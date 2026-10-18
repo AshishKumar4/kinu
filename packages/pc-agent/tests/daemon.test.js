@@ -867,7 +867,7 @@ describe('daemon device path confinement', () => {
    * A command that swaps `inner` for a link to `outside` and back, as fast as it can, until it is killed. The daemon
    * may make a directory of its own where the swapper puts one next: a write or a recursive mkdir makes the missing
    * parents of a path judged while `inner` was away, or judged at the name the real one had while aside (seen on
-   * macOS, 2026-10-18). The swapper removes that one and goes on.
+   * macOS, 2026-10-18). The swapper removes that one and goes on. It says so on its stdout once it has swapped both ways.
    */
   const SWAPPER = `
     const fs = require('node:fs');
@@ -888,11 +888,12 @@ describe('daemon device path confinement', () => {
         }
       }
     };
-    for (;;) {
+    for (let swaps = 0; ; swaps += 1) {
       over(() => fs.renameSync(inner, aside), aside);
       over(() => fs.symlinkSync(outside, inner), inner);
       fs.unlinkSync(inner);
       over(() => fs.renameSync(aside, inner), inner);
+      if (swaps === 0) fs.writeSync(1, 'swapping\\n');
     }`;
 
   // The same swap made while frames run rather than while one waits, each method in turn: no instant between the
@@ -908,11 +909,13 @@ describe('daemon device path confinement', () => {
       cmd: [process.execPath, '-e', SWAPPER],
       env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
       stdin: 'ignore',
-      stdout: 'ignore',
+      stdout: 'pipe',
       stderr: 'inherit',
     });
 
     try {
+      await swapper.stdout.getReader().read();
+
       for (let attempt = 0; attempt < 2000; attempt += 1) {
         const [name, method, params] = frames[attempt % frames.length];
         const ws = fakeWs();
@@ -933,7 +936,7 @@ describe('daemon device path confinement', () => {
     }
 
     expect(escaped).toEqual({});
-    // The swap ran throughout, and the daemon met the link after a frame was checked: the race was run.
+    // The swap ran from the first frame to the last, and the daemon met the link after a frame was checked.
     expect(swapper.signalCode).toBe('SIGTERM');
     expect(refused).toBeGreaterThan(0);
   });
