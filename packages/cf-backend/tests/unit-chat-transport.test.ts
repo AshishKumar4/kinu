@@ -20,7 +20,7 @@ const FrameSchema = v.looseObject({
 
 /** The loop's side of the wire: a refused send rejects with the loop's classified error, a faulting one
  *  with whatever broke underneath. */
-interface HarnessRefusal { readonly refuse: string; readonly fault?: true; }
+interface HarnessRefusal { readonly refuse: string; readonly fault?: true; readonly handedBack?: true; }
 
 function isRefusal(landing: HarnessLanding): landing is HarnessRefusal {
   return v.is(v.object({ refuse: v.string() }), landing);
@@ -99,7 +99,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     sendState: async () => ({ status: 'none' }),
     awaitSend: async () => ({ status: 'none' }),
     send: (input, admitted) => {
-      if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
+      if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError(landing.handedBack === true ? 'cancelled' : 'bad_input', landing.refuse));
       sent.push(input);
       reserved.add(input.id);
       admitted();
@@ -348,6 +348,16 @@ describe('ChatWireTransport', () => {
     expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: 'send requires the message text', done: true, error: true }]);
     expect(h.history).toEqual([]);
     expect(h.broadcasts.filter((b) => b.frame.type === 'cf_agent_chat_messages')).toEqual([]);
+  });
+
+  // A Stop that reached the agent before these words did hands them back: the sender's tab reads that from the send
+  // itself (`awaitSend`) and puts them back in its draft, so the request ends as any other does, never as a failure.
+  test('words a Stop handed back end their request plainly, and nothing is written', async () => {
+    const h = harness({ refuse: 'message input-req-1 was handed back before a turn took it', handedBack: true });
+
+    expect(await h.transport.onMessage(h.connection('c1'), chatRequest('req-1', 'stopped words'))).toBe(true);
+    expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true }]);
+    expect(h.history).toEqual([]);
   });
 
   // Review job 163: a splice ahead of the message that opened the turn kept its mapping, so when that splice was

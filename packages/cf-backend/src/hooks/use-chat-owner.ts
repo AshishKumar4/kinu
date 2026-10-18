@@ -13,7 +13,7 @@ import type { SendLanding, SendState } from "@kinu.run/core";
 import { workspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { sendLanding } from "@kinu.run/core";
-import { detach, diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { attemptInItsWords, detach, diagnostics, renderThrownChain, settle, toKinuError } from "@kinu.run/core/obs";
 import {
   createSessionRecovery, fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha, reportChatStreamFailure,
   routeTemplateOf, type SessionRecovery,
@@ -49,12 +49,9 @@ const KinuActorAddressSchema = v.object({
   subordinate: v.optional(v.string()),
 });
 
-/** `settled` is where the message ended, read from the workspace's record once its turn has; it rejects when no turn
- *  took it. Null: nothing was sent. */
-export type SendAdmission =
-  | { readonly landed: "turn" }
-  | { readonly landed: "mid-turn"; readonly settled: Promise<SendLanding> }
-  | null;
+/** Where the message ended, read from the workspace's record once its turn has; it rejects `cancelled` when no turn
+ *  took it, as when a Stop handed it back. Null: the press was not taken. */
+export type SendAdmission = Promise<SendLanding> | null;
 
 /** The snapshot and the lists the first screen draws, in the one read a workspace tab opens with: as the server answers it. */
 export type WorkspaceOpening = Awaited<ReturnType<OrchestratorAgent["getWorkspaceOpening"]>>;
@@ -271,6 +268,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const {
     messages,
     sendMessage,
+    setMessages,
     regenerate,
     stop,
     isStreaming: streamingTokens,
@@ -306,22 +304,36 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    *  held. `isStreaming` only mirrors it for rendering. */
   const sendLatch = useRef(newSendLatch());
 
+  /** Where the newest turn-opening send landed, and the one a Stop pressed since may have handed back. An opening after
+   *  a Stop waits for that one: the hook sends its whole window, and words handed back must have left the thread
+   *  first, or the next request sends them again and they run. */
+  const lastOpening = useRef<Promise<SendLanding>>(Promise.resolve("turn"));
+  const stoppedOpening = useRef<Promise<SendLanding>>(Promise.resolve("turn"));
+
   /** Every send that starts a turn, the opening's, the composers' and Retry's, begins once the socket's probe is
    *  answered: no caller can send into the probe's answer, and none checks for itself. A Stop pressed meanwhile
-   *  frees the latch, and the send never goes. */
-  const startTurn = useCallback(
-    (begin: () => Promise<void>): boolean => admitTurn(sendLatch.current, async () => {
-      const owner = sendLatch.current.owner;
+   *  frees the latch, and the send never goes. Settles once the send's request has ended or never went; null when
+   *  another turn holds the latch. */
+  const startTurn = useCallback((begin: () => Promise<void>): Promise<void> | null => {
+    const ended = Promise.withResolvers<void>();
 
-      setModelFallbacks([]);
-      await answered.current.promise;
+    const admitted = admitTurn(sendLatch.current, async () => {
+      try {
+        const owner = sendLatch.current.owner;
 
-      if (sendLatch.current.owner !== owner) return;
+        setModelFallbacks([]);
+        await answered.current.promise;
 
-      await begin();
-    }),
-    [],
-  );
+        if (sendLatch.current.owner !== owner) return;
+
+        await begin();
+      } finally {
+        ended.resolve();
+      }
+    });
+
+    return admitted ? ended.promise : null;
+  }, []);
 
   // Read live, never latched. A stream whose socket closes mid-answer ends in an error (agents 0.26,
   // `interruptChatStream`) that the reconnect's resume replaces, clearing useChat's error as it starts: until the
@@ -487,6 +499,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     // Snapshot before the awaits: a Send admitted meanwhile owns the latch and must keep it.
     const aborting = sendLatch.current.owner;
 
+    stoppedOpening.current = lastOpening.current;
+
     try {
       await Promise.all([
         stop(),
@@ -637,10 +651,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [workspace, subordinate]);
 
   /**
-   * Idle: starts a turn under the send latch via the SDK chat path, answering `'turn'`. Otherwise
-   * the actor's `send` RPC splices it into the running turn or runs it as the next turn, and
-   * `settled` says which; nothing here re-sends. `null`: nothing was sent. The decision reads the
-   * latch, not `isStreaming`: two presses in one tick both see stale reactive state.
+   * Idle: starts a turn under the send latch via the SDK chat path. Otherwise the actor's `send` RPC splices it into
+   * the running turn or runs it as the next turn. Either way the answer says where it landed, from the workspace's
+   * record of the message under the id minted here; nothing here re-sends. `null`: nothing was sent. The decision reads
+   * the latch, not `isStreaming`: two presses in one tick both see stale reactive state.
    */
   const sendChat = useCallback((
     content: string,
@@ -654,19 +668,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
     if (parts.length === 0) return null;
 
-    if (sendLatch.current.owner === null && !isStreaming) {
-      const admitted = startTurn(() => {
-        setFrameError(null);
-
-        return sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
-      });
-
-      if (admitted) return { landed: "turn" };
-    }
-
-    // A Plan-locked message that misses its turn must still run as a Plan turn.
-    const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, url: file.url }));
-
     // Id minted here, so a send whose socket closes before its answer is still asked about by name.
     const id = crypto.randomUUID();
 
@@ -675,8 +676,31 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       awaitSend: (sent: string) => agent.call<SendState>("awaitSend", [sent], { timeout: 0 }),
     };
 
-    return { landed: "mid-turn", settled: sendLanding(record, rpc("send", [content, id, attachments, mode]), id) };
-  }, [startTurn, sendMessage, isStreaming, rpc, agent]);
+    if (sendLatch.current.owner === null && !isStreaming) {
+      const before = stoppedOpening.current;
+
+      const ended = startTurn(async () => {
+        await Promise.allSettled([before]);
+        setFrameError(null);
+        await sendMessage({ id, role: "user", parts, metadata: { kinuMode: mode } });
+      });
+
+      if (ended !== null) {
+        const landing = settle(Effect.tapError(attemptInItsWords("io", () => sendLanding(record, ended, id)), (refused) => Effect.sync(() => {
+          if (refused.code === "cancelled") setMessages((shown) => shown.filter((message) => message.id !== id));
+        })));
+
+        lastOpening.current = landing;
+
+        return landing;
+      }
+    }
+
+    // A Plan-locked message that misses its turn must still run as a Plan turn.
+    const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, url: file.url }));
+
+    return sendLanding(record, rpc("send", [content, id, attachments, mode]), id);
+  }, [startTurn, sendMessage, setMessages, isStreaming, rpc, agent]);
 
   /** `regenerate`, not `sendMessage`, which appended a duplicate user message per press. Under the
    *  same latch as `sendChat`: a retry starts a turn. */
@@ -687,7 +711,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       setFrameError(null);
 
       return regenerate();
-    });
+    }) !== null;
   }, [startTurn, messages.length, regenerate]);
 
   /** Every per-chat call names a hosted chat's agent last; the workspace's names none. */

@@ -23,7 +23,7 @@ function noticeFor(steerRuns: readonly InlineSteer[]): string | null | undefined
 
   function Probe() {
     const deps: SteerActionsDeps = {
-      sendChat: () => ({ landed: 'mid-turn', settled: Promise.resolve('mid-turn') }),
+      sendChat: () => Promise.resolve('mid-turn'),
       abortChat: async () => {},
       draft: '',
       setDraft: () => {},
@@ -100,7 +100,7 @@ test('a send that reaches the actor after its turn ends runs once and leaves the
         const id = 'parser-follow-up';
         landing = sendLanding({ open: () => true, awaitSend: (sent) => agent.awaitSend(sent) }, agent.send(text, id), id);
 
-        return { landed: 'mid-turn', settled: landing };
+        return landing;
       },
     });
 

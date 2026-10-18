@@ -516,11 +516,15 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       }
     } catch (cause) {
       release();
+      const refused = cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' });
+      // A Stop handed the words back, which is no failure: the request ends plainly, and its tab reads where they went
+      // from the send itself (`awaitSend`).
+      const handedBack = refused.code === 'cancelled';
 
-      if (opener === null) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
+      if (opener === null) this.done(requestId, handedBack ? {} : { error: refusalOf(refused).error });
 
       // The loop refused and wrote nothing; anything else is a fault its caller must see.
-      if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
+      if (!handedBack && !(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
 
       return;
     }
