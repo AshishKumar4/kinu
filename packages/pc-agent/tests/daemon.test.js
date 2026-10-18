@@ -975,6 +975,9 @@ describe('daemon device path confinement', () => {
     fs.symlinkSync(target, link);
     handle({ id: 'unlink-link', method: 'unlinkPath', sandbox: scoped([project]), params: [link] }, ws, {});
     expect((await ws.response('unlink-link')).result).toEqual({ success: true });
+    // A name is the whole name: one holding a NUL is refused, never cut short to the entry before it.
+    handle({ id: 'unlink-nul', method: 'unlinkPath', sandbox: scoped([project]), params: [`${target}\0.bak`] }, ws, {});
+    expect((await ws.response('unlink-nul')).result).toBeUndefined();
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.existsSync(link)).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
