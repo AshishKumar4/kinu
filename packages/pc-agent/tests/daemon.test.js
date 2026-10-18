@@ -864,29 +864,35 @@ describe('daemon device path confinement', () => {
   });
 
   /**
-   * A command that swaps `inner` for a link to `outside` and back, as fast as it can, until it is killed. A write or a
-   * recursive mkdir makes its missing parents, so the daemon can make an `inner` of its own in the instant the real
-   * one is aside; the swapper removes that one and goes on.
+   * A command that swaps `inner` for a link to `outside` and back, as fast as it can, until it is killed. The daemon
+   * may make a directory of its own where the swapper puts one next: a write or a recursive mkdir makes the missing
+   * parents of a path judged while `inner` was away, or judged at the name the real one had while aside (seen on
+   * macOS, 2026-10-18). The swapper removes that one and goes on.
    */
   const SWAPPER = `
     const fs = require('node:fs');
     const [inner, outside] = JSON.parse(process.env.KINU_SWAP);
     const aside = inner + '-aside';
-    const over = (place) => {
+    const taken = (cause) => cause.code === 'EEXIST' || cause.code === 'ENOTEMPTY';
+    const over = (place, made) => {
       for (;;) {
         try {
           return place();
         } catch (cause) {
-          if (cause.code !== 'EEXIST' && cause.code !== 'ENOTEMPTY') throw cause;
-          fs.rmSync(inner, { recursive: true, force: true });
+          if (!taken(cause)) throw cause;
+        }
+        try {
+          fs.rmSync(made, { recursive: true, force: true });
+        } catch (cause) {
+          if (!taken(cause)) throw cause;
         }
       }
     };
     for (;;) {
-      fs.renameSync(inner, aside);
-      over(() => fs.symlinkSync(outside, inner));
+      over(() => fs.renameSync(inner, aside), aside);
+      over(() => fs.symlinkSync(outside, inner), inner);
       fs.unlinkSync(inner);
-      over(() => fs.renameSync(aside, inner));
+      over(() => fs.renameSync(aside, inner), inner);
     }`;
 
   // The same swap made while frames run rather than while one waits, each method in turn: no instant between the
