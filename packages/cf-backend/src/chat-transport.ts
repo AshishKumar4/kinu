@@ -7,6 +7,7 @@
  * is told the turn is pending (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens. Where a
  * send ended is asked of the workspace (`awaitSend`), never read off this stream.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Connection } from 'agents';
 import {
   MessageType,
@@ -23,6 +24,10 @@ import {
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState' | 'close'>;
+
+/** The socket frame whose handling is running (client-socket-gate.ts), told once a step it started has taken its place
+ *  in a room's order. */
+export const framePlacing = new AsyncLocalStorage<() => void>();
 
 /** A tab whose replay could not be read is closed with this and redials: 1013, Try Again Later (RFC 6455 §7.4.1). */
 const REPLAY_RETRY_CODE = 1013;
@@ -289,6 +294,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     const before = this.intake;
 
     this.intake = before.then(() => held.promise);
+    framePlacing.getStore()?.();
 
     return before.then(() => step(held.resolve)).finally(held.resolve);
   }
