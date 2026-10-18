@@ -56,16 +56,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     setSettled(null);
 
     if (admission.landed === "turn") return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      if ((yield* Effect.promise(() => admission.settled)) === "turn") {
-        // The turn had ended, so the actor ran this as the next turn, atomically in its own queue.
-        setSettled({
-          id: NOTICE_ID, tone: "info",
-          text: "That turn had already finished, so this went as a new message.",
-        });
-      }
-      // The queued line is read from the server's `queued` broadcast, the same for every open tab.
-    }), (failed) => Effect.sync(() => {
+    startTransition(() => settle(Effect.catchCause(Effect.asVoid(Effect.promise(() => admission.settled)), (failed) => Effect.sync(() => {
       const cause = Cause.squash(failed);
       // Unread words return to the draft, appended to anything typed since; a stop is not a failure.
       setDraft((current) => current === "" ? text : `${current}\n\n${text}`);
