@@ -162,6 +162,23 @@ export const FENCES: readonly Fence[] = [
       + 'spurious replacement',
   },
   {
+    name: 'devbox#classifiedRestore:stopped-generation-fence',
+    file: 'packages/devbox/src/devbox.ts',
+    // A restore over a container its admission did not start ends quietly when that container stops, and only a live
+    // owner ends it: a superseded attempt failing on the stopped container would otherwise invalidate the generation
+    // of the start that replaced it, and every reader would stop seeing that start.
+    snippet: `      else if (this.#owns(generation)) this.#invalidateGeneration();
+`,
+    mutation: `      else this.#invalidateGeneration();
+`,
+    owner: {
+      suite: 'packages/devbox/tests/checkpoint-adoption.test.ts',
+      grep: 'a superseded restore whose container stopped leaves the start that replaced it alone',
+    },
+    why: 'a superseded restore clears the startup flight that replaced it, so a checkpoint or a stop no longer waits '
+      + 'for that start and the box is left running behind a stop that reported nothing to commit',
+  },
+  {
     name: 'core/heads/types#HEAD_UNSETTLED_STATUSES:terminal-classification',
     file: 'packages/core/src/heads/types.ts',
     // The terminal/resumable split over the head journal. The leak it fences is
