@@ -1471,8 +1471,15 @@ export class ChatSession {
       }
     };
 
+    // Only the newest link clears the chain: an older one settling must not let the next event past the ones still owed.
+    const chain = (link: Promise<void>): void => {
+      const head = link.finally(() => { if (this.delivery === head) this.delivery = null; });
+
+      this.delivery = head;
+    };
+
     if (this.delivery !== null) {
-      this.delivery = settle(this.delivery.then(() => this.transport.deliver(event))).finally(() => { this.delivery = null; });
+      chain(settle(this.delivery.then(() => this.transport.deliver(event))));
 
       return;
     }
@@ -1480,7 +1487,7 @@ export class ChatSession {
     try {
       const delivered = this.transport.deliver(event);
 
-      if (delivered instanceof Promise) this.delivery = settle(delivered).finally(() => { this.delivery = null; });
+      if (delivered instanceof Promise) chain(settle(delivered));
     } catch (cause) {
       failed(toKinuError({ doing: 'delivering a session event to the frontend listener', cause, otherwise: 'io' }));
     }

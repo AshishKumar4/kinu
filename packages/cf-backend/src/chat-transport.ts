@@ -578,6 +578,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       carried.push(request);
     }
 
+    // One agent runs one turn at a time: a turn opening ended the one before, whose end may be told after this.
+    if (this.live !== null && this.live.turnId !== turn.turnId) this.endStream(this.live);
     this.releaseWaiters();
 
     const live: LiveStream = {
@@ -596,10 +598,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /**
    * The answer row is durable before this. A turn that ends before this room opened it releases the tabs waiting on it.
-   * `window`: the transcript's newest {@link TRANSCRIPT_WINDOW} messages as the turn ended, told with its end by the
-   * agent that holds them.
+   * `window`: the transcript's newest {@link TRANSCRIPT_WINDOW} messages as `turnId` ended, told with its end by the
+   * agent that holds them. A turn told ended after the next one opened was ended by that opening: its window now would
+   * drop the answer streaming in.
    */
-  closeTurn(window: readonly UIMessage[]): void {
+  closeTurn(turnId: string, window: readonly UIMessage[]): void {
     const live = this.live;
 
     if (live === null) {
@@ -608,13 +611,18 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
+    if (live.turnId !== turnId) return;
+    this.endStream(live);
+    this.wire.broadcast(transcriptFrame(window));
+  }
+
+  private endStream(live: LiveStream): void {
     this.live = null;
     this.wire.replies?.ended(live.turnId, live.failure);
     this.pendingResume.clear();
     this.done(live.requestId, live.failure === null ? {} : { error: live.failure });
 
     for (const request of live.carried) this.done(request);
-    this.wire.broadcast(transcriptFrame(window));
   }
 
   /** An answer stamped after its end: its tabs are shown the window again, unless a turn is live, whose end carries it
@@ -624,8 +632,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. */
-  async closeLostTurn(): Promise<void> {
-    this.closeTurn(this.live === null ? [] : await this.wire.history(TRANSCRIPT_WINDOW));
+  async closeLostTurn(turnId: string): Promise<void> {
+    this.closeTurn(turnId, this.live?.turnId === turnId ? await this.wire.history(TRANSCRIPT_WINDOW) : []);
   }
 
   async deliver(event: SessionEvent): Promise<void> {
