@@ -801,30 +801,41 @@ describe('daemon device path confinement', () => {
 
   // 2026-10-12 security review: a mutation was judged when its frame arrived and run on the path string after the
   // checkpoint queue, so a command that swapped a judged directory for a link meanwhile moved it out of the root.
-  test.each([
+  const SWAPPED = [
     ['writeFile', (at) => ['writeFile', [at('inner/target.txt'), 'written', {}]]],
     ['writeFileIfDigest', (at) => ['writeFileIfDigest', [at('inner/target.txt'), 'written', require('node:crypto').createHash('sha256').update('inside').digest('hex'), {}]]],
     ['unlinkPath', (at) => ['unlinkPath', [at('inner/target.txt')]]],
     ['rmdirPath', (at) => ['rmdirPath', [at('inner/empty')]]],
     ['mkdirPath', (at) => ['mkdirPath', [at('inner/made/deeper'), { recursive: true }]]],
-  ])('%s that waits in the queue acts where it was checked, never through a link swapped in meanwhile', async (_name, frame) => {
+  ];
+
+  /** Every entry under a tree, with a file's bytes: what a mutation outside the root would change. */
+  const snapshotTree = (dir) => fs.readdirSync(dir, { recursive: true }).map(String).sort((a, b) => a.localeCompare(b)).map((name) => {
+    const full = path.join(dir, String(name));
+
+    return [String(name), fs.lstatSync(full).isFile() ? fs.readFileSync(full, 'utf8') : 'dir'];
+  });
+
+  /** What every frame in SWAPPED would change: a file reading 'inside' and an empty directory. */
+  function plantTree(dir) {
+    fs.mkdirSync(path.join(dir, 'empty'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'target.txt'), 'inside');
+  }
+
+  /** `project/inner` and an `outside` beside the project, planted alike. */
+  function swapFixture() {
     const root = scratchDir('daemon-swap');
-
-    // Every entry under a tree, with a file's bytes: what a mutation outside the root would change.
-    const snapshotTree = (dir) => fs.readdirSync(dir, { recursive: true }).map(String).sort((a, b) => a.localeCompare(b)).map((name) => {
-      const full = path.join(dir, String(name));
-
-      return [String(name), fs.lstatSync(full).isFile() ? fs.readFileSync(full, 'utf8') : 'dir'];
-    });
-
     const project = path.join(root, 'project');
-    const inner = path.join(project, 'inner');
-    const outside = path.join(root, 'outside');
+    const fixture = { project, inner: path.join(project, 'inner'), outside: path.join(root, 'outside') };
 
-    for (const dir of [path.join(inner, 'empty'), path.join(outside, 'empty')]) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(inner, 'target.txt'), 'inside');
-    fs.writeFileSync(path.join(outside, 'target.txt'), 'inside');
+    plantTree(fixture.inner);
+    plantTree(fixture.outside);
 
+    return fixture;
+  }
+
+  test.each(SWAPPED)('%s that waits in the queue acts where it was checked, never through a link swapped in meanwhile', async (_name, frame) => {
+    const { project, inner, outside } = swapFixture();
     const before = snapshotTree(outside);
     let release;
     const queued = new Promise((resolve) => { release = resolve; });
@@ -852,6 +863,84 @@ describe('daemon device path confinement', () => {
     expect(snapshotTree(outside)).toEqual(before);
   });
 
+  /**
+   * A command that swaps `inner` for a link to `outside` and back, as fast as it can, until it is killed. The daemon
+   * may make a directory of its own where the swapper puts one next: a write or a recursive mkdir makes the missing
+   * parents of a path judged while `inner` was away, or judged at the name the real one had while aside (seen on
+   * macOS, 2026-10-18). The swapper removes that one and goes on. It says so on its stdout once it has swapped both ways.
+   */
+  const SWAPPER = `
+    const fs = require('node:fs');
+    const [inner, outside] = JSON.parse(process.env.KINU_SWAP);
+    const aside = inner + '-aside';
+    const taken = (cause) => cause.code === 'EEXIST' || cause.code === 'ENOTEMPTY';
+    const over = (place, made) => {
+      for (;;) {
+        try {
+          return place();
+        } catch (cause) {
+          if (!taken(cause)) throw cause;
+        }
+        try {
+          fs.rmSync(made, { recursive: true, force: true });
+        } catch (cause) {
+          if (!taken(cause)) throw cause;
+        }
+      }
+    };
+    for (let swaps = 0; ; swaps += 1) {
+      over(() => fs.renameSync(inner, aside), aside);
+      over(() => fs.symlinkSync(outside, inner), inner);
+      fs.unlinkSync(inner);
+      over(() => fs.renameSync(aside, inner), inner);
+      if (swaps === 0) fs.writeSync(1, 'swapping\\n');
+    }`;
+
+  // The same swap made while frames run rather than while one waits, each method in turn: no instant between the
+  // check and the act lets a mutation through the link. `outside` is planted again after each frame that changed it.
+  test('a mutation acts where it was checked while a command swaps a link in and out of its path', async () => {
+    const { project, inner, outside } = swapFixture();
+    const before = snapshotTree(outside);
+    const frames = SWAPPED.map(([name, frame]) => [name, ...frame((relative) => path.join(project, relative))]);
+    const escaped = {};
+    let refused = 0;
+
+    const swapper = Bun.spawn({
+      cmd: [process.execPath, '-e', SWAPPER],
+      env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+
+    try {
+      await swapper.stdout.getReader().read();
+
+      for (let attempt = 0; attempt < 2000; attempt += 1) {
+        const [name, method, params] = frames[attempt % frames.length];
+        const ws = fakeWs();
+
+        handle({ id: 'race', method, sandbox: scoped([project]), params }, ws, {});
+
+        if ((await ws.response('race')).error?.code === 'EACCES') refused += 1;
+
+        if (!Bun.deepEquals(snapshotTree(outside), before)) {
+          escaped[name] = (escaped[name] ?? 0) + 1;
+          fs.rmSync(outside, { recursive: true });
+          plantTree(outside);
+        }
+      }
+    } finally {
+      swapper.kill();
+      await swapper.exited;
+    }
+
+    expect(escaped).toEqual({});
+    // The swap ran from the first frame to the last, and the daemon met the link after a frame was checked.
+    expect(swapper.signalCode).toBe('SIGTERM');
+    expect(refused).toBeGreaterThan(0);
+  });
+
   test('scoped native mutations stay inside the resolved root', async () => {
     // Under /tmp rather than TMPDIR: this suite's TMPDIR is inside the real
     // home, which the agent home is mounted over, and a consented directory
@@ -863,10 +952,19 @@ describe('daemon device path confinement', () => {
 
     const dir = path.join(project, 'nested');
     const file = path.join(dir, 'data.txt');
-    handle({ id: 'mkdir', method: 'mkdirPath', sandbox: scoped([project]), params: [dir, { recursive: true }] }, ws, {});
-    expect((await ws.response('mkdir')).result).toEqual({ success: true });
-    handle({ id: 'write', method: 'writeFile', sandbox: scoped([project]), params: [file, 'ok', {}] }, ws, {});
-    expect((await ws.response('write')).result).toEqual({ success: true });
+    const was = process.umask(0o022);
+
+    try {
+      handle({ id: 'mkdir', method: 'mkdirPath', sandbox: scoped([project]), params: [dir, { recursive: true }] }, ws, {});
+      expect((await ws.response('mkdir')).result).toEqual({ success: true });
+      handle({ id: 'write', method: 'writeFile', sandbox: scoped([project]), params: [file, 'ok', {}] }, ws, {});
+      expect((await ws.response('write')).result).toEqual({ success: true });
+    } finally {
+      process.umask(was);
+    }
+
+    // Made with the modes a plain mkdir and write give, less the umask.
+    expect([fs.statSync(dir).mode & 0o777, fs.statSync(file).mode & 0o777]).toEqual([0o755, 0o644]);
     handle({ id: 'stat', method: 'statPath', sandbox: scoped([project]), params: [file] }, ws, {});
     expect((await ws.response('stat')).result).toMatchObject({ size: 2, type: 'file' });
     handle({ id: 'unlink', method: 'unlinkPath', sandbox: scoped([project]), params: [file] }, ws, {});
@@ -877,6 +975,9 @@ describe('daemon device path confinement', () => {
     fs.symlinkSync(target, link);
     handle({ id: 'unlink-link', method: 'unlinkPath', sandbox: scoped([project]), params: [link] }, ws, {});
     expect((await ws.response('unlink-link')).result).toEqual({ success: true });
+    // A name is the whole name: one holding a NUL is refused, never cut short to the entry before it.
+    handle({ id: 'unlink-nul', method: 'unlinkPath', sandbox: scoped([project]), params: [`${target}\0.bak`] }, ws, {});
+    expect((await ws.response('unlink-nul')).result).toBeUndefined();
     expect(fs.existsSync(target)).toBe(true);
     expect(fs.existsSync(link)).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
