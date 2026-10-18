@@ -1,8 +1,9 @@
 import { expect, test, vi } from 'bun:test';
 import { ChainTestBox, asked, chainBox, chainHead, type ChainBox } from './support/chain-box';
-import { gate, wakeWhileArmed, type Gate } from './support/devbox-harness';
+import { READY_GOLDEN, gate, wakeWhileArmed, type Gate } from './support/devbox-harness';
 import { markerPath } from './support/native-shim';
 import { INCIDENT_PREFIX } from '../src/incidents';
+import type { RestoreClockPhase } from '../src/restoration';
 
 class ScheduledChainBox extends ChainTestBox {
   protected override get ambientCheckpoints(): boolean {
@@ -100,6 +101,66 @@ for (const [race, callback, hold] of races) {
     }
   });
 }
+
+test('a superseded restore whose container stopped leaves the start that replaced it alone', async () => {
+  const source = gate();
+  let holding = false;
+  let restoreSettled = (): void => undefined;
+
+  // Tells the test when a restore settles, whatever its outcome.
+  class WitnessedChainBox extends ScheduledChainBox {
+    protected override onRestorePhase(phase: RestoreClockPhase): void {
+      if (phase === 'settled') restoreSettled();
+    }
+  }
+
+  const { box, evict, rows, container } = chainBox(WitnessedChainBox, {
+    ...READY_GOLDEN,
+    goldenFor: async (asking, lost) => {
+      if (holding) {
+        source.enter();
+        await source.promise;
+      }
+
+      return await READY_GOLDEN.goldenFor(asking, lost);
+    },
+  });
+
+  await box.start();
+  await box.checkpointNow('tick');
+  const committed = chainHead(rows);
+  const starts = container.containerStarts;
+  // The platform replaced the container: the tick's adoption turns over, and its restore parks at the boot-id stamp.
+  container.bootId = undefined;
+  const successor = evict();
+  const stamp = gate();
+  container.stampGate = stamp;
+  await container.seedSchedule('devboxCheckpoint', Date.now() / 1000 - 1);
+  const ticked = container.alarm();
+  // A tick that never adopts settles instead, here and below.
+  await Promise.race([stamp.reached, ticked]);
+  // The platform reclaims the container, and a start supersedes the parked restore while its source is held.
+  await container.stop();
+  holding = true;
+  const restarted = successor.devboxStartup();
+  await source.reached;
+  const settled = new Promise<void>((resolve) => { restoreSettled = resolve; });
+  stamp.release();
+  await Promise.race([settled, ticked]);
+  const startupHeld = (await successor.devboxState()).flights.startupMs !== null;
+
+  source.release();
+  await Promise.all([ticked, restarted]);
+
+  // The checkpoint waits for the live start and saves what it restored (D26).
+  expect({
+    startupHeld,
+    committed: chainHead(rows),
+    starts: container.containerStarts,
+    running: container.running.running,
+    ready: (await successor.devboxState()).ready,
+  }).toEqual({ startupHeld: true, committed: (committed ?? 0) + 1, starts: starts + 1, running: true, ready: true });
+});
 
 test('attaching after eviction adopts the restoration the running container carries', async () => {
   const { box, evict, container } = chainBox();

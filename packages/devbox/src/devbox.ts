@@ -1168,8 +1168,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return undefined;
     } catch (error) {
-      if (this.#stoppedUnder(started)) this.#invalidateGeneration();
-      else await this.#recover(generation, claim, { cause: error });
+      // Fenced as `#recover` is: a superseded attempt clears nothing its successor holds.
+      if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, { cause: error });
+      else if (this.#owns(generation)) this.#invalidateGeneration();
 
       return { cause: error };
     }
