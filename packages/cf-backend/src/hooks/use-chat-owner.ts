@@ -140,10 +140,17 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    * Whether the server has answered the resume probe the SDK sends as this socket opens. Until it has, the chat is not
    * settled: `useChat` keeps one status for a resume and a send, so a send before the answer has its turn's state ended
    * by it (the Stop of a new chat's opening turn lasted 10 ms, 2026-10-14), and a stream the drop interrupted is still
-   * the SDK's to rejoin. `answered` settles with it, for the send that waits on it.
+   * the SDK's to rejoin. `answered` settles once the answer is committed, after every reader of its frame: the SDK's
+   * own reader may run after this hook's, and the resume it then ends set the status a send had just set (a new chat's
+   * opening showed Send, not Stop, for its whole first wait, 2026-10-18).
    */
   const [probeAnswered, setProbeAnswered] = useState(false);
   const answered = useRef(Promise.withResolvers<void>());
+
+  useEffect(() => {
+    if (probeAnswered) answered.current.resolve();
+  }, [probeAnswered]);
+
   /** Its agent as the pane draws it: set by each completed load, cleared only by a switch to another chat, so it means
    *  "this chat has last known data". */
   const [actorSnapshot, setActorSnapshot] = useState<ActorSnapshot | null>(null);
@@ -249,7 +256,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const everyFrame = useCallback((data: SocketFrame) => {
     if (data.type === "cf_agent_stream_resuming" || data.type === "cf_agent_stream_resume_none") {
       setProbeAnswered(true);
-      answered.current.resolve();
     } else if (data.type === "provider_wait") {
       // Each wait in a chain replaces the one before.
       setProviderWait({
