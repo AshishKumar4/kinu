@@ -2344,8 +2344,10 @@ export const LADDER: readonly Gate[] = [
       + 'showing it once it ends, its header never disagreeing with its composer; a page whose socket drops mid-turn '
       + 'replays the answer as it stood; an answer keeps each step\'s text where it streamed after the turn ends and '
       + 'after a reload, the model\'s next request carrying it, and so does a turn another tab sent, on the page that '
-      + 'watched it, and the workspace\'s own first turn, which no page sent; and a marker sent in each pane stays out of the '
-      + 'other, the transcript leak a shared store shows as green.',
+      + 'watched it, and the workspace\'s own first turn, which no page sent; a marker sent in each pane stays out of the '
+      + 'other, the transcript leak a shared store shows as green; a Stop pressed as a turn opens, then a send as it '
+      + 'leaves: the follow-up is answered, the stopped ask never runs, and nothing reads as a failure, words the Stop '
+      + 'handed back returning to the draft; and a new chat\'s opening offers Stop while its first call waits.',
     blind: LIVE_APP_BLIND,
     inputs: LIVE_APP_INPUTS,
   },
