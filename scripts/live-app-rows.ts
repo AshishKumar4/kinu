@@ -24,7 +24,7 @@ import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src
 import { CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -1678,10 +1678,10 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
 
       if (approve instanceof HTMLElement) approve.click();
     });
-    // The handoff turn runs on its own; the row reads the Work list once it has answered, whatever it shows.
-    await until(page, "the approved plan's turn to end", `(${ANSWER_BLOCKS}).at(-1) === 'P:Implemented the approved plan.' && !(${STOP_OFFERED})`);
+    // The handoff turn runs on its own, and the list reads its tasks a refresh after each lands: the row reads where
+    // they sit once the list shows every task the turns added.
     await page.click('#inspector nav[aria-label="Workspace"] button[aria-label="Work"]');
-    await until(page, "the Work tab's plans", `document.querySelector('[data-work-plans]') !== null`);
+    await until(page, "every task the turns added in the Work list", `((shown) => ${JSON.stringify(Object.values(PLAN_TASK_TITLES))}.every((title) => shown.includes(title)))([...document.querySelectorAll('[data-task-depth]')].map(${TASK_TITLE}))`);
     await painted(page);
 
     return {
