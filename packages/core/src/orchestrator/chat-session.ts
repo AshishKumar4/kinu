@@ -19,7 +19,7 @@ import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
-import type { ChatEvent } from '../chat';
+import { INTERRUPTED_TURN, type ChatEvent } from '../chat';
 import type { CompactionTrigger } from '../extension';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { narrowestMode, runWorkModeInvocation } from '../execution/work-mode';
@@ -2183,7 +2183,8 @@ export class ChatSession {
     const end = classifyRunEnd({ completed: false, interrupted, errorText: runError ?? runErrorOf(message) });
 
     await close?.(end);
-    this.emit({ type: 'error', message });
+    // A Stop ends the turn in its one name, whatever failed under it: its tabs read that as a Stop, not a failure.
+    this.emit({ type: 'error', message: end.reason === 'aborted' ? INTERRUPTED_TURN : message });
     this.emit({ type: 'turn-end', turn: turn(), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
     return end.reason;
