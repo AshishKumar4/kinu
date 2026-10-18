@@ -26,7 +26,7 @@ import { builtinModules } from 'node:module';
 import { spawn } from 'node:child_process';
 import { promptText } from './vite-prompt-text';
 import { AGENT_BUNDLE_ENTRY, buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
-import { readAiRun, remoteWorkersAi, workersAiBinding, workersAiTestRunning } from './tests/helpers/workers-ai-binding';
+import { readAiRun, remoteWorkersAi, remoteWorkersAiBinding, workersAiTestRunning } from './tests/helpers/workers-ai-binding';
 import { remoteAiPoolLifecycle } from './tests/helpers/remote-ai-pool';
 import type { Reporter } from 'vitest/reporters';
 import * as v from 'valibot';
@@ -35,21 +35,21 @@ import { readMatching } from '../../scripts/sources';
 import { workerdRequirements } from '../../scripts/workerd-requirements';
 import { workerSourceTriggers } from '../../scripts/worker-test-inputs';
 
-let hireAi: ReturnType<typeof workersAiBinding> | undefined;
+let hireAi: ReturnType<typeof remoteWorkersAiBinding> | undefined;
 
-function getHireAi(): ReturnType<typeof workersAiBinding> {
-  hireAi ??= workersAiBinding(remoteWorkersAi);
+function getHireAi(): ReturnType<typeof remoteWorkersAiBinding> {
+  hireAi ??= remoteWorkersAiBinding(remoteWorkersAi);
 
   return hireAi;
 }
 
-let twoTurnAi: ReturnType<typeof workersAiBinding> | undefined;
+let twoTurnAi: ReturnType<typeof remoteWorkersAiBinding> | undefined;
 
 let twoTurnAiCalls = 0;
 
 /** The two-turn probe reads what the binding was asked through `/log`. */
-function getTwoTurnAi(): ReturnType<typeof workersAiBinding> {
-  twoTurnAi ??= workersAiBinding(async (request) => {
+function getTwoTurnAi(): ReturnType<typeof remoteWorkersAiBinding> {
+  twoTurnAi ??= remoteWorkersAiBinding(async (request) => {
     recordAiRun(await readAiRun(request.clone()));
     twoTurnAiCalls++;
 
@@ -59,10 +59,10 @@ function getTwoTurnAi(): ReturnType<typeof workersAiBinding> {
   return twoTurnAi;
 }
 
-let surfaceAi: ReturnType<typeof workersAiBinding> | undefined;
+let surfaceAi: ReturnType<typeof remoteWorkersAiBinding> | undefined;
 
-function getSurfaceAi(): ReturnType<typeof workersAiBinding> {
-  surfaceAi ??= workersAiBinding(async (request) => {
+function getSurfaceAi(): ReturnType<typeof remoteWorkersAiBinding> {
+  surfaceAi ??= remoteWorkersAiBinding(async (request) => {
     if (request.headers.get('mf-header-cf-consn-model-id') === HELD_PROXY_MODEL) {
       await probeOutbound(new Request('http://probe-control.invalid/proxy/park', { method: 'POST', signal: request.signal }));
 
