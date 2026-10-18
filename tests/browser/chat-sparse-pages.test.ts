@@ -117,6 +117,13 @@ async function shownRows(page: Page): Promise<number[]> {
 /** Moves the socket's live window to those history rows, as the server's transcript frame does. */
 async function liveWindow(page: Page, detail: { rows: number[]; edited?: number; cleared?: boolean }): Promise<void> {
   await page.evaluate((window_) => { window.dispatchEvent(new CustomEvent('gallery:live-window', { detail: window_ })); }, detail);
+  const last = detail.rows.at(-1);
+
+  if (last !== undefined) await page.waitForFunction((row, selector) => {
+    const text = document.querySelector(selector)?.textContent ?? '';
+
+    return text.includes(`Question ${row}:`) || text.includes(`Answer ${row}.`);
+  }, {}, last, CHAT);
   await paint(page);
 }
 
