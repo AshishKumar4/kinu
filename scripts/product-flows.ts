@@ -794,8 +794,11 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
 
     // The '+' flow: the subordinate column mounts a composer its own socket has
     // enabled. The hosted-actor socket defect left that pane connecting forever,
-    // so this row's number is the frames that socket answered with.
+    // so this row's number is the frames that socket answered with. The composer
+    // turns live on the socket's open, before its first frame, so the row waits
+    // for that frame before it counts.
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await waitOn(page, "the agent tab's actor socket to answer", counter.actorAnswered());
 
     const afterSwitch = counter.counts();
 
