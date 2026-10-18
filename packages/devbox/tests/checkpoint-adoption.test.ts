@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'bun:test';
-import { ChainTestBox, asked, chainBox, chainHead } from './support/chain-box';
-import { gate, wakeWhileArmed } from './support/devbox-harness';
+import { ChainTestBox, asked, chainBox, chainHead, type ChainBox } from './support/chain-box';
+import { gate, wakeWhileArmed, type Gate } from './support/devbox-harness';
 import { markerPath } from './support/native-shim';
 import { INCIDENT_PREFIX } from '../src/incidents';
 
@@ -51,37 +51,39 @@ test('a checkpoint alarm on an unused computer starts nothing and reports no dur
 });
 
 // D34: maintenance starts no container. A wake whose adoption meets a stop leaves the box stopped, files nothing, and
-// leaves no row that would wake the object to start it again. The stop lands as the wake is delivered, or while the
-// adoption's first command or its start hook's first read is held.
-for (const [race, callback, held] of [
+// leaves no row that would wake the object to start it again. The stop lands as the wake is delivered, or while one
+// step of the adoption is held.
+const races: readonly (readonly [string, string, ((arm: ChainBox, held: Gate) => void) | undefined])[] = [
   ['before the checkpoint enters its lane', 'devboxCheckpoint', undefined],
-  ['during the admission a checkpoint opens', 'devboxCheckpoint', 'admission'],
-  ['during the admission a heartbeat opens', 'devboxHeartbeat', 'admission'],
-  ['during the start hook a checkpoint opens', 'devboxCheckpoint', 'hook'],
-] as const) {
+  ['during the admission a checkpoint opens', 'devboxCheckpoint', ({ container }, held) => { container.containerHookGate = held; }],
+  ['during the admission a heartbeat opens', 'devboxHeartbeat', ({ container }, held) => { container.containerHookGate = held; }],
+  ['during the start hook a checkpoint opens', 'devboxCheckpoint', ({ storage }, held) => { storage.gateOn('devbox:restoration', held); }],
+  // The platform replaced the container: the adoption turns over and restores it, and the stop lands in that restore.
+  ['during the restore a checkpoint opens', 'devboxCheckpoint', ({ container }, held) => { container.bootId = undefined; container.stampGate = held; }],
+];
+
+for (const [race, callback, hold] of races) {
   test(`a stop ${race} after eviction is not undone`, async () => {
     let now = Date.now();
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
     try {
-      const { box, evict, rows, container, storage } = chainBox(ScheduledChainBox);
+      const arm = chainBox(ScheduledChainBox);
+      const { box, evict, rows, container } = arm;
       await box.start();
       await box.checkpointNow('tick');
       const committed = chainHead(rows);
       const starts = container.containerStarts;
       const successor = evict();
-      const hold = gate();
-
-      if (held === 'admission') container.containerHookGate = hold;
-
-      if (held === 'hook') storage.gateOn('devbox:restoration', hold);
+      const held = gate();
+      hold?.(arm, held);
       await container.seedSchedule(callback, now / 1000 - 1);
       const delivered = container.alarm();
 
       // A wake that never reaches the hold settles instead.
-      if (held !== undefined) await Promise.race([hold.reached, delivered]);
+      if (hold !== undefined) await Promise.race([held.reached, delivered]);
       await successor.stop();
-      hold.release();
+      held.release();
       await delivered;
       await wakeWhileArmed(container, (to) => { now = Math.max(now, to); }, 20);
 

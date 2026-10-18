@@ -992,7 +992,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         if (this.#restoration.phase !== 'unstarted') return;
         generation = this.#generation;
-        const failure = await this.#restoreNow(generation, racedRestoreSteps(budget));
+        const failure = await this.#restoreNow(generation, racedRestoreSteps(budget), started);
 
         if (failure !== undefined) console.error(`[devbox] start refused: ${describe(failure)}`);
       },
@@ -1013,8 +1013,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (clock !== undefined) this.#settleClock(clock);
       this.#invalidateGeneration();
 
-      // A container this admission did not start, stopped under the hook, is left stopped, as at admission (D34).
-      if (!started && this.ctx.container?.running !== true) return;
+      if (this.#stoppedUnder(started)) return;
 
       if (attached) {
         const reason = `[deadline -> repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
@@ -1125,6 +1124,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #restoreNow(
     generation: number,
     steps: RestoreSteps,
+    started: boolean,
   ): Promise<{ readonly cause: unknown } | undefined> {
     await this.#settle({ phase: 'restoring', where: 'start', since: Date.now() });
 
@@ -1132,7 +1132,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const clock = this.#openClock();
 
     try {
-      return await this.#classifiedRestore(generation, steps);
+      return await this.#classifiedRestore(generation, steps, started);
     } finally {
       this.#settleClock(clock);
     }
@@ -1141,6 +1141,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #classifiedRestore(
     generation: number,
     steps: RestoreSteps,
+    started: boolean,
   ): Promise<{ readonly cause: unknown } | undefined> {
     const claim = await this.#claimRecovery();
 
@@ -1167,7 +1168,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return undefined;
     } catch (error) {
-      await this.#recover(generation, claim, { cause: error });
+      if (this.#stoppedUnder(started)) this.#invalidateGeneration();
+      else await this.#recover(generation, claim, { cause: error });
 
       return { cause: error };
     }
@@ -1360,9 +1362,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
-    // An admission that started nothing ends when its container stops: a retry would start the container the stop
-    // ended (D34), and a refusal would park a box nothing refused.
-    if (!startsContainer && this.ctx.container?.running !== true) return;
+    if (this.#stoppedUnder(startsContainer)) return;
     const failure = classifyRecovery(failed);
 
     // A start that fails the same way every time is refused once, not re-armed each second: staging 7e411119d's box
@@ -1455,6 +1455,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  or the release of the single-flight entry. */
   #owns(generation: number): boolean {
     return this.#generation === generation;
+  }
+
+  /** An admission that did not start its container ends, wherever that container's stop lands: a retry or a recovery
+   *  would start the container the stop ended (D34), and a refusal would park a box nothing refused. */
+  #stoppedUnder(started: boolean): boolean {
+    return !started && this.ctx.container?.running !== true;
   }
 
   /** Called only on evidence the container identity is gone or going. The bump makes every
