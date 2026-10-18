@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { writeSync } from 'node:fs';
 import * as v from 'valibot';
 import type { RemoteProxyConnectionString, Response as MiniflareResponse } from 'miniflare';
 import { startRemoteProxySession, unstable_readConfig } from 'wrangler';
@@ -45,19 +46,19 @@ export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | nu
   return messages.every((message) => message.role === 'user') ? 'sleep' : null;
 }
 
-function remoteWorkersAiAuth() {
+/** Wrangler's remote proxy session, shared by every pool worker and ended with the last of them (vitest.config.ts). */
+const remote = remoteSessionHolder(() => {
   const accountId = unstable_readConfig({ config: fileURLToPath(new URL('../../wrangler.jsonc', import.meta.url)), env: 'staging' }).account_id;
   const apiToken = restApiToken();
 
-  if (accountId === undefined || apiToken === '') throw new Error('Workers AI binding tests require the configured account and KINU_CLOUDFLARE_API_TOKEN from Armada secrets.');
+  // A thrown configuration error becomes a lost connection at the HTTP bridge, so the run must end here.
+  if (accountId === undefined || apiToken === '') {
+    writeSync(process.stderr.fd, 'Workers AI binding tests require the configured account and KINU_CLOUDFLARE_API_TOKEN from Armada secrets.\n');
+    process.exit(1);
+  }
 
-  return { accountId, apiToken: { apiToken } };
-}
-
-/** Wrangler's remote proxy session, shared by every pool worker and ended with the last of them (vitest.config.ts). */
-const remote = remoteSessionHolder(() => startRemoteProxySession({ AI: { type: 'ai' } }, {
-  auth: async () => remoteWorkersAiAuth(),
-}));
+  return startRemoteProxySession({ AI: { type: 'ai' } }, { auth: async () => ({ accountId, apiToken: { apiToken } }) });
+});
 
 let runningTest = 'native harness setup';
 
@@ -97,13 +98,6 @@ export async function closeRemoteWorkersAi(): Promise<void> {
 
 export function reopenRemoteWorkersAi(): void {
   remote.reopen();
-}
-
-/** Missing credentials must fail configuration before the HTTP binding can erase the error into a disconnection. */
-export async function remoteWorkersAiBinding(answer: (request: Request) => Promise<Response | MiniflareResponse>) {
-  remoteWorkersAiAuth();
-
-  return await workersAiBinding(answer);
 }
 
 const ProxyUrlSchema = v.custom<RemoteProxyConnectionString>((value) => v.is(v.instance(URL), value));
