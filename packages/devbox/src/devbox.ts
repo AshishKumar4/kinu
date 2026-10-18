@@ -829,7 +829,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.configureContainer(wasRunning && (this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'));
 
       if (!this.#owns(generation) || this.#closed) return;
-      await this.ctx.blockConcurrencyWhile(() => this.#restoreInStartGate());
+      await this.ctx.blockConcurrencyWhile(() => this.#restoreInStartGate(!wasRunning));
     })();
 
     const admission = { abort: () => cancel.abort(), settled: run };
@@ -923,15 +923,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
 
-  /** Joins a re-entered hook; adopts a settled boot without re-attaching. */
-  async #restoreInStartGate(): Promise<void> {
+  /** Joins a re-entered hook; adopts a settled boot without re-attaching. `started`: this admission started the container. */
+  async #restoreInStartGate(started: boolean): Promise<void> {
     if (this.#closed) {
       this.#trace('startup.hook.closed', { generation: this.#generation });
 
       return;
     }
 
-    await this.#fly('hook', this.#generation, () => this.#runStartHook());
+    await this.#fly('hook', this.#generation, () => this.#runStartHook(started));
   }
 
   /**
@@ -969,7 +969,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** One budget includes adoption, restore, resumption and durable settlement. */
-  async #runStartHook(): Promise<void> {
+  async #runStartHook(started: boolean): Promise<void> {
     const budgetMs = Math.min(this.policy.attachBudgetMs, DEFAULT_DEVBOX_POLICY.attachBudgetMs);
     const budget = openStartBudget(budgetMs, this.startClock);
     let generation = this.#generation;
@@ -1012,6 +1012,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (clock !== undefined) this.#settleClock(clock);
       this.#invalidateGeneration();
+
+      // A container this admission did not start, stopped under the hook, is left stopped, as at admission (D34).
+      if (!started && this.ctx.container?.running !== true) return;
 
       if (attached) {
         const reason = `[deadline -> repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
