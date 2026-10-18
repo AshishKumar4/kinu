@@ -107,6 +107,7 @@ test("a socket's frames go on in the order they came, though the second's author
 test("the Stop's RPC keeps its place in the room's order ahead of the send that follows it", async () => {
   // The room's order as the agent meets it: the Stop reaches the wire's interrupt, the send its send.
   const order: string[] = [];
+  const { promise: sent, resolve: sendReached } = Promise.withResolvers<void>();
 
   const room = new ChatWireTransport({
     turnOwed: async () => false,
@@ -117,6 +118,7 @@ test("the Stop's RPC keeps its place in the room's order ahead of the send that 
     admitted: async () => false,
     send: async (_input, admitted) => {
       order.push('send');
+      sendReached();
       admitted();
 
       return 'turn';
@@ -132,9 +134,12 @@ test("the Stop's RPC keeps its place in the room's order ahead of the send that 
     if (left > 0) await steps(left - 1);
   };
 
+  // Its handling goes on past the room (the Stop's device sweep) until the send has reached the agent: a gate that held
+  // the send behind the Stop's whole handling would never let it.
   const { handlers, socket, asked, bothAsked } = await gated(async () => {
     await steps(12);
     await room.interrupt();
+    await sent;
   }, room);
 
   const stop = handlers.onMessage(socket, JSON.stringify({ type: 'rpc', id: 'stop', method: 'cancelCurrentWork', args: [] }));
