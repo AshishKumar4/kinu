@@ -1558,6 +1558,13 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Prom
 
   // The page's own state, which a page drawn again from scratch would not have.
   await frame.evaluate(() => { document.body.dataset['clicked'] = 'yes'; });
+  // The frame eases to the height the page tells once the read lands: a click aimed while it is shorter lands where
+  // the button was, which reached no page (2 of 16 rows hung on Armada, 2026-10-18).
+  const told = await frame.evaluate(() => Math.ceil(document.documentElement.getBoundingClientRect().height));
+  const frameHeight = `document.querySelector('[data-slate-ui="first"] iframe')?.getBoundingClientRect().height ?? 0`;
+
+  await until(page, 'the first frame as tall as its page', `${frameHeight} >= ${String(told)}`);
+  await settled(page, frameHeight, { box: `document.querySelector('[data-slate-ui="first"] iframe')` });
   await frame.click('#send');
   const request = await waitOn(page, 'the click reaching the agent', heard);
 
