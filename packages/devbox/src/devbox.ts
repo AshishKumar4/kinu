@@ -494,11 +494,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return { expected, settled };
   }
 
-  /** Memory can name `attached` for a replaced container, so every reader settles adoption first. */
+  /** Memory can name `attached` for a replaced container, so every reader settles adoption first. Adoption admits the
+   *  running container on the startup flight and starts none; recovery, which may stop or replace one, stays with the
+   *  startup row, so maintenance that meets a stopped box leaves it stopped (D34). */
   async #resolveAdoption(): Promise<void> {
-    if (this.#flights.hook !== undefined) return;
-
-    if (this.#adoptionPending) await this.#startContainer();
+    if (this.ctx.container?.running !== true || this.#flights.hook !== undefined || !this.#adoptionPending) return;
+    await this.#fly('startup', this.#generation, () => this.#admitExecution());
   }
 
   /** Turnover needs a container answer that refutes the stamped boot id; absent rows prove nothing. */
@@ -1356,6 +1357,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
+    // An admission that started nothing ends when its container stops: a retry would start the container the stop
+    // ended (D34), and a refusal would park a box nothing refused.
+    if (!startsContainer && this.ctx.container?.running !== true) return;
     const failure = classifyRecovery(failed);
 
     // A start that fails the same way every time is refused once, not re-armed each second: staging 7e411119d's box
@@ -2180,6 +2184,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return yield* attempt('not-ready', async (): Promise<AttachOutcome> => {
         this.#closed = false;
         this.stampInteraction();
+        await this.#resolveAdoption();
 
         if (this.#restoration.phase === 'repair') {
           await this.#repairAttached(this.#generation);
@@ -2207,15 +2212,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(attempt('io', async (): Promise<CheckpointOutcome> => {
       if (this.#quiescing !== undefined) return { kind: 'failed', reason: QUIESCING, bytes: undefined, movedBytes: undefined };
       this.stampInteraction();
-      await this.#healReplacedContainer();
 
       return await this.#checkpoint(kind);
     }));
   }
 
-  /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`). */
+  /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`), and each adopts and
+   *  checks the container it is about to commit as it runs, not as it was asked. */
   #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
+      await this.#healReplacedContainer();
       const pending = this.#flights.startup;
 
       // Waits for the startup to settle rather than racing it against a timer: a timer set here
@@ -2522,7 +2528,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  so the report names the restoration it carries. */
   devboxState(): Promise<DevboxReport> {
     return settle(attempt('io', async () => {
-      if (this.ctx.container?.running === true) await this.#resolveAdoption();
+      await this.#resolveAdoption();
 
       const [supervised, ports, incidents] = await Promise.all([
         this.#procSpecs(),
@@ -2769,6 +2775,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const beat = this.policy.heartbeatSeconds;
       await this.#scheduled(HEARTBEAT_CALLBACK, beat, async () => {
         this.#renewContainer();
+        await this.#resolveAdoption();
 
         if (this.ctx.container?.running !== true) {
           await this.#tick({ running: false, ping: 'skipped', armedNext: false });
@@ -2776,7 +2783,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return null;
         }
 
-        await this.#resolveAdoption();
         const settled = this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
 
         if (!settled) {
