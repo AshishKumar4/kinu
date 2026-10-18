@@ -5,6 +5,7 @@
  */
 import { afterEach, expect, test } from 'bun:test';
 import type { Connection, WSMessage } from 'agents';
+import { ChatWireTransport } from '../src/chat-transport';
 import { gatedClientHandlers, type ClientHandlers } from '../src/client-socket-gate';
 import { sessionBearerConnectionTag } from '../src/cli/rpc-gate';
 import { socketConnection } from './helpers/bindings';
@@ -25,11 +26,19 @@ function nameOf(message: WSMessage): string {
   return typeof message === 'string' ? message : new TextDecoder().decode(message);
 }
 
+/** A send from the chat's composer, as the SDK's transport frames it. */
+function chatRequest(text: string): string {
+  const body = { messages: [{ id: `input-${text}`, role: 'user', parts: [{ type: 'text', text }] }], trigger: 'submit-message' };
+
+  return JSON.stringify({ type: 'cf_agent_use_chat_request', id: text, init: { method: 'POST', body: JSON.stringify(body) } });
+}
+
 /**
  * A gate over a browser session whose authority the owner's user object answers when the test says, frame by frame,
- * and a base that records what reached it. `handle` is what the base does with each frame once it arrives.
+ * and a base that records what reached it. `handle` is what the base does with each frame once it arrives; `room`
+ * takes the chat frames.
  */
-async function gated(handle: (name: string) => Promise<void> = async () => {}) {
+async function gated(handle: (name: string) => Promise<void> = async () => {}, room: ChatWireTransport | null = null) {
   const user = createTestUserDO();
   const asked: (() => void)[] = [];
   const reached: string[] = [];
@@ -64,7 +73,7 @@ async function gated(handle: (name: string) => Promise<void> = async () => {}) {
     runtimeRefusal: () => null,
     terminalFor: async () => null,
     hostedWindowName: () => null,
-    chatRoomFor: () => null,
+    chatRoomFor: () => room,
     history: async () => undefined,
     overviewChanged: () => {},
     connectionOpened: () => {},
@@ -95,28 +104,48 @@ test("a socket's frames go on in the order they came, though the second's author
   expect(reached).toEqual(['stop', 'send']);
 });
 
-test("a frame whose handler takes steps to its place keeps it ahead of the shallower frame sent after it", async () => {
-  // As the Stop's RPC reaches the chat room through the Agent base's dispatch, a send's chat frame by fewer steps.
+test("the Stop's RPC keeps its place in the room's order ahead of the send that follows it", async () => {
+  // The room's order as the agent meets it: the Stop reaches the wire's interrupt, the send its send.
+  const order: string[] = [];
+
+  const room = new ChatWireTransport({
+    turnOwed: async () => false,
+    steps: async function* () { yield* []; },
+    broadcast: () => {},
+    getConnection: () => undefined,
+    history: async () => [],
+    admitted: async () => false,
+    send: async (_input, admitted) => {
+      order.push('send');
+      admitted();
+
+      return 'turn';
+    },
+    retry: () => Promise.reject(new Error('not reached in this test')),
+    interrupt: async () => { order.push('stop'); },
+    sendState: async () => ({ status: 'none' }),
+    awaitSend: async () => ({ status: 'none' }),
+  });
+
+  // The Stop's method reaches the room some steps into the Agent base's dispatch; the send's chat frame by fewer.
   const steps = async (left: number): Promise<void> => {
     if (left > 0) await steps(left - 1);
   };
 
-  const placed: string[] = [];
+  const { handlers, socket, asked, bothAsked } = await gated(async () => {
+    await steps(12);
+    await room.interrupt();
+  }, room);
 
-  const { handlers, socket, asked, bothAsked } = await gated(async (name) => {
-    if (name === 'stop') await steps(12);
-    placed.push(name);
-  });
-
-  const stop = handlers.onMessage(socket, frame('stop'));
-  const send = handlers.onMessage(socket, frame('send'));
+  const stop = handlers.onMessage(socket, JSON.stringify({ type: 'rpc', id: 'stop', method: 'cancelCurrentWork', args: [] }));
+  const send = handlers.onMessage(socket, chatRequest('send'));
 
   await bothAsked;
   asked[1]?.();
   asked[0]?.();
   await Promise.all([stop, send]);
 
-  expect(placed).toEqual(['stop', 'send']);
+  expect(order).toEqual(['stop', 'send']);
 });
 
 test("a frame whose handler waits on a long turn does not hold the next frame back", async () => {

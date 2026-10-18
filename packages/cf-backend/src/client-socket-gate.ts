@@ -11,7 +11,7 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
   actorFromConnectionTags, ERROR_STATUS, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, hostedWindowMay, JsonValueSchema, requiredRpcAccess,
-  rpcMovesOverview, WorkspaceTerminalInputSchema, type StoragePredatesReleaseError, type UserCaller,
+  rpcMovesOverview, WorkspaceTerminalInputSchema, type AgentRpcMethod, type StoragePredatesReleaseError, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { attempt, diagnostics, refusalOf, settle, tolerate, type KinuError, type Refusal } from '@kinu.run/core/obs';
@@ -19,7 +19,7 @@ import {
   CLI_AUTHORITY_REVOKED, cliBearerFromTags, rejectOutOfScopeRpc, rpcFrameOf, SESSION_AUTHORITY_REVOKED, sessionBearerFromTags,
   WEBSOCKET_POLICY_CLOSE, type CliSocketBearer, type RpcFrame,
 } from './cli/rpc-gate';
-import type { ChatWireTransport } from './chat-transport';
+import { framePlacing, type ChatWireTransport } from './chat-transport';
 import type { UserHubClient } from './account-reads';
 import type { WorkspaceTerminal } from './workspace-host';
 import { logDoCallRetry } from './obs/do-call-retry';
@@ -68,30 +68,27 @@ export function gatedClientHandlers(host: ClientSocketGateHost, base: ClientHand
   };
 }
 
-/** One turn of the event loop: whatever a frame's handler does before its first wait on I/O has run by then. */
-function nextTask(): Promise<void> {
-  return new Promise((resolve) => { setTimeout(resolve, 0); });
-}
+/** The Stop's RPC, which reaches its chat room's order a few steps into the Agent base's dispatch. */
+const STOP_RPC: AgentRpcMethod = 'cancelCurrentWork';
 
 class ClientSocketGate {
   constructor(private readonly host: ClientSocketGateHost) {}
 
-  /** Per socket, its newest frame's place: settled once that frame has gone on, so the frame after it may. */
+  /** Per socket, its newest frame's place: settled once that frame has taken it, so the frame after it may go on. */
   private readonly lines = new Map<string, Promise<void>>();
 
   /**
    * A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. Its
    * authority is asked at once, but it goes on only after the socket's frame before it has taken its place: those
    * answers come back in any order, and a Continue let in ahead of the Stop RPC sent before it was handed back by that
-   * Stop (staging rc12). A chat frame takes its place in the room's order by the path every chat frame takes, so the
-   * next follows at once; any other frame (an RPC: the Stop's is one) may reach the room by a longer one, which it has
-   * walked by the next task turn, before its first wait on I/O. Waiting for a frame's whole handling instead would
-   * hold a Stop behind the send it stops.
+   * Stop (staging rc12). A frame takes its place as it goes on, since chat frames reach the room's order by one path.
+   * The Stop's RPC takes it once the room has its step, or once its handling ends without one. A wait on anything else
+   * (a timer turn, or a frame's whole handling) holds the socket's every later frame behind it.
    */
   message(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
     const before = this.lines.get(connection.id) ?? Promise.resolve();
     const { promise: placed, resolve: place } = Promise.withResolvers<void>();
-    const roomFrame = typeof message === 'string' && parseProtocolMessage(message) !== null;
+    const stop = rpcFrameOf(message)?.method === STOP_RPC;
 
     this.lines.set(connection.id, placed);
 
@@ -100,9 +97,8 @@ class ClientSocketGate {
     const goneOn = Effect.flatMap(checked, ([refused]) => (refused
       ? Effect.sync(place)
       : Effect.promise(async () => {
-        const handled = this.admittedMessage(connection, message, base);
-
-        await Promise.all([handled, (roomFrame ? Promise.resolve() : nextTask()).then(place)]);
+        if (!stop) place();
+        await framePlacing.run(place, () => this.admittedMessage(connection, message, base)).finally(place);
       })));
 
     return settle(Effect.ensuring(goneOn, Effect.sync(() => {
