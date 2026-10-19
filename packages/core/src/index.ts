@@ -1185,7 +1185,7 @@ export {
 
 export {
   withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
-  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
+  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps, removeWhole,
   type VfsMount, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
 } from './vfs/mounts';

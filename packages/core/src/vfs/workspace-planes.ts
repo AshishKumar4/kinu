@@ -8,6 +8,7 @@ import type { ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from 
 import { readSoul } from '../identity/soul';
 import { provisionWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
+import { removeWhole } from './mounts';
 import type { WorkspaceBundle, WorkspaceSession } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqliteVFS, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -88,7 +89,7 @@ function forkSinkOver(store: () => Promise<SqliteVFS>): ForkFileSink {
 
         if (stat === null) continue;
 
-        if (stat.type === 'directory') plane.removeRecursive(at);
+        if (stat.type === 'directory') removeWhole(plane, at);
         else plane.unlink(at);
       }
     },
@@ -168,7 +169,7 @@ export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveStoreTar
         const root = `/${page.root}`;
         const born = kernel.statIfPresent(root, false);
 
-        if (born?.type === 'directory') kernel.removeRecursive(root);
+        if (born?.type === 'directory') removeWhole(kernel, root);
         else if (born !== null) kernel.unlink(root);
       }
 

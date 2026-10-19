@@ -120,29 +120,26 @@ describe('hosted workspace actor shell state', () => {
     });
   });
 
-  // A named shell's listing of its state tells apart what the shell keeps apart, so a read of it (an approval's) never
-  // takes one state for another: values, or names, that differ only in a lone UTF-16 surrogate (NIMBUS-ASKS #52).
-  test('a named shell lists apart values and names the shell keeps apart, and alike what is the same', async () => {
+  // A named shell's state, as an approval reads it, tells apart what the shell keeps apart, so a read of it never takes
+  // one state for another: values that differ only in a lone UTF-16 surrogate (NIMBUS-ASKS #52, whose `shellState`
+  // keeps them exact; a `set` listing loses them). A call's own env is not saved, so a name can differ only so in a call.
+  test("a named shell's state tells apart values the shell keeps apart, and alike what is the same", async () => {
     const storage = openWorkspaceDatabase();
     const workspace = await NimbusWorkspace.create({ ...storage, generation: 1 });
     const box = sdkBox(workerHost(workspace, new Map()));
-    // `$` is the only variable two shells in the same state list differently.
-    const listing = `( export '$=0'; set )`;
+    const digest = nimbusSessionShell({ ready: async () => {}, exec: async (command, options) => await box.exec(command, options), shellState: async (name) => await workspace.shellState(name) }, { home: '/home/main' });
 
     const holding = async (shellId: string, value: string) => {
       await box.exec('export A="$B"', { shellId, env: { B: value } });
 
-      return (await box.exec(listing, shell(shellId))).stdout;
+      return await digest.state?.(shellId);
     };
-
-    const named = async (name: string) => (await box.exec(listing, { shellId: 'agent:names', env: { [name]: 'same' } })).stdout;
 
     expect(await box.exec(`case "$A" in "$B") echo same;; *) echo apart;; esac`, { env: { A: '\uD800', B: '\uD801' } }))
       .toMatchObject({ stdout: 'apart\n' });
     expect(await holding('agent:low', '\uD800')).not.toBe(await holding('agent:high', '\uD801'));
     expect(await holding('agent:low-again', '\uD800')).toBe(await holding('agent:low', '\uD800'));
-    expect(await named('N\uD800')).not.toBe(await named('N\uD801'));
-    expect(await named('N\uD800')).toBe(await named('N\uD800'));
+    expect(await digest.state?.('agent:never-called')).toBe('none');
   });
 
   test('durable shell state survives worker reconstruction', async () => {
@@ -275,11 +272,12 @@ describe('hosted workspace preview capabilities', () => {
 
 describe('an approval in a hosted named session', () => {
   /** The session plane as the hosted workspace adapts the public SDK: its options, shell id included, pass as they are. */
-  function sessionBox(sdk: ReturnType<typeof sdkBox>): NimbusSandboxHandle {
+  function sessionBox(sdk: ReturnType<typeof sdkBox>, workspace: NimbusWorkspace): NimbusSandboxHandle {
     return {
       ready: async () => {},
       exec: async (command, options) => await sdk.exec(command, options),
       shellCwd: async (name) => (await sdk.exec('pwd', shell(name))).stdout.trim() || null,
+      shellState: async (name) => await workspace.shellState(name),
     };
   }
 
@@ -306,7 +304,7 @@ describe('an approval in a hosted named session', () => {
       newId: () => `ask-${String(seq += 1)}`,
     });
 
-    const sessionShell = nimbusSessionShell(sessionBox(sdkBox(workerHost(workspace, new Map()))), { home: '/home/main' });
+    const sessionShell = nimbusSessionShell(sessionBox(sdkBox(workerHost(workspace, new Map())), workspace), { home: '/home/main' });
     const session = createShellSession({ home: '/home/main', userRoots: () => [], stored: async (name) => await sessionShell.cwd?.(name) ?? null });
 
     const gated = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession: session }, {

@@ -791,10 +791,11 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 			const table = shared(bundle, [mountOf(name, backend)]);
 
 			// Walked a component at a time, this `cat` asked the backend 35 times (25 of them a stat of an ancestor); now
-			// `cat` asks only of the file it names, as it would of a local one.
+			// `cat` asks only of the file it names, as it would of a local one. Core 0.24's one open rule stats it once more
+			// than 0.18 did, 4 stats and 2 reads (2026-10-19; drafted as a Nimbus ask, kinu-logs/nimbus-1019-asks).
 			expect(await workspaceShell(bundle).exec(`cat /${name}/home/me/a/b/c.txt`)).toMatchObject({ stdout: 'deep', exitCode: 0 });
 			expect(calls.filter((call) => !call.endsWith(' /home/me/a/b/c.txt'))).toEqual([]);
-			expect(calls.length).toBeLessThanOrEqual(5);
+			expect(calls.length).toBeLessThanOrEqual(6);
 
 			calls.length = 0;
 			expect(await readText(table, `/${name}/home/me/a/b/c.txt`)).toBe('deep');

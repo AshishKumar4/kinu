@@ -2,6 +2,7 @@ import {
   NIMBUS_CLOUDFLARE_API as CLOUDFLARE_API,
   NIMBUS_CF_OAUTH_TOKEN_URL as CLOUDFLARE_TOKEN_URL,
   isNimbusCloudflareAccountId as isCloudflareAccountId,
+  fetchNimbusCloudflareAccounts,
 } from '@nimbus-sh/sdk/oauth';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { OAuthTokenError } from './oauth-token-error';
@@ -120,44 +121,6 @@ function requestCloudflareOAuthToken(env: CloudflareOAuthEnv, fields: Record<str
   });
 }
 
-function fetchCloudflareAccounts(accessToken: string): Effect.Effect<CloudflareAccount[]> {
-  return Effect.gen(function* () {
-    const response = yield* Effect.promise(() => fetch(`${CLOUDFLARE_API}/accounts`, {
-      headers: {
-        accept: 'application/json',
-        authorization: `Bearer ${accessToken}`,
-      },
-    }));
-
-    const payload = yield* jsonObjectOf(response, 'Cloudflare accounts endpoint');
-
-    if (!response.ok) {
-      const reason = stringField(payload, 'error_description') ?? firstCloudflareError(payload) ?? `HTTP ${response.status}`;
-
-      return yield* Effect.die(new Error(`Cloudflare account lookup failed: ${reason}`));
-    }
-
-    return accountsIn(payload);
-  });
-}
-
-function accountsIn(payload: JsonObject): CloudflareAccount[] {
-  const result = v.safeParse(v.array(CloudflareAccountSchema), payload.result);
-
-  if (!result.success) return [];
-
-  return result
-    .output.map((row) => {
-      const id = row.id;
-
-      if (!isCloudflareAccountId(id)) return null;
-      const name = nonEmptyString({ value: row.name }) ?? id;
-
-      return { id, name };
-    })
-    .filter((item): item is CloudflareAccount => item !== null);
-}
-
 export async function cloudflareTokenToCredential(
   token: CloudflareTokenPayload,
 ): Promise<OAuthCredential> {
@@ -165,8 +128,9 @@ export async function cloudflareTokenToCredential(
 
   if (!accessToken) return settle(Effect.die(new Error('Cloudflare OAuth did not return an access token.')));
 
-  // A failed account lookup still stores the credential; a missing account already says so.
-  return settle(Effect.map(fetchCloudflareAccounts(accessToken).pipe(
+  // A failed account lookup still stores the credential; a missing account already says so. Nimbus's lookup validates
+  // only `result` on success and names a failed or malformed answer with its status (ask 50, core 0.19).
+  return settle(Effect.map(Effect.promise(() => fetchNimbusCloudflareAccounts(accessToken)).pipe(
     Effect.catchCause((cause) => {
       diagnostics.failure('oauth.cloudflare_account_lookup_failed', toKinuError({
         doing: "looking up the Cloudflare login's accounts",
