@@ -15,7 +15,7 @@ import {
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
-import { censusOf, type ChatWindow, type MediaRef, type Repair, type StoreCensus, type StoredImage } from '@kinu.run/core';
+import { censusOf, type ChatWindow, type MediaRef, type Repair, type RewindTold, type StoreCensus, type StoredImage } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -63,7 +63,8 @@ export interface AgentFacetCalls {
   /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */
   modelSettingsChanged(snapshot: AgentSnapshot): Promise<void>;
   /** The chat continues from before `entryId`; refused while a turn runs. */
-  revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void>;
+  /** With `told`, a chat-only rewind that tells the agent what its rewound turns left. */
+  revertTo(snapshot: AgentSnapshot, entryId: string, told?: RewindTold): Promise<void>;
   /** The owner's Clear; answers why the emptied request went unmeasured, if it did. */
   clearConversation(snapshot: AgentSnapshot): Promise<string | null>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
@@ -323,8 +324,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
   }
 
-  async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {
-    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId)));
+  async revertTo(snapshot: AgentSnapshot, entryId: string, told?: RewindTold): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId, told)));
   }
 
   async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {

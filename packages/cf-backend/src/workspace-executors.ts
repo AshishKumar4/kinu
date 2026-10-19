@@ -8,7 +8,7 @@ import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   connectedDevices, deleteExecutorPathOp, ExecutorFileDownload, ExecutorFileUpload, getExecutorFiles, readExecutorFile, renameExecutorPathOp,
   runOnExecutor,
-  type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest,
+  type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest, type RewindComputer,
 } from '@kinu.run/core';
 import type { HeldSlatePorts } from '@kinu.run/core/slates';
 import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -276,6 +276,29 @@ export class WorkspaceExecutors {
         onSuccess: (opened) => ({ session: opened.session, user }),
         onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),
       });
+    }));
+  }
+
+  /**
+   * The computer as a chat-only rewind tells it to the agent: what runs on it and what listens, read only while it is
+   * up, as `exposedPorts` reads it, so a rewind never wakes a computer at rest. A read that fails says so in its place.
+   */
+  async rewindComputer(): Promise<RewindComputer> {
+    const [workspace, computer] = await Promise.all([this.exposedPorts('workspace'), this.exposedPorts('computer')]);
+    const ports = [...workspace.ports, ...computer.ports];
+    const state = this.host.computerState();
+    const handle = this.host.runtime().sandboxHandle;
+    const status = this.router?.getProvider('computer')?.getStatus?.();
+
+    if (state.refused !== null) return { processes: null, unread: state.refused, ports };
+
+    if (state.starting) return { processes: null, unread: 'the computer is still restoring', ports };
+
+    if (handle === null || status?.active !== true) return { processes: [], ports };
+
+    return await settle(Effect.matchCause(Effect.promise(() => handle.listSupervisedProcesses()), {
+      onSuccess: (rows): RewindComputer => ({ processes: rows.map(({ command, status: running }) => ({ command, status: running })), ports }),
+      onFailure: (failed): RewindComputer => ({ processes: null, unread: renderThrownChain({ cause: Cause.squash(failed) }), ports }),
     }));
   }
 

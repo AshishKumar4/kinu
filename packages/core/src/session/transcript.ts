@@ -412,6 +412,27 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       ORDER BY e.position, p.position`);
   }
 
+  /** The parts of `entryId` and every entry after it, oldest first: what a rewind to before it removes. Null when no
+   *  entry of this session is `entryId`. */
+  async partsFrom(entryId: string): Promise<JsonObject[] | null> {
+    this.actor.assertCurrent();
+    const { actorId } = this.actor;
+
+    const [from] = this.sql<{ position: number }>`SELECT position FROM conversation_entries
+      WHERE actor_id=${actorId} AND session_id=${this.sessionId} AND id=${entryId}`;
+
+    if (from === undefined) return null;
+
+    const entries = withParts(this.sql<EntryWithPartRow>`SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,
+        e.metadata_path,e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM conversation_entries e
+      LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      WHERE e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.position >= ${from.position}
+      ORDER BY e.position, p.position`);
+
+    return await this.parts(entries.flatMap((entry) => entry.parts));
+  }
+
   /** A value this session kept by {@link SessionTranscript.preparePayload}, read back whole. */
   async payload(stored: SessionPayload): Promise<JsonValue> {
     return await this.payloads.read(stored);
