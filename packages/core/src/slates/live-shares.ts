@@ -220,6 +220,26 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     return true;
   }
 
+  /**
+   * A listed public share on each viewer's own access, as its Gallery picture may be taken through it: its slate and
+   * handle, and whether that still holds (`held`), read where a picture taken now would be kept: still listed, public
+   * and `own`, and its slate's sharing not changed since (`generation`). Null for any other share.
+   */
+  galleryCapture(id: string): { readonly slate: string; readonly handle: string; readonly held: () => boolean } | null {
+    const listed = (): LiveShareRecord | null => {
+      const share = this.get(id);
+
+      return share?.revokedAt === null && share.gallery !== null && share.visibility === 'public' && share.mode === 'own' ? share : null;
+    };
+
+    const share = listed();
+
+    if (share === null) return null;
+    const generation = this.generation(share.slate);
+
+    return { slate: share.slate, handle: share.handle, held: () => listed() !== null && this.generation(share.slate) === generation };
+  }
+
   /** A live share's mode set: `own`, its grant kept for a later `owner`; `owner`, with the grant its owner approved
    *  now and the revision they approved it at. A revoked share keeps what it had. */
   setAuthority(id: string, authority: ShareAuthority, grant: ShareGrant): void {

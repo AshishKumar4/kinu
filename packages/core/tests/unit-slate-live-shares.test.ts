@@ -366,3 +366,33 @@ test("an 'Always for this slate' approval stands on each live owner share of its
     db.close();
   }
 });
+
+test("a listed share's Gallery capture holds while it is listed, public and its own, and its slate's sharing has not moved", () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add({ ...liveShare(), visibility: 'public' });
+    expect(shares.galleryCapture('s1')).toBeNull();
+    shares.setListing('s1', { line: 'Triage', category: 'work' });
+    const capture = shares.galleryCapture('s1');
+
+    expect(capture).toMatchObject({ slate: 'issues', handle: '0123456789' });
+    expect(capture?.held()).toBe(true);
+    // Unlisted, turned to the owner's access, turned back and listed again, all while a shot is taken: it holds no more.
+    shares.setListing('s1', null);
+    expect(capture?.held()).toBe(false);
+    shares.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, grant);
+    shares.setAuthority('s1', { mode: 'own', grantRevision: null }, grant);
+    shares.setListing('s1', { line: 'Triage', category: 'work' });
+    expect(capture?.held()).toBe(false);
+    expect(shares.galleryCapture('s1')?.held()).toBe(true);
+
+    // A share only its named people open is never taken through.
+    shares.add({ id: 's2', slate: 'digest', visibility: 'users', handle: 'abcdef0123', grant });
+    shares.setListing('s2', { line: 'Digest', category: 'work' });
+    expect(shares.galleryCapture('s2')).toBeNull();
+  } finally {
+    db.close();
+  }
+});
+

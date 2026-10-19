@@ -640,12 +640,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A listed public share's view: entered as a visitor with no account enters its host, at its publication now.
       share: async (id) => {
         const { controller } = await this.slates();
-        const share = controller.live.get(id);
+        const entry = controller.live.galleryCapture(id);
 
-        if (share?.revokedAt !== null || share.gallery === null || share.visibility !== 'public') return null;
-        const host = await slateShareUrl(this.env, this.name, share.handle);
+        if (entry === null) return null;
+        const publication = builtRevision(controller.builds, entry.slate) ?? '';
+        const host = await slateShareUrl(this.env, this.name, entry.handle);
 
-        return host === null ? null : { url: shareCaptureUrl(host), publication: builtRevision(controller.builds, share.slate) ?? '' };
+        return host === null ? null : { url: shareCaptureUrl(host), publication, held: entry.held };
       },
       camera: () => browserCamera(browser),
     };

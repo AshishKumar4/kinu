@@ -242,9 +242,9 @@ describe("a removed slate's pictures", () => {
 describe("a listed share's view", () => {
   const HOST = 'https://s1handle-token-ledger.preview.test/';
 
-  /** Share s1 listed, serving `publication` now; listed no more once `listed` says so. */
-  const s1 = (publication: () => string, listed: () => boolean = () => true): PictureCapture['share'] => async (share) =>
-    (share === 's1' && listed() ? { url: shareCaptureUrl(HOST), publication: publication() } : null);
+  /** Share s1 listed, serving `publication` now; listed no more once `listed` says so; its authority holding while `held`. */
+  const s1 = (publication: () => string, listed: () => boolean = () => true, held: () => boolean = () => true): PictureCapture['share'] => async (share) =>
+    (share === 's1' && listed() ? { url: shareCaptureUrl(HOST), publication: publication(), held } : null);
 
   /** A camera whose shots are `frames` in turn, keeping each address it was pointed at in `seen`. */
   function aimed(seen: string[], ...frames: Uint8Array[]): Camera {
@@ -317,6 +317,82 @@ describe("a listed share's view", () => {
     await store.unlisted('ledger', 'board', 's1', bucket);
     expect(store.shareDigest('board', 's1')).toBeNull();
     expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', store.digests().get('board') ?? '')]);
+  });
+});
+
+describe("a share view's shot", () => {
+  const HOST = 'https://s1handle-token-ledger.preview.test/';
+
+  /** A camera that, as it takes its one shot, runs `meanwhile` (what the owner does while the page loads). */
+  function during(meanwhile: () => Promise<void>, frame: Uint8Array): Camera {
+    return {
+      shoot: async () => {
+        await meanwhile();
+
+        return frame;
+      },
+      close: async () => {},
+    };
+  }
+
+  test('taken while its share was unlisted and listed again keeps nothing: the new listing is due a shot of its own', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    // Listed, public and its own again by the time the shot is in: only its listing tells the two apart.
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => true });
+
+    store.listed('board', 's1', 'rev-1', T0);
+
+    // Taken off the Gallery and turned to the owner's access while the page loads, then back and listed again.
+    const unlistedAndBack = async () => {
+      await store.unlisted('ledger', 'board', 's1', bucket);
+      store.listed('board', 's1', 'rev-1', T0 + 40_000);
+    };
+
+    expect(await store.captureDue(capture(during(unlistedAndBack, A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(bucket.objects.size).toBe(0);
+    expect(store.nextDueAt()).toBe(T0 + 70_000);
+  });
+
+  test("taken while its share's authority changed keeps nothing, and is taken again", async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    let held = true;
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => held });
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(during(async () => { held = false; }, A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(bucket.objects.size).toBe(0);
+    // Still due: the next shot is taken under the authority as it stands then.
+    held = true;
+    expect(await store.captureDue(capture(shooting(B), bucket, ['board'], share), T0 + 30_000)).toBe(true);
+    expect(store.shareDigest('board', 's1')).toBe(sha256Hex(B));
+  });
+
+  test("whose share's authority changed while it was stored in R2 keeps nothing of it", async () => {
+    const store = pictures();
+    const stored = memoryBucket();
+    let held = true;
+    // R2 answering the put only once the owner changed the share meanwhile.
+    const bucket: MemoryBucket = { ...stored, put: async (key, value, options) => { held = false; await stored.put(key, value, options); } };
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => held });
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(shooting(A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(stored.objects.size).toBe(0);
+  });
+
+  test('of a view whose listing ended goes at once, even where R2 refuses its pictures', async () => {
+    const store = pictures();
+    const refusing: MemoryBucket = { ...memoryBucket(), list: async () => { throw new Error('R2 is unavailable'); } };
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.unlisted('ledger', 'board', 's1', refusing).then(() => 'kept', () => 'refused')).toBe('refused');
+    // Listed again, it is a view of its own: no shot taken for the one before can land in it.
+    expect(store.nextDueAt()).toBeNull();
   });
 });
 

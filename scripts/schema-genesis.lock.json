@@ -1321,6 +1321,7 @@
   "slate_pictures@packages/cf-backend/src/slates/pictures.ts": [
     "slate TEXT NOT NULL",
     "view TEXT NOT NULL DEFAULT 'preview'",
+    "listing TEXT",
     "port INTEGER",
     "digest TEXT",
     "taken TEXT",

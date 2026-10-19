@@ -27,14 +27,16 @@ const PREVIEW_VIEW = 'preview';
  * One picture per slate and view. `preview` is the owner's private preview, entered by its port with a capture handle
  * of its own: it draws with the owner's own reads, so it is the owner's alone (their Drive). Any other view is a listed
  * share's, taken through the share's own host as a visitor with no account who continued past its consent page, so
- * under the share's own authority in its own mode: only these are ever a Gallery card's. `taken` is the publication a
- * share's picture was taken at; it is due again once its listing is read at another. Rows are a cache the camera
- * refills, and a view's rows predating views are the preview's.
+ * under the share's own authority in its own mode: only these are ever a Gallery card's. `listing` is a share view's
+ * incarnation, minted as its listing makes it and never reused, so a shot taken for one listing never lands in the next.
+ * `taken` is the publication a share's picture was taken at; it is due again once its listing is read at another. Rows
+ * are a cache the camera refills, and rows predating views are the preview's.
  */
 export function initSlatePictureTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS slate_pictures ( /* regenerable cache, refilled by packages/cf-backend/src/slates/pictures.ts */
     slate          TEXT NOT NULL,
     view           TEXT NOT NULL DEFAULT 'preview',
+    listing        TEXT,
     port           INTEGER,
     digest         TEXT,
     taken          TEXT,
@@ -47,7 +49,9 @@ export function initSlatePictureTable(execRaw: RawSqlExec): void {
   )`);
 }
 
-const DueRowSchema = v.object({ slate: v.string(), view: v.string(), port: v.nullable(v.number()), digest: v.nullable(v.string()), attempts: v.number() });
+const DueRowSchema = v.object({
+  slate: v.string(), view: v.string(), listing: v.nullable(v.string()), port: v.nullable(v.number()), digest: v.nullable(v.string()), attempts: v.number(),
+});
 
 type DuePicture = v.InferOutput<typeof DueRowSchema>;
 
@@ -71,7 +75,7 @@ export class SlatePictures {
    * taken at that publication.
    */
   listed(slate: string, share: string, publication: string, now: number): void {
-    this.db.exec(`INSERT INTO slate_pictures (slate, view) VALUES (?, ?) ON CONFLICT (slate, view) DO NOTHING`, slate, share);
+    this.db.exec(`INSERT INTO slate_pictures (slate, view, listing) VALUES (?, ?, ?) ON CONFLICT (slate, view) DO NOTHING`, slate, share, captureToken());
     this.db.exec(
       `UPDATE slate_pictures SET due_at = ?, attempts = 0 WHERE slate = ? AND view = ? AND due_at IS NULL AND taken IS NOT ?`,
       now + AFTER_LAST_RENDER_MS, slate, share, publication,
@@ -85,12 +89,16 @@ export class SlatePictures {
     return row === undefined ? null : v.parse(v.object({ digest: v.nullable(v.string()) }), row).digest;
   }
 
-  /** `share` listed no more: its pictures go, then its view. R2 refusing keeps the view, to go with its slate. */
+  /**
+   * `share` listed no more: its view goes at once, so a listing made later is a view of its own, then its pictures. R2
+   * refusing leaves them to go with the slate.
+   */
   unlisted(workspace: string, slate: string, share: string, bucket: PictureBucket | undefined): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
-      if (bucket !== undefined) yield* Effect.promise(() => deletePictures(bucket, sharePicturePrefix(workspace, slate, share)));
       this.db.exec(`DELETE FROM slate_pictures WHERE slate = ? AND view = ? AND view <> '${PREVIEW_VIEW}'`, slate, share);
       markStoreChanged(this.db);
+
+      if (bucket !== undefined) yield* Effect.promise(() => deletePictures(bucket, sharePicturePrefix(workspace, slate, share)));
     }));
   }
 
@@ -101,12 +109,17 @@ export class SlatePictures {
   }
 
   private due(now: number): DuePicture[] {
-    return this.db.exec(`SELECT slate, view, port, digest, attempts FROM slate_pictures WHERE due_at <= ? ORDER BY due_at`, now).toArray()
+    return this.db.exec(`SELECT slate, view, listing, port, digest, attempts FROM slate_pictures WHERE due_at <= ? ORDER BY due_at`, now).toArray()
       .map((row) => v.parse(DueRowSchema, row));
   }
 
   private removed(picture: DuePicture): boolean {
     return this.db.exec(`SELECT 1 AS x FROM slate_pictures WHERE slate = ? AND view = ?`, picture.slate, picture.view).toArray().length === 0;
+  }
+
+  /** Whether `picture`'s view is still the listing it was due for: unlisted and listed again, it is a view of its own. */
+  private sameListing(picture: DuePicture): boolean {
+    return this.db.exec(`SELECT 1 AS x FROM slate_pictures WHERE slate = ? AND view = ? AND listing IS ?`, picture.slate, picture.view, picture.listing).toArray().length > 0;
   }
 
   /** Whether `handle` is a preview capture's own, open on `port` now: only a preview view's shot opens one. */
@@ -230,7 +243,8 @@ export class SlatePictures {
 
         if (url === null) return yield* Effect.die(new Error('this deployment has no preview host'));
 
-        return yield* this.kept(camera, capture, picture, { url, taken: null });
+        // The owner's own preview, kept as theirs alone while its slate is: no share's view ever takes it.
+        return yield* this.kept(camera, capture, picture, { url, taken: null, holds: () => !this.removed(picture) });
       }), Effect.sync(() => {
         this.closeCapture(picture.slate);
       }));
@@ -248,33 +262,34 @@ export class SlatePictures {
         return false;
       }
 
-      return yield* this.kept(camera, capture, picture, { url: entry.url, taken: entry.publication });
+      // Kept only for the listing it was due for, under the share's authority as it stood as the shot began.
+      return yield* this.kept(camera, capture, picture, { url: entry.url, taken: entry.publication, holds: () => entry.held() && this.sameListing(picture) });
     });
   }
 
-  /** The shot at `url`, stored under its digest in its view's own place, and the one before it gone. */
-  private kept(camera: Camera, capture: PictureCapture, picture: DuePicture, at: { readonly url: string; readonly taken: string | null }): Effect.Effect<boolean> {
+  /**
+   * The shot at `url`, stored under its digest in its view's own place, and the one before it gone. `holds` is read
+   * once the shot is in R2, with nothing awaited before it is kept: what no longer holds keeps nothing of it.
+   */
+  private kept(camera: Camera, capture: PictureCapture, picture: DuePicture, at: { readonly url: string; readonly taken: string | null; readonly holds: () => boolean }): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
       const shot = yield* Effect.promise(async () => camera.shoot(at.url));
       const digest = sha256Hex(shot);
       const changed = digest !== picture.digest;
+      const key = viewPictureKey(capture.workspace, picture, digest);
 
-      if (changed) {
-        const key = viewPictureKey(capture.workspace, picture, digest);
-        yield* Effect.promise(async () => capture.bucket.put(key, shot, { httpMetadata: { contentType: 'image/webp' } }));
+      if (changed) yield* Effect.promise(async () => capture.bucket.put(key, shot, { httpMetadata: { contentType: 'image/webp' } }));
 
-        if (this.removed(picture)) {
-          yield* Effect.promise(async () => capture.bucket.delete(key));
+      if (!at.holds()) {
+        if (changed) yield* Effect.promise(async () => capture.bucket.delete(key));
 
-          return false;
-        }
-
-        const previous = picture.digest;
-
-        if (previous !== null) yield* Effect.promise(async () => capture.bucket.delete(viewPictureKey(capture.workspace, picture, previous)));
+        return false;
       }
 
       this.stored(picture, digest, at.taken);
+      const previous = picture.digest;
+
+      if (changed && previous !== null) yield* Effect.promise(async () => capture.bucket.delete(viewPictureKey(capture.workspace, picture, previous)));
 
       return changed;
     });
@@ -298,10 +313,11 @@ export interface PictureCapture {
   readonly bucket: PictureBucket;
   url(port: number, token: string): Promise<string | null>;
   /**
-   * A listed share's host entered past its consent page (`shareCaptureUrl`), and the publication it serves now; null
-   * once it is listed no more.
+   * A listed share's host entered past its consent page (`shareCaptureUrl`), the publication it serves now, and whether
+   * the authority the shot is taken under still holds where it would be kept (`SlateLiveShareStore.galleryCapture`);
+   * null once it is listed no more.
    */
-  share(share: string): Promise<{ readonly url: string; readonly publication: string } | null>;
+  share(share: string): Promise<{ readonly url: string; readonly publication: string; held(): boolean } | null>;
   /** With broken ones. */
   slates(): Promise<ReadonlySet<string>>;
   camera(): Promise<Camera>;
