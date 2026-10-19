@@ -133,6 +133,16 @@ describe('planEgress', () => {
     expect(plan.kind === 'refuse' && plan.reason).toContain('attacker.test');
   });
 
+  test.each([
+    ['http://api.stripe.com/v1/charges', 'refuse'],
+    ['ws://api.stripe.com/v1/stream', 'refuse'],
+    ['wss://api.stripe.com/v1/stream', 'forward'],
+  ] as const)('a placeholder for its own host over %p is %s: a secret crosses the network only encrypted', (url, kind) => {
+    const plan = planEgress({ host: 'api.stripe.com', url, headers: [['authorization', `Bearer ${STRIPE.placeholder}`]] }, [STRIPE]);
+
+    expect(plan.kind).toBe(kind);
+  });
+
   test('a revoked placeholder is refused, not forwarded as a dummy', () => {
     const plan = planEgress({
       host: 'api.stripe.com',

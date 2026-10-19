@@ -110,8 +110,9 @@ export function egressPlaceholdersIn(facts: EgressRequestFacts): Set<string> {
 }
 
 /**
- * Plan one outbound request against approved `active` bindings. Unknown placeholders are refused; requests
- * without placeholders forward untouched. Bodies are not scanned: a placeholder there leaves unsubstituted.
+ * Plan one outbound request against approved `active` bindings. A secret travels only over TLS, so the host binding
+ * names who reads it and nobody between does. Unknown placeholders are refused; requests without placeholders
+ * forward untouched. Bodies are not scanned: a placeholder there leaves unsubstituted.
  */
 export function planEgress(
   facts: EgressRequestFacts,
@@ -120,6 +121,17 @@ export function planEgress(
   const present = egressPlaceholdersIn(facts);
 
   if (present.size === 0) return { kind: 'forward', substitutions: [] };
+
+  const scheme = URL.parse(facts.url)?.protocol;
+
+  if (scheme !== 'https:' && scheme !== 'wss:') {
+    return {
+      kind: 'refuse',
+      status: 403,
+      reason: `This request carries a secret placeholder over ${scheme ?? 'an unparsed URL'}. A secret is sent only over `
+        + `https:// (wss:// for a WebSocket), never unencrypted. Send it to https://${facts.host} instead.`,
+    };
+  }
 
   const byPlaceholder = new Map(active.map((b) => [b.placeholder, b]));
   const substitutions: EgressSubstitution[] = [];

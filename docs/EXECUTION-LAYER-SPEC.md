@@ -234,8 +234,8 @@ its notices and `acceptSandboxLifecycleIncident` through the root-agent stub
 (the box rests on its own use and never asks the workspace; devbox D56), and installs egress interception. `enableInternet` true plus
 `interceptHttps` true means raw TCP and UDP leave directly, and HTTP/S on
 80/443 leaves through the vault-substituting handler
-(`cf-backend/src/egress/outbound.ts`), which also refuses private
-destinations (devbox D82). `/workspace`
+(`cf-backend/src/egress/outbound.ts`), which substitutes a secret only over
+https or wss and also refuses private destinations (devbox D82). `/workspace`
 is command cwd (`DEVBOX_WORKDIR`, `devbox/src/storage.ts`).
 
 `SANDBOX_LIFECYCLE_STAGES` is the closed failure-stage set;

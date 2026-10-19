@@ -31,6 +31,8 @@ const {
 
 const { stubOf } = await import('./helpers/platform-context');
 
+const { createTestUserDO, testOwner, TEST_USER_ENV } = await import('./helpers/user-do');
+
 
 const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');
 
@@ -184,6 +186,62 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
       );
       expect(upstream.seen[0].url).toBe('https://example.com/');
       expect(upstream.seen[0].headers.get('authorization')).toBeNull();
+    } finally { upstream.restore(); }
+  });
+});
+
+describe('a secret is sent only over an encrypted connection', () => {
+  /** The real owner object behind the stub, holding Stripe's secret, so the gate that decides is the one that ships. */
+  async function realVault(): Promise<{ readonly env: ContainerEgressEnv<string>; readonly placeholder: string }> {
+    const { userDO } = createTestUserDO();
+    const binding = await userDO.putEgressSecret(await testOwner(), { id: 'stripe', label: 'Stripe live', host: 'api.stripe.com', secret: SECRET });
+
+    return {
+      placeholder: binding.placeholder,
+      env: {
+        UserDO: {
+          idFromName: (name: string) => name,
+          get: () => jsrpcStub({
+            resolveEgressInjection: (caller: UserCaller, facts: EgressRequestFacts, grants: readonly ApprovalGrant[]) => userDO.resolveEgressInjection(caller, facts, grants),
+          }),
+        },
+        ...TEST_USER_ENV,
+      },
+    };
+  }
+
+  test('plain http to the allowed host is refused and sends nothing; https to it carries the secret', async () => {
+    const { env, placeholder } = await realVault();
+    const upstream = captureFetch(() => new Response('ok'));
+
+    try {
+      const plain = await handleContainerEgress(
+        new Request('http://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${placeholder}` } }), env, PARAMS, WORKSPACE,
+      );
+
+      expect(plain.status).toBe(403);
+      expect(await plain.text()).toContain('https://');
+      expect(upstream.seen).toHaveLength(0);
+
+      const encrypted = await handleContainerEgress(
+        new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${placeholder}` } }), env, PARAMS, WORKSPACE,
+      );
+
+      expect(encrypted.status).toBe(200);
+      expect(upstream.seen.map((request) => [request.url, request.headers.get('authorization')]))
+        .toEqual([['https://api.stripe.com/v1/charges', `Bearer ${SECRET}`]]);
+    } finally { upstream.restore(); }
+  });
+
+  test('a placeholder in a plain-http URL is refused too, not only one in a header', async () => {
+    const { env, placeholder } = await realVault();
+    const upstream = captureFetch(() => new Response('ok'));
+
+    try {
+      const plain = await handleContainerEgress(new Request(`http://api.stripe.com/v1/charges?key=${placeholder}`), env, PARAMS, WORKSPACE);
+
+      expect(plain.status).toBe(403);
+      expect(upstream.seen).toHaveLength(0);
     } finally { upstream.restore(); }
   });
 });
