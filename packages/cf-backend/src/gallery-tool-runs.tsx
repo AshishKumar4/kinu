@@ -1,7 +1,8 @@
 /**
- * A turn's runs of tool calls in the real chat (`frame=workspacepage&transcript=toolruns`): an answer that searched and
- * read its way to the cause, a long fix with a failed test mid-run, and a run split by a preview it started and by a
- * question for the owner. `gallery:tool-run` with `{ calls, failAt?, answer?, agent? }` shows `agent`'s chat (the
+ * A turn's runs of tool calls in the real chat (`frame=workspacepage&transcript=toolruns`), as an agent fixes a Worker's
+ * failing deploy: an answer that tailed the Worker's errors and read its way to the cause, a long fix with a failed
+ * test run mid-way and a helper hired for the routes, and a run split by a preview it started and by a question for the
+ * owner. `gallery:tool-run` with `{ calls, failAt?, answer?, agent? }` shows `agent`'s chat (the
  * workspace's by default) with a newest turn of that many calls, the newest running unless the answer has started; a
  * test drives the run through its states with it, against the claim it pushes.
  */
@@ -38,68 +39,78 @@ const page = (id: string, url: string): Part => ({ type: "tool-web", toolCallId:
 
 const STEP: Part = { type: "step-start" };
 
+/** The helper the fix hires, whose chat holds the thread too. */
+const HIRED = "route-checker";
+
 /** The ask a run stops at, as `ask_owner` puts it. */
 const DEPLOY_ASK = {
   questions: [{
-    id: "deploy", header: "Deploy", question: "The preview is up. Deploy the fix to staging now?", recommended: 0,
-    options: [{ label: "Deploy now", description: "Staging gets the fix in about two minutes." }, { label: "Wait", description: "Keep the preview; deploy later." }],
+    id: "deploy", header: "Deploy", question: "Staging is healthy on the fix. Deploy it to production now?", recommended: 0,
+    options: [{ label: "Deploy now", description: "Production gets the fix in about a minute." }, { label: "Wait", description: "Keep it on staging; deploy later." }],
   }],
 };
 
-/** Twenty-two calls fixing the bug, a test run failing in the middle. */
+/** A helper the run hires for the routes, as the agents tool puts it. */
+const hire = (id: string, name: string, role: string): Part => ({
+  type: "tool-agents", toolCallId: id, state: "output-available", input: { op: "hire", name, role, lifetime: "task" }, output: `${name} is checking`,
+});
+
+/** Twenty calls fixing the deploy, a test run failing in the middle and a helper hired for the routes. */
 const FIX_RUN: Part[] = [
-  thought("**Fixing the guard**\n\nThe lookup needs a fallback for coupons the migration left without a kind."),
-  ...["apply-coupon.ts", "rules.ts", "coupon.ts", "infer-kind.ts"].map((file, index) => read(`fix-read-${String(index)}`, `packages/checkout/src/${file}`)),
-  edit("fix-edit-1", "packages/checkout/src/apply-coupon.ts"),
+  thought("**Fixing the binding**\n\nThe config renamed the database binding to `SESSIONS_DB`; the code still reads `env.DB`."),
+  ...["src/index.ts", "src/db.ts", "wrangler.jsonc", "migrations/0007_sessions.sql"].map((file, index) => read(`fix-read-${String(index)}`, file)),
+  edit("fix-edit-1", "wrangler.jsonc"),
   STEP,
-  failed("fix-test-1", "bun test packages/checkout", "2 failed: percentage coupon without kind › applies 20%; fixed coupon › keeps its amount"),
-  thought("The fallback inferred a fixed kind for percentages. `inferKind` reads the amount's unit, not its sign."),
-  read("fix-read-4", "packages/checkout/src/infer-kind.ts"),
-  edit("fix-edit-2", "packages/checkout/src/infer-kind.ts"),
-  command("fix-test-2", "bun test packages/checkout", "48 pass, 0 fail"),
+  failed("fix-test-1", "bun test", "2 failed: health › reports the database; sessions › reads a stored session"),
+  thought("The binding in `wrangler.jsonc` is right now, but `openDb` still asks for `env.DB`. It must read the binding by its new name."),
+  read("fix-read-4", "src/db.ts"),
+  edit("fix-edit-2", "src/db.ts"),
+  command("fix-test-2", "bun test", "38 pass, 0 fail"),
   STEP,
-  ...["cart.ts", "totals.ts", "receipt.ts", "admin/coupons.ts", "api/apply.ts", "api/preview.ts"].map((file, index) => read(`fix-site-${String(index)}`, `packages/checkout/src/${file}`)),
-  edit("fix-edit-3", "packages/checkout/src/api/preview.ts"),
-  command("fix-test-3", "bun test packages/checkout packages/admin", "131 pass, 0 fail"),
-  command("fix-lint", "bun run lint", "clean"),
+  thought("Any route could read the old binding directly. A helper can check them while I read the hot ones."),
+  hire("fix-hire", HIRED, "check every route for env.DB"),
+  ...["health.ts", "sessions.ts", "users.ts", "admin.ts", "webhooks.ts"].map((file, index) => read(`fix-route-${String(index)}`, `src/routes/${file}`)),
+  edit("fix-edit-3", "src/routes/webhooks.ts"),
+  command("fix-test-3", "bun test", "41 pass, 0 fail"),
+  command("fix-dry-run", "bunx wrangler deploy --dry-run", "Total Upload: 212.40 KiB / gzip: 48.11 KiB"),
   edit("fix-notes", "CHANGELOG.md"),
-  command("fix-git", "git commit -am 'fix(checkout): coupons without a kind infer it'", "[fix/coupon-kind 3f2a91c]"),
+  command("fix-git", "git commit -am 'fix(api): read the sessions database by its new binding'", "[fix/sessions-binding 3f2a91c]"),
 ];
 
 const THREAD: UIMessage[] = [
-  row({ id: "tr-u1", role: "user", createdAt: at(30), parts: [said("SAVE20 fails at checkout with a 500. Find out why.")] }),
+  row({ id: "tr-u1", role: "user", createdAt: at(30), parts: [said("The api Worker went out an hour ago and /api/health has answered 500 since. Find out why.")] }),
   row({
     id: "tr-a1", role: "assistant", createdAt: at(29),
     parts: [
-      thought("**Reproducing the failure**\n\nFirst the handler, then the migration that landed Tuesday."),
+      thought("**Reading the failure**\n\nFirst what the Worker logs as it fails, then the deploy's config."),
       STEP,
-      read("why-read-1", "packages/checkout/src/apply-coupon.ts"),
-      read("why-read-2", "packages/checkout/migrations/0042_coupon_kind.sql"),
-      thought("The migration nulls `kind` on percentage coupons. Is that a known pattern for this ORM's backfills?"),
-      search("why-search", "coupon kind null after migration backfill"),
-      page("why-page-1", "https://orm.example.dev/docs/migrations/backfill"),
-      page("why-page-2", "https://github.com/example/orm/issues/1182"),
-      page("why-page-3", "https://orm.example.dev/docs/nullable-enums"),
+      command("why-tail", "bunx wrangler tail api --format pretty --status error", "GET /api/health 500 · TypeError: Cannot read properties of undefined (reading 'prepare') at openDb (src/db.ts:12)"),
+      read("why-read-1", "src/db.ts"),
+      read("why-read-2", "wrangler.jsonc"),
+      thought("`env.DB` is undefined at runtime. The config now binds the database as `SESSIONS_DB`. Does a renamed D1 binding keep its old name for a deploy?"),
+      search("why-search", "Cloudflare Workers D1 binding renamed undefined after deploy"),
+      page("why-page-1", "https://developers.cloudflare.com/d1/worker-api/"),
+      page("why-page-2", "https://developers.cloudflare.com/workers/wrangler/configuration/#d1-databases"),
       STEP,
-      said("The 500 is a dereference of `rules[kind]`: Tuesday's migration left every percentage coupon with `kind: null`, and SAVE20 is the only live one. SAVE10 is a fixed coupon, so it never reaches that branch."),
+      said("The 500 is `openDb` reading `env.DB`: yesterday's config change renamed the sessions database's binding to `SESSIONS_DB`, and a binding exists only under the name the config gives it. Every request that opens the database fails, and /api/health is the first to."),
     ],
   }),
-  row({ id: "tr-u2", role: "user", createdAt: at(20), parts: [said("Fix it, and run the whole suite.")] }),
+  row({ id: "tr-u2", role: "user", createdAt: at(20), parts: [said("Fix it, and run the tests.")] }),
   row({
     id: "tr-a2", role: "assistant", createdAt: at(19),
-    parts: [...FIX_RUN, STEP, said("Fixed. Coupons without a kind now infer it from the amount's unit, and all 131 checkout and admin tests pass. The first attempt read percentages as fixed; the second run caught it.")],
+    parts: [...FIX_RUN, STEP, said("Fixed. The Worker reads the sessions database by its new binding everywhere, the webhook route included, and all 41 tests pass. The first test run caught `openDb` still asking for the old name.")],
   }),
-  row({ id: "tr-u3", role: "user", createdAt: at(10), parts: [said("Put up a preview, and ask me before you deploy.")] }),
+  row({ id: "tr-u3", role: "user", createdAt: at(10), parts: [said("Run it, put it on staging, and ask me before production.")] }),
   row({
     id: "tr-a3", role: "assistant", createdAt: at(9),
     parts: [
-      command("pv-build", "bun run build", "built in 4.1s"),
-      command("pv-serve", "bun run preview --port 8789", "listening on 8789"),
+      command("pv-migrate", "bunx wrangler d1 migrations apply SESSIONS_DB --local", "Applied 1 migration"),
+      command("pv-serve", "bunx wrangler dev --port 8789", "Ready on http://localhost:8789"),
       { type: "tool-shell", toolCallId: "pv-expose", state: "output-available", input: { runtime: "workspace", command: "kinu expose 8789" }, output: { url: SLATE_GALLERY_URL, port: 8789 } },
-      read("pv-check-1", "packages/checkout/src/api/apply.ts"),
-      command("pv-check-2", "curl -s localhost:8789/api/apply?code=SAVE20", "{\"total\":1599}"),
+      command("pv-health", "curl -s localhost:8789/api/health", "{\"ok\":true,\"db\":\"up\"}"),
+      command("pv-staging", "bunx wrangler deploy --env staging", "Deployed api-staging (3.12 sec)"),
       STEP,
-      said("The preview applies SAVE20 correctly: $19.99 comes to $15.99."),
+      said("The Worker runs on the fix: /api/health answers `ok` with the database up, here and on staging."),
       { type: "tool-ask_owner", toolCallId: "pv-ask", state: "input-available", input: DEPLOY_ASK },
     ],
   }),
@@ -108,14 +119,14 @@ const THREAD: UIMessage[] = [
 /** The turn a test drives live, asked after the thread above. */
 const TOOL_RUN_TURN = "tr-u4";
 
-const ASKED: UIMessage = row({ id: TOOL_RUN_TURN, role: "user", createdAt: at(1), parts: [said("Check every other call site of applyCoupon.")] });
+const ASKED: UIMessage = row({ id: TOOL_RUN_TURN, role: "user", createdAt: at(1), parts: [said("Check the other Workers for the same binding rename.")] });
 
 /** The kinds of call a live run cycles through, so its line has work of several kinds to name. */
 const LIVE_CALLS: readonly ((id: string, index: number) => Part)[] = [
-  (id, index) => read(id, `packages/checkout/src/call-site-${String(index)}.ts`),
-  (id, index) => read(id, `packages/admin/src/coupons-${String(index)}.ts`),
-  (id) => search(id, "applyCoupon callers outside checkout"),
-  (id, index) => command(id, `rg -n "applyCoupon(" packages/${String(index)}`, "3 matches"),
+  (id, index) => read(id, `workers/worker-${String(index)}/wrangler.jsonc`),
+  (id, index) => read(id, `workers/worker-${String(index)}/src/db.ts`),
+  (id) => search(id, "wrangler D1 binding rename existing Workers"),
+  (id, index) => command(id, `rg -n "env\\.DB\\b" workers/worker-${String(index)}`, "2 matches"),
 ];
 
 const RunAskedSchema = v.object({ calls: v.number(), failAt: v.optional(v.number()), answer: v.optional(v.boolean()), agent: v.optional(v.string()) });
@@ -125,22 +136,20 @@ function liveTurn({ calls, failAt, answer = false }: v.InferOutput<typeof RunAsk
   const parts: Part[] = [];
 
   for (let index = 0; index < calls; index += 1) {
-    if (index % 5 === 0) parts.push(STEP, thought(`Call sites ${String(index + 1)} to ${String(index + 5)}: each passes the coupon straight through, or reads its kind first?`));
+    if (index % 5 === 0) parts.push(STEP, thought(`Workers ${String(index + 1)} to ${String(index + 5)}: each reads its database by the binding its config names, or still by \`env.DB\`?`));
     const id = `live-${String(index)}`;
-    const call = LIVE_CALLS[index % LIVE_CALLS.length]?.(id, index) ?? read(id, "packages/checkout/src/index.ts");
+    const call = LIVE_CALLS[index % LIVE_CALLS.length]?.(id, index) ?? read(id, "src/index.ts");
 
-    if (index === failAt) parts.push(failed(id, `rg -n "applyCoupon(" packages/legacy`, "rg: packages/legacy: No such file or directory"));
-    else if (index === calls - 1 && !answer && "toolCallId" in call) parts.push({ type: "tool-shell", toolCallId: id, state: "input-available", input: { runtime: "workspace", command: `bun test --filter applyCoupon-${String(index)}` } });
+    if (index === failAt) parts.push(failed(id, `rg -n "env\\.DB" workers/legacy`, "rg: workers/legacy: No such file or directory"));
+    else if (index === calls - 1 && !answer && "toolCallId" in call) parts.push({ type: "tool-shell", toolCallId: id, state: "input-available", input: { runtime: "workspace", command: `bunx wrangler deploy --dry-run --config workers/worker-${String(index)}/wrangler.jsonc` } });
     else parts.push(call);
   }
 
-  if (answer) parts.push(STEP, { type: "text", state: "streaming", text: "Every other call site reads the coupon's kind before it applies it, so" });
+  if (answer) parts.push(STEP, { type: "text", state: "streaming", text: "Every other Worker already reads its database by the binding its config names, so" });
 
   return { id: "tr-a4", role: "assistant", parts };
 }
 
-/** The hired agent whose chat holds the thread too. */
-const HIRED = "coupon-auditor";
 
 /** `transcript=toolruns`: the thread above, in the workspace's own chat and in a hired agent's. */
 export function seedToolRuns(transcript: string | null): void {

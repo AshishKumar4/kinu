@@ -172,7 +172,7 @@ const STOCK_ROSTER = {
   entries: [
     { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
       ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
-      : "Storefront", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+      : "API Worker", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
     { name: "perf-audit", displayName: "Dew", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
     { name: "email-triage", displayName: "Support inbox", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
     { name: "design-sys", displayName: "Kinu website", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
@@ -809,7 +809,7 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
       origin: { by: "owner" },
       history: [
         { forgotten: false, value: "English, short answers", origin: { by: "owner" }, at: NOW - 864e5 },
-        { forgotten: false, value: "English", origin: { by: "owner", workspace: "Storefront" }, at: NOW - 6 * 864e5 },
+        { forgotten: false, value: "English", origin: { by: "owner", workspace: "API Worker" }, at: NOW - 6 * 864e5 },
       ],
     },
   ],
@@ -1001,7 +1001,7 @@ const MEMORY_PROPOSALS = new Map<string, JsonValue>([
   }],
   ["timezone", {
     id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
-    origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
+    origin: { by: "background", workspace: "API Worker" }, createdAt: NOW - 36e5,
   }],
 ]);
 
@@ -1604,8 +1604,8 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
-      displayName: "Storefront", purpose: "The store's checkout, cart and payments: keep them fast and correct.",
-      soul: "# Storefront\n\nI look after the checkout, the cart and payments. I read the migration before I guess.\n",
+      displayName: "API Worker", purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
+      soul: "# API Worker\n\nI look after the api Worker: its deploys, its database and its logs. I read the logs before I guess.\n",
       createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
       messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
     },
@@ -1617,8 +1617,8 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
     // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
     chat: {
-      name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "Storefront", role: "default",
-      mission: "The store's checkout, cart and payments: keep them fast and correct.",
+      name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "API Worker", role: "default",
+      mission: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
       model: { model: "anthropic/claude-opus-4", source: "workspace" }, reasoningEffort: "medium",
       activePlan: null, messageCount: 48, pendingSteers: [],
     },
@@ -2039,57 +2039,57 @@ function galleryActorId(name: string): string {
   return `actor-${name}`;
 }
 
-const GALLERY_PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
+const GALLERY_PLAN_MARKDOWN = `# Read the sessions database by its new binding
 
-The checkout accepts archived coupons because the eligibility guard reads the campaign state after the discount has already been applied. This plan moves the guard ahead of mutation and keeps the current response contract.
+The api Worker fails every request that opens its database: yesterday's config renamed the D1 binding to \`SESSIONS_DB\`, but \`openDb\` still reads \`env.DB\`. This plan reads the database by its new name everywhere and keeps the health route's response.
 
 ## Scope
 
-- Read the coupon and campaign in one transaction.
-- Reject archived or expired campaigns before any cart row changes.
-- Keep the existing error code for clients that already handle an ineligible coupon.
+- Read the binding once, in \`openDb\`, by the name \`wrangler.jsonc\` gives it.
+- Move every route that reads \`env.DB\` itself onto \`openDb\`.
+- Keep \`/api/health\`'s response for the monitors that already poll it.
 
 ## Files
 
 \`\`\`text
-packages/
-├── core/
-│   ├── src/checkout/apply-coupon.ts
-│   └── tests/checkout/apply-coupon.test.ts
-└── cf-backend/
-    └── src/routes/checkout.ts
+workers/
+└── api/
+    ├── wrangler.jsonc
+    ├── src/db.ts
+    ├── src/routes/webhooks.ts
+    └── test/health.test.ts
 \`\`\`
 
 ## Implementation
 
-1. Move the eligibility check before the cart update in \`applyCoupon\`.
-2. Return the existing \`coupon_ineligible\` result when the campaign is archived or expired.
-3. Keep the route adapter unchanged; it already maps that result to the public response.
+1. Read \`env.SESSIONS_DB\` in \`openDb\`, and fail with a clear error when the binding is missing.
+2. Move \`routes/webhooks.ts\` onto \`openDb\`; it is the one route that reads the binding itself.
+3. Leave the health route unchanged; it already reports what \`openDb\` answers.
 
 ## Verification
 
-- Run the focused checkout test with active, archived, and expired campaigns.
-- Exercise the route with the existing gallery fixture.
-- Confirm that a refused coupon leaves the cart total and discount rows unchanged.
+- Run the tests with the binding present and missing.
+- Run \`wrangler dev\` and curl \`/api/health\` locally.
+- Deploy to staging and watch \`wrangler tail\` for errors before production.
 
 ## Expected result
 
-The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
+Every request opens the sessions database by its new binding, and \`/api/health\` answers \`ok\` with the database up.`;
 
 /* `?plan=late-heading` (mid-document h1) and `?plan=annotated-heading` (anchor on the leading h1): the header must promote
    neither. `?plan=read-only` is a settled plan. `?plan=code-path` names a file and line inline, the text Plannotator's own
    inline renderer turns into a hover preview that fetches `/api/doc`. */
 const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
 
-const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
+const GALLERY_PLAN_LATE_HEADING = `The config renamed the binding, so every request that still reads \`env.DB\` fails.
 
-# Rejected: map the failure at the edge
+# Rejected: bind the database under both names
 
-Mapping it in the route hides the defect and leaves the cart already mutated.
+Binding it twice hides the rename and leaves the code reading a name the config no longer means.
 
 ## Scope
 
-- Read the coupon and campaign in one transaction.`;
+- Read the binding once, in \`openDb\`, by the name \`wrangler.jsonc\` gives it.`;
 
 const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   id: "gallery-plan-title-note",
@@ -2097,15 +2097,15 @@ const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   startOffset: 0,
   endOffset: 10,
   type: "COMMENT",
-  text: "Name the guard this repairs.",
-  originalText: "Repair the",
+  text: "Name the binding this reads.",
+  originalText: "Read the s",
   createdA: NOW,
   author: "Owner",
 };
 
-const GALLERY_PLAN_CODE_PATH = `# Repair the \`applyCoupon\` eligibility guard
+const GALLERY_PLAN_CODE_PATH = `# Read the sessions database by its new binding
 
-Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` ahead of the cart update.
+Read the binding in \`workers/api/src/db.ts:12\` by the name the config gives it.
 
 [Reference](https://example.test/reference) [Jump](#details) [Local](/readme.md) [Unsafe](javascript:alert(1))
 
@@ -2121,7 +2121,7 @@ graph TD; A-->B
 \`\`\`
 
 $$
-\\frac{\\text{saved}}{\\text{cart}} \\le 0.2 \\quad \\href{javascript:alert(1)}{\\text{off}}
+\\frac{\\text{errors}}{\\text{requests}} \\le 0.001 \\quad \\href{javascript:alert(1)}{\\text{off}}
 $$`;
 
 const GALLERY_PLAN_CONTENTS = new Map([
@@ -2135,17 +2135,17 @@ const GALLERY_PLAN_CONTENT = GALLERY_PLAN_CONTENTS.get(GALLERY_PLAN_VARIANT ?? "
 const GALLERY_PLAN_THREAD: readonly ReviewAnnotation[] = [
   {
     id: "gallery-plan-scope", type: "COMMENT", blockId: "block-1", startOffset: 0, endOffset: 64, author: "Owner",
-    originalText: "The checkout accepts archived coupons because the eligibility guard",
-    text: "Does this also cover coupons whose campaign expires mid-checkout?", createdA: NOW - 20 * 60e3,
+    originalText: "The api Worker fails every request that opens its database: yest",
+    text: "Does this also cover the cron trigger, which opens the database outside a request?", createdA: NOW - 20 * 60e3,
   },
-  { id: "gallery-plan-all", type: "GLOBAL_COMMENT", text: "Split the route change into its own step so it can ship later.", author: "Owner", createdA: NOW - 19 * 60e3 },
+  { id: "gallery-plan-all", type: "GLOBAL_COMMENT", text: "Split the webhook change into its own step so it can ship later.", author: "Owner", createdA: NOW - 19 * 60e3 },
   {
     id: "gallery-plan-reply-scope", type: "REPLY", inReplyTo: "gallery-plan-scope", author: "agent", createdA: NOW - 2 * 60e3,
-    text: "Yes: the guard reads the campaign inside the same transaction, so an expiry between reads is caught. The revision says so in Scope.",
+    text: "Yes: the cron handler opens the database through `openDb` too, so it reads the new binding with the routes. The revision says so in Scope.",
   },
   {
     id: "gallery-plan-reply-all", type: "REPLY", inReplyTo: "gallery-plan-all", author: "agent", createdA: NOW - 60e3,
-    text: "The route adapter needs no change, so there is no route step to split; the revision drops it from Files.",
+    text: "The webhook route only moves onto `openDb`, so there is no step of its own to split; the revision folds it into Implementation.",
   },
 ];
 
@@ -2618,7 +2618,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       ...BOARD_FULL ? [{
         owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] }, plan: null,
         tasks: [
-          galleryTask("t-guard", "Move the eligibility guard ahead of the discount", "active", ["done", "done", "active", "open"]),
+          galleryTask("t-guard", "Read the database by its new binding in openDb", "active", ["done", "done", "active", "open"]),
           galleryTask("t-notes", "Write the release note for SAVE20", "open", ["open", "open"]),
           galleryTask("t-alert", "Alert when coupon 5xx passes 1%", "open"),
           galleryTask("t-repro", "Reproduce the archived-coupon 500", "done", ["done", "done", "done"]),
@@ -3013,7 +3013,7 @@ const PARKED_ASKS: PendingAction[] = [
 /** The workspace's own plan awaiting review, as the queue lists it beside the work read's plan: `&asks=plan`. */
 const PLAN_ASKS: PendingAction[] = [{
   id: `plan:${WORKSPACE_PAGE_NAME}:${galleryAgentPlan.id}:${String(galleryAgentPlan.revision)}`, kind: "plan_review",
-  title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
+  title: "Review the plan: Read the sessions database by its new binding", detail: null, at: NOW - 300_000,
   planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
 }];
 
@@ -4415,7 +4415,7 @@ const GALLERY_CHATS: readonly PanelAgent[] = [
 function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
   return (
     <WorkspaceHeader
-      workspace={{ name: "checkout-fixes", title: "Storefront", to: "/workspace/checkout-fixes/overview", editValue: "Storefront", rename: async () => {}, remove: () => {} }}
+      workspace={{ name: "checkout-fixes", title: "API Worker", to: "/workspace/checkout-fixes/overview", editValue: "API Worker", rename: async () => {}, remove: () => {} }}
       chats={GALLERY_CHATS.map((agent): ChatTab => (agent.key === "main"
         ? { agent, to: "/workspace/checkout-fixes", rename: async () => {} }
         : { agent, to: "/workspace/checkout-fixes", rename: async () => {}, remove: () => {} }))}
@@ -5039,7 +5039,7 @@ function RosterAuthorityFrame() {
 
   const entry: WorkspaceEntry = {
     name: "checkout-fixes",
-    displayName: "Storefront",
+    displayName: "API Worker",
     createdAt: NOW - 7 * 864e5,
     lastVisited: NOW - 60e3,
   };
@@ -5282,7 +5282,7 @@ function GalleryModal() {
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
-          Remove <span className="font-medium p-text">Storefront</span> and delete everything in it? This cannot be undone.
+          Remove <span className="font-medium p-text">API Worker</span> and delete everything in it? This cannot be undone.
         </p>
       </Modal>
     </div>
@@ -5433,7 +5433,7 @@ function MarksFrame() {
           {BROWSER_TABS.map((browser) => (
             <div key={browser.strip} className="w-[300px] rounded-[10px] px-2 pt-2" style={{ background: browser.strip }}>
               <div className="flex h-[34px] w-[200px] items-center gap-2 rounded-t-[8px] px-3 text-[12px]" style={{ background: browser.tab, color: browser.text, fontFamily: "Arial, sans-serif" }}>
-                <img src={favicon} width={16} height={16} alt="" />Storefront · Kinu
+                <img src={favicon} width={16} height={16} alt="" />API Worker · Kinu
               </div>
             </div>
           ))}
@@ -5475,10 +5475,10 @@ function MarksFrame() {
 }
 
 const BRAIN_STATUS = {
-  name: "checkout-coupon-bug-9935d3", displayName: "Storefront",
-  purpose: "The store's checkout, cart and payments: keep them fast and correct.", model: "anthropic/claude-opus-4",
+  name: "checkout-coupon-bug-9935d3", displayName: "API Worker",
+  purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.", model: "anthropic/claude-opus-4",
   scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
-  soul: "# Storefront", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
+  soul: "# API Worker", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
 const GALLERY_SLATE_ID = "sandbox-probe";

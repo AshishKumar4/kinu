@@ -158,7 +158,7 @@ describe('the sidebar before the roster answers', () => {
         const list = () => page.evaluate(() => ({
           busy: document.querySelector('[aria-busy="true"]') !== null,
           empty: document.body.innerText.includes('No workspaces yet.'),
-          storefront: [...document.querySelectorAll('[data-rail] a[href^="/workspace/"]')].some((link) => link.textContent?.includes('Storefront')),
+          storefront: [...document.querySelectorAll('[data-rail] a[href^="/workspace/"]')].some((link) => link.textContent?.includes('API Worker')),
         }));
 
         try {

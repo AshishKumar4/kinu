@@ -53,7 +53,7 @@ const QUIET = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, ha
 
 export const LANDING_ROSTER = {
   entries: [
-    { name: 'checkout-fixes', displayName: 'Storefront', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: 'checkout-fixes', displayName: 'API Worker', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
     { name: 'perf-audit', displayName: 'Dew', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
     { name: 'email-triage', displayName: 'Support inbox', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
   ].map((entry) => ({ ...entry, overview: { ...QUIET, slates: [], shares: [] }, decisions: 0 })),

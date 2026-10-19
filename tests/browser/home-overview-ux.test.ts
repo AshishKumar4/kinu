@@ -101,13 +101,13 @@ describe('the home workspace cards', () => {
         const list = await cards(page);
 
         expect(list.map((card) => card.title)).toEqual([
-          'Storefront', 'Dew', 'Support inbox',
+          'API Worker', 'Dew', 'Support inbox',
           'Kinu website', 'Untitled workspace',
         ]);
 
         // One chip per line, the shared headline: a waiting decision outranks
         // the live turn beside it, and its count rides the label.
-        const coupon = cardNamed(list, 'Storefront');
+        const coupon = cardNamed(list, 'API Worker');
         expect(coupon.chip).toBe('Needs you · 2');
         expect(coupon.chipClass).toContain('p-warning');
         expect(coupon.task).toBe('Investigate intermittent checkout failures in the coupon migration');

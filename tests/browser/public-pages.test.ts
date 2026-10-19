@@ -1149,7 +1149,7 @@ describe('the landing frames reuse the app rail', () => {
     }
 
     expect(rail.visible).toBeTrue();
-    expect(rail.roster).toContain('Storefront');
+    expect(rail.roster).toContain('API Worker');
     expect(rail.account).toBeTrue();
   });
 

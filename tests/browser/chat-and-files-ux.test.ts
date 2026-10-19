@@ -825,8 +825,8 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       await page.setViewport({ width: 1280, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('.p-thread-column [data-tool-run]');
-      await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/coupon-auditor'); });
-      await page.waitForFunction(() => document.querySelector('[data-composer-root] textarea')?.getAttribute('placeholder')?.includes('coupon-auditor') === true);
+      await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/route-checker'); });
+      await page.waitForFunction(() => document.querySelector('[data-composer-root] textarea')?.getAttribute('placeholder')?.includes('route-checker') === true);
       await page.waitForSelector('.p-thread-column [data-tool-run]');
       expect((await chatRuns(page)).map((line) => [line.calls, line.state, line.rowsShown])).toEqual([['6', 'settled', 0], ['20', 'settled', 0], ['2', 'settled', 0], ['2', 'settled', 0]]);
 
@@ -2228,7 +2228,7 @@ describe('history and roster request generations at actual hook boundaries', () 
       expect(await page.$eval('[data-roster-probe]', (el) => el.getAttribute('data-roster-pending'))).toBe('true');
       await page.click('[data-roster-release]');
 
-      // The old server row spells "Storefront", and the local edit
+      // The old server row spells "API Worker", and the local edit
       // retired every read in flight, so the released list must publish
       // NOTHING. That is a claim about something NOT happening, and the proof
       // cannot be another `waitForFunction` on the rename: that condition is

@@ -118,7 +118,7 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
 
   test('a titled workspace is untouched — it shows its own name', () => {
     const titled = rows.find((row) => row.href === '/workspace/checkout-fixes');
-    expect(titled?.text).toContain('Storefront');
+    expect(titled?.text).toContain('API Worker');
     expect(titled?.text).not.toContain(UNTITLED);
   });
 });
