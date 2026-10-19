@@ -11,7 +11,7 @@ import { decodeEntities, HTML_ENTITIES } from '../utils/text';
 import { quickAction, type BrowserRunAccess, type QuickActionEngine, type QuickActionTransport } from './browser-run';
 import type { AuthResolution, AuthResolver } from '../providers/types';
 import { TAVILY_CRED_KEY } from '../credentials/validate';
-import { WEB_SEARCH_INDEX } from './search-index';
+import { WEB_SEARCH_INDEX } from '../operations/web';
 import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
 import { Data, Effect } from 'effect';
 import type { JsonObject } from '../utils/json';

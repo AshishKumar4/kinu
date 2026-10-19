@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import type { FirstPartySearch } from './provider';
 import { parseGatewayTarget } from '../providers/gateway-binding-fetch';
 import { workersAiWebSearch, type WorkersAiWebSearch } from '../providers/model-invocation';
-import { WEB_SEARCH_INDEX } from './search-index';
+import { WEB_SEARCH_INDEX } from '../operations/web';
 import type { ModelCallSink } from '../events/model-call';
 
 /** `POST`, CLI-bearer gated as the inference proxy is: a search on the platform's gateway for a CLI signed in to it. */

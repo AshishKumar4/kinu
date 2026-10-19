@@ -24,8 +24,6 @@ export { buildCfWebSearchProvider } from './provider-factory';
 
 export { USER_WEB_SEARCH_PATH, WebSearchRequestSchema, bindingWebSearch, routeWebSearch } from './first-party-search';
 
-export { WEB_SEARCH_INDEX } from './search-index';
-
 export { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 
 export { htmlToMarkdown, stripBase64Images, looksLikeHtml } from './markdown';
@@ -36,4 +34,4 @@ export { browserSessions, initBrowserSessionTable, ownsBrowserSession, type Brow
 
 export { createWebCodemodeProvider, serveWeb, type WebDeps } from '../tools/web-operations';
 
-export { WEB, KITESURF_SESSION_ID } from '../operations/web';
+export { WEB, KITESURF_SESSION_ID, WEB_SEARCH_INDEX } from '../operations/web';
