@@ -48,6 +48,17 @@ export function selectTrialReport(text: string, item: TrialItem): string {
 
   const normalized = JSON.stringify({ ...parsed, testResults: files });
 
+  // A harness that threw leaves vitest-evals's own failed run: no metadata, and errors as `{ type, message }`.
+  const thrown = v.safeParse(v.looseObject({ meta: v.looseObject({ harness: v.looseObject({ run: v.looseObject({
+    session: v.strictObject({ events: v.array(v.unknown()) }),
+    errors: v.array(v.looseObject({ type: v.string(), message: v.string() })),
+  }) }) }) }), files[0]?.assertionResults[0]);
+
+  if (thrown.success) {
+    throw new Error(`the trial's harness threw before it recorded the run: ${thrown.output.meta.harness.run.errors
+      .map((error) => `${error.type}: ${error.message}`).join('\n')}`);
+  }
+
   const [assertion] = trials(parseResults('the requested trial', normalized));
   const metadata = assertion?.meta.harness.run.session.metadata;
 
