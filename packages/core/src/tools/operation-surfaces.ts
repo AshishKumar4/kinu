@@ -22,7 +22,7 @@ import {
   allowedInPlan, inputJsonSchema, inputProblem, JSON_VALUE_MARK, jsonOf, operationId, typeJsonSchema,
   type Impact, type Operation, type OperationCall, type OperationResult, type Served,
 } from '../operations/operation';
-import { retiredMembersOf } from '../operations/retired';
+import { retiredField, retiredMembersOf } from '../operations/retired';
 
 const typeOf = (schema: JsonSchema): string => jsonSchemaToType(schema, 'T').replace(/^type T = /u, '').replaceAll(`"${JSON_VALUE_MARK}"`, 'JsonValue');
 
@@ -256,6 +256,10 @@ function callInput(op: Operation, args: readonly JsonValue[]): JsonObject {
   const { required } = fieldsOf(op);
   const options = v.safeParse(v.optional(JsonObjectSchema, {}), args[required.length]);
   const problem = arrangementProblem(op, args, options.success ? options.output : null);
+  // An option taken off the surface is told what replaced it, before what the call form takes.
+  const retired = options.success ? Object.keys(options.output).flatMap((key) => retiredField(operationId(op), key) ?? []) : [];
+
+  if (retired.length > 0) return settleSync(Effect.fail(new KinuError('bad_input', `${operationId(op)}: ${retired.join('; ')}`)));
 
   if (problem !== null || !options.success) return settleSync(Effect.fail(new KinuError('bad_input', `${op.ns}.${callForm(op)} takes ${problem ?? 'its options as one object'}`)));
 

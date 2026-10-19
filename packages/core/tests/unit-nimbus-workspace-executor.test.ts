@@ -1,4 +1,4 @@
-import { RETIRED_MEMBERS } from '../src/operations/retired';
+import { RETIRED_FIELDS, RETIRED_MEMBERS } from '../src/operations/retired';
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -308,6 +308,24 @@ describe('the workspace process and port surface', () => {
     expect(await present(workspace.killProcess, 'workspace.killProcess').execute('41')).toMatchObject({
       success: false, reason: 'bad_input', error: expect.stringContaining(RETIRED_MEMBERS['workspace.killProcess']),
     });
+  });
+
+  test('a program passing a retired option is told what replaced it, and nothing starts', async () => {
+    const box = fakeBox();
+    let started = 0;
+
+    box.startProcess = async () => {
+      started += 1;
+
+      throw new Error('a refused call must not start');
+    };
+
+    const workspace = executorNamespace(blockedProvider(box)).tools;
+
+    expect(await present(workspace.startProcess, 'workspace.startProcess').execute('node server.js', { env: { PORT: '4100' } })).toMatchObject({
+      success: false, reason: 'bad_input', error: expect.stringContaining(RETIRED_FIELDS['workspace.startProcess'].env),
+    });
+    expect(started).toBe(0);
   });
 
   test('a port without a listener refuses rather than advertising a working preview', async () => {
