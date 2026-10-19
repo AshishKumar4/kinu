@@ -4,7 +4,12 @@
  * tasks where the tool wrote them.
  */
 import { expect, test } from 'bun:test';
-import { catalogTurn, driveUntil, gatewayWorkspace } from './helpers/actor-harness';
+import type { OwnerAnswer } from '@kinu.run/core';
+import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { createRecordingLogger } from '@kinu.run/test-utils';
+import { actorConnectionTag } from '@kinu.run/core';
+import { asPane } from './helpers/agents-sdk';
+import { agentSql, agentWakes, catalogTurn, driveUntil, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 test('a root turn that stops with its tasks open is reminded of them', async () => {
@@ -30,3 +35,110 @@ test('a root turn that stops with its tasks open is reminded of them', async () 
 
   expect(asked.find((sent) => sent.includes('open task(s)'))).toContain('Migrate the ledger to integer cents');
 });
+
+const ASK = {
+  questions: [{
+    id: 'units', question: 'Which unit should the ledger store?', header: 'Units', recommended: 0,
+    options: [{ label: 'Integer cents', description: 'Exact.' }, { label: 'Decimal dollars', description: 'Readable.' }],
+  }],
+};
+
+const ANSWER: OwnerAnswer[] = [{ id: 'units', selected: ['Integer cents'] }];
+
+// A turn that ended on a question to its owner with a task open queued its reminder behind the question, and the agent
+// still read as owing a turn: each wake, about a minute apart, re-ran the reminder's effect, found its turn still queued,
+// and armed the next, for as long as the question stood. Held behind the question, the reminder is parked: nothing wakes
+// for it until the owner answers or withdraws the question, even when the isolate that queued it ended meanwhile.
+for (const closing of ['answers', 'withdraws', 'withdraws after the isolate ended'] as const) {
+  test(`a reminder that waits behind an open question arms no wake, and runs once the owner ${closing}`, async () => {
+    const asked: string[] = [];
+
+    const gateway = stubAiBinding((run) => {
+      const { messages } = requestOf(run);
+      const sent = JSON.stringify(messages);
+      const results = messages.filter((message) => message.role === 'tool').length;
+
+      asked.push(sent);
+
+      if (sent.includes('open task(s)')) return chatCompletion(run, 'Back on it.');
+
+      if (results === 0) return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Migrate the ledger to integer cents'] } }, 'add_0');
+
+      return results === 1 ? toolCallCompletion(run, { tool: 'ask_owner', args: ASK }, 'call_ask') : chatCompletion(run, 'Storing integer cents.');
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+    const main = workspaceMainActor(workspace.db).actorId;
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+
+    try {
+      await catalogTurn(workspace.agent, 'Plan the ledger migration and start on it.');
+      await workspace.agent.terminalRetryPass();
+    } finally {
+      restore();
+    }
+
+    const [question] = (await workspace.agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+    const parked = log.emitted.filter((line) => line.event === 'turn.terminal_effect_parked').map((line) => line.fields.waits);
+
+    expect({ open: question !== undefined, wakes: agentWakes(workspace.db).filter((actor) => actor === main), reminded: asked.some((sent) => sent.includes('open task(s)')), parked })
+      .toEqual({ open: true, wakes: [], reminded: false, parked: ['owner_question'] });
+
+    if (closing === 'withdraws after the isolate ended') workspace.agent.harnessResetAgentIsolate(workspace.agent.agentOf(main).storageKey);
+
+    if (closing === 'answers') await workspace.agent.answerOwnerQuestions(question?.asked.id ?? '', ANSWER);
+    else await workspace.agent.dismissOwnerQuestions(question?.asked.id ?? '');
+
+    await driveUntil(workspace, `the reminder never ran once the owner ${closing}`, () => asked.some((sent) => sent.includes('open task(s)')));
+  });
+}
+
+// Parked is no wake, and still work its agent holds: a Stop of the agent that hired it reaches it, with its isolate alive
+// or ended since, and dismisses the question the queue waited behind.
+for (const isolate of ['alive', 'ended'] as const) {
+  test(`a hired agent's reminder parked behind its question is stopped by its hirer's Stop, its isolate ${isolate}`, async () => {
+    let asking = false;
+
+    const gateway = stubAiBinding((run) => {
+      const { messages } = requestOf(run);
+      const sent = JSON.stringify(messages);
+      const results = messages.filter((message) => message.role === 'tool').length;
+
+      if (sent.includes('Plan the ledger migration')) {
+        if (results === 0) return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Migrate the ledger to integer cents'] } }, 'add_0');
+
+        asking ||= results === 1;
+
+        return results === 1 ? toolCallCompletion(run, { tool: 'ask_owner', args: ASK }, 'call_ask') : chatCompletion(run, 'Storing integer cents.');
+      }
+
+      if (sent.includes('Keep the ledger.') || results > 0) return chatCompletion(run, 'Ready.');
+
+      return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'durable', message: 'Keep the ledger.' } }, 'call_hire');
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+
+    await catalogTurn(workspace.agent, 'Hire a ledger keeper.');
+    const hired = workspace.db.query<{ id: string }, []>("SELECT actor_id AS id FROM workspace_actors WHERE origin = 'agent'").get()?.id ?? '';
+
+    await workspace.agent.harnessAgentsIdle();
+    await asPane([actorConnectionTag(hired)], () => workspace.agent.send('Plan the ledger migration and start on it.', crypto.randomUUID()));
+    await driveUntil(workspace, 'the hired agent never asked', () => asking);
+    await workspace.agent.harnessAgentsIdle();
+    await workspace.agent.terminalRetryPass();
+    const status = async () => (await workspace.agent.listOwnerQuestions()).filter((question) => question.actor === hired).map((question) => question.asked.status);
+
+    expect({ open: await status(), wakes: agentWakes(workspace.db).filter((actorId) => actorId === hired) }).toEqual({ open: ['open'], wakes: [] });
+
+    if (isolate === 'ended') workspace.agent.harnessResetAgentIsolate(workspace.agent.agentOf(hired).storageKey);
+
+    await workspace.agent.cancelCurrentWork();
+    // The Stop reaches the agents below on a task of its own, and closes the question in the agent's own store.
+    await driveUntil(workspace, "the Stop never dismissed the hired agent's question", () => agentSql(workspace, hired)<{ status: string }>`
+      SELECT status FROM owner_questions WHERE actor_id = ${hired}`.every((question) => question.status === 'dismissed'));
+
+    expect(await status()).toEqual(['dismissed']);
+  });
+}

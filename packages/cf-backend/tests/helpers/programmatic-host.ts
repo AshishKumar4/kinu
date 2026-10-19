@@ -274,9 +274,7 @@ export const SCRIPT_EXPORTS = {
 
       EGRESS_FETCHES.push({ url: request.url, actorId: params?.actorId ?? null });
 
-      return await handleContainerEgress(request, NO_VAULT, params, {
-        grants: async () => { throw new Error('no suite over this host reads workspace grants through the egress'); },
-      });
+      return await handleContainerEgress(request, NO_VAULT, params, undefined);
     },
     connect: (): never => { throw new Error('no suite over this host opens a socket through the egress'); },
   }),

@@ -28,7 +28,7 @@ function checkpointedWrite(msg, { requested, content, options }, checkpoints, wr
 
   const data = options?.encoding === 'base64' ? Buffer.from(String(content), 'base64') : Buffer.from(String(content));
 
-  return mutation(checkpoints, msg.checkpoint, coveredBy(verdict), (snapshot) => {
+  return mutation(checkpoints, { view, hint: msg.checkpoint }, coveredBy(verdict), (snapshot) => {
     const answer = write(view, confined, data);
 
     if (answer.ok === false) return answer;
@@ -85,7 +85,7 @@ function writeEntry(at, flags, data) {
   }
 }
 
-const { atJudged } = require('./daemon/held.js');
+const { atJudged, movedUnderneath } = require('./daemon/held.js');
 
 const sandbox = require('./sandbox.js');
 
@@ -110,6 +110,8 @@ const METHODS = Object.fromEntries(Object.keys(protocol.methods).map((name) => [
 const FRAMES = protocol.frames;
 
 const chatgpt = require('./chatgpt.js');
+
+const screen = require('./daemon/screen.js');
 
 const { runToExit } = update;
 
@@ -219,9 +221,9 @@ const PTY_OUTPUT_FRAME = FRAMES.ptyOutput;
 
 const PTY_EXIT_FRAME = FRAMES.ptyExit;
 
-/** The frames the hub sends a live session. Each names a session this daemon
- *  already opened, so none of them is a way to start work. */
-const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME]);
+/** The frames the hub sends a live session or screen stream. Each names one
+ *  this daemon already opened, so none of them is a way to start work. */
+const LIVE_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, screen.SCREEN_CLOSE_FRAME]);
 
 /**
  * How far behind the socket may fall before live output — a terminal's, or a
@@ -356,19 +358,68 @@ const { DEFAULT_CHECKPOINT_KEEP } = require('../../core/src/checkpoints/format.t
 
 const { createCheckpointEngine } = require('../../core/src/checkpoints/engine.ts');
 
+/** What a confined checkpoint git exits with when its work tree is not there inside the sandbox; git never exits so. */
+const CHECKPOINT_TREE_UNSEEN = 73;
+
+/** What a confined checkpoint git exits with when there is no git inside the sandbox: bash's own for a missing command. */
+const CHECKPOINT_GIT_MISSING = 127;
+
+/**
+ * The argv, environment and directory a checkpoint git runs with: as this daemon's own process for a raw view, else
+ * inside the frame's sandbox (L111 #3) with its store writable. There it enters its work tree itself, so a tree that
+ * leads out of the roots is one it cannot see, and says so by its exit.
+ */
+function checkpointGitRun(confine, bin, args, options) {
+  const { writesStore } = options;
+
+  if (confine === null) return { file: bin, argv: [...args], cwd: options.cwd, env: options.env };
+  const { view } = confine;
+
+  // A sandboxed frame's checkpoint runs only where its commands would: never unconfined on a machine with no sandbox.
+  if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
+    throw new Error(`checkpoints need this device's sandbox, which it does not have (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
+  }
+
+  // Made on first use, as a sandboxed command's are: the sandbox starts in the agent's home.
+  for (const dir of [view.agentHome, view.agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const env = { ...options.env };
+
+  // The work tree as the sandbox names it, where git looks for it inside.
+  if (env.GIT_WORK_TREE !== undefined) env.GIT_WORK_TREE = view.insidePath(env.GIT_WORK_TREE);
+  const program = ['bash', '-c', `cd -- "$1" || exit ${CHECKPOINT_TREE_UNSEEN}; shift; exec "$@"`, 'kinu-checkpoint', view.insidePath(options.cwd), bin, ...args];
+  const store = [options.env.GIT_DIR ?? path.join(DEVICE_HOME, 'checkpoints')];
+  // Read-only where git only reads it, so a work tree that leads into the store writes nothing there.
+  const planned = sandbox.confined({ view, program, env, writable: writesStore ? store : [], readable: writesStore ? [] : store });
+
+  // The sandbox launcher is found on the daemon's own PATH, as a sandboxed command's is; git's environment is its own.
+  return { file: planned.argv[0], argv: planned.argv.slice(1), cwd: planned.cwd, env: { PATH: process.env.PATH, ...planned.env } };
+}
+
+/** Why a confined checkpoint could not reach its work tree, naming the roots it had to stay in. */
+function treeOutsideRoots(view, tree) {
+  const root = view.roots.find((candidate) => tree === candidate || tree.startsWith(`${candidate}/`));
+  const given = root ?? (view.roots.length === 0 ? `the agent's own home, ${view.agentHome}` : view.roots.join(', '));
+
+  return new Error(`checkpoint directory '${tree}' is no longer inside ${given}, which this workspace was given on this device: something in its path now leads out of it, so no checkpoint reads or restores it`);
+}
+
 /** This daemon's frames over core's one checkpoint engine: a hint names the agent, its turn and the directory. */
 function createCheckpoints(opts = {}) {
   const engine = createCheckpointEngine({
     fs, path, homedir: os.homedir(), tmpdir: os.tmpdir(), devNull: os.devNull, env: process.env,
     sha256: (text) => crypto.createHash('sha256').update(text).digest('hex'),
-    run: async (bin, args, options) => {
-      const { error, stdout, stderr } = await runToExit(bin, [...args], { ...options, encoding: 'utf8' });
+    run: async (bin, args, { cwd, env, maxBuffer, confine, writesStore }) => {
+      const run = checkpointGitRun(confine, bin, args, { cwd, env, writesStore });
+      const { error, stdout, stderr } = await runToExit(run.file, run.argv, { cwd: run.cwd, env: run.env, maxBuffer, encoding: 'utf8' });
       // A code that is not an exit status (a signal, an overfull buffer) is git never finishing.
       const finished = error === null || Number.isInteger(error.code);
+      const code = finished ? (error?.code ?? 0) : null;
+
+      if (confine !== null && code === CHECKPOINT_TREE_UNSEEN) throw treeOutsideRoots(confine.view, cwd);
 
       return {
-        code: finished ? (error?.code ?? 0) : null,
-        stdout: String(stdout), stderr: String(stderr), missing: error !== null && error.code === 'ENOENT',
+        code, stdout: String(stdout), stderr: String(stderr),
+        missing: error !== null && (error.code === 'ENOENT' || (confine !== null && code === CHECKPOINT_GIT_MISSING)),
       };
     },
     now: () => Date.now(),
@@ -379,26 +430,29 @@ function createCheckpoints(opts = {}) {
     gitBin: opts.gitBin ?? 'git',
   });
 
-  /** The snapshot a frame's hint asks for, or null when it asks none. */
-  const requestFor = (hint, fallbackDir) => {
+  /** The snapshot a frame's hint asks for under its `view`, or null when it asks none. */
+  const requestFor = (view, hint, fallbackDir) => {
     const dir = hint ? (hintedDir(hint) ?? fallbackDir) : undefined;
 
     if (!hint || !dir) return null;
 
     const named = (field) => ((field ?? '') === '' ? null : field);
 
-    return { agent: String(hint.agent ?? ''), dir, turn: { turnId: named(hint.turnId), sessionId: named(hint.sessionId) }, reason: 'pre-mutation' };
+    return {
+      agent: String(hint.agent ?? ''), dir, turn: { turnId: named(hint.turnId), sessionId: named(hint.sessionId) }, reason: 'pre-mutation',
+      confine: confinementOf(view),
+    };
   };
 
   return {
     status: () => engine.status(),
     /** The pre-mutation snapshot the hint asks for, in store order: its id, or null when none was taken. */
-    ensure: (hint, fallbackDir) => engine.mutate(requestFor(hint, fallbackDir), (outcome) => (outcome !== null && 'id' in outcome ? outcome.id : null)),
+    ensure: (view, hint, fallbackDir) => engine.mutate(requestFor(view, hint, fallbackDir), (outcome) => (outcome !== null && 'id' in outcome ? outcome.id : null)),
     /** `apply`, a frame's mutation, after the snapshot its hint asks for, handed that snapshot's outcome. */
-    mutate: (hint, fallbackDir, apply) => engine.mutate(requestFor(hint, fallbackDir), apply),
+    mutate: (view, hint, fallbackDir, apply) => engine.mutate(requestFor(view, hint, fallbackDir), apply),
     list: (agent, limit, turnId) => engine.list(String(agent ?? ''), { limit, turnId }),
-    plan: (agent, dir, id) => engine.plan(String(agent ?? ''), dir, String(id)),
-    restore: (agent, dir, id) => engine.restore(String(agent ?? ''), dir, String(id)),
+    plan: (view, agent, dir, id) => engine.plan(String(agent ?? ''), dir, String(id), confinementOf(view)),
+    restore: (view, agent, dir, id) => engine.restore(String(agent ?? ''), dir, String(id), confinementOf(view)),
     workdirForPath: (p, covers) => engine.workdirForPath(p, covers),
   };
 }
@@ -681,9 +735,37 @@ function statPathAnswer(msg) {
   const follow = (params[1] ?? {}).follow !== false;
   const view = viewFromFrame(msg);
   const confined = follow ? confinedDeviceViewPath(view, params[0], 'read') : view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'read');
-  const stat = follow ? fs.statSync(confined, { throwIfNoEntry: false }) : fs.lstatSync(confined, { throwIfNoEntry: false });
+  const stat = follow ? statJudged(view, confined) : heldStat(view, confined);
 
   return stat === undefined ? null : { size: stat.size, mtimeMs: stat.mtimeMs, type: statType(stat) };
+}
+
+/**
+ * The entry at a judged path, its own (a link's being the link's), read where it was judged; undefined when nothing is
+ * there, a missing directory of its path included, as a stat of an absent path is. A link put in place of a directory
+ * of it is still refused.
+ */
+function heldStat(view, judged) {
+  try {
+    return atJudged(view, judged, {}, (at) => at.stat());
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return undefined;
+    throw err;
+  }
+}
+
+/**
+ * What a judged path holds, read where it was judged (L111 #2): the view resolved every link in it, so a link found
+ * there now is one a command put in its place since, and its target is no part of the judgment. A raw view judged
+ * nothing, and follows it as the device's own commands do.
+ */
+function statJudged(view, judged) {
+  if (view.raw === true) return fs.statSync(judged, { throwIfNoEntry: false });
+  const stat = heldStat(view, judged);
+
+  if (stat !== undefined && stat.isSymbolicLink()) throw movedUnderneath(judged);
+
+  return stat;
 }
 
 /**
@@ -729,6 +811,11 @@ function whyUncheckpointed(verdict, snapshot) {
   return snapshot?.skipped === undefined ? null : { dir: verdict.path, why: snapshot.skipped };
 }
 
+/** How a frame's checkpoint git is confined: in its sandbox, or not at all for a raw view, which judged nothing. */
+function confinementOf(view) {
+  return view.raw === true ? null : { view };
+}
+
 /** The directory a verdict lets a checkpoint cover, or null. */
 function coveredBy(verdict) {
   return verdict !== null && verdict.why === null ? verdict.path : null;
@@ -749,8 +836,10 @@ function checkpointDirFor(view, requested) {
  * for a large file a range at a time, each answer under the socket's 32 MiB
  * receive ceiling, so the whole file crosses whatever its size.
  */
-function readRangeBytes(file, offset, length) {
-  const descriptor = fs.openSync(file, 'r');
+function readRangeBytes(view, file, offset, length) {
+  // Opened where the view judged it, not by its name again: a directory of it swapped for a link since reads nothing
+  // outside the root (L111 #2).
+  const descriptor = atJudged(view, file, {}, (at) => at.open(fs.constants.O_RDONLY));
 
   try {
     const chunks = [];
@@ -776,18 +865,28 @@ function readRangeBytes(file, offset, length) {
  * so a reader of a large directory needs no stat per entry. An entry gone since the read, a broken or looping link, or
  * one in a directory this user may list but not search carries its name alone.
  */
-function listEntry(dir, entry) {
-  const named = { name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' };
-  const stat = entryStat(path.join(dir, entry.name));
+function listEntry(view, dir, entry) {
+  const stat = entryStat(view, dir, entry);
+  const named = { name: entry.name, type: (stat === undefined ? entry.isDirectory() : stat.isDirectory()) ? 'dir' : 'file' };
 
   return stat === undefined ? named : { ...named, size: stat.size, mtimeMs: stat.mtimeMs };
 }
 
-function entryStat(file) {
+/** What leaves a listed entry its name alone: gone, unreadable, looping, or a link the view does not let this frame read. */
+const NAME_ALONE = new Set(['EACCES', 'ELOOP', 'ENOENT', sandbox.VIEW_INVISIBLE]);
+
+/**
+ * An entry's stat as a listing shows it, links followed. Its own, read through the directory the listing holds; a link's
+ * target only where the view lets this frame read it, judged and read as `statPath` reads it: a link out of the root
+ * shows its name alone, as one that is broken does (L111 #2).
+ */
+function entryStat(view, dir, entry) {
   try {
-    return fs.statSync(file, { throwIfNoEntry: false });
+    if (!entry.isSymbolicLink()) return entry.stat();
+
+    return statJudged(view, view.resolvePath(path.join(dir, entry.name), 'read'));
   } catch (err) {
-    if (err && (err.code === 'EACCES' || err.code === 'ELOOP')) return undefined;
+    if (err && NAME_ALONE.has(err.code)) return undefined;
     throw err;
   }
 }
@@ -805,14 +904,17 @@ function listFilesAnswer(msg) {
   const dir = confinedDeviceViewPath(viewFromFrame(msg), requested, 'read');
   const page = parseRecord(params[1] ?? {}, 'listFiles options must be an object');
 
-  if (page.limit === undefined) return fs.readdirSync(dir, { withFileTypes: true }).map((entry) => listEntry(dir, entry));
+  const view = viewFromFrame(msg);
   const offset = page.offset ?? 0;
 
-  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0) {
+  if (page.limit !== undefined && (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0)) {
     throw new Error('listFiles pages by a non-negative offset and a positive limit');
   }
 
-  return listPage(dir, offset, page.limit);
+  // Read where the view judged it, through its descriptor: a link swapped in for it lists nothing (L111 #2).
+  return atJudged(view, dir, {}, (at) => at.list((entries) => (page.limit === undefined
+    ? entries.map((entry) => listEntry(view, dir, entry))
+    : listPage(entries, offset, page.limit, (entry) => listEntry(view, dir, entry)))));
 }
 
 /**
@@ -820,24 +922,11 @@ function listFilesAnswer(msg) {
  * the offset of the page after, or null past the last entry. The hub pages a
  * large directory so each answer stays under the socket's receive ceiling.
  */
-function listPage(dir, offset, limit) {
-  const opened = fs.opendirSync(dir);
-  const entries = [];
+/** One page of a listing: `limit` entries from `offset`, each as `show` shows it, and where the next page starts. */
+function listPage(listed, offset, limit, show) {
+  const entries = listed.slice(offset, offset + limit).map(show);
 
-  try {
-    let index = 0;
-
-    for (let entry = opened.readSync(); entry !== null; entry = opened.readSync(), index += 1) {
-      if (index < offset) continue;
-
-      if (entries.length === limit) return { entries, next: index };
-      entries.push(listEntry(dir, entry));
-    }
-  } finally {
-    opened.closeSync();
-  }
-
-  return { entries, next: null };
+  return { entries, next: offset + limit < listed.length ? offset + limit : null };
 }
 
 /**
@@ -914,14 +1003,16 @@ function sendLiveFrame(ws, frame) {
 }
 
 /**
- * A frame for a session already open.
+ * A frame for a session or screen stream already open.
  *
  * There is no request id to answer on, so a frame naming a terminal this
  * machine no longer holds is recorded and dropped. That is the ordinary race
  * and not an error: the program exited, and its exit frame is already on its
- * way to the hub that sent this.
+ * way to the hub that sent this. A screen's close names its stream, which is
+ * gone already if this daemon ended it first.
  */
-function handlePtyFrame(msg, ctx) {
+function handleLiveFrame(msg, ctx) {
+  if (msg.type === screen.SCREEN_CLOSE_FRAME) return ctx?.screens?.closed(msg.stream);
   const sessions = ctx && ctx.sessions;
 
   if (!sessions) return log('device.terminal_frame_dropped', msg.type, 'this daemon holds no terminals');
@@ -973,10 +1064,10 @@ function rpcWhenSettled(ws, id, pending) {
 /** A mutating frame's work: after the pre-mutation snapshot of `covered` its
  *  checkpoint hint asks for, in checkpoint-store order, or at once where this
  *  daemon keeps no store. */
-function mutation(checkpoints, hint, covered, apply) {
+function mutation(checkpoints, { view, hint }, covered, apply) {
   if (!checkpoints) return new Promise((resolve) => { resolve(apply()); });
 
-  return checkpoints.mutate(hint && covered !== null ? { ...hint, dir: covered } : null, covered ?? undefined, apply);
+  return checkpoints.mutate(view, hint && covered !== null ? { ...hint, dir: covered } : null, covered ?? undefined, apply);
 }
 
 /** A socket the hub closed: nothing it sent can be answered any more. */
@@ -1086,7 +1177,7 @@ function startCommand(msg, cmd, ws, ctx) {
     // A command's checkpoint covers its working tree.
     const tree = checkpoints && msg.checkpoint ? plan.view.workingTree(hintedDir(msg.checkpoint) ?? plan.cwd) : null;
 
-    const started = await mutation(checkpoints, msg.checkpoint, coveredBy(tree), (snapshot) => {
+    const started = await mutation(checkpoints, { view: plan.view, hint: msg.checkpoint }, coveredBy(tree), (snapshot) => {
       if (socketClosed(ws)) throw new Error(`the socket that sent ${id} closed before it could start`);
 
       return supervision.start(id, cmd, plan, {
@@ -1246,12 +1337,13 @@ async function relayCall(ws, id, request) {
   }
 }
 
-/** Methods past the file and command set: the provider relay and this machine's ChatGPT sign-in, else
- *  the answer an older hub's newer frame gets. */
-function answerLaterMethod(msg, ws) {
+/** Methods past the file and command set: the provider relay, this machine's screen and its ChatGPT sign-in,
+ *  else the answer an older hub's newer frame gets. */
+function answerLaterMethod(msg, ws, ctx) {
   const { id, method, params } = msg;
 
   if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
+  else if (method === METHODS.screenOpen) rpc(ws, id, screensOf(ctx).open(params[0], ws));
   else if (method === CHATGPT_METHODS.status) rpc(ws, id, chatgptSession.status());
   else if (method === CHATGPT_METHODS.signIn) rpcWhenSettled(ws, id, chatgptSession.signIn());
   else if (method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut({ revoke: params?.[0]?.revoke === true }));
@@ -1291,7 +1383,7 @@ function rpcRequest(msg) {
 }
 
 function handle(msg, ws, ctx) {
-  if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
+  if (LIVE_FRAMES.has(msg.type)) return handleLiveFrame(msg, ctx);
   const request = rpcRequest(msg);
 
   if (request === null) return;
@@ -1325,7 +1417,8 @@ function handle(msg, ws, ctx) {
         return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
       }
 
-      const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
+      const view = viewFromFrame(msg);
+      const bytes = readRangeBytes(view, confinedDeviceViewPath(view, params[0], 'read'), offset, length);
       rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === METHODS.writeFile) {
       rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[2] }, checkpoints, (view, confined, data) => {
@@ -1346,7 +1439,7 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       const entry = view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
 
-      rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
+      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, () => {
         atJudged(view, entry, {}, (at) => { at.unlink(); });
 
         return { success: true };
@@ -1355,7 +1448,7 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       const entry = rmdirEntry(view, msg);
 
-      rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
+      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, () => {
         atJudged(view, entry, {}, (at) => { at.rmdir(); });
 
         return { success: true };
@@ -1365,7 +1458,7 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       const confined = confinedDeviceViewPath(view, params[0], 'write');
 
-      rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
+      rpcWhenSettled(ws, id, mutation(checkpoints, { view: viewFromFrame(msg), hint: null }, null, () => {
         atJudged(view, confined, { createParents: recursive }, (at) => { at.mkdir(recursive); });
 
         return { success: true };
@@ -1377,15 +1470,33 @@ function handle(msg, ws, ctx) {
     } else if (method === METHODS.checkpointList) {
       rpcWhenSettled(ws, id, checkpoints.list(params[0], params[1], params[2]));
     } else if (method === METHODS.checkpointPlan) {
-      rpcWhenSettled(ws, id, checkpoints.plan(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
+      const view = viewFromFrame(msg);
+      rpcWhenSettled(ws, id, checkpoints.plan(view, params[0], checkpointDirFor(view, params[1]), params[2]));
     } else if (method === METHODS.checkpointRestore) {
-      rpcWhenSettled(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
+      const view = viewFromFrame(msg);
+      rpcWhenSettled(ws, id, checkpoints.restore(view, params[0], checkpointDirFor(view, params[1]), params[2]));
     } else {
-      answerLaterMethod(msg, ws);
+      answerLaterMethod(msg, ws, ctx);
     }
   } catch (err) {
     rpc(ws, id, null, err);
   }
+}
+
+/** Screen data from the hub, handed to its stream; false when the message is not screen data. */
+function screenDataReceived(data, ctx) {
+  const received = screen.readScreenData(data);
+
+  if (received === null) return false;
+  ctx.screens.receive(received.stream, received.bytes);
+
+  return true;
+}
+
+function screensOf(ctx) {
+  if (!ctx || !ctx.screens) throw new Error('this daemon holds no screens');
+
+  return ctx.screens;
 }
 
 // ── Daemon startup ─────────────────────────────────────────────────────
@@ -1851,6 +1962,9 @@ async function main() {
   // is something a person is watching, so one whose socket is gone has
   // nobody to draw for.
   const sessions = pty.createSessions({ log });
+  // This machine's screen, served only on a stream the hub opens. No system's
+  // screen source ships yet, so every HELLO reports none (1014-t).
+  const screens = screen.createScreens({ source: null, log });
 
   // A signalled daemon terminates without running exit hooks, so the machine
   // would stay claimed by a dead pid until the next daemon reaped it. The
@@ -1864,6 +1978,7 @@ async function main() {
       const ended = sessions.closeAll();
 
       if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
+      screens.closeAll();
       exitWhenQuiet(0);
     });
   }
@@ -1876,6 +1991,7 @@ async function main() {
   const ctx = {
     checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }),
     sessions,
+    screens,
   };
 
   const updater = update.createUpdater({
@@ -1934,6 +2050,7 @@ async function main() {
         const ended = ctx.sessions.closeAll();
 
         if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
+        ctx.screens.closeAll();
         log('device.update_handed_over', `successor connected; pid ${process.pid} exiting`);
         loop.stop();
         exitWhenQuiet(0);
@@ -1957,11 +2074,15 @@ async function main() {
       const ended = ctx.sessions.closeAll();
 
       if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
+      // A screen is drawn for whoever is watching, and the socket was the only way to them.
+      ctx.screens.closeAll();
     },
     dial(ticket) {
       const wsUrl = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
       log('Connecting to', WS_ORIGIN + '/pc/connect');
       const ws = mkWs(wsUrl);
+      // A screen's bytes arrive as binary messages, read in the turn they land.
+      ws.binaryType = 'arraybuffer';
       ws.addEventListener('open', () => {
         log('Connected');
 
@@ -2003,9 +2124,13 @@ async function main() {
             gpu: sandbox.gpuNodes(),
           },
           agentRoot: AGENT_ROOT,
+          desktop: ctx.screens.desktop(),
         }));
       });
       ws.addEventListener('message', (ev) => {
+        // A screen's bytes are the one binary frame the hub sends; every other frame is JSON text.
+        if (typeof ev.data !== 'string' && screenDataReceived(ev.data, ctx)) return;
+
         const payload = ev.data instanceof ArrayBuffer
           ? new TextDecoder().decode(ev.data)
           : String(ev.data);

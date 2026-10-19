@@ -14,6 +14,7 @@ import { createWorkersAIEmbedder, generateReported, streamTextReported } from '.
 import { createChatModel } from '../src/llm';
 import { withModelStack } from '../src/providers/wire-model';
 import { buildCfWebSearchProvider } from '../src/web/provider-factory';
+import { DEFAULT_WEB_SEARCH_CHAIN } from '../src/providers/web-search';
 import type { ModelCallSink } from '../src/events/model-call';
 import type { Usage } from '../src/usage';
 
@@ -131,12 +132,12 @@ describe('the Workers AI utility bindings file unmeasured platform spend', () =>
       const converting = buildCfWebSearchProvider({
         AI: { toMarkdown: async () => [{ format: 'markdown', data: '# Title' }] },
         BROWSER: unusedBrowser,
-      }, () => undefined, report);
+      }, { auth: () => undefined, chain: async () => ({ routes: DEFAULT_WEB_SEARCH_CHAIN, retries: 0 }) }, report);
 
       expect((await converting.fetch('https://example.test/')).markdown).toContain('# Title');
       expect(producers()).toEqual({ platform: { calls: 1, unmeasured: 1, usage: {} } });
 
-      await buildCfWebSearchProvider({ BROWSER: unusedBrowser }, () => undefined, report).fetch('https://example.test/');
+      await buildCfWebSearchProvider({ BROWSER: unusedBrowser }, { auth: () => undefined, chain: async () => ({ routes: DEFAULT_WEB_SEARCH_CHAIN, retries: 0 }) }, report).fetch('https://example.test/');
       expect(producers()).toEqual({ platform: { calls: 1, unmeasured: 1, usage: {} } });
     } finally {
       globalThis.fetch = realFetch;

@@ -11,6 +11,34 @@ interface AlternateStep {
   readonly run: () => Promise<void>;
 }
 
+/** What `useLabelledStep` gives a control: the step running, the last failure, and the way to run one. */
+export interface LabelledStep {
+  readonly busy: string | null;
+  readonly error: string | null;
+  readonly run: (label: string, step: () => Promise<void>) => void;
+}
+
+/**
+ * One labelled step at a time: `busy` names the step running, so only its control says so; a failure is kept, in
+ * words, until the next step; `done` runs after a step that succeeded.
+ */
+export function useLabelledStep(done: () => void): LabelledStep {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = useCallback((label: string, step: () => Promise<void>) => detach(Effect.gen(function* () {
+    setBusy(label);
+    setError(null);
+
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(step);
+      done();
+    }), showing(setError)), Effect.sync(() => setBusy(null)));
+  })), [done]);
+
+  return { busy, error, run };
+}
+
 /** Closes on success; a failure stays open with its reason. */
 export function ConfirmDialog({ title, icon, children, action, failed, onConfirm, onClose, marker, maxWidthClass, danger = true, alternate }: {
   title: string;
@@ -27,18 +55,7 @@ export function ConfirmDialog({ title, icon, children, action, failed, onConfirm
   alternate?: AlternateStep;
 }) {
   /** The action running, so only its button says so. */
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const confirm = useCallback((label: string, step: () => Promise<void>) => detach(Effect.gen(function* () {
-    setBusy(label);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(step);
-      onClose();
-    }), showing(setError)), Effect.sync(() => setBusy(null)));
-  })), [onClose]);
+  const { busy, error, run: confirm } = useLabelledStep(onClose);
 
   return (
     <Modal title={title} icon={icon} onClose={onClose} busy={busy !== null} maxWidthClass={maxWidthClass}

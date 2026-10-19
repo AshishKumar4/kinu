@@ -118,6 +118,15 @@ conversation. Your conversation lives in the workspace and loads when you open
 it. `--no-transcript` skips the record for one run, and
 `--transcript-dir <dir>` chooses where it goes.
 
+Don't paste API keys or passwords into the chat. Add them in the web app under
+Settings › Secrets, one at a time or as a pasted `.env`, each with the hosts it
+may be sent to, and choose the workspaces that may use it. There an agent's
+commands see `$NAME` and its programs `env.NAME`, holding a stand-in that turns
+into the key only when sent over https to those hosts, so the key never enters
+the conversation, a file or a log. Where that can't work (a database password,
+a signed request), turn on "Agents may read the value" for that workspace. If
+you paste a key into the web composer anyway, it offers to move it there first.
+
 ## 4. Letting it touch your machine
 
 A cloud workspace reaches your PC through a daemon:

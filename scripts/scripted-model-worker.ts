@@ -9,20 +9,18 @@
  * Domain (Workers fetch docs; anything else answers error 1042), and the first two would put a test fixture into
  * production's own configuration.
  *
- * It also answers Tavily's `/search` (scripted-search.ts) and serves an MCP server whose sessions end on cue
- * (scripted-mcp.ts), that server again behind OAuth with expiring access tokens and rotating refresh tokens
- * (scripted-mcp-oauth.ts). Its route is public, so it answers only a request bearing `SCRIPTED_MODEL_KEY`, the secret
- * deploy.sh uploads with it and the tiers store as the scripted account's model and search keys (scripted-tier.ts),
- * except the OAuth routes a client reaches before and after a person authorizes, each of which checks what it was
- * handed against that key. It reads a body only up to MAX_BODY_BYTES. A refresh grant's generation is its one state,
- * held by `ScriptedOAuthGrants`.
+ * It also serves an MCP server whose sessions end on cue (scripted-mcp.ts), that server again behind OAuth with
+ * expiring access tokens and rotating refresh tokens (scripted-mcp-oauth.ts). Its route is public, so it answers only a
+ * request bearing `SCRIPTED_MODEL_KEY`, the secret deploy.sh uploads with it and the tiers store as the scripted
+ * account's model key (scripted-tier.ts), except the OAuth routes a client reaches before and after a person
+ * authorizes, each of which checks what it was handed against that key. It reads a body only up to MAX_BODY_BYTES. A
+ * refresh grant's generation is its one state, held by `ScriptedOAuthGrants`.
  */
 import * as v from 'valibot';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { timingSafeEqual } from '../packages/core/src/utils/crypto';
 import { SCRIPTED_MCP_PATH, scriptedMcp, type McpAnswer } from './scripted-mcp';
 import { OAUTH_AUTHORIZE_PATH, downFor, isPublicOAuthPath, scriptedOAuth, type GrantLedger } from './scripted-mcp-oauth';
-import { scriptedSearch } from './scripted-search';
 import { tierModel } from './tier-model';
 import { SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody } from './scripted-protocol';
 
@@ -195,15 +193,6 @@ export default {
 
     if (pathname === '/models' && request.method === 'GET') {
       return new Response(SCRIPTED_MODELS_BODY, { headers: { 'content-type': 'application/json' } });
-    }
-
-    if (pathname === '/search' && request.method === 'POST') {
-      const text = await boundedText(request, MAX_BODY_BYTES);
-
-      if (text === null) return refused(413, `the body is over ${String(MAX_BODY_BYTES)} bytes`);
-      const answer = scriptedSearch(text);
-
-      return new Response(answer.body, { status: answer.status, headers: { 'content-type': 'application/json' } });
     }
 
     if (pathname === SCRIPTED_MCP_PATH) {

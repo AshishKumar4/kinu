@@ -1,13 +1,18 @@
 import { useEffect, useRef } from "react";
 import * as v from "valibot";
-import { WorkspaceBroadcastSchema } from "@kinu.run/core";
+import { PositionCursorSchema, WorkspaceBroadcastSchema } from "@kinu.run/core";
 import { Effect } from "effect";
 import { detach, tolerate } from "@kinu.run/core/obs";
 
 /** The socket's frames: the chat transport's own, and the workspace's broadcasts as core decodes them. */
 const SocketMessageSchema = v.variant("type", [
-  // Arrival is what the chat pane waits on; the payload is the SDK's business.
-  v.looseObject({ type: v.literal("cf_agent_chat_messages") }),
+  // Arrival is what the chat pane waits on; the rows are the SDK's business, and `older` is where scroll-back reads on
+  // from the first of them (null: they reach the chat's start).
+  v.looseObject({
+    type: v.literal("cf_agent_chat_messages"),
+    messages: v.optional(v.array(v.looseObject({ id: v.string() }))),
+    older: v.optional(v.nullable(PositionCursorSchema)),
+  }),
   // `reason` only on the runtime's refusal of this tab (`terminalChatError`).
   v.object({
     type: v.literal("cf_agent_use_chat_response"),

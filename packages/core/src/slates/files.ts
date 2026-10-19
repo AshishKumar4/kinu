@@ -10,6 +10,9 @@ import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { compareCodeUnits } from '../utils/text';
 import { unmovedSince } from '../vfs/unmoved';
+import { removeWhole } from '../vfs/mounts';
+import type { VfsRemoval } from '@nimbus-sh/core/vfs/vfs.js';
+import type { FsTime } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 export { SlateDirectoryName };
 
@@ -89,9 +92,9 @@ export interface SlateFileTree {
   writeFile(path: string, content: Uint8Array, options?: { mode?: number }): void;
   symlink(target: string, path: string): void;
   chmod(path: string, mode: number): void;
-  utimes(path: string, atimeMs: number | null, mtimeMs: number | null): void;
+  utimes(path: string, atime: FsTime, mtime: FsTime): void;
   unlink(path: string): void;
-  removeRecursive(path: string): number;
+  removeRecursive(path: string): VfsRemoval | void;
 }
 
 export class SlateFiles {
@@ -219,7 +222,7 @@ export class SlateFiles {
       if (target.get(path)?.kind === entry.type) {
         if (entry.type === 'directory') this.prune(absolute, path, target);
       } else if (entry.type === 'directory') {
-        this.vfs.removeRecursive(absolute);
+        removeWhole(this.vfs, absolute);
       } else {
         this.vfs.unlink(absolute);
       }

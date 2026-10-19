@@ -457,11 +457,15 @@ describe('a named shell is part of the ask as it was when asked', () => {
     const box: SessionBox = {
       ready: async () => {},
       exec: async (command) => {
-        // A state read is digested in the session; anything else is a command sent to it.
-        if (command.includes('sha256sum')) watch.states += 1;
-        else dispatched.push(command);
+        dispatched.push(command);
 
-        return { command, success: true, stdout: command.includes('sha256sum') ? `${'0'.repeat(64)}  -\n` : '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 };
+        return { command, success: true, stdout: '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 };
+      },
+      // A state read is the session's saved state (Nimbus's shellState); every exec is a command sent to it.
+      shellState: async () => {
+        watch.states += 1;
+
+        return { cwd: WORKSPACE_ROOT, env: {} };
       },
       shellCwd: async () => {
         if (watch.states === watch.mishapAfter) {

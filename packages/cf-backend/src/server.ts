@@ -11,7 +11,7 @@ import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
 import type { EgressStreams, EgressTlsTarget } from '@nimbus-sh/core/_shared/workspace-network.js';
 import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
-  parseEgressParams, workspaceGrants, type KinuEgressParams,
+  parseEgressParams, type KinuEgressParams,
 } from './egress/outbound';
 import { objectNamed, APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
@@ -77,7 +77,7 @@ export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
   override fetch(request: Request): Promise<Response> {
     const params = parseEgressParams(this.ctx);
 
-    return handleContainerEgress(request, this.env, params, { grants: workspaceGrants(this.env), github: params && new GitHubEgressRecorder(this.env, this.ctx, params) });
+    return handleContainerEgress(request, this.env, params, params && new GitHubEgressRecorder(this.env, this.ctx, params));
   }
 
   /** A Nimbus workspace program's plain socket (`handleEgressConnect`); a container's raw sockets go straight out (D82). */

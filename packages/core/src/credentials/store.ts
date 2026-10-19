@@ -10,8 +10,6 @@ export type Credential =
 interface BearerCredential {
   kind: 'bearer';
   token: string;
-  /** Sent here instead of the provider's own endpoint (a proxy). */
-  baseURL?: string;
 }
 
 export interface OAuthCredential {

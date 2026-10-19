@@ -18,7 +18,7 @@ async function exchange(history: SessionHistory, id: string, question: string, a
 }
 
 async function spoken(history: SessionHistory): Promise<string[][]> {
-  return (await chatSeed(history.transcript(CHAT_SESSION_ID), keptMediaName)).map((message) => [
+  return (await chatSeed(history.transcript(CHAT_SESSION_ID), keptMediaName)).messages.map((message) => [
     message.role, message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
   ]);
 }

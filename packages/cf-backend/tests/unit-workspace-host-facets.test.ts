@@ -18,6 +18,7 @@ import {
 import { asFetchFunction } from '@kinu.run/core';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
+import type { SupervisorAnswer } from '@nimbus-sh/core/runtime/vfs-supervisor.js';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { nimbusAssets } from './helpers/nimbus-assets';
 
@@ -253,14 +254,16 @@ describe('hosted workspace facets', () => {
 });
 
 /**
- * What a facet's own code can put on the wire: over RPC every method on an entrypoint's prototype is callable (only
- * instance properties are private), so `_fsOp` sends any op name, stamped with the binding's own pid.
+ * What a facet's own code can put on the wire: over RPC every public method on an entrypoint's prototype is callable,
+ * and `answer` takes a method by name (Nimbus 0.22; its op-named `_fsOp` is private now), stamped with the binding's
+ * own pid.
  */
-async function fsOp(supervisor: SupervisorRPC, op: string, args: readonly string[]): Promise<boolean> {
-  // Any op name at all, as the wire carries it: a method's parameters are compared both ways.
-  const wire: { _fsOp<T>(name: string, values: readonly string[]): Promise<T> } = supervisor;
+async function fsOp(supervisor: SupervisorRPC, op: string, args: string[]): Promise<boolean> {
+  // Any name at all, as the wire carries it: a method's parameters are compared both ways.
+  const wire: { answer(name: string, values: unknown[]): Promise<SupervisorAnswer> } = supervisor;
+  const answer = await wire.answer(op, args);
 
-  return v.parse(v.boolean(), await wire._fsOp<boolean>(op, args));
+  return 'value' in answer ? v.parse(v.boolean(), answer.value) : false;
 }
 
 describe('a hosted process is untrusted code: the host serves only what Nimbus serves', () => {
@@ -277,8 +280,8 @@ describe('a hosted process is untrusted code: the host serves only what Nimbus s
     expect(clone.exitCode).toBe(0);
     // The same wire path serves an op Nimbus knows, so the refusal is about the name.
     expect(known).toBe(true);
-    // It crossed to the host: the refusal is the host's, not the facet's own.
-    expect(actor.dispatched.map((call) => call.op)).toContain(op);
+    // The host's SupervisorRPC refuses the name before the workspace is asked: nothing of it reached the workspace.
+    expect(actor.dispatched.map((call) => call.op)).not.toContain(op);
     const vfs = (await actor.hosted.bundle.session()).vfs.as(CRED_SESSION_USER);
     expect(vfs.exists('home/main/untrusted.txt')).toBe(false);
   });

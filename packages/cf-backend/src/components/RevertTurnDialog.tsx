@@ -51,11 +51,12 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
     return () => { current = false; };
   }, [messageId, rpc]);
 
-  const revert = useCallback((): Promise<string | null> => settle(Effect.gen(function* () {
+  // `chatOnly`: the computer keeps what the rewound turns did, and the agent is told of it (REWIND-0924).
+  const revert = useCallback((chatOnly: boolean): Promise<string | null> => settle(Effect.gen(function* () {
     setBusy(true);
 
     return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => rpc("revertConversation", [messageId]));
+      yield* Effect.promise(async () => rpc("revertConversation", [messageId, { chatOnly }]));
       onReverted();
 
       return null;
@@ -65,14 +66,14 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
   })), [messageId, rpc, onReverted]);
 
   const revertConversation = useCallback(async () => {
-    const reverted = await revert();
+    const reverted = await revert(true);
     setFailure(reverted);
 
     if (reverted === null) onClose();
   }, [revert, onClose]);
 
   const revertWithFiles = useCallback(() => detach(Effect.gen(function* () {
-    const reverted = yield* Effect.promise(async () => revert());
+    const reverted = yield* Effect.promise(async () => revert(false));
     setFailure(reverted);
 
     if (reverted !== null) return;

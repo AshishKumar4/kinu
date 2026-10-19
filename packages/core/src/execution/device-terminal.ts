@@ -12,7 +12,6 @@ import * as v from 'valibot';
 import { connections, type Connections } from '@nimbus-sh/fabric/connections.js';
 import { z } from 'zod/v4';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
-import { WS_OPEN } from './device-tunnel';
 import { DEVICE_PTY_MAX_AXIS, DEVICE_FRAMES } from './device-protocol';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
@@ -75,10 +74,10 @@ interface PendingSession extends TerminalHolder {
 export class DeviceTerminalHub {
   private readonly unattached = new Map<string, PendingSession>();
 
-  private readonly sockets: Connections<z.infer<typeof TerminalAttachmentSchema>>;
+  private readonly sockets: Connections<z.infer<typeof TerminalAttachmentSchema>, DeviceSocket>;
 
   constructor(
-    private readonly ctx: DeviceSocketCtx,
+    ctx: DeviceSocketCtx,
     private readonly devices: DeviceSocketHub,
     private readonly now: () => number = Date.now,
   ) {
@@ -134,12 +133,7 @@ export class DeviceTerminalHub {
   }
 
   paneSocket(session: string): DeviceSocket | null {
-    // Nimbus ask (connections socket type): get() erases the socket's send surface.
-    for (const ws of this.ctx.getWebSockets(terminalTag(session))) {
-      if (ws.readyState === WS_OPEN) return ws;
-    }
-
-    return null;
+    return this.sockets.get(terminalTag(session));
   }
 
   /** Bytes pass through; an unrecognised control frame is dropped and recorded as a defect. */

@@ -1,5 +1,5 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
-import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type UIMessageChunk } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
   actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, driveDeliveredRun, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
@@ -17,7 +17,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnActivity, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnActivity, ChatWindow, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
 
 /** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
  *  a stub's promise of a union is a union of promises. */
@@ -66,10 +66,10 @@ export interface AgentWorkspace {
   chatEvent(event: SessionEvent): Promise<void>;
   /** `ended` names the execution it closes. `activity`: the lines its turn logged that no tool call took. `window`: the
    *  transcript's newest messages as it ended, the frame its room is sent. */
-  turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]): Promise<void>;
+  turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: ChatWindow): Promise<void>;
   /** A committed answer was stamped after its end (its slates' previews): `window` is the transcript's newest messages
    *  now, which its room is shown again unless a turn is live, whose own end carries it. */
-  answerAmended(window: readonly UIMessage[]): Promise<void>;
+  answerAmended(window: ChatWindow): Promise<void>;
   /** The report a hire's settled turn owes its hirer, decided where the hirer's roster is and relayed to it, once its
    *  answer committed: `turn`, what it told so far; `relay`, its dedupe key and mode. Answers the relay's disposition, or
    *  `none` where it owed none. */

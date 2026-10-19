@@ -7,6 +7,7 @@ import type { FileUIPart } from "ai";
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { PromptCard } from "./PromptCard";
+import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 
 const FilePartSchema = v.object({ type: v.literal("file"), mediaType: v.string(), url: v.string(), filename: v.optional(v.string()) });
 
@@ -69,6 +70,9 @@ export function NewChatView({ workspace, title, createChat }: {
     }), showing(setError)), Effect.sync(() => setBusy(false)));
   })), [text, files.parts, createChat, navigate, workspace]);
 
+  // The opening is the chat's first message: a pasted secret is offered to Secrets before the chat is made with it.
+  const secretGuard = usePastedSecretGuard({ draft: text, setDraft: setText, workspace });
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-new-chat>
       <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col justify-center gap-7 px-6 py-[clamp(48px,12vh,120px)]">
@@ -76,7 +80,8 @@ export function NewChatView({ workspace, title, createChat }: {
           What do you want to work on in <span className="p-accent">{title}</span>?
         </h1>
         <PromptCard id="new-chat-opening" label="New chat" placeholder="Ask a question, plan a change, or hand over a task…"
-          action="Start chat" value={text} onChange={setText} onSubmit={start} busy={busy} error={error ?? files.refusal}
+          action="Start chat" value={text} onChange={setText} onSubmit={secretGuard.guarded("start", start)} notice={secretGuard.offer}
+          busy={busy} error={error ?? files.refusal}
           attachments={{ parts: files.parts, onAdd: files.add, onRemove: files.remove }} />
       </div>
     </div>

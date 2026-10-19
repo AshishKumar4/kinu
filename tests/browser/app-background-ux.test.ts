@@ -25,7 +25,7 @@ const SHOTS = evidenceDir('app-background/ux');
 mkdirSync(SHOTS, { recursive: true });
 
 /** The five names the stock gallery roster displays, in card order. */
-const DISPLAYED = ['checkout-fixes', 'perf-audit', 'email-triage', 'design-sys', 'handwrought-walnut-4166c321'];
+const DISPLAYED = ['api-worker', 'perf-audit', 'email-triage', 'design-sys', 'handwrought-walnut-4166c321'];
 
 interface BackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
@@ -287,7 +287,7 @@ describe('the living background', () => {
 
   test('never mounts where a transcript would be', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, '&path=/workspace/checkout-fixes');
+      const page = await freshPage(gallery, '&path=/workspace/api-worker');
 
       try {
         // The route's blank element is its content; a background would have
@@ -322,7 +322,7 @@ describe('the living background', () => {
         await waitForMode(page, 'working');
 
         // One decision waiting: a flash, then back under the working hum.
-        await setOverview(page, 'checkout-fixes', { activity: 'working', awaitsSettings: false, decisionsWaiting: 1, hasUpdates: false, latestRun: null, slates: [], shares: [] });
+        await setOverview(page, 'api-worker', { activity: 'working', awaitsSettings: false, decisionsWaiting: 1, hasUpdates: false, latestRun: null, slates: [], shares: [] });
         await waitForMode(page, 'attention', 1 / 60);
 
         const afterFlash = await page.evaluate(() => {

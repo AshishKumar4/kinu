@@ -149,18 +149,18 @@ const CITATION_ILLUSTRATIVE: readonly Illustrative[] = [
   },
   {
     file: 'packages/cf-backend/src/gallery.tsx',
-    cites: 'lean/Checkout/Coupon.lean',
+    cites: 'lean/Api/Sessions.lean',
     reason: 'Sample data for the design gallery, not a reference. The frame shows a'
-      + ' search whose task is "Prove that applyCoupon terminates for every coupon'
+      + ' search whose task is "Prove that the expiry sweep terminates for every session'
       + ' row", so the observation names a module the fixture invents along with the'
-      + ' coupon table it proves over. A gallery frame that cited a REAL module would'
+      + ' sessions table it proves over. A gallery frame that cited a REAL module would'
       + ' be worse: the fixture would then break whenever that module was renamed,'
       + ' and a designer reading the frame would take invented sorry counts for'
       + ' measured ones.',
   },
   {
     file: 'scripts/lean-citations.ts',
-    cites: 'lean/Checkout/Coupon.lean',
+    cites: 'lean/Api/Sessions.lean',
     reason: 'This register quoting the entry above it. Enrolling a path here makes'
       + ' this file cite that path, which is why every entry naming a spelling needs'
       + ' a twin naming this file.',

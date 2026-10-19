@@ -136,19 +136,29 @@ trap : INT
 if [ -f "${SAVED_SESSIONS}/$2/screen" ]; then rm -f "${SAVED_SESSIONS}/$2/running"; sh ${SESSION_RESUME_FILE} "$2"; fi
 while [ ! -e "$dir/piped" ]; do sleep 0.05; done
 printf '\\033[2m$ %s\\033[0m\\n' "$(cat "$dir/command")"
+[ -f "$dir/env" ] && . "$dir/env"
 sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" /bin/bash -c "$(cat "$dir/command")"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
 exec /bin/bash --rcfile ${SESSION_RC_FILE} -i`;
 
-/** In a session (D95): the session's files, then the session, its pane copied to the job's one log. */
+/**
+ * In a session (D95): the session's files, then the session, its pane copied to the job's one log. The values named in
+ * `DEVBOX_REVEALED` are the session's environment from its start, in tmux's memory only; a session that does not start
+ * fails the job with tmux's reason, as any failed start does.
+ */
 const RUN_IN_SESSION = `session=$DEVBOX_SESSION
 ${INSTALL_SESSION_FILES}
 printf '%s\\n' "$DEVBOX_JOB_PANE" >${JOB_PANE_FILE}
 unset DEVBOX_SESSION DEVBOX_JOB_PANE
 printf '%s' "$3" >"$dir/command"
 : >"$dir/stdout.log"; : >"$dir/stderr.log"
+# The values named in DEVBOX_REVEALED become the session's own, by tmux's -e, and leave this shell before tmux runs:
+# a server it starts takes its client's variables as every pane's.
+set --
+for name in \${DEVBOX_REVEALED:-}; do eval "set -- \\"\\$@\\" -e \\"\\$name=\\\${$name}\\""; unset "$name"; done
+unset DEVBOX_REVEALED
 tmux kill-session -t "=$session" 2>/dev/null
-if ! tmux -f ${TMUX_CONF_FILE} new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "sh ${JOB_PANE_FILE} $dir $session" 2>"$dir/stderr.log"; then
+if ! tmux -f ${TMUX_CONF_FILE} new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "$@" "sh ${JOB_PANE_FILE} $dir $session" 2>"$dir/stderr.log"; then
   echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
   exit 0
 fi
@@ -166,6 +176,7 @@ if [ -n "\${DEVBOX_SESSION:-}" ]; then
 ${RUN_IN_SESSION}
   exit 0
 fi
+[ -f "$dir/env" ] && . "$dir/env"
 setsid sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"`;
 
@@ -278,7 +289,14 @@ export class Processes {
   }
 
   /** With `session`, the job runs in that terminal session, where a person can watch and answer it (D95). */
-  start(command: string, options: { readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string }): Promise<ProcessRecord> {
+  /**
+   * `env` is written beside the job and read by its launch, in a session's pane too, which inherits no caller's
+   * variables. `revealed` is never written: it rides the launch in memory, and into a session as its environment.
+   */
+  start(command: string, options: {
+    readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string;
+    readonly env?: Readonly<Record<string, string>> | undefined; readonly revealed?: Readonly<Record<string, string>> | undefined;
+  }): Promise<ProcessRecord> {
     if (this.kernel === undefined) return settle(attempt('process', async () => {
       const kernel = await this.incarnation();
 
@@ -307,11 +325,21 @@ export class Processes {
       const record = { id: options.processId, command, cwd: options.cwd ?? '/workspace' };
       yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
 
-      const env = options.session === undefined ? CONTAINER_ENV : {
+      // A name it reads the value of is left out: the pane sources this file after the session's own values are set.
+      const variables = Object.entries(options.env ?? {}).filter(([name]) => options.revealed?.[name] === undefined)
+        .map(([name, value]) => `export ${name}='${value.replaceAll("'", "'\\''")}'\n`).join('');
+
+      if (variables !== '') yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/env`, variables)));
+
+      const revealed = options.revealed ?? {};
+
+      const env = options.session === undefined ? { ...CONTAINER_ENV, ...revealed } : {
         ...CONTAINER_ENV,
         ...SESSION_FILES,
+        ...revealed,
         DEVBOX_SESSION: options.session,
         DEVBOX_JOB_PANE: JOB_PANE,
+        ...(Object.keys(revealed).length > 0 && { DEVBOX_REVEALED: Object.keys(revealed).join(' ') }),
       };
 
       const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {

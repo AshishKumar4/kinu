@@ -12,40 +12,40 @@ interface DesignView {
 
 const GROUPS = ["Wide pane", "Notes to the agent", "Narrow pane", "Other machines", "Large and odd files"] as const;
 
-const APPLY = "&file=packages/checkout/src/apply-coupon.ts";
+const DB = "&file=workers/api/src/db.ts";
 
 const WIDE = "&inspector=760";
 
 const WIDEST = "&inspector=1270";
 
 const DESIGN_VIEWS: readonly DesignView[] = [
-  { id: "wide", group: "Wide pane", label: "Every file, one column", query: `${WIDE}${APPLY}`, width: "desktop" },
-  { id: "wide-split", group: "Wide pane", label: "Every file, side by side", query: `${WIDEST}${APPLY}`, width: "wide" },
-  { id: "wide-unified", group: "Wide pane", label: "Side by side, switched to unified", query: `${WIDEST}&layout=unified${APPLY}`, width: "wide" },
+  { id: "wide", group: "Wide pane", label: "Every file, one column", query: `${WIDE}${DB}`, width: "desktop" },
+  { id: "wide-split", group: "Wide pane", label: "Every file, side by side", query: `${WIDEST}${DB}`, width: "wide" },
+  { id: "wide-unified", group: "Wide pane", label: "Side by side, switched to unified", query: `${WIDEST}&layout=unified${DB}`, width: "wide" },
   { id: "wide-edge", group: "Wide pane", label: "Large files, expanded", query: `&set=edge${WIDE}`, width: "desktop" },
-  { id: "select", group: "Notes to the agent", label: "Selecting words", query: `${WIDEST}${APPLY}&select=text`, width: "wide" },
-  { id: "select-lines", group: "Notes to the agent", label: "Selecting lines by number", query: `${WIDEST}${APPLY}&select=lines`, width: "wide" },
-  { id: "comment", group: "Notes to the agent", label: "Writing a note", query: `${WIDEST}${APPLY}&comment=1`, width: "wide" },
-  { id: "notes", group: "Notes to the agent", label: "Three notes, beside the code", query: `${WIDEST}${APPLY}&notes=1&annotations=1`, width: "wide" },
-  { id: "notes-wide", group: "Notes to the agent", label: "The notes, in place of the tree", query: `${WIDE}${APPLY}&notes=1&annotations=1`, width: "desktop" },
-  { id: "comment-narrow", group: "Notes to the agent", label: "Writing a note, one file open", query: `${APPLY}&comment=1` },
-  { id: "panel-notes", group: "Notes to the agent", label: "Notes waiting to be sent", query: `&notes=1${APPLY}` },
-  { id: "panel-notes-open", group: "Notes to the agent", label: "The notes, opened in a narrow pane", query: `&notes=1&annotations=1${APPLY}` },
+  { id: "select", group: "Notes to the agent", label: "Selecting words", query: `${WIDEST}${DB}&select=text`, width: "wide" },
+  { id: "select-lines", group: "Notes to the agent", label: "Selecting lines by number", query: `${WIDEST}${DB}&select=lines`, width: "wide" },
+  { id: "comment", group: "Notes to the agent", label: "Writing a note", query: `${WIDEST}${DB}&comment=1`, width: "wide" },
+  { id: "notes", group: "Notes to the agent", label: "Three notes, beside the code", query: `${WIDEST}${DB}&notes=1&annotations=1`, width: "wide" },
+  { id: "notes-wide", group: "Notes to the agent", label: "The notes, in place of the tree", query: `${WIDE}${DB}&notes=1&annotations=1`, width: "desktop" },
+  { id: "comment-narrow", group: "Notes to the agent", label: "Writing a note, one file open", query: `${DB}&comment=1` },
+  { id: "panel-notes", group: "Notes to the agent", label: "Notes waiting to be sent", query: `&notes=1${DB}` },
+  { id: "panel-notes-open", group: "Notes to the agent", label: "The notes, opened in a narrow pane", query: `&notes=1&annotations=1${DB}` },
   { id: "sent", group: "Notes to the agent", label: "Sent, in the thread", query: "&sent=1&pane=chat" },
   { id: "changes", group: "Narrow pane", label: "What changed", query: "" },
-  { id: "file", group: "Narrow pane", label: "A file, open", query: APPLY },
-  { id: "file-added", group: "Narrow pane", label: "A new file", query: "&file=packages/checkout/tests/coupon-kind.test.ts" },
-  { id: "file-deleted", group: "Narrow pane", label: "A deleted file", query: "&file=packages/checkout/src/legacy-discount.ts" },
-  { id: "file-last", group: "Narrow pane", label: "The last file", query: "&file=packages/checkout/README.md" },
+  { id: "file", group: "Narrow pane", label: "A file, open", query: DB },
+  { id: "file-added", group: "Narrow pane", label: "A new file", query: "&file=workers/api/test/integration/sessions-binding.test.ts" },
+  { id: "file-deleted", group: "Narrow pane", label: "A deleted file", query: "&file=workers/api/src/kv-sessions.ts" },
+  { id: "file-last", group: "Narrow pane", label: "The last file", query: "&file=workers/api/README.md" },
   { id: "reviewed", group: "Narrow pane", label: "Just marked reviewed", query: "&reviewed=1" },
   { id: "device", group: "Other machines", label: "A laptop's uncommitted changes", query: "&source=laptop" },
-  { id: "device-file", group: "Other machines", label: "A git diff, with gaps", query: "&source=laptop&file=shop/src/app/checkout/page.tsx" },
+  { id: "device-file", group: "Other machines", label: "A git diff, with gaps", query: "&source=laptop&file=dashboard/src/app/issues/page.tsx" },
   { id: "source-menu", group: "Other machines", label: "Choosing whose changes", query: "&menu=source" },
   { id: "offline", group: "Other machines", label: "A laptop gone offline", query: "&source=laptop&offline=1" },
   { id: "edge", group: "Large and odd files", label: "Large, binary and long files", query: "&set=edge" },
-  { id: "edge-large", group: "Large and odd files", label: "Too large to show", query: "&set=edge&file=packages/checkout/src/generated/schema.ts" },
+  { id: "edge-large", group: "Large and odd files", label: "Too large to show", query: "&set=edge&file=workers/api/worker-configuration.d.ts" },
   { id: "edge-long", group: "Large and odd files", label: "A long new file", query: "&set=edge&file=docs/incident-runbook.md" },
-  { id: "edge-capped", group: "Large and odd files", label: "A diff that stops part-way", query: "&set=edge&file=data/seed/coupons.csv" },
+  { id: "edge-capped", group: "Large and odd files", label: "A diff that stops part-way", query: "&set=edge&file=data/seed/sessions.csv" },
 ];
 
 /** Review chrome, not product. `scripts/design-shots.ts diff-design` photographs the states it links. */

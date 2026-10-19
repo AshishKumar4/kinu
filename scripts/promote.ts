@@ -16,6 +16,7 @@
  *
  *   bun scripts/promote.ts digest                                   the artifact digest of packages/cf-backend/dist
  *   bun scripts/promote.ts forget                                   staging's deploy, before it builds: HEAD is not verified
+ *   bun scripts/promote.ts withdraw                                 staging's deploy, when it ends red: not verified, built kept
  *   bun scripts/promote.ts record <staging version> [reset record]
  *                                                                   staging's deploy, when every phase passed
  *   bun scripts/promote.ts evals <verdict dir>                      store HEAD's completed armada evaluation beside its record
@@ -230,6 +231,17 @@ export type Override = v.InferOutput<typeof OverrideSchema>;
 export interface Records {
   read(key: string): string | undefined;
   write(key: string, text: string): void;
+  delete(key: string): void;
+}
+
+/**
+ * What a staging deploy takes back of `sha`'s records. `publishing`, before it replaces what staging serves: all three,
+ * since nothing it publishes is verified, built or evaluated until it says so. `red`, when it ends red after publishing:
+ * the verified record and the evals verdict, which would let a red build be promoted, but not the built record, which
+ * says only that staging serves it, and is what an owner's override names (`writeOverride`).
+ */
+export function withdraw(records: Records, sha: string, moment: 'publishing' | 'red'): void {
+  for (const key of moment === 'publishing' ? [verifiedKey(sha), builtKey(sha), evalsKey(sha)] : [verifiedKey(sha), evalsKey(sha)]) records.delete(key);
 }
 
 /**
@@ -618,11 +630,16 @@ function refuseImageDrift(): void {
   if (drift.length > 0) throw new Error(`production names container images staging never ran: ${drift.join(', ')}`);
 }
 
-function forgetCommand({ sha, buckets }: Context): number {
-  r2(['delete', `${buckets.staging}/${verifiedKey(sha)}`]);
-  r2(['delete', `${buckets.staging}/${builtKey(sha)}`]);
-  r2(['delete', `${buckets.staging}/${evalsKey(sha)}`]);
+function forgetCommand({ sha, records }: Context): number {
+  withdraw(records, sha, 'publishing');
   console.log(`promote: ${sha} is not verified on staging until this deploy's tiers pass`);
+
+  return 0;
+}
+
+function withdrawCommand({ sha, records }: Context): number {
+  withdraw(records, sha, 'red');
+  console.log(`promote: ${sha} went red on staging: not verified, and promotable only by an owner's override of the build staging serves`);
 
   return 0;
 }
@@ -751,6 +768,7 @@ interface Command {
 
 const COMMANDS = new Map<string, Command>([
   ['forget', { takes: [0], run: forgetCommand }],
+  ['withdraw', { takes: [0], run: withdrawCommand }],
   ['record', { takes: [1, 2], run: recordCommand }],
   ['built', { takes: [1, 2], run: builtCommand }],
   ['evals', { takes: [1], run: evalsCommand }],
@@ -761,7 +779,7 @@ const COMMANDS = new Map<string, Command>([
   ['rollback', { takes: [0], run: rollbackCommand }],
 ]);
 
-const USAGE = 'usage: bun scripts/promote.ts digest | forget | record <staging version> [reset record] | built <staging version> [reset record] '
+const USAGE = 'usage: bun scripts/promote.ts digest | forget | withdraw | record <staging version> [reset record] | built <staging version> [reset record] '
   + '| evals <verdict dir> | check | override "<owner\'s words>" | adopt [override] | promoted [--override] <version> [reset record] | rollback';
 
 /** Whether `rest` is a shape the command takes beyond its count: adopt's one word is `override`, and promoted takes a
@@ -794,7 +812,11 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
   const { origins, buckets } = targets();
   const staging = bucketAt(buckets.staging, scratch);
-  const records: Records = { read: (key) => r2Text(buckets.staging, key), write: (key, text) => { staging.put(key, text, 'application/json'); } };
+
+  const records: Records = {
+    read: (key) => r2Text(buckets.staging, key), write: (key, text) => { staging.put(key, text, 'application/json'); },
+    delete: (key) => { r2(['delete', `${buckets.staging}/${key}`]); },
+  };
 
   return await chosen.run({ sha: head(), origins, buckets, staging, production: bucketAt(buckets.production, scratch), records }, rest);
 }

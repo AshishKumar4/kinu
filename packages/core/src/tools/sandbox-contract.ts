@@ -65,14 +65,14 @@ export function craftedToolDescription(name: string, description?: string): stri
 
 
 /** `eval`'s one input: the program it runs. */
-const PROGRAM = defineOperation({
+export const EVAL_PROGRAM = defineOperation({
   ns: 'eval', name: 'run', slate: false, impact: 'execute', plan: true,
   help: 'Run a JavaScript program over the namespaces this turn reaches.',
   input: v.strictObject({ code: v.pipe(v.string(), v.description(CODEMODE_CODE_DESCRIPTION)) }),
   output: v.unknown(),
 });
 
-const CODEMODE_INPUT = operationInputSchema(PROGRAM);
+const CODEMODE_INPUT = operationInputSchema(EVAL_PROGRAM);
 
 /** Shared by both backends; CF reassigns it over `createCodeTool`'s own schema. */
 export function codemodeInputSchema(): typeof CODEMODE_INPUT {

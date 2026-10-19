@@ -383,3 +383,90 @@ describe('queued native mutations belong to the kernel they observed', () => {
     });
   }
 });
+
+describe("a job its owner started reads the values its agents may read at each launch, and keeps none", () => {
+  /** Assembled, so no scanner reads a hardcoded password here. */
+  const VALUE = ['hunter2', 'job', 'db'].join('-');
+
+  const PLACEHOLDER = `pxs1_${'a'.repeat(43)}`;
+
+  class RevealingBox extends Devbox {
+    asked = 0;
+
+    protected override async revealedEnv(): Promise<Readonly<Record<string, string>>> {
+      this.asked += 1;
+
+      return { DATABASE_PASSWORD: VALUE };
+    }
+  }
+
+  /** Everything the box keeps: its rows and every file it wrote. */
+  function kept(made: ReturnType<typeof harness<RevealingBox>>): string {
+    return JSON.stringify([...made.rows.values()]) + JSON.stringify([...made.container.files.values()]);
+  }
+
+  test('the launch is handed the value in memory; the spec and the job directory hold the placeholder alone', async () => {
+    const made = harness(RevealingBox);
+
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, true);
+
+    expect(made.box.asked).toBe(1);
+    expect(made.container.launchEnvs.at(-1)).toMatchObject({ DATABASE_PASSWORD: VALUE, DEVBOX_REVEALED: 'DATABASE_PASSWORD' });
+    expect(kept(made)).toContain(PLACEHOLDER);
+    expect(kept(made)).not.toContain(VALUE);
+  });
+
+  test("the job's own variables file leaves out what it reads the value of, so the pane cannot set the placeholder back", async () => {
+    const made = harness(RevealingBox);
+
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}` }, true);
+    const files = [...made.container.files].filter(([path]) => path.endsWith('/env')).map(([, content]) => content);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toContain('CLOUDFLARE_API_TOKEN');
+    expect(files[0]).not.toContain('DATABASE_PASSWORD');
+  });
+
+  test('a restore after a recycle asks again, so the job holds the value as the owner left it', async () => {
+    const made = harness(RevealingBox);
+
+    made.rows.set(`devbox:proc:${REPAIR_ID}`, { processId: REPAIR_ID, command: COMMAND, cwd: '/workspace', createdAt: 1, env: { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, reveal: true });
+    await made.box.devboxStartup();
+
+    expect(made.box.asked).toBe(1);
+    expect(made.container.launchEnvs.at(-1)).toMatchObject({ DATABASE_PASSWORD: VALUE });
+    expect(kept(made)).not.toContain(VALUE);
+  });
+
+  class UnansweredBox extends Devbox {
+    protected override async revealedEnv(): Promise<Readonly<Record<string, string>>> {
+      throw new Error('account object unreachable');
+    }
+  }
+
+  test('an account that does not answer fails the start with that reason, and nothing is launched short of its value', async () => {
+    const made = harness(UnansweredBox);
+
+    await expect(made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, true)).rejects.toThrow('the account did not answer');
+    expect(made.container.launchEnvs).toEqual([]);
+  });
+
+  test('a restore whose account does not answer launches nothing, and leaves the job to be asked for again', async () => {
+    const made = harness(UnansweredBox);
+
+    made.rows.set(`devbox:proc:${REPAIR_ID}`, { processId: REPAIR_ID, command: COMMAND, cwd: '/workspace', createdAt: 1, env: { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, reveal: true });
+    await made.box.devboxStartup();
+
+    expect(made.container.launchEnvs).toEqual([]);
+    expect((await made.box.devboxState()).supervised.map((spec) => spec.processId)).toEqual([REPAIR_ID]);
+  });
+
+  test("a job no owner started never asks, and its launch holds no value", async () => {
+    const made = harness(RevealingBox);
+
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER });
+
+    expect(made.box.asked).toBe(0);
+    expect(JSON.stringify(made.container.launchEnvs)).not.toContain(VALUE);
+  });
+});

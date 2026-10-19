@@ -1,9 +1,9 @@
 /** The workspace side of an agent's isolate (D9). */
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
-import type { UIMessage, UIMessageChunk } from 'ai';
+import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { decodeModelMessageValues, forkConversationRowSchema, relayedAnswer, remoteContextTree } from '@kinu.run/core';
-import type { ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
+import type { ChatWindow, ForkConversationPlan, ForkConversationSection, ForkConversationSource, ForkConversationTarget, ForkRows } from '@kinu.run/core';
 import type { CacheWarmArm, ContextEditor, ContextTree, ConversationRecall, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
@@ -206,8 +206,8 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   prepareChat(request: ChatTurnRequest) { return this.open(() => this.answers.prepareChat(request)); }
   scaffold() { return this.open(() => this.answers.scaffold()); }
   chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }
-  turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: readonly UIMessage[]) { return this.open(() => this.answers.turnEnded(ended, figures, activity, window), ended); }
-  answerAmended(window: readonly UIMessage[]) { return this.open(() => this.answers.answerAmended(window)); }
+  turnEnded(ended: TurnEndEvent, figures: AgentFigures, activity: readonly AgentTurnActivity[], window: ChatWindow) { return this.open(() => this.answers.turnEnded(ended, figures, activity, window), ended); }
+  answerAmended(window: ChatWindow) { return this.open(() => this.answers.answerAmended(window)); }
   turnReport(...args: Parameters<AgentWorkspace['turnReport']>) { return this.open(() => this.answers.turnReport(...args)); }
   parentReport(report: Parameters<AgentWorkspace['parentReport']>[0]) { return this.open(() => this.answers.parentReport(report)); }
   autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }

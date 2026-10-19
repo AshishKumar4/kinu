@@ -8,6 +8,7 @@ import {
 import { RECENT_WORKSPACES, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 import { PromptCard } from "@/components/workspaces/PromptCard";
+import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 import { WORKSPACE_MISSION_ID } from "@/components/workspaces/NewWorkspaceButton";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
@@ -27,6 +28,9 @@ export default function HomePage() {
     });
   };
 
+  // A new workspace's mission is its first message: a pasted secret is offered to Secrets before it is sent.
+  const secretGuard = usePastedSecretGuard({ draft: mission, setDraft: setMission, workspace: undefined });
+
   return (
     <div className="h-full overflow-y-auto">
       <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
@@ -43,7 +47,8 @@ export default function HomePage() {
           action="Create workspace"
           value={mission}
           onChange={setMission}
-          onSubmit={submit}
+          onSubmit={secretGuard.guarded("create", submit)}
+          notice={secretGuard.offer}
           busy={creating}
           error={err ?? files.refusal}
           attachments={{ parts: files.parts, onAdd: files.add, onRemove: files.remove }}

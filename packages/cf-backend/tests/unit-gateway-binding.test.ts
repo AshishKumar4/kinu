@@ -44,6 +44,7 @@ describe('parseGatewayTarget', () => {
   test('splits a gateway URL into the gateway id and the prefix requests sit under', () => {
     expect(parseGatewayTarget(TEST_GATEWAY_URL)).toEqual({
       id: 'test-gateway',
+      account: 'testaccount0000000000000000000',
       origin: 'https://gateway.ai.cloudflare.com',
       prefix: '/v1/testaccount0000000000000000000/test-gateway/',
     });

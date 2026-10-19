@@ -112,6 +112,7 @@ export async function hostedWorkspace(
     holdLane: (body) => body(),
     workspaceBox: (shellId) => workspace.box(shellId),
     workspaceServing: () => workspace.serving(),
+    commandEnvironment: async () => ({}),
     homeHost: () => workspace.bundle.privileged()
       .then((privileged) => ({ ...privileged, sql: ctx.storage.sql })),
     sql,

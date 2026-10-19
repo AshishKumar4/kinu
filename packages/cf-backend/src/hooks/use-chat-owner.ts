@@ -23,6 +23,7 @@ import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.
 import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import { useSocketFrames, type SocketFrame } from "./socket-frames";
+import type { SeedEdge } from "./use-chat-thread";
 import {
   createLiveRefreshAdmission, formatWorkspaceError, loadWorkspaceSnapshot, readFailureText, refreshLiveResource,
   SNAPSHOT_SEEDED_SOURCES, type ErrorSource, type LiveRefreshAdmission, type LiveRefreshSource,
@@ -220,6 +221,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   // Set by the connect frame, or by a revisited chat's last transcript, which is never empty; the only things that
   // entitle the pane to draw a conversation. False is "not yet", never "nothing".
   const [transcriptSeeded, setTranscriptSeeded] = useState(lastShown !== undefined);
+  // Where each window the room sent starts reading older rows from: scroll-back continues from the one it shows first.
+  const [seedEdge, setSeedEdge] = useState<SeedEdge | null>(null);
 
   const clearProviderWait = useCallback(() => setProviderWait(null), []);
 
@@ -548,6 +551,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const paneFrame = async (msg: SocketFrame): Promise<void> => {
     if (msg.type === "cf_agent_chat_messages") {
       setTranscriptSeeded(true);
+      const from = msg.messages?.[0]?.id;
+
+      if (from !== undefined && msg.older !== undefined) setSeedEdge({ from, older: msg.older });
     } else if (msg.type === "model_fallback") {
       setModelFallbacks((prev) => [...prev, msg.message]);
     } else if (msg.type === "steer_status") {
@@ -806,6 +812,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       recoverTurn,
       /** Until true, empty `messages` means "not delivered", not "there is nothing". */
       transcriptSeeded,
+      /** Where the newest window's scroll-back reads on from (`use-chat-thread.ts`). */
+      seedEdge,
       connectionStatus,
       /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
        *  classification and clears it on open. */

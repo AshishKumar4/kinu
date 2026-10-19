@@ -129,7 +129,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
   async runProgram(code: string): Promise<string> {
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null, asOwner: true } : null }), workspace: this.name,
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null, asOwner: true, ownerUserId: null } : null }, async () => ({})), workspace: this.name,
     });
 
     const eval_ = factory.toolFor(codemodeSurface(this.rt, {}, () => ({}), { stores: this.surfaceActor('build').stores }), {

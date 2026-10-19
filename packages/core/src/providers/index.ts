@@ -56,6 +56,11 @@ export { OAuthTokenError } from './oauth-token-error';
 
 export * from './cloudflare-oauth';
 
+export {
+  DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS, WebSearchRouteSchema,
+  type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
+} from './web-search';
+
 export * from './anthropic';
 
 export { CLAUDE_CRED_KEY, createClaudeProvider } from './claude';

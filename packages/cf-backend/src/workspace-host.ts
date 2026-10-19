@@ -530,6 +530,7 @@ function workspaceBox(deps: {
     execStream: async (command, options) => await (await runtime()).execStream(command, named(options)),
     startProcess: async (command, options): Promise<NimbusStartResult> => await (await runtime()).startProcess(command, named(options)),
     shellCwd: async (shellId) => namedShellCwd(deps.ctx.storage.sql, keyed(shellId)),
+    shellState: async (shellId) => await (await runtime()).workspace.shellState(keyed(shellId)),
     runtimes: {
       list: async () => await jsonResultOrVoid((await runtime()).listRuntimes()),
     },

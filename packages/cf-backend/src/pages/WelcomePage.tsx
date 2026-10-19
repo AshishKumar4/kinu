@@ -16,6 +16,7 @@ import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
+import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { useAccount } from "@/hooks/use-account";
@@ -213,6 +214,9 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {/* Mounted only while open, so a revisit reads the providers connected meanwhile. */}
                 {s.id === 'model' && i === step && <DefaultModelField />}
+
+                {/* Likewise: the model step writes the same catalog, so this one reads it when it opens. */}
+                {s.id === 'search' && i === step && <WebSearchSettings place="setup" returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />}
 
                 {s.id === 'tools' && (
                   <div className="space-y-4">

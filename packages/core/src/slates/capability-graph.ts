@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import type { Impact } from '@agent-core/core/facets';
-import { slateAddressImpact, slateOwnerOnly } from './members';
+import { shareMemberRefusal, slateAddressImpact } from './members';
 import type { ShareGrant, ShareGrantMember, SlateCapabilityGraph, SlateGraphMember, SlateGraphNamespace } from './sharing';
 import type { RoomService } from './room-api';
 
@@ -203,12 +203,14 @@ function shareGrant(graph: SlateCapabilityGraph, approved: Parameters<typeof cut
 
   for (const row of graph.namespaces) {
     for (const member of row.members) {
-      if (member.impact === 'observe' && !slateOwnerOnly({ namespace: row.namespace, member: member.member })) admit(row.slate, row.namespace, member.member, 'observe');
+      if (member.impact === 'observe' && shareMemberRefusal({ namespace: row.namespace, member: member.member }) === null) admit(row.slate, row.namespace, member.member, 'observe');
     }
   }
 
   for (const entry of approved) {
-    if (slateOwnerOnly(entry)) return Effect.fail(new KinuError('bad_input', `${entry.namespace}.${entry.member} runs only in its owner's own slate; a share cannot grant it`));
+    const refused = shareMemberRefusal(entry);
+
+    if (refused !== null) return Effect.fail(new KinuError('bad_input', `${refused}; a share cannot grant it`));
 
     const member = graph.namespaces
       .find((row) => row.slate === entry.slate && row.namespace === entry.namespace)

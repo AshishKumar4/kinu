@@ -10,7 +10,7 @@ import { every, REAL_CLOCK, type Clock } from '../types/clock';
 import { DEVICE_METHOD, DEVICE_FRAMES, DEVICE_ERRORS, deviceFailure } from './device-protocol';
 
 export interface TunnelSocket {
-  send(data: string): void;
+  send(data: string | Uint8Array): void;
   readyState: number;
 }
 
@@ -132,10 +132,14 @@ export function nextDeviceRequestId(): string {
 }
 
 function sendFrame(socket: TunnelSocket, frame: JsonObject): Effect.Effect<void, KinuError> {
+  return sendData(socket, JSON.stringify(frame));
+}
+
+function sendData(socket: TunnelSocket, data: string | Uint8Array): Effect.Effect<void, KinuError> {
   if (socket.readyState !== WS_OPEN) return Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED));
 
   return Effect.try({
-    try: () => socket.send(JSON.stringify(frame)),
+    try: () => socket.send(data),
     catch: (cause) => deviceFailure(DEVICE_ERRORS.disconnected, TUNNEL_DISCONNECTED, { cause }),
   });
 }
@@ -220,6 +224,11 @@ export class DeviceTunnel {
 
   notify(frame: JsonObject): void {
     return settleSync(sendFrame(this.socket, frame));
+  }
+
+  /** A binary frame, as a screen's bytes cross (`DEVICE_SCREEN_DATA`). */
+  sendBytes(frame: Uint8Array): void {
+    return settleSync(sendData(this.socket, frame));
   }
 
   handleMessage(raw: string): void {

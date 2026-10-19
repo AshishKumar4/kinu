@@ -248,6 +248,33 @@ test('its owner turns a share to owner mode over the reach at a built revision, 
   }
 });
 
+test('creating or editing a share cannot grant any computer member, and a refusal leaves its stored authority unchanged', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    const graph = slateCapabilityGraph({
+      slate: 'issues', workspace: 'w', catalog: { mcp: [], slates: ['issues'] },
+      usage: () => [{ namespace: 'computer', member: 'exec' }, { namespace: 'computer', member: 'fs.text' }],
+    });
+
+    for (const member of ['exec', 'fs.text']) {
+      expect(() => shareLiveSlate({ shares, graph, visibility: 'public', approved: [{ slate: 'issues', namespace: 'computer', member }], url: () => null }))
+        .toThrow(/computer.*viewer.*(?:credentials|secrets)/isu);
+      expect(shares.list()).toEqual([]);
+    }
+
+    const held = shares.add(liveShare());
+
+    for (const member of ['exec', 'fs.text']) {
+      expect(() => setShareMode({ shares, share: held.id, graph, mode: 'owner', approved: [{ slate: 'issues', namespace: 'computer', member }], revision: 'r1' }))
+        .toThrow(/computer.*viewer.*(?:credentials|secrets)/isu);
+      expect(shares.get(held.id)).toEqual(held);
+    }
+  } finally {
+    db.close();
+  }
+});
+
 test('a slate\'s build record tells its listener only when the code it serves moves', () => {
   const db = new Database(':memory:');
   initSlateBuildTable(makeExecRaw(db));

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { serveFamily } from './helpers/api';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './helpers/user-do';
-import { CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
+import { CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_WEB_SEARCH_CRED_KEY, CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
@@ -16,6 +16,7 @@ const AccountStatusSchema = v.object({
   connected: v.boolean(),
   selectedId: v.nullable(v.string()),
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
+  webSearch: v.boolean(),
 });
 
 const PERSONAL = { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' };
@@ -53,7 +54,7 @@ describe('Cloudflare account selection', () => {
   test('no Cloudflare credential means nothing to pick', async () => {
     const harness = createTestUserDO();
     expect(await harness.userDO.listCloudflareAccounts(await testOwner()))
-      .toEqual({ connected: false, selectedId: null, accounts: [] });
+      .toEqual({ connected: false, selectedId: null, accounts: [], webSearch: false });
     harness.close();
   });
 
@@ -67,6 +68,7 @@ describe('Cloudflare account selection', () => {
         connected: true,
         selectedId: PERSONAL.id,
         accounts: [PERSONAL, EMPLOYER],
+        webSearch: false,
       });
       expect(await harness.userDO.getCredentialEndpoint(await testOwner(), CLOUDFLARE_OAUTH_CRED_KEY))
         .toEqual({ baseURL: `https://api.cloudflare.com/client/v4/accounts/${PERSONAL.id}/ai/v1` });
@@ -87,7 +89,7 @@ describe('Cloudflare account selection', () => {
         metadata: { accountId: PERSONAL.id },
       });
       expect(await harness.userDO.listCloudflareAccounts(owner)).toEqual({
-        connected: true, selectedId: PERSONAL.id, accounts: [],
+        connected: true, selectedId: PERSONAL.id, accounts: [], webSearch: false,
       });
       await expect(harness.userDO.selectCloudflareAccount(owner, PERSONAL.id)).rejects.toMatchObject({ code: 'bad_input' });
       expect(await harness.userDO.getCredentialEndpoint(owner, CLOUDFLARE_OAUTH_CRED_KEY))
@@ -179,7 +181,7 @@ function routeHarness(selectFails = false) {
       return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const }];
     },
     async listCloudflareAccounts() {
-      return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER] };
+      return { connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true };
     },
     async selectCloudflareAccount(_caller: UserCaller, id: string) {
       if (selectFails) throw new KinuError('bad_input', 'That Cloudflare account is not one this login can see.');
@@ -216,13 +218,44 @@ function routeHarness(selectFails = false) {
   return { call, notified, selected, pending };
 }
 
+// Owner, 2026-10-19: web search billed to the person's own AI Gateway. Only a login that granted search may be billed for
+// it; one from before the grant searches on the deployment's gateway (core `web/search-chain.ts`).
+describe('a Cloudflare login and web search', () => {
+  test('the login bills its own account for search only once it grants search, on the selected gateway or the default', async () => {
+    const restore = stubGatewayNetwork();
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, multiAccountCredential());
+      expect((await harness.userDO.listCloudflareAccounts(owner)).webSearch).toBe(false);
+      expect(await harness.userDO.getAuth(owner, CLOUDFLARE_WEB_SEARCH_CRED_KEY)).toBeNull();
+
+      const granted = multiAccountCredential();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, { ...granted, metadata: { ...granted.metadata, scopes: CLOUDFLARE_WORKERS_AI_SCOPES.split(' ') } });
+      expect((await harness.userDO.listCloudflareAccounts(owner)).webSearch).toBe(true);
+      expect(await harness.userDO.getAuth(owner, CLOUDFLARE_WEB_SEARCH_CRED_KEY)).toMatchObject({
+        headers: { Authorization: 'Bearer cf-access', 'cf-aig-gateway-id': 'default' },
+        baseURL: `https://api.cloudflare.com/client/v4/accounts/${PERSONAL.id}/ai/v1`,
+      });
+
+      await harness.userDO.selectAIGateway(owner, 'gw-two');
+      expect((await harness.userDO.getAuth(owner, CLOUDFLARE_WEB_SEARCH_CRED_KEY))?.headers['cf-aig-gateway-id']).toBe('gw-two');
+      await expect(harness.userDO.setCredential(owner, CLOUDFLARE_WEB_SEARCH_CRED_KEY, { kind: 'bearer', token: 'x' })).rejects.toMatchObject({ code: 'bad_input' });
+    } finally {
+      harness.close();
+      restore();
+    }
+  });
+});
+
 describe('the account selector is reachable over HTTP', () => {
   test('GET /cloudflare/accounts lists what the login can see', async () => {
     const { call } = routeHarness();
     const res = await call('/cloudflare/accounts', 'GET');
     expect(res?.status).toBe(200);
     expect(v.parse(AccountStatusSchema, await res?.json())).toEqual({
-      connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER],
+      connected: true, selectedId: PERSONAL.id, accounts: [PERSONAL, EMPLOYER], webSearch: true,
     });
   });
 

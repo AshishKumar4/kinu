@@ -15,7 +15,7 @@ import type { MemoryEntry, ForkNode, ExecutorCommandResult, TabPresence } from "
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
-import { PreviewFrame } from "@/components/PreviewFrame";
+import { PreviewFrame, useComputerPreviewLink } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { StatusDot } from "@/components/ui/Status";
 import type { AgentSurfaceProps } from "./AgentSurface";
@@ -215,6 +215,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
   }, [settled, props.tabPresence, workspaceKey]);
 
   const openPort = surface === null ? undefined : openPortOf(surface, ports);
+  const publicLink = useComputerPreviewLink(openPort, props.rpc);
+
   const previewSelected = surface?.startsWith(SLATE_PREFIX) === true || surface?.startsWith("preview:") === true;
   // One-shot intent: an Environment card's Files action opens that environment's root.
   const [filesJump, setFilesJump] = useState<{ path: string; file?: string; nonce: number } | null>(null);
@@ -348,7 +350,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onConnectDevice={openConnect}
               />
             )}
-            {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} /></div></div>}
+            {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} publicLink={publicLink} /></div></div>}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

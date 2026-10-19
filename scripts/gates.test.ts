@@ -470,6 +470,7 @@ describe('native egress constraints — red in every governed direction', () => 
   const kinu = 'packages/cf-backend/src/kinu-devbox.ts';
   const router = 'packages/devbox/src/gateway.ts';
   const vault = 'packages/cf-backend/src/egress/outbound.ts';
+  const sender = 'packages/cf-backend/src/egress/send-out.ts';
   const worker = 'packages/cf-backend/src/server.ts';
   const bench = 'packages/devbox/bench/worker.ts';
   const generic = ['Devbox', 'BenchBox', 'SnapshotChainBox', 'ExampleBox'];
@@ -529,8 +530,9 @@ describe('native egress constraints — red in every governed direction', () => 
     [kinu, 'this.#nativeExports.KinuEgress({ props: params })', 'this.#nativeExports.KinuEvents({ props: params })', 'does not bind the vault'],
     [base, 'await this.outboundPolicy()', '{ routes: {} }', 'does not bind the vault'],
     [router, 'this.#fallback = policy.fallback', 'this.#fallback = undefined', 'does not bind the vault'],
-    [worker, 'return handleContainerEgress(request, this.env, params, { grants: workspaceGrants(this.env), github: params && new GitHubEgressRecorder(this.env, this.ctx, params) });', 'return fetch(request);', 'does not enter credential injection'],
-    [vault, 'vault.resolveEgressInjection(', 'vault.unrelatedInjection(', 'does not consult the owner vault'],
+    [worker, 'return handleContainerEgress(request, this.env, params, params && new GitHubEgressRecorder(this.env, this.ctx, params));', 'return fetch(request);', 'does not enter credential injection'],
+    [sender, 'owner.resolveEgressInjection(', 'owner.unrelatedInjection(', 'does not consult the owner vault'],
+    [vault, 'return yield* sendOut(request, env, params, github);', 'return yield* Effect.promise(() => fetch(request));', 'does not leave through sendOut'],
     [router, '?? outbound.fallback', '', 'owned routes do not precede'],
     [router, 'outbound.internet ?', 'true ?', 'public forwarding is not conditional'],
     [router, ": routeEgress(request, props.outbound)", ": serveStore(request, props.store, (name) => this.env[name])", 'does not route egress through its router'],

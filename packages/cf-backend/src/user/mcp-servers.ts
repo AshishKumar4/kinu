@@ -8,6 +8,7 @@ import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
+import { mcpOAuthStorage } from './mcp-oauth-storage';
 import type { UserCredentials } from './credentials';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -456,12 +457,14 @@ export class UserMcpServers {
   }): KinuMcpOAuthProvider {
     const { appCredentials } = input;
 
+    const storage = mcpOAuthStorage(this.host.ctx, this.host.env);
+
     const provider = appCredentials
       ? new RegisteredAppOAuthClientProvider({
-          storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
+          storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
           clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
         })
-      : new KinuMcpOAuthProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
+      : new KinuMcpOAuthProvider(storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
 
     provider.serverId = input.serverId;
 
