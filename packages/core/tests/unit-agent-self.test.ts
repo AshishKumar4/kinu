@@ -223,22 +223,40 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(declared(p)).toContain("quality(");
   });
 
-  test("jobResult on a SETTLED job passes the row through unchanged — the result is there to read", async () => {
+  // Staging 5c522f12d: a search's result read back as JSON text inside a program's own result, and five programs
+  // parsed it at the wrong level ("[object Object]" is not valid JSON).
+  test("jobResult on a SETTLED job answers the value the job returned, never its stored JSON text", async () => {
     const settled: BackgroundJob = {
-      id: "bgjob-1", kind: "shell", label: null, workMode: "build", status: "completed",
-      result: '"the output"', error: null, createdAt: 1, settledAt: 2, epoch: 0,
+      id: "bgjob-1", kind: "agents", label: null, workMode: "build", status: "completed",
+      result: '{"preset":"research","candidates":[{"id":"c1","artifact":"x"}]}', error: null, createdAt: 1, settledAt: 2, epoch: 0,
       retriedBy: null,
       attemptStartedAt: 1, resumeAfter: null, serves: null,
     };
 
-    const host = fakeHost({ jobResult: async (id) => {
-      host.calls.push(`jobResult:${id}`);
+    const host = fakeHost({
+      jobResult: async (id) => {
+        host.calls.push(`jobResult:${id}`);
 
-      return settled;
-    } });
+        return settled;
+      },
+      listBackgroundJobs: async () => [settled],
+    });
 
     const p = createAgentSelfProvider(host);
-    expect(await p.tools.jobResult.execute("bgjob-1")).toEqual(settled);
+    const value = { preset: "research", candidates: [{ id: "c1", artifact: "x" }] };
+    expect(await p.tools.jobResult.execute("bgjob-1")).toEqual({ ...settled, result: value });
+    expect(await p.tools.backgroundJobs.execute({})).toEqual([{ ...settled, result: value }]);
+  });
+
+  test("jobResult keeps a result that was never JSON as the text it is", async () => {
+    const unserializable: BackgroundJob = {
+      id: "bgjob-3", kind: "shell", label: null, workMode: "build", status: "completed",
+      result: "unserializable job result: cycle", error: null, createdAt: 1, settledAt: 2, epoch: 0,
+      retriedBy: null, attemptStartedAt: 1, resumeAfter: null, serves: null,
+    };
+
+    const p = createAgentSelfProvider(fakeHost({ jobResult: async () => unserializable }));
+    expect(await p.tools.jobResult.execute("bgjob-3")).toEqual(unserializable);
   });
 
   test("jobResult on a job still RUNNING returns a note instead of an empty poll — no loop to spin on", async () => {
