@@ -2,7 +2,7 @@
 // executable bytes shows up as poison on disk.
 import { AwaitedList, awaitExit, killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -18,7 +18,7 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { type CloudDevice } from '../src/cloud-api';
-import { describeConnectScope, describeDeviceSandbox } from '../src/device-connect';
+import { describeDeviceSandbox } from '../src/device-connect';
 import { VERSION } from '../src/display';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
@@ -628,6 +628,17 @@ describe('device-connect install hardening', () => {
     expect(existsSync(join(home, POISON_MARKER))).toBe(false);
   });
 
+  // L111 #1's review: a module that read a file beside itself by `__dirname` built into the daemon as the build tree's
+  // own path, so it loaded on the build machine and nowhere else. The installed files name no path of that tree.
+  test('the daemon as it installs names no path of the tree it was built from', () => {
+    const tree = resolve(import.meta.dir, '..', '..', '..');
+
+    const naming = [['pc-agent.js', DAEMON_SOURCE], ...Object.entries(DAEMON_SIBLINGS)]
+      .filter(([, source]) => source.includes(tree)).map(([name]) => name);
+
+    expect(naming).toEqual([]);
+  });
+
   test('kinu connect replaces a malformed local config and starts a working shipped daemon', async () => {
     const hub = startUpdateHub({ served: VERSION, archive: new Uint8Array() });
     updateHubs.push(hub);
@@ -661,6 +672,15 @@ describe('device-connect install hardening', () => {
     const reply = await socket.waitForReply('reconnect-which');
     expect(reply.error).toBeUndefined();
     expect(reply.result).toBeDefined();
+    // A command's output past its bound spills through the supervisor script the installed daemon writes, which carries
+    // held.js's no-follow walk as source: no file of it is installed beside the daemon (L111 #1).
+    const noisy = `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000) + 'END')"`;
+
+    socket.send({ id: 'rpc-shipspill0-1', method: 'exec', sandbox: { tier: 'raw', agentHome: '', roots: [] }, params: [noisy] });
+    const spilled = await socket.waitForReply('rpc-shipspill0-1');
+    expect({ error: spilled.error, saved: JSON.stringify(spilled.result).includes('the full stdout is at ') }).toEqual({ error: undefined, saved: true });
+    socket.send({ id: 'rpc-shipspill0-1ack', method: 'execAck', params: ['rpc-shipspill0-1', 1] });
+    await socket.waitForReply('rpc-shipspill0-1ack');
   });
 
   test('kinu connect reads device.json as the daemon does: one its daemon would refuse is replaced, its token not reused', async () => {
@@ -1210,7 +1230,7 @@ describe("a browser's connect command, run on a machine", () => {
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ user: JOIN_ACCOUNT, device: 'dev_joined', root: homedir() });
   });
 
-  test('a root the command names is the one linked', async () => {
+  test('a root the command names is the one linked, said before the question', async () => {
     const { stub } = joinWorld();
     const home = makeHome({ origin: stub.origin });
     daemonHomes.push(home);
@@ -1218,11 +1238,33 @@ describe("a browser's connect command, run on a machine", () => {
 
     const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', JOIN_TICKET, '--root', named]);
     await connect.waitFor('Link and start the daemon?');
+    // L111 #6: the folder it shares is on screen before anything is joined.
+    expect({ said: connect.output().includes(realpathSync(named)), joined: stub.joins.items.length }).toEqual({ said: true, joined: 0 });
     await connect.send('y');
     expect(await connect.proc.exited).toBe(0);
     await connect.drained;
 
     expect(parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'))).toMatchObject({ root: named });
+  });
+
+  // L111 #6: a root through a link to the home folder was said as the link's name alone, with no word of the home it is.
+  test('a root that leads to the home folder is said as the home folder before the question, and refused on no', async () => {
+    const { stub } = joinWorld();
+    const home = makeHome({ origin: stub.origin });
+    daemonHomes.push(home);
+    const link = join(newProjectDir(), 'project-link');
+    symlinkSync(homedir(), link);
+
+    const connect = spawnConnectInPty(home, 'build box', newProjectDir(), ['--join', JOIN_TICKET, '--root', link]);
+    await connect.waitFor('Link and start the daemon?');
+    const said = connect.output();
+
+    expect({ home: said.includes('whole home folder'), where: said.includes(realpathSync(homedir())), named: said.includes(link), joined: stub.joins.items.length })
+      .toEqual({ home: true, where: true, named: true, joined: 0 });
+    await connect.send('n');
+    expect(await connect.proc.exited).toBe(0);
+    await connect.drained;
+    expect(stub.joins.items).toEqual([]);
   });
 
   test('signed in as the account it names, it links through that session and leaves the ticket unspent', async () => {
@@ -1471,23 +1513,5 @@ describe('desktop command reuses device-connect', () => {
     `);
 
     expect(failure).toContain('Usage: kinu desktop [connect|status|logs]');
-  });
-});
-
-// L111 #6: the link question came with no word of the folder it shares, of / linking the whole machine unsandboxed, or of
-// a home folder reaching the shell's startup files.
-describe('the connect question says what it shares first', () => {
-  test('a project folder by its absolute path, the home folder with what it reaches, and / as the whole machine', () => {
-    expect({
-      project: describeConnectScope('/home/ada/project', '/home/ada'),
-      home: describeConnectScope('/home/ada', '/home/ada')[0],
-      reaches: describeConnectScope('/home/ada', '/home/ada')[1],
-      whole: describeConnectScope('/', '/home/ada'),
-    }).toEqual({
-      project: ['Shares /home/ada/project and nothing beside it.'],
-      home: 'Shares your whole home folder, /home/ada.',
-      reaches: expect.stringContaining('shell startup files and git settings, which run outside the sandbox'),
-      whole: ['Shares the whole machine, from /.', expect.stringContaining('its commands run as you')],
-    });
   });
 });

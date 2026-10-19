@@ -6155,6 +6155,9 @@ function noteListing(path: string): void {
 }
 
 /** One stateful frame for Environment and Files: `onSurface` is real, so a card's Files action lands the drive. */
+/** The workspace the Environment and Files frames are routed under. */
+const DRIVE_WORKSPACE = "checkout-fixes";
+
 function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false }: {
   initialSurface: SurfaceKind;
   offlineDevice: boolean;
@@ -6330,6 +6333,8 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
           onExecute={runCommand} lastActiveExecutor="workspace"
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={workspaceRpc(filesRpc)}
+          // The frame's route names it, as the workspace page names its own: a machine connected here is granted to it.
+          workspace={DRIVE_WORKSPACE}
         />
       </div>
     </div>
@@ -7481,7 +7486,7 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
   const column = frameName === "files" ? "w-[860px]" : "w-[720px]";
 
   return {
-    entries: ["/workspace/checkout-fixes"],
+    entries: [`/workspace/${DRIVE_WORKSPACE}`],
     node: (
       <Routes>
         <Route path="/workspace/:agentId"
