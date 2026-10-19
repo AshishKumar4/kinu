@@ -901,10 +901,9 @@ describe('thinking in a settled turn', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
-      // The thoughts lead a run of calls, so they are opened with it.
-      await page.waitForSelector('[data-chat-row="a1"] [data-tool-run] [data-reasoning]');
-      await page.click('[data-chat-row="a1"] [data-tool-run] > button');
+      // The thoughts lead a run of calls, so they stand before it, outside it, as thinking always has.
       await page.waitForSelector('[data-chat-row="a1"] [data-reasoning] button[aria-expanded="false"]');
+      expect(await page.$eval('[data-chat-row="a1"] [data-reasoning]', (block) => block.closest('[data-tool-run]') === null)).toBe(true);
       await page.click('[data-chat-row="a1"] [data-reasoning] button[aria-expanded="false"]');
 
       const thinking = await page.$$eval('[data-chat-row="a1"] [data-reasoning]', (blocks) => blocks.map((block) => ({

@@ -6,7 +6,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { CaretRightIcon } from "@phosphor-icons/react";
-import { toolRunSummary, type RunStep } from "@kinu.run/core";
+import { toolRunSummary, type RunStep, type ToolRunSummary } from "@kinu.run/core";
 
 /** The dot and words a piece of work is headed by: pulsing and shimmering while it runs. */
 export function WorkLabel({ live, failed = false, children }: { live: boolean; failed?: boolean; children: ReactNode }) {
@@ -159,6 +159,29 @@ function useRunSpan(calls: readonly string[], live: boolean): string | null {
   return live || from === undefined || to === undefined ? null : spanWords(to - from);
 }
 
+/** A phase's line in words: what it did, and what is running now; before any call has words, what is running leads. */
+function phaseWords(summary: ToolRunSummary, live: boolean, written: string | undefined) {
+  const title = live ? summary.title : written ?? summary.title;
+  const now = live && summary.now !== "" ? summary.now : null;
+
+  if (title === "") return { label: `${now ?? "Working"}…`, nowLeads: now !== null, now: null };
+
+  return { label: title, nowLeads: false, now };
+}
+
+/** Said after a phase's line, never shimmering: what is running now, a failure inside it, how long it took. */
+function PhaseAfter({ now, failed, span }: { now: string | null; failed: number; span: string | null }) {
+  if (now === null && failed === 0 && span === null) return null;
+
+  return (
+    <span className="shrink-0 p-row-text p-text-3">
+      {now !== null && <> · <span data-tool-run-now>{now}…</span></>}
+      {failed > 0 && <> · <span className="p-danger" data-tool-run-failed={failed}>{failed} failed</span></>}
+      {span !== null && <> · {span}</>}
+    </span>
+  );
+}
+
 /**
  * A phase, its calls and the thinking between them, as one group: while it runs, what it has done so far and what is
  * running now, over a small view of its newest steps; settled, what it did in a few words, its steps a click away. A
@@ -169,24 +192,15 @@ export function ToolRun({ steps, live, written, children }: { steps: readonly Ru
   const span = useRunSpan(steps.flatMap((step) => (step.kind === "tool" ? [step.part.toolCallId] : [])), live);
   const last = steps.at(-1);
   const follow = `${String(steps.length)}:${last?.kind === "tool" ? last.part.state : String(last?.parts.map((part) => part.text.length).join())}`;
-  const title = live ? summary.title : written ?? summary.title;
-  const now = live && summary.now !== "" ? summary.now : null;
-  // Before any of its calls has words, the line is what is running.
-  const label = title === "" ? `${now ?? "Working"}…` : title;
-  const nowAfter = title === "" ? null : now;
+  const words = phaseWords(summary, live, written);
+  const fromModel = written !== undefined && !live;
 
   return (
     <ChatDisclosure live={live} failed={!live && summary.failed > 0} folded="hidden" follow={follow} viewport="max-h-36"
-      label={<span key={label} className={written !== undefined && !live ? "animate-fade-in" : undefined} data-tool-run-now={nowAfter === null && now !== null ? "" : undefined}>{label}</span>}
-      after={(nowAfter !== null || summary.failed > 0 || span !== null) && (
-        <span className="shrink-0 p-row-text p-text-3">
-          {nowAfter !== null && <> · <span data-tool-run-now>{nowAfter}…</span></>}
-          {summary.failed > 0 && <> · <span className="p-danger" data-tool-run-failed={summary.failed}>{summary.failed} failed</span></>}
-          {span !== null && <> · {span}</>}
-        </span>
-      )}
+      label={<span key={words.label} className={fromModel ? "animate-fade-in" : undefined} data-tool-run-now={words.nowLeads ? "" : undefined}>{words.label}</span>}
+      after={<PhaseAfter now={words.now} failed={summary.failed} span={span} />}
       data-tool-run={live ? "live" : "settled"} data-tool-run-calls={summary.calls} data-tool-run-span={span ?? undefined}
-      data-phase-title={written !== undefined && !live ? "model" : "calls"}>
+      data-phase-title={fromModel ? "model" : "calls"}>
       {children}
     </ChatDisclosure>
   );

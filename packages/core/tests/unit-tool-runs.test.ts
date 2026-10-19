@@ -83,36 +83,41 @@ describe('a long turn', () => {
 
   const blocksOf = (parts: Part[]): PartBlock[] => groupMessageParts(parts);
 
-  test('while it runs, the work before its newest phase rolls up once two phases lie there; the newest and its opening thought stay open', () => {
-    const parts = [...phase('p1'), said('Found it.'), ...phase('p2'), said('Fixed.'), thought('Now staging'), ...phase('p3')];
+  test('while it runs, the work before its newest phase rolls up once three phases lie there; the newest and its opening thought stay open', () => {
+    const parts = [...phase('p1'), said('Found it.'), ...phase('p2'), said('Fixed.'), ...phase('p3'), said('Tested.'), thought('Now staging'), ...phase('p4')];
 
     expect(laidOut(rollUpTurn(blocksOf(parts), true))).toEqual([
-      { turn: [{ run: ['p1a', 'p1b'] }, { part: 'text' }, { run: ['p2a', 'p2b'] }, { part: 'text' }] },
-      { reasoning: 'Now staging' }, { run: ['p3a', 'p3b'] },
+      { turn: [{ run: ['p1a', 'p1b'] }, { part: 'text' }, { run: ['p2a', 'p2b'] }, { part: 'text' }, { run: ['p3a', 'p3b'] }, { part: 'text' }] },
+      { reasoning: 'Now staging' }, { run: ['p4a', 'p4b'] },
     ]);
   });
 
-  test('one phase before the newest is a line already, so nothing rolls up', () => {
-    const blocks = blocksOf([...phase('p1'), said('Found it.'), ...phase('p2')]);
+  test('an ordinary turn, two phases before the newest or two in all, reads as it always has', () => {
+    const live = blocksOf([...phase('p1'), said('Found it.'), ...phase('p2'), said('Fixed.'), ...phase('p3')]);
+    const settled = blocksOf([thought('Read first'), ...phase('p1'), said('Found it.'), ...phase('p2'), said('Fixed and tested.')]);
+    // Calls on rows of their own, words between them, are no phases: however many, the turn reads as it did.
+    const rows = blocksOf([read('c1', 'a.ts'), said('a'), read('c2', 'b.ts'), said('b'), read('c3', 'c.ts'), said('c'), ...phase('p1'), said('Done.')]);
 
-    expect(rollUpTurn(blocks, true)).toEqual(blocks);
+    expect(rollUpTurn(live, true)).toEqual(live);
+    expect(rollUpTurn(settled, false)).toEqual(settled);
+    expect(rollUpTurn(rows, false)).toEqual(rows);
   });
 
-  test('once it has run, all its work rolls up and the answer stands after it', () => {
-    const parts = [thought('Read first'), ...phase('p1'), said('Found it.'), ...phase('p2'), thought('All green'), said('Fixed and tested.')];
+  test('once a long turn has run, all its work rolls up and the answer stands after it', () => {
+    const parts = [thought('Read first'), ...phase('p1'), said('Found it.'), ...phase('p2'), said('Fixed.'), ...phase('p3'), thought('All green'), said('Fixed and tested.')];
 
     expect(laidOut(rollUpTurn(blocksOf(parts), false))).toEqual([
-      { turn: [{ reasoning: 'Read first' }, { run: ['p1a', 'p1b'] }, { part: 'text' }, { run: ['p2a', 'p2b'] }] },
+      { turn: [{ reasoning: 'Read first' }, { run: ['p1a', 'p1b'] }, { part: 'text' }, { run: ['p2a', 'p2b'] }, { part: 'text' }, { run: ['p3a', 'p3b'] }] },
       { reasoning: 'All green' }, { part: 'text' },
     ]);
   });
 
   test('a question for the owner is never rolled up: it splits the line in two', () => {
-    const parts = [...phase('p1'), said('a'), ...phase('p2'), ask, ...phase('p3'), said('b'), ...phase('p4'), said('Done.')];
+    const parts = [...phase('p1'), said('a'), ...phase('p2'), said('b'), ...phase('p3'), ask, ...phase('p4'), said('c'), ...phase('p5'), said('d'), ...phase('p6'), said('Done.')];
 
     expect(laidOut(rollUpTurn(blocksOf(parts), false))).toEqual([
-      { turn: [{ run: ['p1a', 'p1b'] }, { part: 'text' }, { run: ['p2a', 'p2b'] }] }, { part: 'ask' },
-      { turn: [{ run: ['p3a', 'p3b'] }, { part: 'text' }, { run: ['p4a', 'p4b'] }] }, { part: 'text' },
+      { turn: [{ run: ['p1a', 'p1b'] }, { part: 'text' }, { run: ['p2a', 'p2b'] }, { part: 'text' }, { run: ['p3a', 'p3b'] }] }, { part: 'ask' },
+      { turn: [{ run: ['p4a', 'p4b'] }, { part: 'text' }, { run: ['p5a', 'p5b'] }, { part: 'text' }, { run: ['p6a', 'p6b'] }] }, { part: 'text' },
     ]);
   });
 });

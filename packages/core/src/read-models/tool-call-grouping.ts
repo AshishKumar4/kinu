@@ -124,13 +124,13 @@ function ownerFacing(block: PartBlock): boolean {
   return block.kind === "part" && block.part.type !== "text" && !isWorkBlock(block);
 }
 
-/** The work blocks a stretch holds before it rolls up: one is a line already. */
-const TURN_MIN = 2;
+/** The phases a stretch holds before it rolls up: a long turn's, never an ordinary one's, which reads as it did. */
+const TURN_MIN = 3;
 
 /**
  * The turn as it reads: while it runs, the newest phase, and the thought that opened it, open, and the work before it
- * under one line once two phases or calls lie there; once it has run, all its work under that line and the answer
- * after it. What the owner reads or answers is never rolled up, so it splits the line in two.
+ * under one line once three phases lie there; once it has run, all its work under that line and the answer
+ * after it, when it holds as many. What the owner reads or answers is never rolled up, so it splits the line in two.
  */
 export function rollUpTurn(blocks: readonly PartBlock[], live: boolean): TurnBlock[] {
   const newest = lastIndex(blocks, isWorkBlock);
@@ -142,7 +142,7 @@ export function rollUpTurn(blocks: readonly PartBlock[], live: boolean): TurnBlo
   let stretch: PartBlock[] = [];
 
   const close = () => {
-    if (stretch.filter(isWorkBlock).length >= TURN_MIN) rolled.push({ kind: "turn", blocks: stretch });
+    if (stretch.filter((block) => block.kind === "run").length >= TURN_MIN) rolled.push({ kind: "turn", blocks: stretch });
     else rolled.push(...stretch);
     stretch = [];
   };
