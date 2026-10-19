@@ -40,16 +40,24 @@ function heldModule(load) {
   }
 
   /** How this system's libc reads a directory through its descriptor: the calls, and where a struct dirent holds its
-   *  name (glibc's dirent64; macOS's 64-bit-inode dirent, whose x86_64 calls carry the $INODE64 suffix). */
+   *  kind and name (glibc's dirent64; macOS's 64-bit-inode dirent, whose x86_64 calls carry the $INODE64 suffix). */
   const DIRENT = process.platform === 'darwin'
     ? {
       library: '/usr/lib/libSystem.B.dylib',
       fdopendir: process.arch === 'x64' ? 'fdopendir$INODE64' : 'fdopendir',
       readdir: process.arch === 'x64' ? 'readdir$INODE64' : 'readdir',
       errno: '__error',
+      type: 20,
       name: 21,
     }
-    : { library: 'libc.so.6', fdopendir: 'fdopendir', readdir: 'readdir64', errno: '__errno_location', name: 19 };
+    : { library: 'libc.so.6', fdopendir: 'fdopendir', readdir: 'readdir64', errno: '__errno_location', type: 18, name: 19 };
+
+  /** dirent.h's d_type values, alike on both: one the filesystem does not report is read from the entry's stat. */
+  const DT_UNKNOWN = 0;
+
+  const DT_DIR = 4;
+
+  const DT_LNK = 10;
 
   let libcDirent = null;
 
@@ -66,17 +74,15 @@ function heldModule(load) {
       [DIRENT.errno]: { args: [], returns: 'ptr' },
     });
 
-    const errno = () => read.i32(symbols[DIRENT.errno](), 0);
-
     libcDirent = {
       dup: (fd) => symbols.dup(fd),
       close: (fd) => symbols.close(fd),
       fdopendir: (fd) => symbols[DIRENT.fdopendir](fd),
       readdir: (dir) => symbols[DIRENT.readdir](dir),
       closedir: (dir) => symbols.closedir(dir),
-      errno,
-      // readdir answers null both at the end and on a failure: errno, cleared first, tells them apart.
-      clearErrno: () => { new Int32Array(toArrayBuffer(symbols[DIRENT.errno](), 0, 4))[0] = 0; },
+      // This thread's errno, which readdir sets only on a failure: it answers null at the end too, so it is cleared first.
+      errno: () => new Int32Array(toArrayBuffer(symbols[DIRENT.errno](), 0, 4)),
+      typeOf: (entry) => read.u8(entry, DIRENT.type),
       nameOf: (entry) => new CString(entry, DIRENT.name).toString(),
     };
 
@@ -105,49 +111,66 @@ function heldModule(load) {
       throw Object.assign(new Error(`this device cannot list '${shown}' through the directory it checked: ${cause.message}`), { code: 'ENOTSUP', cause });
     }
 
+    const errno = calls.errno();
     const copy = calls.dup(held);
 
-    if (copy < 0) throw libcFailure(calls.errno(), 'dup', shown);
+    if (copy < 0) throw libcFailure(errno[0], 'dup', shown);
     const dir = calls.fdopendir(copy);
 
     if (dir === null) {
-      const failed = libcFailure(calls.errno(), 'fdopendir', shown);
+      const failed = libcFailure(errno[0], 'fdopendir', shown);
 
       calls.close(copy);
       throw failed;
     }
 
     try {
-      const names = [];
+      const entries = [];
 
       for (;;) {
-        calls.clearErrno();
+        errno[0] = 0;
         const entry = calls.readdir(dir);
 
         if (entry === null) {
-          const errno = calls.errno();
+          if (errno[0] !== 0) throw libcFailure(errno[0], 'readdir', shown);
 
-          if (errno !== 0) throw libcFailure(errno, 'readdir', shown);
-
-          return names;
+          return entries;
         }
 
         const name = calls.nameOf(entry);
 
-        if (name !== '.' && name !== '..') names.push(name);
+        if (name !== '.' && name !== '..') entries.push({ name, type: calls.typeOf(entry) });
       }
     } finally {
       calls.closedir(dir);
     }
   }
 
-  /** The entries of the directory `held`: its names (`namesIn`), each with its own stat as `statOf` reads it there, and
-   *  its kind from that stat. A name gone before its stat is gone from the listing. */
+  /**
+   * The entries of the directory `held`: its names (`namesIn`) with the kind the directory reports, each entry's own stat
+   * read there by `statOf` only when it is asked (a page of a large folder stats its page alone), undefined once the
+   * entry is gone. A kind the filesystem does not report is read from that stat.
+   */
   function listedIn(held, shown, statOf) {
-    return namesIn(held, shown).flatMap((name) => {
-      const stat = statOf(name);
+    return namesIn(held, shown).map(({ name, type }) => {
+      let read = false;
+      let stat;
 
-      return stat === undefined ? [] : [{ name, isDirectory: () => stat.isDirectory(), isSymbolicLink: () => stat.isSymbolicLink(), stat: () => stat }];
+      const own = () => {
+        if (!read) {
+          stat = statOf(name);
+          read = true;
+        }
+
+        return stat;
+      };
+
+      return {
+        name,
+        isDirectory: () => (type === DT_UNKNOWN ? own()?.isDirectory() === true : type === DT_DIR),
+        isSymbolicLink: () => (type === DT_UNKNOWN ? own()?.isSymbolicLink() === true : type === DT_LNK),
+        stat: own,
+      };
     });
   }
 
