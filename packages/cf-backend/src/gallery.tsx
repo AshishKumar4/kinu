@@ -46,6 +46,7 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
+import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
@@ -435,8 +436,10 @@ function galleryChatGptStatus() {
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
 
-/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read. */
-const settingsSavedCredentials = new Map<string, JsonValue>();
+/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read.
+ *  `&keys=` names keys the account already holds (`tavily,exa`). */
+const settingsSavedCredentials = new Map<string, JsonValue>((new URLSearchParams(location.search).get("keys")?.split(",") ?? [])
+  .map((key) => [key, { kind: "bearer", token: "gallery" }]));
 
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
 function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -585,11 +588,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     ]);
   }
 
-  if (path === "/api/user/cloudflare/accounts") {
-    return fixtureJson({
-      connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
-    });
-  }
+  if (path === "/api/user/cloudflare/accounts") return fixtureJson(galleryCloudflareAccounts());
 
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;
@@ -763,8 +762,12 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** A saved catalog reads back. */
-let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
+/** A saved catalog reads back; `&chain=` starts it on a chosen web search. */
+let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = (() => {
+  const webSearch = galleryWebSearchChain();
+
+  return { catalog: webSearch === undefined ? BUILTIN_PROFILE_CATALOG : { ...BUILTIN_PROFILE_CATALOG, webSearch }, version: 0 };
+})();
 
 /** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused. */
 async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
@@ -830,6 +833,7 @@ function builtinAuthFixture(path: string): Response | null {
 }
 
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  galleryWebSearchTest,
   builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,

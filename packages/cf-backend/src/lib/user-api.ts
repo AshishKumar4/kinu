@@ -21,6 +21,9 @@ import {
   WorkspaceEntrySchema,
   CredentialSummarySchema,
   type McpTransport,
+  USER_WEB_SEARCH_TEST_PATH,
+  WEB,
+  type WebSearchRoute,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -344,6 +347,13 @@ export function testModel(spec: string, signal: AbortSignal): Promise<ModelTestR
   }));
 }
 
+/** One search through one entry of the chain, as the `web` tool would make it; a refusal rejects in the provider's words. */
+export function testWebSearch(route: WebSearchRoute, query: string, signal: AbortSignal): Promise<WebSearchAnswer> {
+  return settle(request(WEB.search.output, USER_WEB_SEARCH_TEST_PATH, { method: 'POST', json: { query, limit: 3, route }, signal }));
+}
+
+export type WebSearchAnswer = v.InferOutput<typeof WEB.search.output>;
+
 
 export const listProviderCatalog = () =>
   settle(api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog'));
@@ -353,6 +363,7 @@ export type CloudflareAccountStatus = v.InferOutput<typeof CloudflareAccountStat
 const CloudflareAccountStatusSchema = v.object({
   connected: v.boolean(), selectedId: v.nullable(v.string()),
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
+  webSearch: v.boolean(),
 });
 
 export const listCloudflareAccounts = () =>
