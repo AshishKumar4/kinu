@@ -99,7 +99,7 @@ describe("a proposed workspace", () => {
     expect(h.woken).toEqual([expect.objectContaining({
       kind: "workspace_proposal",
       text: expect.stringContaining("https://kinu.example/workspace/blue-river-1a2b"),
-      metadata: { proposal: "wsp-1", decision: "created", workspace: "blue-river-1a2b", url: "https://kinu.example/workspace/blue-river-1a2b" },
+      metadata: { proposal: "wsp-1", decision: "created", name: ASK.name, workspace: "blue-river-1a2b", url: "https://kinu.example/workspace/blue-river-1a2b" },
     })]);
     expect(h.proposals.open()).toEqual([]);
     // schema audit: a settled proposal's row goes; its outcome lived in the answer and the wake, never read back.
@@ -115,7 +115,7 @@ describe("a proposed workspace", () => {
 
     expect((await settle(h.proposals.decide("wsp-1", "decline")))?.status).toBe("declined");
     expect(h.created).toEqual([]);
-    expect(h.woken.map((signal) => signal.metadata)).toEqual([{ proposal: "wsp-1", decision: "declined" }]);
+    expect(h.woken.map((signal) => signal.metadata)).toEqual([{ proposal: "wsp-1", decision: "declined", name: ASK.name }]);
     expect(h.proposals.open()).toEqual([]);
   });
 
