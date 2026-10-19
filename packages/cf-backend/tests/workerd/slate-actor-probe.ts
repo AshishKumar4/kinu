@@ -2,7 +2,6 @@
  * Hosted Plan/eval probe: crafted-tool declarations are re-read, not cached,
  * and `plan` mode is refused at the seam `build` is admitted at.
  */
-import { freshServedStores } from '@kinu.run/test-utils';
 import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -93,13 +92,15 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     const actor = bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => Effect.void);
 
+    const probe = probeActor(this.ctx.storage, sql, actor);
+
     const scope: CodemodeScope = {
       reach: slateToolReach(narrowToolSurface(undefined)),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), SURFACE_POLICY.program, { executor }),
+      namespaces: (executor) => actorNamespaces(probe, SURFACE_POLICY.program, { executor }),
     };
 
     // The store holds `crafted`, read fresh per program as a runtime's surface reads it.
-    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), stores: freshServedStores() };
+    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), stores: probe.stores };
 
     const host = new SlateHost({
       ctx: this.ctx, workspace: 'binding-probe', builds: new SlateBuilds(this.ctx.storage.sql),
@@ -190,9 +191,12 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       name: 'stop-probe', storageKey: 'stop-probe',
     }, () => Effect.void);
 
-    const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [], stores: freshServedStores() }, {
+    // The surface and its namespaces carry the probe actor's one store set.
+    const probe = probeActor(this.ctx.storage, sql, actor);
+
+    const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [], stores: probe.stores }, {
       reach: narrowToolSurface(undefined),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), SURFACE_POLICY.program, { executor }),
+      namespaces: (executor) => actorNamespaces(probe, SURFACE_POLICY.program, { executor }),
     }).execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');
@@ -236,15 +240,17 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       planes: cloudPlanes(WORKSPACE_ROOT), ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
     };
 
+    const probe = probeActor(this.ctx.storage, sql, actor, { executors: [{
+      name: 'workspace', positionalArgs: true, capabilities: new Set(), tools: {},
+      fileRoot: async () => ({ root: '' }),
+    }], files: fileScope });
+
     const scope: CodemodeScope = {
       reach: narrowToolSurface(undefined),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor, { executors: [{
-        name: 'workspace', positionalArgs: true, capabilities: new Set(), tools: {},
-        fileRoot: async () => ({ root: '' }),
-      }], files: fileScope }), SURFACE_POLICY.program, { executor }),
+      namespaces: (executor) => actorNamespaces(probe, SURFACE_POLICY.program, { executor }),
     };
 
-    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], stores: freshServedStores() }, scope) }).eval;
+    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], stores: probe.stores }, scope) }).eval;
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');

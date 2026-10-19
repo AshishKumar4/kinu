@@ -357,12 +357,10 @@ function listsRun(lists: readonly ListNode[]): boolean {
 }
 
 export function runsInlineProgram(command: string): boolean {
-  // The parser refuses a command it cannot read with ParseError; any other throw is a defect, and surfaces.
-  const script = settleSync(Effect.catchCause(Effect.sync(() => parse(lex(command))), (cause) => (
-    Cause.squash(cause) instanceof ParseError ? Effect.succeed(null) : Effect.failCause(cause))));
-
-  // A command this parser cannot read (bash's `<(...)`) asks whenever any word of it names an interpreter or a shell.
-  if (script === null) return command.split(/[\s;&|()<>`$"']+/u).some((word) => grammarOf(word) !== undefined || SHELLS.includes(basename(word)));
-
-  return listsRun(script.lists);
+  return settleSync(Effect.catchCause(Effect.sync(() => listsRun(parse(lex(command)).lists)), (cause) => (
+    // A command this parser refuses (bash's `<(...)`) asks whenever any word of it names an interpreter or a shell; any
+    // other throw is a defect, and surfaces.
+    Cause.squash(cause) instanceof ParseError
+      ? Effect.succeed(command.split(/[\s;&|()<>`$"']+/u).some((word) => grammarOf(word) !== undefined || SHELLS.includes(basename(word))))
+      : Effect.failCause(cause))));
 }

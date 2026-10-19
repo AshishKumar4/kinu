@@ -132,8 +132,8 @@ const MachineFileCallSchema = v.looseObject({ path: v.string(), device: v.option
  * open(2) does. Only a spelling that climbs above the machine's root is refused, since the plane would take that `..`
  * out of the machine: where a link leads is never guessed.
  */
-function onMachine(root: string, home: string | undefined, path: string): string {
-  if (root === '') return path;
+function onMachine(root: string, home: string | undefined, path: string): Effect.Effect<string, KinuError> {
+  if (root === '') return Effect.succeed(path);
   const written = path.startsWith('/') ? path : `${(home ?? '').replace(/\/+$/u, '')}/${path}`;
   let depth = 0;
 
@@ -141,10 +141,10 @@ function onMachine(root: string, home: string | undefined, path: string): string
     if (part === '..') depth -= 1;
     else if (part !== '' && part !== '.') depth += 1;
 
-    if (depth < 0) throw new KinuError('denied', `${path} climbs above this machine's root, which its own paths start at`);
+    if (depth < 0) return Effect.fail(new KinuError('denied', `${path} climbs above this machine's root, which its own paths start at`));
   }
 
-  return `${root}${written}`;
+  return Effect.succeed(`${root}${written}`);
 }
 
 /**
@@ -165,11 +165,13 @@ function machineFiles(provider: ExecutorProviderSurface, files: Readonly<Record<
       const { path, device, ...rest } = v.parse(MachineFileCallSchema, input);
 
       // The file operation's refusal is the call's, in its own words: what to read first, what is missing.
-      return Effect.map(attemptInItsWords('io', async () => {
-        const { root, home } = await fileRoot(device);
+      return Effect.gen(function* () {
+        const { root, home } = yield* attemptInItsWords('io', () => fileRoot(device));
+        const onPlane = yield* onMachine(root, home, path);
+        const answered = yield* attemptInItsWords('io', () => file.run(projectJsonValue({ value: { ...rest, path: onPlane } }), call));
 
-        return await file.run(projectJsonValue({ value: { ...rest, path: onMachine(root, home, path) } }), call);
-      }), (answered) => answered.value);
+        return answered.value;
+      });
     })];
   });
 }
