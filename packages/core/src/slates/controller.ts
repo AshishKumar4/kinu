@@ -856,11 +856,19 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   }
 
   /**
-   * Whether the slate builds, by the build its preview serves: nothing is shown, so the turn's answer still draws the
-   * slate it changed. `{ broken }` is the compiler's words when its latest source does not build.
+   * Whether the slate builds, as its preview would serve it: nothing is shown, so the turn's answer still draws the slate
+   * it changed, and nothing is restarted, so a call of the slate's own that made the change is answered before its
+   * process gives way to the build (`SlateProcesses.built`). `{ broken }` is the compiler's words when its latest source
+   * does not build.
    */
   build(caller: SlateCaller, id: string): Promise<SlateCallResult> {
-    return settle(this.answerServed(caller, id, 'build', ({ broken }) => Effect.succeed<JsonValue>(broken === null ? {} : { broken })));
+    return settle(answer('slate ' + id + ' build', Effect.gen({ self: this }, function* () {
+      requireWorkModePermission(caller.workMode, false, 'Building a slate');
+      const { broken } = yield* Effect.promise(async () => this.processes.built(ROOT_SLATE_CALLER, id));
+      const builds: JsonValue = broken === null ? {} : { broken };
+
+      return builds;
+    })));
   }
 
   /** The application is the root's, so the URL is the same whoever asks and across launches. */
@@ -883,7 +891,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
   /** The slate's served build, booted for the workspace root, as `read` reads it; a slate that cannot be served is
    *  refused, and a caller who may not start one is refused first. */
   private answerServed(
-    caller: SlateCaller, id: string, doing: 'build' | 'preview',
+    caller: SlateCaller, id: string, doing: 'preview',
     read: (served: RunningSlate<Source, Process> & { readonly app: DurableAppIdentity }) => Effect.Effect<JsonValue, KinuError>,
   ): Effect.Effect<SlateCallResult> {
     return answer('slate ' + id + ' ' + doing, Effect.gen({ self: this }, function* () {

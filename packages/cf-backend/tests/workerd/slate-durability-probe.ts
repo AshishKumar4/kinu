@@ -458,6 +458,36 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
+   * A slate whose own call writes a file inside its own tree, called by its owner's program twice: what each call
+   * answered, and the file as it stands after.
+   */
+  async selfEditCalls(input: { workspace: string; owner: string }): Promise<{ first: string; second: string; file: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/notebook/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Notebook' } }));
+    await this.writeSlateFile(target, '/slates/notebook/server.ts', [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  async note(text) { await this.env.workspace.fs.write("/slates/notebook/note.txt", text); return "noted " + text; }',
+      '}',
+    ].join('\n'));
+
+    const call = async (text: string): Promise<string> => {
+      try {
+        return await target.runProgram(`return await workspace.slates.notebook.note(${JSON.stringify(text)});`);
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    const first = await call('one');
+    const second = await call('two');
+
+    return { first, second, file: JSON.stringify(await target.executeInExecutor('workspace', 'cat /slates/notebook/note.txt')) };
+  }
+
+  /**
    * A public share on its owner's access whose one acting member is approved: a signed-out visitor's write through the
    * share's own host (a Cap'n Web batch, as the visitor's page sends it) waits for the owner, who approves it on their
    * stack; then the same write again. `mark` is where the write lands. What each write answered, and what was written.

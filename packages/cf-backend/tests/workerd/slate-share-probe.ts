@@ -16,12 +16,13 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
-  agentCred, approvalKindOf, bearWorkspaceIdentity, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, openWorkspaceMainActor, WORKSPACE_IDENTITY_DDL,
+  agentCred, approvalKindOf, initUserTables, bearWorkspaceIdentity, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, openWorkspaceMainActor, WORKSPACE_IDENTITY_DDL,
   type ActorHandle, MissionGovernor, provisionAgentHome, settleSharedRoots, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { GalleryIndex, initGalleryTables, initSlateLiveShareTables, preapproveSlateEffect, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost, type SlateDispatchContext } from '../../src/slates/host';
+import { rosterPage } from '../../src/user/roster';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCallFrom, type SlateCaller, type SlateConsent, type SlateLineage } from '@kinu.run/core/slates';
 import type { PartViewer } from '../../src/slates/part-runs';
@@ -1059,6 +1060,21 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     try {
       return { found: index.page({ q, sort: 'new', category: null, page: 0 }, null, 2).listings.map((listing) => listing.line) };
+    } catch (cause) {
+      return { failed: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * An account's roster in this object's own SQLite, as its UserDO keeps it, holding one workspace titled `title`: the
+   * titles a search for `q` lists, or its failure in its own words.
+   */
+  rosterSearch(title: string, q: string): { found: string[] } | { failed: string } {
+    initUserTables(this.ctx.storage.sql);
+    this.ctx.storage.sql.exec('INSERT OR REPLACE INTO user_workspaces (name, display_name) VALUES (?, ?)', 'probe-workspace', title);
+
+    try {
+      return { found: rosterPage(this.ctx.storage.sql, { query: q }).entries.map((entry) => entry.displayName) };
     } catch (cause) {
       return { failed: cause instanceof Error ? cause.message : String(cause) };
     }

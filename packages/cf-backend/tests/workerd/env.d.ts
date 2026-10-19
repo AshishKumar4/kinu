@@ -311,6 +311,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
   craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; waited: string; approved: string[]; viewer: string }>;
   viewerApprovedWrite(input: { workspace: string; owner: string; mark: string }): Promise<{ waited: string; approved: string[]; ran: string; marked: string }>;
+  selfEditCalls(input: { workspace: string; owner: string }): Promise<{ first: string; second: string; file: string }>;
   sharedRunsOwnTree(input: { owner: string; workspace: string }): Promise<{ unshared: string; shared: string; afterUnshare: string }>;
   editorBatch(input: { owner: string; workspace: string; kind: 'atomic' | 'links' | 'stale' }): Promise<{
     answers: string[]; files: { path: string; text: string; sha256: string }[]; marks: (string | null)[]; outside: string;
@@ -383,6 +384,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   inheritedAfterRevoke(share: string): Promise<{ inheriting: number; retained: string; written: boolean }>;
   craftedAcrossRevoke(share: string): Promise<string[]>;
   gallerySearch(line: string, q: string): Promise<{ found: string[] } | { failed: string }>;
+  rosterSearch(title: string, q: string): Promise<{ found: string[] } | { failed: string }>;
   inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; started: string; inheriting: number; leftRunning: number }>;
   ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
   environments(): Promise<string[]>;
