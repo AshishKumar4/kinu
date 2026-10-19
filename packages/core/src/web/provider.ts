@@ -11,6 +11,7 @@ import { decodeEntities, HTML_ENTITIES } from '../utils/text';
 import { quickAction, type BrowserRunAccess, type QuickActionEngine, type QuickActionTransport } from './browser-run';
 import type { AuthResolution, AuthResolver } from '../providers/types';
 import { TAVILY_CRED_KEY } from '../credentials/validate';
+import { WEB_SEARCH_INDEX } from './search-index';
 import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
 import { Data, Effect } from 'effect';
 import type { JsonObject } from '../utils/json';
@@ -35,8 +36,8 @@ export interface WebSearchResponse {
   /** Tavily only. */
   answer?: string;
   results: WebSearchResult[];
-  /** The index the results came from: Tavily's, or Ceramic.ai's through Cloudflare's Web Search API. */
-  source: 'tavily' | 'ceramic';
+  /** The index the results came from: Tavily's, or {@link WEB_SEARCH_INDEX}'s through Cloudflare's Web Search API. */
+  source: 'tavily' | typeof WEB_SEARCH_INDEX;
 }
 
 export interface WebFetchResult {
@@ -262,7 +263,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       };
     });
 
-    return { query, results, source: 'ceramic' };
+    return { query, results, source: WEB_SEARCH_INDEX };
   });
 
   const judged = (url: string): Effect.Effect<URL> => Effect.gen(function* () {

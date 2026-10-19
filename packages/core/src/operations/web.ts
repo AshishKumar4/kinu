@@ -1,6 +1,7 @@
 /** The web: search, a page as Markdown, a screenshot, and remote browser sessions a program drives. */
 import * as v from 'valibot';
 import { defineOperation, described, type Impact } from './operation';
+import { WEB_SEARCH_INDEX } from '../web/search-index';
 
 /** Kitesurf has no session to keep: `connectBrowser` starts one per program under this id. */
 export const KITESURF_SESSION_ID = 'kitesurf';
@@ -25,7 +26,7 @@ export const WEB = {
       query: v.string(),
       answer: v.optional(v.string()),
       results: v.array(v.strictObject({ title: v.string(), url: v.string(), snippet: v.string(), date: v.optional(v.string()), position: v.number() })),
-      source: v.picklist(['tavily', 'ceramic']),
+      source: v.picklist(['tavily', WEB_SEARCH_INDEX]),
     }),
     text: ({ query, answer, results, source }) => {
       if (results.length === 0) return `No web results for "${query}".`;

@@ -24,6 +24,8 @@ export { buildCfWebSearchProvider } from './provider-factory';
 
 export { USER_WEB_SEARCH_PATH, WebSearchRequestSchema, bindingWebSearch, routeWebSearch } from './first-party-search';
 
+export { WEB_SEARCH_INDEX } from './search-index';
+
 export { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 
 export { htmlToMarkdown, stripBase64Images, looksLikeHtml } from './markdown';
