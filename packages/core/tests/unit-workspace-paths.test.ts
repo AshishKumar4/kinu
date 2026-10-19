@@ -214,6 +214,9 @@ test('a path that names nothing is told what it names under each prefix', async 
     .toThrow('`skills/slates/SKILL.md` is `/home/main/skills/slates/SKILL.md` here, `vfs://skills/slates/SKILL.md` is `/skills/slates/SKILL.md` and `computer://skills/slates/SKILL.md` is `/computer/skills/slates/SKILL.md`');
   await expect(file({ op: 'list', path: '/workspace/true-myth' })).rejects.toThrow('`computer://workspace/true-myth` is `/computer/workspace/true-myth`');
   await expect(file({ op: 'stat', path: '/workspace/true-myth/src/maybe.ts' })).rejects.toThrow('`computer://workspace/true-myth/src/maybe.ts` is `/computer/workspace/true-myth/src/maybe.ts`');
+  // Node's fs resolves `skills/…` against the cwd before the plane sees it (Luna, delegation t3): read from the cwd.
+  await expect(file({ op: 'read', path: '/home/main/skills/slates/SKILL.md' })).rejects
+    .toThrow('`/home/main/skills/slates/SKILL.md` is `/home/main/skills/slates/SKILL.md` here, `vfs://skills/slates/SKILL.md` is `/skills/slates/SKILL.md`');
 });
 
 // Luna searched the directory `archive` three times in a row on staging 5c522f12d; the refusal never said it was one.

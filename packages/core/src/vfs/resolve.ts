@@ -192,11 +192,12 @@ export function addressingHint(planes: PathPlanes, written?: string): string {
 /**
  * A plain path (never a reference or `~`) written under each plane's prefix, where that names another file than it
  * did: a skill read as `skills/x` meant `vfs://skills/x`, and a computer's `/workspace/app` is `computer://workspace/app`.
- * Text only; none is looked up.
+ * A path that landed under the cwd is read from the cwd, as its relative spelling is: Node's `fs` resolves
+ * `skills/x` there before the plane sees it. Text only; none is looked up.
  */
 function prefixedReadings(written: string, landed: string, planes: PathPlanes): Effect.Effect<string[]> {
   if (REFERENCE.test(written) || written === '~' || written.startsWith('~/')) return Effect.succeed([]);
-  const rest = written.replace(/^(?:\.?\/)+/u, '');
+  const rest = landed !== planes.cwd && holds(planes.cwd, landed) ? relativeTo(planes.cwd, landed) : written.replace(/^(?:\.?\/)+/u, '');
   const rows = planes.prefixes.filter((row) => row.prefix !== DEVICE_PREFIX);
 
   const readings = Effect.forEach(rows, (row) => {
