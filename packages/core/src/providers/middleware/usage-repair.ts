@@ -6,6 +6,7 @@ import type { LanguageModelV4StreamPart, LanguageModelV4Usage } from '@ai-sdk/pr
 import type { LanguageModelMiddleware } from 'ai';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from '../../utils/json';
+import { pulledThrough } from '../../utils/pulled-stream';
 
 const CachedReportSchema = v.looseObject({
   usage: v.looseObject({
@@ -22,19 +23,15 @@ export function usageRepairMiddleware(): LanguageModelMiddleware {
       const result = await doStream();
       let maxCached = 0;
 
-      const repair = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
-        transform(part, controller) {
-          const raw = part.type === 'raw' ? part.rawValue : undefined;
-          // Only a usage report is parsed: a schema that fails records an issue, and most raw parts carry none.
-          const report = typeof raw === 'object' && raw !== null && 'usage' in raw ? v.safeParse(CachedReportSchema, raw) : null;
+      return { ...result, stream: pulledThrough(result.stream, (part): LanguageModelV4StreamPart => {
+        const raw = part.type === 'raw' ? part.rawValue : undefined;
+        // Only a usage report is parsed: a schema that fails records an issue, and most raw parts carry none.
+        const report = typeof raw === 'object' && raw !== null && 'usage' in raw ? v.safeParse(CachedReportSchema, raw) : null;
 
-          if (report?.success === true) maxCached = Math.max(maxCached, report.output.usage.prompt_tokens_details.cached_tokens);
+        if (report?.success === true) maxCached = Math.max(maxCached, report.output.usage.prompt_tokens_details.cached_tokens);
 
-          controller.enqueue(part.type === 'finish' ? { ...part, usage: withCacheRead(part.usage, maxCached) } : part);
-        },
-      });
-
-      return { ...result, stream: result.stream.pipeThrough(repair) };
+        return part.type === 'finish' ? { ...part, usage: withCacheRead(part.usage, maxCached) } : part;
+      }) };
     },
   };
 }
