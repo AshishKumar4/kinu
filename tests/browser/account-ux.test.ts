@@ -1059,6 +1059,9 @@ describe('Settings → Memory', () => {
         await page.keyboard.type('Ada');
         await page.$$eval('button', (buttons) => buttons.find((button) => button.textContent?.trim() === 'Save')?.click());
         await page.waitForFunction(() => document.documentElement.dataset.galleryProfilePatches === '1');
+        // Saved once the name can be edited again: the account takes the answer in that render. Save alone is disabled
+        // from the press, while the patch is out, so a read then saw the old name (tier, b69e13df2: "Owner").
+        await page.waitForSelector('input[aria-label="Your name"]:not(:disabled)');
         await page.waitForFunction(() => [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Save')?.disabled === true);
         // The saved profile is the account's answer: nothing reads it again, and every reader holds it at once.
         expect(await reads()).toBe(before);

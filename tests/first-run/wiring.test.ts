@@ -59,9 +59,9 @@ test('a red in either project reds the tier, which still reports spend and keeps
   const reports = tier.reports;
 
   expect(run.exitCode).toBe(42);
-  // Both accounts the cases act as run on the scripted model, each put there with its own bearer.
+  // Every account the cases act as runs on the scripted model, each put there with its own bearer.
   expect(readFileSync(join(reports, 'scripted'), 'utf8').trim().split('\n').sort())
-    .toEqual(['https://kinu.run devices fixture-token', 'https://kinu.run scripted fixture-token']);
+    .toEqual(['https://kinu.run devices fixture-token', 'https://kinu.run scripted fixture-token', 'https://kinu.run settings fixture-token']);
   expect(readFileSync(join(reports, 'projects'), 'utf8').trim().split('\n').sort()).toEqual(['first-run-cases', 'first-run-fleet']);
   expect(readFileSync(join(reports, 'spend-first-run.jsonl'), 'utf8')).toBe('measured-spend\nmeasured-spend\n');
   expect(readFileSync(join(reports, 'spend-reported'), 'utf8')).toBe('reported\n');

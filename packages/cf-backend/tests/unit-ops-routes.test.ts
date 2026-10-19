@@ -3,7 +3,7 @@
 // refused before any object is asked.
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { OPS_PASS_PREFIX, requireOps, sha256Hex, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
+import { EVAL_ACCOUNTS, OPS_PASS_PREFIX, requireOps, sha256Hex, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
 import { BUILTIN_ACCOUNTS_OBJECT } from '@kinu.run/core/identity';
 import { opsRoutes, type OpsEnv } from '../src/ops-routes';
 
@@ -105,8 +105,8 @@ test('the walk starts from the builtin directory and the eval service\'s account
   // This deployment binds no control plane, so the walk is led to none.
   expect(control).toEqual([]);
 
-  // The service, `devices` and `scripted`, each by the id the deployment's sign-in derives.
-  expect(accounts).toHaveLength(4);
+  // The builtin directory, then the service and each of its eval accounts, by the id the deployment's sign-in derives.
+  expect(accounts).toHaveLength(2 + EVAL_ACCOUNTS.length);
   expect(accounts[0]).toBe(BUILTIN_ACCOUNTS_OBJECT);
 });
 
