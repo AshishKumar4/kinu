@@ -5,12 +5,13 @@
  * account on a chosen chain (`linkup-cloudflare,exa-cloudflare`), and `&keys=` names the keys it holds (gallery.tsx).
  */
 import * as v from "valibot";
-import { WEB, WebSearchRouteSchema, USER_WEB_SEARCH_TEST_PATH, type JsonValue, type WebSearchRoute } from "@kinu.run/core";
+import { WEB, WebSearchRouteSchema, USER_WEB_SEARCH_TEST_PATH, type WebSearchRoute } from "@kinu.run/core";
+import type { CloudflareAccountStatus } from "@/lib/user-api";
 
 const query = new URLSearchParams(location.search);
 
 /** Whose Cloudflare login the account holds, for the account read and the bill line. */
-export const GALLERY_CLOUDFLARE = v.parse(v.picklist(["granted", "stale", "off"]), query.get("cloudflare") ?? "granted");
+const GALLERY_CLOUDFLARE = v.parse(v.picklist(["granted", "stale", "off"]), query.get("cloudflare") ?? "granted");
 
 /** The account's chosen chain, where `&chain=` names one. */
 export function galleryWebSearchChain(): WebSearchRoute[] | undefined {
@@ -23,8 +24,8 @@ export function galleryWebSearchChain(): WebSearchRoute[] | undefined {
   });
 }
 
-/** Cloudflare's account read, as `listCloudflareAccounts` answers it. */
-export function galleryCloudflareAccounts(): JsonValue {
+/** Cloudflare's account read, as `listCloudflareAccounts` reads it. */
+export function galleryCloudflareAccounts(): CloudflareAccountStatus {
   return GALLERY_CLOUDFLARE === "off"
     ? { connected: false, selectedId: null, accounts: [], webSearch: false }
     : { connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }], webSearch: GALLERY_CLOUDFLARE === "granted" };

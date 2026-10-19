@@ -42,7 +42,7 @@ export function storedCredentialKey(key: string): string {
  * login for it and refused an unknown scope with `invalid_scope` (2026-10-19); wrangler 4.145's login asks for it too.
  * Whether `ai.write` alone already admits an OAuth token there is unmeasured.
  */
-export const CLOUDFLARE_WEB_SEARCH_SCOPE = 'websearch.run';
+const CLOUDFLARE_WEB_SEARCH_SCOPE = 'websearch.run';
 
 // `offline_access` makes Cloudflare issue a refresh token; `aig.write` covers the gateway management APIs
 // (no separate Read scope) and `aig.run` covers inference.

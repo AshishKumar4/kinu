@@ -588,7 +588,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     ]);
   }
 
-  if (path === "/api/user/cloudflare/accounts") return fixtureJson(galleryCloudflareAccounts());
+  if (path === "/api/user/cloudflare/accounts") return Response.json(galleryCloudflareAccounts());
 
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;

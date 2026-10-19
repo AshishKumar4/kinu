@@ -7,7 +7,7 @@
 import * as v from 'valibot';
 
 /** One result as a provider answered it, before Kinu ranks, clips and screens it. */
-export interface SearchHit {
+interface SearchHit {
   readonly url: string;
   readonly title?: string | undefined;
   readonly snippet?: string | undefined;
@@ -21,7 +21,7 @@ export interface SearchAnswer {
 }
 
 /** A provider's own API, called with the account's key stored under the provider's id. */
-export interface DirectSearchApi {
+interface DirectSearchApi {
   /** Where a person makes a key. */
   readonly keyPage: string;
   /** The most results one request takes, from its docs. */
@@ -82,7 +82,7 @@ export const WEB_SEARCH_PROVIDERS = {
 } as const satisfies Readonly<Record<WebSearchProviderId, WebSearchProviderEntry>>;
 
 /** Who pays: the gateway Cloudflare's API runs on, or the person's own key at the provider. */
-export const WEB_SEARCH_BILLINGS = ['cloudflare', 'key'] as const;
+const WEB_SEARCH_BILLINGS = ['cloudflare', 'key'] as const;
 
 export type WebSearchBilling = (typeof WEB_SEARCH_BILLINGS)[number];
 

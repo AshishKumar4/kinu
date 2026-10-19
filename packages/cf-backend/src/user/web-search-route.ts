@@ -9,7 +9,8 @@ import {
   bindingWebSearch, chainWebSearch, objectNamed, ownerCaller, safeJson, json, webSearchChainOf, USER_WEB_SEARCH_PATH, WebSearchRequestSchema,
   type AuthResolver, type OwnerCapabilityEnv, type ProfileCatalogEnvelope, type UserCaller, type WebSearchResponse, type WorkersAiWebSearch,
 } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { attemptInItsWords, KinuError, settle } from '@kinu.run/core/obs';
 import type { FamilyEnv } from '../api/context';
 import { inferenceProxyGate, type CliBearerEnv, type CliBearerVariables } from '../api/cli-bearer';
 import type { CliAuthAuthority } from '../cli/auth-store';
@@ -28,22 +29,24 @@ export interface WebSearchEnv {
 
 /** One search as `account`: its chain, or the one entry the body names, asked once. Filed nowhere, as the inference
  *  proxy's completions are: no workspace's ledger holds it. */
-export async function searchAsAccount(env: WebSearchEnv, account: SearchingAccount, request: Request): Promise<WebSearchResponse> {
-  const body: v.InferOutput<typeof WebSearchRequestSchema> | null = await safeJson(request, WebSearchRequestSchema);
+export function searchAsAccount(env: WebSearchEnv, account: SearchingAccount, request: Request): Promise<WebSearchResponse> {
+  return settle(Effect.gen(function* () {
+    const body: v.InferOutput<typeof WebSearchRequestSchema> | null = yield* Effect.promise(() => safeJson(request, WebSearchRequestSchema));
 
-  if (body === null) throw new KinuError('bad_input', 'Body must be { query, limit, route? }.');
-  const { route } = body;
-  const deployment = bindingWebSearch(env);
+    if (body === null) return yield* Effect.fail(new KinuError('bad_input', 'Body must be { query, limit, route? }.'));
+    const { route } = body;
+    const deployment = bindingWebSearch(env);
 
-  const search = chainWebSearch({
-    fetch: globalThis.fetch,
-    getAuth: account.getAuth,
-    ...(deployment !== null && { deployment }),
-    report: () => undefined,
-    chain: async () => (route === undefined ? webSearchChainOf((await account.catalog()).catalog) : { routes: [route], retries: 0 }),
-  });
+    const search = chainWebSearch({
+      fetch: globalThis.fetch,
+      getAuth: account.getAuth,
+      ...(deployment !== null && { deployment }),
+      report: () => undefined,
+      chain: async () => (route === undefined ? webSearchChainOf((await account.catalog()).catalog) : { routes: [route], retries: 0 }),
+    });
 
-  return await search({ query: body.query, limit: body.limit });
+    return yield* attemptInItsWords('unavailable', () => search({ query: body.query, limit: body.limit }));
+  }));
 }
 
 type SearchAuthority = CliAuthAuthority & UserCredentialClient & { getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> };
