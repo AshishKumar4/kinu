@@ -9,8 +9,18 @@ import { KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal } fro
 import type { JsonValue } from '../utils/json';
 
 /**
- * Turn a shell's exit-127 "command not found" into a refusal naming the real exits (sandbox, `nimbus install`).
- * `cataloged` is per call: installed runtimes re-register bins mid-session.
+ * What the workspace shell does instead of a command models reach for that it lacks, where it has one: measured on
+ * staging, 2026-10-19 (`rg` refused 10 of Luna's calls in the rc20 trials; `grep -rn` and `diff` answer there).
+ */
+const IN_THIS_SHELL: ReadonlyMap<string, string> = new Map([
+  ['rg', 'Here `grep -rn <pattern> <dir>` searches. '],
+  ['cmp', 'Here `diff` compares files. '],
+]);
+
+/**
+ * Turn a shell's exit-127 "command not found" into a refusal naming the real exits: what this shell does instead,
+ * `help`, which lists its commands, the computer, `nimbus install`. `cataloged` is per call: installed runtimes
+ * re-register bins mid-session.
  */
 export async function workspaceCommandNotFound<O extends { stdout: string; stderr: string; exitCode: number; refusal?: Refusal }>(
   outcome: O,
@@ -26,12 +36,14 @@ export async function workspaceCommandNotFound<O extends { stdout: string; stder
   const catalog = await cataloged(bin);
   const installable = catalog === true;
   const unreadable = catalog !== true && catalog !== false ? catalog.unreadable : undefined;
+  const instead = IN_THIS_SHELL.get(bin);
 
   return {
     ...outcome,
     refusal: refusalOf(new KinuError(
       'unavailable',
-      `${bin}: no such command in this workspace's shell. `
+      `${bin}: no such command in this workspace's shell, whose commands \`help\` lists. `
+        + (instead ?? '')
         + (installable
           ? `Run it on your computer (runtime 'computer'), or install it with \`nimbus install ${bin}\`.`
           : `Run it on your computer (runtime 'computer'), which ships a full toolchain, `

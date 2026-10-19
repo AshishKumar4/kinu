@@ -189,6 +189,35 @@ describe('the desktop members', () => {
     expect(sent).toEqual([]);
   });
 
+  // The minecraft trials (2026-10-19): Muse sent 21 of its 54 wrong desktop calls as these shapes. A chord stays one
+  // string; each refusal names the exact string to send.
+  test('a chord sent as its keys in order, or the space bar as " ", is refused with the one string to send', async () => {
+    const { box, sent } = desktopBox();
+    const computer = computerOf(box);
+
+    const refused: JsonValue[] = await Promise.all([
+      call(computer, 'key', ['Escape']), call(computer, 'key', ['ctrl', 's']), call(computer, 'key', ' '), call(computer, 'key', 'shift+ '),
+      call(computer, 'click', [1, 2], { hold: ['ctrl', 'shift'] }), call(computer, 'key', []),
+    ]);
+
+    expect(refused).toEqual(refused.map(() => expect.objectContaining({ success: false, reason: 'bad_input' })));
+    expect(refused.map((answer) => /send "([^"]*)"|like "ctrl\+s"/u.exec(JSON.stringify(answer).replaceAll('\\"', '"'))?.[0] ?? null)).toEqual([
+      'send "Escape"', 'send "ctrl+s"', 'send "space"', 'send "shift+space"', 'send "ctrl+shift"', 'like "ctrl+s"',
+    ]);
+    expect(sent).toEqual([]);
+  });
+
+  test('a hold that names no duration is refused saying what hold is', async () => {
+    const { box, sent } = desktopBox();
+    const computer = computerOf(box);
+
+    const refused: JsonValue[] = await Promise.all([call(computer, 'key', 'w', { hold: true }), call(computer, 'key', 'w', { hold: 0 })]);
+
+    expect(refused).toEqual(refused.map(() => expect.objectContaining({ success: false, reason: 'bad_input' })));
+    expect(refused.map((answer) => JSON.stringify(answer).includes('there is no separate key down or key up'))).toEqual([true, true]);
+    expect(sent).toEqual([]);
+  });
+
   test("the box's own refusals reach the program as refusals: a point off its screen, and another agent driving it", async () => {
     const off: DesktopAnswer = { kind: 'refused', reason: 'off_screen', detail: '[1300, 20] is off the screen, which is 1280×768.' };
     const driven: DesktopAnswer = { kind: 'refused', reason: 'driven', detail: 'another agent of this workspace drives the desktop' };

@@ -187,6 +187,22 @@ describe('hosted Nimbus workspace provider', () => {
     expect(real.exitCode).toBe(2);
   });
 
+  // The rc20 trials (2026-10-19): `rg` refused 10 of Luna's calls, `cmp` one of Muse's; staging's shell has `grep -rn`,
+  // `diff` and `help`, which lists its commands (kinu-logs/workspace-shell-commands-2026-10-19).
+  test('a command the shell lacks names `help`, and what this shell does instead where it has one', async () => {
+    const box = fakeBox();
+    box.exec = async (command) => ({
+      command, success: false, stdout: '', stderr: `${command.split(' ')[0] ?? ''}: command not found`, exitCode: 127, duration: 0, timestamp: 0,
+    });
+    const shell = nimbusSessionShell(box, { home: WORKSPACE_ROOT });
+
+    const [rg, cmp, pdftotext] = await Promise.all(['rg -n TODO src', 'cmp a.bin b.bin', 'pdftotext report.pdf'].map(async (command) => (await shell.exec(command)).refusal?.error ?? ''));
+
+    expect([rg, cmp, pdftotext].every((error) => error.includes('`help` lists') && error.includes("runtime 'computer'"))).toBe(true);
+    expect({ rg: rg.includes('`grep -rn <pattern> <dir>` searches'), cmp: cmp.includes('`diff` compares files'), pdftotext: pdftotext.includes('Here ') })
+      .toEqual({ rg: true, cmp: true, pdftotext: false });
+  });
+
   test('a runtime catalog read failure is carried into the refusal, not hidden as "no bins"', async () => {
     const box = fakeBox();
     box.exec = async (command) => ({
