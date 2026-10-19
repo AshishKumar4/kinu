@@ -994,9 +994,15 @@ export class FakeSandbox {
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 
     const pid = this.#pid++;
+    const process = await this.#nativeCommand(args, options, pid);
 
-    return this.#nativeCommand(args, options, pid);
+    this.#live.set(pid, process);
+
+    return process;
   }
+
+  /** Each process an exec started, by its pid, for the box's own kill of it (`endProcess`). */
+  readonly #live = new Map<number, ExecProcess>();
 
   #nativeProtocol(args: string[], options: ContainerExecOptions): Promise<ExecProcess> | ExecProcess | undefined {
     if (args[3] === 'devbox-incarnation-read') {
@@ -1057,6 +1063,13 @@ export class FakeSandbox {
   async #nativeCommand(launched: string[], options: ContainerExecOptions, pid: number): Promise<ExecProcess> {
     // A caller's run is in its own group, `setsid -w` (D69): what it runs follows.
     const args = launched[0] === 'setsid' && launched[1] === '-w' ? launched.slice(2) : launched;
+
+    // The box ends a process with an exec of kill (`endProcess`): the process it names ends as a SIGKILL ends it.
+    if (args[0] === 'kill' && args[1] === '-KILL') {
+      this.#live.get(Number(args[2]))?.kill(9);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
 
     // The restore deadline's process ends only when it is killed: a test that needs the deadline to
     // fall hands the box a hand clock rather than waiting out a duration.

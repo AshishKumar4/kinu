@@ -22,8 +22,8 @@ export const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE:
  * container whose connection was lost it failed the box's request as an uncaught "Network connection lost." (staging
  * rc23, 2026-10-19; `connection-lost.test.ts`). So no exec of the box's is given a signal or killed by the platform.
  */
-export function endProcess(container: Pick<Container, 'exec'>, pid: number, doing: string): void {
-  observe(attempt('process', async () => await (await container.exec(['kill', '-KILL', String(pid)])).output(), doing), {
+export function endProcess(container: Pick<Container, 'exec'>, pid: number, doing: string): () => void {
+  return observe(attempt('process', async () => await (await container.exec(['kill', '-KILL', String(pid)])).output(), doing), {
     success: () => undefined,
     failure: (cause) => { console.error(`[devbox] ${cause.message}`); },
   });
