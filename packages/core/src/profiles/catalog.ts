@@ -16,6 +16,8 @@ import { MODEL_ROUTE_POLICY } from './model-route';
 import { REASONING_EFFORTS } from '../providers/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { DECISION_MODELS } from '../providers/decision-model';
+import { DEFAULT_WEB_SEARCH_CHAIN, WebSearchRouteSchema } from '../providers/web-search';
+import type { WebSearchChain } from '../web/search-chain';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
@@ -24,6 +26,7 @@ import {
   BUILTIN_ROLE_IDS, RoleIdSchema, TIER_IDS, TierIdSchema,
   type BuiltinRoleId, type ProfileCatalog, type RoleCatalog, type RoleId,
   type TierAssignments, type TierId, type RoleDefinition, type ProfileCatalogEnvelope,
+  DEFAULT_PROVIDER_RETRIES,
 } from '../types/profile';
 
 export type {
@@ -87,6 +90,11 @@ const ProfileCatalogObjectSchema = v.strictObject({
   retries: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(10))),
   decisionModel: v.optional(v.picklist(DECISION_MODELS)),
   betaSwarms: v.optional(v.boolean()),
+  webSearch: v.optional(v.pipe(
+    v.array(WebSearchRouteSchema),
+    v.minLength(1),
+    v.check((chain) => new Set(chain.map((route) => `${route.provider}|${route.billing}`)).size === chain.length, 'a search chain names each entry once'),
+  )),
 });
 
 function allSpawnReferencesExist(
@@ -239,3 +247,8 @@ export const BUILTIN_PROFILE_CATALOG: ProfileCatalog = Object.freeze({
   roles: Object.freeze({}),
   tiers: Object.freeze({ default: Object.freeze({ model: DEFAULT_WORKERS_AI_MODEL_SPEC }) }),
 });
+
+/** The account's search chain, and how many more times its last entry is asked (`web/search-chain.ts`). */
+export function webSearchChainOf(catalog: Pick<ProfileCatalog, 'webSearch' | 'retries'>): WebSearchChain {
+  return { routes: catalog.webSearch ?? DEFAULT_WEB_SEARCH_CHAIN, retries: catalog.retries ?? DEFAULT_PROVIDER_RETRIES };
+}

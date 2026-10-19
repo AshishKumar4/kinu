@@ -5,7 +5,6 @@ export {
   type WebSearchResponse,
   type WebFetchResult,
   type DefaultWebSearchProviderDeps,
-  type FirstPartySearch,
   type WebScreenshot,
   type BrowserSessions,
   type BrowserSessionView,
@@ -22,7 +21,9 @@ export {
 
 export { buildCfWebSearchProvider } from './provider-factory';
 
-export { USER_WEB_SEARCH_PATH, WebSearchRequestSchema, bindingWebSearch, routeWebSearch } from './first-party-search';
+export { USER_WEB_SEARCH_PATH, USER_WEB_SEARCH_TEST_PATH, WebSearchRequestSchema, routeWebSearch } from './search-route';
+
+export { bindingWebSearch, chainWebSearch, type DeploymentSearch, type WebSearch, type WebSearchChain, type WebSearchDeps } from './search-chain';
 
 export { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 
@@ -34,4 +35,4 @@ export { browserSessions, initBrowserSessionTable, ownsBrowserSession, type Brow
 
 export { createWebCodemodeProvider, serveWeb, type WebDeps } from '../tools/web-operations';
 
-export { WEB, KITESURF_SESSION_ID, WEB_SEARCH_INDEX } from '../operations/web';
+export { WEB, KITESURF_SESSION_ID } from '../operations/web';

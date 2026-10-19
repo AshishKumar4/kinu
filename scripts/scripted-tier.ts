@@ -1,9 +1,9 @@
 /**
  * Puts one eval account a deployed tier acts as on the scripted model, and proves the deployment reaches it. The
  * account's `openai-compat` credential points at the tiers' Worker and its default tier becomes the scripted model, so
- * its workspaces, and the helpers and swarm nodes they hire, all answer from `tierModel`; its `tavily` credential points
- * at the same Worker's scripted search. Run by the tier before its
- * cases, against the build it drives, with that account's CLI bearer in KINU_TOKEN.
+ * its workspaces, and the helpers and swarm nodes they hire, all answer from `tierModel`; its search chain is chosen
+ * (`chooseSearch`), and `gateway` signs in to Cloudflare. Run by the tier before its cases, against the build it drives,
+ * with that account's CLI bearer in KINU_TOKEN.
  *   bun scripts/scripted-tier.ts <origin> <eval account>
  *
  * Two kinds of request reach the scripted model's host, routed differently (scripts/scripted-model-worker.jsonc), and
@@ -20,10 +20,15 @@ import { resolveWebIdentity, webHeaders } from '../evals/src/workspace-roster';
 import {
   SCRIPTED_MODEL_ID, SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC,
 } from '../packages/test-utils/src/scripted-model-spec';
-import { SCRIPTED_CREDENTIAL, defaultToScriptedModel, forgetSearchKey, registerScriptedModel, registerScriptedSearch } from './scripted-model';
+import { SCRIPTED_CREDENTIAL, chooseSearch, connectCloudflare, defaultToScriptedModel, registerScriptedModel } from './scripted-model';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 
 const [origin, named, ...rest] = process.argv.slice(2);
+
+/** A Cloudflare API token with Workers AI Read and AI Gateway Read, and the account it reaches. */
+const GATEWAY_TOKEN_ENV = 'WEBSEARCH_CF_TOKEN';
+
+const GATEWAY_ACCOUNT_ENV = 'WEBSEARCH_CF_ACCOUNT';
 
 const token = process.env.KINU_TOKEN?.trim() ?? '';
 
@@ -52,8 +57,22 @@ const headers = webHeaders(identity.identity);
 
 await registerScriptedModel(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey);
 
-// `keyless` holds no search key (EVAL_ACCOUNTS): its searches reach the deployment's own provider.
-await (account === 'keyless' ? forgetSearchKey(origin, headers) : registerScriptedSearch(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey));
+await chooseSearch(origin, headers, account);
+
+// `gateway` signs in to Cloudflare (EVAL_ACCOUNTS): its searches bill its own account's gateway.
+if (account === 'gateway') {
+  const cloudflare = v.safeParse(v.object({
+    [GATEWAY_TOKEN_ENV]: v.pipe(v.string(), v.minLength(1)),
+    [GATEWAY_ACCOUNT_ENV]: v.pipe(v.string(), v.regex(/^[0-9a-f]{32}$/)),
+  }), process.env);
+
+  if (!cloudflare.success) {
+    console.error(`scripted-tier: the gateway account signs in to Cloudflare with ${GATEWAY_TOKEN_ENV} on ${GATEWAY_ACCOUNT_ENV}, and one is not set.`);
+    process.exit(2);
+  }
+
+  await connectCloudflare(origin, headers, { token: cloudflare.output[GATEWAY_TOKEN_ENV], accountId: cloudflare.output[GATEWAY_ACCOUNT_ENV] });
+}
 
 await defaultToScriptedModel(origin, headers);
 

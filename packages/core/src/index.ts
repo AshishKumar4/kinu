@@ -2126,7 +2126,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING, webSearchChainOf,
 } from './profiles';
 
 export type {

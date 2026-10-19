@@ -194,7 +194,7 @@ import { gatedClientHandlers } from "./client-socket-gate";
 import { isWorkspaceTerminal } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
-import { sha256Hex } from '@kinu.run/core';
+import { sha256Hex, webSearchChainOf } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -912,6 +912,7 @@ export abstract class ActorAgent extends Agent<Env> {
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
+    webSearchChain: async () => webSearchChainOf((await this.profileCatalog()).catalog),
     currentTurn: (reference) => this.currentTurnOf(reference),
   });
 

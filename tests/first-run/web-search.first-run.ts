@@ -1,19 +1,15 @@
 /**
- * FIRST RUN: a web search answers on the deployed product.
+ * FIRST RUN: a web search answers on the deployed product, from the provider the account chose.
  *
- * THE ASK. An end-to-end pass of the keyed web search path: the deployed agent
- * searches with its `web` tool through the account's `tavily` credential, which
- * points at the tiers' scripted search (scripts/scripted-search.ts), and uses
- * what came back. From a Worker, key-less DuckDuckGo answered 522 or its bot
- * page on every staging run of 2026-09-27, which measured the provider, not the
- * product; whether a real provider answers is the evals' question. Every
- * check reads durable state — the ledger's `tool_call_end` row and the stored
- * reply — never the model's own account of what it did.
+ * THE ASK. An end-to-end pass of the web search capability, and of the choice the owner asked for on 2026-10-19:
+ * search billed through Cloudflare by default, or a provider a person picks. The `scripted` account's chain names
+ * Linkup (scripts/scripted-model.ts `chooseSearch`), not the default Exa, so the deployed agent's `web` search must
+ * come from the provider the account's catalog names, through the deployment's gateway. Every check reads durable
+ * state — the ledger's `tool_call_end` and `model_call` rows and the stored reply — never the model's own account of
+ * what it did.
  *
- * WHY `every-tool` DOES NOT COVER IT. Its web call is a fetch of the product's
- * own health route. Search is the other action, and its provider (Tavily with
- * a key, Cloudflare's Web Search API without, packages/core/src/web/provider.ts)
- * is reached by no other row.
+ * WHY `every-tool` DOES NOT COVER IT. Its web call is a fetch of the product's own health route. Search is the other
+ * action, and its chain (packages/core/src/web/search-chain.ts) is reached by no other row.
  */
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation } from '@kinu.run/test-utils';
@@ -32,9 +28,9 @@ const DEFECT: FirstRunDefect = {
     + 'fixture pages, so a provider the deployment cannot reach, or a layout it no longer parses, '
     + 'is invisible until a user asks the agent to look something up.',
   provedRedAt: 'b220f59f8',
-  redDirection: 'RED on the deployed build: DuckDuckGo answers the Worker 522 or rate-limits it, so every '
-    + 'search fails; it stays red until the search provider serves Worker egress. Also planted on '
-    + 'loopback `vite dev`: an endpoint that does not answer leaves `searched` and `results-returned` missed.',
+  redDirection: 'RED on the deployed build: DuckDuckGo answered the Worker 522 or rate-limited it, so every '
+    + 'search failed. Since the search chain, also RED on a build that does not read the account\'s choice: the search '
+    + 'comes from Exa, not Linkup, and `chosen-provider` is missed.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'search');
@@ -57,11 +53,8 @@ describe(SUITE, () => {
       genesis: false,
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
       async run({ session }) {
-        return await searchSubgoals(session);
+        return await searchSubgoals(session, { provider: 'linkup', payer: 'deployment' });
       },
     }, observations);
   });
 });
-
-/** The defect this case is red on, re-exported so `wiring.test.ts` can hold the
- *  corpus and the defect register equal without importing the case modules. */

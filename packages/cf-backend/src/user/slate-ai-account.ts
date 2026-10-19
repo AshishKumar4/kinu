@@ -5,7 +5,7 @@
  */
 import * as v from 'valibot';
 import {
-  accountSpendOfCall, DEFAULT_ROLE_ID, pricedModelCallEvent, loadProfileAuthorityInputs, ModelCatalogSession, resolveTurnProfile, specModelInfo,
+  accountSpendOfCall, DEFAULT_ROLE_ID, webSearchChainOf, pricedModelCallEvent, loadProfileAuthorityInputs, ModelCatalogSession, resolveTurnProfile, specModelInfo,
   type AccountSpend, type ModelCallReport, type ProfileCatalogEnvelope, type SlateSurfaceValue, type Usage, type UserCaller,
 } from '@kinu.run/core';
 import { recordModelRow } from '@kinu.run/core/analytics';
@@ -35,6 +35,7 @@ function accountServices<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, w
     getUserCaller: async () => caller,
     getCredentialsRevision: async () => host.credentialsRevision(caller),
     reportModelCall: record,
+    webSearchChain: async () => webSearchChainOf((await host.catalog(caller)).catalog),
   });
 }
 

@@ -13,7 +13,7 @@ import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-servi
 import type { ModelRelayHub } from '../src/egress/model-relay-route';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
 import {
-  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG, CLOUDFLARE_WEB_SEARCH_CRED_KEY, DEFAULT_WEB_SEARCH_CHAIN, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
   resolveTurnProfile, RunEventRecorder, initRunEventTables,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
 } from '@kinu.run/core';
@@ -25,6 +25,9 @@ import type { ProviderEnv } from '@kinu.run/core';
 
 /** `LanguageModel` is `string | LanguageModelV3`; resolvers hand back the object half. */
 const ResolvedModelSchema = v.object({ provider: v.string(), modelId: v.string() });
+
+/** These cases resolve models; none searches. */
+const NO_CHAIN = async (): Promise<never> => { throw new Error('this case searches nothing'); };
 
 function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchema> {
   return v.parse(ResolvedModelSchema, model);
@@ -100,7 +103,7 @@ describe('OwnedModelServices', () => {
     const services = new OwnedModelServices({
       env, agentName: () => 'actor', workspaceId: () => 'workspace', workspaceName: () => 'workspace', appTitle: 'Kinu', ownerRequired: true,
       getOwnerUserId: () => 'owner', getUserCaller: testOwner, getCredentialsRevision: async () => 0,
-      reportModelCall: unobservedSpend,
+      reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
     });
 
     const model = services.resolveModel('openai/gpt-5.5');
@@ -121,7 +124,7 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
       getCredentialsRevision: async () => 0,
-      reportModelCall: unobservedSpend,
+      reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
     });
 
     expect(() => services.providerRegistry()).toThrow(
@@ -139,7 +142,7 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
       getCredentialsRevision: async () => 0,
-      reportModelCall: unobservedSpend,
+      reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
     });
 
     const model = resolved(services.resolveModel(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
@@ -157,7 +160,7 @@ describe('OwnedModelServices', () => {
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
       getCredentialsRevision: async () => 0,
-      reportModelCall: unobservedSpend,
+      reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
     });
 
     const model = resolved(services.resolveModel('openrouter/anthropic/claude-sonnet-4'));
@@ -187,7 +190,7 @@ describe('OwnedModelServices', () => {
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
       getCredentialsRevision: async () => 0,
-      reportModelCall: unobservedSpend,
+      reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
     });
 
     // The mock response fails the AI SDK decoder; asserted so a mock that decodes cleanly fails
@@ -204,10 +207,10 @@ describe('OwnedModelServices', () => {
   test('invalidate rebuilds owner-bound registry while the cached web provider resolves auth per call', async () => {
     const mock = createMockFetch([
       {
-        match: 'tavily.com',
+        match: 'api.cloudflare.com',
         respond: {
           status: 200,
-          body: { answer: 'owner result', results: [] },
+          body: { items: [{ url: 'https://developers.cloudflare.com/workers/', title: 'Workers', description: 'Owner result.' }] },
           headers: { 'content-type': 'application/json' },
         },
       },
@@ -216,8 +219,18 @@ describe('OwnedModelServices', () => {
     globalThis.fetch = mock.fetch;
     let owner: string | null = null;
 
+    // The owner's Cloudflare login, granting web search on their account.
+    const login: FakeUserDO = {
+      ...fakeUserDO(),
+      async getAuth(_caller, key) {
+        return key === CLOUDFLARE_WEB_SEARCH_CRED_KEY
+          ? { headers: { Authorization: 'Bearer cf-login', 'cf-aig-gateway-id': 'default' }, baseURL: 'https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1' }
+          : null;
+      },
+    };
+
     const services = new OwnedModelServices({
-      env: fakeEnv(fakeUserDO({ 'tavily': { Authorization: 'Bearer tavily-token' } })),
+      env: fakeEnv(login),
       agentName: () => 'head',
       workspaceId: () => 'workspace', workspaceName: () => 'workspace',
       appTitle: 'Kinu (exploration)',
@@ -225,19 +238,19 @@ describe('OwnedModelServices', () => {
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => owner,
       getCredentialsRevision: async () => 0,
-      reportModelCall: unobservedSpend,
+      reportModelCall: unobservedSpend, webSearchChain: async () => ({ routes: DEFAULT_WEB_SEARCH_CHAIN, retries: 0 }),
     });
 
     const web = services.getWebSearchProvider();
     const beforeRegistry = services.providerRegistry();
 
-    // No AI binding that searches in this env, and no owner's Tavily key yet: it says so instead of answering nothing.
-    await expect(web.search('before claim')).rejects.toThrow('Web search is not available here');
+    // No AI binding that searches in this env, and no owner's login yet: it says so instead of answering nothing.
+    await expect(web.search('before claim')).rejects.toThrow('no Cloudflare account is connected');
     owner = 'owner-1';
     services.invalidate();
     expect(services.providerRegistry()).not.toBe(beforeRegistry);
     expect(services.getWebSearchProvider()).toBe(web);
-    expect((await web.search('after claim')).source).toBe('tavily');
+    expect((await web.search('after claim')).results[0]?.snippet).toBe('Owner result.');
   });
 
   // The security review of the owner-only preview: a share's viewer's `web.screenshot` reached the owner's private
@@ -258,7 +271,7 @@ describe('OwnedModelServices', () => {
 
     const services = new OwnedModelServices({
       env, agentName: () => 'actor', workspaceId: () => 'workspace', workspaceName: () => 'hello', appTitle: 'Kinu', ownerRequired: false,
-      getOwnerUserId: () => null, getUserCaller: testOwner, getCredentialsRevision: async () => 0, reportModelCall: unobservedSpend,
+      getOwnerUserId: () => null, getUserCaller: testOwner, getCredentialsRevision: async () => 0, reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
     });
 
     const preview = present((await nimbusPreviewUrl(env, 'hello', 4321, '0123456789abcdef01234567')).url, 'the preview');
@@ -292,7 +305,7 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => null,
       getUserCaller: async () => await testOwner(),
       getCredentialsRevision: async () => 0,
-      reportModelCall: unpricedLedger(ledger),
+      reportModelCall: unpricedLedger(ledger), webSearchChain: NO_CHAIN,
     });
 
     const page = await services.getWebSearchProvider().fetch('https://example.test/');
@@ -322,7 +335,7 @@ function snapshotServices(
     getOwnerUserId: () => owner,
     getUserCaller: async () => ({ workspaceToken: 'wt' }),
     getCredentialsRevision,
-    reportModelCall: unobservedSpend,
+    reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
   });
 }
 
@@ -445,7 +458,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
       getOwnerUserId: () => 'owner-1',
       getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getCredentialsRevision: async () => 0,
-      reportModelCall: unobservedSpend,
+      reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
     });
 
     await services.profileProviderSnapshot();

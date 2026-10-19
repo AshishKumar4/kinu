@@ -1,12 +1,13 @@
 /**
- * FIRST RUN: a web search answers on the deployment's own provider, with no search key.
+ * FIRST RUN: a web search answers on the deployment's own gateway, for an account that never chose and holds no
+ * Cloudflare login.
  *
  * THE ASK. The owner's search in earthen-plane-fb5ed18f (2026-10-17) failed with
  * `{"reason":"unavailable","error":"web search failed (522)"}`: an account with no search key searches through the
- * deployment's own provider, then a scraped engine, now Cloudflare's Web Search API (dafb2c6aa). web-search proves
- * the keyed path through the scripted search; this case acts as the `keyless` eval account, the scripted model and no
- * search key, so its search reaches the provider a person with no key gets. Every check reads durable state
- * (`searched.ts`).
+ * deployment's own provider, then a scraped engine, now Cloudflare's Web Search API (dafb2c6aa). This case acts as the
+ * `keyless` eval account, the scripted model, the default chain and no Cloudflare login, so its search takes Exa on
+ * the deployment's gateway, as a person's who never chose does, and the spend row names no account of theirs. Every
+ * check reads durable state (`searched.ts`).
  */
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation } from '@kinu.run/test-utils';
@@ -50,7 +51,7 @@ describe(SUITE, () => {
       genesis: false,
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
       async run({ session }) {
-        return await searchSubgoals(session);
+        return await searchSubgoals(session, { provider: 'exa', payer: 'deployment' });
       },
     }, observations);
   });

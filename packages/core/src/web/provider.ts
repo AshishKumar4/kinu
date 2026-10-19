@@ -1,25 +1,19 @@
 /**
- * Web search/fetch provider shared by both backends. Search is Tavily when a `tavily` credential is stored, else the
- * deployment's own: Cloudflare's Web Search API ({@link FirstPartySearch}). Rendered fetches and screenshots go through
- * Browser Run (`browser-run.ts`).
+ * Web search/fetch provider shared by both backends. Search runs the account's chain of providers (`search-chain.ts`);
+ * rendered fetches and screenshots go through Browser Run (`browser-run.ts`).
  */
 
 import * as v from 'valibot';
-import { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
+import { refusedResolution, assertSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
 import { decodeEntities, HTML_ENTITIES } from '../utils/text';
 import { quickAction, type BrowserRunAccess, type QuickActionEngine, type QuickActionTransport } from './browser-run';
-import type { AuthResolution, AuthResolver } from '../providers/types';
-import { TAVILY_CRED_KEY } from '../credentials/validate';
-import { WEB_SEARCH_INDEX } from '../operations/web';
-import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle, tolerate } from '../obs/index';
+import type { WebSearchProviderId } from '../providers/web-search';
+import type { WebSearch } from './search-chain';
+import { attempt, attemptInItsWords, diagnostics, inItsWords, KinuError, settle } from '../obs/index';
 import { Data, Effect } from 'effect';
 import type { JsonObject } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
-
-
-
-const TAVILY_API = 'https://api.tavily.com';
 
 export interface WebSearchResult {
   title: string;
@@ -33,11 +27,11 @@ export interface WebSearchResult {
 
 export interface WebSearchResponse {
   query: string;
-  /** Tavily only. */
+  /** A provider that writes an answer of its own (Tavily). */
   answer?: string;
   results: WebSearchResult[];
-  /** The index the results came from: Tavily's, or {@link WEB_SEARCH_INDEX}'s through Cloudflare's Web Search API. */
-  source: 'tavily' | typeof WEB_SEARCH_INDEX;
+  /** The provider whose index the results came from, however it was billed. */
+  source: WebSearchProviderId;
 }
 
 export interface WebFetchResult {
@@ -63,23 +57,10 @@ export interface WebSearchProvider {
   screenshot(url: string, opts?: { engine?: QuickActionEngine; fullPage?: boolean; signal?: AbortSignal }): Promise<WebScreenshot>;
 }
 
-/**
- * The deployment's own web search: Cloudflare's Web Search API on its default index (Ceramic.ai), through the AI
- * binding on a Worker (`first-party-search.ts`) or through the signed-in account's gated route from the CLI. Answers
- * the API's own response, read here once whichever way it came. Key-less scraping of a search engine is not a backend:
- * DuckDuckGo's HTML endpoint answered results to 3 of 72 queries from Workers in six regions (2026-10-17), a challenge
- * page or a 19.5 s timeout to the rest, and a challenge page to this machine's second query.
- */
-export interface FirstPartySearch {
-  search(input: { readonly query: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<Response>;
-}
-
 export interface DefaultWebSearchProviderDeps {
   fetch: typeof fetch;
-  /** Reads the `tavily` credential, which wins over {@link firstParty}: the person chose it. */
-  getAuth?: AuthResolver;
-  /** Absent (a CLI signed out of its Kinu account): search needs a Tavily key. */
-  firstParty?: FirstPartySearch;
+  /** The account's search: its chain where its keys are (`chainWebSearch`), or its deployment's route from a CLI. */
+  search: WebSearch;
   /** Falls back to the local converter when absent or throwing. */
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
   /** Absent on a Worker, whose platform refuses a name resolving inward (`url-safety.ts`). */
@@ -101,29 +82,6 @@ export interface BrowserCookie {
 const DEFAULT_SEARCH_LIMIT = 5;
 
 const MAX_SEARCH_LIMIT = 20;
-
-/** What a result's snippet keeps, Tavily's or Cloudflare's: the clip Tavily snippets had. Unmeasured for Ceramic.ai,
- *  whose descriptions run to 8,000 characters; sized once its results can be read. */
-const SNIPPET_CHARS = 600;
-
-/** Cloudflare's Web Search API answer (developers.cloudflare.com/web-search/how-to-use, 2026-10-12). */
-const WebSearchApiSchema = v.object({
-  items: v.array(v.object({ url: v.string(), title: v.optional(v.string()), description: v.optional(v.string()) })),
-});
-
-/** Its refusal: `web_search_payment_required` (402) when the account's AI Gateway credits are spent, measured 2026-10-17. */
-const WebSearchApiErrorSchema = v.object({ error: v.object({ code: v.optional(v.string()), message: v.optional(v.string()) }) });
-
-const TavilyResponseSchema = v.object({
-  answer: v.optional(v.string()),
-  results: v.optional(v.array(v.object({
-    title: v.optional(v.string()),
-    url: v.optional(v.string()),
-    content: v.optional(v.string()),
-    published_date: v.optional(v.string()),
-  }))),
-});
-
 
 const MAX_FETCH_BYTES = 2_000_000;
 
@@ -172,99 +130,6 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       })),
     );
   };
-
-  const tavilySearch = (
-    query: string,
-    limit: number,
-    { headers, baseURL = TAVILY_API }: AuthResolution,
-    signal: AbortSignal | undefined,
-  ): Effect.Effect<WebSearchResponse> => Effect.gen(function* () {
-    const res = yield* Effect.promise(() => fetchImpl(new URL('search', baseURL.endsWith('/') ? baseURL : `${baseURL}/`).href, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...headers },
-      body: JSON.stringify({
-        query,
-        max_results: limit,
-        include_answer: true,
-        search_depth: 'basic',
-      }),
-      signal,
-    }));
-
-    if (res.status === 429) return yield* Effect.die(new WebFetchError('Tavily rate limit (429): retry shortly'));
-
-    if (!res.ok) {
-      const body = yield* Effect.promise(() => res.text());
-
-      return yield* Effect.die(new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`));
-    }
-
-    const read = Effect.tryPromise({
-      try: async (): Promise<WebSearchResponse> => {
-        const json = v.parse(TavilyResponseSchema, await res.json());
-
-        const safe = (json.results ?? []).flatMap((r) => {
-          const url = r.url;
-
-          return url !== undefined && isSafeUrl(url) ? [{ ...r, url }] : [];
-        });
-
-        const results: WebSearchResult[] = safe
-          .slice(0, limit)
-          .map((r, i) => {
-            const title = r.title?.trim();
-
-            return {
-              title: title === undefined || title === '' ? r.url : title,
-              url: r.url,
-              snippet: stripBase64Images((r.content ?? '').trim()).slice(0, SNIPPET_CHARS),
-              date: r.published_date === '' ? undefined : r.published_date,
-              position: i + 1,
-            };
-          });
-
-        const answer = json.answer?.trim();
-
-        return { query, answer: answer === '' ? undefined : answer, results, source: 'tavily' };
-      },
-      catch: (cause) => ({ cause }),
-    });
-
-    return yield* Effect.catch(read, (failed) => Effect.die(signal?.aborted === true
-      ? failed.cause
-      : new WebFetchError('Tavily search returned an unreadable response', { cause: failed.cause })));
-  });
-
-  const firstPartySearch = (search: FirstPartySearch, query: string, limit: number, signal: AbortSignal | undefined): Effect.Effect<WebSearchResponse> => Effect.gen(function* () {
-    const res = yield* Effect.promise(() => search.search({ query, limit, ...(signal !== undefined && { signal }) }));
-    const body = yield* Effect.promise(() => res.text());
-
-    if (!res.ok) {
-      const refusal = tolerate(() => v.parse(WebSearchApiErrorSchema, JSON.parse(body)), 'malformed-input');
-
-      // Not this person's to fix: the deployment pays for its own search.
-      if (res.status === 402) return yield* Effect.die(new WebFetchError('Web search is not available on this deployment right now'));
-
-      return yield* Effect.die(new WebFetchError(`Web search failed (${res.status}): ${refusal?.error.message ?? body.slice(0, 200)}`));
-    }
-
-    const answered = yield* Effect.try({ try: () => v.parse(WebSearchApiSchema, JSON.parse(body)), catch: (cause) => ({ cause }) }).pipe(
-      Effect.catch((failed) => Effect.die(new WebFetchError('Web search returned an unreadable response', { cause: failed.cause }))),
-    );
-
-    const results = answered.items.filter((item) => isSafeUrl(item.url)).slice(0, limit).map((item, i): WebSearchResult => {
-      const title = item.title?.trim();
-
-      return {
-        title: title === undefined || title === '' ? item.url : title,
-        url: item.url,
-        snippet: (item.description ?? '').trim().slice(0, SNIPPET_CHARS),
-        position: i + 1,
-      };
-    });
-
-    return { query, results, source: WEB_SEARCH_INDEX };
-  });
 
   const judged = (url: string): Effect.Effect<URL> => Effect.gen(function* () {
     const parsed = yield* Effect.try({ try: () => assertSafeUrl(url), catch: (cause) => ({ cause }) }).pipe(
@@ -348,15 +213,9 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         const q = query.trim();
 
         if (!q) return yield* Effect.die(new WebFetchError('search query is empty'));
-        const limit = clampLimit(opts?.limit);
-        const getAuth = deps.getAuth;
-        const auth = getAuth ? yield* Effect.promise(() => getAuth(TAVILY_CRED_KEY)) : null;
+        const signal = opts?.signal;
 
-        if (auth) return yield* tavilySearch(q, limit, auth, opts?.signal);
-
-        if (deps.firstParty === undefined) return yield* Effect.die(new WebFetchError('Web search is not available here: connect a Tavily key to search'));
-
-        return yield* firstPartySearch(deps.firstParty, q, limit, opts?.signal);
+        return yield* attemptInItsWords('unavailable', () => deps.search({ query: q, limit: clampLimit(opts?.limit), ...(signal !== undefined && { signal }) }));
       }));
     },
 

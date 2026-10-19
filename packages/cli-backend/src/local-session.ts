@@ -71,7 +71,7 @@ import { ActorSession, type ActorTurnLease,
   turnTags, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, chainWebSearch, restBrowserRunAccess, REAL_CLOCK, webSearchChainOf, type Clock, type WebSearchProvider,
   actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
   agentRoleSwitch, builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
@@ -2109,23 +2109,24 @@ export class LocalAgentSession {
     return conversationKey(this.conversation(), this.sessionId);
   }
 
-  /** Search through the signed-in account's own (Cloudflare's Web Search API), or a stored `tavily` credential, which
-   *  wins; local HTML→markdown. */
+  /** Signed in, the account's own search through its deployment; signed out, this machine's chain with its own keys.
+   *  Local HTML→markdown. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
-    const getAuth = this.modelResolver?.getAuth;
-    const firstParty = this.modelResolver?.firstPartySearch;
+    const resolver = this.modelResolver;
+    const getAuth = resolver?.getAuth ?? (async () => null);
 
-    const options: DefaultWebSearchProviderDeps = {
+    this._webSearchProvider = createDefaultWebSearchProvider({
       fetch: globalThis.fetch,
+      search: resolver?.accountSearch ?? chainWebSearch({
+        fetch: globalThis.fetch,
+        getAuth,
+        report: this.modelCallSink,
+        chain: async () => webSearchChainOf((await this.profiles().envelope()).catalog),
+      }),
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
       browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch }),
-    };
-
-    if (getAuth) options.getAuth = getAuth;
-
-    if (firstParty !== undefined) options.firstParty = firstParty;
-    this._webSearchProvider = createDefaultWebSearchProvider(options);
+    });
 
     return this._webSearchProvider;
   }

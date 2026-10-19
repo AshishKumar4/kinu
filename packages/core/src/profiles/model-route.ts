@@ -22,6 +22,8 @@ export const MODEL_ROUTE_POLICY = {
   fast: { kind: 'fixed', tier: 'fast' },
   reflection: { kind: 'fixed', tier: 'fast' },
   platform: { kind: 'platform' },
+  // The account's `webSearch` chain, not a tier (web/search-chain.ts).
+  search: { kind: 'platform' },
   // Replays the frozen spec that wrote the entry (providers/cache-warming.ts); no turn exists.
   warming: { kind: 'platform' },
   test: { kind: 'platform' },

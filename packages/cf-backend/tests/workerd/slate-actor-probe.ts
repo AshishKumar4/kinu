@@ -21,6 +21,7 @@ import { codemodeLauncher } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
+import { KinuError } from '@kinu.run/core/obs';
 import type { BrowserSessions } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
@@ -36,6 +37,8 @@ import { MemoryStore } from '@kinu.run/agent-utils/memory';
 
 const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
 
+const SEARCHES_NOTHING = async (): Promise<never> => { throw new KinuError('unavailable', 'this probe searches nothing'); };
+
 const NO_BROWSERS: BrowserSessions = { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} };
 
 /** A probe's actor over genuine stores; its caller supplies any machine and file plane it exercises. */
@@ -50,7 +53,7 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
 
   return {
     executors: () => scope.executors ?? [],
-    web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
+    web: { search: createDefaultWebSearchProvider({ fetch, search: SEARCHES_NOTHING, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
     stores: serveStores({
       memory: () => ({ memory, actor: handle, conversations: stores.conversationSearch }),
       files: files === undefined ? unreached : () => files,

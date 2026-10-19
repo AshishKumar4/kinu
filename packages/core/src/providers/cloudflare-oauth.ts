@@ -27,9 +27,33 @@ export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
  *  Null until a gateway is selected, which gates `my-gateway`. */
 export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
 
+/** Derived credential key, never stored: the `cloudflare.oauth` row aimed at its account's Web Search API, on the
+ *  selected gateway or the platform's default one. Null unless the login grants {@link CLOUDFLARE_WEB_SEARCH_SCOPE}:
+ *  an account that never granted web search is not billed for it. */
+export const CLOUDFLARE_WEB_SEARCH_CRED_KEY = 'cloudflare.web-search';
+
+/** The stored row a derived Cloudflare key reads. */
+export function storedCredentialKey(key: string): string {
+  return key === CLOUDFLARE_AI_GATEWAY_CRED_KEY || key === CLOUDFLARE_WEB_SEARCH_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
+}
+
+/**
+ * Runs Cloudflare's Web Search API. Kinu's OAuth client may ask for it: dash.cloudflare.com/oauth2/auth went on to the
+ * login for it and refused an unknown scope with `invalid_scope` (2026-10-19); wrangler 4.145's login asks for it too.
+ * Whether `ai.write` alone already admits an OAuth token there is unmeasured.
+ */
+export const CLOUDFLARE_WEB_SEARCH_SCOPE = 'websearch.run';
+
 // `offline_access` makes Cloudflare issue a refresh token; `aig.write` covers the gateway management APIs
 // (no separate Read scope) and `aig.run` covers inference.
-export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.write aig.run offline_access';
+export const CLOUDFLARE_WORKERS_AI_SCOPES = `user-details.read account-settings.read ai.write aig.write aig.run ${CLOUDFLARE_WEB_SEARCH_SCOPE} offline_access`;
+
+/** Whether the login granted web search, as its token's scopes were recorded at sign-in or refresh. */
+export function grantsWebSearch(credential: OAuthCredential): boolean {
+  const scopes = v.safeParse(v.array(v.string()), credential.metadata?.scopes);
+
+  return scopes.success && scopes.output.includes(CLOUDFLARE_WEB_SEARCH_SCOPE);
+}
 
 /** Created on an account's first authenticated request to it; no other id is (developers.cloudflare.com/ai-gateway/
  *  configuration/manage-gateway, updated 2026-09-15; changelog 2026-03-02). */
