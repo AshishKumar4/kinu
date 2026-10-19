@@ -317,6 +317,34 @@ describe('every trial account a run acts as', () => {
     }
   });
 
+  // 2026-10-19, the owner's call: Claude Haiku 5.5 and GPT-6 Luna measured on the owner's own plans, through a grant the
+  // run alone signed in for. Each is owned by one account, whose renewals single-flight in its own object: the trial
+  // account its model's sequence runs in (EvalMatrix.sequence), never eval-service, and given it once.
+  test('a run on plan models gives its trial account the run\'s plan grants once; eval-service and a run on none get none', async () => {
+    const { server, accounts, at } = accountsDeployment();
+    const grant = { kind: 'oauth' as const, accessToken: 'plan-access-never-printed', refreshToken: 'plan-refresh-never-printed', expiresAt: 4102444800000, metadata: {} };
+    const planGrants = { 'claude.oauth': grant, 'chatgpt.oauth@compare': grant };
+    const base = { origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY' };
+
+    try {
+      const input = { ...base, models: [MODEL, 'claude/claude-haiku-5-5', 'chatgpt@compare/gpt-6-luna'], trialAccounts: ['trial-1'] as const, planGrants };
+
+      await provisionEvalProviderKeys(input);
+      // The account renews its grant: a later provisioning leaves the renewed one, never the run's first.
+      accounts.get('trial-1')?.keys.set('claude.oauth', { ...grant, accessToken: 'renewed' });
+      await provisionEvalProviderKeys(input);
+
+      expect([accounts.get('trial-1')?.keys.get('claude.oauth'), accounts.get('trial-1')?.keys.get('chatgpt.oauth@compare')])
+        .toEqual([{ ...grant, accessToken: 'renewed' }, grant]);
+      expect([...accounts.get('eval-service')?.keys.keys() ?? []]).toEqual(['opencode-go.bearer']);
+
+      await provisionEvalProviderKeys({ ...base, models: [MODEL], trialAccounts: ['trial-3'] as const, planGrants });
+      expect([...accounts.get('trial-3')?.keys.keys() ?? []]).toEqual(['opencode-go.bearer']);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test('a trial account holding a row a trial would inherit is reset and given its keys again, unless a run is on it', async () => {
     const { server, accounts, resets, at } = accountsDeployment();
 

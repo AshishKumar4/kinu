@@ -1143,15 +1143,15 @@
       "loadAtStart": 1.46,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
-      "wallSeconds": 81,
-      "cpuSeconds": 44.97,
-      "peakRssMb": 555.21,
-      "peakRunnable": 12,
-      "peakCpuThreads": 3.15,
-      "meanThreads": 0.56,
-      "samples": 356,
-      "loadAtStart": 3.56,
+    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
+      "wallSeconds": 61.33,
+      "cpuSeconds": 48.06,
+      "peakRssMb": 530.4,
+      "peakRunnable": 8,
+      "peakCpuThreads": 3.53,
+      "meanThreads": 0.78,
+      "samples": 277,
+      "loadAtStart": 2.76,
       "exit": 0,
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
     }
