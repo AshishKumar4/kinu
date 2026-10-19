@@ -17,16 +17,18 @@ const DAY = 864e5;
 const NOW = Date.now();
 
 /** The roster's own titles, so a grant reads as the workspace the owner knows. */
-const TITLES = new Map([["checkout-fixes", "Storefront"], ["perf-audit", "Dew"], ["email-triage", "Support inbox"], ["design-sys", "Kinu website"]]);
+const TITLES = new Map([["perf-audit", "Dew"], ["email-triage", "Support inbox"], ["design-sys", "Kinu website"]]);
 
 const STOCK: SecretSummary[] = [
-  { name: "DATABASE_PASSWORD", hosts: ["db.storefront.dev"], updatedAt: NOW - 12 * DAY, grants: [{ workspace: "checkout-fixes", title: "Storefront", reveal: true }] },
+  // Deploying the site with wrangler: a token the egress spends at Cloudflare's API.
+  { name: "CLOUDFLARE_API_TOKEN", hosts: ["api.cloudflare.com"], updatedAt: NOW - DAY, grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }] },
+  // Reading production logs over Postgres: raw TCP, where a stand-in cannot work, so this workspace's agents read it.
+  { name: "DATABASE_PASSWORD", hosts: ["logs-db.dew.dev"], updatedAt: NOW - 12 * DAY, grants: [{ workspace: "perf-audit", title: "Dew", reveal: true }] },
   {
     name: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], updatedAt: NOW - 3 * DAY,
-    grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }, { workspace: "checkout-fixes", title: "Storefront", reveal: false }],
+    grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }, { workspace: "email-triage", title: "Support inbox", reveal: false }],
   },
   { name: "OPENAI_API_KEY", hosts: ["api.openai.com"], updatedAt: NOW - 40 * DAY, grants: [] },
-  { name: "STRIPE_SECRET_KEY", hosts: ["api.stripe.com"], updatedAt: NOW - DAY, grants: [{ workspace: "checkout-fixes", title: "Storefront", reveal: false }] },
 ];
 
 let held: SecretSummary[] = new URLSearchParams(location.search).get("secrets") === "empty" ? [] : STOCK;
@@ -111,9 +113,9 @@ const IDLE: TurnLiveness = { kind: "idle" };
 
 /** The draft as the composer holds it, a GitHub token pasted in; what the chat sent lands on the root's dataset. */
 export function SecretPasteFrame() {
-  const [draft, setDraft] = useState(`push the fix with this token ${["ghp_", "R8q2LmZx7KbV4nT1sWc9YdE3uHf6JpA0gN5o"].join("")} please`);
+  const [draft, setDraft] = useState(`label the new issues on kinu-run/kinu with this token ${["ghp_", "R8q2LmZx7KbV4nT1sWc9YdE3uHf6JpA0gN5o"].join("")}`);
   const [sent, setSent] = useState<string[]>([]);
-  const guard = usePastedSecretGuard({ draft, setDraft, workspace: "checkout-fixes" });
+  const guard = usePastedSecretGuard({ draft, setDraft, workspace: "email-triage" });
 
   const send = () => {
     const next = [...sent, draft];
@@ -149,7 +151,7 @@ export function ComputerPreviewFrame() {
   return (
     <div className="p-bg p-text h-screen p-3">
       <div className="h-full overflow-hidden rounded-lg border p-border">
-        <PreviewFrame url="https://3000-kinu-checkout-fixes-p3000_a1b2c3d4.preview.example.test/" label="Computer :3000" publicLink={COMPUTER_LINK} />
+        <PreviewFrame url="https://8787-kinu-design-sys-p8787_a1b2c3d4.preview.example.test/" label="Computer :8787" publicLink={COMPUTER_LINK} />
       </div>
     </div>
   );

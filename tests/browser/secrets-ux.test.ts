@@ -35,19 +35,19 @@ describe('Settings › Secrets', () => {
       expect(await page.$eval('[data-add-secrets] button[type="submit"]', (button) => button instanceof HTMLButtonElement && button.disabled)).toBe(true);
 
       await page.type('input[aria-label="Hosts WEBHOOK_SECRET may be sent to"]', 'hooks.example.dev');
-      await page.type('[data-add-secrets] input[placeholder="Choose workspaces…"]', 'Store');
-      await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((option) => option.textContent?.includes('Storefront')));
+      await page.type('[data-add-secrets] input[placeholder="Choose workspaces…"]', 'Kinu');
+      await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((option) => option.textContent?.includes('Kinu website')));
       await page.$$eval('[role="option"]', (options) => {
-        const storefront = options.find((option) => option.textContent?.includes('Storefront'));
+        const site = options.find((option) => option.textContent?.includes('Kinu website'));
 
-        if (storefront instanceof HTMLElement) storefront.click();
+        if (site instanceof HTMLElement) site.click();
       });
       await page.click('[data-add-secrets] button[type="submit"]');
       await page.waitForSelector('[data-secret="WEBHOOK_SECRET"]');
 
       const saved = v.parse(SavedSchema, JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySecretsSaved ?? '[]')));
-      expect(saved).toEqual([{ names: ['OPENAI_API_KEY', 'WEBHOOK_SECRET'], grantTo: ['checkout-fixes'] }]);
-      expect(await page.$eval('[data-secret="OPENAI_API_KEY"]', (row) => row.textContent ?? '')).toContain('In Storefront');
+      expect(saved).toEqual([{ names: ['OPENAI_API_KEY', 'WEBHOOK_SECRET'], grantTo: ['design-sys'] }]);
+      expect(await page.$eval('[data-secret="OPENAI_API_KEY"]', (row) => row.textContent ?? '')).toContain('In Kinu website');
       await page.close();
     });
   });
@@ -57,8 +57,8 @@ describe('Settings › Secrets', () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=${SETTINGS}`, { waitUntil: 'networkidle0' });
-      await page.click('[data-secret="STRIPE_SECRET_KEY"] button');
-      const reveal = '[data-secret-details="STRIPE_SECRET_KEY"] [data-secret-reveal="checkout-fixes"]';
+      await page.click('[data-secret="CLOUDFLARE_API_TOKEN"] button');
+      const reveal = '[data-secret-details="CLOUDFLARE_API_TOKEN"] [data-secret-reveal="design-sys"]';
       await page.waitForSelector(reveal);
 
       await page.click(reveal);
@@ -119,13 +119,13 @@ describe('a secret pasted into the chat', () => {
       await page.waitForFunction(() => document.querySelector('[data-secret-offer]') === null);
 
       const saved = v.parse(SavedSchema, JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySecretsSaved ?? '[]')));
-      expect(saved).toEqual([{ names: ['GITHUB_TOKEN'], grantTo: ['checkout-fixes'] }]);
-      expect(await page.$eval('[data-composer-root] textarea', (box) => box instanceof HTMLTextAreaElement ? box.value : '')).toBe('push the fix with this token $GITHUB_TOKEN please');
+      expect(saved).toEqual([{ names: ['GITHUB_TOKEN'], grantTo: ['email-triage'] }]);
+      expect(await page.$eval('[data-composer-root] textarea', (box) => box instanceof HTMLTextAreaElement ? box.value : '')).toBe('label the new issues on kinu-run/kinu with this token $GITHUB_TOKEN');
 
       await page.click('[data-composer-root] textarea');
       await page.keyboard.press('Enter');
       await page.waitForFunction(() => document.documentElement.dataset.gallerySent !== undefined);
-      expect(JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySent ?? '[]'))).toEqual(['push the fix with this token $GITHUB_TOKEN please']);
+      expect(JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySent ?? '[]'))).toEqual(['label the new issues on kinu-run/kinu with this token $GITHUB_TOKEN']);
       await page.close();
     });
   });
@@ -142,7 +142,7 @@ describe('a secret pasted into the chat', () => {
       await page.click('[data-secret-offer-send]');
       await page.waitForFunction(() => document.documentElement.dataset.gallerySent !== undefined);
 
-      expect(JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySent ?? '[]'))).toEqual([`push the fix with this token ${GITHUB} please`]);
+      expect(JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySent ?? '[]'))).toEqual([`label the new issues on kinu-run/kinu with this token ${GITHUB}`]);
       expect(await page.$('[data-secret-offer]')).toBeNull();
       await page.close();
     });

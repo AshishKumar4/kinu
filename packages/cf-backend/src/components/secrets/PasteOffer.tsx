@@ -63,10 +63,10 @@ export function usePastedSecretGuard(input: {
   const offer = waiting.length === 0 ? null : (
     <div className="mx-1 mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border p-border p-overlay px-3 py-2.5" role="status" data-secret-offer>
       <ShieldWarningIcon size={16} className="shrink-0 p-warning" />
-      <p className="min-w-0 flex-1 p-row-text p-text">
+      <p className="min-w-[14rem] flex-1 p-row-text p-text">
         This looks like {described(waiting)}. Keep it out of the chat: move it to Secrets and your agents use it without seeing it.
       </p>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button size="sm" variant="ghost" data-secret-offer-send onClick={() => { setSendAsIs(draft); setHeld(null); held?.act(); }}>Send anyway</Button>
         <FilledButton data-secret-offer-move onClick={() => setMoving(true)}><KeyIcon size={12} /> Move to Secrets</FilledButton>
       </div>
