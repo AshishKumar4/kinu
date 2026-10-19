@@ -1920,6 +1920,9 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
   // `ExecutorDiffResult` (core read-models/workspace-diff.ts) always carries `files`; `vfs-baseline` is the answer for an empty `executors` prop.
   if (method === "getExecutorDiff") return rpcResult({ files: [], mode: "vfs-baseline" }).json<T>();
 
+  // A listing, read as `result.entries`: the blanket `[]` below has `entries`, the array's own method.
+  if (method === "getExecutorFiles") return rpcResult({ path: "/", entries: [] }).json<T>();
+
   // Read as `result.plans` / `result.tasks`.
   if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
 
@@ -2593,6 +2596,7 @@ async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
 
 /* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
+  getExecutorFiles: workspaceListing,
   listAlternateTakes: () => (TAKE_COUNT > 0 ? { [galleryTakes.turnId ?? ""]: galleryTakes } : {}),
   pickAlternateTake: galleryPickTake,
   getWorkspaceSnapshot: () => {
@@ -6145,6 +6149,16 @@ const PC_MOUNT = `/pc/${PC_SEGMENT}`;
 
 /** Production learns it from the machine (`deviceFiles`' homeDir); a bare `/pc/<name>` lands here. */
 const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
+
+/** The workspace page's Files: the drive frame's tree, as it is before anything moves. */
+const PAGE_TREE = seedCompositeTree(false);
+
+function workspaceListing(args?: unknown[]): JsonValue {
+  const [, path, { from, hidden }] = v.parse(FILES_REQUEST_ARGS, args ?? []);
+  const dir = path === "" ? "/" : path;
+
+  return v.parse(JsonValueSchema, filesPage(dir, shownEntries(PAGE_TREE.get(dir) ?? [], dir, hidden), from));
+}
 
 const FILES_TEXT = {
   "/home/main/notes.md": "# Sessions binding regression\n\n- the 500s start with the Sept 22 config, which renamed DB to SESSIONS_DB\n- only the health route falls back to the old name\n- fix drafted in workers/api/src/db.ts\n",
