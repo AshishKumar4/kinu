@@ -34,7 +34,7 @@ import {
   JOB_ASK, JOB_NOT_STARTED, JOB_STARTED,
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
-  SPLICE_BEFORE, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_WORK_ASK,
+  SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -130,46 +130,70 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
   }
 }
 
-/** Where the ping's card sits, and how far the agent has got with it. */
-export interface SpliceReading {
-  /** Its delivery mark and the colour it wears. */
+/** One ping's card as the chat draws it: its delivery mark and the colour it wears, and whether it is drawn inside the
+ *  answer rather than as a loose card. */
+export interface SpliceCard {
+  readonly ping: number;
   readonly state: string | null;
   readonly tone: string | null;
-  /** Drawn inside the answer, not as a loose card. */
   readonly spliced: boolean;
-  /** The reading order of the turn's words before it, the card, and the answer after it (-1: not found). */
+}
+
+/** The chat as one reading of the page sees the work turn. */
+export interface SpliceReading {
+  /** Each ping's card drawn, in the chat's reading order. */
+  readonly cards: readonly SpliceCard[];
+  /** The reading order of each step's words, each ping's card after it, and the answer (-1: not found). */
   readonly order: readonly number[];
+  /** Whether the turn was still working. */
+  readonly working: boolean;
 }
 
 export interface SpliceVerdict {
-  /** While the agent slept: the card waiting on it. */
-  readonly waited: SpliceReading;
+  /** Once each ping's card is drawn: what the chat showed then. */
+  readonly arrivals: readonly SpliceReading[];
   /** Once the turn ended, and again after a reload. */
   readonly answered: SpliceReading;
   readonly reloaded: SpliceReading;
+  /** The answer's words: the pings the agent heard, in the order they reached it. */
+  readonly heard: string;
 }
 
-/** The ping's card as the chat draws it, by the word it carries, read in the page. */
+/** The chat as it draws the work turn, read in the page: each ping's card by the numbered word it carries. */
 const SPLICE_READING = `(() => {
   const all = [...document.querySelectorAll('#chat *')];
   const at = (needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
     && ![...el.children].some((child) => (child.textContent ?? '').includes(needle)));
-  const card = [...document.querySelectorAll('#chat [data-signal-card]')].find((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}));
-  const mark = card?.querySelector('[data-delivery]') ?? null;
+  const ping = (el) => Number(new RegExp(${JSON.stringify(`${SPLICE_SENT}-(\\d+)`)}).exec(el.textContent ?? '')?.[1] ?? 0);
+  const cards = [...document.querySelectorAll('#chat [data-signal-card]')].filter((el) => ping(el) > 0).map((card) => {
+    const mark = card.querySelector('[data-delivery]');
+
+    return {
+      ping: ping(card),
+      state: mark?.getAttribute('data-delivery') ?? null,
+      tone: ['p-warning', 'p-success'].find((name) => mark?.classList.contains(name)) ?? null,
+      spliced: card.closest('[data-spliced-signal]') != null,
+    };
+  });
+  const steps = ${JSON.stringify(SPLICE_STEPS)};
 
   return {
-    state: mark?.getAttribute('data-delivery') ?? null,
-    tone: ['p-warning', 'p-success'].find((name) => mark?.classList.contains(name)) ?? null,
-    spliced: card?.closest('[data-spliced-signal]') != null,
-    order: [${JSON.stringify(SPLICE_BEFORE)}, ${JSON.stringify(SPLICE_SENT)}, ${JSON.stringify(SPLICE_HEARD)}].map(at),
+    cards,
+    order: [...steps.flatMap((step, i) => [at(step), at(${JSON.stringify(SPLICE_SENT)} + '-' + String(i + 1))]), at(${JSON.stringify(SPLICE_HEARD)})],
+    working: !(${CHAT_IDLE}),
   };
 })()`;
 
-const SpliceReadingSchema = v.object({ state: v.nullable(v.string()), tone: v.nullable(v.string()), spliced: v.boolean(), order: v.array(v.number()) });
+const SpliceReadingSchema = v.object({
+  cards: v.array(v.object({ ping: v.number(), state: v.nullable(v.string()), tone: v.nullable(v.string()), spliced: v.boolean() })),
+  order: v.array(v.number()),
+  working: v.boolean(),
+});
 
 /**
- * Row: a page in the chat sends the agent a word while it works. Its card waits amber, is drawn inside the answer between
- * the words before it and the answer that read it, turns green once read, and a reload draws it there still.
+ * Row: a page in the chat sends the agent a word at each step of its work. Each card is drawn as it arrives, while the
+ * agent still works, after the words of the step it arrived in; once read, each sits there green, every one of them,
+ * and a reload draws them there still (1008-r, 1008-x).
  */
 export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<SpliceVerdict> {
   const workspace = await createFlowWorkspace(target, 'splice');
@@ -177,6 +201,7 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
     const reading = async (): Promise<SpliceReading> => v.parse(SpliceReadingSchema, await page.evaluate(SPLICE_READING));
+    const chatHas = (words: string): string => `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(words)})`;
 
     await sendAndSettle(page, SPLICE_PAGE_ASK);
     await until(page, 'the Ping page drawn', `document.querySelector('[data-slate-ui="ping"] iframe') !== null`);
@@ -185,23 +210,30 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
 
     await frame.waitForSelector('#ping');
 
-    // The work turn: sent, and clicked into while it sleeps.
+    // The work turn: sent, and clicked into once at each step while it waits.
     const composer = await typeIntoComposer(page, SPLICE_WORK_ASK);
     await composer.press('Enter');
-    await until(page, 'the work turn waiting on its build', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_BEFORE)})`);
-    await frame.click('#ping');
-    await until(page, "the ping's card", `[...document.querySelectorAll('#chat [data-signal-card]')].some((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}))`);
-    const waited = await reading();
+    const arrivals: SpliceReading[] = [];
 
-    await until(page, 'the answer that read the ping', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)}) && ${CHAT_IDLE}`);
+    for (const [index, step] of SPLICE_STEPS.entries()) {
+      const sent = `${SPLICE_SENT}-${String(index + 1)}`;
+
+      await until(page, `step ${String(index + 1)} waiting on its build`, chatHas(step));
+      await frame.click('#ping');
+      await until(page, `ping ${String(index + 1)}'s card`, `[...document.querySelectorAll('#chat [data-signal-card]')].some((el) => (el.textContent ?? '').includes(${JSON.stringify(sent)}))`);
+      arrivals.push(await reading());
+    }
+
+    await until(page, 'the answer that read the pings', `${chatHas(SPLICE_HEARD)} && ${CHAT_IDLE}`);
     const answered = await reading();
+    const heard = v.parse(v.string(), await page.evaluate(`(document.querySelector('#chat')?.innerText ?? '').split('\\n').find((line) => line.includes(${JSON.stringify(SPLICE_HEARD)}))?.trim() ?? ''`));
 
     await page.reload({ waitUntil: 'load' });
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
-    await until(page, 'the answer drawn again', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)})`);
+    await until(page, 'the answer drawn again', chatHas(SPLICE_HEARD));
     const again = await reading();
 
-    return { waited, answered, reloaded: again };
+    return { arrivals, answered, reloaded: again, heard };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
@@ -959,6 +991,10 @@ export async function eachPaneKeepsItsTranscript(target: FlowTarget): Promise<St
 
 /** Press the welcome page's forward control: Next through its steps, then
  *  Finish setup. Answers which it pressed, or 'none' when neither is offered. */
+/** Whether the setup offers a way forward: Next or Finish setup, drawn and pressable. */
+const WELCOME_OFFERED = `[...document.querySelectorAll('button')]
+  .some((b) => !b.disabled && b.getClientRects().length > 0 && ['Next', 'Finish setup'].includes((b.textContent ?? '').trim()))`;
+
 const WELCOME_FORWARD = `(() => {
   const offered = [...document.querySelectorAll('button')].filter((b) => !b.disabled && b.getClientRects().length > 0);
   const finish = offered.find((b) => (b.textContent ?? '').trim() === 'Finish setup');
@@ -991,6 +1027,8 @@ export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
     const welcomed = v.parse(v.boolean(), await page.evaluate(`location.pathname === '/welcome'`));
 
     for (let pressed = 'next'; welcomed && pressed === 'next'; await painted(page)) {
+      // `/welcome` is the address before the page draws its setup: its steps' buttons come once it has.
+      await until(page, 'the setup offering Next or Finish setup', WELCOME_OFFERED);
       pressed = v.parse(v.picklist(['next', 'finish', 'none']), await page.evaluate(WELCOME_FORWARD));
 
       if (pressed === 'none') throw new Error('the welcome page offers neither Next nor Finish setup');
