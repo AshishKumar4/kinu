@@ -806,7 +806,7 @@ export async function driveUntil(
 
     if (holds()) return;
 
-    if (!workspace.agent.harnessWorkRemains() && !workspace.agent.harnessTimerDue() && !alarmDue(workspace.db) && !harnessFibersRunning()) {
+    if (!workspace.agent.harnessWorkRemains() && !workspace.agent.harnessTimerDue() && !alarmDue(workspace.db) && !harnessFibersRunning(workspace.agent)) {
       throw new Error(failure);
     }
 
@@ -892,11 +892,11 @@ export async function runDelegatedTask(
   workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
 ): Promise<void> {
   await wakeForDelegatedTask(workspace, actorId, task);
-  await joinHarnessFibers();
+  await workspace.agent.harnessJoinDetachedFibers();
   // The turn's answer is relayed as its agent's isolate settles it; what the turn started here (a job's lane) is joined
   // after it, and its own answer settled in turn.
   await workspace.agent.harnessAgentsIdle();
-  await joinHarnessFibers();
+  await workspace.agent.harnessJoinDetachedFibers();
   await workspace.agent.harnessAgentsIdle();
 }
 
@@ -1998,9 +1998,7 @@ export async function reactivateOrchestratorHarness(
 
   if (opts?.world?.freshScaffold !== true) harness.agent.declareScaffoldPresent();
 
-  // Join the detached reconcile: it runs as a fiber, so every sequence it acquired is released
-  // once no fiber body is left.
-  for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
+  await started;
 
   return { ...harness, started };
 }

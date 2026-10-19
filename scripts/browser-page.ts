@@ -635,6 +635,7 @@ const ACTOR_SEGMENT = hostedActorSocketPath('probe').split('/')[0] ?? '';
 
 export interface RpcCounter {
   counts(): RpcCounts;
+  actorAnswered(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -648,6 +649,7 @@ export async function countRpc(page: Page): Promise<RpcCounter> {
   const actorSockets = new Set<string>();
 
   let actorFrames = 0;
+  const actorAnswer = Promise.withResolvers<void>();
 
   const bump = (table: Record<string, number>, payload: string): void => {
     // A frame that is not the JSON envelope is counted as such: parsing it
@@ -670,11 +672,15 @@ export async function countRpc(page: Page): Promise<RpcCounter> {
   cdp.on('Network.webSocketFrameReceived', (event: { requestId?: string; response?: { payloadData?: string } }) => {
     bump(received, event.response?.payloadData ?? '');
 
-    if (event.requestId !== undefined && actorSockets.has(event.requestId)) actorFrames += 1;
+    if (event.requestId !== undefined && actorSockets.has(event.requestId)) {
+      actorFrames += 1;
+      actorAnswer.resolve();
+    }
   });
 
   return {
     counts: (): RpcCounts => ({ sent: { ...sent }, received: { ...received }, actorFrames }),
+    actorAnswered: () => actorAnswer.promise,
     stop: async (): Promise<void> => { await cdp.detach(); },
   };
 }

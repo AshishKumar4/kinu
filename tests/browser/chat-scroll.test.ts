@@ -119,18 +119,23 @@ async function untilProbe(page: Page, condition: string, step: string): Promise<
     return Boolean(${condition}); })()`;
 
   await page.evaluate(() => { delete document.documentElement.dataset.probeIdle; delete document.documentElement.dataset.probeLast; });
-  await page.waitForFunction(`(() => {
-    if (${met}) return true;
+
+  const ended = await page.waitForFunction(`(() => {
+    if (${met}) return "met";
     const text = document.querySelector('${PROBE}')?.textContent ?? '';
     const tally = document.documentElement.dataset;
     const loading = text !== '' && JSON.parse(text).loading === true;
     const idle = loading || tally.probeLast !== text ? 0 : Number(tally.probeIdle ?? 0) + 1;
     tally.probeLast = text;
     tally.probeIdle = String(idle);
-    return idle >= ${IDLE_FRAMES};
+    return idle >= ${IDLE_FRAMES} ? "idle" : false;
   })()`, { polling: 'raf' });
 
-  if (await page.evaluate(met) === true) return;
+  const outcome = await ended.jsonValue();
+
+  await ended.dispose();
+
+  if (outcome === 'met') return;
   const state = await probe(page);
 
   throw new Error(`${step}: the frame went still (loading=${state.loading}, exhausted=${state.exhausted}, calls=${state.calls.length}, rows=${state.ids.length})`);

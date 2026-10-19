@@ -7,6 +7,7 @@
  * is told the turn is pending (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens. Where a
  * send ended is asked of the workspace (`awaitSend`), never read off this stream.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Connection } from 'agents';
 import {
   MessageType,
@@ -23,6 +24,10 @@ import {
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState' | 'close'>;
+
+/** The socket frame whose handling is running (client-socket-gate.ts), told once a step it started has taken its place
+ *  in a room's order. */
+export const framePlacing = new AsyncLocalStorage<() => void>();
 
 /** A tab whose replay could not be read is closed with this and redials: 1013, Try Again Later (RFC 6455 §7.4.1). */
 const REPLAY_RETRY_CODE = 1013;
@@ -289,6 +294,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     const before = this.intake;
 
     this.intake = before.then(() => held.promise);
+    framePlacing.getStore()?.();
 
     return before.then(() => step(held.resolve)).finally(held.resolve);
   }
@@ -510,11 +516,15 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       }
     } catch (cause) {
       release();
+      const refused = cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' });
+      // A Stop handed the words back, which is no failure: the request ends plainly, and its tab reads where they went
+      // from the send itself (`awaitSend`).
+      const handedBack = refused.code === 'cancelled';
 
-      if (opener === null) this.done(requestId, { error: refusalOf(cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' })).error });
+      if (opener === null) this.done(requestId, handedBack ? {} : { error: refusalOf(refused).error });
 
       // The loop refused and wrote nothing; anything else is a fault its caller must see.
-      if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
+      if (!handedBack && !(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
 
       return;
     }
@@ -572,6 +582,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       carried.push(request);
     }
 
+    // One agent runs one turn at a time: a turn opening ended the one before, whose end may be told after this.
+    if (this.live !== null && this.live.turnId !== turn.turnId) this.endStream(this.live);
     this.releaseWaiters();
 
     const live: LiveStream = {
@@ -590,10 +602,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /**
    * The answer row is durable before this. A turn that ends before this room opened it releases the tabs waiting on it.
-   * `window`: the transcript's newest {@link TRANSCRIPT_WINDOW} messages as the turn ended, told with its end by the
-   * agent that holds them.
+   * `window`: the transcript's newest {@link TRANSCRIPT_WINDOW} messages as `turnId` ended, told with its end by the
+   * agent that holds them. A turn told ended after the next one opened was ended by that opening: its window now would
+   * drop the answer streaming in.
    */
-  closeTurn(window: readonly UIMessage[]): void {
+  closeTurn(turnId: string, window: readonly UIMessage[]): void {
     const live = this.live;
 
     if (live === null) {
@@ -602,13 +615,18 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       return;
     }
 
+    if (live.turnId !== turnId) return;
+    this.endStream(live);
+    this.wire.broadcast(transcriptFrame(window));
+  }
+
+  private endStream(live: LiveStream): void {
     this.live = null;
     this.wire.replies?.ended(live.turnId, live.failure);
     this.pendingResume.clear();
     this.done(live.requestId, live.failure === null ? {} : { error: live.failure });
 
     for (const request of live.carried) this.done(request);
-    this.wire.broadcast(transcriptFrame(window));
   }
 
   /** An answer stamped after its end: its tabs are shown the window again, unless a turn is live, whose end carries it
@@ -618,8 +636,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. */
-  async closeLostTurn(): Promise<void> {
-    this.closeTurn(this.live === null ? [] : await this.wire.history(TRANSCRIPT_WINDOW));
+  async closeLostTurn(turnId: string): Promise<void> {
+    this.closeTurn(turnId, this.live?.turnId === turnId ? await this.wire.history(TRANSCRIPT_WINDOW) : []);
   }
 
   async deliver(event: SessionEvent): Promise<void> {

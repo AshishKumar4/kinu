@@ -7,7 +7,7 @@ import { base64ToBytes } from '../utils/base64';
 import { compareCodeUnits } from '../utils/text';
 
 /** Hex. A rotation must ship under the old key first: older machines verify with the key they carry. */
-export const RELEASE_SIGNING_PUBLIC_KEY = '232098b9f5cc9b300b903bb9f3347ecb2b62115b2711438ab7fab12d30bfbaef';
+export const RELEASE_SIGNING_PUBLIC_KEY = 'b132a9d50c26f6fbce4109ef335919ee050f6ea664620af57cd2fe8a7493b33c';
 
 /** A machine's own operator may pin another key through the environment (the test harness signs with its own); never a wire input. */
 export const RELEASE_SIGNING_PUBLIC_KEY_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';

@@ -21,6 +21,7 @@ import type { ConversationUiState } from "@/hooks/use-conversation-ui-state";
 import type { useFileDrop } from "@/hooks/use-file-drop";
 import type { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useSteerActions } from "@/hooks/use-steer-actions";
+import { useOpeningMessage } from "@/components/workspaces/NewChatView";
 
 type ChatState = ReturnType<typeof useChatOwner>["chat"];
 
@@ -40,6 +41,8 @@ interface ChatColumnExtras {
   readonly attachments?: ReturnType<typeof usePendingAttachments>;
   readonly drop?: ReturnType<typeof useFileDrop>;
   readonly onBranch?: () => void;
+  /** Sends the message a new chat was opened with (`useOpeningMessage`), as a press of Send would. */
+  readonly opening?: true;
 }
 
 export function EmptyConversation({ mission }: { mission: string }) {
@@ -201,7 +204,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
 
   useAutogrow(inputRef, ui.draft);
 
-  const { notice: steerNotice, send, stop } = useSteerActions({
+  const { notice: steerNotice, send, sendWords, stop } = useSteerActions({
     sendChat: (text, files) => state.sendChat(text, [...files], ui.mode),
     abortChat: state.abortChat,
     draft: ui.draft,
@@ -209,6 +212,8 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
     ...(attachments !== undefined && { attachments: { parts: attachments.parts, clear: attachments.clear } }),
     steerRuns: state.steerRuns,
   });
+
+  useOpeningMessage(extras.opening === true && state.connectionStatus === "connected", sendWords);
 
   const pickModel = useCallback((spec: string) => detach(Effect.promise(async () => state.setModel(spec))), [state]);
   const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);

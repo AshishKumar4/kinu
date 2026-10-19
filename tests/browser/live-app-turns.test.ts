@@ -2,11 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
-import { DROPPED_FILE_ARRIVED, PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/live-app-scripts';
-import { liveRows } from '../../scripts/live-app-rows';
+import { DROPPED_FILE_ARRIVED, PACED_SILENCE_MS, RECONNECT_STEPS, STOPPED_ASK } from '../../scripts/live-app-scripts';
+import { liveRows, STOP_SEND_ATTEMPTS } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
-  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'cleared', 'state',
+  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'cleared', 'stop-then-send', 'new-chat-stop',
+  'state',
 ]);
 
 /** An answer keeps each step's text where it streamed: its steps drawn while it waits, the same blocks and then the
@@ -121,5 +122,29 @@ describe('Main clears only once the server has', () => {
     const cleared = verdictOf(observed.cleared, 'cleared');
 
     expect([cleared.closedWhenIdle, cleared.emptiedWhenIdle, cleared.emptyAfterReload]).toEqual([true, true, true]);
+  });
+});
+
+// A Stop pressed as a turn opens, then a send as it leaves (staging titled-chat, 2026-10-18): the follow-up's stream was
+// closed by the stopped turn's late end, the stopped turn read as failed, and words handed back ran on the next send.
+describe('a Stop then a send at once', () => {
+  test('every follow-up is answered, and the stopped ask never is', () => {
+    const { attempts, stoppedAnswered } = verdictOf(observed.stopThenSend, 'stop-then-send');
+
+    expect({ attempts: attempts.length, stoppedAnswered }).toEqual({ attempts: STOP_SEND_ATTEMPTS, stoppedAnswered: false });
+  });
+
+  test('a Stop is no failure: words it handed back return to the draft with one info notice, and no other notice shows', () => {
+    const { attempts } = verdictOf(observed.stopThenSend, 'stop-then-send');
+
+    expect(attempts).toEqual(attempts.map(({ draft }, index) => (draft === ''
+      ? { draft, notices: [] }
+      : { draft: `${STOPPED_ASK} ${String(index + 1)}`, notices: ['info'] })));
+  });
+});
+
+describe("a new chat's opening offers Stop while its first call waits", () => {
+  test('Stop stands while the opening waits on the model, and the opening is answered once it is let go', () => {
+    expect(verdictOf(observed.newChatStop, 'new-chat-stop')).toEqual({ stopOffered: true, answered: true });
   });
 });

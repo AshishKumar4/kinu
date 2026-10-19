@@ -3179,6 +3179,13 @@ async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
   return {};
 }
 
+/** Where a send landed: a turn read it, or none did while `data-gallery-handed-back` is set, as when a Stop came first. */
+async function galleryAwaitSend(): Promise<JsonValue> {
+  if (document.documentElement.dataset.galleryHandedBack === "1") return { status: "none" };
+
+  return { status: "settled", turnId: "gallery-turn", landed: "turn", outcome: "completed" };
+}
+
 /** Stop's cancel, held while `data-gallery-cancel-held` is set, until `gallery:release-cancel`. */
 async function galleryCancelWork(): Promise<JsonValue> {
   if (document.documentElement.dataset.galleryCancelHeld === "1") {
@@ -3203,6 +3210,7 @@ const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>
   ["revertConversation", galleryRevert],
   ["clearConversation", galleryClearConversation],
   ["send", galleryMidTurnSend],
+  ["awaitSend", galleryAwaitSend],
   ["cancelCurrentWork", galleryCancelWork],
   ["resolveDeviceConsent", galleryResolveConsent],
   ["listBackgroundJobs", galleryJobsRead],

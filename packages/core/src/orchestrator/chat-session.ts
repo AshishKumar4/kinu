@@ -19,7 +19,7 @@ import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
-import type { ChatEvent } from '../chat';
+import { INTERRUPTED_TURN, type ChatEvent } from '../chat';
 import type { CompactionTrigger } from '../extension';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { narrowestMode, runWorkModeInvocation } from '../execution/work-mode';
@@ -1471,8 +1471,15 @@ export class ChatSession {
       }
     };
 
+    // Only the newest link clears the chain: an older one settling must not let the next event past the ones still owed.
+    const chain = (link: Promise<void>): void => {
+      const head = link.finally(() => { if (this.delivery === head) this.delivery = null; });
+
+      this.delivery = head;
+    };
+
     if (this.delivery !== null) {
-      this.delivery = settle(this.delivery.then(() => this.transport.deliver(event))).finally(() => { this.delivery = null; });
+      chain(settle(this.delivery.then(() => this.transport.deliver(event))));
 
       return;
     }
@@ -1480,7 +1487,7 @@ export class ChatSession {
     try {
       const delivered = this.transport.deliver(event);
 
-      if (delivered instanceof Promise) this.delivery = settle(delivered).finally(() => { this.delivery = null; });
+      if (delivered instanceof Promise) chain(settle(delivered));
     } catch (cause) {
       failed(toKinuError({ doing: 'delivering a session event to the frontend listener', cause, otherwise: 'io' }));
     }
@@ -2176,7 +2183,8 @@ export class ChatSession {
     const end = classifyRunEnd({ completed: false, interrupted, errorText: runError ?? runErrorOf(message) });
 
     await close?.(end);
-    this.emit({ type: 'error', message });
+    // A Stop ends the turn in its one name, whatever failed under it: its tabs read that as a Stop, not a failure.
+    this.emit({ type: 'error', message: end.reason === 'aborted' ? INTERRUPTED_TURN : message });
     this.emit({ type: 'turn-end', turn: turn(), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
     return end.reason;
