@@ -158,33 +158,45 @@ async function mapTrials(argv: string[], items: readonly QueuedTrial[], started:
   return { job, outcomes, exitCode };
 }
 
-async function main(): Promise<number> {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
-    pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
-  } });
-
-  const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
-
-  if (gitIn(ROOT, 'status', '--porcelain') !== '') throw new Error('armada measures a committed checkout: commit the tree first');
-  const candidateOrigin = values.pass ? process.env['KINU_EVAL_ORIGIN'] : deploymentOf('staging').origin;
-  const target = evalTargetVerdict(candidateOrigin);
+/**
+ * The legs a run measures, each a deployment and the build it serves: staging against production, staging alone
+ * (`stagingOnly`), or the one deployment KINU_EVAL_ORIGIN names (`pass`). `asked` is the build the caller expects the
+ * candidate to serve.
+ */
+async function legsOf(pass: boolean, stagingOnly: boolean, asked: string | undefined) {
+  const target = evalTargetVerdict(pass ? process.env['KINU_EVAL_ORIGIN'] : deploymentOf('staging').origin);
 
   if (target.kind === 'refused' || target.why !== 'deployment') throw new Error('evals-map names a real Kinu deployment through KINU_EVAL_ORIGIN');
 
   const origins: { leg: 'candidate' | 'baseline'; origin: string }[] = [{ leg: 'candidate', origin: target.origin }];
 
-  if (!values.pass) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
+  if (!pass && !stagingOnly) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
 
-  const builds = await Promise.all(origins.map(async ({ origin }) => (await deployedBuild({ origin })).sha));
-
-  const candidateBuild = builds[0] ?? '';
-  const baselineBuild = builds[1] ?? '';
-  const asked = positionals[0];
+  const [candidateBuild = '', baselineBuild = ''] = await Promise.all(origins.map(async ({ origin }) => (await deployedBuild({ origin })).sha));
 
   if (asked !== undefined && !candidateBuild.startsWith(asked) && !asked.startsWith(candidateBuild)) {
     throw new Error(`${target.origin} serves ${candidateBuild}, not the requested ${asked}`);
   }
+
+  return { origins, candidateBuild, baselineBuild };
+}
+
+async function main(): Promise<number> {
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+    tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
+    pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
+    'staging-only': { type: 'boolean', default: false },
+  } });
+
+  // Staging alone measures the models a run names against each other on one build: no production leg, so no verdict.
+  if (values['staging-only'] && (values.pass || values.record || values.post !== undefined)) {
+    throw new Error('--staging-only measures models, never a build\'s verdict: drop --pass, --record and --post');
+  }
+
+  const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
+
+  if (gitIn(ROOT, 'status', '--porcelain') !== '') throw new Error('armada measures a committed checkout: commit the tree first');
+  const { origins, candidateBuild, baselineBuild } = await legsOf(values.pass, values['staging-only'], positionals[0]);
 
   const matrix = evalMatrix({ ...process.env, KINU_EVAL_TRIALS: values.pass ? '1' : values.trials ?? process.env['KINU_EVAL_TRIALS'] }, ARMS.map((arm) => arm.id));
   const allTasks = trackedFiles().filter(isEvalTask).sort();

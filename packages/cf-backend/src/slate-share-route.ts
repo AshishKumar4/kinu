@@ -109,12 +109,28 @@ shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
 
 
 
+/**
+ * Whether a request acts (any method but GET, HEAD or OPTIONS, or a socket's upgrade) from anywhere but this share's own
+ * origin. A viewer's cookie rides every same-site request, and every other share and preview host is same-site, so such
+ * a request never carries the cookie's authority. One naming no origin is refused alike: absence grants nothing.
+ */
+function actsFromElsewhere(request: Request, url: URL): boolean {
+  const acting = !['GET', 'HEAD', 'OPTIONS'].includes(request.method) || request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+
+  return acting && request.headers.get('origin') !== url.origin;
+}
+
 shareHostRoutes.all('*', async (c) => {
   const { env, handle, workspace } = c.env;
   const request = c.req.raw;
   const url = new URL(request.url);
   // Read the claim before the sanitizer strips the cookie.
   const cookie = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+
+  if (cookie !== null && actsFromElsewhere(request, url)) {
+    return new Response('A share acts on its viewer\'s behalf only from its own page', { status: 403, headers: { 'cache-control': 'no-store' } });
+  }
+
   const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(env, request), consented: cookie?.consented === true };
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');

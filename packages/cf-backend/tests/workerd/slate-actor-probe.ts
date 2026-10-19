@@ -102,11 +102,10 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       },
       browserActor: async () => null,
       catalog: async () => ({ mcp: [], slates: [] }),
-      shareUrl: async () => null,
       shareEntry: () => null,
     });
 
-    const call = (mode: WorkMode) => host.surfaceCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'workspace', { path: ['tools', 'calculate'], args: [{ n: 21 }], invocation: null });
+    const call = (mode: WorkMode) => host.surfaceCall({ caller: { ...ROOT_SLATE_CALLER, workMode: mode }, id: 'crafted', name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, { path: ['tools', 'calculate'], args: [{ n: 21 }], invocation: null });
     const tool = factory.toolFor(surface, scope);
     const declarations = () => craftedToolDeclarations({ eval: tool }, { workMode: 'build', allowedTools: ['eval'] });
     const before = declarations();

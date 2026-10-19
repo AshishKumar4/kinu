@@ -4,8 +4,8 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { sha256Hex } from '@kinu.run/core';
-import { initSlatePictureTable, pictureKey, SlatePictures, type Camera, type PictureCapture } from '../src/slates/pictures';
+import { pragmaStamps, repairSchema, sha256Hex } from '@kinu.run/core';
+import { initSlatePictureTable, pictureKey, shareCaptureUrl, sharePictureKey, SlatePictures, type Camera, type PictureCapture } from '../src/slates/pictures';
 import { durableSqlStorage } from './helpers/programmatic-host';
 import { memoryBucket, type MemoryBucket } from './helpers/r2';
 
@@ -50,9 +50,10 @@ const failing: Camera = {
   async close() {},
 };
 
-function capture(lens: Camera, bucket: MemoryBucket = memoryBucket(), live: readonly string[] = ['board']): PictureCapture {
+/** `share` answers a listed share's host and publication: by default, no share is listed. */
+function capture(lens: Camera, bucket: MemoryBucket = memoryBucket(), live: readonly string[] = ['board'], share: PictureCapture['share'] = async () => null): PictureCapture {
   return {
-    workspace: 'ledger', bucket, url: async (port, token) => `https://${String(port)}-${token}.preview.test/`,
+    workspace: 'ledger', bucket, url: async (port, token) => `https://${String(port)}-${token}.preview.test/`, share,
     slates: async () => new Set(live), camera: async () => lens,
   };
 }
@@ -237,3 +238,227 @@ describe("a removed slate's pictures", () => {
     expect(store.nextDueAt()).toBeNull();
   });
 });
+
+describe("a listed share's view", () => {
+  const HOST = 'https://s1handle-token-ledger.preview.test/';
+
+  /** Share s1 listed, serving `publication` now; listed no more once `listed` says so; its authority holding while `held`. */
+  const s1 = (publication: () => string, listed: () => boolean = () => true, held: () => boolean = () => true): PictureCapture['share'] => async (share) =>
+    (share === 's1' && listed() ? { url: shareCaptureUrl(HOST), publication: publication(), held } : null);
+
+  /** A camera whose shots are `frames` in turn, keeping each address it was pointed at in `seen`. */
+  function aimed(seen: string[], ...frames: Uint8Array[]): Camera {
+    const lens = shooting(...frames);
+
+    return {
+      shoot: async (url) => {
+        seen.push(url);
+
+        return lens.shoot(url);
+      },
+      close: async () => {},
+    };
+  }
+
+  test('is taken through its own host past its consent page, kept under the share, apart from the preview', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    const seen: string[] = [];
+
+    store.rendered('board', PORT, T0);
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(await store.captureDue(capture(aimed(seen, A, B), bucket, ['board'], s1(() => 'rev-1')), T0 + 300_000)).toBe(true);
+
+    // The preview's shot by its port and handle, the share's past its host's consent page: each in its own place.
+    expect(seen.filter((url) => url.startsWith(HOST))).toEqual([`${HOST}__kinu/viewer?consent=1`]);
+    const preview = store.digests().get('board');
+    const shared = store.shareDigest('board', 's1');
+
+    expect(new Set([preview, shared])).toEqual(new Set([sha256Hex(A), sha256Hex(B)]));
+    expect([...bucket.objects.keys()].sort()).toEqual([pictureKey('ledger', 'board', preview ?? ''), sharePictureKey('ledger', 'board', 's1', shared ?? '')].sort());
+    // A preview's capture handle is never a share view's.
+    expect(store.shareDigest('board', 'preview')).toBeNull();
+  });
+
+  test('is taken again only at a new publication, which replaces the one before', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    let publication = 'rev-1';
+
+    store.listed('board', 's1', publication, T0);
+    await store.captureDue(capture(shooting(A), bucket, ['board'], s1(() => publication)), T0 + 30_000);
+    // Told again at the same publication (each start relists it): nothing is due.
+    store.listed('board', 's1', publication, T0 + 30_000);
+    expect(store.nextDueAt()).toBeNull();
+    // Published anew: due again, and its new picture replaces the old.
+    publication = 'rev-2';
+    store.listed('board', 's1', publication, T0 + 30_000);
+    expect(store.nextDueAt()).toBe(T0 + 60_000);
+    expect(await store.captureDue(capture(shooting(B), bucket, ['board'], s1(() => publication)), T0 + 60_000)).toBe(true);
+    expect(store.shareDigest('board', 's1')).toBe(sha256Hex(B));
+    expect([...bucket.objects.keys()]).toEqual([sharePictureKey('ledger', 'board', 's1', sha256Hex(B))]);
+  });
+
+  test('of a share listed no more is not taken, and goes with its listing, leaving the preview', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    const seen: string[] = [];
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(aimed(seen, A), bucket, ['board'], s1(() => 'rev-1', () => false)), T0 + 30_000)).toBe(false);
+    expect(seen).toEqual([]);
+    expect(store.nextDueAt()).toBeNull();
+
+    store.rendered('board', PORT, T0);
+    store.listed('board', 's1', 'rev-2', T0);
+    await store.captureDue(capture(shooting(A, B), bucket, ['board'], s1(() => 'rev-2')), T0 + 300_000);
+    expect(bucket.objects.size).toBe(2);
+    await store.unlisted('ledger', 'board', 's1', bucket);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect([...bucket.objects.keys()]).toEqual([pictureKey('ledger', 'board', store.digests().get('board') ?? '')]);
+  });
+});
+
+describe("a share view's shot", () => {
+  const HOST = 'https://s1handle-token-ledger.preview.test/';
+
+  /** A camera that, as it takes its one shot, runs `meanwhile` (what the owner does while the page loads). */
+  function during(meanwhile: () => Promise<void>, frame: Uint8Array): Camera {
+    return {
+      shoot: async () => {
+        await meanwhile();
+
+        return frame;
+      },
+      close: async () => {},
+    };
+  }
+
+  /** Share s1 taken off the Gallery (and turned to the owner's access) while a shot is taken, then back and listed again. */
+  const unlistedAndBack = (store: SlatePictures, bucket: MemoryBucket) => async () => {
+    await store.unlisted('ledger', 'board', 's1', bucket);
+    store.listed('board', 's1', 'rev-1', T0 + 40_000);
+  };
+
+  test('taken while its share was unlisted and listed again keeps nothing: the new listing is due a shot of its own', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    // Listed, public and its own again by the time the shot is in: only its listing tells the two apart.
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => true });
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(during(unlistedAndBack(store, bucket), A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(bucket.objects.size).toBe(0);
+    expect(store.nextDueAt()).toBe(T0 + 70_000);
+  });
+
+  test("taken while its share's authority changed keeps nothing, and is taken again", async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+    let held = true;
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => held });
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(during(async () => { held = false; }, A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(bucket.objects.size).toBe(0);
+    // Still due: the next shot is taken under the authority as it stands then.
+    held = true;
+    expect(await store.captureDue(capture(shooting(B), bucket, ['board'], share), T0 + 30_000)).toBe(true);
+    expect(store.shareDigest('board', 's1')).toBe(sha256Hex(B));
+  });
+
+  test("whose share's authority changed while it was stored in R2 keeps nothing of it", async () => {
+    const store = pictures();
+    const stored = memoryBucket();
+    let held = true;
+    // R2 answering the put only once the owner changed the share meanwhile.
+    const bucket: MemoryBucket = { ...stored, put: async (key, value, options) => { held = false; await stored.put(key, value, options); } };
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => held });
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(shooting(A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(stored.objects.size).toBe(0);
+  });
+
+  test('that fails after its listing was replaced leaves the new listing due its own first shot', async () => {
+    const store = pictures();
+    const stored = memoryBucket();
+    let put = false;
+
+    // R2 takes the retired shot, then refuses to delete it.
+    const bucket: MemoryBucket = {
+      ...stored,
+      put: async (key, value, options) => {
+        put = true;
+        await stored.put(key, value, options);
+      },
+      delete: async (keys) => {
+        if (put) throw new Error('R2 is unavailable');
+        await stored.delete(keys);
+      },
+    };
+
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => true });
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(during(unlistedAndBack(store, bucket), A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.nextDueAt()).toBe(T0 + 70_000);
+  });
+
+  test('found listed no more after its listing was replaced leaves the new listing due', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+
+    store.listed('board', 's1', 'rev-1', T0);
+
+    // Unlisted and listed again while its host is looked up, which then answers nothing for the shot begun before.
+    const share: PictureCapture['share'] = async () => {
+      await unlistedAndBack(store, bucket)();
+
+      return null;
+    };
+
+    expect(await store.captureDue(capture(shooting(A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.nextDueAt()).toBe(T0 + 70_000);
+  });
+
+  test('of a view whose listing ended goes at once, even where R2 refuses its pictures', async () => {
+    const store = pictures();
+    const refusing: MemoryBucket = { ...memoryBucket(), list: async () => { throw new Error('R2 is unavailable'); } };
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.unlisted('ledger', 'board', 's1', refusing).then(() => 'kept', () => 'refused')).toBe('refused');
+    // Listed again, it is a view of its own: no shot taken for the one before can land in it.
+    expect(store.nextDueAt()).toBeNull();
+  });
+});
+
+describe('a picture store from before views', () => {
+  test("is rebuilt with its rows, each one its slate's preview, and takes share views beside them", () => {
+    const database = new Database(':memory:');
+    databases.push(database);
+    database.exec(`CREATE TABLE slate_pictures (slate TEXT PRIMARY KEY, port INTEGER NOT NULL, digest TEXT, due_at INTEGER, due_since INTEGER,
+      attempts INTEGER NOT NULL DEFAULT 0, capture_handle TEXT, capture_until INTEGER);
+      INSERT INTO slate_pictures (slate, port, digest) VALUES ('board', ${String(PORT)}, '${sha256Hex(A)}');
+      PRAGMA user_version = 1;`);
+    const sql = durableSqlStorage(database);
+
+    const repair = repairSchema(sql, {
+      schema: 'agent', tables: ['slate_pictures'], stamps: pragmaStamps(sql), transactionSync: (write) => database.transaction(write)(),
+      init: () => { initSlatePictureTable((ddl) => { sql.exec(ddl); }); },
+    }, 'pictures');
+
+    expect({ rebuilt: repair?.rebuilt, refilled: repair?.refilled, refused: repair?.refused }).toEqual({ rebuilt: ['slate_pictures'], refilled: [], refused: null });
+    const store = new SlatePictures(sql);
+
+    expect(store.digests().get('board')).toBe(sha256Hex(A));
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(store.shareDigest('board', 's1')).toBeNull();
+    expect(store.nextDueAt()).toBe(T0 + 30_000);
+  });
+});
+

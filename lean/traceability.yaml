@@ -953,3 +953,184 @@ requirements:
       - Read correctness assumes ordered authentic records and correct base and chunk bytes; SHA-256 collision resistance and the Rust translation are tested assumptions, not axioms or kernel proofs
       - The readiness state machine covers the composed mounts and captured runtime generation; kernel scheduling, external mount mutation, network latency and the 30-second wall-clock target remain runtime evidence
       - Arbitrary service scans and writable opens can demand whole files before full lifecycle readiness; no bound on that demanded work or on unsynced mmap checkpointing is claimed
+  PR-SHARE-NIMBUS-001:
+    statement: Any live own-mode share gives every shared-server call no authority, while owner-only shares at the current revision intersect member keys and keep only the first grant's slates and member metadata.
+    status: proved-and-refined
+    theorems:
+      - Kinu.SharingNimbus.own_mode_server_holds_no_grant
+      - Kinu.SharingNimbus.a_live_own_share_confines_every_server_call
+      - Kinu.SharingNimbus.a_server_grant_intersects_every_live_share
+    tsRefs:
+      - packages/core/src/slates/share-policy.ts#serverAuthority
+    remainingEvidence:
+      - The fixture checks the pure function on generated inputs, not the host's live-share lookup, dispatch routing, durable transactions or concurrent revocation
+      - Workers and Nimbus isolation and attack replays in workerd remain runtime evidence
+    refinement:
+      - lean/fixtures/share-policy-cases.json :: packages/core/tests/refinement-share-policy.test.ts
+  PR-SHARE-NIMBUS-002:
+    statement: A personal connection dispatch occurs only in its own viewer's part with current scoped consent, and any call not declared read-only and closed-world, a read as much as a send, needs effects consent and the viewer's approval of its exact payload and requested destination.
+    status: proved-and-refined
+    theorems:
+      - Kinu.SharingNimbus.a_running_part_call_has_current_consent
+      - Kinu.SharingNimbus.a_contained_tool_is_read_only_and_closed_world
+      - Kinu.SharingNimbus.a_personal_grant_acts_only_in_its_viewers_part
+      - Kinu.SharingNimbus.a_disclosing_call_dispatches_only_with_its_viewers_exact_approval
+    tsRefs:
+      - packages/core/src/slates/share-policy.ts#partCallVerdict
+      - packages/core/src/slates/share-modes.ts#SlateConsentSchema
+      - packages/core/src/slates/share-policy.ts#containedTool
+    remainingEvidence:
+      - The pure verdict checks server, root, tool, revision and effects; selecting the viewer's consent by workspace and slate is a host premise, represented explicitly by consentFor in the state model
+      - A call's root is an input to the model, never derived in it; that the root names what the tool's handler reaches is partCallRoot's per-operation contract (share-policy.ts REPOSITORY_TOOLS, read off the GitHub MCP server's handlers), runtime evidence in unit-share-policy and unit-share-owner-effects
+      - The host's routing of every tool call to that viewer's own account and the confined process's isolation need runtime evidence and attack replays in workerd
+      - The fixture refines containedTool and partCallVerdict, including an uncontained read tool; it does not refine the abstract personalDispatch host or its signed-in viewer and share checks
+    refinement:
+      - lean/fixtures/share-policy-cases.json :: packages/core/tests/refinement-share-policy.test.ts
+  PR-SHARE-NIMBUS-003:
+    statement: An edit retains old consents and share approvals at their old revision, so a consent from another revision refuses every call and a live owner-mode share approved for another revision gives the shared server no grant until re-approved.
+    status: proved-and-refined
+    theorems:
+      - Kinu.SharingNimbus.revision_binding_refuses_an_old_consent
+      - Kinu.SharingNimbus.revision_binding_suspends_an_old_owner_share
+      - Kinu.SharingNimbus.an_edit_keeps_old_consents_and_grants_bound
+      - Kinu.SharingNimbus.an_edit_suspends_a_previously_approved_owner_share
+    tsRefs:
+      - packages/core/src/slates/share-policy.ts#serverAuthority
+      - packages/core/src/slates/share-policy.ts#partCallVerdict
+    remainingEvidence:
+      - Revision strings abstract the served image digest; publishing that image, updating grant_revision only on owner approval and rechecking after every wait need host and workerd evidence
+      - The fixture refines the pure revision decisions, not the setRevision event or the host's image and approval transaction
+    refinement:
+      - lean/fixtures/share-policy-cases.json :: packages/core/tests/refinement-share-policy.test.ts
+  PR-SHARE-NIMBUS-004:
+    statement: A viewer's approval admits one disclosing call, including an uncontained read, only with its exact workspace, slate, revision, requested server, tool, root and payload, with duplicate asks preserving a decision and a decline or successful dispatch consuming it.
+    status: proved-and-refined
+    theorems:
+      - Kinu.SharingNimbus.taking_an_effect_requires_its_exact_approved_call
+      - Kinu.SharingNimbus.a_disclosing_dispatch_consumes_its_exact_approval
+      - Kinu.SharingNimbus.an_approval_admits_one_effect
+      - Kinu.SharingNimbus.an_approval_admits_only_its_exact_call
+      - Kinu.SharingNimbus.a_declined_approval_admits_nothing
+      - Kinu.SharingNimbus.asking_again_does_not_repeat_or_erase_a_decision
+      - Kinu.SharingNimbus.a_spent_approval_stays_spent_until_a_fresh_decision
+    tsRefs:
+      - packages/core/src/slates/share-policy.ts#EffectApprovals.ask
+      - packages/core/src/slates/share-policy.ts#EffectApprovals.decide
+      - packages/core/src/slates/share-policy.ts#EffectApprovals.take
+      - packages/core/src/slates/share-policy.ts#EffectApprovals.idOf
+    remainingEvidence:
+      - The model keys approvals by exact canonical calls, not finite hashes; collision resistance of the implementation's truncated SHA-256 ids is a cryptographic assumption, not a proved theorem or a Lean axiom
+      - Replay independently hashes the model's canonical JSON and tests reordered roots, nested objects, arrays, exact integers, changed bound fields and a changed destination URL; general JavaScript number encoding and all JSON inputs are not exhaustively refined
+      - A new ask after consumption requires a new decision; the one-effect theorem concerns one approval, not a lifetime ban on approving that call again
+      - Viewer-account ownership of the book, transient-run lifetime, authenticated decisions and dispatch atomicity remain runtime evidence and attack replays in workerd
+    refinement:
+      - lean/fixtures/share-policy-cases.json :: packages/core/tests/refinement-share-policy.test.ts
+  PR-SHARE-NIMBUS-005:
+    statement: A fork starts at its parent's code revision with no shares, consents, approvals, outputs or shared state, and every later effect call is bound to the fork's own workspace and slate rather than its parent's grants.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.SharingNimbus.a_fork_starts_with_its_code_alone
+      - Kinu.SharingNimbus.a_fork_event_emits_only_code_and_keeps_parent_data
+      - Kinu.SharingNimbus.a_fork_never_reaches_its_parents_grants
+    tsRefs:
+      - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.liveBundle
+      - packages/core/src/slates/blueprints.ts#WorkspaceBlueprints.admit
+    remainingEvidence:
+      - Fork code is an abstract revision, not source bytes; secrets typed into code and publication-time secret scanning are outside this theorem
+      - The fork event emits code-only identities and forkState materializes them; every later grant must be explicitly granted anew in the child, and the theorem does not forbid a person choosing an equivalent fresh grant
+      - Bundle contents, host admission, empty durable storage and the absence of inherited account bindings need runtime fork tests and attack replays in workerd
+  PR-SHARE-NIMBUS-006:
+    statement: For the same event history and confirmed show values, changing only one viewer's personal connection answers leaves shared state and every other viewer's outputs equal, only show or serverCall writes shared state and a server call never reads a personal-part connection.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.SharingNimbus.only_show_and_server_calls_write_shared_state
+      - Kinu.SharingNimbus.a_server_call_never_reads_a_personal_connection
+      - Kinu.SharingNimbus.a_parts_output_goes_only_to_its_viewer
+      - Kinu.SharingNimbus.personal_data_reaches_shared_state_only_by_its_viewers_show
+    tsRefs:
+      - packages/core/src/slates/share-policy.ts#serverAuthority
+      - packages/core/src/slates/personal-parts.ts#PartOutputSchema
+      - packages/core/src/slates/personal-parts.ts#PartShowRequestSchema
+    remainingEvidence:
+      - Noninterference quantifies arbitrary confined computations and server computations over a fixed history; show values are the viewer's own trusted act, identical in the compared histories
+      - World varies only personal-part connection answers; explicitly granted server responses and public inputs are fixed by Env, not secretly treated as personal-part output
+      - The host's viewer-account routing, confined process isolation, globalOutbound null, ephemeral storage, sealed rendering and the trusted show prompt require runtime evidence and attack replays in workerd
+      - Workers and Nimbus isolation, timing, termination, private-data-dependent event scheduling, already dispatched work and relaying by a viewer are not proved
+  PR-SHARE-NIMBUS-007:
+    statement: Revoking a share or removing its viewer permanently ends calls under those share identities, and withdrawing a consent refuses every later matching personal call unless the viewer explicitly gives a fresh consent.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.SharingNimbus.a_revoked_share_refuses_every_later_call
+      - Kinu.SharingNimbus.removing_a_person_ends_their_existing_shares
+      - Kinu.SharingNimbus.a_withdrawn_consent_refuses_every_later_call
+    tsRefs:
+      - packages/core/src/slates/share-policy.ts#partCallVerdict
+      - packages/core/src/slates/share-policy.ts#EffectApprovals.take
+    remainingEvidence:
+      - The state model keeps retired share identities and checks access and consent at every call; production lookups, share-id non-reuse and rechecks after waits need host and workerd evidence
+      - Withdrawal is permanent for the withdrawn grant, not a prohibition on a later explicit consent; the history theorem excludes a fresh consent by that viewer
+      - Bytes already released are not recalled and work dispatched before revocation may complete; distributed persistence, authenticated removal and cancellation of queued effects are outside this abstract transition system
+  PR-SHARE-NIMBUS-008:
+    statement: Assuming truthful contained-tool declarations, any value a personal part carries in a call reaches only its consented server unless its viewer approved that exact canonical payload and requested destination.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.SharingNimbus.a_parts_value_reaches_only_its_consented_server_or_an_approved_destination
+    tsRefs:
+      - packages/core/src/slates/share-policy.ts#containedTool
+      - packages/core/src/slates/share-policy.ts#partCallVerdict
+      - packages/core/src/slates/share-policy.ts#EffectApprovals.take
+    remainingEvidence:
+      - ContainmentSound is an explicit theorem premise, not an axiom; read-only and closed-world flags alone cannot prove a remote server tells the truth or that its implementation never delegates
+      - ToolReach describes every destination able to learn an arbitrary call payload and is indexed by the exact canonical call, so a changed payload or requested destination needs another approval
+      - Requested destination means server, tool and root plus any URL in the payload; resolving URLs, redirects and an unseen ultimate network endpoint are not separately represented or proved approved
+      - The fixture checks the containment classifier, uncontained-read verdicts and changed-payload or changed-URL approval keys, not the semantic ToolReach premise or remote egress behavior
+      - Viewer-account routing, an exact and honest approval prompt, delegated dispatch, Workers and Nimbus isolation and adversarial workerd replays remain runtime evidence
+  PR-SHARE-NIMBUS-009:
+    statement: Every launch-relevant sharing change and its generation fence are one step; minted lineages seal their slate and all inherited shared ancestors, inheritance preserves those seals through every hop, and a sharing change permanently refuses every descendant binding and nested admission with or without a request record. Admitted lineages retain launch sharing, stale launches restart, and both a split fence and an own-generation-only descendant admit stale owner authority.
+    status: proved-and-refined
+    theorems:
+      - Kinu.SharingNimbus.Fence.every_sharing_change_advances_its_fence_in_the_same_step
+      - Kinu.SharingNimbus.Fence.one_slates_fence_leaves_other_slates_unchanged
+      - Kinu.SharingNimbus.Fence.a_sharing_generation_never_returns
+      - Kinu.SharingNimbus.Fence.sharing_cannot_change_behind_an_unmoved_fence
+      - Kinu.SharingNimbus.Fence.an_admitted_binding_keeps_its_launch_sharing
+      - Kinu.SharingNimbus.Fence.owner_egress_and_browser_authority_stay_unshared
+      - Kinu.SharingNimbus.Fence.a_changed_fence_permanently_refuses_an_old_binding
+      - Kinu.SharingNimbus.Fence.an_invocation_keeps_its_incarnation_and_every_chain_fence
+      - Kinu.SharingNimbus.Fence.another_incarnation_cannot_reuse_an_invocation
+      - Kinu.SharingNimbus.Fence.a_stale_launch_is_restarted_with_current_sharing
+      - Kinu.SharingNimbus.Fence.a_ready_launch_still_has_the_sharing_it_chose
+      - Kinu.SharingNimbus.Fence.splitting_a_share_change_from_its_fence_admits_stale_owner_authority
+      - Kinu.SharingNimbus.Fence.the_atomic_share_change_refuses_the_same_stale_binding
+      - Kinu.SharingNimbus.Fence.an_admitted_binding_keeps_every_ancestor_fence
+      - Kinu.SharingNimbus.Fence.inheritance_keeps_every_ancestor_and_its_sealed_generation
+      - Kinu.SharingNimbus.Fence.a_new_shared_ancestor_is_sealed_at_its_current_generation
+      - Kinu.SharingNimbus.Fence.inheritance_is_transitive
+      - Kinu.SharingNimbus.Fence.a_changed_ancestor_permanently_refuses_every_descendant
+      - Kinu.SharingNimbus.Fence.a_changed_ancestor_fences_every_process_below_every_hop
+      - Kinu.SharingNimbus.Fence.every_nested_admission_has_current_lineage
+      - Kinu.SharingNimbus.Fence.a_changed_slate_permanently_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_changed_ancestor_permanently_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_foreign_invocation_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_stale_invocation_fence_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_binding_that_seals_only_itself_admits_revoked_ancestor_owner_authority
+      - Kinu.SharingNimbus.Fence.the_inherited_seal_refuses_the_same_stale_owner_call
+    tsRefs:
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.add
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.revoke
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.setAuthority
+      - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.generation
+      - packages/core/src/slates/shared-server.ts#SharedServers.lineage
+      - packages/core/src/slates/shared-server.ts#SharedServers.within
+      - packages/core/src/slates/caller.ts#SlateCaller
+    refinement:
+      - lean/fixtures/share-fence-cases.json :: packages/core/tests/refinement-share-fence.test.ts
+    remainingEvidence:
+      - The launch-sharing projection records share identities, liveness and modes; unchanged-mode grant and grantRevision edits do not move this fence and must still be re-weighed by the server gate at each send
+      - The fixture replays immediate post-write observations, transitive ancestor seals, non-refreshing inheritance after re-sharing, stale process, ancestor and request-chain generations, foreign incarnations, live and repeated revokes, mode and grant-only edits, listing, users and preapproval operations against SQLite and SharedServers.lineage
+      - Nested observing-member cases compare fenced and unfenced SharedServers.within and beyond, including calls that current sharing weighs as unbounded after the last ancestor share is revoked; approval spending for effects and arbitrary crafted-tool execution are not modeled here
+      - Owner-mode fixture transitions explicitly clear the Gallery listing first, satisfying the existing SQLite constraint; failed duplicate inserts and other database-constraint failures are not modeled as successful sharing changes
+      - The atomic state machine has no yield between a launch-relevant sharing mutation and its fence; the split model is a kernel-checked counterexample, not a claim to exercise the Workers scheduler exhaustively
+      - beginLaunch and finishLaunch abstract own-slate launch-time egress and browser choices and stale-attempt restart; inherited seals and their preservation are modeled, but actual host caller.via propagation, Nimbus launch, teardown, binding minting and restart are not driven by this fixture and need adversarial workerd launch interleavings
+      - Host-issued lineage and invocation records are trusted inputs, not caller-supplied authority; incarnation freshness, invalidation across object restarts and per-call checks immediately before dispatch remain runtime evidence
+      - Generations are unbounded naturals in the proof and sampled exact JavaScript integers in replay; numerical wraparound, persistent epochs across object lives and already dispatched remote work are outside the model

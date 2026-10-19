@@ -13,7 +13,9 @@ def fixtures : List (String × String) :=
   [("uct-select.json", UctCases.fixture),
    ("records.json", RecordsCases.fixture),
    ("credential-envelope.json", CredentialCases.fixture),
-   ("device-view.json", DeviceViewCases.fixture)]
+   ("device-view.json", DeviceViewCases.fixture),
+   ("share-policy-cases.json", SharePolicyCases.fixture),
+   ("share-fence-cases.json", ShareFenceCases.fixture)]
 
 def main (args : List String) : IO UInt32 := do
   let dir := args.headD "fixtures"

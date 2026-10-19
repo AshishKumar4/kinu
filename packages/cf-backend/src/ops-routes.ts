@@ -15,11 +15,10 @@ import { BUILTIN_ACCOUNTS_OBJECT, type SignInDeclarationEnv } from '@kinu.run/co
 import { attempt, renderThrownChain, settle } from '@kinu.run/core/obs';
 import type { FamilyEnv } from './api/context';
 import { accountIdFor } from './auth/store';
-import { controlPlaneStub, hasControlPlane } from './control-plane/stub';
-import type { ControlPlaneDO } from './control-plane/control-plane-do';
+import { CONTROL_PLANE_SINGLETON, controlPlaneStub, hasControlPlane } from './control-plane/stub';
 
-/** The classes the walk reaches, and the namespace each is bound as. */
-const OPS_CLASSES = ['UserDO', 'OrchestratorAgent'] as const;
+/** The classes the walk reaches. */
+const OPS_CLASSES = ['UserDO', 'OrchestratorAgent', 'ControlPlaneDO'] as const;
 
 type OpsClass = (typeof OPS_CLASSES)[number];
 
@@ -46,7 +45,12 @@ export interface OpsEnv extends SignInDeclarationEnv {
   DEV_USER_EMAIL?: string;
   UserDO: OpsNamespace;
   OrchestratorAgent: OpsNamespace;
-  ControlPlaneDO?: DurableObjectNamespace<ControlPlaneDO>;
+  ControlPlaneDO?: { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): OpsControlPlane };
+}
+
+/** The control plane as the walk reaches it: its users, the accounts the walk starts from, and its own tables. */
+interface OpsControlPlane extends OpsObject {
+  opsUsers(caller: OpsCaller): Promise<string[]>;
 }
 
 /** An object as the walk named it, and the id its name makes, which Cloudflare's list is read against. */
@@ -65,6 +69,11 @@ function named(object: { readonly id: DurableObjectId; readonly name: string }):
 
 export const opsRoutes = new Hono<FamilyEnv<OpsEnv, object>>();
 
+/** The namespace a class is bound as, where it is bound. */
+function namespaceOf(env: OpsEnv, className: OpsClass): OpsNamespace | undefined {
+  return className === 'ControlPlaneDO' ? env.ControlPlaneDO : env[className];
+}
+
 /** Whether the request bears a pass the step wrote. */
 function admitted(env: OpsEnv, header: string | undefined): Effect.Effect<boolean> {
   const pass = /^Bearer (\S{32,})$/u.exec(header ?? '')?.[1];
@@ -74,21 +83,22 @@ function admitted(env: OpsEnv, header: string | undefined): Effect.Effect<boolea
 
 const REFUSED = 'The deploy\'s walk is run by its deploy step, which writes its pass into this deployment first.';
 
-/** The accounts the walk starts from, by the name each object is reached by: the builtin sign-in directory, every
- *  user the control plane has seen, and the eval service's own accounts. */
+/** The objects the walk starts from, by the name each is reached by: the accounts (the builtin sign-in directory,
+ *  every user the control plane has seen, and the eval service's own) and the control plane itself, where one is
+ *  bound. */
 opsRoutes.post('/ops/roots', (c) => settle(Effect.gen(function* () {
   if (!(yield* admitted(c.env, c.req.header('authorization')))) return err(401, REFUSED);
   const caller = yield* Effect.promise(() => opsCaller(c.env));
   const { ControlPlaneDO } = c.env;
 
-  const seen = ControlPlaneDO !== undefined && hasControlPlane({ ControlPlaneDO })
-    ? yield* Effect.promise(() => controlPlaneStub({ ControlPlaneDO }).opsUsers(caller)) : [];
+  const bound = ControlPlaneDO !== undefined && hasControlPlane({ ControlPlaneDO });
+  const seen = bound ? yield* Effect.promise(() => controlPlaneStub({ ControlPlaneDO }).opsUsers(caller)) : [];
 
   const dev = c.env.DEV_USER_EMAIL ?? '';
   const evalEmails = dev === '' ? [] : [dev, ...EVAL_ACCOUNTS.map((account) => evalAccountEmail(dev, account))];
   const evals = yield* Effect.promise(() => Promise.all(evalEmails.map((email) => accountIdFor(c.env, email))));
 
-  return json({ body: { accounts: [...new Set([BUILTIN_ACCOUNTS_OBJECT, ...evals, ...seen])] } });
+  return json({ body: { accounts: [...new Set([BUILTIN_ACCOUNTS_OBJECT, ...evals, ...seen])], control: bound ? [CONTROL_PLANE_SINGLETON] : [] } });
 })));
 
 opsRoutes.post('/ops/tables', (c) => settle(Effect.gen(function* () {
@@ -96,7 +106,9 @@ opsRoutes.post('/ops/tables', (c) => settle(Effect.gen(function* () {
   const body = yield* Effect.promise(() => safeJson(c.req.raw, OpsRequestSchema));
 
   if (body === null) return err(400, `The body names a class, and at most ${String(OPS_OBJECTS_PER_REQUEST)} objects by name.`);
-  const namespace: OpsNamespace = c.env[body.class satisfies OpsClass];
+  const namespace = namespaceOf(c.env, body.class);
+
+  if (namespace === undefined) return err(400, `This deployment binds no ${body.class}.`);
   const caller = yield* Effect.promise(() => opsCaller(c.env));
 
   const objects = body.names.map((name) => ({ id: namespace.idFromName(name), name }));

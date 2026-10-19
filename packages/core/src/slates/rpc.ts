@@ -4,6 +4,7 @@ import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type { WorkMode } from '../types/turn';
 import { requireWorkModePermission } from '../execution/work-mode';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
+import { ShareStartSchema } from './share-modes';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
@@ -49,6 +50,29 @@ const ShareId = v.pipe(v.string(), v.minLength(1));
 
 const IncludedPaths = v.array(v.pipe(v.string(), v.check((name) => name !== '' && !name.includes('/') && name !== '.' && name !== '..', 'An included path is one top-level name')));
 
+/** A file of a slate's tree as an editor names it: relative, plain segments, nothing of its dependencies or its history. */
+export const SlateFilePath = v.pipe(
+  v.string(),
+  v.regex(/^[\w.-]+(?:\/[\w.-]+)*$/u, 'A slate file is a relative path of plain names'),
+  v.check((path) => !path.split('/').some((part) => part === '.' || part === '..'), 'A slate file path stays inside the slate'),
+  v.check((path) => !/^(?:node_modules|\.git)(?:\/|$)/u.test(path), 'A slate file is its source, not its dependencies or history'),
+);
+
+const FileDigest = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u, 'A file base is its full SHA-256'));
+
+/** One atomic edit: each path's next text (null deletes) and the digest read before editing (null means absent). */
+export const SlateFileChangeSchema = v.pipe(v.record(SlateFilePath, v.strictObject({ text: v.nullable(v.string()), base: v.nullable(FileDigest) })), v.check((files) => Object.keys(files).length > 0, 'A change names a file'));
+
+export type SlateFileChange = v.InferOutput<typeof SlateFileChangeSchema>;
+
+/** A shared slate's text files, as an editor's agent reads them. */
+export const SharedSlateFilesSchema = v.object({ files: v.array(v.object({ path: v.string(), text: v.string(), sha256: FileDigest })) });
+
+export type SharedSlateFiles = v.InferOutput<typeof SharedSlateFilesSchema>;
+
+/** Another workspace's slate, shared with this workspace's owner to edit: its workspace and its directory there. */
+const SharedSlateAddress = { workspace: v.pipe(v.string(), v.minLength(1)), slate: SlateDirectoryName };
+
 export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('list') }),
   v.strictObject({ op: v.literal('preview'), id: SlateDirectoryName }),
@@ -70,11 +94,15 @@ export const SlateOperationSchema = v.variant('op', [
     visibility: LiveShareVisibilitySchema,
     approved: v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() })),
     fork: v.optional(v.boolean()),
+    start: v.optional(ShareStartSchema),
   }),
   v.strictObject({ op: v.literal('liveShares') }),
   v.strictObject({ op: v.literal('viewerRequests'), share: ShareId }),
   // Keeps an answer's `<slate-ui>` page, addressed as the chat draws it, as a slate with files under its title.
   v.strictObject({ op: v.literal('save'), page: v.pipe(v.string(), v.minLength(1)) }),
+  // A slate someone shared with this workspace's owner to edit: its files read, and changed, in its owner's workspace.
+  v.strictObject({ op: v.literal('sharedFiles'), ...SharedSlateAddress }),
+  v.strictObject({ op: v.literal('sharedEdit'), ...SharedSlateAddress, files: SlateFileChangeSchema }),
 ]);
 
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
@@ -100,6 +128,8 @@ export const SLATE_PROGRAM_MEMBERS = {
   publish: { on: 'slate', params: ['version', 'include'] },
   share: { on: 'slate', params: ['...'] },
   save: { on: 'directory', params: ['page'] },
+  sharedFiles: { on: 'directory', params: ['workspace', 'slate'] },
+  sharedEdit: { on: 'directory', params: ['workspace', 'slate', 'files'] },
 } as const satisfies Record<Exclude<SlateOperation['op'], 'call'>, SlateMemberSpec>;
 
 function programMember(operation: SlateOperation): string {
@@ -110,9 +140,9 @@ function programMember(operation: SlateOperation): string {
 
 const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
   list: true, history: true, inspect: true, shares: true,
-  graph: true, liveShares: true, viewerRequests: true,
+  graph: true, liveShares: true, viewerRequests: true, sharedFiles: true,
   preview: false, methods: false, call: false, commit: false, fork: false, restore: false, remove: false, publish: false, unshare: false,
-  share: false, save: false,
+  share: false, save: false, sharedEdit: false,
 };
 
 /** Reads run in Plan; the rest change resources or run authored code, as `methods` does by booting the slate. */

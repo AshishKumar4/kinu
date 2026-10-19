@@ -1180,7 +1180,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/verified-secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
     label: 'Gate self-tests: secrets, corpus, preflight',
     tier: 'push',
     // 1.0 s declared 2026-08-24; the gallery-harness case adds 0.13 s, measured 2026-09-05.
@@ -1444,6 +1444,24 @@ export const LADDER: readonly Gate[] = [
       + 'to what an install script DOES once bun runs it, which is `gate:install-scripts` above. '
       + 'An unreachable feed is reported as `unknown` via `blocked()`, never as a clean tree.',
     inputs: { kind: 'live', why: 'runs `bun pm scan`, which asks an advisory feed over the network; a new advisory changes the verdict with no file changed.' },
+  },
+  {
+    run: 'bun scripts/verified-secret-scan.ts',
+    label: 'Verified secret scan',
+    tier: 'ci',
+    // Measured 2026-10-19 on the 24-thread workstation over every local ref (597,947 chunks, 644 MB): 24 s, of
+    // which 9 s is asking providers.
+    seconds: 25,
+    catches: 'a credential that still works, reachable from any ref the clone holds, in any shape TruffleHog '
+      + 'detects: each candidate is tried against its provider, so a finding is a live key, named by detector, file, '
+      + 'line and commit and never printed. `Secret scan` is the reviewed list of shapes this repository has held; '
+      + 'this is the broad, verified half, which ran on GitHub (security-scan.yml, TruffleHog v3.97.1, '
+      + '`--only-verified`) until armada took it. It is at `ci` because it needs the network.',
+    blind: 'a credential its provider answers as revoked or does not answer for (only verified ones are '
+      + 'reported, as on GitHub); a shape TruffleHog has no detector for; unreachable objects. A shallow clone, a '
+      + 'runner that cannot reach api.github.com, or a missing binary is BLOCKED via `blocked()`, never a clean '
+      + 'verdict, since `--only-verified` reads an unverifiable candidate as no finding.',
+    inputs: { kind: 'live', why: 'asks each candidate\'s provider over the network whether it still works, over the clone\'s refs; a revocation or a new ref changes the verdict with no tracked file changed.' },
   },
   {
     // Measured 2026-08-22: 18.42s, four isolated workers.

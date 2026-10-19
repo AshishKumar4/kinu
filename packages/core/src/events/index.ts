@@ -78,4 +78,4 @@ export {
   type SpendTally,
 } from './model-call';
 
-export { buildModelCallEvent } from './model-call-event';
+export { buildModelCallEvent, pricedModelCallEvent } from './model-call-event';

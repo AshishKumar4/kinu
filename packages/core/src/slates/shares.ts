@@ -81,7 +81,8 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
       this.db.exec(`UPDATE ${this.table.shares} SET revoked_at = ? WHERE id = ?`, revokedAt, id);
       markStoreChanged(this.db);
 
-      return Effect.succeed({ ...share, revokedAt });
+      // Read back, as every record is: what a revoke ends (a live share's listing) is the row's to say.
+      return Effect.succeed(this.get(id) ?? { ...share, revokedAt });
     }));
   }
 
@@ -129,6 +130,8 @@ const BLUEPRINT_SHARES: ShareTable<v.InferOutput<typeof ShareRow>, SlateShareRec
 export interface ShareUser {
   readonly userId: string;
   readonly email: string;
+  /** A live share's: whether they use the slate or edit it too; `use` when absent. A blueprint's ignores it. */
+  readonly role?: 'use' | 'edit';
 }
 
 export interface NewSlateShare {

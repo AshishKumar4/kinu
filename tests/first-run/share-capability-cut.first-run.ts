@@ -1,10 +1,11 @@
 /**
  * A public live share under a cut that admits one observing member and nothing
  * that acts. The owner runs a slate that reads and writes its workspace, shares
- * it approving nothing, and a signed-out visitor drives the share
- * origin: the read answers, the mutation is refused with the grant's own
- * classified code, and the owner's tree shows no effect. An agent-namespace
- * call from the slate is refused outright.
+ * it approving nothing and turns it to "my access" through the share sheet's
+ * route, and a signed-out visitor drives the share origin: the read answers,
+ * the mutation is refused with the grant's own classified code, and the owner's
+ * tree shows no effect. An agent-namespace call from the slate is refused
+ * outright, on the owner's access as well.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -12,6 +13,9 @@ import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal
 import { JsonValueSchema, LiveShareCreatedSchema, ViewerRequestRecordSchema, type JsonValue } from '@kinu.run/core';
 import { ERROR_CODES } from '@kinu.run/core/obs';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { lendShares } from './my-access';
+import { shareHost } from './share-entry';
+import { webHeaders } from '../../evals/src/workspace-roster';
 
 const SUITE = 'First-run · share-capability-cut';
 
@@ -22,7 +26,7 @@ const DEFECT: FirstRunDefect = {
   found: 'A public live share under a cut admitting one read member answered the read, refused the mutation with the grant code, left no owner-side effect, and refused an agent-namespace call outright.',
   missedBecause: 'Unit and harness proofs cover the grant cut and the agent refusal in isolation; nothing drove the share origin signed out and read the owner tree plus the audit row for the same episode.',
   provedRedAt: null,
-  redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
+  redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, the owner to turn it to "my access" through POST /api/shared/live/mode (a share starts on each viewer\'s own access, which reads nothing of the owner\'s), probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
     + 'No deployed build carried a hole, and one carrying it fails the deploy\'s own source gates before it reaches staging, '
     + 'so the red direction is proved at the grant itself: '
     + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
@@ -92,8 +96,16 @@ END`));
         const shared = await session.slateOp({ op: 'share', id: SLATE, visibility: 'public', approved: [] });
         const answered = v.safeParse(Answered, shared);
         const created = answered.success ? v.safeParse(LiveShareCreatedSchema, answered.output.value) : null;
-        const url = created?.success === true ? created.output.url : null;
+        const url = await shareHost(plan.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
         const refusal = v.safeParse(Refused, shared);
+        const controlShared = await session.slateOp({ op: 'share', id: CONTROL_SLATE, visibility: 'public', approved: [] });
+
+        // A share starts on each viewer's own access, which reads nothing of the owner's: the owner lends theirs.
+        const lent = await lendShares({
+          origin: plan.origin, headers: webHeaders(plan.identity), workspace: session.workspace, slateOp: async (operation) => session.slateOp(operation),
+          shares: [{ answer: shared, slate: SLATE }, { answer: controlShared, slate: CONTROL_SLATE }],
+        });
+
         let served: { status: number; body: string } | null = null;
         let probe: SlateViewerAnswer<JsonValue> | null = null;
         let mutate: SlateViewerAnswer<JsonValue> | null = null;
@@ -111,10 +123,9 @@ END`));
           mutate = await callSharedSlate(url, 'mutate', JsonValueSchema, cookie);
         }
 
-        const controlShared = await session.slateOp({ op: 'share', id: CONTROL_SLATE, visibility: 'public', approved: [] });
         const controlAnswered = v.safeParse(Answered, controlShared);
         const controlCreated = controlAnswered.success ? v.safeParse(LiveShareCreatedSchema, controlAnswered.output.value) : null;
-        controlUrl = controlCreated?.success === true ? controlCreated.output.url : null;
+        controlUrl = await shareHost(plan.origin, session.workspace, controlCreated?.success === true ? controlCreated.output.share.id : undefined);
 
         if (controlUrl !== null) ctrl = await callSharedSlate(controlUrl, 'ctrl', JsonValueSchema, await consentToShare(controlUrl));
 
@@ -134,6 +145,9 @@ END`));
         goals.push({
           what: 'share-op-answers-url', reached: url !== null,
           detail: JSON.stringify({ origin: plan.origin, refused: refusal.success ? refusal.output : null, hasUrl: url !== null }),
+        });
+        goals.push({
+          what: 'owner-turns-on-my-access', reached: lent.lent, detail: JSON.stringify(lent.answers),
         });
         goals.push({
           what: 'public-share-serves-signed-out', reached: served?.status === 200 && served.body === 'cut-share-probe-ok',

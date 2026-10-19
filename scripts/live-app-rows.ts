@@ -24,7 +24,7 @@ import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src
 import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -803,11 +803,13 @@ const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat .prose-chat, #chat [
     ? 'T:' + (node.querySelector('strong')?.textContent ?? '').trim()
     : 'P:' + (node.textContent ?? '').trim().slice(0, 40))`;
 
-/** A workspace's page that records its sockets and queued render work, once its first turn has ended. */
-async function openRecorded(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
+/** A workspace's page that records its sockets and queued render work, once its first turn has ended. `first` runs
+ *  before any of the page's own scripts. */
+async function openRecorded(newPage: LiveApp['newPage'], origin: string, workspace: string, first?: string): Promise<Page> {
   const page = await named('a new recorded tab', async () => {
     const opened = await newPage();
 
+    if (first !== undefined) await opened.evaluateOnNewDocument(first);
     await opened.setViewport(DESKTOP);
     await recordDeadEnds(opened);
     await opened.evaluateOnNewDocument(RECORD_SOCKETS);
@@ -1705,80 +1707,139 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
   }
 }
 
-/** How each attempt of the stop-then-send row ended, once its follow-up was answered. */
+/** Who pressed Stop: the tab that sent the words, or another tab on the same chat. */
+export const STOPPED_BY = ['sender', 'other tab'] as const;
+
+/** How each attempt of the stop-then-send row ended, once the sender's tab knew where its words landed. */
 interface StopAttempt {
-  /** The draft then: empty, or the stopped ask's words a Stop handed back. */
+  readonly stoppedBy: (typeof STOPPED_BY)[number];
+  /** The sender's draft then: the words the Stop handed back, or empty. */
   readonly draft: string;
-  /** The tone of each notice the composer showed then. */
+  /** The tone of each notice the sender's composer showed then. */
   readonly notices: readonly string[];
+  /** Whether the sender's chat still drew the words as a message. */
+  readonly shown: boolean;
 }
 
 export interface StopThenSendVerdict {
   readonly attempts: readonly StopAttempt[];
   /** Whether the chat drew the stopped ask's answer: a stopped message never runs. */
   readonly stoppedAnswered: boolean;
+  /** The words a Stop handed back, each time a model request carried them: none may. */
+  readonly heardBack: readonly string[];
+  /** Whether each follow-up, sent once the words were back, was answered. */
+  readonly followedUp: boolean;
 }
 
-/** Attempts per row: a Stop lands on the ask's turn at any point of its opening, which each attempt takes as it falls. */
-export const STOP_SEND_ATTEMPTS = 3;
-
-/** Presses Stop the frame it shows, then sends `followUp` the frame Send is back: as a person stops and goes on. */
-const STOP_THEN_SEND = (followUp: string): string => `new Promise((resolve) => {
-  let stopped = false;
-  const step = () => {
-    if (!stopped) {
-      const stop = [...document.querySelectorAll('#chat button[aria-label="Stop this turn"]')].find((button) => button.getClientRects().length > 0);
-      if (stop instanceof HTMLElement) {
-        stop.click();
-        stopped = true;
-        const box = document.querySelector('#chat textarea');
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, ${JSON.stringify(followUp)});
-        box.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    } else {
-      const send = document.querySelector('#chat button[aria-label="Send"]');
-      if (send instanceof HTMLButtonElement && !send.disabled) { send.click(); resolve(null); return; }
-    }
-    requestAnimationFrame(step);
+/** Holds every frame the page's sockets receive from `__holdFrames()` until `__releaseFrames()`, then hands them on in
+ *  order: the workspace's frames come late, as a slow link's do. Installed before the page's first socket, on the
+ *  WebSocket every socket is built as. */
+const GATE_FRAMES = `(() => {
+  const add = WebSocket.prototype.addEventListener;
+  const held = [];
+  let holding = false;
+  window.__holdFrames = () => { holding = true; };
+  window.__releaseFrames = () => {
+    holding = false;
+    for (const deliver of held.splice(0)) deliver();
   };
-  requestAnimationFrame(step);
-})`;
+  WebSocket.prototype.addEventListener = function (type, listener, options) {
+    if (type !== 'message' || typeof listener !== 'function') return add.call(this, type, listener, options);
+    return add.call(this, type, function (event) {
+      if (!holding && held.length === 0) return listener.call(this, event);
+      held.push(() => listener.call(this, event));
+    }, options);
+  };
+})()`;
 
 const COMPOSER_NOTICE_TONES = `[...document.querySelectorAll('#chat [data-composer-root] [data-notice]')].map((notice) => notice.getAttribute('data-notice') ?? '')`;
 
+const DRAFT = `document.querySelector('#chat textarea')?.value ?? ''`;
+
+/** The words in a message bubble of the chat: a person's message the chat draws. */
+const SHOWN_AS_MESSAGE = (words: string): string => `[...document.querySelectorAll('#chat .p-user-bubble')].some((bubble) => (bubble.textContent ?? '').includes(${JSON.stringify(words)}))`;
+
+/** Presses the chat's Stop where it is drawn, as a person's click does; false when no Stop is drawn. */
+const PRESS_STOP = `(() => {
+  const stop = [...document.querySelectorAll('#chat button[aria-label="Stop this turn"]')].find((button) => button.getClientRects().length > 0);
+  if (!(stop instanceof HTMLElement)) return false;
+  stop.click();
+  return true;
+})()`;
+
+const CLEAR_DRAFT = `((box) => {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, '');
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+})(document.querySelector('#chat textarea'))`;
+
 /**
- * Row (2026-10-18): a Stop pressed as an ask's turn opens, then a follow-up sent as the Stop leaves. The follow-up is
- * answered, the stopped ask never is, and nothing reads as a failure. Three defects broke it: the stopped turn's end was
- * told its room after the follow-up's turn opened, and the room closed the follow-up's stream (never drawn); a turn
- * stopped before its stream opened told its room the abort's own words (a red notice with Retry); and words a Stop
- * handed back before the agent took them ended their request as a failure and stayed in the chat, so the next request
- * sent them again and the stopped ask ran.
+ * Row (2026-10-18, 2026-10-19 review): words the agent owes a running turn, handed back unread by a Stop, return to
+ * the draft of the tab that sent them, leave its chat, and reach no model; whichever tab pressed Stop. The sender's tab
+ * hears nothing of the other tab's turn until the Stop has been taken ({@link GATE_FRAMES}), so it sends as the chat
+ * looks idle, as a tab whose frames come late does: its words open a request of their own, and the agent owes them to
+ * the running turn, whose call is held so no step reads them. Each attempt waits on the room's word that it queued
+ * the words, then that the Stop handed them back. The sender's tab was told where they landed only by its own Stop,
+ * so another tab's left them drawn, and its next request ran them.
  */
-async function measureStopThenSend(newPage: LiveApp['newPage'], origin: string, stopped: HeldCall): Promise<StopThenSendVerdict> {
+async function measureStopThenSend(newPage: LiveApp['newPage'], origin: string, probe: StopProbe): Promise<StopThenSendVerdict> {
   const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-stop-send-${RUN_ID}`, purpose: 'stop then send probe', model: SCRIPTED_MODEL_SPEC });
-  const page = await openRecorded(newPage, origin, workspace);
+  const sender = await openRecorded(newPage, origin, workspace, GATE_FRAMES);
+  const other = await openRecorded(newPage, origin, workspace);
+  const [senderFrames, otherFrames] = await Promise.all([frameLedger(sender), frameLedger(other)]);
   const attempts: StopAttempt[] = [];
 
   try {
-    for (let attempt = 1; attempt <= STOP_SEND_ATTEMPTS; attempt += 1) {
-      await pressSend(page, `${STOPPED_ASK} ${String(attempt)}`);
-      await page.evaluate(STOP_THEN_SEND(`${FOLLOW_UP_ASK} ${String(attempt)}`));
-      await until(page, `follow-up ${String(attempt)}'s answer`, `(${ANSWER_BLOCKS}).includes(${JSON.stringify(`P:${FOLLOW_UP_ANSWER} ${String(attempt)}.`)}) && !(${STOP_OFFERED})`);
-      await painted(page);
-      const draft = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat textarea')?.value ?? ''`));
+    for (const [index, stoppedBy] of STOPPED_BY.entries()) {
+      const attempt = String(index + 1);
+      const words = `${HANDED_BACK_ASK} ${attempt}`;
+      const held = probe.next();
 
-      attempts.push({ draft, notices: await noticesRead(page, COMPOSER_NOTICE_TONES) });
-      // Words handed back are the next attempt's draft unless cleared.
-      await page.evaluate(`((box) => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, '');
-        box.dispatchEvent(new Event('input', { bubbles: true }));
-      })(document.querySelector('#chat textarea'))`);
+      try {
+        await sender.evaluate('window.__holdFrames()');
+        await pressSend(other, `${STOPPED_ASK} ${attempt}`);
+        await named(`running turn ${attempt}'s call to reach the model`, () => held.arrived);
+        otherFrames.restart();
+        senderFrames.restart();
+        await pressSend(sender, words);
+        await named(`the room's word that words ${attempt} are queued`, () => otherFrames.received('steer_status'));
+        otherFrames.restart();
+
+        if (!v.parse(v.boolean(), await (stoppedBy === 'sender' ? sender : other).evaluate(PRESS_STOP))) throw new Error(`no Stop drawn in the ${stoppedBy}'s tab`);
+
+        await named(`the room's word that words ${attempt} are handed back`, () => otherFrames.received('steer_status'));
+        await sender.evaluate('window.__releaseFrames()');
+        // Read in front: a page behind another draws no frames, and a settle counts frames.
+        await sender.bringToFront();
+        // Idle once every frame it was sent is read; then it has asked whatever it asks of where the words landed.
+        await until(sender, `the sender's tab idle after attempt ${attempt}`, `!(${STOP_OFFERED})`);
+        await named(`the sender's asks of attempt ${attempt} answered`, () => senderFrames.quietAfter());
+        await settled(sender, `JSON.stringify([${DRAFT}, ${COMPOSER_NOTICE_TONES}, ${SHOWN_AS_MESSAGE(words)}])`);
+        attempts.push({
+          stoppedBy,
+          draft: v.parse(v.string(), await sender.evaluate(DRAFT)),
+          notices: await noticesRead(sender, COMPOSER_NOTICE_TONES),
+          shown: v.parse(v.boolean(), await sender.evaluate(SHOWN_AS_MESSAGE(words))),
+        });
+      } finally {
+        held.release();
+        await sender.evaluate('window.__releaseFrames()');
+      }
+
+      // The next request from the sender carries no words a Stop handed back.
+      await sender.evaluate(CLEAR_DRAFT);
+      await pressSend(sender, `${FOLLOW_UP_ASK} ${attempt}`);
+      await until(sender, `follow-up ${attempt}'s answer`, `(${ANSWER_BLOCKS}).includes(${JSON.stringify(`P:${FOLLOW_UP_ANSWER} ${attempt}.`)}) && !(${STOP_OFFERED})`);
     }
 
-    return { attempts, stoppedAnswered: v.parse(v.boolean(), await page.evaluate(`(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(STOPPED_ANSWER)})`)) };
+    return {
+      attempts,
+      stoppedAnswered: v.parse(v.boolean(), await sender.evaluate(`(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(STOPPED_ANSWER)})`)),
+      heardBack: [...probe.heardBack],
+      followedUp: true,
+    };
   } finally {
-    stopped.release();
-    await page.close();
+    await Promise.all([senderFrames.stop(), otherFrames.stop()]);
+    await Promise.all([sender.close(), other.close()]);
   }
 }
 
@@ -2044,7 +2105,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const unsentHeld = heldCall();
     const clearedHeld = heldCall();
     const probeWaitHeld = heldCall();
-    const stoppedHeld = heldCall();
+    const stopProbe = new StopProbe();
     const openingHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
@@ -2058,7 +2119,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stoppedHeld, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -2091,7 +2152,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'dropped-file': async () => { observed.droppedFile = await attempt('dropped-file', () => measureDroppedFile(newPage, origin)); },
         'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
         'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
-        'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stoppedHeld)); },
+        'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stopProbe)); },
         'new-chat-stop': async () => { observed.newChatStop = await attempt('new-chat-stop', () => measureNewChatStop(newPage, origin, openingHeld)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
