@@ -7,7 +7,8 @@
  *
  * Discovery (RFC 9728, RFC 8414) and registration (RFC 7591) are public, as a client reaches them before it holds
  * anything; authorizing needs the Worker's key, so only the tiers can mint a grant, and the code, the access token and
- * the refresh token are HMAC-signed with that key. A grant's generation is the one state (`GrantLedger`).
+ * the refresh token are HMAC-signed with that key. A grant's generations are the one state (`GrantLedger`); a call
+ * naming `expire: true` expires its token, so a case meets expiry on its next call without waiting.
  */
 import * as v from 'valibot';
 import type { JsonValue } from '../packages/core/src/utils/json';
@@ -29,10 +30,18 @@ const PROTECTED_RESOURCE_METADATA = '/.well-known/oauth-protected-resource';
 /** How long a code may wait for its exchange. */
 const CODE_MS = 120_000;
 
-/** Whether a grant's refresh token of `generation` is its current one: then the grant moves on, else it is revoked. */
+/** A grant's state: which refresh generation is current, and through which generation its access tokens expired. */
 export interface GrantLedger {
+  /** Whether the refresh token of `generation` is the current one: then the grant moves on, else it is revoked. */
   rotate(grant: string, generation: number): Promise<'rotated' | 'reused'>;
+  /** Expires the grant's access tokens through `generation`, as their lifetime running out would. */
+  expire(grant: string, generation: number): Promise<void>;
+  expired(grant: string, generation: number): Promise<boolean>;
 }
+
+/** A call naming `expire: true` expires the access token it carried once it is answered, so a case meets an expired
+ *  token on its next calls without waiting out the lifetime. */
+const ExpiringCallSchema = v.object({ method: v.literal('tools/call'), params: v.object({ arguments: v.object({ expire: v.literal(true) }) }) });
 
 export interface OAuthRequest {
   readonly method: string;
@@ -169,13 +178,19 @@ async function protectedMcp(request: OAuthRequest, ttl: number): Promise<McpAnsw
   const bearer = /^Bearer (.+)$/u.exec(request.headers.get('authorization') ?? '')?.[1] ?? '';
   const access = await opened(request.key, bearer);
 
-  if (access?.k !== 'access' || access.exp <= request.now || access.resource !== resource) {
+  const live = access?.k === 'access' && access.exp > request.now && access.resource === resource && !await request.ledger.expired(access.grant, access.gen);
+
+  if (!live || access?.k !== 'access') {
     const metadata = `${request.url.origin}${PROTECTED_RESOURCE_METADATA}${SCRIPTED_MCP_OAUTH_PATH}/${String(ttl)}`;
 
     return json(401, { error: 'invalid_token' }, { 'www-authenticate': `Bearer error="invalid_token", resource_metadata="${metadata}"` });
   }
 
-  return scriptedMcp({ method: request.method, session: request.headers.get('mcp-session-id'), body: request.body }, request.now, request.nonce);
+  const answer = scriptedMcp({ method: request.method, session: request.headers.get('mcp-session-id'), body: request.body }, request.now, request.nonce);
+
+  if (v.is(v.pipe(v.string(), v.parseJson(), ExpiringCallSchema), request.body)) await request.ledger.expire(access.grant, access.gen);
+
+  return answer;
 }
 
 /** The answer to an OAuth route of this server, or null for a path that is none of them. */

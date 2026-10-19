@@ -49,16 +49,25 @@ export interface GrantStorage {
 }
 
 /**
- * One OAuth grant's refresh generation. Its storage calls hold the object's input gate, so two refreshes of one grant
- * are answered one after the other: the second presents a used generation and revokes the grant.
+ * One OAuth grant's generations: which refresh token is current, and through which generation its access tokens are
+ * expired. Its storage calls hold the object's input gate, so two refreshes of one grant are answered one after the
+ * other: the second presents a used generation and revokes the grant.
  */
 export class ScriptedOAuthGrants {
   constructor(private readonly state: { readonly storage: GrantStorage }) {}
 
   async fetch(request: Request): Promise<Response> {
-    const presented = Number(new URL(request.url).searchParams.get('generation'));
-    const stored = await this.state.storage.get('generation');
-    const current = typeof stored === 'number' ? stored : 0;
+    const { pathname, searchParams } = new URL(request.url);
+    const presented = Number(searchParams.get('generation'));
+
+    if (pathname === '/expire') {
+      await this.state.storage.put('expiredThrough', Math.max(presented, await this.number('expiredThrough', -1)));
+
+      return Response.json({ expired: true });
+    }
+
+    if (pathname === '/expired') return Response.json({ expired: presented <= await this.number('expiredThrough', -1) });
+    const current = await this.number('generation', 0);
 
     if ((await this.state.storage.get('revoked')) === true || presented !== current) {
       await this.state.storage.put('revoked', true);
@@ -69,6 +78,12 @@ export class ScriptedOAuthGrants {
     await this.state.storage.put('generation', current + 1);
 
     return Response.json({ rotation: 'rotated' });
+  }
+
+  private async number(key: string, otherwise: number): Promise<number> {
+    const stored = await this.state.storage.get(key);
+
+    return typeof stored === 'number' ? stored : otherwise;
   }
 }
 
@@ -92,13 +107,19 @@ export function inMemoryGrants(): GrantsNamespace {
 
 const RotationSchema = v.object({ rotation: v.picklist(['rotated', 'reused']) });
 
-function grantLedger(grants: GrantsNamespace): GrantLedger {
-  return {
-    rotate: async (grant, generation) => {
-      const answer = await grants.get(grants.idFromName(grant)).fetch(new Request(`https://grants/rotate?generation=${String(generation)}`, { method: 'POST' }));
+const ExpiredSchema = v.object({ expired: v.boolean() });
 
-      return v.parse(RotationSchema, await answer.json()).rotation;
-    },
+function grantLedger(grants: GrantsNamespace): GrantLedger {
+  const ask = async <S extends v.GenericSchema>(schema: S, grant: string, action: 'rotate' | 'expire' | 'expired', generation: number): Promise<v.InferOutput<S>> => {
+    const answer = await grants.get(grants.idFromName(grant)).fetch(new Request(`https://grants/${action}?generation=${String(generation)}`, { method: 'POST' }));
+
+    return v.parse(schema, await answer.json());
+  };
+
+  return {
+    rotate: async (grant, generation) => (await ask(RotationSchema, grant, 'rotate', generation)).rotation,
+    expire: async (grant, generation) => { await ask(ExpiredSchema, grant, 'expire', generation); },
+    expired: async (grant, generation) => (await ask(ExpiredSchema, grant, 'expired', generation)).expired,
   };
 }
 

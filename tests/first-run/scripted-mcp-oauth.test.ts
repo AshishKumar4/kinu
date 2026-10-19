@@ -5,8 +5,9 @@
  */
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
+import type { JsonObject } from '../../packages/core/src/utils/json';
 import worker, { inMemoryGrants } from '../../scripts/scripted-model-worker';
-import { SCRIPTED_MCP_PATH } from '../../scripts/scripted-mcp';
+import { SCRIPTED_MCP_PATH, SCRIPTED_MCP_TOOL } from '../../scripts/scripted-mcp';
 import { OAUTH_AUTHORIZE_PATH, SCRIPTED_MCP_OAUTH_PATH } from '../../scripts/scripted-mcp-oauth';
 
 const ORIGIN = 'https://scripted-model.kinu.run';
@@ -73,6 +74,21 @@ describe('the tiers\' OAuth-protected MCP server', () => {
     } finally {
       setSystemTime();
     }
+  });
+
+  test('a call naming expire answers, and the token it carried is refused on the next call', async () => {
+    const pair = await granted(60);
+    const bearer = { authorization: `Bearer ${pair.access_token}`, 'content-type': 'application/json' };
+
+    const rpc = (headers: Readonly<Record<string, string>>, body: JsonObject) => worker.fetch(new Request(`${ORIGIN}${SCRIPTED_MCP_OAUTH_PATH}/60`, {
+      method: 'POST', headers, body: JSON.stringify(body),
+    }), ENV);
+
+    const session = (await rpc(bearer, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })).headers.get('mcp-session-id') ?? '';
+    const call = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: SCRIPTED_MCP_TOOL, arguments: { expire: true } } };
+
+    expect((await rpc({ ...bearer, 'mcp-session-id': session }, call)).status).toBe(200);
+    expect((await rpc({ ...bearer, 'mcp-session-id': session }, call)).status).toBe(401);
   });
 
   test('authorizing without the key is refused, so only the tiers mint a grant', async () => {
