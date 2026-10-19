@@ -58,7 +58,7 @@ import type { ProviderPacer } from './providers/pacing';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
-import { renderThrownChain, settleSync, toKinuError, type TurnTrace } from './obs/index';
+import { renderThrownChain, settle, toKinuError, type KinuError, type TurnTrace } from './obs/index';
 import { Effect } from 'effect';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
@@ -276,33 +276,36 @@ export interface StepRecord {
  * next: read seven times a call, they carried 37,452 of the 100,000 part-stages of the heap gate's long turn in its
  * agent's isolate (#m2180e). One is read only where no end arrived, a call that streamed no step, for what the SDK found.
  */
-async function endedCall(call: ProviderCall, ending: {
+function endedCall(call: ProviderCall, ending: {
   readonly steps: PromiseLike<readonly StepResult<ToolSet>[]>;
   readonly operation: ModelOperation;
   readonly produced: ModelMessage[];
-}): Promise<CallOutcome> {
+}): Effect.Effect<CallOutcome, KinuError> {
   const { operation, produced } = ending;
 
-  if (call.interrupted) {
-    operation.failed({ cause: new Error(INTERRUPTED_TURN) });
+  return Effect.suspend((): Effect.Effect<CallOutcome, KinuError> => {
+    if (call.interrupted) {
+      operation.failed({ cause: new Error(INTERRUPTED_TURN) });
 
-    return { steps: call.recordedSteps, produced, finishReason: call.lastFinishReason, interrupted: true, failure: null };
-  }
+      return Effect.succeed({ steps: call.recordedSteps, produced, finishReason: call.lastFinishReason, interrupted: true, failure: null });
+    }
 
-  const { end } = call;
+    const { end } = call;
 
-  if (end === null) {
-    const [settled] = await Promise.allSettled([ending.steps]);
-    const cause = settled.status === 'rejected' ? settled.reason : new Error('the model call settled its steps without its end');
+    if (end !== null) {
+      operation.completed({ usage: normalizeUsage(end.usage), modelId: end.modelId });
 
-    operation.failed({ cause });
+      return Effect.succeed({ steps: end.steps, produced, finishReason: call.lastFinishReason, interrupted: false, failure: null });
+    }
 
-    return settleSync(Effect.fail(toKinuError({ doing: 'finishing a model call', cause, otherwise: 'unavailable' })));
-  }
+    return Effect.promise(() => Promise.allSettled([ending.steps])).pipe(Effect.flatMap(([settled]) => {
+      const cause = settled?.status === 'rejected' ? settled.reason : new Error('the model call settled its steps without its end');
 
-  operation.completed({ usage: normalizeUsage(end.usage), modelId: end.modelId });
+      operation.failed({ cause });
 
-  return { steps: end.steps, produced, finishReason: call.lastFinishReason, interrupted: false, failure: null };
+      return Effect.fail(toKinuError({ doing: 'finishing a model call', cause, otherwise: 'unavailable' }));
+    }));
+  });
 }
 
 interface CallOutcome {
@@ -1158,7 +1161,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       return { steps: call.finishedSteps, produced: paired, finishReason: undefined, interrupted: false, failure };
     }
 
-    return await endedCall(call, { steps: result.steps, operation, produced: paired });
+    return await settle(endedCall(call, { steps: result.steps, operation, produced: paired }));
   };
 
   /** A fallback gets its own provider's cache, replay and options, and a request assembled for it: its window, its
