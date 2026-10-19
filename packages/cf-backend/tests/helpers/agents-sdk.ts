@@ -637,7 +637,11 @@ export function mockAgentsSdk(): void {
       async codeVerifier(): Promise<string> { return 'test-code-verifier'; }
       async saveCodeVerifier(): Promise<void> {}
       async state(): Promise<string> { return `st.${this.serverId}`; }
-      redirectToAuthorization(url: URL): void { this.authUrl = url.toString(); }
+      /** What the flow discovered, kept for its callback leg, as the real one keeps it in storage. */
+      private discovered: JsonValue | undefined = undefined;
+      async saveDiscoveryState(state: JsonValue): Promise<void> { this.discovered = state; }
+      async discoveryState(): Promise<JsonValue | undefined> { return this.discovered; }
+      async redirectToAuthorization(url: URL): Promise<void> { this.authUrl = url.toString(); }
       async invalidateCredentials(): Promise<void> {}
     },
   }));

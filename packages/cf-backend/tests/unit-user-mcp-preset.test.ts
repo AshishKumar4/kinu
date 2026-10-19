@@ -1,7 +1,8 @@
 // Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
-import { createCredentialCipher } from '@kinu.run/core';
+import { createCredentialCipher, mcpPresetById, type JsonObject } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 import {
   createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
@@ -135,7 +136,7 @@ describe('an MCP preset add', () => {
         client_id: 'test-github-client-id',
         client_secret: 'test-github-client-secret',
       });
-      expect(provider.clientMetadata.scope).toBe('repo read:user');
+      expect(provider.clientMetadata.scope).toBe('repo read:org read:user');
     }
 
     // Names the registered app, so a restore after eviction keeps the same registration.
@@ -341,5 +342,47 @@ describe('the registered-app provider against the real SDK auth flow', () => {
     expect(token?.body?.get('client_secret')).toBe('test-github-client-secret');
 
     expect(seen.some((call) => call.url === 'https://mcp.example/register')).toBe(false);
+  });
+  // Staging, 2026-10-19: the owner's GitHub app was asked for every scope GitHub's MCP lists (write:packages, gist,
+  // project...), the SDK preferring the server's protected-resource scopes_supported to the preset's own. Modelled on
+  // GitHub's answers as measured that day.
+  test("GitHub's sign-in asks for the scope the preset declares, not every scope the server lists", async () => {
+    const github: JsonObject = {
+      'https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/': {
+        resource: 'https://api.githubcopilot.com/mcp/', authorization_servers: ['https://github.com/login/oauth'],
+        scopes_supported: ['repo', 'read:org', 'read:user', 'user:email', 'read:packages', 'write:packages', 'read:project', 'project', 'gist', 'notifications'],
+        bearer_methods_supported: ['header'], resource_name: 'GitHub MCP Server',
+      },
+      'https://github.com/.well-known/oauth-authorization-server/login/oauth': {
+        issuer: 'https://github.com/login/oauth', authorization_endpoint: 'https://github.com/login/oauth/authorize',
+        token_endpoint: 'https://github.com/login/oauth/access_token', response_types_supported: ['code'],
+        grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
+        code_challenge_methods_supported: ['S256'], authorization_response_iss_parameter_supported: true, scopes_supported: ['offline_access'],
+      },
+    };
+
+    const fetchFn = async (url: string | URL): Promise<Response> => {
+      const answer = github[String(url)];
+
+      return answer === undefined ? new Response('not found', { status: 404 }) : Response.json(answer);
+    };
+
+    const preset = present(mcpPresetById('github'), 'the GitHub preset');
+
+    const provider = new RegisteredAppOAuthClientProvider({
+      storage: durableObjectStorage({}), clientName: 'test-client', baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
+      clientId: 'test-github-client-id', clientSecret: 'test-github-client-secret', scope: preset.scope,
+    });
+
+    provider.serverId = 'srv';
+
+    expect(await auth(provider, {
+      serverUrl: preset.serverUrl, fetchFn,
+      resourceMetadataUrl: new URL('https://api.githubcopilot.com/.well-known/oauth-protected-resource/mcp/'),
+    })).toBe('REDIRECT');
+    // `offline_access` asks the server for a refresh token, which the SDK adds where the server lists it.
+    const asked = new URL(provider.authUrl ?? '').searchParams.get('scope')?.split(' ').filter((scope) => scope !== 'offline_access');
+
+    expect(asked).toEqual(preset.scope?.split(' '));
   });
 });

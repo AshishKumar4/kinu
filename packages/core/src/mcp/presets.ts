@@ -30,7 +30,9 @@ export const MCP_PRESETS: readonly McpPreset[] = [
     serverUrl: 'https://api.githubcopilot.com/mcp/',
     transport: 'streamable-http',
     auth: 'oauth-app',
-    scope: 'repo read:user',
+    // What the default toolsets (context, repos, issues, pull_requests, users) challenge for: `repo`, and `read:org`
+    // for teams and organization fields (github/github-mcp-server README, "OAuth Challenge Scopes", 2026-10-19).
+    scope: 'repo read:org read:user',
     tokenFallback: { label: 'Personal access token' },
     docsUrl: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
   },

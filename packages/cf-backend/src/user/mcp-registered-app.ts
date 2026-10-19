@@ -47,4 +47,23 @@ export class RegisteredAppOAuthClientProvider extends DurableObjectOAuthClientPr
   }
 
   override async saveClientInformation(): Promise<void> {}
+
+  /**
+   * The SDK asks for every scope the server lists (its protected-resource `scopes_supported`) before the client's own,
+   * so GitHub's sign-in asked for write:packages, gist and project access nobody chose. A preset declares what Kinu
+   * asks for, and that replaces the server's list; a scope the server challenged for, or `offline_access`, stays.
+   */
+  override async redirectToAuthorization(authUrl: URL): Promise<void> {
+    const listed = (await this.discoveryState())?.resourceMetadata?.scopes_supported ?? [];
+    const asked = (authUrl.searchParams.get('scope') ?? '').split(' ').filter((scope) => scope !== '');
+    const refresh = asked.filter((scope) => scope === 'offline_access');
+    const theServersList = listed.length > 0 && asked.filter((scope) => scope !== 'offline_access').join(' ') === listed.join(' ');
+
+    if (this.scope === undefined || !theServersList) return super.redirectToAuthorization(authUrl);
+    const scoped = new URL(authUrl);
+
+    scoped.searchParams.set('scope', [...this.scope.split(' '), ...refresh].join(' '));
+
+    return super.redirectToAuthorization(scoped);
+  }
 }
