@@ -470,14 +470,14 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     await this.writeSlateFile(target, '/slates/effects/server.ts', [
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
-      `  async mark() { return await this.env.workspace.writeFile(${JSON.stringify(input.mark)}, "visitor"); }`,
+      `  async mark() { return await this.env.workspace.fs.write(${JSON.stringify(input.mark)}, "visitor"); }`,
       '}',
     ].join('\n'));
     // A share is cut from what the owner's own calls reached: run the write once, then take the owner's mark back.
     await target.runProgram('return await workspace.slates.effects.mark();');
     await target.executeInExecutor('workspace', `rm -f ${input.mark}`);
     const owned = workspaceOwner(this.env, input.workspace);
-    const write = [{ slate: 'effects', namespace: 'workspace', member: 'writeFile' }];
+    const write = [{ slate: 'effects', namespace: 'workspace', member: 'fs.write' }];
     const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'effects', visibility: 'public', approved: write });
 
     if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
