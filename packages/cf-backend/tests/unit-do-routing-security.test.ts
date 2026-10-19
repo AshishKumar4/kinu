@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  chatMediaPath,
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   hostedActorRoute,
@@ -83,6 +84,22 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/get-messages/extra')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/get-messages/sub/user-d-o/victim')).toBe(true);
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/get-messages')).toBeNull();
+  });
+
+  test("a chat image's address is admitted at its workspace, built by the one helper, and opens nothing past it", () => {
+    const path = chatMediaPath('my-workspace', 'actor-1', { messageId: 'message-1', partNo: 3, index: 0 });
+
+    expect(path).toBe('/agents/orchestrator-agent/my-workspace/chat-media/actor-1/message-1/3/0');
+    expect(isForeignAgentNamespacePath(path)).toBe(false);
+    expect(extractOrchestratorAgentName(path)).toBe('my-workspace');
+    expect(hostedActorRoute(path)).toBeNull();
+    expect(extractTicketOrchestratorAgentName(path)).toBeNull();
+
+    // A part and an index are numbers, and nothing follows them.
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/chat-media/actor-1/message-1/three/0')).toBe(true);
+    expect(isForeignAgentNamespacePath(`${path}/extra`)).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/chat-media/actor-1/message-1/3')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher/chat-media/actor-1/message-1/3/0')).toBe(true);
   });
 
   test('ownership and CLI ticket extraction include hosted-actor paths', () => {

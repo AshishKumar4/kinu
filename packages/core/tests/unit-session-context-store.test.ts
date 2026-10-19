@@ -13,7 +13,8 @@ import { SessionTranscript, readSessionTranscript } from '../src/session/transcr
 import { rowText } from '../src/utils/ui-message';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID, initSessionTranscriptTables } from '../src/session/transcript-schema';
-import { getChatHistoryPage } from '../src/read-models/status';
+import { chatSeed, getChatHistoryPage } from '../src/read-models/status';
+import { keptMediaName } from '../src/session/chat-media';
 import { answersForDrainTurns } from '../src/identity/conversation-store';
 import { inheritedContextFromTranscript } from '../src/orchestrator/heads-support';
 import type { JsonObject } from '../src/utils/json';
@@ -394,9 +395,9 @@ test('read-only transcript authorization is checked again after payload access',
       return s.rt.storage.vfs;
     });
 
-    expect(await reader.history()).toEqual([{ id: 'public-input', role: 'user', parts: [{ type: 'text', text }] }]);
+    expect(await chatSeed(reader, keptMediaName)).toEqual([{ id: 'public-input', role: 'user', parts: [{ type: 'text', text }] }]);
     revokeDuringRead = true;
-    await expect(reader.history()).rejects.toThrow('read grant revoked');
+    await expect(chatSeed(reader, keptMediaName)).rejects.toThrow('read grant revoked');
   } finally { s.testSql.close(); }
 });
 
@@ -414,12 +415,12 @@ test('canonical transcript pages follow position order and stay session-scoped',
       transcript.appendUser(await transcript.prepareUser({ id, turnId: id, message: reference }));
     }
 
-    const first = await getChatHistoryPage(writer, { limit: 2 });
-    expect(first.items.map(item => [item.content, item.position])).toEqual([['left', 1], ['right', 2]]);
+    const first = await getChatHistoryPage(writer, { limit: 2 }, keptMediaName);
+    expect(first.items.map(item => [rowText(item), item.position])).toEqual([['left', 1], ['right', 2]]);
 
     if (first.status !== 'more') throw new Error('expected another page');
-    const last = await getChatHistoryPage(writer, { limit: 2, cursor: first.next });
-    expect(last.items.map(item => item.content)).toEqual(['root']);
+    const last = await getChatHistoryPage(writer, { limit: 2, cursor: first.next }, keptMediaName);
+    expect(last.items.map(item => rowText(item))).toEqual(['root']);
     expect(last.status).toBe('end');
     expect(writer.count()).toBe(3);
     expect(other.count()).toBe(1);
@@ -529,7 +530,7 @@ test('a multi-step answer draws every part it streamed, and every reader of the 
 
     expect(drawn).toEqual(['Step 1: listing.', 'tool-file', 'Step 2: listing.', 'tool-file', 'Done.']);
     expect((await transcript.project('answer'))?.content).toBe('Done.');
-    expect((await getChatHistoryPage(transcript, {})).items.find(item => item.role === 'assistant')?.content).toBe('Done.');
+    expect(rowText(present((await getChatHistoryPage(transcript, {}, keptMediaName)).items.find(item => item.role === 'assistant'), 'the answer'))).toBe('Done.');
     expect((await transcript.newestFirst()).find(row => row.role === 'assistant')?.content).toBe('Done.');
     expect(await answersForDrainTurns(transcript, ['drain'])).toEqual(new Map([['drain', 'Done.']]));
     expect((await inheritedContextFromTranscript(transcript)).find(row => row.role === 'assistant')?.content).toBe('Done.');

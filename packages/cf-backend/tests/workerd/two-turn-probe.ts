@@ -10,7 +10,7 @@ import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
 import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import {
-  HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
+  HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema, rowText,
   type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import {
@@ -67,7 +67,10 @@ import type {
   RawChatProbeResult,
   ReactorEviction,
   ReactorWake,
+  ChatPagesWalk,
+  ScreenshotChat,
 } from './two-turn-shapes';
+import { SCREEN_MARK } from './two-turn-shapes';
 import {
   CallRecordSchema,
   DriveOnceInputSchema,
@@ -165,7 +168,7 @@ const FACET_CALLS = Object.keys({
   forkPlan: true, forkCount: true, forkRows: true, forkClear: true, forkStage: true, forkPublish: true,
   drainAnswers: true, lastUserMetadata: true, turnPair: true, standing: true, steps: true, runSteps: true,
   listRuns: true, runSummaries: true, runEvents: true, runEventText: true, idle: true, deliverAdvice: true,
-  step: true, frozen: true, history: true, historyPage: true, messageCount: true, inspect: true,
+  step: true, frozen: true, seed: true, media: true, historyPage: true, messageCount: true, inspect: true,
   inheritedContext: true, workingContext: true, turnRequests: true, turnRequest: true, spend: true, context: true,
   searchConversations: true, scrollConversation: true, browseConversations: true, unseen: true, interrupt: true,
   recover: true, outOfMemory: true, archivePage: true,
@@ -196,6 +199,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     this.meter = metered.meter;
     this.unmetered = metered.unmetered;
     Reflect.deleteProperty(this, 'chatHistoryPage');
+    Reflect.deleteProperty(this, 'seedScreenshotChat');
+    Reflect.deleteProperty(this, 'chatPagesWalk');
     Reflect.deleteProperty(this, 'pendingSteers');
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
     Reflect.deleteProperty(this, 'agentLogEvents');
@@ -228,7 +233,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'mainQuiet');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -534,12 +539,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const { wire } = transport;
 
     if (this.countedWire !== wire) {
-      const history = wire.history.bind(wire);
+      const seed = wire.seed.bind(wire);
 
-      wire.history = async (limit) => {
+      wire.seed = async () => {
         if (this.historyReads !== null) this.historyReads += 1;
 
-        return await history(limit);
+        return await seed();
       };
 
       this.countedWire = wire;
@@ -586,7 +591,34 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** Runs inside the object: `DurableObjectStub`'s mapping of `Page<ChatHistoryEntry>`
    *  overflows TypeScript's instantiation depth at the caller. */
   async chatHistoryPage(): Promise<HistoryResult> {
-    return v.parse(HistorySchema, await this.getChatHistoryPage({}));
+    const { status, items } = await this.getChatHistoryPage({});
+
+    // Each entry's words, as a reader of text alone reads its drawn parts.
+    return v.parse(HistorySchema, { status, items: items.map((item) => ({ role: item.role, content: rowText(item) })) });
+  }
+
+  /** Main's chat, an ask and {@link SCREENS} computer-use answers of a screenshot each, as its own store keeps them. */
+  async seedScreenshotChat(): Promise<void> {
+    await (await this.agentFacetOf<ProbeAgentFacet>(this.actorHandle().actorId)).seedScreens(this.actorHandle().actorId);
+  }
+
+  /** Main's chat walked back as its pane scrolls, from the newest page to the start; read as JSON, as the pane gets it. */
+  async chatPagesWalk(): Promise<ChatPagesWalk> {
+    const ids: string[] = [];
+    const pageBytes: number[] = [];
+    let inline = false;
+    let media: string | null = null;
+
+    for (let page = await this.getChatHistoryPage({}); ; page = await this.getChatHistoryPage({ cursor: page.next })) {
+      const json = JSON.stringify(page.items);
+
+      ids.unshift(...page.items.map((entry) => entry.id));
+      pageBytes.push(new TextEncoder().encode(json).byteLength);
+      inline ||= json.includes(SCREEN_MARK);
+      media ??= /\/agents\/orchestrator-agent\/[^"\\]+\/chat-media\/[^"\\]+/u.exec(json)?.[0] ?? null;
+
+      if (page.status === 'end') return { ids, pageBytes, inline, media };
+    }
   }
 
   async wakeRows(): Promise<WakeRows> {
@@ -617,13 +649,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   /** Main's answers as its window reads them, from its own isolate. */
   private async assistantTexts(): Promise<string[]> {
-    return (await this.chatTransport.wire.history()).flatMap((message) => (message.role === 'assistant'
+    return (await this.chatTransport.wire.seed()).flatMap((message) => (message.role === 'assistant'
       ? [message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')]
       : []));
   }
 
   private async conversationRows(): Promise<ParityRows['assistantMessages']> {
-    return (await this.chatTransport.wire.history()).map((message, position) => ({
+    return (await this.chatTransport.wire.seed()).map((message, position) => ({
       id: message.id, position, role: message.role, content: JSON.stringify(message),
     }));
   }
@@ -887,7 +919,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   | 'createSubordinateAgent' | 'readWorkspaceFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -1714,6 +1746,24 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const { target } = await this.claimQueueWorkspace('page-modes');
 
     return await target.answerPageModes();
+  }
+
+  /** A long computer-use chat as a page opening on it meets it: its seed, every page back to the start, and one of its
+   *  screenshots fetched by the address a page names. */
+  async screenshotChatIn(): Promise<ScreenshotChat> {
+    const { target, workspace } = await this.claimQueueWorkspace('screens');
+
+    await target.seedScreenshotChat();
+    const seeded = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+    const said = await seeded.text();
+    const walk = await target.chatPagesWalk();
+    const fetched = walk.media === null ? null : await target.fetch(`https://probe${walk.media}`);
+
+    return {
+      seed: { status: seeded.status, bytes: new TextEncoder().encode(said).byteLength, inline: said.includes(SCREEN_MARK) },
+      walk: { ids: walk.ids, pageBytes: walk.pageBytes, inline: walk.inline },
+      media: fetched === null ? null : { status: fetched.status, type: fetched.headers.get('content-type'), bytes: (await fetched.arrayBuffer()).byteLength },
+    };
   }
 
   /** A hired agent answers with a `<slate-ui>` block (the queue model echoes the ask); the workspace resolves its id. */

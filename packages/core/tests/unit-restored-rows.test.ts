@@ -1,12 +1,12 @@
-/** A stored row restored for the renderer: its text as a part, its metadata kept and never invented. */
+/** A stored row restored for the renderer: its drawn parts, its metadata kept and never invented. */
 import { describe, expect, test } from 'bun:test';
 import { restoredRows, type ChatHistoryEntry } from '../src/index';
 
 const stored = (id: string, content = id): ChatHistoryEntry =>
-  ({ id, position: 0, role: 'assistant', turnId: null, content, createdAt: '2026-01-01 00:00:00' });
+  ({ id, position: 0, role: 'assistant', turnId: null, parts: [{ type: 'text', text: content }], createdAt: '2026-01-01 00:00:00' });
 
 describe('restored rows', () => {
-  test('a stored message becomes a text part the renderer can read', () => {
+  test('a stored message keeps the parts it was drawn with', () => {
     const [restored] = restoredRows([stored('m1', 'hello there')]);
     expect(restored).toEqual({
       id: 'm1', role: 'assistant', parts: [{ type: 'text', text: 'hello there' }],
@@ -15,8 +15,8 @@ describe('restored rows', () => {
 
   test('a walked-back programmatic row keeps the markers its card is drawn from', () => {
     const [restored] = restoredRows([{
-      id: 'f8798675', position: 0, role: 'system', turnId: null, content: '9 head(s) across 1 fork run(s)…',
-      createdAt: '2026-01-01 00:00:00',
+      id: 'f8798675', position: 0, role: 'system', turnId: null,
+      parts: [{ type: 'text', text: '9 head(s) across 1 fork run(s)…' }], createdAt: '2026-01-01 00:00:00',
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
     }]);
 

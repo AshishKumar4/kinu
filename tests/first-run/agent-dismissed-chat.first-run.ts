@@ -26,6 +26,7 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { rowText } from '@kinu.run/core';
 
 const SUITE = 'First-run · agent-dismissed-chat';
 
@@ -85,7 +86,7 @@ const HistoryPageSchema = v.object({ items: v.array(ChatHistoryEntrySchema) });
 function historyEntries(value: JsonValue) {
   const parsed = v.safeParse(HistoryPageSchema, value);
   const items = parsed.success ? parsed.output.items : [];
-  const of = (role: string): string => items.filter((entry) => entry.role === role).map((entry) => entry.content).join(' ');
+  const of = (role: string): string => items.filter((entry) => entry.role === role).map((entry) => rowText(entry)).join(' ');
 
   return { said: of('user'), answered: of('assistant') };
 }

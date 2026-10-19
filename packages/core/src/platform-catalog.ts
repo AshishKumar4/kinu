@@ -632,20 +632,29 @@ export const PLATFORM_CATALOG = {
     limit: { value: 32 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'wire',
-    evidence: 'inferred',
-    provenance: '~/Nimbus/packages/worker/src/constants.ts:67-70',
-    date: '2026-07-24',
+    evidence: 'observed-in-production',
+    provenance: 'staging 667f96316, evals pilot d8b53e373 trial 2: '
+      + 'kinu/tmp/evals-lane/pilot-d8b53e373/trials/2/evals/evals-minecraft-1792378577427/'
+      + 'opencode-go-muse-spark-1-3-contributor/product/minecraft-trial-1/transcript.md:8',
+    date: '2026-10-19',
     trigger: 'structured-clone size of an RPC argument or return value > 32 MiB',
-    onBreach: 'the call fails at the boundary before the receiver runs',
-    observable: [],
+    onBreach: 'the call fails at the boundary before the receiver runs, and its caller gets the error',
+    observable: [
+      {
+        context: "a workspace's GET .../get-messages, which read its agent's whole chat back over the facet RPC (500)",
+        message: 'Serialized RPC arguments or return values are limited to 32MiB, but the size of this value was: 70107941 bytes',
+      },
+    ],
+    measurements: [
+      { scenario: "a 341-step computer-use chat returned whole by its agent's facet, its screenshots inline", value: 70_107_941, unit: 'bytes' },
+    ],
     firstPartySignal: true,
     notes:
-      'A SECOND UNSOURCED NUMBER. Nimbus states "the platform limit is 32 MiB" and cites '
-      + 'nothing; Cloudflare publishes 32 MiB only for RECEIVED WEBSOCKET MESSAGES '
-      + '(websocket.message_bytes), and the RPC lifecycle docs give no size at all. The two '
-      + 'may be the same underlying cap or may be unrelated. Nimbus operates at 28 MiB '
-      + '(facet.rpc_payload_budget) to leave structured-clone metadata headroom, so the real '
-      + 'ceiling has never been touched. Top probe candidate.',
+      'Touched on staging 2026-10-19: the runtime refused a 70 MB return value in its own words, the facet path\'s figure '
+      + '(do.facet.rpc_bytes) for an ordinary call. Nimbus states the same number uncited and operates at 28 MiB '
+      + '(facet.rpc_payload_budget); Cloudflare publishes 32 MiB only for received WebSocket messages '
+      + '(websocket.message_bytes). A chat now crosses as byte-bounded pages, each image an address fetched alone '
+      + '(session/chat-media.ts, CHAT_PAGE_BYTES), so no read of it grows with its length.',
     conflictsWith: ['websocket.message_bytes'],
   },
 

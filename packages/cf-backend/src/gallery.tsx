@@ -2856,17 +2856,20 @@ window.addEventListener("gallery:live-window", (event: Event) => {
   const entries = asked.rows.map((index) => {
     const row = historyRow(index);
 
-    return index === asked.edited ? { ...row, content: `${row.content} Edited live.` } : row;
+    return index === asked.edited ? { ...row, parts: row.parts.map((part) => (typeof part.text === "string" ? { ...part, text: `${part.text} Edited live.` } : part)) } : row;
   });
 
   galleryChatWindow("", restoredRows(entries));
 });
 
+/** A stored row as the page reader draws a text-only one: its words as its one part. */
+const textEntry = ({ content, ...entry }: Omit<ChatHistoryEntry, "parts"> & { readonly content: string }): ChatHistoryEntry => ({ ...entry, parts: [{ type: "text", text: content }] });
+
 function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
 
-  if (index % 2 === 0) return { id, position: index, role: "user", turnId: null, content: `Question ${index}: what changed in the pricing guard this time?`, createdAt };
+  if (index % 2 === 0) return textEntry({ id, position: index, role: "user", turnId: null, content: `Question ${index}: what changed in the pricing guard this time?`, createdAt });
 
   const kind = index % 10;
   let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
@@ -2876,7 +2879,7 @@ function historyRow(index: number): ChatHistoryEntry {
   else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
   else if (kind === 7) content += "\n\nslate://board";
 
-  return { id, position: index, role: "assistant", turnId: null, content, createdAt };
+  return textEntry({ id, position: index, role: "assistant", turnId: null, content, createdAt });
 }
 
 function galleryReadFault(flag: string | undefined, message = "Network connection lost"): void {
@@ -4865,7 +4868,7 @@ const HISTORY_DEPTH = Number(historyParams.get("depth") ?? 4);
 
 const STORED_HISTORY: ChatHistoryEntry[] = Array.from(
   { length: HISTORY_PAGE * HISTORY_DEPTH },
-  (_, i) => ({
+  (_, i) => textEntry({
     id: `h${i + 1}`,
     position: i,
     role: i % 2 === 0 ? "user" as const : "assistant" as const,

@@ -64,7 +64,7 @@ describe('local inspection of a subordinate', () => {
 
     const read = await inspectLocalSubordinate(NAME, { path: [], view: 'history', page: {}, actor: helper.actorId });
 
-    expect(read).toMatchObject({ view: 'history', page: { items: [{ content: 'the refiner answered' }] } });
+    expect(read).toMatchObject({ view: 'history', page: { items: [{ parts: [{ type: 'text', text: 'the refiner answered' }] }] } });
   });
 });
 

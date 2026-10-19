@@ -17,6 +17,7 @@ import { LocalAgentSession } from '../src/local-session';
 import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
+import { chatSeed, keptMediaName } from '@kinu.run/core';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -226,7 +227,7 @@ describe('a promoted scaffold drives a local turn', () => {
 
       expect(ended?.turn.steps).toBe(2);
       expect(ended?.turn.usage).toEqual({ input: 5, output: 7 });
-      const transcript = await rt.stores.history.transcript(CHAT_SESSION_ID).history();
+      const transcript = await chatSeed(rt.stores.history.transcript(CHAT_SESSION_ID), keptMediaName);
 
       expect(transcript.flatMap((row) => row.role === 'assistant' ? row.parts.flatMap((part) => part.type === 'text' ? [part.text] : []) : []))
         .toEqual(['the default loop answered', 'program follow-up']);

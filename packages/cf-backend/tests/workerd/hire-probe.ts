@@ -225,7 +225,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // The chat lives in the agent's own database; read it as its pane does.
     for (const { actor_id: actorId } of rows) {
-      const messages = await (await this.agentFacetOf(actorId)).history(this.agentSnapshot(actorId));
+      const messages = await (await this.agentFacetOf(actorId)).seed(this.agentSnapshot(actorId));
 
       for (const message of v.parse(v.array(ChatTextSchema), messages)) {
         for (const part of message.parts) if (part.type === 'text' && part.text !== undefined) lines.push(`${message.role}: ${part.text}`);

@@ -4,9 +4,9 @@ import type { RawSqlExec } from '../types/primitives';
 /** The chat session every conversational read and write uses. */
 export const CHAT_SESSION_ID = 'default';
 
-/** A transcript frame's newest messages: what a tab is sent of a conversation, as it connects or a turn ends. The pane
- *  pages older rows from storage. */
-export const TRANSCRIPT_WINDOW = 60;
+/** The most one page of a chat holds, its newest entry always in: what a tab is sent as it connects or a turn ends, and
+ *  each older page it scrolls back to. Images cross as addresses (`chat-media.ts`), so this is words and calls. */
+export const CHAT_PAGE_BYTES = 1024 * 1024;
 
 export function initSessionTranscriptTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS conversation_entries (

@@ -96,7 +96,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
       for (const [id, heard] of received) if (!(exclude ?? []).includes(id)) heard.push(message);
     },
     getConnection: (id) => connections.get(id),
-    history: loadHistory ?? (async () => [...history]),
+    seed: loadHistory ?? (async () => [...history]),
+    media: async () => null,
     // The agent's own rows and reservations, read where the agent keeps them; `held` fails as that read fails.
     unseen: async (ids) => {
       unseenAsked.push([...ids]);

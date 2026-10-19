@@ -10,8 +10,8 @@ import type { UIMessage } from 'ai';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
-  actorFromConnectionTags, ERROR_STATUS, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, hostedWindowMay, JsonValueSchema, requiredRpcAccess,
-  rpcMovesOverview, WorkspaceTerminalInputSchema, type AgentRpcMethod, type StoragePredatesReleaseError, type UserCaller,
+  actorFromConnectionTags, base64ToBytes, ERROR_STATUS, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, hostedWindowMay, JsonValueSchema, requiredRpcAccess,
+  rpcMovesOverview, WorkspaceTerminalInputSchema, type AgentRpcMethod, type MediaRef, type StoragePredatesReleaseError, type StoredImage, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { attempt, diagnostics, refusalOf, settle, tolerate, type KinuError, type Refusal } from '@kinu.run/core/obs';
@@ -42,8 +42,10 @@ export interface ClientSocketGateHost {
   /** The name of the window a hosted actor's socket addresses, or null for one this workspace no longer holds. */
   hostedWindowName(actorId: string): string | null;
   chatRoomFor(connection: Connection): ChatWireTransport | null;
-  /** A pane's seed: the actor its path addresses, its rows; undefined for one not hosted here. */
-  history(hostedActor: string | null): Promise<UIMessage[] | undefined>;
+  /** A pane's seed: the actor its path addresses, its newest page; undefined for one not hosted here. */
+  seed(hostedActor: string | null): Promise<UIMessage[] | undefined>;
+  /** An image a page of `actorId`'s chat named; undefined for an actor not hosted here. */
+  media(actorId: string, ref: MediaRef): Promise<StoredImage | null | undefined>;
   overviewChanged(): void;
   connectionOpened(): void;
   lastConnectionClosed(): void;
@@ -54,6 +56,24 @@ export interface ClientSocketGateHost {
   /** The caller this workspace asks it as. */
   caller(): Promise<UserCaller>;
   workspace(): string;
+}
+
+/** A picture a browser draws and cannot run; any other kept file is served to download, as a page or an SVG of the app's
+ *  own origin could run. */
+const INLINE_IMAGES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
+function mediaResponse(image: StoredImage): Response {
+  const inline = INLINE_IMAGES.has(image.mediaType);
+
+  return new Response(base64ToBytes(image.data), {
+    headers: {
+      'content-type': inline ? image.mediaType : 'application/octet-stream',
+      'content-disposition': inline ? 'inline' : 'attachment',
+      'x-content-type-options': 'nosniff',
+      // A kept part never changes under its id.
+      'cache-control': 'private, max-age=31536000, immutable',
+    },
+  });
 }
 
 /**
@@ -253,15 +273,27 @@ class ClientSocketGate {
     // The seed is fetched on the same path the pane's socket opens, so each pane gets its own actor's rows.
     const seed = async (c: Context): Promise<Response> => {
       const hosted = hostedActorRoute(c.req.path) === null ? null : c.req.header(HOSTED_ACTOR_ID_HEADER) ?? '';
-      const history = await this.host.history(hosted);
+      const history = await this.host.seed(hosted);
 
       if (history === undefined) return Response.json({ reason: 'missing', error: 'The actor is not hosted here.' }, { status: 404 });
 
       return Response.json(history);
     };
 
+    // An image a page named, fetched alone: a page carries its address, never its bytes (`chat-media.ts`).
+    const media = async (c: Context): Promise<Response> => {
+      const { actor, message, part, index } = c.req.param();
+
+      const image = actor === undefined || message === undefined
+        ? null
+        : await this.host.media(actor, { messageId: message, partNo: Number(part), index: Number(index) });
+
+      return image === null || image === undefined ? Response.json({ reason: 'missing', error: 'No image is kept there.' }, { status: 404 }) : mediaResponse(image);
+    };
+
     requests.all('/get-messages', seed);
     requests.all('/:prefix{.*}/get-messages', seed);
+    requests.get('/:prefix{.*}/chat-media/:actor/:message/:part/:index', media);
     requests.notFound(async (c) => base.onRequest(c.req.raw));
     requests.onError(rethrow);
 

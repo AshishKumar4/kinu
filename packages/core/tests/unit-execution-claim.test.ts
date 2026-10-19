@@ -10,6 +10,8 @@ import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { KinuError } from '../src/obs/error';
 import { PendingSendStore } from '../src/orchestrator/inbox';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { chatSeed } from '../src/read-models/status';
+import { keptMediaName } from '../src/session/chat-media';
 import { sessionFixture } from './helpers-session';
 
 /** A model that answers each call `done`, after `held` (when given) lets it; `prompts`: what each call was sent. */
@@ -59,7 +61,7 @@ test('a turn whose preparation fails ends with its room told, its words answered
     expect({ outcome: fixture.actor.session.claims.read('q-1')?.outcome ?? null, owed: owedWords(fixture) }).toEqual({ outcome: 'error', owed: [] });
 
     await fixture.chat.send('plan it again', { id: 'q-2' });
-    const answered = (await fixture.actor.stores.history.transcript(CHAT_SESSION_ID).history()).filter((row) => row.role === 'assistant');
+    const answered = (await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName)).filter((row) => row.role === 'assistant');
 
     expect(JSON.stringify(answered)).toContain('done');
   } finally { fixture.close(); }
@@ -94,7 +96,7 @@ test("a Stop as a turn opens asks the model nothing, keeps the owner's words, an
     await Promise.allSettled([sending]);
     await fixture.chat.pumpPromise;
 
-    const [question, ...after] = await fixture.actor.stores.history.transcript(CHAT_SESSION_ID).history();
+    const [question, ...after] = await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName);
 
     expect([asked.count, question?.id, question?.role, after.filter((row) => row.role === 'assistant' && row.parts.length > 0)]).toEqual([0, 's-1', 'user', []]);
 

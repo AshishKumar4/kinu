@@ -46,12 +46,10 @@ export function restoredRows(older: readonly ChatHistoryEntry[]): UIMessage[] {
     if (seen.has(entry.id)) continue;
     seen.add(entry.id);
 
-    const row: UIMessage = {
-      id: entry.id, role: entry.role, parts: [{ type: 'text', text: entry.content }],
-    };
-
-    if (entry.metadata !== undefined) row.metadata = entry.metadata;
-    restored.push(row);
+    // Drawn by the page reader, so its parts are the chat's own.
+    restored.push(v.parse(UIMessageSchema, {
+      id: entry.id, role: entry.role, parts: entry.parts, ...(entry.metadata !== undefined && { metadata: entry.metadata }),
+    }));
   }
 
   return restored;

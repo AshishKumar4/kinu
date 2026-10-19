@@ -18,7 +18,7 @@ import type {
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import { isSteeredMessage, type AgentModelMenu, type CompactOutcome, type FileLinks, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
+import { isSteeredMessage, rowText, type AgentModelMenu, type CompactOutcome, type FileLinks, type JobOutputTail, type PathPlanes } from '@kinu.run/core';
 import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -162,9 +162,11 @@ export async function readConversation(
 
   for (;;) {
     const read = await page(request);
-    messages.unshift(...read.items.map(({ id, role, content, metadata }) => (isSteeredMessage({ metadata })
-      ? { id, role, content, metadata, steered: true }
-      : { id, role, content, metadata })));
+    messages.unshift(...read.items.map(({ id, role, parts, metadata }) => {
+      const content = rowText({ role, parts });
+
+      return isSteeredMessage({ metadata }) ? { id, role, content, metadata, steered: true } : { id, role, content, metadata };
+    }));
 
     if (read.status === 'end') return messages;
     request = { cursor: read.next };
@@ -184,7 +186,7 @@ export async function recordedAnswer(
     const turn = read.items.filter((entry) => entry.turnId === turnId);
     const answer = turn.filter((entry) => entry.role === 'assistant').at(-1);
 
-    if (answer !== undefined) return answer.content;
+    if (answer !== undefined) return rowText(answer);
 
     // A turn's own entries come before its answer: a page that holds them and no answer means it recorded none.
     if (turn.length > 0 || read.status === 'end') return null;

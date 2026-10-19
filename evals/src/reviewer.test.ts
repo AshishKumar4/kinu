@@ -102,8 +102,6 @@ function answeredReview(answer: { failure?: string; text?: string; wireError?: b
 
  return Response.json({ ok: true }); }
 
-      if (path.endsWith('/get-messages')) return Response.json(history);
-
       if (path.endsWith('/runs')) return Response.json({ status: 'end', items: events.length === 0 ? [] : [{ runId: 'review-run' }] });
 
       if (path.endsWith('/events')) return Response.json(events.filter((event) => event.eventIndex >= Number(new URL(request.url).searchParams.get('since') ?? 0)));
@@ -124,6 +122,9 @@ function answeredReview(answer: { failure?: string; text?: string; wireError?: b
           result = { role };
         } else if (frame.method === 'setModel') {
           result = { spec: model };
+        } else if (frame.method === 'getChatHistoryPage') {
+          // The conversation as one page, drawn as the page reader draws it.
+          result = { status: 'end', items: history.map((message, position) => ({ ...message, position, turnId: null, createdAt: position })) };
         }
 
         socket.send(rpcReplyFrame({ requestId: frame.id, result }));

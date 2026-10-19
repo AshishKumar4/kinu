@@ -9,6 +9,8 @@ import type { SessionTranscript } from '../src/session/transcript';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
 import { claimFences } from '../src/orchestrator/actor-claims';
+import { chatSeed } from '../src/read-models/status';
+import { keptMediaName } from '../src/session/chat-media';
 
 let restore: (() => void) | null = null;
 
@@ -67,7 +69,7 @@ describe('a rewind', () => {
     fixture.history.revertTo(CHAT_SESSION_ID, 'u1', () => Effect.void);
 
     expect(fixture.transcript.newestId()).toBeNull();
-    expect(await fixture.transcript.history()).toEqual([]);
+    expect(await chatSeed(fixture.transcript, keptMediaName)).toEqual([]);
 
     const rewound = logger.emitted.filter((line: RecordedLog) => line.event === 'session.transcript_rewound');
     expect(present(rewound[0], 'the recorded rewind').fields).toMatchObject({ from: 'u1', position: 0 });

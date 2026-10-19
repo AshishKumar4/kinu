@@ -10,7 +10,9 @@ export const ChatHistoryEntrySchema = v.object({
   turnId: v.nullable(v.string()),
   /** The run that admitted this entry, retained even after its actor is released. */
   runId: v.optional(v.nullable(v.string())),
-  content: v.string(),
+  /** Its parts as the chat draws them, each image an address its host serves; a reader of words alone reads them with
+   *  `rowText`. */
+  parts: v.array(JsonObjectSchema),
   createdAt: v.union([v.string(), v.number()]),
   /** Author and event markers must survive paging as well as live delivery. */
   metadata: v.optional(JsonObjectSchema),

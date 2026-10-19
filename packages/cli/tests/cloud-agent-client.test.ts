@@ -115,7 +115,8 @@ function startMockAgentServer(options: ({
           const cursor = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ before: v.number() })) })), args[0]);
           const end = cursor?.cursor?.before ?? chatMessages.length;
           const start = Math.max(0, end - 2);
-          const items = chatMessages.slice(start, end).map((message, offset) => ({ turnId: null, ...message, position: start + offset }));
+          // Drawn as the page reader draws a text-only row: its words as its one part.
+          const items = chatMessages.slice(start, end).map(({ content, ...message }, offset) => ({ turnId: null, ...message, parts: [{ type: 'text', text: content }], position: start + offset }));
 
           return Response.json({
             result: start === 0 ? { status: 'end', items } : { status: 'more', items, next: { before: start } },
@@ -296,7 +297,7 @@ describe('CloudAgentClient protocol', () => {
       const history = await client.history();
       expect(history.map((message) => message.id)).toEqual(['event-1', 'user-2', 'assistant-3']);
       expect(history[0]?.metadata).toEqual(metadata);
-      expect(restoredRows([v.parse(ChatHistoryEntrySchema, { ...row, position: 0, turnId: null })])[0]?.metadata).toEqual(history[0]?.metadata);
+      expect(restoredRows([v.parse(ChatHistoryEntrySchema, { id: row.id, role: row.role, createdAt: row.createdAt, metadata, parts: [{ type: 'text', text: row.content }], position: 0, turnId: null })])[0]?.metadata).toEqual(history[0]?.metadata);
     } finally {
       await client.close();
     }

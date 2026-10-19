@@ -12,6 +12,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import * as v from 'valibot';
 import { PROBE_TITLE } from '../probe-model-script';
+import { rowText } from '@kinu.run/core';
 
 /** Loopback: the one host `authenticateRequest` accepts without an identity secret (auth/session.ts:200-213). */
 const ORIGIN = 'http://localhost';
@@ -403,7 +404,7 @@ const pageText = async (pane: Pane, id: string, actor?: string): Promise<string>
   pane.send(rpcRequest(id, 'getChatHistoryPage', [{ ...(actor !== undefined && { actor }), limit: 40 }]));
   const page = await pane.rpc(id, pageSchema(ChatHistoryEntrySchema));
 
-  return page.items.map((entry) => entry.content).join('\n');
+  return page.items.map((entry) => rowText(entry)).join('\n');
 };
 
 describe('a hosted actor pane reads its own chat back from nothing', () => {

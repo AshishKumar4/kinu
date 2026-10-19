@@ -8,6 +8,7 @@ import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { KINU_TIMER_JOB } from '../../../src/wake-jobs';
+import { PLATFORM_CATALOG } from '@kinu.run/core';
 import {
   CallRecordSchema,
   DiagnosticFailureSchema,
@@ -15,6 +16,10 @@ import {
   HttpCallSchema,
   PreparedConversationSchema,
   QueuedConversationSchema,
+  SCREEN_CHARS,
+  SCREENS,
+  screenEntry,
+  ScreenshotChatSchema,
   SnapshotSchema,
   type DiagnosticFailure,
   type HttpCall,
@@ -260,6 +265,22 @@ describe('two real turns over the HTTP model seam', () => {
     const modes = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('page-modes-driver')).answerPageModesIn();
 
     expect(modes).toEqual({ auto: 'ok', plan: 'denied', autoAgain: 'ok', planner: 'denied' });
+  });
+
+  // Staging 2026-10-19: a 341-step computer-use chat would not open. Its seed read the agent's whole conversation back
+  // over the facet RPC, screenshots inline, and the runtime refused the 70 MB answer past its 32 MiB. The seed is the
+  // newest page, each image an address fetched alone, and the pane pages back through the same reader to the start.
+  it("a long computer-use chat opens on its newest page, pages back to its start, and serves each screenshot alone", async () => {
+    const seen = v.parse(ScreenshotChatSchema, await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('screens-driver')).screenshotChatIn());
+    // What one crossing out of the agent's isolate carries: every read of the chat must fit it, however long the chat.
+    const crossing = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value;
+
+    expect({ status: seen.seed.status, inline: seen.seed.inline }).toEqual({ status: 200, inline: false });
+    expect(seen.seed.bytes).toBeLessThan(crossing);
+    expect(seen.walk.ids).toEqual(['screens-ask', ...Array.from({ length: SCREENS }, (_, index) => screenEntry(index))]);
+    expect(seen.walk.inline).toBe(false);
+    expect(seen.walk.pageBytes.filter((bytes) => bytes >= crossing)).toEqual([]);
+    expect(seen.media).toEqual({ status: 200, type: 'image/png', bytes: SCREEN_CHARS * 3 / 4 });
   });
 
   // A hired agent's answer is read from its own isolate. Under the agent's id its block is found, and its page's

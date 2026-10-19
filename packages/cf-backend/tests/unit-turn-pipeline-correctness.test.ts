@@ -27,6 +27,7 @@ import type { HostedActorSeams } from '../src/hosted-actors';
 import type { ModelMessage, ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
+import { rowText } from '@kinu.run/core';
 
 /** Role plus flattened text, so string content and a single text part compare equal. */
 function spoken(messages: readonly ModelMessage[]): { role: string; text: string }[] {
@@ -615,7 +616,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const page = await harness.agent.getChatHistoryPage({ limit: 10 });
     expect(page.items.map((entry) => entry.id)).toEqual(['u-live', settled.messageId]);
-    expect(page.items[1].content).toBe('partial answer');
+    expect(rowText(present(page.items[1], 'the answer'))).toBe('partial answer');
   });
 
   test('an ABORTED turn is still recorded as evidence', async () => {
@@ -643,8 +644,8 @@ describe('turn-pipeline correctness wiring', () => {
     await chatSessionTurns(drained.agent).settle({ messageId: 'a-9', text: 'the answer' });
     const rows = (await drained.agent.getChatHistoryPage({ limit: 10 })).items;
     // The pane draws a drain's words as a system entry, not as the operator speaking.
-    expect(rows.at(-2)).toMatchObject({ role: 'system', content: 'the drain text', metadata: expect.objectContaining({ drainTurnId: 'drain-1' }) });
-    expect(rows.at(-1)).toMatchObject({ role: 'assistant', content: 'the answer' });
+    expect(rows.at(-2)).toMatchObject({ role: 'system', parts: [{ type: 'text', text: 'the drain text' }], metadata: expect.objectContaining({ drainTurnId: 'drain-1' }) });
+    expect([rows.at(-1)?.role, rowText(present(rows.at(-1), 'the answer'))]).toEqual(['assistant', 'the answer']);
   });
 
   test("a queued drain's reply survives eviction and closes the batch it answered", async () => {
