@@ -909,7 +909,7 @@ function WorkspaceScene() {
   };
 
   return (
-    <div className="flex h-full flex-col" data-mail-workspace>
+    <div className="flex h-full flex-col" data-mail-workspace data-workbench>
       <WorkspaceHeader
         workspace={{ name: WORKSPACE, title: "API Worker", to: `/workspace/${WORKSPACE}`, editValue: "API Worker", rename: async () => {}, remove: () => {} }}
         chats={[
