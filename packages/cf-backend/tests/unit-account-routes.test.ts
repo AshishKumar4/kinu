@@ -1,5 +1,6 @@
 // DELETE /api/user/account: share recipients are forgotten before the object is destroyed, and the
 // SDK's abort sentinel reads as success while any other failure reaches the caller.
+import { requireControl } from '@kinu.run/core/control-plane';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
@@ -59,6 +60,16 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
 
   const env: AccountRoutesEnv<string> = {
     UserDO: { idFromName: (name) => name, get: () => userDO },
+    ControlPlaneDO: {
+      idFromName: (name) => name,
+      get: () => ({
+        galleryForget: async (caller, email) => {
+          // Held to the control plane's own gate: only the Worker's ingest capability reaches it.
+          await requireControl({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY }, caller, 'gallery.forget');
+          calls.push(`gallery:forget:${email}`);
+        },
+      }),
+    },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
@@ -88,13 +99,13 @@ describe('DELETE /api/user/account', () => {
     expect(calls).toEqual([]);
   });
 
-  test('the email in another case forgets the shares, then deletes', async () => {
+  test('the email in another case forgets the shares and the Gallery\'s stars, then deletes', async () => {
     const { env, calls } = setup('ok');
     const response = await account(request(JSON.stringify({ confirm: '  owner@example.TEST ' })), env);
 
     expect(response?.status).toBe(200);
     expect(v.parse(DeletedSchema, await response?.json())).toEqual({ deleted: true });
-    expect(calls).toEqual(['cards:withdraw', `account:delete:${USER_ID}`]);
+    expect(calls).toEqual(['cards:withdraw', 'gallery:forget:owner@example.test', `account:delete:${USER_ID}`]);
   });
 
   test("the SDK's own abort sentinel is a completed delete", async () => {
@@ -102,7 +113,7 @@ describe('DELETE /api/user/account', () => {
     const response = await account(request(JSON.stringify({ confirm: 'owner@example.test' })), env);
 
     expect(response?.status).toBe(200);
-    expect(calls).toEqual(['cards:withdraw', `account:delete:${USER_ID}`]);
+    expect(calls).toEqual(['cards:withdraw', 'gallery:forget:owner@example.test', `account:delete:${USER_ID}`]);
   });
 
   test('any other failure is a 500 naming its class; its cause goes to the log alone', async () => {

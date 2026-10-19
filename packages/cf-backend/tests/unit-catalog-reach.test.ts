@@ -10,6 +10,9 @@ import { DEFAULT_WORKERS_AI_MODEL_SPEC, type JsonValue } from '@kinu.run/core';
 import { hostedSubordinateHarness, orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
+/** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
+const UNSHARED = { incarnation: 'test', generation: 0, ancestors: {} };
+
 /** A role with programs and a shell, but no file tool. */
 const CODER = {
   roles: { coder: { description: 'Codes without the file tool.', instructions: 'Code.', tier: 'default', preset: 'ideate', allowedTools: ['eval', 'shell', 'memory'] } },
@@ -49,7 +52,7 @@ test("a slate's call reaches an operation only where its catalog entry says a sl
   await files.mkdir('/slates/notes', { recursive: true });
   await writeText(files, '/slates/notes/package.json', JSON.stringify({ main: 'server.ts' }));
   await writeText(files, '/home/main/note.txt', 'the note');
-  const slate = (path: string[], args: JsonValue[]) => workspace.agent.slateCallAs(ROOT_SLATE_CALLER, 'notes', 'workspace', { path, args, invocation: null });
+  const slate = (path: string[], args: JsonValue[]) => workspace.agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'notes', name: 'workspace', lineage: UNSHARED }, { path, args, invocation: null });
 
   expect(JSON.stringify(await slate(['file', 'read'], ['/home/main/note.txt']))).toContain('the note');
   expect(await slate(['state', 'set'], ['draft', 1])).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining("not on a slate's surface") });

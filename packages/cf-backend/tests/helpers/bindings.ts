@@ -212,6 +212,8 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
     getAuth: refuse('getAuth'),
     getAuthHeaders: refuse('getAuthHeaders'),
     getCredentialEndpoint: refuse('getCredentialEndpoint'),
+    // An account's own AI in other people's slates: none in these tests.
+    slateAiSpend: async () => [],
     relayDevice: refuse('relayDevice'),
     relayModelCall: refuse('relayModelCall'),
     cancelModelRelay: refuse('cancelModelRelay'),
@@ -302,6 +304,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     accountMemory_put: refuse('accountMemory_put'),
     accountMemory_forget: refuse('accountMemory_forget'),
     accountMemory_forgetNote: refuse('accountMemory_forgetNote'),
+    // An account's own AI in other people's slates: none in these tests.
+    slateAiSpend: async () => [],
     userMcp_list: refuse('userMcp_list'),
     userMcp_presets: refuse('userMcp_presets'),
     userMcp_add: refuse('userMcp_add'),

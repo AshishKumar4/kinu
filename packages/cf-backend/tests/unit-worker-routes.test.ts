@@ -142,6 +142,12 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   ['anon', 'GET', '/assets/main.js', shell('/assets/main.js')],
   ['anon', 'GET', '/assets', door(401)],
   ['anon', 'GET', '/shared/blueprint/abc', shell('/shared/blueprint/abc')],
+  // A live share's entry is its link and its Gallery Open: its shell is public, and its open route decides who it admits.
+  ['page', 'GET', '/shared/live/acme/share-1', shell('/shared/live/acme/share-1')],
+  ['anon', 'GET', '/shared/live/acme/share-1', shell('/shared/live/acme/share-1')],
+  // The Drive's Shared tab is the account's own.
+  ['page', 'GET', '/shared', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fshared` }],
+  ['anon', 'GET', '/shared/live', door(401)],
 
   // Dev asset paths bypass the session only off a published host.
   ['anon', 'GET', '/src/main.tsx', door(401)],

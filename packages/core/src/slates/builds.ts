@@ -26,6 +26,8 @@ export interface SlateBuildRead {
 /** A compiled slate: each module's content digest; the runner module carries the client bundle and page shell. */
 export interface SlateImage {
   readonly modules: Readonly<Record<string, string>>;
+  /** `tree`: compiled from the slate's own tree alone (cf `SlateBuildInput.scope`), as a shared slate's image must be. */
+  readonly scope?: 'tree';
   /** What the compile looked at outside the slate's own tree; kept beside the image, not in it. */
   readonly inputs?: readonly SlateBuildRead[];
 }
@@ -64,7 +66,7 @@ export function initSlateBuildTable(execRaw: RawSqlExec): void {
   execRaw('CREATE INDEX IF NOT EXISTS slate_build_inputs_path ON slate_build_inputs (path)');
 }
 
-const SlateImageSchema = v.object({ modules: v.record(v.string(), v.string()) });
+const SlateImageSchema = v.object({ modules: v.record(v.string(), v.string()), scope: v.optional(v.literal('tree')) });
 
 const RowSchema = v.object({
   good_key: v.nullable(v.string()), good_image: v.nullable(v.string()), failed_key: v.nullable(v.string()), failure: v.nullable(v.string()),
@@ -98,7 +100,15 @@ export class SlateBuilds {
   /** Read once per activation per authority, as every model step asks; each write below keeps it current. */
   readonly #failing = new Map<string, FailingSlateBuild[]>();
 
+  /** Told each time a slate's working image moves to a new source as an authority. */
+  readonly #moved = new Set<(slate: string, authority: string, key: string) => void>();
+
   constructor(private readonly db: SqlExec) {}
+
+  /** `listener` is told each time a slate's working image moves to a new source as an authority. */
+  whenBuilt(listener: (slate: string, authority: string, key: string) => void): void {
+    this.#moved.add(listener);
+  }
 
   private row(slate: string, authority: string): v.InferOutput<typeof RowSchema> | null {
     const [row] = this.db.exec(`SELECT good_key, good_image, failed_key, failure FROM slate_images WHERE slate = ? AND authority = ?`, slate, authority).toArray();
@@ -110,6 +120,7 @@ export class SlateBuilds {
    *  its next build is stale by. */
   built(slate: string, authority: string, key: string, image: SlateImage): void {
     const { inputs = [], ...kept } = image;
+    const before = this.row(slate, authority)?.good_key ?? null;
 
     this.db.exec(
       `INSERT INTO slate_images (slate, authority, good_key, good_image) VALUES (?, ?, ?, ?)
@@ -119,6 +130,8 @@ export class SlateBuilds {
     this.db.exec(`DELETE FROM slate_build_inputs WHERE slate = ? AND authority = ?`, slate, authority);
     this.looked(slate, authority, inputs);
     this.#failing.clear();
+
+    if (before !== key) for (const listener of this.#moved) listener(slate, authority, key);
   }
 
   /** The source `key` did not compile as `authority`: what it looked at joins what the image still served looked at. A

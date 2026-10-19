@@ -18,6 +18,8 @@
     "device_status_watchers",
     "experience_library",
     "share_cards_sent",
+    "slate_ai_spend",
+    "slate_consents",
     "user_access_tokens",
     "user_auth_generation",
     "user_browser_sessions",
@@ -140,6 +142,7 @@
     "search_nodes",
     "session_messages",
     "slate_build_inputs",
+    "slate_edit_marks",
     "slate_file_manifest",
     "slate_images",
     "slate_live_share_users",
@@ -260,6 +263,7 @@
     "search_node_scores",
     "search_nodes",
     "session_messages",
+    "slate_edit_marks",
     "slate_file_manifest",
     "slate_live_share_users",
     "slate_live_shares",
@@ -372,6 +376,7 @@
     "scaffold_versions",
     "search_nodes",
     "session_messages",
+    "slate_edit_marks",
     "slate_file_manifest",
     "slate_live_share_users",
     "slate_live_shares",
@@ -393,5 +398,14 @@
     "workspace_actors",
     "workspace_identity",
     "workspace_proposals"
+  ],
+  "control": [
+    "cp_audit",
+    "cp_feedback",
+    "cp_users",
+    "cp_workspaces",
+    "gallery_listings",
+    "gallery_reports",
+    "gallery_stars"
   ]
 }

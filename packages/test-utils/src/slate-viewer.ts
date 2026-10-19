@@ -27,8 +27,9 @@ export function callSharedSlate<Value>(
 ): Promise<SlateViewerAnswer<Value>> {
   const target = new URL('/__rpc', url).toString();
 
+  // A viewer's cookie acts only from its share's own page, as a browser sends it there (slate-share-route.ts).
   const stub = newHttpBatchRpcSession<Record<string, () => Promise<JsonValue>>>(
-    cookie === undefined ? target : new Request(target, { method: 'POST', headers: { cookie } }),
+    cookie === undefined ? target : new Request(target, { method: 'POST', headers: { cookie, origin: new URL(url).origin } }),
   );
 
   return settle(Effect.matchCause(Effect.promise(async () => v.parse(schema, await stub[method]())), {

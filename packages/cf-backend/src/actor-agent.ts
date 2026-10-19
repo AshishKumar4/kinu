@@ -91,12 +91,11 @@ import {
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
-  normalizeUsage, priceCall, type Usage,
-  generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+  priceCall, type Usage,
   WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
   recordModelOperations, type ModelAttemptInfo, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
-  buildModelCallEvent,
+  pricedModelCallEvent,
   type FactsStore,
   createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
   agentArtifactDirectory, agentHome, MAIN_AGENT,
@@ -178,6 +177,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
+import { slateAiAnswer } from '@kinu.run/core/slates';
 import { OwnedModelServices } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { AgentFacetCalls } from "./agent-facet/agent-facet";
@@ -348,12 +348,22 @@ interface WorkspaceTitleInputs {
  * unreachable; every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
-/** A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. */
+/**
+ * A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. A
+ * viewer's call is admitted (`context.admit`) at the last moment before it acts: an authorization is the act of a member
+ * the class runs itself.
+ */
 async function slateMember(
   providers: readonly CodemodeProvider[], route: Extract<SlateRoute, { kind: 'namespace' }>, context: SlateDispatchContext,
 ): Promise<JsonValue> {
-  if (!context.authorizeOnly) return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  if (!context.authorizeOnly) {
+    context.admit?.();
+
+    return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  }
+
   requireCodemodeMember(providers, route.namespace, route.member);
+  context.admit?.();
 
   return null;
 }
@@ -1816,13 +1826,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /**
    * Record one non-turn model call (judges, fast tier, evolution, compaction, AI bindings) as a
    * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
-   * live in core's `buildModelCallEvent`.
+   * live in core's `pricedModelCallEvent`.
    */
   protected reportModelCall(report: ModelCallReport): void {
-    const event = buildModelCallEvent(report, {
-      effectiveSpec: this.effectiveModelSpec(),
-      pricing: this.modelCatalog.pricing(),
-    });
+    const event = pricedModelCallEvent(report, this.modelCatalog);
 
     settleLoggedSync('event.model_call_emit_failed', { doing: 'recording a model_call run event', otherwise: 'io' }, () => {
       this.eventRecorder.emit(currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID), event);
@@ -2394,7 +2401,7 @@ export abstract class ActorAgent extends Agent<Env> {
       return yield* Effect.promise(async () => this.withHostedActor(this.hostedSlateCaller(name), async (actor) => {
         if (route.kind === 'ai') {
           // A hosted actor runs the model call through its own profile, resolved now.
-          return await this.slateAiRun(route, actor.handle);
+          return await this.slateAiRun(route, actor.handle, context.admit);
         }
 
         if (route.kind === 'agent') {
@@ -2417,6 +2424,9 @@ export abstract class ActorAgent extends Agent<Env> {
         const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
+          // The caller's word read again where the tool is sent, as the root's tools are.
+          context.admit?.();
+
           return this.callSlateTool({ rt: actor.runtime, actor: surface.actor, reach, route, mode: authority.mode, context });
         }
 
@@ -2474,6 +2484,9 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'tool': {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
+          // A viewer's call is admitted as the tool starts; each member its program reaches meets `nested` as it runs.
+          context.admit?.();
+
           return yield* Effect.promise(async () => this.callSlateTool({
             rt: this.rt, actor: this.surfaceActor(mode, context.viewer ? 'viewer' : 'owner'), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
@@ -2507,6 +2520,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (!authority.reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
 
+          // A viewer's call is admitted here, after every wait to prepare it and with none between it and the send.
+          context.admit?.();
           const answered = yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined));
 
           // A slate calls on its viewer's behalf, not any agent's.
@@ -2524,6 +2539,8 @@ export abstract class ActorAgent extends Agent<Env> {
           if (route.viewer !== undefined) metadata.viewer = route.viewer;
 
           const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
+
+          context.admit?.();
 
           if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
 
@@ -2543,9 +2560,14 @@ export abstract class ActorAgent extends Agent<Env> {
           return { reply };
         }
 
-        case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route));
+        case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route, undefined, context.admit));
 
-        case 'rpc': return yield* Effect.promise(async () => this.slateReadModel(route.method));
+        case 'rpc': {
+          context.admit?.();
+
+          return yield* Effect.promise(async () => this.slateReadModel(route.method));
+        }
+
         case 'app': return yield* new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
       }
     }));
@@ -2563,6 +2585,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAiRun(
     route: Extract<SlateRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
+    admit?: () => void,
   ): Promise<SlateSurfaceValue> {
     let profile: ResolvedTurnProfile;
 
@@ -2579,43 +2602,13 @@ export abstract class ActorAgent extends Agent<Env> {
       throw cause;
     }
 
-    const spec = profile.tier.model;
-    const model = this.ownedModelServices.resolveModel(spec);
-    const input: GenerateRequest = { model, prompt: route.prompt };
+    // Priced as every call is: its model's rate, warmed when it is not the turn's own.
+    await this.modelCatalog.warm([profile.tier.model]);
+    // A viewer's call is admitted once the model is ready, as it is asked.
+    admit?.();
 
-    if (route.system !== undefined) input.system = route.system;
-
-    if (route.stream === true) return this.slateAiStream({ model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) }, spec);
-
-    const answer = await generateReported(input, {
-      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      spec,
-    });
-
-    const usage = normalizeUsage(answer.usage);
-
-    return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
-  }
-
-  /**
-   * `ai.stream`: the answer's text as UTF-8 bytes, each written as the model writes it, which the slate's class reads as
-   * text. Its spend is filed once the stream drains, as any streamed call's is; a reader that stops early ends the call.
-   */
-  private slateAiStream(request: StreamRequest, spec: string): ReadableStream<Uint8Array> {
-    const chunks = streamTextReported(request, {
-      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations }, spec,
-    });
-
-    const encoder = new TextEncoder();
-
-    return new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const next = await chunks.next();
-
-        if (next.done === true) controller.close();
-        else controller.enqueue(encoder.encode(next.value));
-      },
-      async cancel() { await chunks.return(undefined); },
+    return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations,
     });
   }
 

@@ -82,10 +82,12 @@ import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFr
 import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
+import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
+import { installPartsFixture, installShareModeFixture, PART_PREVIEWS_ENTRY, PartFrameFrame, partFrameEntry, PartHostFrame, PartPreviewsFrame, PartStatesFrame, SHARED_LIVE_ENTRY, SharedLiveFrame } from "@/gallery-parts";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
-import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateCapabilityGraph } from "@kinu.run/core";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharePreapproval, SlateReach } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
@@ -1275,6 +1277,12 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
 window.fetch = galleryFetch;
 
 installDriveFixture(frame);
+
+installGalleryFixture(frame);
+
+installPartsFixture(frame);
+
+installShareModeFixture(frame, () => LIVE_SHARE, () => STANDING);
 
 
 // Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,
@@ -3013,7 +3021,30 @@ const MIXED_ASKS: PendingAction[] = [
   { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
-const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
+/** A change a share of issue-triage made on the owner's access, for Sam, as the queue lists it. */
+function effectAsk({ id, tool, server, root, payload, at }: {
+  id: string; tool: string; server: string; root: Record<string, string>; payload: JsonValue; at: number;
+}): PendingAction {
+  return {
+    id, kind: "deferred_action", at, title: `Approve: ${tool} on ${server}, for sam@example.com through a share of issue-triage`,
+    detail: JSON.stringify(payload, null, 2), effect: { slate: "issue-triage", caller: "issue-triage", server, tool, root },
+  };
+}
+
+/** `&asks=effect`: one change a shared slate asks on the owner's access; `&asks=effects`, two; `&asks=effect-mixed`, one beside a command. */
+const EFFECT_ASKS: PendingAction[] = [
+  effectAsk({ id: "effect-issue", tool: "create_issue", server: "mcp.github", root: { org: "acme" }, payload: { title: "Label sync is late" }, at: NOW - 20_000 }),
+];
+
+const EFFECTS_ASKS: PendingAction[] = [
+  ...EFFECT_ASKS,
+  effectAsk({ id: "effect-notes", tool: "writeFile", server: "workspace", root: {}, payload: { path: "notes/triage.md" }, at: NOW - 50_000 }),
+];
+
+const ASK_SETS = new Map([
+  ["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS],
+  ["effect", EFFECT_ASKS], ["effects", EFFECTS_ASKS], ["effect-mixed", [...EFFECT_ASKS, ...PARKED_ASKS.slice(0, 1)]],
+]);
 
 /** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
 const LATE_ASKS: PendingAction[] = [{
@@ -5676,7 +5707,8 @@ const RISK = (body: string) => ({ public: `${body} Anyone who opens this share c
 
 const NO_RISK = { public: "", users: "" };
 
-const SHARE_GRAPH: SlateCapabilityGraph = {
+const SHARE_GRAPH: SlateReach = {
+  revision: "r2",
   slate: "issue-triage",
   slates: ["issue-triage", "digest"],
   namespaces: [
@@ -5716,18 +5748,35 @@ const LIVE_SHARE: LiveShareRecord = {
     { slate: "issue-triage", namespace: "slates.digest", member: "summary", impact: "observe" },
     { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
   ] },
-  createdAt: NOW - 864e5, revokedAt: null, users: [],
+  // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
+  createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, gallery: null,
 };
 
+/** Its team's share: Pat edits it, Sam uses it, and Pat's last change stopped it on the owner's access. */
+const TEAM_SHARE: LiveShareRecord = {
+  ...LIVE_SHARE, id: "live-team-2", visibility: "users", handle: "8b2e5d1f40", users: ["pat@example.com", "sam@example.com"], editors: ["pat@example.com"],
+  createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com",
+};
+
+/** The owner's "Always for this slate" answers at the slate's revision now: a GitHub change on one org, and a file write. */
+const STANDING: SharePreapproval[] = [
+  { slate: "issue-triage", namespace: "mcp.github", member: "create_issue", root: { org: "acme" }, revision: "r2" },
+  { slate: "issue-triage", namespace: "workspace", member: "writeFile", root: {}, revision: "r2" },
+];
+
+/** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
+const SHARED_REFUSAL = "Slate issue-triage is shared, so it runs only as its own files build; they do not build alone yet";
+
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
-function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
+/** `first`: the slate's first share, before anyone has it, which asks what they start with. */
+function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint"; first?: boolean }) {
 
   return (
     <div className="h-screen p-bg p-text">
       <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
         fixture={{
           mode,
-          live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
+          live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL, preapproved: STANDING },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
             { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
@@ -7789,9 +7838,21 @@ async function mount() {
     ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
     ["drive-wide", { node: <DrivePageFrame />, entries: [drivePathAsked] }],
     ["drive-recipient", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
+    // The Gallery, and `&slate=<slate>`'s own page.
+    ["gallery-list", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
+    ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
+    // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
+    ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
+    ["part-host-refused", { node: <PartHostFrame />, entries: ["/"] }],
+    ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
+    ["shared-live", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
+    ["shared-live-signed-out", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
+    ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
+    ["part-previews", { node: <PartPreviewsFrame />, entries: [PART_PREVIEWS_ENTRY] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
+    ["sharedialog-first", { node: <ShareDialogFrame mode="live" first />, entries: ["/"] }],
     ["fork-reach", {
       node: (
         <div className="h-screen w-[720px] p-sidebar p-text">

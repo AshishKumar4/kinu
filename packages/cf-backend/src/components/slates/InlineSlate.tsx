@@ -15,6 +15,7 @@ import { SlateInlineContext, SlatePreviews } from "./context";
 import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { WorkspacePartHost } from "@/hooks/use-part-host";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -345,6 +346,8 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const save = useMemo(() => (block === undefined ? undefined : async () => rpc("slate", [{ op: 'save', page: id }])), [block, rpc, id]);
 
   const notice = preview?.broken === undefined ? null : <BrokenNotice title={preview.title ?? id} />;
+  // The owner's own preview runs its personal parts as the owner, one host to a preview.
+  const decision = <WorkspacePartHost slate={id} titled={preview} slateFrame={frame} />;
   let content: ReactNode = null;
 
   if (src !== null) {
@@ -373,6 +376,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     return (
       <div className="p-pane gap-2">
         {notice}
+        {decision}
         {refusal !== null && (
           <div className="p-notice-danger rounded-lg px-3 py-2 text-xs">
             <p className="break-words m-0">{refusal}</p>
@@ -394,6 +398,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   return (
     <SlateCard id={id} block={block} measure={attach} save={save}>
       {notice}
+      {decision}
       {refusal !== null && (
         <span className="block p-notice-danger px-3 py-2 text-xs">
           <span className="block break-words m-0">{refusal}</span>
