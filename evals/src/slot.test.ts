@@ -7,7 +7,7 @@ import type { EvalTarget } from './workspace-roster';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
 
-const MATRIX = { models: ['opencode-go/muse', 'openrouter/mercury', 'openrouter/ling'], arms: ['product'], trials: 10, firstSlot: 1 };
+const MATRIX = { models: ['opencode-go/muse', 'openrouter/mercury', 'openrouter/ling'], arms: ['product'], trials: 10, firstSlot: 1, sequence: false };
 
 describe('a trial\'s slot', () => {
   test('every trial of a run has a slot of its own, one to the matrix\'s size, each an eval account', () => {
@@ -66,6 +66,18 @@ test('a trial account may hold its provider keys and its own bookkeeping, and no
     user_credentials: 2, user_credential_revisions: 2, user_credentials_revision: 1, user_profile: 1,
     experience_library: 3, user_mcp_servers: 1, user_config: 0,
   })).toEqual({ experience_library: 3, user_mcp_servers: 1 });
+});
+
+// 2026-10-19, the owner's plans: a model on a plan login runs every task in the one account that owns the login, so every
+// renewal is that account's own; each task opens there in turn.
+test('a sequence runs every task of a model, arm and trial in one account, and the run needs one account for each', () => {
+  const matrix = { ...MATRIX, trials: 1, firstSlot: 7, sequence: true };
+  const places = TASK_FILES.flatMap((task) => matrix.models.map((model) => trialSlot({ taskFiles: TASK_FILES, task, matrix, model, arm: 'product', trial: 1 })));
+
+  expect([...new Set(places)].sort()).toEqual(['trial-7', 'trial-8', 'trial-9']);
+  expect(TASK_FILES.map((task) => trialSlot({ taskFiles: TASK_FILES, task, matrix, model: 'openrouter/ling', arm: 'product', trial: 1 })))
+    .toEqual(TASK_FILES.map(() => 'trial-9'));
+  expect(trialAccounts(TASK_FILES, matrix)).toEqual(['trial-7', 'trial-8', 'trial-9']);
 });
 
 test('the stored model catalog is one provisioned row, not a waiver for other configuration or runtime rows', () => {
@@ -151,6 +163,16 @@ describe('opening on a trial account', () => {
     await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
   });
 
+  test('a task of a sequence opens on what the sequence\'s earlier tasks left, and still never on a live run', async () => {
+    const after = deployment({ workspaces: [], held: { experience_library: 4, workspace_overviews: 1 } });
+    const busy = deployment({ workspaces: [{ name: 'eval-other-1-abcdef', lastVisited: now - 5_000 }], held: {} });
+
+    servers.push(after.server, busy.server);
+    await expect(prepareTrialAccount(after.target, now, { subject: 'chess-1', sequence: true })).resolves.toBeUndefined();
+    await expect(prepareTrialAccount(after.target, now, { subject: 'chess-1', sequence: false })).rejects.toThrow('experience_library 4');
+    await expect(prepareTrialAccount(busy.target, now, { subject: 'chess-1', sequence: true })).rejects.toThrow('in use by another run');
+  });
+
   test('so does the AI Gateway a gateway model\'s run selects, beside the catalog', async () => {
     const gated = deployment({ workspaces: [], held: { user_config: 2 }, catalogVersion: 1, gateway: 'kinu-ai-gateway-staging' });
     const stale = deployment({ workspaces: [], held: { user_config: 2 }, catalogVersion: 1 });
@@ -168,9 +190,9 @@ describe('opening on a trial account', () => {
     const rival = deployment({ workspaces: [{ name: evalWorkspaceName('chess-3'), lastVisited: live }] });
 
     servers.push(retried.server, rival.server);
-    await expect(prepareTrialAccount(retried.target, now, 'minecraft-3')).resolves.toBeUndefined();
+    await expect(prepareTrialAccount(retried.target, now, { subject: 'minecraft-3', sequence: false })).resolves.toBeUndefined();
     expect(retried.deleted).toHaveLength(1);
-    await expect(prepareTrialAccount(rival.target, now, 'minecraft-3')).rejects.toThrow('in use by another run');
+    await expect(prepareTrialAccount(rival.target, now, { subject: 'minecraft-3', sequence: false })).rejects.toThrow('in use by another run');
     expect(rival.deleted).toEqual([]);
   });
 
