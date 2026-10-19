@@ -335,6 +335,12 @@ describe("a share view's shot", () => {
     };
   }
 
+  /** Share s1 taken off the Gallery (and turned to the owner's access) while a shot is taken, then back and listed again. */
+  const unlistedAndBack = (store: SlatePictures, bucket: MemoryBucket) => async () => {
+    await store.unlisted('ledger', 'board', 's1', bucket);
+    store.listed('board', 's1', 'rev-1', T0 + 40_000);
+  };
+
   test('taken while its share was unlisted and listed again keeps nothing: the new listing is due a shot of its own', async () => {
     const store = pictures();
     const bucket = memoryBucket();
@@ -342,14 +348,7 @@ describe("a share view's shot", () => {
     const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => true });
 
     store.listed('board', 's1', 'rev-1', T0);
-
-    // Taken off the Gallery and turned to the owner's access while the page loads, then back and listed again.
-    const unlistedAndBack = async () => {
-      await store.unlisted('ledger', 'board', 's1', bucket);
-      store.listed('board', 's1', 'rev-1', T0 + 40_000);
-    };
-
-    expect(await store.captureDue(capture(during(unlistedAndBack, A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(await store.captureDue(capture(during(unlistedAndBack(store, bucket), A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
     expect(store.shareDigest('board', 's1')).toBeNull();
     expect(bucket.objects.size).toBe(0);
     expect(store.nextDueAt()).toBe(T0 + 70_000);
@@ -383,6 +382,48 @@ describe("a share view's shot", () => {
     expect(await store.captureDue(capture(shooting(A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
     expect(store.shareDigest('board', 's1')).toBeNull();
     expect(stored.objects.size).toBe(0);
+  });
+
+  test('that fails after its listing was replaced leaves the new listing due its own first shot', async () => {
+    const store = pictures();
+    const stored = memoryBucket();
+    let put = false;
+
+    // R2 takes the retired shot, then refuses to delete it.
+    const bucket: MemoryBucket = {
+      ...stored,
+      put: async (key, value, options) => {
+        put = true;
+        await stored.put(key, value, options);
+      },
+      delete: async (keys) => {
+        if (put) throw new Error('R2 is unavailable');
+        await stored.delete(keys);
+      },
+    };
+
+    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => true });
+
+    store.listed('board', 's1', 'rev-1', T0);
+    expect(await store.captureDue(capture(during(unlistedAndBack(store, bucket), A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.nextDueAt()).toBe(T0 + 70_000);
+  });
+
+  test('found listed no more after its listing was replaced leaves the new listing due', async () => {
+    const store = pictures();
+    const bucket = memoryBucket();
+
+    store.listed('board', 's1', 'rev-1', T0);
+
+    // Unlisted and listed again while its host is looked up, which then answers nothing for the shot begun before.
+    const share: PictureCapture['share'] = async () => {
+      await unlistedAndBack(store, bucket)();
+
+      return null;
+    };
+
+    expect(await store.captureDue(capture(shooting(A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
+    expect(store.nextDueAt()).toBe(T0 + 70_000);
   });
 
   test('of a view whose listing ended goes at once, even where R2 refuses its pictures', async () => {

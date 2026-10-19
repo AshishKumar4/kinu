@@ -145,16 +145,18 @@ export class SlatePictures {
     markStoreChanged(this.db);
   }
 
+  /** A shot of `picture` that failed: its own listing waits longer, or gives up; a listing that replaced it is left due. */
   private failed(picture: DuePicture, now: number): void {
     const attempts = picture.attempts + 1;
+    const at = [picture.slate, picture.view, picture.listing] as const;
 
     if (attempts >= ATTEMPTS) {
-      this.db.exec(`UPDATE slate_pictures SET due_at = NULL, due_since = NULL, attempts = 0 WHERE slate = ? AND view = ?`, picture.slate, picture.view);
+      this.db.exec(`UPDATE slate_pictures SET due_at = NULL, due_since = NULL, attempts = 0 WHERE slate = ? AND view = ? AND listing IS ?`, ...at);
 
       return;
     }
 
-    this.db.exec(`UPDATE slate_pictures SET due_at = ?, attempts = ? WHERE slate = ? AND view = ?`, now + RETRY_MS * 2 ** attempts, attempts, picture.slate, picture.view);
+    this.db.exec(`UPDATE slate_pictures SET due_at = ?, attempts = ? WHERE slate = ? AND view = ? AND listing IS ?`, now + RETRY_MS * 2 ** attempts, attempts, ...at);
   }
 
   /** Each slate's private preview picture, for its owner alone. */
@@ -257,7 +259,7 @@ export class SlatePictures {
       const entry = yield* Effect.promise(async () => capture.share(picture.view));
 
       if (entry === null) {
-        this.db.exec(`UPDATE slate_pictures SET due_at = NULL, attempts = 0 WHERE slate = ? AND view = ?`, picture.slate, picture.view);
+        this.db.exec(`UPDATE slate_pictures SET due_at = NULL, attempts = 0 WHERE slate = ? AND view = ? AND listing IS ?`, picture.slate, picture.view, picture.listing);
 
         return false;
       }
