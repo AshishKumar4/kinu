@@ -379,7 +379,9 @@ export class ActorSession {
 
     this.canonical.revertTo(sessionId, entryId, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
 
-    if (told !== undefined && rewound !== null) await this.tellRewound(sessionId, rewindNotice(rewoundWork(rewound), told.computer));
+    const notice = told === undefined || rewound === null ? null : rewindNotice(rewoundWork(rewound), told.computer);
+
+    if (notice !== null) await this.tellRewound(sessionId, notice);
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }

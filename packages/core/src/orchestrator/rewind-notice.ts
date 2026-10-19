@@ -173,8 +173,11 @@ export interface RewindNotice {
   readonly metadata: JsonObject;
 }
 
-export function rewindNotice(work: RewoundWork, computer: RewindComputer | undefined): RewindNotice {
+/** The notice owed, or null when it would say nothing: the rewound turns did nothing, and no computer was read. */
+export function rewindNotice(work: RewoundWork, computer: RewindComputer | undefined): RewindNotice | null {
   const files = [...work.files.keys()];
+
+  if (computer === undefined && files.length === 0 && work.commands.length === 0 && work.programs.ran === 0) return null;
 
   const text = [
     'The person rewound this conversation to before one of its messages. Your turns after it are gone from the chat, '
