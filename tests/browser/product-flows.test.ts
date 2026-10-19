@@ -412,6 +412,13 @@ describe(productFlowTestName('titled-chat', 'a chat is named from its brief (100
     expect([INTERRUPTED_BRIEF, INTERRUPTED_TITLE]).toContain(chat.title);
     expect(chat.title).not.toBe(CONTINUE);
   });
+
+  // 1008-d: the owner's chat, stopped by hand, stayed marked as wanting them (2026-10-08).
+  test('a stop asks nothing of the owner: the tab is idle once the stopped turn ends, and after Continue', () => {
+    const chat = verdictOf(observed, 'titled-chat');
+
+    expect([chat.statusAfterStop, chat.statusAfterContinue]).toEqual(['idle', 'idle']);
+  });
 });
 
 describe(productFlowTestName('hire-home', 'a hire lives in a home of its own name (1008-g)'), () => {
