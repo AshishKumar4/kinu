@@ -61,7 +61,8 @@ export function pcAgentDaemon(opts: { gitBin?: string } = {}): PcAgentDaemon {
       return promise;
     },
     snapshot: async (hint) => {
-      v.parse(v.nullable(v.string()), await store.ensure(hint, hint.dir));
+      // A raw view: the conformance store's git runs as the daemon's own, as it does on a machine with no sandbox.
+      v.parse(v.nullable(v.string()), await store.ensure({ raw: true }, hint, hint.dir));
     },
   };
 }

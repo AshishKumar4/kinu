@@ -681,6 +681,9 @@ function buildLinuxArgv(view, options) {
   for (const dir of view.hiddenDirs) argv.push('--tmpfs', dir);
 
   for (const file of view.hiddenFiles) argv.push('--ro-bind', '/dev/null', file);
+
+  // Kinu's own directories a confined program of the daemon writes (a checkpoint store), after the mask that hides them.
+  for (const dir of options.writable ?? []) argv.push('--bind', dir, dir);
   // Last: a root holding it (the owner's home) would shadow it, and the mask on
   // Kinu's own directory, which holds it, would hide it.
   argv.push('--bind', view.agentHome, view.agentHome);
@@ -688,7 +691,7 @@ function buildLinuxArgv(view, options) {
   argv.push('--clearenv');
 
   for (const name of Object.keys(options.env)) argv.push('--setenv', name, options.env[name]);
-  argv.push('--', 'bash', '-c', options.command);
+  argv.push('--', ...(options.program ?? ['bash', '-c', options.command]));
 
   return argv;
 }
@@ -698,9 +701,10 @@ function buildLinuxArgv(view, options) {
  *  agent's own" expressible without enumerating what to hide. Kinu's own
  *  directory is denied after the consented roots, which may hold it, and the
  *  agent's directories inside it are allowed again after that. */
-function buildMacProfile(view) {
+function buildMacProfile(view, daemonDirs = []) {
   const subpath = (dir) => `(subpath ${JSON.stringify(dir)})`;
-  const own = [view.agentHome, view.agentTmp];
+  // Kinu's directories a confined program of the daemon writes (a checkpoint store) are allowed again with the agent's.
+  const own = [view.agentHome, view.agentTmp, ...daemonDirs];
   const writable = [...own, ...view.roots, '/private/tmp', '/private/var/tmp'];
 
   return [
@@ -823,6 +827,24 @@ function plan(options) {
     cwd,
     gpu,
   };
+}
+
+/**
+ * A program the DAEMON runs in a frame's sandbox (L111 #3): its checkpoint git, which reads and writes the frame's work
+ * tree. The view's own mounts or profile, so a directory a command swapped for a link out of the roots leads nowhere;
+ * `writable` adds Kinu's directories it needs (its store), and `env` is the daemon's own for it, passed whole. Starts
+ * in the agent's home, which always exists; the program enters its directory itself, inside.
+ */
+function confined(options) {
+  const platform = options.platform ?? os.platform();
+  const { view, program, env } = options;
+  const writable = options.writable ?? [];
+
+  if (platform === 'darwin') {
+    return { argv: [MAC_SANDBOX_EXEC, '-p', buildMacProfile(view, writable), ...program], env, cwd: view.agentHome };
+  }
+
+  return { argv: buildLinuxArgv(view, { cwd: view.agentHome, env, program, writable, gpu: [] }), env: {}, cwd: view.agentHome };
 }
 
 /**
@@ -953,6 +975,7 @@ module.exports = {
   rawEnvironment,
   launchDotenv,
   plan,
+  confined,
   probe,
   helloCapability,
 };

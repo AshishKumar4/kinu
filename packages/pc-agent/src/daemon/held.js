@@ -28,7 +28,18 @@ function entryAt(at, follow = 0) {
     mkdir: (recursive) => { fs.mkdirSync(at, { recursive }); },
     unlink: () => { fs.unlinkSync(at); },
     rmdir: () => { fs.rmdirSync(at); },
+    stat: () => fs.lstatSync(at, { throwIfNoEntry: false }),
+    list: (read) => read(fs.readdirSync(at, { withFileTypes: true }).map((entry) => listed(entry.name, entry, () => fs.lstatSync(path.join(at, entry.name), { throwIfNoEntry: false })))),
   };
+}
+
+/**
+ * One entry of a held directory: its name, its kind as the directory reports it, and its own stat, a link's being the
+ * link's (`stat()`, undefined once it is gone), read through the directory while `list(read)` runs `read`. A link is never
+ * followed here: what it leads to is judged by the caller.
+ */
+function listed(name, dirent, stat) {
+  return { name, isDirectory: () => dirent.isDirectory(), isSymbolicLink: () => dirent.isSymbolicLink(), stat };
 }
 
 /**
@@ -60,6 +71,20 @@ function procEntry(dir, name, shown) {
     mkdir: named(entry.mkdir),
     unlink: named(entry.unlink),
     rmdir: named(entry.rmdir),
+    stat: named(() => fs.lstatSync(at, { throwIfNoEntry: false })),
+    // The directory is held by its own descriptor while it is read, so a link swapped in for it meanwhile reads nothing.
+    list: named((read) => {
+      const held = fs.openSync(at, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+
+      try {
+        const through = `/proc/self/fd/${held}`;
+
+        return read(fs.readdirSync(through, { withFileTypes: true })
+          .map((child) => listed(child.name, child, () => fs.lstatSync(`${through}/${child.name}`, { throwIfNoEntry: false }))));
+      } finally {
+        fs.closeSync(held);
+      }
+    }),
   };
 }
 
@@ -71,6 +96,11 @@ const procRoot = () => fs.openSync('/', O_PATH | O_DIRECTORY | O_NOFOLLOW);
 const DARWIN_O_SEARCH = 0x40000000 | O_DIRECTORY;
 
 const DARWIN_O_CLOEXEC = 0x1000000;
+
+// sys/fcntl.h: O_SYMLINK opens a link itself; O_NONBLOCK keeps a stat's open of a FIFO from waiting for a writer.
+const DARWIN_O_SYMLINK = 0x200000;
+
+const DARWIN_O_NONBLOCK = 0x4;
 
 const DARWIN_AT_REMOVEDIR = 0x80;
 
@@ -148,7 +178,49 @@ function darwinEntry(dir, name, shown) {
     },
     unlink: () => { ok(symbols.unlinkat(dir, bytes, 0), 'unlink'); },
     rmdir: () => { ok(symbols.unlinkat(dir, bytes, DARWIN_AT_REMOVEDIR), 'rmdir'); },
+    // The entry itself, a link's being the link's: opened without following it (O_SYMLINK for a link), then fstat.
+    stat: () => {
+      const opened = openat(dir, bytes, O_RDONLY | O_NOFOLLOW | DARWIN_O_NONBLOCK, 0);
+      const held = opened >= 0 ? opened : linkOrMissing(() => openat(dir, bytes, O_RDONLY | DARWIN_O_SYMLINK, 0), () => failure('open', shown));
+
+      if (held === null) return undefined;
+
+      try {
+        return fs.fstatSync(held);
+      } finally {
+        fs.closeSync(held);
+      }
+    },
+    // macOS opens /dev/fd/N as a dup of descriptor N, so the held directory is read where it is, not by its path.
+    list: (read) => {
+      const held = ok(openat(dir, bytes, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0), 'open');
+
+      try {
+        return read(fs.readdirSync(`/dev/fd/${held}`, { withFileTypes: true }).map((entry) => {
+          const inside = darwinEntry(held, entry.name, path.join(shown, entry.name));
+
+          return listed(entry.name, entry, () => inside.stat());
+        }));
+      } finally {
+        fs.closeSync(held);
+      }
+    },
   };
+}
+
+/** A link's own descriptor (`openLink`, O_SYMLINK), when the no-follow open met one; null when nothing is there now.
+ *  `failure` is the last open's error, read before anything else can set it. */
+function linkOrMissing(openLink, failure) {
+  const cause = failure();
+
+  if (cause.code === 'ENOENT') return null;
+
+  if (cause.code !== 'ELOOP') throw cause;
+  const link = openLink();
+
+  if (link < 0) throw failure();
+
+  return link;
 }
 
 const darwinRoot = () => fs.openSync('/', O_RDONLY | O_DIRECTORY);
@@ -197,4 +269,4 @@ function atJudged(view, judged, { createParents = false } = {}, act) {
   }
 }
 
-module.exports = { atJudged };
+module.exports = { atJudged, movedUnderneath };

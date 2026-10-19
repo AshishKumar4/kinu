@@ -28,9 +28,12 @@ function engines(root: string, gitBin = 'git') {
     ensure: v.function(), mutate: v.function(), list: v.function(), workdirForPath: v.function(),
   }), daemon.createCheckpoints({ base, gitBin }));
 
+  // A raw view, as the host engine runs: one set of rules, not the sandbox around a device's git.
+  const view = { raw: true };
+
   const device = {
-    ensure: async (dir: string, turnId: string) => v.parse(v.nullable(v.string()), await raw.ensure({ agent: AGENT, dir, turnId, sessionId: 's' })),
-    mutate: async (dir: string, turnId: string, apply: () => string) => v.parse(v.string(), await raw.mutate({ agent: AGENT, dir, turnId, sessionId: 's' }, undefined, apply)),
+    ensure: async (dir: string, turnId: string) => v.parse(v.nullable(v.string()), await raw.ensure(view, { agent: AGENT, dir, turnId, sessionId: 's' })),
+    mutate: async (dir: string, turnId: string, apply: () => string) => v.parse(v.string(), await raw.mutate(view, { agent: AGENT, dir, turnId, sessionId: 's' }, undefined, apply)),
     workdirForPath: (path: string) => v.parse(v.string(), raw.workdirForPath(path)),
   };
 
