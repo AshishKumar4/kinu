@@ -492,8 +492,11 @@ export class ChatSession {
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
-  /** A turn runs, or one queued may: one a question to the owner holds is parked until they close it. */
-  get turnOwed(): boolean { return this.pumpActive || (this.queue.length > 0 && this.queue.some(this.runnable())); }
+  get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
+
+  /** What its wake waits on: a turn runs, or one queued may. One a question to the owner holds is parked until they close
+   *  it, and wakes nothing meanwhile; a Stop still finds it owed and cancels it. */
+  get turnRunnable(): boolean { return this.pumpActive || (this.queue.length > 0 && this.queue.some(this.runnable())); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
 

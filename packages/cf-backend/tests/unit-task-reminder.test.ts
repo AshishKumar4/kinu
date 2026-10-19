@@ -7,6 +7,8 @@ import { expect, test } from 'bun:test';
 import type { OwnerAnswer } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger } from '@kinu.run/test-utils';
+import { actorConnectionTag } from '@kinu.run/core';
+import { asPane } from './helpers/agents-sdk';
 import { agentWakes, catalogTurn, driveUntil, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
@@ -91,3 +93,52 @@ for (const closing of ['answers', 'withdraws', 'withdraws after the isolate ende
     await driveUntil(workspace, `the reminder never ran once the owner ${closing}`, () => asked.some((sent) => sent.includes('open task(s)')));
   });
 }
+
+// Parked is no wake, and still work its agent holds: a Stop of the agent that hired it finds the queue and cancels it.
+test("a hired agent's reminder parked behind its question is cancelled by its hirer's Stop", async () => {
+  let asking = false;
+
+  const gateway = stubAiBinding((run) => {
+    const { messages } = requestOf(run);
+    const sent = JSON.stringify(messages);
+    const results = messages.filter((message) => message.role === 'tool').length;
+
+    if (sent.includes('Plan the ledger migration')) {
+      if (results === 0) return toolCallCompletion(run, { tool: 'tasks', args: { op: 'add', titles: ['Migrate the ledger to integer cents'] } }, 'add_0');
+
+      asking ||= results === 1;
+
+      return results === 1 ? toolCallCompletion(run, { tool: 'ask_owner', args: ASK }, 'call_ask') : chatCompletion(run, 'Storing integer cents.');
+    }
+
+    if (sent.includes('Keep the ledger.') || results > 0) return chatCompletion(run, 'Ready.');
+
+    return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'durable', message: 'Keep the ledger.' } }, 'call_hire');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await catalogTurn(workspace.agent, 'Hire a ledger keeper.');
+  const hired = workspace.db.query<{ id: string }, []>("SELECT actor_id AS id FROM workspace_actors WHERE origin = 'agent'").get()?.id ?? '';
+
+  await workspace.agent.harnessAgentsIdle();
+  await asPane([actorConnectionTag(hired)], () => workspace.agent.send('Plan the ledger migration and start on it.', crypto.randomUUID()));
+  await driveUntil(workspace, 'the hired agent never asked', () => asking);
+  await workspace.agent.harnessAgentsIdle();
+  await workspace.agent.terminalRetryPass();
+  const open = (await workspace.agent.listOwnerQuestions()).filter((question) => question.actor === hired && question.asked.status === 'open');
+
+  expect({ open: open.length, wakes: agentWakes(workspace.db).filter((actorId) => actorId === hired) }).toEqual({ open: 1, wakes: [] });
+
+  const log = createRecordingLogger();
+  const restore = setDiagnosticsSink(log);
+
+  try {
+    await workspace.agent.cancelCurrentWork();
+    await driveUntil(workspace, "the Stop never cancelled the hired agent's queue", () => log.emitted.some((line) => line.event === 'turn.queued_cancelled'));
+  } finally {
+    restore();
+  }
+
+  expect(log.emitted.filter((line) => line.event === 'turn.queued_cancelled').map((line) => line.fields)).toEqual([{ count: 1 }]);
+});

@@ -1348,7 +1348,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const record = this.actorDirectoryStore().retained(retirement.reference.actorId);
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
         // Read before it retires: its questions leave the stack with it.
-        const asked = record !== null && actorReadHandle(this.boundSql, record).config.getHoldsQuestions();
+        const asked = record !== null && this.holdsQuestions(record.actorId);
 
         if (own) await this.agentTurns.beforeRetirement(record.actorId, retirement.destroy || retirement.interrupt);
 
@@ -2260,8 +2260,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           for (const event of this.carried(actor.actorId, cancelled)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
         }
 
-        if (await this.agentTurns.holdsTurn(actor.actorId)) {
-          await this.agentTurns.beforeRetirement(actor.actorId, true);
+        // One whose queue waits behind its question to its owner arms no wake, and is asked all the same.
+        if (await this.agentTurns.holdsTurn(actor.actorId)
+          || (this.holdsQuestions(actor.actorId) && await this.agentCall(actor.actorId, (isolate, snapshot) => isolate.owed(snapshot)))) {
+          await this.agentTurns.interrupt(actor.actorId, null);
           continue;
         }
 
@@ -3233,6 +3235,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.liveReadsMoved(readsOfTables(['plan_reviews']));
     this.slowOverview = null;
     this.overviewChanged();
+  }
+
+  /** Whether the agent was ever offered `ask_owner`, read off its row as it retires too. */
+  private holdsQuestions(actorId: string): boolean {
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    return record !== null && actorReadHandle(this.boundSql, record).config.getHoldsQuestions();
   }
 
   /** Marks the agent as one the stack asks for questions; its call parks in its own isolate's store. */

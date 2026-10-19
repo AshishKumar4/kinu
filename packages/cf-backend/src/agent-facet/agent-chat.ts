@@ -674,7 +674,7 @@ export class FacetChat {
   /** The next instant to wake it, or none: a turn running or queued, or effects still closing, is looked at again a lap
    *  later. */
   private owed(): number | null {
-    const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete() || this.questions.owedResumes().length > 0;
+    const busy = this.session.turnRunnable || this.terminal.closing || this.terminal.hasIncomplete() || this.questions.owedResumes().length > 0;
 
     // The workspace keeps one wake per agent, the latest it was told: a turn waiting out its backoff names its end.
     const next = Math.min(
