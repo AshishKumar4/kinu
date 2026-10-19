@@ -197,6 +197,8 @@ describe('the workspace root answers the walk-back', () => {
           { name: 'file', input: { op: 'write', path: 'notes/plan.md', content: 'step one\nstep two' } },
           { name: 'file', input: { op: 'edit', path: 'notes/absent.md', edits: [{ old_text: 'never', new_text: 'there' }] } },
           { name: 'shell', input: { runtime: 'workspace', command: 'echo started > notes/log.txt' } },
+          // Most work runs in programs: their own writes go unlisted, but that they ran is told.
+          { name: 'eval', input: { code: 'return 1 + 1;' } },
         ],
       });
 
@@ -220,8 +222,8 @@ describe('the workspace root answers the walk-back', () => {
 
       // A card of its own, from the notice's fields: the file written, and the command that ran.
       expect(card?.kind === 'system_event' ? card.event : card?.kind).toBe(CHAT_REWOUND_EVENT);
-      expect(v.parse(v.looseObject({ rewoundPaths: v.array(v.string()), rewoundCommands: v.number() }), notice?.metadata))
-        .toMatchObject({ rewoundPaths: ['notes/plan.md'], rewoundCommands: 1 });
+      expect(v.parse(v.looseObject({ rewoundPaths: v.array(v.string()), rewoundCommands: v.number(), rewoundPrograms: v.number() }), notice?.metadata))
+        .toMatchObject({ rewoundPaths: ['notes/plan.md'], rewoundCommands: 1, rewoundPrograms: 1 });
 
       const next = await turns.prepare({ messages: [{ role: 'user', content: 'what changed?' }] });
       const read = JSON.stringify(next.prompt);

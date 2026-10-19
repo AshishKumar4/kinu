@@ -50,6 +50,7 @@ const SummaryFieldsSchema = v.looseObject({
   rewoundFiles: v.optional(Count),
   rewoundPaths: v.optional(v.array(v.string())),
   rewoundCommands: v.optional(Count),
+  rewoundPrograms: v.optional(Count),
   runningProcesses: v.optional(Count),
   exposedPorts: v.optional(v.array(v.number())),
 });
@@ -104,6 +105,7 @@ function rewound(fields: SummaryFields): EventSummary {
   return withLine('Rewound', joined([
     counted(fields.rewoundFiles, (count) => `${plural(count, 'file')} changed`),
     counted(fields.rewoundCommands, (count) => plural(count, 'command')),
+    counted(fields.rewoundPrograms, (count) => plural(count, 'program')),
     counted(fields.runningProcesses, (count) => `${plural(count, 'process', 'processes')} running`),
     ports.length > 0 && `${ports.length === 1 ? 'port' : 'ports'} ${ports.join(', ')}`,
   ]), { ...(paths.length > 0 && { detail: [...paths, ...(unnamed > 0 ? [`and ${plural(unnamed, 'more file')}`] : [])].join('\n') }) });

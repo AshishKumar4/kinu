@@ -30,7 +30,7 @@ import type { RunEventRecorder } from '../events/recorder';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import { projectJsonValue, type JsonObject } from '../utils/json';
-import { rewindNotice, rewoundWork, type RewindComputer, type RewindNotice } from './rewind-notice';
+import { rewindNotice, rewoundWork, type RewindNotice, type RewindTold } from './rewind-notice';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
@@ -371,15 +371,15 @@ export class ActorSession {
   }
 
   /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction.
-   *  With `computer`, a chat-only rewind: the agent is told what its rewound turns did and what the computer holds now,
-   *  in a row of the chat its next turn reads, which starts no turn of its own. */
-  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>, computer?: RewindComputer): Promise<void> {
+   *  With `told`, a chat-only rewind: the agent is told what its rewound turns did, and what the computer holds now where
+   *  the host read it, in a row of the chat its next turn reads, which starts no turn of its own. */
+  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>, told?: RewindTold): Promise<void> {
     // Read before the cut deletes them; a turn that ran in between fails the cut's idle check.
-    const rewound = computer === undefined ? null : await this.canonical.transcript(sessionId).partsFrom(entryId);
+    const rewound = told === undefined ? null : await this.canonical.transcript(sessionId).partsFrom(entryId);
 
     this.canonical.revertTo(sessionId, entryId, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
 
-    if (computer !== undefined && rewound !== null) await this.tellRewound(sessionId, rewindNotice(rewoundWork(rewound), computer));
+    if (told !== undefined && rewound !== null) await this.tellRewound(sessionId, rewindNotice(rewoundWork(rewound), told.computer));
     this.dynamic.unload();
     await this.restoreWorkingHistory();
   }

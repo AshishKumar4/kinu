@@ -6905,9 +6905,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async revertConversation(entryId: string, options?: RevertOptions): Promise<void> {
     // Parsed here too: a client's argument reaches this method unchecked.
     const chatOnly = v.parse(RevertOptionsSchema, options ?? {}).chatOnly === true;
-    const computer = chatOnly ? await this.executors.rewindComputer() : undefined;
+    const told = chatOnly ? { computer: await this.executors.rewindComputer() } : undefined;
 
-    await this.mainCall((isolate, snapshot) => isolate.revertTo(snapshot, entryId, computer));
+    await this.mainCall((isolate, snapshot) => isolate.revertTo(snapshot, entryId, told));
   }
 
   /**

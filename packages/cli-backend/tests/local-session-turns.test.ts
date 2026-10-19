@@ -18,7 +18,7 @@ import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, } from './helpers/local-session';
-import { keptMediaName } from '@kinu.run/core';
+import { CHAT_REWOUND_EVENT, keptMediaName } from '@kinu.run/core';
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
@@ -638,6 +638,52 @@ describe('LocalAgentSession — the walk-back', () => {
     expect(read).toContain('first ask');
     expect(read.at(-1)).toBe('what did I say?');
     expect(read.some((text) => text.includes('second ask'))).toBe(false);
+  });
+
+  // REWIND-0924 on this machine: the walk-back leaves files as they are, and the agent is told what its rewound turn
+  // did. This machine's processes and ports have no reader, so the notice names none.
+  test("a walk-back tells the agent's next turn what its rewound turn changed, and starts none", async () => {
+    const prompts: string[] = [];
+    let wrote = false;
+
+    const model = scriptedTurnModel({ doGenerate: (options) => {
+      const prompt = JSON.stringify(options.prompt);
+      const writes = prompt.includes('write the plan') && !wrote;
+
+      prompts.push(prompt);
+      wrote ||= writes;
+
+      return {
+        content: writes
+          ? [{ type: 'tool-call' as const, toolCallId: 'plan-write', toolName: 'file', input: JSON.stringify({ op: 'write', path: 'notes/plan.md', content: 'step one' }) }]
+          : [{ type: 'text', text: 'answered' }],
+        finishReason: { unified: writes ? 'tool-calls' : 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+      };
+    } });
+
+    const { rt, session } = setup('unused', model);
+
+    await session.send('first ask', { id: crypto.randomUUID() });
+    await session.send('write the plan', { id: crypto.randomUUID() });
+    const second = (await transcript(rt)).filter((row) => row.role === 'user').at(-1);
+
+    if (second === undefined) throw new Error('the fixture recorded no user entry');
+    const asked = prompts.length;
+
+    await session.revertConversation(second.id, { chatOnly: true });
+    expect(prompts).toHaveLength(asked);
+    const notice = (await getChatHistoryPage(rt.stores.history.transcript(CHAT_SESSION_ID), {}, keptMediaName)).items.at(-1);
+
+    expect(v.parse(v.looseObject({ kinuEvent: v.string(), rewoundPaths: v.array(v.string()) }), notice?.metadata))
+      .toMatchObject({ kinuEvent: CHAT_REWOUND_EVENT, rewoundPaths: ['notes/plan.md'] });
+    expect(notice?.metadata).not.toHaveProperty('exposedPorts');
+
+    await session.send('what changed?', { id: crypto.randomUUID() });
+    await session.end();
+
+    expect(prompts.at(-1)).toContain('notes/plan.md');
   });
 
   test('a turn in flight refuses the walk-back and keeps the conversation', async () => {
