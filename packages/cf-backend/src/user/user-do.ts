@@ -1227,7 +1227,7 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      return settle(this.terminals.closeDeviceTerminal(terminal.device, terminal.session));
+      return settle(this.terminals.closeDeviceTerminal(terminal, ws));
     }
 
     const viewer = screenFromSocket(ws);

@@ -5,7 +5,9 @@
 // under its name, in its folder, as the computer's sessions come back after a
 // restart (D90). The shell itself is pty.js's and lives only as long as this
 // daemon does. Keying by workspace keeps one workspace from naming, listing or
-// attaching to another's sessions on the same machine.
+// attaching to another's sessions on the same machine. The file is read for
+// every call and written whole after each change, so a daemon and the successor
+// an update starts beside it never act on a copy the other has moved past.
 'use strict';
 
 const crypto = require('node:crypto');
@@ -41,33 +43,30 @@ function parseName(value) {
   return name;
 }
 
-/** Records as the file holds them; one this daemon cannot read is dropped, and said. */
+/** Records as the file holds them, by workspace, in a map no workspace's name can reach past (`constructor` is a
+ *  name too); one this daemon cannot read is dropped, and said. */
 function readRecords(file, log) {
+  const records = new Map();
   let text;
 
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (err) {
-    if (err && err.code === 'ENOENT') return {};
+    if (err && err.code === 'ENOENT') return records;
     throw err;
   }
 
   try {
-    const parsed = JSON.parse(text);
-    const records = {};
-
-    for (const [workspace, list] of Object.entries(parsed)) {
+    for (const [workspace, list] of Object.entries(JSON.parse(text))) {
       if (!Array.isArray(list)) continue;
-      records[workspace] = list.filter((record) => record && typeof record.id === 'string' && typeof record.name === 'string')
-        .map((record) => ({ id: record.id, name: record.name, cwd: typeof record.cwd === 'string' ? record.cwd : null }));
+      records.set(workspace, list.filter((record) => record && typeof record.id === 'string' && typeof record.name === 'string')
+        .map((record) => ({ id: record.id, name: record.name, cwd: typeof record.cwd === 'string' ? record.cwd : null })));
     }
-
-    return records;
   } catch (err) {
     log('device.terminal_records_unreadable', file, err instanceof Error ? err.message : String(err));
-
-    return {};
   }
+
+  return records;
 }
 
 /**
@@ -75,84 +74,97 @@ function readRecords(file, log) {
  * session; its name is a pty.js session name and never a path.
  */
 function createTerminalRecords({ file, log = () => {}, mint = () => `pty-${crypto.randomBytes(12).toString('base64url')}` }) {
-  const records = readRecords(file, log);
-
   /** A complete file, renamed over the last, so a crash leaves one or the other. */
-  function save() {
+  function save(records) {
     const temporary = `${file}.${process.pid}.tmp`;
 
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(temporary, `${JSON.stringify(records, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(temporary, `${JSON.stringify(Object.fromEntries(records), null, 2)}\n`, { mode: 0o600 });
     fs.renameSync(temporary, file);
   }
 
-  function of(workspace) {
-    return records[parseWorkspace(workspace)] ?? [];
+  /** `change` over the file's records for `workspace`, its first session made when it has none; saved when asked. */
+  function over(workspace, change) {
+    const records = readRecords(file, log);
+    const named = parseWorkspace(workspace);
+    let held = records.get(named) ?? [];
+    let dirty = false;
+
+    if (held.length === 0) {
+      held = [{ id: mint(), name: FIRST_NAME, cwd: null }];
+      records.set(named, held);
+      dirty = true;
+    }
+
+    const answer = change(held, () => { dirty = true; });
+
+    if (dirty) save(records);
+
+    return answer;
   }
 
   /** A workspace's sessions, its first made when it has none. */
   function list(workspace) {
-    const held = of(workspace);
-
-    if (held.length > 0) return held;
-    records[workspace] = [{ id: mint(), name: FIRST_NAME, cwd: null }];
-    save();
-
-    return records[workspace];
+    return over(workspace, (held) => held.map((record) => ({ ...record })));
   }
 
   function find(workspace, id) {
-    return of(workspace).find((record) => record.id === id) ?? null;
+    return over(workspace, (held) => held.find((record) => record.id === id) ?? null);
   }
 
   function create(workspace, name) {
-    const held = list(workspace);
+    return over(workspace, (held, changed) => {
+      if (held.length >= MAX_SESSIONS_PER_WORKSPACE) {
+        throw new Error(`this workspace keeps ${MAX_SESSIONS_PER_WORKSPACE} sessions on this machine already; close one first`);
+      }
 
-    if (held.length >= MAX_SESSIONS_PER_WORKSPACE) {
-      throw new Error(`this workspace keeps ${MAX_SESSIONS_PER_WORKSPACE} sessions on this machine already; close one first`);
-    }
+      const taken = new Set(held.map((record) => record.name));
+      let next = 2;
 
-    const taken = new Set(held.map((record) => record.name));
-    let next = 2;
+      while (taken.has(`${FIRST_NAME} ${next}`)) next += 1;
+      const record = { id: mint(), name: name === undefined || name === null ? `${FIRST_NAME} ${next}` : parseName(name), cwd: null };
 
-    while (taken.has(`${FIRST_NAME} ${next}`)) next += 1;
-    const record = { id: mint(), name: name === undefined || name === null ? `${FIRST_NAME} ${next}` : parseName(name), cwd: null };
+      held.push(record);
+      changed();
 
-    held.push(record);
-    save();
-
-    return record;
+      return record;
+    });
   }
 
   function rename(workspace, id, name) {
-    const record = find(workspace, id);
+    return over(workspace, (held, changed) => {
+      const record = held.find((candidate) => candidate.id === id);
 
-    if (record === null) throw new Error('that session is gone; open a new one');
-    record.name = parseName(name);
-    save();
+      if (record === undefined) throw new Error('that session is gone; open a new one');
+      record.name = parseName(name);
+      changed();
 
-    return record;
+      return record;
+    });
   }
 
   /** The folder a session's shell opened in, kept for the shell a restart opens there again. */
   function settle(workspace, id, cwd) {
-    const record = find(workspace, id);
+    over(workspace, (held, changed) => {
+      const record = held.find((candidate) => candidate.id === id);
 
-    if (record === null || record.cwd === cwd) return;
-    record.cwd = cwd;
-    save();
+      if (record === undefined || record.cwd === cwd) return;
+      record.cwd = cwd;
+      changed();
+    });
   }
 
   /** Forgets a session; the shell, if one runs, is the caller's to end. */
   function remove(workspace, id) {
-    const held = of(workspace);
-    const at = held.findIndex((record) => record.id === id);
+    return over(workspace, (held, changed) => {
+      const at = held.findIndex((record) => record.id === id);
 
-    if (at < 0) return false;
-    held.splice(at, 1);
-    save();
+      if (at < 0) return false;
+      held.splice(at, 1);
+      changed();
 
-    return true;
+      return true;
+    });
   }
 
   return { list, find, create, rename, settle, remove };

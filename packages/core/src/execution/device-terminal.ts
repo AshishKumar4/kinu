@@ -229,8 +229,18 @@ export class DeviceTerminalHub {
     pane.close(1000, error);
   }
 
-  /** The pane's socket closed: the session keeps running on the machine, detached, for the next pane (1014-t). */
-  paneClosed(device: string, session: string): void {
+  /** A pane other than `closing` shows the session, or a token minted for it waits for one: a second open would steal
+   *  the first's output. */
+  claimed(device: string, session: string, closing?: DeviceSocket): boolean {
+    const showing = this.ctx.getWebSockets(terminalTag(device, session)).some((ws) => ws !== closing && ws.readyState === WS_OPEN);
+
+    return showing || this.pendingFor(device, session).length > 0;
+  }
+
+  /** The pane's socket closed: the session keeps running on the machine, detached, for the next pane (1014-t). A late
+   *  close from a pane another has since replaced, or one opening now, leaves the session attached to that one. */
+  paneClosed(device: string, session: string, closing?: DeviceSocket): void {
+    if (this.claimed(device, session, closing)) return;
     this.devices.tunnel(device)?.notify({ type: DEVICE_FRAMES.ptyDetach, session });
   }
 

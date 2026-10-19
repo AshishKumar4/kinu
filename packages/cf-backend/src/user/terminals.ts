@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  DEVICE_PTY_MAX_AXIS, nanoid, type UserCaller, DeviceTerminalHub, DEVICE_FRAMES, DEVICE_METHOD, NO_DEVICE_CONNECTED,
+  DEVICE_PTY_MAX_AXIS, nanoid, type UserCaller, DeviceTerminalHub, DEVICE_FRAMES, DEVICE_METHOD, NO_DEVICE_CONNECTED, type DeviceSocket,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -18,6 +18,8 @@ const DeviceTerminalFrameSchema = v.variant('type', [
 const TERMINAL_DEFAULT_AXIS = { cols: 80, rows: 24 } as const;
 
 const TERMINAL_RECONNECTED = 'the PC reconnected; open the terminal again';
+
+const TERMINAL_ALREADY_OPEN = 'that terminal is already open in another tab';
 
 /** A session as the daemon keeps it (packages/pc-agent/src/daemon/terminals.js): its id, name and folder. */
 const DeviceSessionRecordSchema = v.object({ id: v.string(), name: v.string(), cwd: v.nullable(v.string()) });
@@ -123,6 +125,13 @@ export class UserTerminals {
       // The first session's id is the daemon's; a pane that names none learns it from the open's answer.
       const named = target.session ?? (yield* this.firstSession(caller, agentName, device));
 
+      // Tokens no pane spent are swept first, their sessions detached unless another pane holds them: this object's one
+      // alarm belongs to other work.
+      for (const stale of this._terminals.expired()) yield* this.closeDeviceTerminal(stale);
+
+      // Refused before the machine is asked: an open replays the session's output to, and resizes, whoever holds it.
+      if (this._terminals.claimed(device, named)) return yield* Effect.fail(new KinuError('denied', TERMINAL_ALREADY_OPEN));
+
       // Known before the machine is asked, so what its shell draws first, or a resumed one kept, waits for the pane.
       this._terminals.register(token, { session: named, device, workspace: agentName });
       yield* attemptInItsWords('io', () => this.host.devices.deviceRpc(
@@ -131,10 +140,6 @@ export class UserTerminals {
         [bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows), named],
         { agentName, deviceId: device, requestId: token, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
       )).pipe(Effect.tapError(() => Effect.sync(() => this._terminals.forget(token))));
-
-      // Tokens no pane spent are swept on the next open, their sessions detached: this object's one alarm belongs to
-      // other work.
-      for (const stale of this._terminals.expired()) yield* this.closeDeviceTerminal(stale.device, stale.session);
 
       return { session: token };
     }));
@@ -152,9 +157,11 @@ export class UserTerminals {
     if (this.host.devices._devices.liveSocket(deviceId) === null) this._terminals.endDevice(deviceId, NO_DEVICE_CONNECTED);
   }
 
-  /** The pane closed: its session keeps running on the machine, detached (1014-t). */
-  closeDeviceTerminal(device: string, session: string): Effect.Effect<void> {
-    return attempt({ doing: 'detach the device terminal', otherwise: 'unavailable' }, async () => { this._terminals.paneClosed(device, session); }).pipe(
+  /** The pane `closing` closed, or a token went unspent: the session keeps running on the machine, detached (1014-t). */
+  closeDeviceTerminal(holder: { device: string; session: string }, closing?: DeviceSocket): Effect.Effect<void> {
+    const { device, session } = holder;
+
+    return attempt({ doing: 'detach the device terminal', otherwise: 'unavailable' }, async () => { this._terminals.paneClosed(device, session, closing); }).pipe(
       Effect.catch((failure) => Effect.sync(() => diagnostics.failure('device.terminal_close_unsent', failure, { device }))),
     );
   }

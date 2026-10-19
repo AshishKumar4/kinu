@@ -346,6 +346,13 @@ describe('DeviceTerminalHub socket ownership', () => {
   });
 });
 
+/** A daemon's socket that records each frame the hub tells it. */
+function toldDaemon() {
+  const told: JsonValue[] = [];
+
+  return { told, socket: socketPeer((data) => { told.push(v.parse(JsonValueSchema, JSON.parse(v.parse(v.string(), data)))); }).socket };
+}
+
 // 1014-t: a PC's terminal is a named session that outlives its pane. Its pane closing detaches it on the machine; a new
 // token attaches the next pane to it; and its bytes reach only the device's own pane of that name.
 describe('a named session on a device', () => {
@@ -353,18 +360,21 @@ describe('a named session on a device', () => {
     const ctx = peerContext();
     const hub = new DeviceSocketHub(ctx);
     const terminals = new DeviceTerminalHub(ctx, hub);
-    const told: JsonValue[] = [];
-    const daemon = socketPeer((data) => { told.push(v.parse(JsonValueSchema, JSON.parse(v.parse(v.string(), data)))); });
+    const { told, socket } = toldDaemon();
     const shell = { session: 'pty-shell', device: 'dev-a', workspace: 'workspace-a' };
 
-    hub.accept('dev-a', daemon.socket);
+    hub.accept('dev-a', socket);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    const firstPane = socketPeer();
+
     terminals.register('token-1', shell);
-    terminals.attach('token-1', socketPeer().socket);
+    terminals.attach('token-1', firstPane.socket);
     terminals.register('token-2', shell);
     expect(() => terminals.attach('token-2', socketPeer().socket)).toThrow('that terminal is already open in another tab');
+    // The account object refuses such an open before it mints a token (unit-device-sessions); here the token goes.
+    terminals.forget('token-2');
 
-    terminals.paneClosed('dev-a', 'pty-shell');
+    terminals.paneClosed('dev-a', 'pty-shell', firstPane.socket);
     expect(told).toEqual([{ type: DEVICE_FRAMES.ptyDetach, session: 'pty-shell' }]);
 
     const next = socketPeer();
@@ -376,6 +386,26 @@ describe('a named session on a device', () => {
     terminals.attach('token-3', next.socket);
     expect(JSON.parse(v.parse(v.string(), await next.receive()))).toMatchObject({ type: 'ready' });
     expect(Buffer.from(v.parse(v.instance(Uint8Array), await next.receive())).toString()).toBe('kept output');
+  });
+
+  test("a late close from a pane another has replaced leaves the session attached to the new one", async () => {
+    const ctx = peerContext();
+    const hub = new DeviceSocketHub(ctx);
+    const terminals = new DeviceTerminalHub(ctx, hub);
+    const { told, socket } = toldDaemon();
+    const shell = { session: 'pty-shell', device: 'dev-a', workspace: 'workspace-a' };
+
+    hub.accept('dev-a', socket);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    terminals.register('token-old', shell);
+    terminals.attach('token-old', socketPeer().socket);
+    ctx.getWebSockets('terminal:dev-a:pty-shell')[0]?.close(1000, 'reconnected');
+    terminals.register('token-new', shell);
+    terminals.attach('token-new', socketPeer().socket);
+
+    // The old pane's close callback runs only now.
+    terminals.paneClosed('dev-a', 'pty-shell');
+    expect(told).toEqual([]);
   });
 
   test("a device's bytes for its session never reach another device's pane of the same name", async () => {

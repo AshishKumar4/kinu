@@ -1076,6 +1076,9 @@ async function openTerminalSession(msg, ws, ctx) {
   const framed = record.cwd !== null && msg.cwd === undefined ? { ...msg, cwd: record.cwd } : msg;
   const plan = await planFromFrame(framed, SESSION_COMMAND, { source: sessionSource() });
 
+  // A close that landed while this open planned forgot the session: nothing could list or close its shell.
+  if (ctx.terminals.find(workspace, record.id) === null) throw new Error('that terminal session was closed while it opened');
+
   const opened = ctx.sessions.open({
     session: record.id,
     cols: params[0],
@@ -2116,8 +2119,16 @@ async function main() {
   const loop = startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
     // A dead credential is not a transient failure, so the process exits
-    // non-zero and the log says which command relinks the machine.
-    onRejected: () => { process.exitCode = REJECTED_EXIT; },
+    // non-zero and the log says which command relinks the machine. A revoked
+    // machine keeps no shell: detached ones would run on with nothing that may
+    // reach them, and keep this process alive.
+    onRejected: () => {
+      process.exitCode = REJECTED_EXIT;
+      const ended = ctx.sessions.closeAll();
+
+      if (ended.length > 0) log('device.terminals_closed_with_credential', ended.join(' '));
+      ctx.screens.closeAll();
+    },
     secret: () => cfg.token,
     onClose: (event) => {
       // The successor this daemon started has connected: the hub gave it this

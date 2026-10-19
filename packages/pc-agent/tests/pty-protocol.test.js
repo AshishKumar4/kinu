@@ -339,6 +339,31 @@ describe("a workspace's named sessions", () => {
     expect({ name: after.find(WORKSPACE, shell.id)?.name, resumed: reopened.resumed, fresh: reopened.pid !== opened.pid }).toEqual({ name: 'shell', resumed: false, fresh: true });
   });
 
+  test('a close that lands while an open plans leaves no shell behind it', async () => {
+    const { ctx, sessions } = context();
+    const ws = fakeWs();
+    const [first] = ctx.terminals.list(WORKSPACE);
+
+    handle({ id: 'rpc-named-race-open', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, params: [80, 24, first.id] }, ws, ctx);
+    handle({ id: 'rpc-named-race-close', method: 'ptyClose', workspace: WORKSPACE, params: [first.id] }, ws, ctx);
+    const opened = await ws.response('rpc-named-race-open');
+
+    expect({ error: opened.error?.message, shells: sessions.size(), listed: ctx.terminals.find(WORKSPACE, first.id) })
+      .toEqual({ error: 'that terminal session was closed while it opened', shells: 0, listed: null });
+  });
+
+  test("two daemons on one file, as an update's successor beside its predecessor, each read the other's changes", () => {
+    const file = path.join(scratchDir('pty-named-shared'), 'terminals.json');
+    const predecessor = createTerminalRecords({ file });
+    const successor = createTerminalRecords({ file });
+    const made = predecessor.create(WORKSPACE);
+
+    successor.rename(WORKSPACE, made.id, 'dev server');
+    expect(predecessor.list(WORKSPACE).map((record) => record.name)).toEqual(['shell', 'dev server']);
+    // A workspace's name is a key, never a property of the map that holds them.
+    expect(successor.list('constructor').map((record) => record.name)).toEqual(['shell']);
+  });
+
   test('a shell opened under another confinement is ended and opened again, never handed back', async () => {
     const { ctx, sessions } = context();
     const ws = fakeWs();

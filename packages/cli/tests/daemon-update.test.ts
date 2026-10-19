@@ -556,10 +556,13 @@ describe('the daemon answers the hub in core\'s frames', () => {
     const proved = v.parse(ProvedHelloSchema, socket.hello);
 
     if (proved.sandbox.capability !== 'sandboxed') return;
-    const session = 'rpc-terminal00-1';
     const sandbox = { tier: 'sandboxed' as const, agentHome: join(proved.agentRoot, 'ws-terminal', 'home'), roots: [scratchDir('daemon-terminal')] };
-    socket.send({ id: session, method: DEVICE_METHOD.ptyOpen, params: [80, 24], sandbox });
-    expect(v.parse(ReplySchema, await socket.waitForReply(session)).error).toBeUndefined();
+    socket.send({ id: 'rpc-terminal00-1', method: DEVICE_METHOD.ptyOpen, workspace: 'ws-terminal', params: [80, 24], sandbox });
+    const reply = v.parse(ReplySchema, await socket.waitForReply('rpc-terminal00-1'));
+    // The workspace's first session, named by the daemon.
+    const session = v.parse(v.object({ session: v.string() }), reply.result).session;
+
+    expect(reply.error).toBeUndefined();
     socket.send({ type: DEVICE_FRAMES.ptyInput, session, data: Buffer.from('echo $((6 * 7))\r').toString('base64') });
 
     const ofSession = (type: string) => socket.frames.items.filter((frame) => frame.type === type && frame.session === session);

@@ -80,6 +80,8 @@ describe("a PC's named sessions", () => {
     const pane = present(harness.acceptedSockets.at(-1), 'the pane');
 
     expect(upgrade.status).toBe(101);
+    // The tab closes its socket: the platform reports it closed, then calls the object.
+    pane.drop();
     await harness.userDO.webSocketClose(pane.ws, 1001, 'tab closed', true);
     await harness.joinFibers();
 
@@ -87,6 +89,18 @@ describe("a PC's named sessions", () => {
       detached: harness.devicePushes.filter((push) => push.type === DEVICE_FRAMES.ptyDetach),
       cancelled: harness.deviceFrames.some((frame) => frame.method === DEVICE_METHOD.cancel),
     }).toEqual({ detached: [expect.objectContaining({ type: DEVICE_FRAMES.ptyDetach, session: 'pty-build' })], cancelled: false });
+
+    await harness.closeDeviceHarness();
+  });
+
+  test('a second open of a session a pane holds is refused before the machine is asked', async () => {
+    const harness = await granted();
+    const target = { device: harness.deviceId, session: 'pty-build' };
+    const { session: token } = await harness.userDO.openDeviceTerminal(harness.workspace, WORKSPACE, { cols: 80, rows: 24 }, target);
+
+    await harness.userDO.fetch(new Request(`https://kinu.example.com${DEVICE_TERMINAL_PATH}?session=${token}`, { headers: { Upgrade: 'websocket' } }));
+    await expect(harness.userDO.openDeviceTerminal(harness.workspace, WORKSPACE, { cols: 120, rows: 40 }, target)).rejects.toThrow('that terminal is already open in another tab');
+    expect(harness.deviceFrames.filter((frame) => frame.method === DEVICE_METHOD.ptyOpen).length).toBe(1);
 
     await harness.closeDeviceHarness();
   });
