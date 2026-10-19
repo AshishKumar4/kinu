@@ -689,3 +689,40 @@ describe('a chat\'s status, as the bar paints it', () => {
     });
   });
 });
+
+// m2088: `?frame=characters` once fell through to the gallery's index and showed no mascot. It is where the mascots are
+// looked at side by side: every state row draws the same characters, each drawn, in the face that state gives it.
+describe('the characters frame', () => {
+  test('draws every character in each state row it lists, in that state\'s face', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.getElementById('root')?.childElementCount ?? 0) > 0);
+
+      const rows = await page.$$eval('[data-mascot-state]', (found) => found.map((row) => {
+        const marks = [...row.querySelectorAll('[data-face]')];
+
+        return {
+          state: row.getAttribute('data-mascot-state'),
+          characters: marks.map((mark) => mark.getAttribute('data-accessory') ?? '').join(),
+          // Off its row's face, or not drawn: hidden, of no size, or with nothing in it.
+          astray: marks.filter((mark) => {
+            const tile = mark.querySelector('svg');
+            const box = tile?.getBoundingClientRect();
+            const drawn = tile?.getBBox();
+
+            return mark.getAttribute('data-face') !== row.getAttribute('data-mascot-state') || tile?.checkVisibility() !== true
+              || !box?.width || !box.height || !drawn?.width || !drawn.height;
+          }).length,
+          count: marks.length,
+        };
+      }));
+
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.filter((row) => row.astray > 0 || row.count < 2)).toEqual([]);
+      expect(new Set(rows.map((row) => row.characters)).size).toBe(1);
+      await page.close();
+    });
+  });
+});
