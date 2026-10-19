@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { runToExit } from '@kinu.run/test-utils';
 import { requireEqual, tierIdentity } from './fixtures/devbox-e2e/oracle';
 import { completeTeardown } from './fixtures/devbox-e2e/teardown';
-import { contractOwner, contractOwnerEnded, contractRunEnded, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
+import { contractLedger, contractOwner, contractOwnerEnded, contractRunEnded, recoverAbandoned } from './fixtures/devbox-e2e/ledger';
 import type { ContractOwner, ContractTeardown } from './fixtures/devbox-e2e/ledger';
 import { dropLease, fixtureNames, takeLease, type Lease, type LeaseStore } from './fixtures/devbox-e2e/fixture';
 
@@ -78,6 +78,47 @@ function leaseStore(): LeaseStore & { held: () => Lease | null } {
 const leaseOf = (run: string, job: string): Lease => ({
   schema: 'devbox-contracts/lease@1', worker: 'kinu-devbox-contracts-staging', run,
   owner: { job, index: 0, attempt: 1, vessel: 'v1', statusUrl: `https://armada.test/status/${job}`, statusToken: 'scoped' },
+});
+
+/**
+ * R2 as measured on 2026-10-19: a GET that may be compressed answers gzip with the ETag weakened (`W/"…"`), one asking
+ * for `identity` answers the strong ETag, and a PUT's If-Match holds only against the strong one.
+ */
+function r2() {
+  let held: { body: string; tag: string } | null = null;
+  let tags = 0;
+
+  return Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
+    if (request.method === 'GET') {
+      if (held === null) return new Response('missing', { status: 404 });
+      const compressed = (request.headers.get('accept-encoding') ?? '').includes('gzip');
+
+      return new Response(held.body, { headers: { etag: compressed ? `W/${held.tag}` : held.tag } });
+    }
+
+    const match = request.headers.get('if-match');
+
+    if (request.headers.get('if-none-match') === '*' ? held !== null : match !== held?.tag) return new Response('', { status: 412 });
+    held = { body: await request.text(), tag: `"${String(tags += 1)}"` };
+
+    return new Response('', { status: 200 });
+  } });
+}
+
+// Staging deploy of 001f6d749, 2026-10-19 12:03Z: the lease a killed deploy held at 11:53:41 was never written again,
+// yet the takeover was refused as "taken by another run": its If-Match carried the weakened ETag of a gzip GET.
+test('an ended holder\'s lease is taken over in R2 itself, over the version its read named', async () => {
+  const server = r2();
+
+  try {
+    const store = contractLedger({ account: 'f44999d1ddda7012e9a87729eba250f1', accessKeyId: 'id', secretAccessKey: 'secret', origin: server.url.origin }).lease('kinu-devbox-contracts-staging');
+
+    await takeLease(store, leaseOf('dc20261019115338aaaaa', 'job-a'), async () => false);
+    await takeLease(store, leaseOf('dc20261019120039bbbbb', 'job-b'), async () => true);
+    expect((await store.read())?.lease).toEqual(leaseOf('dc20261019120039bbbbb', 'job-b'));
+  } finally {
+    await server.stop(true);
+  }
 });
 
 test('one run at a time deploys the fixture: a running holder refuses the next, naming it, and an ended one is taken over', async () => {
