@@ -1066,9 +1066,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       chatEvent: (event) => this.hostedChatEvent(actorId, event),
       turnEnded: async (event, figures, activity, window) => {
-        // What its turn logged that no tool call took rides its end.
-        if (activity.length > 0) this.agentActivity(actorId, activity);
         await this.hostedTurnEnded(actorId, event, figures, window);
+
+        // What its turn logged that no tool call took rides its end, written after its room heard it.
+        if (activity.length > 0) this.agentActivity(actorId, activity);
       },
       answerAmended: async (window) => { this.chatRooms.hostedRoom(actorId)?.answerAmended(window); },
       // The turn's report, owed once its answer committed: decided here, where its hirer's roster is, and relayed. What it
@@ -1123,7 +1124,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
       answerMetadata: (close, narration) => this.takeTurnSlates(actorId, close.turnId, narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
-      reportModelOperation: async (event) => { this.modelOperations(event); },
       getAuth: credentialReads.getAuth,
       listCredentials: credentialReads.listCredentials,
       relayDevice: async (provider) => {
@@ -1199,10 +1199,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (actorPolicy(this.agentOf(actorId)).workspaceAgent) this.turnClaimChanged();
   }
 
-  /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. */
+  /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. The room hears the end before
+   *  this object writes it: a frame waits for the writes made before it, and the answer it tells of is already durable in
+   *  the agent's own store (#103). */
   private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
     const { runId } = event;
-    const ended = new TurnFences(this.boundSql).ended(actorId, { runId });
+    const fences = new TurnFences(this.boundSql);
+    const ended = fences.ending(actorId, runId);
 
     if (ended === null) {
       diagnostics.event('agent.stale_turn_end', { actorId, runId });
@@ -1211,6 +1214,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     this.chatRooms.hostedRoom(actorId)?.closeTurn(event.turnId, window);
+    fences.ended(actorId, { runId });
     await this.chatTurnClosed(actorId, figures, ended === 'unfenced' ? null : ended, ended === 'unfenced' ? this.agentTurns.chatTurn(actorId) : ended.turnId);
   }
 
@@ -3124,7 +3128,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(room, message, exclude); },
       history: (limit) => call((isolate, snapshot) => isolate.history(snapshot, limit)),
-      admitted: (id) => call((isolate, snapshot) => isolate.admitted(snapshot, id)),
+      unseen: (ids) => call((isolate, snapshot) => isolate.unseen(snapshot, ids)),
       send: async ({ id, ...words }, admitted) => await this.deliverWords(actorId, { id, input: { kind: 'words', ...words }, authorship: 'owner' }, true, admitted) ?? 'mid-turn',
       retry: (messageId) => whenActorTakesInput(this.boundSql, actorId, async () => {
         const done = await this.ownerIntent(actorId, { id: `retry:${messageId}`, input: { kind: 'retry', messageId }, authorship: 'owner' });

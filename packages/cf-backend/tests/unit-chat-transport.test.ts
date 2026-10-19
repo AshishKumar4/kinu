@@ -29,8 +29,10 @@ function isRefusal(landing: HarnessLanding): landing is HarnessRefusal {
 /** One landing for every send, or one per send in order. */
 type HarnessLanding = SendLanding | HarnessRefusal | Promise<SendLanding> | readonly SendLanding[];
 
-function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
+function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<UIMessage[]>, held: () => Promise<void> = async () => {}) {
   const { db } = createTestSql();
+  /** Each unseen-ids question the room asked the agent, in order. */
+  const unseenAsked: string[][] = [];
   const broadcasts: Array<{ frame: v.InferOutput<typeof FrameSchema>; exclude: string[] | undefined }> = [];
   const history: UIMessage[] = [];
   /** The ids the loop holds a reservation for: every send accepted mid-turn. */
@@ -95,7 +97,13 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     },
     getConnection: (id) => connections.get(id),
     history: loadHistory ?? (async () => [...history]),
-    admitted: async (id) => history.some((row) => row.id === id) || reserved.has(id),
+    // The agent's own rows and reservations, read where the agent keeps them; `held` fails as that read fails.
+    unseen: async (ids) => {
+      unseenAsked.push([...ids]);
+      await held();
+
+      return ids.filter((id) => !history.some((row) => row.id === id) && !reserved.has(id));
+    },
     sendState: async () => ({ status: 'none' }),
     awaitSend: async () => ({ status: 'none' }),
     send: (input, admitted) => {
@@ -128,7 +136,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
     hangUp: (socket: Connection) => { closed.add(socket); },
     /** The code the server closed `id` with, if it closed it. */
     closedWith: (id: string) => closedWith.get(id),
-    transport, broadcasts, history, reserved, recorded, asked, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
+    transport, broadcasts, history, reserved, recorded, asked, unseenAsked, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
     interrupts: () => interrupts,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
@@ -169,9 +177,9 @@ function chatRequest(id: string, text: string, file?: { url: string; mediaType: 
   });
 }
 
-test('history materialization finishes before connect publication and chat admission', async () => {
+test("connect publication waits for the transcript, and chat admission for the agent's answer of what it holds", async () => {
   const pending = Promise.withResolvers<UIMessage[]>();
-  const h = harness('turn', () => pending.promise);
+  const h = harness('turn', () => pending.promise, async () => { await pending.promise; });
   const connection = h.connection('waiting-history');
   const connected = h.transport.onConnect(connection);
   const admitted = h.transport.onMessage(connection, chatRequest('replayed', 'already stored'));
@@ -395,8 +403,8 @@ describe('ChatWireTransport', () => {
     expect(h.responses()[0]?.landed).toBeUndefined();
   });
 
-  test('a history read that fails during admission closes the request too', async () => {
-    const h = harness('turn', () => Promise.reject(new Error('the transcript is unreadable')));
+  test('a read of what the agent holds that fails during admission closes the request too', async () => {
+    const h = harness('turn', undefined, () => Promise.reject(new Error('the agent is unreachable')));
     const conn = h.connection('c1');
 
     await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
@@ -457,6 +465,27 @@ describe('ChatWireTransport', () => {
     }));
 
     expect(h.sent.map((input) => input.id)).toEqual(['pending', 'new']);
+  });
+
+  // #103: the room read the transcript's newest sixty messages, and asked once more per new message, to learn which of a
+  // request's words were new: two crossings and a window drawn on the agent before every turn could open.
+  test('a chat request asks the agent once which of its words are new and reads no transcript, however long the list', async () => {
+    const h = harness('turn', async () => { throw new Error('a chat request reads no transcript'); });
+    const conn = h.connection('c1');
+
+    const thread = Array.from({ length: 40 }, (_, index): UIMessage[] => [
+      { id: `asked-${String(index)}`, role: 'user', parts: [{ type: 'text', text: `ask ${String(index)}` }] },
+      { id: `answer-${String(index)}`, role: 'assistant', parts: [{ type: 'text', text: 'done' }] },
+    ]).flat();
+
+    h.history.push(...thread);
+    await h.transport.onMessage(conn, JSON.stringify({
+      type: 'cf_agent_use_chat_request', id: 'req-long',
+      init: { method: 'POST', body: JSON.stringify({ messages: [...thread, { id: 'fresh', role: 'user', parts: [{ type: 'text', text: 'one more' }] }], trigger: 'submit-message' }) },
+    }));
+
+    expect(h.sent.map((input) => input.id)).toEqual(['fresh']);
+    expect(h.unseenAsked).toHaveLength(1);
   });
 
   test("a turn's chunks are broadcast under its request and accumulate into the answer", async () => {

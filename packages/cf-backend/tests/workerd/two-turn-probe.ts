@@ -167,7 +167,7 @@ const FACET_CALLS = Object.keys({
   listRuns: true, runSummaries: true, runEvents: true, runEventText: true, idle: true, deliverAdvice: true,
   step: true, frozen: true, history: true, historyPage: true, messageCount: true, inspect: true,
   inheritedContext: true, workingContext: true, turnRequests: true, turnRequest: true, spend: true, context: true,
-  searchConversations: true, scrollConversation: true, browseConversations: true, admitted: true, interrupt: true,
+  searchConversations: true, scrollConversation: true, browseConversations: true, unseen: true, interrupt: true,
   recover: true, outOfMemory: true, archivePage: true,
 } satisfies Record<keyof AgentFacetCalls, true>);
 

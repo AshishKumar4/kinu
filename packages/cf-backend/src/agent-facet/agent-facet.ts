@@ -130,7 +130,7 @@ export interface AgentFacetCalls {
   searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
   scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
   browseConversations(snapshot: AgentSnapshot, limit?: number): Promise<ConversationSummary[]>;
-  admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
+  unseen(snapshot: AgentSnapshot, ids: readonly string[]): Promise<string[]>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   /** The platform reported its isolate out of memory at `diedAt`. */
@@ -520,8 +520,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).spend(steps);
   }
 
-  async admitted(snapshot: AgentSnapshot, id: string): Promise<boolean> {
-    return this.open(snapshot).admitted(id);
+  async unseen(snapshot: AgentSnapshot, ids: readonly string[]): Promise<string[]> {
+    return this.open(snapshot).unseen(ids);
   }
 
   /** Stops one run its workspace delivered: queued, it never runs; running, its chat aborts it. */

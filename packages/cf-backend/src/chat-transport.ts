@@ -11,7 +11,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Connection } from 'agents';
 import {
   MessageType,
-  parseProtocolMessage, reconcileMessages, sanitizeMessage, sendIfOpen,
+  parseProtocolMessage, sendIfOpen,
   type ChatProtocolEvent,
 } from 'agents/chat';
 import type { UIMessage, UIMessageChunk } from 'ai';
@@ -48,8 +48,9 @@ export interface ChatWire {
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
   history(limit?: number): Promise<UIMessage[]>;
-  /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
-  admitted(id: string): Promise<boolean>;
+  /** Of `ids`, in order, those the agent holds neither as a durable row nor as an accepted send's reservation: the hook
+   *  resends its whole list per request, and the agent keeps each message under the id its tab gave it. */
+  unseen(ids: readonly string[]): Promise<readonly string[]>;
   /** Each slate `agent.ask` reply: told where its message's card is shown, fed that turn's text deltas, and told when
    *  the turn ends. */
   readonly replies?: Pick<TurnReplies, 'card' | 'feed' | 'ended'>;
@@ -477,7 +478,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
-  /** One send per message the loop does not hold (`reconcileMessages`); answered only once the landing is decided.
+  /** One send per message the loop does not hold, asked by id in one crossing; answered only once the landing is decided.
    *  Every request ends in exactly one terminal frame: its turn's, or this method's, whatever failed. */
   private async admitChatRequest(requestId: string, body: string | undefined, admitted: () => void): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
@@ -502,13 +503,11 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     const release = (): void => { for (const id of taken) if (id !== opener) this.requests.delete(id); };
 
     try {
-      // The client resends only its window, so reconcile against the window.
-      const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
+      const asked = parsed.output.messages.filter((message) => message.role === 'user');
+      const unseen = new Set(await this.wire.unseen([...new Set(asked.map((message) => message.id))]));
 
-      const unseen = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage).filter((message) => message.role === 'user');
-
-      for (const message of unseen) {
-        if (await this.wire.admitted(message.id)) continue;
+      for (const message of asked) {
+        if (!unseen.delete(message.id)) continue;
         this.requests.set(message.id, requestId);
         taken.push(message.id);
 

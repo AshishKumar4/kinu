@@ -681,11 +681,13 @@ export class AgentDatabase {
     return await this.readable().transcript.history(limit);
   }
 
-  /** Or reserved and not yet written. */
-  admitted(id: string): boolean {
+  /** Of `ids`, in order, those this agent holds neither as a row of its chat nor as a send it reserved and has not written. */
+  unseen(ids: readonly string[]): string[] {
     const { actor, transcript } = this.readable();
+    const written = transcript.holding(ids);
+    const reserved = new PendingSendStore(this.sql, actor.actorId).holding(ids);
 
-    return transcript.has(id) || new PendingSendStore(this.sql, actor.actorId).has(id);
+    return ids.filter((id) => !written.has(id) && !reserved.has(id));
   }
 
   /** What a turn has told its hirer, kept as its tools answered: only ever more. */

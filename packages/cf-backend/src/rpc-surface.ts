@@ -242,8 +242,6 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'missionGuard',
   'onModelSettingsChanged',
   'readWorkspaceFile',
-  'reportFacetModelCall',
-  'reportFacetModelOperation',
   'statWorkspaceFile',
   'writeWorkspaceFile',
 ] as const satisfies readonly (keyof ActorAgent)[];

@@ -47,7 +47,6 @@ const unusedPort: AgentWorkspacePort = {
   sayToParent: unused,
   logActivity: unused,
   reportModelCall: unused,
-  reportModelOperation: unused,
 };
 
 const unusedWorkspace: AgentWorkspaceCalls = { session: unused, stateSession: unused, memory: unused, program: unused, port: unused };
@@ -125,7 +124,7 @@ function counted(calls: Partial<AgentWorkspacePort>) {
 }
 
 test("a working agent's calls share one port, which is let go once it rests", async () => {
-  const { tally, workspace } = counted({ logActivity: async () => {}, reportModelOperation: async () => {} });
+  const { tally, workspace } = counted({ logActivity: async () => {} });
   const client = workspaceClient(workspace);
 
   client.work();

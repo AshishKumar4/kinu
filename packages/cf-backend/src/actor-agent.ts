@@ -93,7 +93,7 @@ import {
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   normalizeUsage, priceCall, type Usage,
   generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
-  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
+  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink,
   recordModelOperations, type ModelAttemptInfo, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
@@ -1503,21 +1503,6 @@ export abstract class ActorAgent extends Agent<Env> {
     labels: readonly string[]; calls?: number; spawns?: number; usage?: Usage; spec?: string;
   }): Promise<void> {
     this.budget.debit(tokens, opts);
-  }
-
-  /**
-   * A facet's non-turn model call, filed in the root workspace's event log so spend is not stranded
-   * in facet SQLite. Not `@callable` (spend must not be writable over WS/HTTP); allowlisted in
-   * rpc-surface.ts.
-   */
-  async reportFacetModelCall(report: ModelCallReport): Promise<void> {
-    this.reportModelCall(report);
-  }
-
-  /** A facet's model-operation frames, to the same root log as reportFacetModelCall.
-   *  Not `@callable`; allowlisted in rpc-surface.ts. */
-  async reportFacetModelOperation(event: ModelOperationEvent): Promise<void> {
-    this.modelOperations(event);
   }
 
   // Head-journal writes for a recursive split run in this isolate (orchestrator.ts `runHostedSplit`),
