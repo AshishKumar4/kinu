@@ -11,6 +11,8 @@ import type { LogEventName } from './log';
 export const ALARM_WORK = {
   // Tears down an eval workspace a lease after its run's last mark (cf-backend `user/eval-leases.ts`).
   EvalLeaseJobs: ['workspace.destroyed'],
+  // Runs again a workspace's deletion that has not landed, a lap after it began (cf-backend `user/workspace-deletions.ts`).
+  WorkspaceDeletionJobs: ['workspace.destroyed'],
   // Drops or expires a deploy run nobody finished, an hour after its last call (cf-backend `deploy/deploy-do.ts`).
   DeployRunDO: ['deploy.run_dropped', 'deploy.run_expired'],
   // Sends a share's card to a recipient's account: a call into that account, none into this one.

@@ -14,6 +14,7 @@ import type { UserMcpServers } from './mcp-servers';
 import type { UserObjectHost } from './user-host';
 import type { ShareCardJobs } from './share-cards';
 import type { EvalLeaseJobs } from './eval-leases';
+import type { WorkspaceDeletionJobs } from './workspace-deletions';
 
 /** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
@@ -42,6 +43,8 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   readonly mcpServers: Pick<UserMcpServers, 'stopWorkspaceMcpCalls'>;
   /** An eval run's workspaces' leases, moved by each mark and ended by the teardown. */
   readonly evalLeases: Pick<EvalLeaseJobs, 'marked' | 'ended'>;
+  /** Each workspace's deletion, run again by its own job until it lands. */
+  readonly deletions: Pick<WorkspaceDeletionJobs, 'begun' | 'ended'>;
   /** Brings a workspace's share recipients to the shares its overview names. */
   readonly shareCards: Pick<ShareCardJobs, 'reconcile'>;
   nudgeUnreported(): void;
@@ -116,8 +119,7 @@ export class UserWorkspaces {
 
   async listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
     const resolved = await this.host.requireTier(caller, 'workspaces.read');
-    // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
-    await this.resumePendingDeletions();
+    // This read is the retry for stale fork reservations nothing else frees; an unfinished teardown is its own job's.
     await this.reclaimStaleForkReservations();
     this.host.nudgeUnreported();
     const page = rosterPage(this.host.ctx.storage.sql, query);
@@ -337,8 +339,8 @@ export class UserWorkspaces {
   }
 
   /**
-   * Reclaim lapsed reservations. Driven by the owner's reads like {@link resumePendingDeletions}:
-   * this object has no timer, and the roster hides `create_pending` rows.
+   * Reclaim lapsed reservations. Driven by the owner's reads, and the roster hides
+   * `create_pending` rows.
    */
   private async reclaimStaleForkReservations(): Promise<void> {
     const stale = this.host.sqlx<{ name: string }>(
@@ -453,8 +455,8 @@ export class UserWorkspaces {
   }
 
   /**
-   * Row is marked before teardown and removed after, so a failed teardown is resumed by the next
-   * read (`resumePendingDeletions`); `destroyAgent` is idempotent.
+   * Row is marked before teardown and removed after, so a failed teardown is run again by its own
+   * job (`WorkspaceDeletionJobs`); `destroyAgent` is idempotent.
    */
   async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
     await this.host.requireTier(caller, 'workspaces.write');
@@ -471,6 +473,8 @@ export class UserWorkspaces {
    */
   async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
     this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    // With the mark's commit: a teardown that fails or dies on the way is run again a lap later, read or no read.
+    await this.host.deletions.begun(name);
     const object = this.host.env.OrchestratorAgent.idFromName(name);
     const stub = this.host.env.OrchestratorAgent.get(object);
 
@@ -500,6 +504,7 @@ export class UserWorkspaces {
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
     await this.host.evalLeases.ended(name);
+    await this.host.deletions.ended(name);
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
   }
@@ -510,14 +515,17 @@ export class UserWorkspaces {
     }
   }
 
+  /** The workspaces whose teardown began and has not landed. */
+  markedForDeletion(): string[] {
+    return this.host.sqlx<{ name: string }>(`SELECT name FROM user_workspaces WHERE delete_pending = 1`).map((row) => row.name);
+  }
+
   /**
-   * Finish teardowns left marked; driven by the owner's reads since this object has no timer.
-   * Failures keep the marker (the row is the retry) and do not throw, so listings still succeed.
+   * Finish teardowns left marked, for a create that needs a marked name now; each is otherwise run again by its own job.
+   * Failures keep the marker and do not throw.
    */
   private async resumePendingDeletions(): Promise<void> {
-    const pending = this.host.sqlx<{ name: string }>(
-      `SELECT name FROM user_workspaces WHERE delete_pending = 1`,
-    );
+    const pending = this.markedForDeletion();
 
     if (pending.length === 0) return;
     const ownerUserId = this.host.ctx.id.name ?? '';
@@ -532,15 +540,15 @@ export class UserWorkspaces {
       return;
     }
 
-    for (const row of pending) {
+    for (const name of pending) {
       try {
-        await this.tearDownWorkspace(row.name, ownerUserId);
+        await this.tearDownWorkspace(name, ownerUserId);
       } catch (err) {
         diagnostics.failure('workspace.cleanup_retry_failed', toKinuError({
           doing: 'finishing a workspace teardown a previous attempt left unfinished',
           cause: err,
           otherwise: 'io',
-        }), { workspace: row.name });
+        }), { workspace: name });
       }
     }
   }
