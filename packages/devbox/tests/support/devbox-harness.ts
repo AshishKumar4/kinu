@@ -865,7 +865,8 @@ export class FakeSandbox {
     await this.ctx.storage.setAlarm(Math.min(this.alarmAt ?? Infinity, time * 1000));
   }
   get alarmAt(): number | null { return alarmTimes.get(this.ctx.storage)?.at ?? null; }
-  async alarm(): Promise<void> { await this.owner?.alarm(); }
+  /** As the platform delivers it: never inside a block. */
+  async alarm(): Promise<void> { await this.initGate; await this.owner?.alarm(); }
   clearSchedules(callback?: string): void {
     for (const [key] of this.ctx.storage.kv.list({ prefix: "devbox:schedule:" })) {
       if (callback === undefined || key === "devbox:schedule:" + callback) this.ctx.storage.kv.delete(key);
@@ -1452,8 +1453,10 @@ export function harness<Box extends PlatformServed>(
       const clear = () => { if (container.initGate === held) container.initGate = undefined; };
 
       void held.then(clear, clear);
+      // Where each block opens and closes, among the container's own steps.
+      container.sequence.push('block:enter');
 
-      return closure().finally(completed.resolve);
+      return closure().finally(() => { container.sequence.push('block:exit'); completed.resolve(); });
     },
   });
 

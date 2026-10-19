@@ -4972,7 +4972,7 @@ model proxies, whose cancelled call the shared `onError` now answers 499 and log
 D102. A box adopts the running container it woke beside once per incarnation, on the first member that touches the
 container, and every such member awaits that one adoption (2026-10-19; #117). R1 holds for restoration unchanged: a
 fresh start restores inside its start block. Replaces the per-caller adoption (`#adoptionPending`, `#resolveAdoption`)
-and bd87bdfb0's checkpoint-path adoption, which mended one caller of it.
+and bd87bdfb0's checkpoint-path adoption, which mended one caller of it. Its "holds no block" is reversed by D104.
 
 What failed. Production (bc78a94bd) showed the owner a System card "failed at the checkpoint stage ... this devbox is
 not ready: no restoration has run for this container yet" every 5 minutes in every workspace. The box's object restarted
@@ -5059,6 +5059,42 @@ provider key is spent until the release evals have run on it (measure: `/mnt/loc
 Rejected: retiring for the turn's life only, an overlay that leaves the stored context raw, which keeps D89's cross-turn
 rule and every later turn re-holding every past screenshot (production's seed turn started with 105, about 28 MB live);
 and moving at each turn's start only, which is D89's own reason for an in-turn move.
+
+D104. Resumption runs in the box's own block, as restoration does: the adoption opens `blockConcurrencyWhile` on first
+use, and a start configures its container inside the block it restores in (2026-10-19; the owner's R1, m193, 1019-g).
+Reverses D102's "holds no block". D102's single, memoized adoption, its members and its answered-only rule stand.
+
+What drifted. The owner: "things might have drifted from the architecture I had wanted of having all of devbox
+restoration complete in the blockConcurrencyWhile of the devbox DO itself". R1 says "restores and resumption to happen
+within blockConcurrencyWhile ... that nothing else touches the container until it's fully ready". A fresh start already
+restored inside its start block. Two steps ran outside one:
+- the start's configuration (egress intercepts, the CA's trust, the box's name), just before the block;
+- since D102, the whole resumption beside a running container: the boot-id read, taking the claim and configuring.
+
+The design.
+- `#startNative` runs `configureContainer` and `#restoreInStartGate` in one block. A configuration refused is
+  answered after the block, where its throw fails the start and does not reset the object.
+- `#adopted()` memoizes `#adoptInBlock()`, which runs `#adopt()` inside a block of its own, opened by whichever member
+  first touches the container, never by the constructor (`gate:do-init`). Its rejection is answered outside the block.
+- The start hook adopts from inside its own block. This nests, as `#claimRecovery`'s block already nests in the hook's.
+- Tests: `adoption.test.ts` "the adoption runs in a block" and "a fresh start configures its container inside the
+  block". Both are red on 9e490e423 and green here.
+
+Measured on the deployed contract fixture, both shapes, each object reset by `ctx.abort()` beside its running container
+(kinu-logs/devbox-r1-blocks-2026-10-19):
+- D102's A/B, rerun: the same answers in both shapes. (A) The tick after a reset files nothing. (B) The sessions read
+  after a reset reads `attached`. (C) A replaced container is not read, its start is armed, and it is restored from
+  backup within 45 s.
+- What an event waits for, the cost accepted here. A storage-only event sent 5 ms after a member that adopts:
+  - D102: it ran 0 ms after the member began, 6 of 6 runs.
+  - This shape: it ran 38 to 63 ms after, 6 of 6, as the adoption's block ended.
+- Stop's own run is unchanged: 39 to 113 ms, alone or behind an adoption. The client's wall time for a Stop sent behind
+  an adoption went from 386 to 458 ms to 465 to 553 ms.
+
+Accepted risk, D102's reason against a block. A boot-id read that a disk stall never answers would hold every event,
+Stop included, until the block's cap resets the object. A Stop retried on the fresh object passes, because Stop does
+not adopt. A container read on a box has not been seen to hang. The wedge report measured `cat`, builtins and
+`/bin/true` answering through a stall (kinu-logs/container-btrfs-wedge-2026-10-17).
 
 ## Open
 

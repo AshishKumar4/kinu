@@ -509,11 +509,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /**
-   * The one adoption of this incarnation (D102): read by the first member that touches the container, and awaited by
-   * every member that touches it, before anything else. It holds no block, so a stop, or a restart under the disk's
-   * stall, still reaches the object while the read waits. An outcome with no answer stands for members that only read,
-   * which find the box unready, and a start's hook (`asking`), with the control listener proven, asks again; so retries
-   * keep the startup row's pace.
+   * The one adoption of this incarnation (D102): opened by the first member that touches the container, and awaited by
+   * every member that touches it, before anything else. It runs inside `blockConcurrencyWhile`, so no event reaches the
+   * object until the box has taken or refused the container it woke beside (R1, D104); never from the constructor
+   * (`gate:do-init`). An outcome with no answer stands for members that only read, which find the box unready, and a
+   * start's hook (`asking`), with the control listener proven, asks again; so retries keep the startup row's pace.
    */
   async #adopted(asking = false): Promise<Adoption> {
     if (asking && this.#unanswered) {
@@ -521,7 +521,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.#unanswered = false;
     }
 
-    const adoption = this.#adoption ??= this.#adopt();
+    const adoption = this.#adoption ??= this.#adoptInBlock();
     const [outcome] = await Promise.allSettled([adoption]);
 
     if (this.#adoption === adoption) {
@@ -531,6 +531,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
 
     return await adoption;
+  }
+
+  /** {@link #adopt} in a block of its own; its failure is answered outside it, where a rejection resets nothing. */
+  async #adoptInBlock(): Promise<Adoption> {
+    const held = await this.ctx.blockConcurrencyWhile(async () => {
+      const adopting = this.#adopt();
+
+      await Promise.allSettled([adopting]);
+
+      return { adopting };
+    });
+
+    return await held.adopting;
   }
 
   /**
@@ -869,10 +882,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (!await this.#admit(container, cancel.signal, inputs)) return;
 
       if (!this.#owns(generation) || this.#closed) return;
-      await this.configureContainer(wasRunning && this.#reused());
+      // The configuration and the restore run in one block, so nothing reaches the container before it is ready (R1,
+      // D104). A configuration refused is answered outside it, where its throw fails the start and resets nothing.
+      let configuring = Promise.resolve();
 
-      if (!this.#owns(generation) || this.#closed) return;
-      await this.ctx.blockConcurrencyWhile(() => this.#restoreInStartGate(!wasRunning));
+      await this.ctx.blockConcurrencyWhile(async () => {
+        configuring = this.configureContainer(wasRunning && this.#reused());
+        const [configured] = await Promise.allSettled([configuring]);
+
+        if (configured.status === 'fulfilled' && this.#owns(generation) && !this.#closed) await this.#restoreInStartGate(!wasRunning);
+      });
+      await configuring;
     })();
 
     const admission = { abort: () => cancel.abort(), settled: run };

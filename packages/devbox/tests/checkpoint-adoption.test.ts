@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'bun:test';
 import { ChainTestBox, asked, chainBox, chainHead, type ChainBox } from './support/chain-box';
-import { READY_GOLDEN, gate, wakeWhileArmed, type Gate } from './support/devbox-harness';
+import { READY_GOLDEN, deliver, gate, wakeWhileArmed, type Gate } from './support/devbox-harness';
 import { markerPath } from './support/native-shim';
 import { INCIDENT_PREFIX } from '../src/incidents';
 import type { RestoreClockPhase } from '../src/restoration';
@@ -53,7 +53,7 @@ test('a checkpoint alarm on an unused computer starts nothing and reports no dur
 
 // D34: maintenance starts no container. A wake whose adoption meets a stop leaves the box stopped, files nothing, and
 // leaves no row that would wake the object to start it again. The stop lands as the wake is delivered, or while one
-// step of the adoption is held: the adoption holds no block, so the box's own stop reaches it there (D102).
+// step of the adoption is held: the stop is delivered once the adoption's block ends (D104).
 const races: readonly (readonly [string, string, ((arm: ChainBox, held: Gate) => void) | undefined])[] = [
   ['before the checkpoint enters its lane', 'devboxCheckpoint', undefined],
   ['while a checkpoint\'s adoption reads the boot id', 'devboxCheckpoint', ({ container }, held) => { container.bootReadGate = held; }],
@@ -80,11 +80,12 @@ for (const [race, callback, hold] of races) {
       await container.seedSchedule(callback, now / 1000 - 1);
       const delivered = container.alarm();
 
-      // A wake that never reaches the hold settles instead.
+      // A wake that never reaches the hold settles instead. The stop is an event, delivered once the adoption's or the
+      // restore's block ends (R1, D104).
       if (hold !== undefined) await Promise.race([held.reached, delivered]);
-      await successor.stop();
+      const stopped = deliver(container, () => successor.stop());
       held.release();
-      await delivered;
+      await Promise.all([stopped, delivered]);
       await wakeWhileArmed(container, (to) => { now = Math.max(now, to); }, 20);
 
       expect({
