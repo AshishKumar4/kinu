@@ -205,9 +205,13 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 10_500
  *  (armada map, one gate a container) and 318.6-330.5 MB over 12 beside 48 suites of the tier's heaviest on 60 containers
  *  at once; 315.1-333.3 MB over 8 more alone on 162bdf552 and the tip; and 337.3 and 338.4 MB in two tiers
  *  (20261017130149-357d290c, 20261017141010-0990fca1), which the old 335 MB bound read red. Over all 34: mean 325.1 MB,
- *  standard deviation 5.65 MB. So the bound is the mean and four deviations, 9.6 MB above the highest read: a per-step
- *  rebuild the size of the one 3e0c5614c cut (347-348 MB to 316-321 MB, above) still trips it. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 348_000_000;
+ *  standard deviation 5.65 MB. So the bound was the mean and four deviations, 9.6 MB above the highest read: a per-step
+ *  rebuild the size of the one 3e0c5614c cut (347-348 MB to 316-321 MB, above) still trips it. On 0a4fb372f, 2026-10-19,
+ *  once a model call's end comes from `onEnd` and the SDK's accessors, each a reader replaying every part the call
+ *  streamed, are read no more (#m2180e): 280.3-291.8 MB over 12 runs alone, mean 286.3 MB, main's 216.7-228.5 MB, where
+ *  6f59a1bc9 read 251.5-255.6 MB in main's over 3. The bound is that mean and four of the 34 runs' deviations: the seven
+ *  readers back, about 33 MB, trip it. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 309_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
