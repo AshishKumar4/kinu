@@ -140,3 +140,12 @@ test("a slate reaches what each operation's catalog entry says, and nothing unde
 test("a visitor's needs are the MCP servers and the model the slate reaches, never its owner's workspace, the web or its slates", () => {
   expect(visitorNeeds(graph)).toEqual([{ kind: 'github', title: 'GitHub' }, { kind: 'ai', title: 'AI' }]);
 });
+
+test("a visitor's need for a server its owner's catalog does not know names that server, never Kinu's namespace for it", () => {
+  const unknown = slateCapabilityGraph({
+    slate: 'notes', workspace: 'w', catalog: { mcp: [], slates: ['notes'] }, usage: () => used('mcp.eval-gallery-3e59fc75.search'),
+  });
+
+  expect(visitorNeeds(unknown)).toEqual([{ kind: 'mcp', title: 'eval-gallery-3e59fc75' }]);
+});
+
