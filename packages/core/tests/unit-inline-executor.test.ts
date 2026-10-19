@@ -588,14 +588,16 @@ describe('workspace.slates', () => {
   });
 
   // The slates skill calls `workspace.slates.$list()`; on staging 5c522f12d describe() answered no `$` member at all.
-  test("describe declares the `$` members the skill documents, and a member's name points at the declaration holding it", () => {
+  test("describe declares the `$` members the skill documents, and answers a member's name with the declaration holding it", () => {
     const { rt } = createTestRuntime();
     const exec = createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell'), slate: async () => ({ ok: true, value: null }) });
     const declared = v.parse(v.function(), new Function(`${describeProgramSource(programDeclarations([fileNamespaceFor(rt, exec)]))}\nreturn describe;`)());
     const slates = v.parse(v.string(), declared('workspace.slates'));
 
     for (const member of ['$list()', '$fork(version)', '$preview()', '$restore(version)', '$share(options)']) expect(slates).toContain(member);
-    expect(() => declared('workspace.slates.$list')).toThrow('describe: nothing is named "workspace.slates.$list"; describe(\'workspace.slates\') declares what it holds');
+    // rc22 dashboards: describe('workspace.slates.$list') answers the declaration that declares it.
+    expect(declared('workspace.slates.$list')).toBe(slates);
+    expect(() => declared('workspace.slates.$nothing')).toThrow('describe: nothing is named "workspace.slates.$nothing"; describe(\'workspace.slates\') declares what it holds');
   });
 
   test('invalid operation fields are refused before the available host is called', async () => {
