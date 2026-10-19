@@ -136,6 +136,20 @@ CASES_TOKEN="${CASES_RESOLVED[1]}"
 KINU_TOKEN=$CASES_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$CASES_ACCOUNT" || exit 1
 KINU_TOKEN=$FLEET_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$FLEET_ACCOUNT" || exit 1
 
+# THE CASE THAT WRITES ACCOUNT SETTINGS ACTS AS ITS OWN ACCOUNT. workspace-settings
+# writes the account's default computer size, which every computer the account
+# starts reads: as `scripted` it sized the product flows' computers beside it, and
+# a run cut off before its restore left them there (staging rc20, 2026-10-19).
+SETTINGS_ACCOUNT=settings
+KINU_EVAL_ACCOUNT=$SETTINGS_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
+SETTINGS_OUT="$(KINU_EVAL_ACCOUNT=$SETTINGS_ACCOUNT bun scripts/eval-credentials.ts)"
+mapfile -t SETTINGS_RESOLVED <<< "$SETTINGS_OUT"
+if [[ ${#SETTINGS_RESOLVED[@]} -ne 2 || "${SETTINGS_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
+  echo "first-run: no CLI bearer for the $SETTINGS_ACCOUNT eval account at $KINU_ORIGIN." >&2
+  exit 1
+fi
+KINU_TOKEN="${SETTINGS_RESOLVED[1]}" bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$SETTINGS_ACCOUNT" || exit 1
+
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"
 echo "declared cases: $(ls tests/first-run/*.first-run.ts | wc -l | tr -d ' ') (executed/skipped cases are listed in JUnit)"
