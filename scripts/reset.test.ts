@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { deployedConfig } from './infra-manifest';
-import { LATEST_RESET_KEY, pendingReset, type Reset, ResetSchema, type ResetTarget, type Serving, wipe } from './reset';
+import { LATEST_RESET_KEY, pendingReset, releaseVerdicts, type Reset, ResetSchema, type ResetTarget, type Serving, wipe } from './reset';
 
 const config = deployedConfig('staging');
 
@@ -265,3 +265,44 @@ describe('a reset deletes the snapshots its applications made', () => {
   });
 });
 
+
+describe('a release plans the tables it changed', () => {
+  const git = (repo: string, ...args: string[]) => {
+    const ran = Bun.spawnSync(['git', ...args], { cwd: repo, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
+
+    if (ran.exitCode !== 0) throw new Error(ran.stderr.toString());
+
+    return ran.stdout.toString().trim();
+  };
+
+  const commit = (repo: string, files: Record<string, string | null>) => {
+    for (const [path, text] of Object.entries(files)) {
+      if (text === null) git(repo, 'rm', '-q', path);
+      else { mkdirSync(join(repo, path, '..'), { recursive: true }); writeFileSync(join(repo, path), text); git(repo, 'add', path); }
+    }
+
+    git(repo, 'commit', '-q', '-m', 'c');
+
+    return git(repo, 'rev-parse', 'HEAD');
+  };
+
+  test('a table retired with its declaring file is planned from the build that declared it', () => {
+    const repo = scratchDir('kinu-release-verdicts');
+
+    git(repo, 'init', '-q');
+    const declaring = 'src/state.ts';
+    const lock = JSON.stringify({ [`old_state@${declaring}`]: ['key TEXT NOT NULL'], [`kept@src/kept.ts`]: ['id TEXT PRIMARY KEY'] });
+
+    const from = commit(repo, {
+      'scripts/schema-genesis.lock.json': lock, 'scripts/schema-classes.json': JSON.stringify({ workspace: ['old_state', 'kept'] }),
+      'scripts/schema-retired.json': '[]', [declaring]: 'CREATE TABLE IF NOT EXISTS old_state (key TEXT NOT NULL)', 'src/kept.ts': 'CREATE TABLE IF NOT EXISTS kept (id TEXT PRIMARY KEY)',
+    });
+
+    commit(repo, { 'scripts/schema-retired.json': '["old_state"]', 'scripts/schema-classes.json': JSON.stringify({ workspace: ['kept'] }), [declaring]: null });
+
+    const { changed, verdicts } = releaseVerdicts(from, repo);
+
+    expect(changed).toEqual([{ table: 'old_state', change: 'removed' }]);
+    expect(verdicts.map((verdict) => verdict.table)).toEqual(['old_state']);
+  });
+});
