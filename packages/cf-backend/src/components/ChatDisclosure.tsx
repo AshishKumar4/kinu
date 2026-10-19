@@ -160,26 +160,45 @@ function useRunSpan(calls: readonly string[], live: boolean): string | null {
 }
 
 /**
- * A run of tool calls and the thinking among them, as one group: while it runs, what it is doing and a small view of
- * its newest steps; settled, what it used and took, its steps a click away. A failure inside says so on its line.
+ * A phase, its calls and the thinking between them, as one group: while it runs, what it has done so far and what is
+ * running now, over a small view of its newest steps; settled, what it did in a few words, its steps a click away. A
+ * model's line for it replaces the calls' own once it lands. A failure inside says so on its line.
  */
-export function ToolRun({ steps, live, children }: { steps: readonly RunStep[]; live: boolean; children: ReactNode }) {
+export function ToolRun({ steps, live, written, children }: { steps: readonly RunStep[]; live: boolean; written: string | undefined; children: ReactNode }) {
   const summary = toolRunSummary(steps);
   const span = useRunSpan(steps.flatMap((step) => (step.kind === "tool" ? [step.part.toolCallId] : [])), live);
   const last = steps.at(-1);
   const follow = `${String(steps.length)}:${last?.kind === "tool" ? last.part.state : String(last?.parts.map((part) => part.text.length).join())}`;
-  const used = `Used ${String(summary.calls)} tool${summary.calls === 1 ? "" : "s"}`;
+  const title = live ? summary.title : written ?? summary.title;
+  const now = live && summary.now !== "" ? summary.now : null;
 
   return (
     <ChatDisclosure live={live} failed={!live && summary.failed > 0} folded="hidden" follow={follow} viewport="max-h-36"
-      label={live ? `${summary.doing || "Working"}…` : used}
-      after={(summary.failed > 0 || span !== null) && (
+      label={<span key={title} className={written !== undefined && !live ? "animate-fade-in" : undefined}>{title || "Starting"}</span>}
+      after={(now !== null || summary.failed > 0 || span !== null) && (
         <span className="shrink-0 p-row-text p-text-3">
+          {now !== null && <> · <span data-tool-run-now>{now}…</span></>}
           {summary.failed > 0 && <> · <span className="p-danger" data-tool-run-failed={summary.failed}>{summary.failed} failed</span></>}
           {span !== null && <> · {span}</>}
         </span>
       )}
-      data-tool-run={live ? "live" : "settled"} data-tool-run-calls={summary.calls} data-tool-run-span={span ?? undefined}>
+      data-tool-run={live ? "live" : "settled"} data-tool-run-calls={summary.calls} data-tool-run-span={span ?? undefined}
+      data-phase-title={written !== undefined && !live ? "model" : "calls"}>
+      {children}
+    </ChatDisclosure>
+  );
+}
+
+/**
+ * A long turn's earlier work under one line: what all its calls did, in the few words a phase's line has, or the model's
+ * line for the whole turn once it lands; opening it shows the phases, the thinking and the words among them, as they were.
+ */
+export function TurnRollup({ line, phases, written, children }: { line: string; phases: number; written: string | null; children: ReactNode }) {
+  return (
+    <ChatDisclosure live={false} folded="hidden" follow={String(phases)} viewport="max-h-36"
+      label={<span key={written ?? ""} className={written === null ? undefined : "animate-fade-in"}>{written ?? line}</span>}
+      after={<span className="shrink-0 p-row-text p-text-3"> · {phases} {phases === 1 ? "phase" : "phases"}</span>}
+      data-turn-rollup={phases} data-phase-title={written === null ? "calls" : "model"}>
       {children}
     </ChatDisclosure>
   );

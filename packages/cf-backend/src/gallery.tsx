@@ -51,6 +51,7 @@ import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import { seedToolRuns } from "@/gallery-tool-runs";
+import { LongTurnNotes, seedLongTurn } from "@/gallery-long-turn-view";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -2456,6 +2457,7 @@ function galleryOweIntent(intent: OwedOwnerIntent): JsonValue {
 
 function seedFrameTranscript(transcript: string | null): void {
   seedToolRuns(transcript);
+  seedLongTurn(transcript);
 
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
 
@@ -7678,7 +7680,9 @@ function nodeQuery(): string {
 function workspacePageFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
 
-  seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
+  const transcript = new URLSearchParams(location.search).get("transcript");
+
+  seedFrameTranscript(transcript);
   scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
 
   return {
@@ -7686,6 +7690,7 @@ function workspacePageFrame(): MountedFrame {
     node: (
       <>
         <GalleryNavigator />
+        {transcript === "longturn" && <LongTurnNotes />}
         <Routes>
           <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
