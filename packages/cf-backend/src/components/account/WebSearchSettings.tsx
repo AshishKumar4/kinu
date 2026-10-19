@@ -13,7 +13,7 @@ import {
 } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import {
-  getProfileCatalog, listCloudflareAccounts, listCloudflareGateways, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
+  deleteCredential, getProfileCatalog, listCloudflareAccounts, listCloudflareGateways, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
   type CloudflareAccountStatus, type CloudflareGatewayStatus, type WebSearchAnswer,
 } from "@/lib/user-api";
 import { Choice, Field, inputCls } from "@/components/ui/form";
@@ -118,13 +118,16 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
   const lastIndex = chain.find((route) => route.billing === "cloudflare")?.provider ?? DEFAULT_WEB_SEARCH_CHAIN[0].provider;
   const lastKeyed = chain.find((route) => route.billing === "key")?.provider ?? KEYED_PROVIDERS.find((id) => stored.has(id));
 
-  const pick = (billing: WebSearchBilling) => {
+  /** Opens a tile; it leads the chain at once where it has something to search with. */
+  const pick = (billing: WebSearchBilling) => Effect.suspend(() => {
     setOpened(billing);
 
-    if (billing === "cloudflare" && primary.billing !== "cloudflare") detach(lead({ provider: lastIndex, billing }));
+    if (billing === "cloudflare" && primary.billing !== "cloudflare") return lead({ provider: lastIndex, billing });
 
-    if (billing === "key" && primary.billing !== "key" && lastKeyed !== undefined && stored.has(lastKeyed)) detach(lead({ provider: lastKeyed, billing }));
-  };
+    if (billing === "key" && primary.billing !== "key" && lastKeyed !== undefined && stored.has(lastKeyed)) return lead({ provider: lastKeyed, billing });
+
+    return Effect.void;
+  });
 
   return (
     <div className="space-y-6" data-web-search>
@@ -151,7 +154,13 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
         </div>
       ) : (
         <KeyEntry primary={primary} stored={stored} disabled={saving}
-          onSaved={(provider) => { onKeySaved(); detach(lead({ provider, billing: "key" })); }} />
+          onSaved={(provider) => { onKeySaved(); detach(lead({ provider, billing: "key" })); }}
+          onRemoved={(provider) => {
+            onKeySaved();
+            const kept = chain.filter((route) => !sameRoute({ provider, billing: "key" })(route));
+
+            detach(save(kept.length === 0 ? DEFAULT_WEB_SEARCH_CHAIN : kept));
+          }} />
       )}
 
       {place === "settings" && (
@@ -167,7 +176,7 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
 function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
   billing: WebSearchBilling;
   opened: WebSearchBilling;
-  onPick: (billing: WebSearchBilling) => void;
+  onPick: (billing: WebSearchBilling) => Effect.Effect<void>;
   disabled: boolean;
   title: string;
   badge?: string;
@@ -177,7 +186,7 @@ function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
     <label data-web-search-tile={billing}
       className="relative block cursor-pointer rounded-[14px] border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-accent-subtle)] has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
       <input type="radio" name="web-search-billing" value={billing} checked={opened === billing} disabled={disabled}
-        onChange={() => onPick(billing)} className="sr-only" />
+        onChange={() => detach(onPick(billing))} className="sr-only" />
       <span className="flex items-baseline justify-between gap-2">
         <span className="p-row-text font-medium p-text">{title}</span>
         {badge !== undefined && <span className="p-meta p-text-3">{badge}</span>}
@@ -210,11 +219,13 @@ function Payer({ status, gateways, returnTo }: { status: CloudflareAccountStatus
 }
 
 /** A provider's key: pasted, stored with the account's credentials, and then its search leads the chain. */
-function KeyEntry({ primary, stored, disabled, onSaved }: {
+function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
   primary: WebSearchRoute;
   stored: ReadonlySet<string>;
   disabled: boolean;
   onSaved: (provider: WebSearchProviderId) => void;
+  /** The key is gone: its entry leaves the chain, and an empty chain is the default again. */
+  onRemoved: (provider: WebSearchProviderId) => void;
 }) {
   const [provider, setProvider] = useState<WebSearchProviderId | undefined>(primary.billing === "key" ? primary.provider : KEYED_PROVIDERS[0]);
   const [key, setKey] = useState("");
@@ -227,6 +238,10 @@ function KeyEntry({ primary, stored, disabled, onSaved }: {
 
   const store = () => shown(`storing your ${WEB_SEARCH_PROVIDERS[provider].label} key`, () => setCredential(provider, { kind: "bearer", token: key.trim() }), {
     busy: setSaving, failed: setFailure, done: () => { setKey(""); onSaved(provider); },
+  });
+
+  const remove = () => shown(`removing your ${WEB_SEARCH_PROVIDERS[provider].label} key`, () => deleteCredential(provider, false), {
+    busy: setSaving, failed: setFailure, done: () => { onRemoved(provider); },
   });
 
   let action = has ? "Replace" : "Save";
@@ -254,6 +269,9 @@ function KeyEntry({ primary, stored, disabled, onSaved }: {
       </form>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
         {has ? <Status tone="success">Key stored</Status> : <span>Stored sealed with your other keys, and sent only to {WEB_SEARCH_PROVIDERS[provider].label}.</span>}
+        {has && (
+          <button type="button" disabled={saving || disabled} onClick={() => detach(remove())} className="p-danger hover:underline">Remove key</button>
+        )}
         {direct !== null && (
           <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-accent hover:underline">
             Get a {WEB_SEARCH_PROVIDERS[provider].label} key <ArrowSquareOutIcon size={11} />
