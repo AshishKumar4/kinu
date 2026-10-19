@@ -6,13 +6,19 @@
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, present } from '@kinu.run/test-utils';
 import {
   actorNamespaces, callOperation, SURFACE_POLICY, TurnContextBudget, WORKSPACE_ROOT,
   type ExecutorProviderSurface, type RoleSwitch, type SurfaceActor, type SurfacePolicy,
 } from '../src/index';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
-import { conversationsFor } from './helpers';
+import { conversationsFor, createTestRuntime } from './helpers';
+import { inWorkMode } from '../src/execution/work-mode';
+
+const SCRATCH = {
+  name: 'scratch', scope: 'private',
+  columns: [{ name: 'key', type: 'text', primaryKey: true }, { name: 'value', type: 'json' }],
+} as const;
 
 const SHOT = { url: 'https://example.com/', retrievedAt: '2026-10-08T00:00:00.000Z', bytes: new Uint8Array([137, 80, 78, 71]) };
 
@@ -33,7 +39,6 @@ function actorWith(input: { executors?: ExecutorProviderSurface[]; roleSwitch?: 
     files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
     tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: input.roleSwitch ?? null }),
     db: stores.appData,
-    programState: rt.actor.programState,
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,
     ownerWaits: null,
@@ -55,11 +60,11 @@ test("each caller reaches the actor's own namespaces, less what its policy decla
     slateTool: named(actor, SURFACE_POLICY.slateTool),
     noInbox: named({ ...actor, agents: null }, SURFACE_POLICY.program),
   }).toEqual({
-    program: ['state', 'agents', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
-    operations: ['state', 'agents', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
+    program: ['agents', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
+    operations: ['agents', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
     slate: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
-    slateTool: ['state', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
-    noInbox: ['state', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
+    slateTool: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
+    noInbox: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
   });
 });
 
@@ -99,3 +104,58 @@ test('an executor is reached while it is attached: each build reads the actor as
 
   expect({ before: before.includes('workspace'), after: named(actor, SURFACE_POLICY.program).includes('workspace') }).toEqual({ before: false, after: true });
 });
+
+for (const mode of ['build', 'plan'] as const) {
+  test(`the program policy creates, writes, reads and batches private tables in ${mode}`, async () => {
+    const actor = actorWith();
+    const db = present(actorNamespaces(actor, SURFACE_POLICY.program).find((provider) => provider.name === 'db'), 'program db').tools;
+
+    await inWorkMode(mode, async () => {
+      expect(await present(db.createTable, 'db.createTable').execute(SCRATCH)).toMatchObject({ name: 'scratch', scope: 'private' });
+      expect(await present(db.insert, 'db.insert').execute('scratch', [{ key: 'draft', value: { count: 1 } }])).toEqual({ rowsAffected: 1 });
+      expect(await present(db.select, 'db.select').execute('scratch')).toEqual([{ key: 'draft', value: { count: 1 } }]);
+      expect(await present(db.batch, 'db.batch').execute([
+        { op: 'update', table: 'scratch', set: { value: { count: 2 } }, where: { key: 'draft' } },
+        { op: 'insert', table: 'scratch', rows: [{ key: 'next', value: [3, 1, 2] }] },
+      ])).toEqual([{ rowsAffected: 1 }, { rowsAffected: 1 }]);
+      expect(await present(db.select, 'db.select').execute('scratch', { orderBy: [{ column: 'key', dir: 'asc' }] }))
+        .toEqual([{ key: 'draft', value: { count: 2 } }, { key: 'next', value: [3, 1, 2] }]);
+    });
+  });
+}
+
+for (const policy of ['slate', 'slateTool'] as const) {
+  test(`${policy} refuses every private-table operation and every batch item without exposing the table`, async () => {
+    const actor = actorWith();
+    actor.db.createTable(SCRATCH);
+    actor.db.apply({ op: 'insert', table: 'scratch', rows: [{ key: 'secret', value: 'only the program sees this' }] });
+    actor.db.createTable({ name: 'public_notes', scope: 'actor', columns: [{ name: 'note', type: 'text' }] });
+    const db = present(actorNamespaces(actor, SURFACE_POLICY[policy]).find((provider) => provider.name === 'db'), `${policy} db`).tools;
+
+    const privateCalls: readonly [string, unknown[]][] = [
+      ['schema', ['scratch']], ['select', ['scratch']], ['count', ['scratch']],
+      ['insert', ['scratch', [{ key: 'injected', value: 'stolen' }]]],
+      ['update', ['scratch', { value: 'stolen' }, {}]], ['deleteRows', ['scratch', {}]], ['dropTable', ['scratch']],
+    ];
+
+    for (const [member, args] of privateCalls) {
+      expect(await present(db[member], `db.${member}`).execute(...args)).toMatchObject({
+        success: false, reason: 'denied', error: expect.stringContaining('scratch'),
+      });
+    }
+
+    for (const privateFirst of [false, true]) {
+      const shared = { op: 'insert', table: 'public_notes', rows: [{ note: 'must not land' }] };
+      const hidden = { op: 'insert', table: 'scratch', rows: [{ key: 'injected', value: 'stolen' }] };
+      expect(await present(db.batch, 'db.batch').execute(privateFirst ? [hidden, shared] : [shared, hidden]))
+        .toMatchObject({ success: false, reason: 'denied', error: expect.stringContaining('scratch') });
+    }
+
+    expect(await present(db.listTables, 'db.listTables').execute()).toEqual([expect.objectContaining({ name: 'public_notes', scope: 'actor' })]);
+    expect(await present(db.createTable, 'db.createTable').execute({ ...SCRATCH, name: 'another_secret' }))
+      .toMatchObject({ success: false, reason: 'denied', error: expect.stringContaining('private') });
+    expect(actor.db.listTables().map(({ name }) => name).sort()).toEqual(['public_notes', 'scratch']);
+    expect(actor.db.count('public_notes')).toBe(0);
+    expect(actor.db.select('scratch')).toEqual([{ key: 'secret', value: 'only the program sees this' }]);
+  });
+}

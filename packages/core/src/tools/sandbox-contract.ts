@@ -267,8 +267,8 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
 }
 
 /**
- * A program's crafted tools, defined in its scope ahead of its code: a body reads the caller's `workspace`, `state`
- * and `tools`. `tools[name]` enters as the host's failure census for that name.
+ * A program's crafted tools, defined in its scope ahead of its code: a body reads the caller's `workspace`, `db` and
+ * `tools`. `tools[name]` enters as the host's failure census for that name.
  */
 export function renderCraftedDefinitions(crafted: readonly CraftedToolSource[]): string {
   const definitions = crafted.map((entry) => {

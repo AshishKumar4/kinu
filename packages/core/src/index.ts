@@ -516,15 +516,12 @@ export {
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 
-export { createStateCodemodeProvider } from './tools/state-operations';
 
 export { executorNamespace } from './tools/executor-operations';
 
 export { DB, type AppColumnType } from './operations/db';
 
-export { STATE } from './operations/state';
 
-export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
 
 export {
   APP_TABLE_SCOPES, APP_MUTATIONS,

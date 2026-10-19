@@ -11,7 +11,6 @@ import { DB } from '../operations/db';
 import { COMPUTER, DEVICE, machineFileOperations, machineOperations, PARENT, WORKSPACE } from '../operations/executors';
 import { FILE } from '../operations/file';
 import { MEMORY } from '../operations/memory';
-import { STATE } from '../operations/state';
 import { TASKS } from '../operations/tasks';
 import { WEB, WEB_SANDBOX_IMPACTS } from '../operations/web';
 
@@ -35,7 +34,7 @@ const machine = (ns: string, own: Readonly<Record<string, Operation>>): Readonly
 
 /** Every eval namespace the catalog declares, each operation by its name. */
 const DECLARED = new Map(Object.entries({
-  memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, state: STATE, agent: AGENT,
+  memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, agent: AGENT,
   workspace: machine('workspace', WORKSPACE), computer: machine('computer', COMPUTER), device: machine('device', DEVICE), parent: machine('parent', PARENT),
 }).map(([namespace, ops]) => [namespace, new Map(Object.values<Operation>(ops).map((op) => [op.name, op]))]));
 

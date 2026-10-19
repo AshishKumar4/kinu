@@ -680,8 +680,7 @@ describe('role and Plan authority', () => {
     expect(narrowToolSurface(['eval']).allowsNamespace('db')).toBe(false);
     expect(narrowToolSurface(['eval', 'db']).allowsNamespace('db')).toBe(true);
     expect(narrowToolSurface(undefined).allowsNamespace('db')).toBe(true);
-    expect(narrowToolSurface(['eval']).narrowProviders([{ name: 'db' }, { name: 'state' }]))
-      .toEqual([{ name: 'state' }]);
+    expect(narrowToolSurface(['eval']).narrowProviders([{ name: 'db' }])).toEqual([]);
   });
 
   test('Plan writes its own research state and is denied the workspace\'s', async () => {
@@ -689,7 +688,7 @@ describe('role and Plan authority', () => {
 
     try {
       const store = w.store(w.a);
-      const provider = providersInWorkMode('plan', [createDbCodemodeProvider(store)]);
+      const provider = providersInWorkMode('plan', [createDbCodemodeProvider(store, { private: true })]);
       const db = provider[0]?.tools;
 
       if (db === undefined) throw new Error('no db namespace');
@@ -728,7 +727,7 @@ describe('role and Plan authority', () => {
 
     try {
       const store = w.store(w.a);
-      const db = createDbCodemodeProvider(store).tools;
+      const db = createDbCodemodeProvider(store, { private: true }).tools;
       expect(await db.select.execute('conversation_entries')).toMatchObject({ reason: 'missing' });
       expect(await db.select.execute('session_messages')).toMatchObject({ reason: 'missing' });
       expect(await db.createTable.execute({ name: 'x', scope: 'actor', columns: [] }))

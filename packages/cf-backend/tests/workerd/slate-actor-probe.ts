@@ -13,9 +13,9 @@ import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createCodemodeToolFactory, type CodemodeScope } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
-import { actorNamespaces, createAppDataStore, SURFACE_POLICY, type ActorHandle, type ExecutorProviderSurface, type SqlExecutor, type SurfaceActor, type SurfacePolicy } from '@kinu.run/core';
+import { actorNamespaces, createAppDataStore, initWorkspaceSchema, RunEventRecorder, SURFACE_POLICY, WorkspaceActorDirectory, type ActorHandle, type ExecutorProviderSurface, type SqlExec, type SqlExecutor, type SurfaceActor, type SurfacePolicy } from '@kinu.run/core';
 import { bindAgentSql } from '../../src/runtime';
-import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
+import { bindActorHandle, createDefaultWebSearchProvider, initAgentDataTables, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
@@ -47,8 +47,8 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
     executors: () => scope.executors ?? [],
     web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
     memory: unreached, files: files === undefined ? unreached : () => files, tasks: unreached,
-    db: createAppDataStore({ sql, actor: handle, transactionSync: (write) => storage.transactionSync(write), events: unreached, runId: () => 'probe' }),
-    programState: handle.programState, agents: null, self: null, ownerWaits: null,
+    db: createAppDataStore({ sql, actor: handle, transactionSync: (write) => storage.transactionSync(write), events: () => new RunEventRecorder(sql, handle), runId: () => 'probe' }),
+    agents: null, self: null, ownerWaits: null,
   };
 }
 
@@ -71,7 +71,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     files.writeFile('/slates/crafted/package.json', JSON.stringify({ main: 'server.ts' }));
     const sql = bindAgentSql(this);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
-    initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+    initAgentDataTables((statement) => { this.ctx.storage.sql.exec(statement); });
     initSlateBuildTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const crafted: CraftedTool = {
@@ -140,7 +140,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
    */
   async stopDuringHeldCalls(): Promise<{ answer: string; called: string[]; cancelled: string[] }> {
     const sql = bindAgentSql(this);
-    initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+    initAgentDataTables((statement) => { this.ctx.storage.sql.exec(statement); });
     const stop = new AbortController();
     const called: string[] = [];
     const cancelled: string[] = [];
@@ -208,16 +208,19 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     if (!files.exists('/home/main/plan-data.txt')) files.writeFile('/home/main/plan-data.txt', 'original');
     const sql = bindAgentSql(this);
-    initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+
+    const exec: SqlExec = {
+      exec: (query, ...bindings) => this.ctx.storage.sql.exec(query, ...bindings.map((value) => typeof value === 'boolean' ? Number(value) : value)),
+    };
+
+    initWorkspaceSchema({ execRaw: (statement) => { this.ctx.storage.sql.exec(statement); }, sql, exec, transactionSync: (write) => this.ctx.storage.transactionSync(write) });
+    void sql`INSERT OR IGNORE INTO workspace_identity (id, name) VALUES (${'mode-probe'}, ${'mode-probe'})`;
 
     const factory = createCodemodeToolFactory({
       launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'mode-probe', actor: 'mode-probe', asOwner: true } : null }), workspace: 'mode-probe',
     });
 
-    const actor = bindActorHandle(sql, {
-      actorId: 'mode-probe', workspaceId: 'mode-probe', parentActorId: null,
-      name: 'mode-probe', storageKey: 'mode-probe',
-    }, () => Effect.void);
+    const actor = new WorkspaceActorDirectory(sql, { workspaceId: 'mode-probe', ownerUserId: '' }).createMain({ name: 'mode-probe' });
 
     const native = sqliteFiles(vfs, CRED_SESSION_USER);
 

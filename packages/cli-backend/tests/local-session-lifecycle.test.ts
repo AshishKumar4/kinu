@@ -1294,11 +1294,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(JSON.stringify(result?.result)).toContain('computed inline');
   });
 
-  test('the CLI sandbox binds state.* as the shared docstring promises', async () => {
-    // The shared `eval` description promises `state.set`/`state.get`; the CLI factory list must bind the provider.
+  test('the CLI sandbox keeps program scratch in a private db table', async () => {
     const { session, events } = setup(
       'unused',
-      codemodeModel('await state.set("probe", "found")\nawait state.get("probe")'),
+      codemodeModel([
+        'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "value", type: "text" }] });',
+        'await db.insert("scratch", [{ value: "found" }]);',
+        'return (await db.select("scratch"))[0].value;',
+      ].join('\n')),
       { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true } },
     );
 

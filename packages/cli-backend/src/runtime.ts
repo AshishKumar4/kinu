@@ -25,7 +25,7 @@ import {
   DefaultExecutionRouter,
   adaptMemory,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
-  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
+  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver,
@@ -261,7 +261,6 @@ function buildCLIRuntime(
   // DDL here too: a runtime built without `initWorkspaceSchema` (branch worker,
   // `kinu evolve`, fixture) still reads the table on its first gated command.
   initAgentConfigTable(execRaw);
-  initCodemodeStateTable(execRaw);
   initScaffoldTables(execRaw);
   const agentConfig = actor.config;
   // Same endpoint and credentials as the routed-lane factory, so a tier's model is spelled one way.

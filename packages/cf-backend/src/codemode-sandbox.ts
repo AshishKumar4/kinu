@@ -35,12 +35,11 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     `    const __kinu = await import(${JSON.stringify(`./${KINU_NODE_MODULE_NAME}`)});`,
     '    const __kinuWorkspace = typeof workspace === "undefined" ? null : workspace;',
     '    __kinu.bindSlates(__kinuWorkspace);',
-    '    const __kinuState = typeof state === "undefined" ? null : state;',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
     `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
     '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
-    `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, state: __kinuState, missingBuiltins: __kinuBuiltins.missing });`,
+    `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, missingBuiltins: __kinuBuiltins.missing });`,
     renderCraftedDefinitions(crafted),
   ].join('\n');
 }

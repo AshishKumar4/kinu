@@ -235,7 +235,7 @@ export const BUILTIN_TOOL_SPECS = {
       'Write it like a Node script: top-level statements, `await` anywhere, and `return` (or a trailing expression) hands back the result. Type annotations do not parse.',
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
       '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
-      '`console.log` output comes back with the result. Variables do not survive between programs; `state` does.',
+      '`console.log` output comes back with the result. Variables do not survive between programs; a `private` `db` table keeps data.',
       'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
       'Run independent calls together with `await Promise.all([...])`, and `return` the values you need rather than logging them.',
       'Start with one `//` comment naming the operation and its target; the interface shows it as the call\'s intent.',

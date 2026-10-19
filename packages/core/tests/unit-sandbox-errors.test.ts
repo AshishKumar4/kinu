@@ -20,7 +20,6 @@ import { createInlineExecutor, createNimbusWorkspaceExecutor, type InlineExecuto
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import { createParentExecutor } from '../src/execution/parent';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
-import { createStateCodemodeProvider } from '../src/tools/state-operations';
 import { executorNamespace } from '../src/tools/executor-operations';
 import { createAgentsCodemodeProvider } from '../src/delegation/agents-operations';
 import { createReportCodemodeProvider } from '../src/tools/report-operations';
@@ -31,6 +30,10 @@ import { createDbCodemodeProvider } from '../src/tools/db-codemode';
 import { createWebCodemodeProvider } from '../src/tools/web-operations';
 import { createAgentSelfProvider } from '../src/tools/agent-self';
 import { createTestRuntime, conversationsFor } from './helpers';
+
+test('a program naming state is told to use a private db table', () => {
+  expect(explainSandboxError('state is not defined')).toContain('state was removed: use a private db table');
+});
 
 /**
  * A dependency whose every property is another such double and none of which can be called, so each member takes
@@ -160,13 +163,12 @@ test('every member of every namespace refuses with the one declared Refusal, and
     // Its capabilities are read from the live fleet, so the double answers that one read: no machine is connected.
     executorNamespace(createDeviceTunnelExecutor({ rpc: refusingDouble(), refreshStatus: refusingDouble(), status: () => ({ devices: [] }) })),
     { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }), undefined) },
-    createStateCodemodeProvider(refusingDouble()),
     createAgentsCodemodeProvider(() => refusingDouble()),
     createReportCodemodeProvider(() => refusingDouble()),
     createMemoryCodemodeProvider(() => refusingDouble()),
     createTasksCodemodeProvider(refusingDouble(), refusingDouble()),
     createFileCodemodeProvider(() => refusingDouble()),
-    createDbCodemodeProvider(refusingDouble()),
+    createDbCodemodeProvider(refusingDouble(), { private: true }),
     createWebCodemodeProvider(refusingDouble()),
     createAgentSelfProvider(refusingDouble()),
   ];

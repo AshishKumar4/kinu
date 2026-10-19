@@ -96,7 +96,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
   async program(code: string, as: 'main' | 'scout'): Promise<DbProbeAnswer> {
     const actors = this.open();
     const actor = as === 'main' ? actors.main : actors.scout;
-    const provider: CodemodeProvider = createDbCodemodeProvider(this.store(actor));
+    const provider: CodemodeProvider = createDbCodemodeProvider(this.store(actor), { private: true });
 
     const tool = createCodeTool({
       description: 'probe',

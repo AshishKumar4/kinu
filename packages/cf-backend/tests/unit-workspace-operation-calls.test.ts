@@ -15,7 +15,7 @@ function workspaceActorId(db: Database): string {
 
 const call = () => ({ callId: crypto.randomUUID() });
 
-test('each actor reaches its own state: what one saves, another does not read', async () => {
+test('each actor reaches its own private table rows: what one saves, another does not read', async () => {
   const workspace = orchestratorHarness();
 
   // An added agent takes the workspace's mission.
@@ -24,12 +24,13 @@ test('each actor reaches its own state: what one saves, another does not read', 
   const { subordinate } = await workspace.agent.createSubordinateAgent();
   const hosted = { actorId: v.parse(v.string(), subordinate.actorId), turnId: null, mode: 'build' as const };
 
-  await workspace.agent.callOperation(root, 'state.set', { key: 'draft', value: 'the root draft' }, call());
+  await workspace.agent.callOperation(root, 'db.createTable', { spec: { name: 'drafts', scope: 'private', columns: [{ name: 'value', type: 'text' }] } }, call());
+  await workspace.agent.callOperation(root, 'db.insert', { table: 'drafts', rows: [{ value: 'the root draft' }] }, call());
 
   expect({
-    root: await workspace.agent.callOperation(root, 'state.get', { key: 'draft' }, call()),
-    hosted: await workspace.agent.callOperation(hosted, 'state.get', { key: 'draft' }, call()),
-  }).toEqual({ root: { value: 'the root draft' }, hosted: { value: null } });
+    root: await workspace.agent.callOperation(root, 'db.select', { table: 'drafts' }, call()),
+    hosted: await workspace.agent.callOperation(hosted, 'db.select', { table: 'drafts' }, call()),
+  }).toEqual({ root: { value: [{ value: 'the root draft' }] }, hosted: { value: [] } });
 });
 
 test('a Plan caller lists only what Plan permits, and a write is refused', async () => {

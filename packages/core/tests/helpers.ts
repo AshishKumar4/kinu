@@ -30,7 +30,6 @@ import { createScaffoldSurface } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
-import { initCodemodeStateTable } from '../src/identity/program-state';
 import { WORKSPACE_ROOT, workspacePath } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { workspaceShell } from '@kinu.run/test-utils';
@@ -56,7 +55,6 @@ export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspace
   void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, ${name})`;
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
-  initCodemodeStateTable(execRaw);
 
   return new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name });
 }

@@ -164,7 +164,6 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
     files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
     tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
     db: stores.appData,
-    programState: rt.actor.programState,
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,
     ownerWaits: null,

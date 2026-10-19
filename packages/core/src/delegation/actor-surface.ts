@@ -9,7 +9,6 @@ import type { AgentConfigStore } from '../config/store';
 import type { ConversationRecall } from '../memory/conversation-search';
 import type { VectorStore } from '../memory/vector-store';
 import type { AccountMemory } from '../memory/account';
-import type { ProgramStateStore } from '../identity/program-state';
 import type { SeatedActor } from '../state/actor-host';
 import type { TurnLedgers } from '../orchestrator/turn-accumulator';
 import type { Storage } from '../types/primitives';
@@ -21,7 +20,6 @@ import { executorNamespace } from '../tools/executor-operations';
 import { createFileCodemodeProvider, serveFile, type FileDeps } from '../tools/file-operations';
 import { createMemoryCodemodeProvider, type MemoryDeps } from '../tools/memory-operations';
 import { createReportCodemodeProvider, type ReportDeps } from '../tools/report-operations';
-import { createStateCodemodeProvider } from '../tools/state-operations';
 import { createTasksCodemodeProvider, type RoleSwitch } from '../tools/tasks-operations';
 import type { TaskListStore } from '../tools/task-store';
 import { createWebCodemodeProvider } from '../tools/web-operations';
@@ -47,7 +45,6 @@ export interface SurfaceActor {
   /** `roleSwitch` null: its programs switch no role, as a hire's role is its hirer's to set. */
   readonly tasks: () => { readonly list: TaskListStore; readonly config: AgentConfigStore; readonly roleSwitch: RoleSwitch | null };
   readonly db: AppDataStore;
-  readonly programState: ProgramStateStore;
   /** Null for an actor with no inbox of its own to delegate from. */
   readonly agents: (() => AgentsToolDeps) | null;
   /** `agent.*`, its own lifecycle: the workspace's main actor only. */
@@ -58,7 +55,9 @@ export interface SurfaceActor {
 
 /** How a caller's namespaces differ from the actor's own programs'. */
 export interface SurfacePolicy {
-  readonly state: boolean;
+  /** Whether it reaches the agent's private tables (`db` scope `private`): never a slate's call, nor a crafted tool a
+   *  slate runs, whoever's slate it is. */
+  readonly private: boolean;
   readonly agents: boolean;
   /** `memory`, `file` and `tasks`. */
   readonly stores: boolean;
@@ -77,16 +76,16 @@ export interface SurfacePolicy {
 export const SURFACE_POLICY = {
   /** The actor's own programs, a hire's, a head's or a swarm node's alike: each reaches what its actor holds, as its
    *  native tools do. */
-  program: { state: true, agents: true, stores: true, webFiles: true, browser: 'program', account: true },
+  program: { private: true, agents: true, stores: true, webFiles: true, browser: 'program', account: true },
   /** A caller outside eval acting as the actor: an isolate running its turn, an operation call. */
-  operations: { state: true, agents: true, stores: true, webFiles: true, browser: 'class', account: true },
-  /** A slate's call, which a share's visitor may make: it saves nothing through web, delegates nothing and keeps no state. */
-  slate: { state: false, agents: false, stores: true, webFiles: false, browser: 'class', account: false },
+  operations: { private: true, agents: true, stores: true, webFiles: true, browser: 'class', account: true },
+  /** A slate's call, which a share's visitor may make: it saves nothing through web, delegates nothing and reaches no private table. */
+  slate: { private: false, agents: false, stores: true, webFiles: false, browser: 'class', account: false },
   /** The owner's own slate calling as the owner, no share in it: a slate's reach, and it hires and messages helpers. */
-  ownerSlate: { state: false, agents: true, stores: true, webFiles: false, browser: 'class', account: false },
+  ownerSlate: { private: false, agents: true, stores: true, webFiles: false, browser: 'class', account: false },
   /** A crafted tool a slate runs: a program of the actor's that delegates nothing, driving its caller's browser. */
-  slateTool: { state: true, agents: false, stores: true, webFiles: true, browser: 'program', account: false },
-  slateToolForViewer: { state: true, agents: false, stores: true, webFiles: true, browser: 'viewer', account: false },
+  slateTool: { private: false, agents: false, stores: true, webFiles: true, browser: 'program', account: false },
+  slateToolForViewer: { private: false, agents: false, stores: true, webFiles: true, browser: 'viewer', account: false },
 } as const satisfies Readonly<Record<string, SurfacePolicy>>;
 
 const VIEWER_BROWSER = 'this program holds no browser session; a share\'s viewer drives none of its owner\'s';
@@ -133,14 +132,13 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
   const files = serveFile(actor.files);
 
   return [
-    ...(policy.state ? [createStateCodemodeProvider(actor.programState)] : []),
     ...(policy.agents && agents !== null ? [createAgentsCodemodeProvider(agents)] : []),
     ...(tasks === null ? [] : [
       createMemoryCodemodeProvider(policy.account ? actor.memory : () => withoutAccount(actor.memory())),
       createFileCodemodeProvider(actor.files),
       createTasksCodemodeProvider(tasks.list, tasks.config, tasks.roleSwitch ?? undefined),
     ]),
-    createDbCodemodeProvider(actor.db),
+    createDbCodemodeProvider(actor.db, { private: policy.private }),
     ...agentNamespace(self, actor.ownerWaits),
     ...(call.report === undefined ? [] : [createReportCodemodeProvider(call.report)]),
     webFor(actor.web, policy),
@@ -183,7 +181,6 @@ export function hostedSurfaceActor(
     },
     tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
     db: stores.appData,
-    programState: runtime.actor.programState,
     agents: inputs.agents ?? null,
     self: null,
     ownerWaits: inputs.ownerWaits,

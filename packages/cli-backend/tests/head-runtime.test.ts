@@ -768,30 +768,34 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
 });
 
 describe("a head's eval holds the namespaces the shared description promises", () => {
-  // Every backend's description promises `state.set`/`state.get` to every program, CLI heads included.
-  test('state.set and state.get work inside a local head, over its own scratch', async () => {
+  test('a local head keeps private db scratch between programs', async () => {
     const journal = makeJournal();
     let step = 0;
 
     const model = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-state',
+      provider: 'fake', modelId: 'fake-private-db',
       doGenerate: async () => {
         step += 1;
 
-        const content = step === 1
+        const content = step <= 2
           ? [{
-            type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'eval',
+            type: 'tool-call' as const, toolCallId: `private-${String(step)}`, toolName: 'eval',
             input: JSON.stringify({
-              code: '// Keep a marker between programs\nawait state.set("marker", "kept");\nreturn await state.get("marker");',
+              code: step === 1 ? [
+                '// Keep a marker between programs',
+                'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "value", type: "text" }] });',
+                'await db.insert("scratch", [{ value: "kept" }]);',
+                'return "saved";',
+              ].join('\n') : 'return (await db.select("scratch"))[0].value;',
             }),
           }]
           : [{ type: 'text' as const, text: 'done' }];
 
         return {
           content,
-          finishReason: step === 1 ? 'tool-calls' as const : 'stop' as const,
+          finishReason: step <= 2 ? 'tool-calls' as const : 'stop' as const,
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-          response: { id: 'r', modelId: 'fake-state', timestamp: new Date(0) },
+          response: { id: 'r', modelId: 'fake-private-db', timestamp: new Date(0) },
           warnings: [],
         };
       },
@@ -807,9 +811,10 @@ describe("a head's eval holds the namespaces the shared description promises", (
       .filter((c) => getToolName(c) === 'eval')
       .map((c) => JSON.stringify(c.state === 'output-available' ? c.output : ''));
 
-    expect(outputs).toHaveLength(1);
-    expect(outputs[0]).toContain('kept');
-    expect(outputs[0]).not.toContain('ReferenceError');
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0]).toContain('saved');
+    expect(outputs[1]).toContain('kept');
+    expect(outputs.join('\n')).not.toContain('ReferenceError');
   });
 });
 

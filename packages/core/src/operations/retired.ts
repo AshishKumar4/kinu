@@ -31,6 +31,18 @@ const RETIRED_FIELDS = {
   },
 } as const satisfies Readonly<Record<string, Readonly<Record<string, string>>>>;
 
+/** A namespace taken off the surface whole → what to use instead. */
+const RETIRED_NAMESPACES = {
+  state: "a private db table: db.createTable({ spec: { name, scope: 'private', columns } }) once, then db.select, and db.batch to replace a row",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** What a program naming a retired namespace is told, or null for any other name. */
+export function retiredNamespace(name: string): string | null {
+  const successor = Object.entries(RETIRED_NAMESPACES).find(([retired]) => retired === name)?.[1];
+
+  return successor === undefined ? null : `${name} was removed: use ${successor}`;
+}
+
 /** What a call to a retired member is told, or null for any other name. */
 export function retiredMember(namespace: string, member: string): string | null {
   const name = `${namespace}.${member}`;

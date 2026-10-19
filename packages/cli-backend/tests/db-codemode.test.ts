@@ -55,7 +55,7 @@ function sandbox(): Sandbox {
       });
 
       // `namespaces` is the production seam: the one list `actorNamespaces` builds, executors included.
-      const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [createDbCodemodeProvider(store)] });
+      const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [createDbCodemodeProvider(store, { private: true })] });
       const tool = factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
 
       return toolExecute(tool)({ code });

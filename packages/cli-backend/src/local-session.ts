@@ -2567,7 +2567,6 @@ export class LocalAgentSession {
       tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
       // Plan scoping follows the resolved table scope, read from the live invocation.
       db: this.stores.appData,
-      programState: this.rt.actor.programState,
       agents: () => this.agentsToolDeps(mode),
       self: agentSelfHost({
         rt: this.rt,

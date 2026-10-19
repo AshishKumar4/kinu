@@ -162,7 +162,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
     tasks: () => ({ list: taskList, config, roleSwitch: null }),
     db: rt.stores.appData,
-    programState: rt.actor.programState,
     agents: () => agents,
     self: null,
     ownerWaits: null,

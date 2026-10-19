@@ -2793,7 +2793,6 @@ export abstract class ActorAgent extends Agent<Env> {
       tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
       // Plan is decided per table scope at invocation.
       db: this.stores.appData,
-      programState: this.rt.actor.programState,
       agents: () => this.ownAgentsToolDeps(mode),
       self: this.agentSelf(),
       // The workspace's agent reads what waits on its owner through its own `agent.*`.

@@ -22,7 +22,7 @@ import { settleSync } from '../obs/effect';
 import { currentWorkMode, workModeRefusal } from '../execution/work-mode';
 import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { APP_TABLE_SCOPES, type AppTableScope, type DbOpRecord } from '../types/app-store';
+import { APP_TABLE_SCOPE, APP_TABLE_SCOPES, type AppTableScope, type DbOpRecord } from '../types/app-store';
 import type { ForkAppData } from '../identity/fork-sections';
 
 export {
@@ -122,7 +122,7 @@ class AppBatchError extends KinuError {
 export function initAgentDataTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS ${AGENT_DATA_CATALOG} (
     name TEXT PRIMARY KEY,
-    scope TEXT NOT NULL CHECK(scope IN ('actor','workspace')),
+    scope TEXT NOT NULL CHECK(scope IN ('actor','workspace','private')),
     columns TEXT NOT NULL,
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL
@@ -318,7 +318,7 @@ const quotedAll = (names: readonly string[]): Effect.Effect<string, KinuError> =
 
 function createTableDdl(spec: AppTableSpec, physical: string): Effect.Effect<string, KinuError> {
   return Effect.gen(function* () {
-    const scoped = spec.scope === 'actor';
+    const scoped = APP_TABLE_SCOPE[spec.scope].agentBound;
     const columns: string[] = [];
 
     if (scoped) columns.push(`${yield* quoted(ACTOR_COLUMN)} TEXT NOT NULL`);
@@ -346,7 +346,7 @@ function createTableDdl(spec: AppTableSpec, physical: string): Effect.Effect<str
 }
 
 function ownerIndexDdl(spec: AppTableSpec, physical: string): Effect.Effect<string | null, KinuError> {
-  if (spec.scope !== 'actor') return Effect.succeed(null);
+  if (!APP_TABLE_SCOPE[spec.scope].agentBound) return Effect.succeed(null);
 
   if (spec.columns.some((column) => column.primaryKey === true)) return Effect.succeed(null);
 
@@ -427,7 +427,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       : Effect.succeed(column);
   };
 
-  /** Plan permits actor-scoped writes (spec §9.1) but not workspace-scoped ones. */
+  /** Plan permits writes to the agent's own rows (spec §9.1) but not to a workspace-scoped table's. */
   const permitted = (planAllowed: boolean, operation: string): Effect.Effect<void, KinuError> => {
     const refusal = workModeRefusal(currentWorkMode(), planAllowed, operation);
 
@@ -436,7 +436,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
   /** Scope predicate from the bound handle, never an argument. Returns whether `WHERE` is still needed. */
   const compileScope = (resolved: Resolved, statement: Statement): Effect.Effect<boolean, KinuError> => {
-    if (resolved.record.scope !== 'actor') return Effect.succeed(true);
+    if (!APP_TABLE_SCOPE[resolved.record.scope].agentBound) return Effect.succeed(true);
 
     return Effect.map(quoted(ACTOR_COLUMN), (column) => {
       statement.text(` WHERE ${column} = `).value(actorId);
@@ -561,7 +561,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
   /** One INSERT per consecutive run of same-signature rows; preserves rowid order. */
   const insertRows = (resolved: Resolved, rows: readonly AppRow[], doing: string): Effect.Effect<number, KinuError> => Effect.gen(function* () {
-    const scoped = resolved.record.scope === 'actor';
+    const scoped = APP_TABLE_SCOPE[resolved.record.scope].agentBound;
     let written = 0;
     let index = 0;
 
@@ -620,7 +620,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
   const applyOp = (op: AppOp, doing: string): Effect.Effect<AppliedOp, KinuError> => Effect.gen(function* () {
     const resolved = yield* resolve(op.table);
-    yield* permitted(resolved.record.scope === 'actor', `db.${op.op} on a ${resolved.record.scope}-scope table`);
+    yield* permitted(APP_TABLE_SCOPE[resolved.record.scope].agentBound, `db.${op.op} on a ${resolved.record.scope}-scope table`);
 
     if (op.op === 'insert') {
       const inserted: AppliedOp = {
@@ -733,7 +733,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       }));
     }
 
-    yield* permitted(declared.scope === 'actor', `db.createTable of a ${declared.scope}-scope table`);
+    yield* permitted(APP_TABLE_SCOPE[declared.scope].agentBound, `db.createTable of a ${declared.scope}-scope table`);
 
     const counted = yield* execute<{ n: number }>(sql, new Statement().text(`SELECT COUNT(*) AS n FROM ${catalog}`), doing);
     const tables = v.parse(CountSchema, counted[0]?.n ?? 0);
@@ -763,7 +763,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       return yield* new KinuError('denied', `table \`${resolved.record.name}\` was declared by another agent (${resolved.record.createdBy}); delete your own rows instead`);
     }
 
-    if (resolved.record.scope === 'actor') {
+    if (APP_TABLE_SCOPE[resolved.record.scope].agentBound) {
       const counted = yield* execute<{ n: number }>(
         sql,
         new Statement()
@@ -822,9 +822,10 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   })));
 
   const fork: ForkAppData = {
-    tables: () => settleSync(Effect.map(catalogRows('read the agent-data catalogue'), (records) => records.map(({ name, scope, columns, createdAt }) => ({
-      declaration: JSON.stringify({ name, scope, columns }), createdAt,
-    })))),
+    // A fork copies only the tables whose scope forks; the agent's private ones stay with it.
+    tables: () => settleSync(Effect.map(catalogRows('read the agent-data catalogue'), (records) => records
+      .filter(({ scope }) => APP_TABLE_SCOPE[scope].forks)
+      .map(({ name, scope, columns, createdAt }) => ({ declaration: JSON.stringify({ name, scope, columns }), createdAt })))),
     page: (table, after, limit) => settleSync(Effect.gen(function* () {
       const resolved = yield* resolve(table);
       const doing = `export ${resolved.record.name}`;
@@ -915,19 +916,68 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   };
 }
 
-/** `db.*` for programs: the catalog's db operations over one actor's store. A refused batch names its operation. */
-export function createDbCodemodeProvider(store: AppDataStore): CodemodeProvider {
-  return codemodeNamespace('db', 'Tables of your own, in SQL.', [
-    serve(DB.createTable, ({ spec }) => classified(() => store.createTable(spec))),
-    serve(DB.listTables, () => classified(() => [...store.listTables()])),
-    serve(DB.schema, ({ table }) => classified(() => store.schema(table))),
-    serve(DB.select, ({ table, ...query }) => classified(() => store.select(table, query))),
-    serve(DB.count, ({ table, where }) => classified(() => store.count(table, where))),
-    serve(DB.insert, ({ table, rows }) => classified(() => ({ rowsAffected: store.apply({ op: 'insert', table, rows }).rowsAffected }))),
-    serve(DB.update, ({ table, set, where }) => classified(() => ({ rowsAffected: store.apply({ op: 'update', table, set, where }).rowsAffected }))),
-    serve(DB.deleteRows, ({ table, where }) => classified(() => ({ rowsAffected: store.apply({ op: 'delete', table, where }).rowsAffected }))),
-    serve(DB.batch, ({ ops }) => classified(() => store.batch(ops).map(({ rowsAffected }) => ({ rowsAffected })))),
+/**
+ * `db.*` for programs: the catalog's db operations over one actor's store. A refused batch names its operation. A
+ * caller that does not reach the agent's private tables (a slate's call, a crafted tool a slate runs) is refused each
+ * one by name, in every operation and every item of a batch, and lists none; whether a table is private is its own
+ * declared scope.
+ */
+export function createDbCodemodeProvider(store: AppDataStore, reach: { readonly private: boolean }): CodemodeProvider {
+  const reached = (table: string): void => {
+    if (reach.private) return;
+    const { scope } = store.schema(table);
+
+    if (!APP_TABLE_SCOPE[scope].slates) throw new KinuError('denied', `table \`${table}\` is the agent's own (${scope}): a slate's call does not reach it`);
+  };
+
+  const declared = (scope: AppTableScope): void => {
+    if (!reach.private && !APP_TABLE_SCOPE[scope].slates) throw new KinuError('denied', `a slate's call declares no ${scope}-scope table`);
+  };
+
+  return codemodeNamespace('db', 'Tables of your own, read and written by structured calls, not SQL.', [
+    serve(DB.createTable, ({ spec }) => classified(() => {
+      declared(spec.scope);
+
+      return store.createTable(spec);
+    })),
+    serve(DB.listTables, () => classified(() => store.listTables().filter(({ scope }) => reach.private || APP_TABLE_SCOPE[scope].slates))),
+    serve(DB.schema, ({ table }) => classified(() => {
+      reached(table);
+
+      return store.schema(table);
+    })),
+    serve(DB.select, ({ table, ...query }) => classified(() => {
+      reached(table);
+
+      return store.select(table, query);
+    })),
+    serve(DB.count, ({ table, where }) => classified(() => {
+      reached(table);
+
+      return store.count(table, where);
+    })),
+    serve(DB.insert, ({ table, rows }) => classified(() => {
+      reached(table);
+
+      return { rowsAffected: store.apply({ op: 'insert', table, rows }).rowsAffected };
+    })),
+    serve(DB.update, ({ table, set, where }) => classified(() => {
+      reached(table);
+
+      return { rowsAffected: store.apply({ op: 'update', table, set, where }).rowsAffected };
+    })),
+    serve(DB.deleteRows, ({ table, where }) => classified(() => {
+      reached(table);
+
+      return { rowsAffected: store.apply({ op: 'delete', table, where }).rowsAffected };
+    })),
+    serve(DB.batch, ({ ops }) => classified(() => {
+      for (const op of ops) reached(op.table);
+
+      return store.batch(ops).map(({ rowsAffected }) => ({ rowsAffected }));
+    })),
     serve(DB.dropTable, ({ table }) => classified(() => {
+      reached(table);
       store.dropTable(table);
 
       return null;

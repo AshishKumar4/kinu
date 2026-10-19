@@ -2,7 +2,7 @@
 // stand-in would bypass the binding under test; `sibling` proves isolation.
 import type { Database } from 'bun:sqlite';
 import {
-  WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, initAgentConfigTable, initCodemodeStateTable,
+  WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, initAgentConfigTable,
   WorkspaceActorDirectory, bearWorkspaceIdentity, type ActorHandle, type RawSqlExec, type SqlExecutor,
 } from '@kinu.run/core';
 import { wrapDatabase } from '@kinu.run/core/identity';
@@ -27,7 +27,6 @@ export function createTestActors(
   execRaw(WORKSPACE_IDENTITY_DDL);
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
-  initCodemodeStateTable(execRaw);
 
   const existing = sql<{ id: string; owner_user_id: string }>`
     SELECT id, owner_user_id FROM workspace_identity LIMIT 1

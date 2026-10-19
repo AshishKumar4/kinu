@@ -11,7 +11,7 @@ import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
 import { SlateId } from '@agent-core/core/slates';
-import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, TerminalTransitions, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initTerminalEffectTable, initToolEffectClaimTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, openTurnRun, resetWorkspaceBaseline, settleSharedRoots, standardMounts, withMountTable, type ActorHandle, type AgentStores, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT, readAgentFigures } from '@kinu.run/core';
+import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, TerminalTransitions, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initTerminalEffectTable, initToolEffectClaimTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, openTurnRun, resetWorkspaceBaseline, settleSharedRoots, standardMounts, withMountTable, type ActorHandle, type AgentStores, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines, WORKSPACE_ROOT, readAgentFigures } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
 import { storeFiles } from '@kinu.run/core/workspace';
@@ -152,7 +152,6 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     this.execRaw(WORKSPACE_IDENTITY_DDL);
     initWorkspaceActorTable(this.execRaw);
     initAgentConfigTable(this.execRaw);
-    initCodemodeStateTable(this.execRaw);
     initActorClaimTables(this.execRaw);
     const workspaceId = crypto.randomUUID();
 
