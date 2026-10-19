@@ -60,7 +60,7 @@ import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
 import { renderThrownChain, settleSync, toKinuError, type TurnTrace } from './obs/index';
 import { Effect } from 'effect';
-import { beginModelOperation, type ModelOperationSink } from './events/model-call';
+import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, withStableSchemas } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
@@ -267,6 +267,42 @@ export interface StepRecord {
   readonly messages: readonly ModelMessage[];
   readonly step?: Omit<PendingStepEvent, 'responseMessages'>;
   readonly toolResults: readonly { readonly event: Extract<ChatEvent, { type: 'tool-result' }>; readonly args: JsonObject }[];
+}
+
+/**
+ * A drained call that did not fail: cut, its steps as `onAbort` handed them over, since a cut run never settles the SDK's;
+ * else its end as `onEnd` handed it over. Each of the SDK's own accessors (`steps`, `usage`, `response`) opens a reader
+ * of its own on the call's stream, a tee and two transforms, and the stream keeps every part the call streamed for the
+ * next: read seven times a call, they carried 37,452 of the 100,000 part-stages of the heap gate's long turn in its
+ * agent's isolate (#m2180e). One is read only where no end arrived, a call that streamed no step, for what the SDK found.
+ */
+async function endedCall(call: ProviderCall, ending: {
+  readonly steps: PromiseLike<readonly StepResult<ToolSet>[]>;
+  readonly operation: ModelOperation;
+  readonly produced: ModelMessage[];
+}): Promise<CallOutcome> {
+  const { operation, produced } = ending;
+
+  if (call.interrupted) {
+    operation.failed({ cause: new Error(INTERRUPTED_TURN) });
+
+    return { steps: call.recordedSteps, produced, finishReason: call.lastFinishReason, interrupted: true, failure: null };
+  }
+
+  const { end } = call;
+
+  if (end === null) {
+    const [settled] = await Promise.allSettled([ending.steps]);
+    const cause = settled.status === 'rejected' ? settled.reason : new Error('the model call settled its steps without its end');
+
+    operation.failed({ cause });
+
+    return settleSync(Effect.fail(toKinuError({ doing: 'finishing a model call', cause, otherwise: 'unavailable' })));
+  }
+
+  operation.completed({ usage: normalizeUsage(end.usage), modelId: end.modelId });
+
+  return { steps: end.steps, produced, finishReason: call.lastFinishReason, interrupted: false, failure: null };
 }
 
 interface CallOutcome {
@@ -1087,31 +1123,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       return { steps: call.finishedSteps, produced: paired, finishReason: undefined, interrupted: false, failure };
     }
 
-    // A cut run never settles `result.response`/`result.steps`; read what `onAbort` handed over.
-    if (call.interrupted) {
-      operation.failed({ cause: new Error(INTERRUPTED_TURN) });
-
-      return { steps: call.recordedSteps, produced: paired, finishReason: call.lastFinishReason, interrupted: true, failure: null };
-    }
-
-    // Its end as `onEnd` handed it over. Each of the SDK's own accessors (`steps`, `usage`, `response`) opens a reader of
-    // its own on the call's stream, a tee and two transforms, and the stream keeps every part the call streamed for the
-    // next: read seven times a call, they carried 37,452 of the 100,000 part-stages of the heap gate's long turn in its
-    // agent's isolate (#m2180e). One is read only where no end arrived, a call that streamed no step, for what the SDK found.
-    const { end } = call;
-
-    if (end === null) {
-      const [settled] = await Promise.allSettled([result.steps]);
-      const cause = settled.status === 'rejected' ? settled.reason : new Error('the model call settled its steps without its end');
-
-      operation.failed({ cause });
-
-      return settleSync(Effect.fail(toKinuError({ doing: 'finishing a model call', cause, otherwise: 'unavailable' })));
-    }
-
-    operation.completed({ usage: normalizeUsage(end.usage), modelId: end.modelId });
-
-    return { steps: end.steps, produced: paired, finishReason: call.lastFinishReason, interrupted: false, failure: null };
+    return await endedCall(call, { steps: result.steps, operation, produced: paired });
   };
 
   /** A fallback gets its own provider's cache, replay and options, and a request assembled for it: its window, its
