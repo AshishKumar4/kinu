@@ -203,7 +203,7 @@ function assistantSnapshot(snapshot: JsonObject): JsonObject {
 }
 
 /** The workspace's own answers over the gallery's, as the assistant's Durable Object would give them. */
-function assistantRpc(base: SocketCall): SocketCall {
+export function assistantRpc(base: SocketCall): SocketCall {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = (value: JsonValue) => new Response(JSON.stringify(value)).json<T>();
 
@@ -245,7 +245,7 @@ function AssistantLine() {
   return <>Watching {WATCHING.length}{brief?.next !== null && brief?.next !== undefined && <> · brief {whenNext(brief.next, NOW)}</>}</>;
 }
 
-function AssistantHome() {
+export function AssistantHome() {
   const opened = v.parse(v.nullable(v.picklist(["needs", "mail", "workspaces", "watching"])), query.get("today")) satisfies TodayTile | null;
 
   return (
@@ -261,9 +261,12 @@ function AssistantHome() {
 }
 
 /** Home with the assistant installed, in the product's own shell. */
+/** The assistant's chat as the frame's moment has it. */
+export const ASSISTANT_THREAD = MOMENT === "firstrun" ? FIRST_RUN_THREAD : MORNING_THREAD;
+
 export function assistantHomeFrame(base: SocketCall) {
   serveGalleryRpc(assistantRpc(base));
-  seedGalleryChat(MOMENT === "firstrun" ? FIRST_RUN_THREAD : MORNING_THREAD);
+  seedGalleryChat(ASSISTANT_THREAD);
 
   return {
     entries: [APP_ROUTES.home],
