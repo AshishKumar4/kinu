@@ -68,7 +68,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 | A person | `<username>@D` | `ashish@kinu.run` |
 | A workspace | `<workspace>.<username>@D` | `research.ashish@kinu.run` |
 | An agent | `<agent>.<workspace>.<username>@D` | `scout.research.ashish@kinu.run` |
-| Any of them + tag | `…+<tag>@D` | `ashish+receipts@kinu.run`: delivered to the same box, the tag kept as a label |
+| Any of them + tag | `…+<tag>@D` | `ashish+receipts@kinu.run`: delivered to the same box, the tag kept in `delivered_to` |
 
 **Labels and how they are read:**
 
@@ -99,7 +99,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 **`Mailbox` Durable Object, one per account** (`idFromName(user_id)`). It holds:
 
 - the account's addresses (person, workspaces, agents), and who may wake or send as each;
-- every message's metadata, threads, labels and read state;
+- every message's metadata, threads, the assistant's Important picks and read state;
 - a full-text index (DO SQLite supports FTS5);
 - the send outbox and its delivery status.
 
@@ -129,11 +129,11 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 | Member | Impact | What |
 |---|---|---|
 | `mail.address()` | observe | the actor's own address, and its workspace's |
-| `mail.find({ box?, query?, unread?, from?, label?, before?, limit? })` | observe | thread summaries, newest first |
+| `mail.find({ box?, query?, unread?, from?, important?, before?, limit? })` | observe | thread summaries, newest first |
 | `mail.read(threadOrMessageId)` | observe | messages with text bodies and attachment metadata, marked untrusted (§4) |
 | `mail.draft({ to, cc?, subject, text, replyTo?, attach? })` | effect, no approval | a draft in the box, shown to the owner in Mail |
 | `mail.send(draftIdOrMessage)` | effect, approval | sends as the actor's own address (rules below) |
-| `mail.update(id, { read?, starred?, labels?, archived? })` | effect, own box only | |
+| `mail.update(id, { read?, important?, trashed? })` | effect, own box only | `important` is the reason; only the Personal assistant sets it, on the person's box |
 
 **What an agent can read:**
 
@@ -377,6 +377,15 @@ Nothing else is removed. `PRIMARY_NAV` keeps every entry; Mail's entry point is 
 
 There are two new Durable Object classes, each with its own schema class: `mailname` and `mailbox`. Every number the UI shows is a query over these rows; none is stored beside them.
 
+**Changed with the redesign (2026-10-19):**
+
+- **`mail_threads`** loses `folder`, `starred`, `triage`, `summary` and `summarized_by`, and gains `important`, the assistant's reason. Unverified is a message's verdict, and All, Sent and Drafts are queries, so none needs a column.
+- **`mail_addresses.reads_person`** goes. The person's box names its reader, the Personal assistant, in `workspace` and `actor_id`.
+- **`mail_labels`** goes. The design has no labels, and a `+tag` stays in `delivered_to`.
+- **`mail_messages.woke`** is new.
+  - Writer: `deliver`. Readers: the Mail page and the Inbox tool ("Woke main to read and draft").
+  - It records the wake decision under the address's policy at delivery. That policy can change later, so the decision cannot be derived afterwards.
+
 ### `MailName`: one per root label (`idFromName(label)`)
 
 Its single row is the claim. Naming the object is the global lock.
@@ -418,21 +427,20 @@ CREATE TABLE IF NOT EXISTS mail_box (
   created_at  INTEGER NOT NULL
 );
 
--- Every box of the account. A path is relative to the username: '' is the person, 'research' a workspace,
--- 'scout.research' an agent. A rename touches no row here.
+-- Every box of the account. A path is relative to the username: '' is the person, 'api-worker' a workspace,
+-- 'scout.api-worker' an agent. A rename touches no row here. The person's box belongs to their Personal assistant (§7).
 CREATE TABLE IF NOT EXISTS mail_addresses (
   path        TEXT    PRIMARY KEY CHECK (length(path) <= 41),
   kind        TEXT    NOT NULL CHECK (kind IN ('person', 'workspace', 'agent')),
-  workspace   TEXT,                       -- the workspace's name (its Durable Object's), for workspace and agent boxes
-  actor_id    TEXT,                       -- the agent the box belongs to; the workspace's root agent for a workspace box
+  workspace   TEXT,                       -- the workspace that reads it (its Durable Object's name); the Personal assistant's for the person
+  actor_id    TEXT,                       -- the agent it belongs to; a workspace's main agent for a workspace box
   wake        TEXT    NOT NULL DEFAULT 'owner' CHECK (wake IN ('owner', 'allowlist', 'verified', 'never')),
-  reads_person INTEGER NOT NULL DEFAULT 0 CHECK (reads_person IN (0, 1)),  -- a workspace the owner granted their own box (the mail assistant)
   state       TEXT    NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'retired')),
   created_at  INTEGER NOT NULL,
   retired_at  INTEGER,
   CHECK ((kind = 'person') = (path = '')),
-  CHECK ((kind = 'person') = (workspace IS NULL AND actor_id IS NULL)),
-  CHECK (reads_person = 0 OR kind = 'workspace'),
+  CHECK ((workspace IS NULL) = (actor_id IS NULL)),       -- NULL only for a person whose assistant isn't installed
+  CHECK (kind = 'person' OR workspace IS NOT NULL),
   CHECK ((state = 'retired') = (retired_at IS NOT NULL))
 );
 
@@ -446,23 +454,20 @@ CREATE TABLE IF NOT EXISTS mail_allow (
   PRIMARY KEY (path, sender)
 );
 
--- A conversation, in the box it arrived in or was started from.
+-- A conversation, in the box it arrived in or was started from. All, Sent and Drafts are queries over messages;
+-- unverified is a message's verdict, not a folder.
 CREATE TABLE IF NOT EXISTS mail_threads (
   id          TEXT    PRIMARY KEY,
   path        TEXT    NOT NULL REFERENCES mail_addresses (path),
   subject     TEXT    NOT NULL,
-  folder      TEXT    NOT NULL DEFAULT 'inbox' CHECK (folder IN ('inbox', 'archive', 'unverified', 'trash')),
-  starred     INTEGER NOT NULL DEFAULT 0 CHECK (starred IN (0, 1)),
+  important   TEXT    CHECK (important IS NULL OR length(important) BETWEEN 1 AND 280),  -- the Personal assistant's reason; NULL: not picked
   trashed_at  INTEGER,                    -- emptied 30 days after
-  triage      TEXT    CHECK (triage IS NULL OR triage IN ('needs', 'fyi', 'news', 'later')),
-  summary     TEXT,                       -- the mail assistant's line
-  summarized_by TEXT,                     -- the assistant workspace that wrote it
   created_at  INTEGER NOT NULL,
-  CHECK ((folder = 'trash') = (trashed_at IS NOT NULL)),
-  CHECK ((summary IS NULL) = (summarized_by IS NULL))
+  CHECK (important IS NULL OR path = '')  -- the assistant picks from the box it reads
 );
 
-CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path, folder);
+CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path, created_at);
+CREATE INDEX IF NOT EXISTS mail_threads_important ON mail_threads (created_at) WHERE important IS NOT NULL AND trashed_at IS NULL;
 CREATE INDEX IF NOT EXISTS mail_threads_trashed ON mail_threads (trashed_at) WHERE trashed_at IS NOT NULL;
 
 -- One message, as received or written. Large parts and the raw message live in R2 under the account.
@@ -481,7 +486,8 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   subject     TEXT    NOT NULL,
   at          INTEGER NOT NULL,           -- received (in) or written (out)
   verdict     TEXT    NOT NULL CHECK (verdict IN ('verified', 'unverified', 'ours')),
-  auth        TEXT,                       -- the Authentication-Results it was judged by, as received
+  auth        TEXT,                       -- the first Authentication-Results field, the one it was judged by (§4)
+  woke        TEXT    CHECK (woke IS NULL OR woke IN ('owner', 'input')),  -- the box's agent woke on the owner's word, or on input; NULL: nothing woke
   snippet     TEXT    NOT NULL DEFAULT '',
   text_body   TEXT,                       -- the text part inline up to 64 KiB, else NULL and text_key set
   text_key    TEXT,
@@ -496,6 +502,7 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   CHECK (direction = 'out' OR (raw_key IS NOT NULL AND written_by IS NULL)),
   CHECK (text_body IS NULL OR text_key IS NULL),
   CHECK ((send_state = 'approval') = (send_digest IS NOT NULL AND written_by IS NOT NULL)),
+  CHECK (woke IS NULL OR (direction = 'in' AND verdict = 'verified')),
   UNIQUE (thread_id, header_id)
 );
 
@@ -503,15 +510,6 @@ CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages (thread_id, at)
 CREATE INDEX IF NOT EXISTS mail_messages_header ON mail_messages (header_id) WHERE header_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS mail_messages_sent ON mail_messages (direction, at);
 CREATE INDEX IF NOT EXISTS mail_messages_waiting ON mail_messages (send_state) WHERE send_state IN ('draft', 'approval');
-
--- Labels on a thread: the person's, the assistant's, and each +tag mail arrived with.
-CREATE TABLE IF NOT EXISTS mail_labels (
-  thread_id   TEXT    NOT NULL REFERENCES mail_threads (id),
-  label       TEXT    NOT NULL CHECK (length(label) BETWEEN 1 AND 40),
-  PRIMARY KEY (thread_id, label)
-);
-
-CREATE INDEX IF NOT EXISTS mail_labels_label ON mail_labels (label);
 
 -- A file a message carries; its bytes are content-addressed under the account in R2.
 CREATE TABLE IF NOT EXISTS mail_attachments (
