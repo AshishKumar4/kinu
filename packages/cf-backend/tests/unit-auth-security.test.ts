@@ -18,15 +18,19 @@ import { sanitizeReturnTo } from '@kinu.run/core';
 import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import {
   bootstrappedProfile, cliAccount, staticRouteCliEnv, unreachableAssets, unreachableNamespace, userAccount,
-  workerContext,
+  workerContext, workspaceObject,
 } from './helpers/bindings';
 import { authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { pollCliAuth, startCliAuth } from '../src/cli/auth-store';
 import type { CliRoutesEnv } from '../src/cli/routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { accountRoutes, type AccountRoutesEnv } from '../src/user/account-routes';
+import { getProfile } from '../src/lib/user-api';
+import type { FamilyEnv } from '../src/api/context';
+import { Hono } from 'hono';
 import { makeKv } from './helpers/kv';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/sessions';
 import type { UserCaller } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
@@ -520,6 +524,49 @@ interface SignInOptions {
   readonly afterStart?: (state: string) => Promise<void>;
 }
 
+/**
+ * The name onboarding prefills after a real Cloudflare sign-in: the callback's cookie, checked by the product's own
+ * session check against the account's real object, then the profile the page's client reads through the mounted
+ * account routes.
+ */
+async function onboardingNameAfterSignIn(user: JsonValue): Promise<string | null> {
+  const accounts = new Map<string, TestUserDO>();
+
+  const account = (id: string): TestUserDO => {
+    const found = accounts.get(id) ?? createTestUserDO({ durableObjectId: id });
+
+    accounts.set(id, found);
+
+    return found;
+  };
+
+  const UserDO = { idFromName: (name: string) => name, get: (id: string) => account(id).userDO };
+  const env = { ...cloudflareCallbackEnv().env, UserDO };
+  const realFetch = globalThis.fetch;
+
+  try {
+    const { done } = await cloudflareSignInSteps(env, { access_token: 'cf-a' }, user);
+    const cookie = done.headers.getSetCookie().find((each) => each.startsWith(`${SESSION_COOKIE_NAME}=`))?.split(';')[0] ?? '';
+    const identity = await authenticateRequest(new Request('https://kinu.example.com/', { headers: { cookie } }), env);
+    // The app mounts the owner-only account family ahead of the user family (api/app.ts).
+    const families = new Hono<FamilyEnv<UserRoutesEnv<unknown> & AccountRoutesEnv<unknown>>>().route('/', accountRoutes).route('/', userRoutes);
+    const serve = serveFamily(families, { identity, ctx: workerContext() });
+    const routesEnv = { CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, UserDO, OrchestratorAgent: { idFromName: (name: string) => name, get: () => workspaceObject({}) } };
+
+    globalThis.fetch = asFetchFunction(async (input, init) => {
+      const answered = await serve(new Request(new URL(v.parse(v.string(), input), 'https://kinu.example.com'), init), routesEnv);
+
+      return answered ?? new Response(null, { status: 404 });
+    });
+
+    return present(await getProfile(), 'the onboarding page\'s profile').displayName;
+  } finally {
+    globalThis.fetch = realFetch;
+
+    for (const opened of accounts.values()) opened.close();
+  }
+}
+
 async function cloudflareSignIn(
   env: AuthRoutesEnv<string>, tokenJson: JsonValue, userResult: JsonValue, options: SignInOptions = {},
 ): Promise<Response> {
@@ -584,31 +631,16 @@ async function cloudflareSignInSteps(
   }
 }
 
-  test('Cloudflare OAuth profile uses the Cloudflare API user shape', async () => {
-    const named = cloudflareCallbackEnv();
+  // m2071a: onboarding showed a Cloudflare account's opaque 32-hex username as its owner's name. The page prefills
+  // what the profile answers, so each sign-in runs on to the profile its client reads from the account's own object.
+  test('onboarding reads the name Cloudflare shared, and no name where it shared only an id', async () => {
+    const named = await onboardingNameAfterSignIn({ id: 'cf-user-2', email: 'person@example.com', first_name: 'Ada', last_name: 'Lovelace' });
 
-    const doneAda = await cloudflareSignIn(named.env, { access_token: 'cf-a' }, {
-      id: 'cf-user-2',
-      email: 'person@example.com',
-      first_name: 'Ada',
-      last_name: 'Lovelace',
+    const unnamed = await onboardingNameAfterSignIn({
+      id: 'cf-user-1', email: 'ashish@example.com', first_name: null, last_name: null, username: '61b1829abc1e61e3521cd0d1efed72a2',
     });
 
-    expect(doneAda.status).toBe(302);
-    expect([...named.sessions.values()].map((row) => row.identity.displayName)).toEqual(['Ada Lovelace']);
-
-    const handle = cloudflareCallbackEnv();
-
-    const doneAsh = await cloudflareSignIn(handle.env, { access_token: 'cf-b' }, {
-      id: 'cf-user-1',
-      email: 'ashish@example.com',
-      first_name: null,
-      last_name: null,
-      username: '61b1829abc1e61e3521cd0d1efed72a2',
-    });
-
-    expect(doneAsh.status).toBe(302);
-    expect([...handle.sessions.values()].map((row) => row.identity.displayName)).toEqual([null]);
+    expect([named, unnamed]).toEqual(['Ada Lovelace', null]);
   });
 
   test('Cloudflare OAuth token variants survive the callback into the stored credential', async () => {
