@@ -100,7 +100,8 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
     pipe: true,
     userDataDir: join(root, 'profile'),
     // 20261010004413-e9a788d5: --user-data-dir did not isolate Crashpad's database; this environment variable did.
-    env: { ...process.env, CHROME_CONFIG_HOME: join(root, 'config') },
+    // The singleton socket needs a live parent after the preload releases its TMPDIR between reruns.
+    env: { ...process.env, TMPDIR: root, CHROME_CONFIG_HOME: join(root, 'config') },
     // No clock on the launch or a protocol round trip (puppeteer 25.10 guards every timer with `if (timeout)`): a
     // launch ran past 30 s at load 109 on 2026-09-22. A browser that dies fails the launch on its exit.
     timeout: 0,

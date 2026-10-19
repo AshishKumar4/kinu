@@ -1794,6 +1794,50 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   });
+
+  /**
+   * A Stop that reached the agent before an opening's words did hands them back (2026-10-18): they return to the draft
+   * under the Stop's own notice, as a steer's do, and no failure shows. An opening no Stop touched is read where it ran.
+   */
+  test('words a Stop handed back before the agent read them return to the draft, and no failure shows', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-composer-root] textarea');
+      await page.evaluate(() => {
+        document.documentElement.dataset.galleryChatHold = '1';
+        document.documentElement.dataset.galleryHandedBack = '1';
+      });
+
+      const composer = () => page.evaluate(() => ({
+        draft: document.querySelector<HTMLTextAreaElement>('[data-composer-root] textarea')?.value ?? '',
+        notices: [...document.querySelectorAll('[data-composer-root] [data-notice]')].map((notice) => notice.getAttribute('data-notice')),
+      }));
+
+      await page.type('[data-composer-root] textarea', 'words the Stop handed back');
+      await page.click('[data-composer-root] button[aria-label="Send"]');
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+      await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
+      await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
+      expect(await composer()).toEqual({ draft: '', notices: [] });
+
+      // The stopped request ends; the agent's record says no turn read the words.
+      await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail: { at: 0 } })); });
+      await page.waitForFunction(() => document.querySelector('[data-composer-root] [data-notice]') !== null);
+      expect(await composer()).toEqual({ draft: 'words the Stop handed back', notices: ['info'] });
+
+      // Sent again and left to run, they are read where they ran: nothing returns.
+      await page.evaluate(() => { document.documentElement.dataset.galleryHandedBack = '0'; });
+      await page.click('[data-composer-root] button[aria-label="Send"]');
+      await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('[data-composer-root] textarea')?.value === '');
+      await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail: { at: 1 } })); });
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]', { hidden: true });
+      expect(await composer()).toEqual({ draft: '', notices: [] });
+      await page.close();
+    });
+  });
 });
 
 /**

@@ -34,7 +34,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { cpus } from 'node:os';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { EVAL_TASK_TIMEOUT_SECONDS } from '../evals/src/config';
+import { EVAL_RUN_SILENCE_SECONDS } from '../evals/src/config';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, ROW_NOTICES_ENV, runUnderDeadline, writeFully } from './deadline';
@@ -1148,7 +1148,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -1571,7 +1571,8 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run evals',
     label: 'Eval suite',
     tier: 'evals',
-    deadline: { seconds: EVAL_TASK_TIMEOUT_SECONDS, why: 'orchestrates native armada work; the deployment harness decides trial silence.' },
+    deadline: { seconds: EVAL_RUN_SILENCE_SECONDS, why: 'follows one armada map, speaking as each trial ends; a trial ends on its own, '
+      + 'its harness bounding its silence, and an eval run has no elapsed limit (EVAL_RUN_SILENCE_SECONDS).' },
     // MEASURED 2026-09-30 on kinu.run serving 2f660875cc: the four tasks' 40 trials, all
     // at once on Muse Spark, took 717s (kinu-logs/evals-fast/prod-muse-40), with no
     // provider wait. It is a floor, not the suite's runtime: a trial stops at its first
@@ -2344,8 +2345,10 @@ export const LADDER: readonly Gate[] = [
       + 'showing it once it ends, its header never disagreeing with its composer; a page whose socket drops mid-turn '
       + 'replays the answer as it stood; an answer keeps each step\'s text where it streamed after the turn ends and '
       + 'after a reload, the model\'s next request carrying it, and so does a turn another tab sent, on the page that '
-      + 'watched it, and the workspace\'s own first turn, which no page sent; and a marker sent in each pane stays out of the '
-      + 'other, the transcript leak a shared store shows as green.',
+      + 'watched it, and the workspace\'s own first turn, which no page sent; a marker sent in each pane stays out of the '
+      + 'other, the transcript leak a shared store shows as green; a Stop pressed as a turn opens, then a send as it '
+      + 'leaves: the follow-up is answered, the stopped ask never runs, and nothing reads as a failure, words the Stop '
+      + 'handed back returning to the draft; and a new chat\'s opening offers Stop while its first call waits.',
     blind: LIVE_APP_BLIND,
     inputs: LIVE_APP_INPUTS,
   },
@@ -2638,8 +2641,8 @@ export const LADDER: readonly Gate[] = [
       + 'whose secret no pull request holds.',
     evidence: 'evals',
     phase: 'soak',
-    deadline: { seconds: EVAL_TASK_TIMEOUT_SECONDS, why: 'the local command waits for native armada jobs; '
-      + 'the trial harness on the deployment, not an idle orchestrator, enforces the silence bound.' },
+    deadline: { seconds: EVAL_RUN_SILENCE_SECONDS, why: 'the local command follows one armada map, speaking as each trial ends; '
+      + 'the trial harness on the deployment, not an idle orchestrator, bounds a trial\'s silence, and nothing bounds its time.' },
     here: 'orchestrates the same native armada per-trial map as the statistics, with Kinu\'s explicit connection; '
       + 'no model work happens on this machine.',
     alone: 'is the deploy\'s soak (L24): started once the deployment serves, never awaited, so a real model\'s minutes '

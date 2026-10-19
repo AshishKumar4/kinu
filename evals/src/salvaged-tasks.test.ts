@@ -29,7 +29,7 @@ function workspace(files: ReadonlyMap<string, string>): VerifierSession {
 /** The checks that fail on `files` and `replies`. */
 async function failing(turn: EvalTurn, files: ReadonlyMap<string, string>, replies: readonly string[]): Promise<string[]> {
   if (turn.verify === undefined) throw new Error('the turn checks nothing');
-  const checks: EvalCheck[] = await new EvalVerifier(workspace(files), replies, 0, () => Promise.resolve()).collect(turn.verify);
+  const checks: EvalCheck[] = await new EvalVerifier(workspace(files), replies.map((text) => ({ text })), 0, () => Promise.resolve()).collect(turn.verify);
 
   return checks.filter((check) => !check.pass).map((check) => check.id);
 }

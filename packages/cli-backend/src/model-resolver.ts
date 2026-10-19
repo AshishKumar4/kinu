@@ -118,7 +118,7 @@ export interface LocalModelResolver {
   getAuth: AuthResolver;
   /** The signed-in account's web search, through its gated route; absent signed out. */
   readonly firstPartySearch?: FirstPartySearch;
-  withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait'>): LocalModelResolver;
+  withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait' | 'onModelAttempt'>): LocalModelResolver;
 }
 
 export interface LocalModelResolverConfig {

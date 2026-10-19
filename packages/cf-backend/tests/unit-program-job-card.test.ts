@@ -90,12 +90,12 @@ test('a program waiting on what never settles shows the owner a Stop, and stoppi
 
   expect(job.status).toBe('running');
   expect(card(job)).toContain('Cancel');
-  expect(harnessFibersRunning()).toBe(true);
+  expect(harnessFibersRunning(workspace.agent)).toBe(true);
 
   expect(await workspace.agent.cancelBackgroundJob(job.id)).toEqual({ ok: true });
   await workspace.agent.harnessJoinDetachedFibers();
   expect((await workspace.agent.listBackgroundJobs(20))[0]?.status).toBe('cancelled');
-  expect(harnessFibersRunning()).toBe(false);
+  expect(harnessFibersRunning(workspace.agent)).toBe(false);
 });
 
 test('a settled card speaks only through its recorded outcome; the re-driven note is for a job still running', () => {

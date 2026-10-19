@@ -328,6 +328,7 @@ export function useAgentChat(options: { agent: GalleryAgent }) {
 			});
 		},
 		regenerate: () => Promise.resolve(),
+		setMessages: (update: (shown: readonly UIMessage[]) => readonly UIMessage[]) => { setMessages(update); },
 		stop: () => {
 			for (const send of held.current) send.stopped = true;
 			resync();

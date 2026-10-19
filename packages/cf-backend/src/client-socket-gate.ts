@@ -11,7 +11,7 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
   actorFromConnectionTags, ERROR_STATUS, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, hostedWindowMay, JsonValueSchema, requiredRpcAccess,
-  rpcMovesOverview, WorkspaceTerminalInputSchema, type StoragePredatesReleaseError, type UserCaller,
+  rpcMovesOverview, WorkspaceTerminalInputSchema, type AgentRpcMethod, type StoragePredatesReleaseError, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { attempt, diagnostics, refusalOf, settle, tolerate, type KinuError, type Refusal } from '@kinu.run/core/obs';
@@ -19,7 +19,7 @@ import {
   CLI_AUTHORITY_REVOKED, cliBearerFromTags, rejectOutOfScopeRpc, rpcFrameOf, SESSION_AUTHORITY_REVOKED, sessionBearerFromTags,
   WEBSOCKET_POLICY_CLOSE, type CliSocketBearer, type RpcFrame,
 } from './cli/rpc-gate';
-import type { ChatWireTransport } from './chat-transport';
+import { framePlacing, type ChatWireTransport } from './chat-transport';
 import type { UserHubClient } from './account-reads';
 import type { WorkspaceTerminal } from './workspace-host';
 import { logDoCallRetry } from './obs/do-call-retry';
@@ -68,54 +68,41 @@ export function gatedClientHandlers(host: ClientSocketGateHost, base: ClientHand
   };
 }
 
-/** One turn of the event loop: whatever a frame's handler does before its first wait on I/O has run by then. */
-function nextTask(): Promise<void> {
-  return new Promise((resolve) => { setTimeout(resolve, 0); });
-}
+/** The Stop's RPC, which reaches its chat room's order a few steps into the Agent base's dispatch. */
+const STOP_RPC: AgentRpcMethod = 'cancelCurrentWork';
 
 class ClientSocketGate {
   constructor(private readonly host: ClientSocketGateHost) {}
 
-  /** Per socket, its newest frame's progress: begun once its handling has started, placed once it has taken its place. */
-  private readonly lines = new Map<string, { readonly begun: Promise<void>; readonly placed: Promise<void> }>();
+  /** Per socket, its newest frame's place: settled once that frame has taken it, so the frame after it may go on. */
+  private readonly lines = new Map<string, Promise<void>>();
 
   /**
    * A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. Its
-   * authority is asked at once, but it begins only after the socket's frame before it has: those answers come back in
-   * any order, and a Continue let in ahead of the Stop RPC sent before it was handed back by that Stop (staging rc12).
-   * A chat frame also waits for every frame before it to have taken its place: one of another kind (an RPC: the Stop's
-   * is one) may reach the room by a longer path, which it has walked by the next task turn. Only a chat frame waits for
-   * that turn, so a burst of reads is not held a turn apiece: queued so, each read took three times as long and a page
-   * dropped every answer as stale (live-app-plans, rc15). Waiting for a frame's whole handling would hold a Stop behind
-   * the send it stops.
+   * authority is asked at once, but it goes on only after the socket's frame before it has taken its place: those
+   * answers come back in any order, and a Continue let in ahead of the Stop RPC sent before it was handed back by that
+   * Stop (staging rc12). A frame takes its place as it goes on, since chat frames reach the room's order by one path.
+   * The Stop's RPC takes it once the room has its step, or once its handling ends without one. A wait on anything else
+   * (a timer turn, or a frame's whole handling) holds the socket's every later frame behind it.
    */
   message(connection: Connection, message: WSMessage, base: ClientHandlers): Promise<void> {
-    const before = this.lines.get(connection.id) ?? { begun: Promise.resolve(), placed: Promise.resolve() };
-    const roomFrame = typeof message === 'string' && parseProtocolMessage(message) !== null;
-    const { promise: begun, resolve: begin } = Promise.withResolvers<void>();
-    const placed = Promise.all([before.placed, roomFrame ? begun : begun.then(nextTask)]).then(() => undefined);
-    const line = { begun, placed };
+    const before = this.lines.get(connection.id) ?? Promise.resolve();
+    const { promise: placed, resolve: place } = Promise.withResolvers<void>();
+    const stop = rpcFrameOf(message)?.method === STOP_RPC;
 
-    this.lines.set(connection.id, line);
+    this.lines.set(connection.id, placed);
 
-    const checked = Effect.all([
-      this.refuseRevokedAuthority(connection, message),
-      Effect.promise(() => (roomFrame ? before.placed : before.begun)),
-    ], { concurrency: 'unbounded' });
+    const checked = Effect.all([this.refuseRevokedAuthority(connection, message), Effect.promise(() => before)], { concurrency: 'unbounded' });
 
     const goneOn = Effect.flatMap(checked, ([refused]) => (refused
-      ? Effect.sync(begin)
+      ? Effect.sync(place)
       : Effect.promise(async () => {
-        const handled = this.admittedMessage(connection, message, base);
-
-        // Begun once its handling has walked to its first wait: a chat frame has then joined the room's order.
-        await Promise.all([handled, Promise.resolve().then(begin)]);
+        if (!stop) place();
+        await framePlacing.run(place, () => this.admittedMessage(connection, message, base)).finally(place);
       })));
 
-    return settle(Effect.ensuring(goneOn, Effect.promise(async () => {
-      await placed;
-
-      if (this.lines.get(connection.id) === line) this.lines.delete(connection.id);
+    return settle(Effect.ensuring(goneOn, Effect.sync(() => {
+      if (this.lines.get(connection.id) === placed) this.lines.delete(connection.id);
     })));
   }
 

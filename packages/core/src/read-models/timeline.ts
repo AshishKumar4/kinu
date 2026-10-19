@@ -70,6 +70,7 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
 const DIAGNOSIS_ONLY_TYPES = [
   'model_call',
   'provider_wait',
+  'model_attempt',
   'model_operation',
   'db_op',
   'context_edit',

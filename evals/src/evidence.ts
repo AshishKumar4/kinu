@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { SLATES_ROOT, WORKSPACE_ROOT, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { unheld } from './redact';
-import type { HarnessRun } from './results';
+import type { ActorLedger, HarnessRun } from './results';
 import type { KinuPublicSession } from './session';
 import type { EvidenceCall } from './task';
 import type { TimelineEntry } from './timeline';
@@ -119,8 +119,9 @@ function kept(bytes: Uint8Array): string | Uint8Array {
 
 /**
  * Write one trial's evidence into `directory`: `transcript.md` (rendered, and scrubbed, as a reviewer
- * reads a report), `ledger.jsonl`, `timeline.jsonl`, and what the workspace gave up of `files/`, `slates.json`
- * and `data.json`; `workspace.txt` says what it would not, and why. Everything but the transcript is kept as
+ * reads a report), `ledger.jsonl` (the lead's run events), `descendants.jsonl` (each helper's and swarm node's, a line
+ * `{ actor, event }` each), `timeline.jsonl`, and what the workspace gave up of `files/`, `slates.json` and
+ * `data.json`; `workspace.txt` says what it would not, and why. Everything but the transcript is kept as
  * the deployment answered, less the run's own credential: a pattern scrub would rewrite the code a
  * reader came for, and this directory stays on the machine that ran the trial.
  */
@@ -128,12 +129,15 @@ export function writeEvidence(directory: string, trial: {
   readonly run: HarnessRun;
   readonly verdict: { status: 'passed' | 'failed'; durationMs: number };
   readonly events: readonly RunEvent[];
+  readonly ledgers: readonly ActorLedger[];
   readonly workspace: WorkspaceEvidence;
   readonly timeline: readonly TimelineEntry[];
 }): void {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, 'transcript.md'), `${renderTrial(trial.run, trial.verdict)}\n`);
   writeFileSync(join(directory, 'ledger.jsonl'), trial.events.map((event) => `${unheld(JSON.stringify(event))}\n`).join(''));
+  writeFileSync(join(directory, 'descendants.jsonl'), trial.ledgers.filter((ledger) => ledger.actor !== 'main')
+    .flatMap(({ actor, events }) => events.map((event) => `${unheld(JSON.stringify({ actor, event }))}\n`)).join(''));
   writeFileSync(join(directory, 'timeline.jsonl'), trial.timeline.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
 
   for (const [path, bytes] of trial.workspace.files) {

@@ -27,6 +27,8 @@ export interface SteerActionsDeps {
 interface SteerActions {
   notice: ComposerNotice | null;
   send: () => void;
+  /** Words sent as the draft's are, such as a new chat's opening. */
+  sendWords: (text: string, files: readonly FileUIPart[]) => boolean;
   stop: () => void;
 }
 
@@ -42,30 +44,14 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
 
   const notice = useMemo(() => settled ?? queuedSteerNotice(steerRuns), [settled, steerRuns]);
 
-  const send = useCallback(() => {
-    const text = draft.trim();
-    const files = attachments?.parts ?? [];
+  /** Sends `text`, and puts it back in the draft if no turn read it; false when the press was not taken. */
+  const sendWords = useCallback((text: string, files: readonly FileUIPart[]): boolean => {
+    // `sendChat` owns admission.
+    const landing = sendChat(text, files);
 
-    if (!text && files.length === 0) return;
-    // `sendChat` owns admission; the draft clears only for a press that was taken.
-    const admission = sendChat(text, files);
-
-    if (admission === null) return;
-    setDraft(() => "");
-    attachments?.clear();
+    if (landing === null) return false;
     setSettled(null);
-
-    if (admission.landed === "turn") return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
-      if ((yield* Effect.promise(() => admission.settled)) === "turn") {
-        // The turn had ended, so the actor ran this as the next turn, atomically in its own queue.
-        setSettled({
-          id: NOTICE_ID, tone: "info",
-          text: "That turn had already finished, so this went as a new message.",
-        });
-      }
-      // The queued line is read from the server's `queued` broadcast, the same for every open tab.
-    }), (failed) => Effect.sync(() => {
+    startTransition(() => settle(Effect.catchCause(Effect.asVoid(Effect.promise(() => landing)), (failed) => Effect.sync(() => {
       const cause = Cause.squash(failed);
       // Unread words return to the draft, appended to anything typed since; a stop is not a failure.
       setDraft((current) => current === "" ? text : `${current}\n\n${text}`);
@@ -73,7 +59,21 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
         ? { id: NOTICE_ID, tone: "info", text: "Stopped before the agent read this, so it is back here." }
         : { id: NOTICE_ID, tone: "danger", text: `Could not send to the turn: ${readFailureText({ cause })}` });
     }))));
-  }, [draft, setDraft, attachments, sendChat]);
+
+    return true;
+  }, [setDraft, sendChat]);
+
+  const send = useCallback(() => {
+    const text = draft.trim();
+    const files = attachments?.parts ?? [];
+
+    if (!text && files.length === 0) return;
+
+    // The draft clears only for a press that was taken.
+    if (!sendWords(text, files)) return;
+    setDraft(() => "");
+    attachments?.clear();
+  }, [draft, setDraft, attachments, sendWords]);
 
   const stop = useCallback(() => {
     setSettled(null);
@@ -85,5 +85,5 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     }))));
   }, [abortChat]);
 
-  return { notice, send, stop };
+  return { notice, send, sendWords, stop };
 }

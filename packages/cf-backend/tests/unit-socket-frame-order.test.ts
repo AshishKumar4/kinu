@@ -5,6 +5,7 @@
  */
 import { afterEach, expect, test } from 'bun:test';
 import type { Connection, WSMessage } from 'agents';
+import { ChatWireTransport } from '../src/chat-transport';
 import { gatedClientHandlers, type ClientHandlers } from '../src/client-socket-gate';
 import { sessionBearerConnectionTag } from '../src/cli/rpc-gate';
 import { socketConnection } from './helpers/bindings';
@@ -16,30 +17,28 @@ afterEach(() => {
   for (const user of users.splice(0)) user.close();
 });
 
-/** An RPC frame its test names, as the gate passes it on: binary, so it goes to the Agent base and no chat room. */
+/** A frame its test names, as the gate passes it on: binary, so no chat room is asked for it. */
 function frame(name: string): WSMessage {
   return new TextEncoder().encode(name);
 }
-
-/** A chat frame: a send, which the gate hands to the chat room. */
-const CHAT_SEND = JSON.stringify({ type: 'cf_agent_use_chat_request', id: 'send', init: {} });
 
 function nameOf(message: WSMessage): string {
   return typeof message === 'string' ? message : new TextDecoder().decode(message);
 }
 
-/** Microtask turns only, no timer: what a frame does before the next task turn has happened by the end of these. */
-async function microtasks(turns: number): Promise<void> {
-  for (let turn = 0; turn < turns; turn++) await Promise.resolve();
+/** A send from the chat's composer, as the SDK's transport frames it. */
+function chatRequest(text: string): string {
+  const body = { messages: [{ id: `input-${text}`, role: 'user', parts: [{ type: 'text', text }] }], trigger: 'submit-message' };
+
+  return JSON.stringify({ type: 'cf_agent_use_chat_request', id: text, init: { method: 'POST', body: JSON.stringify(body) } });
 }
 
 /**
- * A gate over a browser session whose authority the owner's user object answers when the test says, frame by frame.
- * `reached` records each frame as it arrives: an RPC at the Agent base, a chat frame at the room, which here is the
- * gate's answer that no room is hosted (the room is a class the test does not build). `handle` is what the base then
- * does with an RPC frame.
+ * A gate over a browser session whose authority the owner's user object answers when the test says, frame by frame,
+ * and a base that records what reached it. `handle` is what the base does with each frame once it arrives; `room`
+ * takes the chat frames.
  */
-async function gated(handle: (name: string) => Promise<void> = async () => {}) {
+async function gated(handle: (name: string) => Promise<void> = async () => {}, room: ChatWireTransport | null = null) {
   const user = createTestUserDO();
   const asked: (() => void)[] = [];
   const reached: string[] = [];
@@ -74,7 +73,7 @@ async function gated(handle: (name: string) => Promise<void> = async () => {}) {
     runtimeRefusal: () => null,
     terminalFor: async () => null,
     hostedWindowName: () => null,
-    chatRoomFor: () => null,
+    chatRoomFor: () => room,
     history: async () => undefined,
     overviewChanged: () => {},
     connectionOpened: () => {},
@@ -86,9 +85,7 @@ async function gated(handle: (name: string) => Promise<void> = async () => {}) {
     workspace: () => 'frame-order',
   }, base);
 
-  const socket: Connection = socketConnection({
-    id: 'tab-1', tags: [sessionBearerConnectionTag('a'.repeat(64)) ?? ''], send: () => { reached.push('send'); },
-  });
+  const socket: Connection = socketConnection({ id: 'tab-1', tags: [sessionBearerConnectionTag('a'.repeat(64)) ?? ''] });
 
   return { handlers, socket, asked, bothAsked, reached };
 }
@@ -96,7 +93,7 @@ async function gated(handle: (name: string) => Promise<void> = async () => {}) {
 test("a socket's frames go on in the order they came, though the second's authority answers first", async () => {
   const { handlers, socket, asked, bothAsked, reached } = await gated();
   const stop = handlers.onMessage(socket, frame('stop'));
-  const send = handlers.onMessage(socket, CHAT_SEND);
+  const send = handlers.onMessage(socket, frame('send'));
 
   await bothAsked;
   // The Continue's check answers first, the Stop's on the same turn after it.
@@ -107,37 +104,53 @@ test("a socket's frames go on in the order they came, though the second's author
   expect(reached).toEqual(['stop', 'send']);
 });
 
-test("an RPC that takes steps to reach the room stays ahead of the chat frame sent after it", async () => {
-  // As the Stop's RPC reaches the chat room through the Agent base's dispatch, a send's chat frame by fewer steps.
-  const { handlers, socket, asked, bothAsked, reached } = await gated(async (name) => {
-    if (name === 'stop') await microtasks(60);
+test("the Stop's RPC keeps its place in the room's order ahead of the send that follows it", async () => {
+  // The room's order as the agent meets it: the Stop reaches the wire's interrupt, the send its send.
+  const order: string[] = [];
+  const { promise: sent, resolve: sendReached } = Promise.withResolvers<void>();
+
+  const room = new ChatWireTransport({
+    turnOwed: async () => false,
+    steps: async function* () { yield* []; },
+    broadcast: () => {},
+    getConnection: () => undefined,
+    history: async () => [],
+    admitted: async () => false,
+    send: async (_input, admitted) => {
+      order.push('send');
+      sendReached();
+      admitted();
+
+      return 'turn';
+    },
+    retry: () => Promise.reject(new Error('not reached in this test')),
+    interrupt: async () => { order.push('stop'); },
+    sendState: async () => ({ status: 'none' }),
+    awaitSend: async () => ({ status: 'none' }),
   });
 
-  const reachedRoom: string[] = [];
-  const stop = Promise.resolve(handlers.onMessage(socket, frame('stop'))).then(() => { reachedRoom.push('stop'); });
-  const send = Promise.resolve(handlers.onMessage(socket, CHAT_SEND)).then(() => { reachedRoom.push('send'); });
+  // The Stop's method reaches the room some steps into the Agent base's dispatch; the send's chat frame by fewer.
+  const steps = async (left: number): Promise<void> => {
+    if (left > 0) await steps(left - 1);
+  };
+
+  // Its handling goes on past the room (the Stop's device sweep) until the send has reached the agent: a gate that held
+  // the send behind the Stop's whole handling would never let it.
+  const { handlers, socket, asked, bothAsked } = await gated(async () => {
+    await steps(12);
+    await room.interrupt();
+    await sent;
+  }, room);
+
+  const stop = handlers.onMessage(socket, JSON.stringify({ type: 'rpc', id: 'stop', method: 'cancelCurrentWork', args: [] }));
+  const send = handlers.onMessage(socket, chatRequest('send'));
 
   await bothAsked;
   asked[1]?.();
   asked[0]?.();
   await Promise.all([stop, send]);
 
-  expect({ reached, reachedRoom }).toEqual({ reached: ['stop', 'send'], reachedRoom: ['stop', 'send'] });
-});
-
-test('a read is not held a task turn behind the read before it', async () => {
-  // Queued a turn apiece, a burst of reads took three times as long and a page dropped each answer as stale (rc15).
-  const { handlers, socket, asked, bothAsked, reached } = await gated();
-  const first = handlers.onMessage(socket, frame('read-1'));
-  const second = handlers.onMessage(socket, frame('read-2'));
-
-  await bothAsked;
-  asked[0]?.();
-  asked[1]?.();
-  await microtasks(200);
-
-  expect(reached).toEqual(['read-1', 'read-2']);
-  await Promise.all([first, second]);
+  expect(order).toEqual(['stop', 'send']);
 });
 
 test("a frame whose handler waits on a long turn does not hold the next frame back", async () => {
@@ -146,7 +159,7 @@ test("a frame whose handler waits on a long turn does not hold the next frame ba
   // The first frame's handler waits until the second has reached the base: a gate that held the second behind the
   // first's whole handling would never let it.
   const { handlers, socket, asked, bothAsked, reached } = await gated(async (name) => {
-    if (name === 'read') {
+    if (name === 'stop') {
       endTurn();
 
       return;
@@ -155,13 +168,13 @@ test("a frame whose handler waits on a long turn does not hold the next frame ba
     await turnEnds;
   });
 
-  const send = handlers.onMessage(socket, frame('turn'));
-  const read = handlers.onMessage(socket, frame('read'));
+  const send = handlers.onMessage(socket, frame('send'));
+  const stop = handlers.onMessage(socket, frame('stop'));
 
   await bothAsked;
   asked[0]?.();
   asked[1]?.();
-  await Promise.all([send, read]);
+  await Promise.all([send, stop]);
 
-  expect(reached).toEqual(['turn', 'read']);
+  expect(reached).toEqual(['send', 'stop']);
 });

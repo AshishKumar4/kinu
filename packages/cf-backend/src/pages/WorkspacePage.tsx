@@ -58,7 +58,7 @@ import { useLayoutDrawer } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
-import { useCarriedAttachments, useOpeningMessage } from "@/components/workspaces/NewChatView";
+import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** The mission is shown as the standing brief, not sent as an opening message
@@ -457,8 +457,6 @@ function SubordinateChatColumn({
   const questions = attention?.reads.questions;
   const asked = useMemo(() => (state.paneActorId === null ? [] : askedBy(questions ?? [], state.paneActorId)), [questions, state.paneActorId]);
 
-  useOpeningMessage(state.connectionStatus === "connected", (text, files) => { state.sendChat(text, [...files], ui.mode); });
-
   if (state.terminalClose && !state.actorSnapshot) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
   }
@@ -485,7 +483,7 @@ function SubordinateChatColumn({
           <p className="text-sm p-text-3">This agent's conversation starts here.</p>
         </div>
       }
-      asked={asked} answerSlates={answerChat} layout={{ startFirst: false, padClass: "pt-5 pb-12" }} />
+      asked={asked} answerSlates={answerChat} layout={{ startFirst: false, padClass: "pt-5 pb-12" }} extras={{ opening: true }} />
   );
 }
 

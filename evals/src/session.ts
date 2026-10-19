@@ -1555,7 +1555,7 @@ export class KinuPublicSession {
     return inspectedStepMessages(events, (request) => this.inspect(request), this.cachedStepMessages);
   }
 
-  /** Main's already-read ledger and every retained descendant's requests, through the public inspector's pages. */
+  /** Main's already-read ledger and every retained descendant's whole ledger, through the public inspector's pages. */
   async actorLedgers(rootEvents: readonly RunEvent[]): Promise<ActorLedger[]> {
     const ledgers: ActorLedger[] = [{ actor: 'main', events: rootEvents }];
 
@@ -1570,7 +1570,7 @@ export class KinuPublicSession {
 
           const address = helperAddress(child);
 
-          ledgers.push({ actor: child.actorReference.actorId, events: await this.actorStepEvents(address) });
+          ledgers.push({ actor: child.actorReference.actorId, events: await this.actorEvents(address) });
           await visit(address);
         }));
 
@@ -1584,7 +1584,7 @@ export class KinuPublicSession {
     return ledgers;
   }
 
-  private async actorStepEvents(address: HelperAddress): Promise<RunEvent[]> {
+  private async actorEvents(address: HelperAddress): Promise<RunEvent[]> {
     const events: RunEvent[] = [];
 
     for (let cursor: { after: string } | undefined; ;) {
@@ -1592,20 +1592,20 @@ export class KinuPublicSession {
 
       if (runs.view !== 'runs') throw new Error(`the public inspector could not read runs of ${address.actor ?? address.path.join('/')}`);
 
-      for (const run of runs.page.items) await this.appendActorSteps(events, address, run.runId);
+      for (const run of runs.page.items) await this.appendActorEvents(events, address, run.runId);
 
       if (runs.page.status === 'end') return events;
       cursor = runs.page.next;
     }
   }
 
-  private async appendActorSteps(events: RunEvent[], address: HelperAddress, runId: string): Promise<void> {
+  private async appendActorEvents(events: RunEvent[], address: HelperAddress, runId: string): Promise<void> {
     for (let since = 0; ;) {
       const page = await this.inspect({ ...address, path: [...address.path], view: 'events', runId, query: { since, limit: EVENT_PAGE } });
 
-      if (page.view !== 'events') throw new Error(`the public inspector could not read requests of ${address.actor ?? address.path.join('/')}/${runId}`);
+      if (page.view !== 'events') throw new Error(`the public inspector could not read the ledger of ${address.actor ?? address.path.join('/')}/${runId}`);
 
-      for (const event of page.page.items) if (event.type === 'step_finish') events.push(event);
+      events.push(...page.page.items);
 
       if (page.page.status === 'end') return;
       since = page.page.next;

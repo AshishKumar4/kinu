@@ -54,9 +54,12 @@ test("the workspace's shell answers a call while another still runs, and a cance
   const stop = new AbortController();
   const held = shell.exec('sleep 600', { signal: stop.signal });
 
-  expect(await shell.exec('echo beside')).toMatchObject({ stdout: 'beside\n', exitCode: 0 });
-  stop.abort();
-  expect((await held).exitCode).not.toBe(0);
+  try {
+    expect(await shell.exec('echo beside')).toMatchObject({ stdout: 'beside\n', exitCode: 0 });
+  } finally {
+    stop.abort();
+    expect((await held).exitCode).not.toBe(0);
+  }
 });
 
 test("an eval's child process starts where the shell does, in the directory's own project", async () => {
@@ -71,11 +74,15 @@ test("an eval's exec carries the call's job and cancel: the job's name answers b
 
   // Started first, so it holds the name when the later call reaches it.
   const held = run("return await workspace.exec('sleep 600', { name: 'server' });", { abortSignal: stop.signal, [DEVICE_REQUEST_OPTION]: job });
-  await expect(run("return await workspace.exec('echo hi', { name: 'server' });")).rejects.toMatchObject({
-    outcome: { success: false, reason: 'unavailable' },
-  });
-  stop.abort();
-  await expect(held).rejects.toMatchObject({ outcome: { success: false, reason: 'io' } });
+
+  try {
+    await expect(run("return await workspace.exec('echo hi', { name: 'server' });")).rejects.toMatchObject({
+      outcome: { success: false, reason: 'unavailable' },
+    });
+  } finally {
+    stop.abort();
+    await expect(held).rejects.toMatchObject({ outcome: { success: false, reason: 'io' } });
+  }
 });
 
 test('a named shell larger than the output bound has one state, read the same each time through the bounded host shell', async () => {
