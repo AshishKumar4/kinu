@@ -16,6 +16,7 @@ import type { ExecCallContext } from '../execution/signal';
 import { programExecContext } from './outcome';
 import type { CodemodeProvider } from '../types/codemode';
 import { callArgs, codemodeNamespace } from './operation-surfaces';
+import { SLATE_PROGRAM_MEMBERS } from '../slates/rpc';
 
 /** Each executor's own members and what it is, by the executor's name; the members every machine shares are admitted
  *  by its capabilities (`machineOperations`). */
@@ -115,10 +116,21 @@ function machineServed(provider: ExecutorProviderSurface): Served[] {
   });
 }
 
-/** The workspace's `slates` is an object of slates, not an operation, so it is declared as the member it is. */
+/** Each `$` member a program calls on `on`, with its parameters as the shim binds them (`...` is one options object). */
+function lifecycleMembers(on: 'directory' | 'slate'): string {
+  return Object.entries(SLATE_PROGRAM_MEMBERS).filter(([, member]) => member.on === on)
+    .map(([op, member]) => `$${op}(${member.params.map((param) => (param === '...' ? 'options' : param)).join(', ')})`).join(', ');
+}
+
+/**
+ * The workspace's `slates` is an object of slates, not an operation, so it is declared as the member it is; its `$`
+ * members, which the slates skill calls, are declared here too, so `describe` answers every name the skill uses.
+ */
 const SLATES_DECLARATION = {
-  full: '/** Slates in this workspace; read vfs://skills/slates/SKILL.md first, which names the `$` members.\n'
-    + ' * `await workspace.slates.board.addStroke(stroke)` runs the board slate\'s `addStroke`. */\n'
+  full: '/** Slates in this workspace. `await workspace.slates.board.addStroke(stroke)` runs the board slate\'s `addStroke`.\n'
+    + ` * Lifecycle members start with \`$\`: on \`workspace.slates\`, ${lifecycleMembers('directory')};\n`
+    + ` * on one slate (\`workspace.slates.board.$preview()\`), ${lifecycleMembers('slate')}.\n`
+    + ' * vfs://skills/slates/SKILL.md says what each does and how to build a slate. */\n'
     + 'slates: { readonly [id: string]: { readonly [member: string]: (...args: unknown[]) => Promise<unknown> } };',
   call: 'slates.<id>.<member>(...)',
 };

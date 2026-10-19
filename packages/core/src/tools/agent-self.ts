@@ -14,7 +14,7 @@ import type { QualityDay } from '../types/quality';
 import type { TimerTrigger } from '../events/ingress/triggers';
 import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
-import type { JsonObject } from '../utils/json';
+import { safeJsonParse, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/index';
 import type { WorkspaceProposalInput, WorkspaceProposalReceipt } from '../safety/workspace-proposals';
 import { serve } from '../operations/operation';
@@ -75,8 +75,20 @@ interface RunningJobRead {
   note: string;
 }
 
-function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRead | null {
-  if (job?.status !== 'running') return job;
+/** A job as a program reads it: its result is the value it returned, not the JSON text it is stored as, which inside
+ *  a program's own result was a string to parse again (staging 5c522f12d: 5 programs parsed at the wrong level). */
+interface JobRead extends Omit<BackgroundJob, 'result'> {
+  result: JsonValue;
+}
+
+function jobRead(job: BackgroundJob): JobRead {
+  return { ...job, result: job.result === null ? null : safeJsonParse(job.result) };
+}
+
+function formatJobRead(job: BackgroundJob | null): JobRead | RunningJobRead | null {
+  if (job === null) return null;
+
+  if (job.status !== 'running') return jobRead(job);
 
   return {
     id: job.id,
@@ -138,7 +150,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
     serve(AGENT.cancelSchedule, async ({ id }) => await host.cancelTrigger(id, 'self')),
     serve(AGENT.budget, async ({ label }) => host.budget.snapshot(label)),
     serve(AGENT.jobResult, async ({ jobId }) => formatJobRead(await host.jobResult(jobId))),
-    serve(AGENT.backgroundJobs, async ({ limit }) => await host.listBackgroundJobs(limit)),
+    serve(AGENT.backgroundJobs, async ({ limit }) => (await host.listBackgroundJobs(limit)).map(jobRead)),
     serve(AGENT.compactNow, async () => {
       await host.armCompactNow();
 
