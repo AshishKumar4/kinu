@@ -1756,6 +1756,14 @@ const DRAFT = `document.querySelector('#chat textarea')?.value ?? ''`;
 /** The words in a message bubble of the chat: a person's message the chat draws. */
 const SHOWN_AS_MESSAGE = (words: string): string => `[...document.querySelectorAll('#chat .p-user-bubble')].some((bubble) => (bubble.textContent ?? '').includes(${JSON.stringify(words)}))`;
 
+/** Presses the chat's Stop where it is drawn, as a person's click does; false when no Stop is drawn. */
+const PRESS_STOP = `(() => {
+  const stop = [...document.querySelectorAll('#chat button[aria-label="Stop this turn"]')].find((button) => button.getClientRects().length > 0);
+  if (!(stop instanceof HTMLElement)) return false;
+  stop.click();
+  return true;
+})()`;
+
 const CLEAR_DRAFT = `((box) => {
   Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, '');
   box.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1792,9 +1800,13 @@ async function measureStopThenSend(newPage: LiveApp['newPage'], origin: string, 
         await pressSend(sender, words);
         await named(`the room's word that words ${attempt} are queued`, () => otherFrames.received('steer_status'));
         otherFrames.restart();
-        await (stoppedBy === 'sender' ? sender : other).click('#chat button[aria-label="Stop this turn"]');
+
+        if (!v.parse(v.boolean(), await (stoppedBy === 'sender' ? sender : other).evaluate(PRESS_STOP))) throw new Error(`no Stop drawn in the ${stoppedBy}'s tab`);
+
         await named(`the room's word that words ${attempt} are handed back`, () => otherFrames.received('steer_status'));
         await sender.evaluate('window.__releaseFrames()');
+        // Read in front: a page behind another draws no frames, and a settle counts frames.
+        await sender.bringToFront();
         // Idle once every frame it was sent is read; then it has asked whatever it asks of where the words landed.
         await until(sender, `the sender's tab idle after attempt ${attempt}`, `!(${STOP_OFFERED})`);
         await named(`the sender's asks of attempt ${attempt} answered`, () => senderFrames.quietAfter());
