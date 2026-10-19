@@ -50,8 +50,8 @@ function since(at: number, now: number): string {
   return minutes < 60 ? `${String(minutes)}m` : `${String(Math.floor(minutes / 60))}h`;
 }
 
-export interface ComputerSessions {
-  /** Null until the first read answers; empty never, the box keeps one. */
+export interface MachineSessions {
+  /** Null until the first read answers; empty never, the box and a PC's daemon each keep one. */
   readonly sessions: readonly TerminalSession[] | null;
   readonly failure: string | null;
   readonly open: () => Effect.Effect<SessionRecord | null>;
@@ -59,17 +59,18 @@ export interface ComputerSessions {
   readonly close: (id: string) => Effect.Effect<void>;
 }
 
-/** The computer's sessions, read while `watching` and the page is visible, and changed by the box's own calls. */
-export function useComputerSessions(rpc: WorkspaceRpc, watching: boolean): ComputerSessions {
+/** A machine's sessions: the computer's, or the PC `device`'s (1014-t), read while `watching` and the page is visible,
+ *  and changed by that machine's own calls. */
+export function useMachineSessions(rpc: WorkspaceRpc, watching: boolean, device: string | null): MachineSessions {
   const [sessions, setSessions] = useState<readonly TerminalSession[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const live = useRef(true);
 
-  const read = useCallback(() => attempt({ doing: "reading the computer's sessions", otherwise: "io" },
-    () => rpc("listComputerSessions", [])).pipe(
+  const read = useCallback(() => attempt({ doing: device === null ? "reading the computer's sessions" : "reading the PC's sessions", otherwise: "io" },
+    () => (device === null ? rpc("listComputerSessions", []) : rpc("listDeviceSessions", [device]))).pipe(
     Effect.map((next) => { if (live.current) { setSessions(next ?? []); setFailure(null); } }),
     Effect.catch((cause) => Effect.sync(() => { if (live.current) setFailure(renderThrownChain({ cause })); })),
-  ), [rpc]);
+  ), [rpc, device]);
 
   // Only a page someone can see reads, and one read at a time: a slow box never stacks them.
   const reading = useRef(false);
@@ -112,9 +113,9 @@ export function useComputerSessions(rpc: WorkspaceRpc, watching: boolean): Compu
   return {
     sessions,
     failure,
-    open: () => call("opening a session", () => rpc("openComputerSession", [])),
-    rename: (id, name) => call("renaming a session", () => rpc("renameComputerSession", [id, name])).pipe(Effect.asVoid),
-    close: (id) => call("closing a session", () => rpc("closeComputerSession", [id])).pipe(Effect.asVoid),
+    open: () => call("opening a session", () => (device === null ? rpc("openComputerSession", []) : rpc("openDeviceSession", [device]))),
+    rename: (id, name) => call("renaming a session", () => (device === null ? rpc("renameComputerSession", [id, name]) : rpc("renameDeviceSession", [device, id, name]))).pipe(Effect.asVoid),
+    close: (id) => call("closing a session", () => (device === null ? rpc("closeComputerSession", [id]) : rpc("closeDeviceSession", [device, id]))).pipe(Effect.asVoid),
   };
 }
 
@@ -279,6 +280,6 @@ function folderTail(cwd: string): string {
 }
 
 /** Opens a session, then shows it; a refusal stays with the hook's failure. */
-export function openSession(sessions: ComputerSessions, show: (id: string) => void): Effect.Effect<void> {
+export function openSession(sessions: MachineSessions, show: (id: string) => void): Effect.Effect<void> {
   return sessions.open().pipe(Effect.map((record) => { if (record !== null) show(record.id); }));
 }

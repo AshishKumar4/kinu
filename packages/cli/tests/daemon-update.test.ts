@@ -251,9 +251,9 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const before = v.parse(AnnouncedSchema, previous.hello);
     const after = v.parse(AnnouncedSchema, successor.hello);
 
-    expect({ protocol: before.protocolVersion, screen: before.features.includes('screenOpen') }).toEqual({ protocol: 3, screen: false });
-    expect({ protocol: after.protocolVersion, screen: after.features.includes('screenOpen'), version: successor.hello.version })
-      .toEqual({ protocol: 4, screen: true, version: NEW });
+    expect({ protocol: before.protocolVersion, sessions: before.features.includes('ptyList') }).toEqual({ protocol: 3, sessions: false });
+    expect({ protocol: after.protocolVersion, sessions: after.features.includes('ptyList'), version: successor.hello.version })
+      .toEqual({ protocol: 4, sessions: true, version: NEW });
 
     // It serves on the new protocol: a digest-checked write lands, outside the Kinu home the tunnel never serves.
     const file = join(scratchDir('protocol-3-updated'), 'landed.txt');
@@ -556,10 +556,13 @@ describe('the daemon answers the hub in core\'s frames', () => {
     const proved = v.parse(ProvedHelloSchema, socket.hello);
 
     if (proved.sandbox.capability !== 'sandboxed') return;
-    const session = 'rpc-terminal00-1';
     const sandbox = { tier: 'sandboxed' as const, agentHome: join(proved.agentRoot, 'ws-terminal', 'home'), roots: [scratchDir('daemon-terminal')] };
-    socket.send({ id: session, method: DEVICE_METHOD.ptyOpen, params: [80, 24], sandbox });
-    expect(v.parse(ReplySchema, await socket.waitForReply(session)).error).toBeUndefined();
+    socket.send({ id: 'rpc-terminal00-1', method: DEVICE_METHOD.ptyOpen, workspace: 'ws-terminal', params: [80, 24], sandbox });
+    const reply = v.parse(ReplySchema, await socket.waitForReply('rpc-terminal00-1'));
+    // The workspace's first session, named by the daemon.
+    const session = v.parse(v.object({ session: v.string() }), reply.result).session;
+
+    expect(reply.error).toBeUndefined();
     socket.send({ type: DEVICE_FRAMES.ptyInput, session, data: Buffer.from('echo $((6 * 7))\r').toString('base64') });
 
     const ofSession = (type: string) => socket.frames.items.filter((frame) => frame.type === type && frame.session === session);

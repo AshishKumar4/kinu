@@ -56,7 +56,7 @@ export interface WorkspaceExecutorsHost {
   broadcast(frame: string): void;
   ownerUserId(): string | null;
   /** A terminal on the owner's machine, opened by the owner's account for this workspace. */
-  openOwnerTerminal(window: { cols: number; rows: number }, device: string | undefined): Promise<{ session: string }>;
+  openOwnerTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string }>;
   /** The screen of the owner's machine `device`, opened by the owner's account for this workspace (1014-t). */
   openOwnerScreen(device: string): Promise<{ session: string }>;
 }
@@ -267,8 +267,8 @@ export class WorkspaceExecutors {
   }
 
   /** `user` is the object holding both sockets; the route sends the pane's upgrade there. */
-  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
-    return settle(this.openOnOwner('opening a terminal on this machine', async () => this.host.openOwnerTerminal(window, device)));
+  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+    return settle(this.openOnOwner('opening a terminal on this machine', async () => this.host.openOwnerTerminal(window, target)));
   }
 
   /** As a terminal opens, for the machine's screen: `user` holds the device socket the viewer's bytes cross. */

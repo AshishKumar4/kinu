@@ -1956,6 +1956,8 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
 
   if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
 
+  if (method.endsWith("DeviceSession") || method === "listDeviceSessions") return rpcResult(v.parse(JsonValueSchema, galleryDeviceSessions(method, args ?? []))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -2009,6 +2011,32 @@ function gallerySessions(method: string, args: readonly unknown[]): readonly Ter
   if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
 
   return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
+}
+
+/** The PC's sessions (1014-t) as its daemon keeps them: its shell, and a build running in another. Its daemon reads no
+ *  last command, port or branch. */
+const GALLERY_DEVICE_SESSIONS: TerminalSession[] = [
+  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: null, needsInput: false },
+  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "cargo", last: null, ports: [], branch: null, needsInput: false },
+];
+
+function galleryDeviceSessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
+  if (method === "openDeviceSession") {
+    const record = { id: `pty-${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, name: `shell ${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, cwd: "" };
+
+    GALLERY_DEVICE_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
+
+    return record;
+  }
+
+  const at = GALLERY_DEVICE_SESSIONS.findIndex((session) => session.id === args[1]);
+  const found = GALLERY_DEVICE_SESSIONS[at];
+
+  if (method === "renameDeviceSession" && typeof args[2] === "string" && found !== undefined) GALLERY_DEVICE_SESSIONS[at] = { ...found, name: args[2] };
+
+  if (method === "closeDeviceSession" && found !== undefined) GALLERY_DEVICE_SESSIONS.splice(at, 1);
+
+  return method === "listDeviceSessions" ? GALLERY_DEVICE_SESSIONS : null;
 }
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */

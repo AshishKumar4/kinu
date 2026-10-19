@@ -165,7 +165,10 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
     return json({ body: { ok: true } });
   }
 
-  return toDeviceHolder(call, DEVICE_TERMINAL_PATH, (agent) => agent.openDeviceTerminal(paneWindow(url), url.searchParams.get("device") ?? undefined));
+  // The pane names its PC and the workspace's session on it (1014-t); one that names no session opens the first.
+  const target = { device: url.searchParams.get("device") ?? undefined, session: url.searchParams.get("session") ?? undefined };
+
+  return toDeviceHolder(call, DEVICE_TERMINAL_PATH, (agent) => agent.openDeviceTerminal(paneWindow(url), target));
 }
 
 /** A PC's screen, as its shell: opened through the workspace, the viewer's upgrade then handed to the DO holding the
