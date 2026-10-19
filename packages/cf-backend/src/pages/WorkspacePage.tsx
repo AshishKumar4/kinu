@@ -1,6 +1,6 @@
 import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
-import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type RefObject } from "react";
+import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from "react";
 import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -48,13 +48,14 @@ import { NodeTranscript } from "@/components/NodeTranscript";
 import { FileLinkContext } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
-import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
+import { FocusBar, WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
+import { mascotColour, mascotSeed } from "@/components/Marks";
 import { RemoveWorkspaceDialog } from "@/components/RemoveWorkspaceDialog";
 import { DeleteChatDialog } from "@/components/DeleteChatDialog";
 import { NewChatView } from "@/components/workspaces/NewChatView";
 import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
 import { WorkspaceSettings } from "@/pages/SettingsPage";
-import { useLayoutDrawer } from "@/components/layout";
+import { useLayoutDrawer, useWorkspaceArea } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
@@ -499,8 +500,9 @@ type SideSource = (typeof SIDE_SOURCES)[number]["source"];
 
 type WorkspaceState = ReturnType<typeof useKinu>;
 
-/** The workspace's bar, with the dialogs its delete controls open. */
-function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, inspector, actions }: {
+/** The workspace's bar, with the dialogs its delete controls open. In the `focus` layout the chat tabs give way to
+ *  who is talking and what they are doing, until the person asks for the tabs. */
+function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, inspector, actions, focus }: {
   workspace: string;
   title: string;
   editValue: string;
@@ -510,14 +512,36 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   view: string | undefined;
   inspector: InspectorControl | null;
   actions: (agent: PanelAgent) => ChatTab;
+  /** The `focus` layout's identity: the name it goes by and its line. */
+  focus: FocusIdentity | null;
 }) {
   const drawer = useLayoutDrawer();
   const agentsNav = useAgentsNav();
   const { entries, rename } = useWorkspaceRoster();
   const logo = entries.find((entry) => entry.name === workspace)?.logo;
   const [removing, setRemoving] = useState(false);
+  const [tabsShown, setTabsShown] = useState(false);
   const working = agents.filter((agent) => !agent.tab && agent.activity === "working").length;
   const chats = agents.filter((agent) => agent.tab).map(actions);
+  const menu = drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>;
+  const barActions = <WorkspaceBarActions workspace={workspace} working={working} view={view} inspector={inspector} onAgents={() => agentsNav.enter(workspace)} />;
+  const speaking = shown ?? agents.find((agent) => agent.category === "main");
+
+  if (focus !== null && !tabsShown && view === undefined) {
+    return (
+      <FocusBar
+        workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/overview` }}
+        agent={{
+          label: focus.label ?? speaking?.label ?? title, seed: mascotSeed(workspace, speaking?.key ?? "main"),
+          colour: mascotColour(workspace, speaking?.colour ?? 0), activity: speaking?.activity,
+        }}
+        line={focus.line}
+        leading={menu}
+        trailing={barActions}
+        {...(chats.length > 1 && { tabs: { count: chats.length, show: () => setTabsShown(true) } })}
+      />
+    );
+  }
 
   return (
     <>
@@ -530,8 +554,8 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
         chats={chats}
         active={openBarItem(view, shown)}
         newChat={`/workspace/${workspace}/new`}
-        leading={drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>}
-        trailing={<WorkspaceBarActions workspace={workspace} working={working} view={view} inspector={inspector} onAgents={() => agentsNav.enter(workspace)} />}
+        leading={menu}
+        trailing={barActions}
       />
       {removing && <RemoveWorkspaceDialog workspace={{ name: workspace, displayName: editValue }} onClose={() => setRemoving(false)} />}
     </>
@@ -580,19 +604,42 @@ function useLiveSplices(entries: readonly { readonly message: UIMessage }[], car
   return useMemo(() => (answering ? cards.filter((card) => card.atStep !== undefined) : []), [answering, cards]);
 }
 
-export default function WorkspacePage() {
-  const { agentId } = useParams();
+/** What the `focus` layout's bar says: the name it goes by (the workspace's title unless given) and its line. */
+export interface FocusIdentity {
+  readonly label?: string;
+  readonly line: ReactNode;
+}
+
+/** A workspace's page, the one its route names; Home names the assistant's (`workspace`), with Today `above` its chat. */
+export interface WorkspacePageProps {
+  readonly workspace?: string;
+  readonly above?: ReactNode;
+  readonly identity?: FocusIdentity;
+}
+
+export default function WorkspacePage(props: WorkspacePageProps = {}) {
+  const routed = useParams().agentId;
+  const agentId = props.workspace ?? routed;
   const [gone, setGone] = useState<string | null>(null);
 
   if (agentId !== undefined && gone === agentId) return <GoneWorkspace />;
 
   // Unmounting closes its socket and every read it polls.
-  return <OpenWorkspace key={agentId} onGone={setGone} />;
+  return <OpenWorkspace key={agentId} onGone={setGone} {...props} />;
 }
 
-function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
+function OpenWorkspace({ onGone, workspace, above, identity }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
   const params = useParams();
-  const { agentId } = params;
+  const agentId = workspace ?? params.agentId;
+  const area = useWorkspaceArea();
+
+  // Shown where its route is not (Home), the workspace still draws the phone's one bar.
+  useEffect(() => {
+    if (workspace === undefined || area === null) return undefined;
+    area.ownBar(true);
+
+    return () => { area.ownBar(false); };
+  }, [workspace, area]);
   const subName = routedAgentPath(params);
   const [search] = useSearchParams();
   const linkIds = useMemo<AgentLinkIds>(() => ({ actor: search.get("actor"), parent: search.get("parent") }), [search]);
@@ -795,6 +842,9 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   if (!agentId) return null;
 
   const as = state.actorSnapshot;
+  const focused = (state.status?.layout ?? "workbench") === "focus";
+  // In the focus layout the composer addresses whoever the bar names.
+  const restingPlaceholder = focused && identity?.label !== undefined ? `Message ${identity.label}…` : "Send a message...";
   // The roster holds the title; the visit (`touchWorkspace`) makes this workspace its newest row.
   const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
   // Blank until the row is read: `agentId` is the URL slug, not a title, and "Untitled" would be a false one.
@@ -804,7 +854,8 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
   const bar = (
     <>
       <WorkspaceBar workspace={agentId} title={shownTitle} editValue={rosterEntry === undefined ? "" : workspaceTitleDraft(rosterEntry)}
-        state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions} />
+        state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions}
+        focus={focused ? identity ?? { label: shownTitle, line: activityLine(shownAgent ?? agentsPanel.list.find((agent) => agent.category === "main")) } : null} />
       <DeleteChat chat={deletingChat} workspace={agentId} shown={subName} dismiss={state.dismissSubordinate} onClose={() => setDeletingChat(null)} />
     </>
   );
@@ -846,6 +897,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
       )}
 
       {bar}
+      {view === undefined && above}
 
       {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list}
         open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} clearMain={() => setClearingMain(true)} />}
@@ -854,6 +906,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
         ref={workbench}
         workspace={agentId}
         contents={state}
+        quiet={focused}
         onInspector={setInspectorControl}
         chat={(control) => <HelperChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
             {shownNode !== null && (
@@ -868,7 +921,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
               </AgentPlanWindowContext.Provider>
             ) : (
             <ChatColumn pane={mainPane} label="Chat" state={state} ui={ui} chat={chat} retryOwed={retryOwed} input
-              placeholder={live ? "Steer the running turn…" : "Send a message..."}
+              placeholder={live ? "Steer the running turn…" : restingPlaceholder}
               attention={<AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />}
               empty={<EmptyConversation mission={as?.mission ?? ""} />}
               asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-7 pb-12" }}
@@ -1013,4 +1066,13 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
     </div>
     </ChatImageContext.Provider></FileLinkContext.Provider></SlateInlineContext.Provider>
   );
+}
+
+/** A chat's line in the `focus` bar: what its agent is doing, in words. */
+function activityLine(agent: PanelAgent | undefined): string {
+  if (agent === undefined) return "";
+
+  const doing: Partial<Record<PanelAgent["activity"], string>> = { working: "Working", waiting: "Waiting on you", stopped: "Stopped", failed: "Last run failed" };
+
+  return `${agent.label} · ${doing[agent.activity] ?? "Idle"}`;
 }

@@ -39,6 +39,9 @@ export const WorkspaceOverviewSchema = v.object({
   shares: v.array(SlateShareCardSchema),
   /** The current settings notification obligation; working workspaces remain conservative. */
   awaitsSettings: v.boolean(),
+  /** The workspace's active plan as far as it has come: what a workspace pursuing a goal shows of its progress. Absent on
+   *  a tile stored before plans were counted. */
+  plan: v.optional(v.nullable(v.object({ title: v.string(), done: v.number(), total: v.number() }))),
 });
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
