@@ -1,7 +1,7 @@
 /**
- * The Drive's places: Slates (`/slates`), My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`), in a column
- * with My stuff's folder tree, or below `lg` in a switch at the top. Nothing empty is drawn: Slates and Shared are
- * placed once they hold something, and one place alone takes no column.
+ * The Drive's places: My stuff (`/drive`, `/drive/<path>`), Slates (`/slates`) and Shared (`/shared`), in a column
+ * with My stuff's folder tree from `lg`, or below it in a switch at the top. Nothing empty is drawn: Slates and Shared
+ * are placed once they hold something, and the column holds the title even when My stuff is the only place.
  */
 import { Effect, Result } from 'effect';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -52,8 +52,8 @@ const IMAGE = /\.(?:png|jpe?g|gif|webp|svg)$/iu;
 const ChosenState = v.object({ chosen: v.literal(true) });
 
 const PLACES: readonly { id: DriveTab; label: string; to: string; icon: ReactNode }[] = [
-  { id: "slates", label: "Slates", to: APP_ROUTES.slates, icon: <AppWindowIcon size={16} /> },
   { id: "mine", label: "My stuff", to: APP_ROUTES.drive, icon: <FolderSimpleIcon size={16} /> },
+  { id: "slates", label: "Slates", to: APP_ROUTES.slates, icon: <AppWindowIcon size={16} /> },
   { id: "shared", label: "Shared", to: APP_ROUTES.shared, icon: <UsersThreeIcon size={16} /> },
 ];
 
@@ -140,12 +140,12 @@ function FolderTree({ listings, parent, current, depth }: {
   );
 }
 
-/** From `lg`, the Drive's places in a column: Slates, My stuff with its folder tree, then Shared. */
+/** From `lg`, the Drive's places in a column: My stuff with its folder tree, Slates, then Shared. */
 function DriveColumn({ tab, path, shown, places, unseen }: {
   tab: DriveTab; path: string; shown: DriveListing | null; places: readonly DriveTab[]; unseen: boolean;
 }) {
-  // Drawn only from `lg`, and only with a second place; the tree in it reads nothing while it is not drawn.
-  const drawn = useMediaQuery("(min-width: 1024px)") && places.length > 1;
+  // Drawn only from `lg`; the tree in it reads nothing while it is not drawn.
+  const drawn = useMediaQuery("(min-width: 1024px)");
   const listings = useFolderWay(drawn && tab === "mine", path, shown);
 
   if (!drawn) return null;
@@ -193,24 +193,21 @@ function DriveHead({ tab, path, subtitle, places, unseen, search, action }: {
   search: { readonly query: string; readonly set: (query: string) => void }; action: ReactNode;
 }) {
   const isRoot = path === "/";
-  const column = places.length > 1;
-  // With one place there is no column, and the title stays above the crumbs at every width.
-  const wide = column ? "lg:[grid-template-areas:'crumbs_action_search']" : "lg:[grid-template-areas:'title_action_search'_'crumbs_crumbs_crumbs']";
 
   return (
-    <div className={`grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] ${wide}`}>
-      <header className={`flex items-center gap-3 [grid-area:title] ${column ? "lg:hidden" : ""}`}>
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] lg:[grid-template-areas:'crumbs_action_search']">
+      <header className="flex items-center gap-3 [grid-area:title] lg:hidden">
         <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
         <h1 className="p-display text-2xl">Drive</h1>
       </header>
       {action && <div className="ml-3 [grid-area:action]">{action}</div>}
-      {column && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}
+      {places.length > 1 && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}
       {tab === "shared" && (
         <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
           data-drive-search className={`${inputCls} mt-3 w-full [grid-area:search] sm:w-60 lg:mt-0`} />
       )}
       {(!isRoot || subtitle !== null) && (
-        <div className={`min-w-0 [grid-area:crumbs] ${column ? "lg:mt-0" : ""} ${isRoot ? "mt-4" : "mt-6"}`}>
+        <div className={`min-w-0 [grid-area:crumbs] lg:mt-0 ${isRoot ? "mt-4" : "mt-6"}`}>
           {tab === "mine" && !isRoot && <Crumbs path={path} />}
           {subtitle !== null && <p className={`p-meta p-text-3 lg:leading-8 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
         </div>
@@ -542,8 +539,8 @@ function ownsNothing(contents: MineContents): boolean {
 }
 
 /**
- * A place with nothing in it goes back to My stuff. A first visit to the Drive lands on Slates when there is one, else
- * on what is shared when My stuff holds nothing of its own.
+ * A place with nothing in it goes back to My stuff. A first visit to the Drive lands on My stuff; only when My stuff
+ * holds nothing of its own does it land on Slates, else on what is shared.
  */
 /** Where the page is at: its place, whether it is a first visit to the Drive's root, and what its reads have said. */
 interface Arrival {
@@ -556,7 +553,7 @@ interface Arrival {
 }
 
 function landing({ tab, firstVisit, settled, nothingOwned, library }: Arrival): ReactNode {
-  // A first visit waits to know where it lands: My stuff is never drawn for a moment before Slates replaces it.
+  // A first visit waits to know where it lands: My stuff is never drawn for a moment before another place replaces it.
   if (tab === "mine" && firstVisit && !settled) return <div className="flex h-full items-center justify-center" data-drive-landing><Loader size="base" /></div>;
 
   if (library === null) return null;
@@ -564,11 +561,11 @@ function landing({ tab, firstVisit, settled, nothingOwned, library }: Arrival): 
 
   if (!places.includes(tab)) return <Navigate to={APP_ROUTES.drive} replace state={{ chosen: true }} />;
 
-  if (tab !== "mine" || !firstVisit) return null;
+  if (tab !== "mine" || !firstVisit || !nothingOwned) return null;
 
   if (places.includes("slates")) return <Navigate to={APP_ROUTES.slates} replace />;
 
-  return nothingOwned && places.includes("shared") ? <Navigate to={APP_ROUTES.shared} replace /> : null;
+  return places.includes("shared") ? <Navigate to={APP_ROUTES.shared} replace /> : null;
 }
 
 function subtitleOf(tab: DriveTab, path: string): ReactNode {
@@ -992,7 +989,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     <div className="flex h-full min-h-0">
       <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
       <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className="max-w-5xl px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
+      <div className="px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
         <DriveHead tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }}
           action={tab === "mine" && (
             <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
