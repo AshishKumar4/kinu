@@ -23,7 +23,7 @@ import { carriedMedia, kinuCodec } from './codec';
 import { KEEP_RECENT_IMAGES, type AttachmentStore } from './attachments';
 
 /** Images moved out at once, past the latest {@link KEEP_RECENT_IMAGES}. */
-export const STEP_IMAGE_BATCH = 4;
+const STEP_IMAGE_BATCH = 4;
 
 /** The text left in an image's place: the rung's form, its arrow in ASCII, as model text is written. */
 function stub(attachment: Attachment, link: string): string {

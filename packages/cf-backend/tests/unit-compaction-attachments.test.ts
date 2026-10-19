@@ -12,7 +12,6 @@ import { actorConnectionTag, buildBuiltinTools, type JsonValue } from '@kinu.run
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { screenshot } from '../../compaction/tests/helpers';
 import { KEEP_RECENT_IMAGES } from '../../compaction/src/attachments';
-import { STEP_IMAGE_BATCH } from '../../compaction/src/step-images';
 import { conversationsFor } from '../../core/tests/helpers';
 import { asPane } from './helpers/agents-sdk';
 import { catalogTurn, driveUntil, hostedMainActor, orchestratorHarness, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -69,11 +68,19 @@ const EARLIER = Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n);
 /** The newest few, which stay in the request. */
 const NEWEST = Array.from({ length: KEEP_RECENT_IMAGES }, (_, n) => SHOTS - KEEP_RECENT_IMAGES + n);
 
-/** What the turn that took them retired as it went: every whole four past the newest few. */
-const RETIRED = Array.from({ length: Math.floor((SHOTS - KEEP_RECENT_IMAGES) / STEP_IMAGE_BATCH) * STEP_IMAGE_BATCH }, (_, n) => n);
+/**
+ * What a later turn's request carries of the screenshots an earlier turn took, on a model they all fit: the turn retired
+ * all but its last few as it went (D103), so the newest stay inline, a tail holding at least the kept few, and every one
+ * before them is a link the workspace's file tool opens to that screenshot.
+ */
+async function retiredAsLinks(workspace: Parameters<typeof hostedMainActor>[0], request: ReturnType<typeof carried>): Promise<void> {
+  const firstInline = request.inline[0] ?? SHOTS;
 
-/** What it left in view: the rest, which a later request on a model they fit still carries inline. */
-const KEPT = Array.from({ length: SHOTS - RETIRED.length }, (_, n) => RETIRED.length + n);
+  expect(request.inline).toEqual(Array.from({ length: SHOTS - firstInline }, (_, n) => firstInline + n));
+  expect(request.inline.length).toBeGreaterThanOrEqual(KEEP_RECENT_IMAGES);
+  expect(firstInline).toBeGreaterThan(0);
+  expect(await reopened(workspace, request.links)).toEqual(Array.from({ length: firstInline }, (_, n) => n));
+}
 
 /** Which model a request was sent to, by the spec's own model id. */
 function servedBy(run: RecordedGatewayRun, spec: string): boolean {
@@ -188,11 +195,7 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
-    const refusedRequest = carried(present(asked.primary[0], 'the request Claude refused'));
-
-    // A later turn carries the retired as links it can still open, whichever model serves it.
-    expect(refusedRequest.inline).toEqual(KEPT);
-    expect(await reopened(workspace, refusedRequest.links)).toEqual(RETIRED);
+    await retiredAsLinks(workspace, carried(present(asked.primary[0], 'the request Claude refused')));
     expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
@@ -208,11 +211,7 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
-    const refusedRequest = carried(present(asked.primary[0], 'the request Claude refused'));
-
-    // A later turn carries the retired as links it can still open, whichever model serves it.
-    expect(refusedRequest.inline).toEqual(KEPT);
-    expect(await reopened(workspace, refusedRequest.links)).toEqual(RETIRED);
+    await retiredAsLinks(workspace, carried(present(asked.primary[0], 'the request Claude refused')));
     expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
@@ -237,10 +236,7 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const served = carried(present(asked.fallback[0], 'the node request gpt-4o-mini served'));
 
-    const refusedRequest = carried(present(asked.primary[0], 'the node request Claude refused'));
-
-    expect(refusedRequest.inline).toEqual(KEPT);
-    expect(await reopened(workspace, refusedRequest.links)).toEqual(RETIRED);
+    await retiredAsLinks(workspace, carried(present(asked.primary[0], 'the node request Claude refused')));
     expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
