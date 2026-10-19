@@ -19,6 +19,7 @@ import { rawParam, type FamilyEnv } from '../api/context';
 type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
+  | 'listSecrets' | 'putSecrets' | 'setSecretHosts' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
 >;
 
@@ -74,6 +75,79 @@ accountApi.delete('/credentials/:key', (c) => settle(Effect.gen(function* () {
   modelSettingsChanged(c);
 
   return json({ body: { ok: true, ...outcome } });
+})));
+
+/** Never a value: names, hosts and where each is granted. */
+accountApi.get('/secrets', async (c) => json({ body: await c.get('account').stub.listSecrets(c.get('owner')) }));
+
+const PutSecretsSchema = v.object({
+  entries: v.array(v.object({ name: v.string(), hosts: v.array(v.string()), value: v.string() })),
+  grantTo: v.array(v.string()),
+});
+
+/** Every entry lands, or none does; each is granted to `grantTo`. */
+accountApi.post('/secrets', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, PutSecretsSchema));
+
+  if (body === null) return err(400, 'Body must be JSON: { entries: [{ name, hosts, value }], grantTo: [workspace] }');
+
+  yield* Effect.tryPromise({
+    try: async () => { await c.get('account').stub.putSecrets(c.get('owner'), body.entries, body.grantTo); },
+    catch: (cause) => authoredRefusal({ doing: 'storing these secrets', cause }),
+  });
+
+  return json({ body: { ok: true } });
+})));
+
+accountApi.put('/secrets/:name/hosts', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, v.object({ hosts: v.array(v.string()) })));
+
+  if (body === null) return err(400, 'Body must be JSON: { hosts: [host] }');
+
+  yield* Effect.tryPromise({
+    try: async () => { await c.get('account').stub.setSecretHosts(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), body.hosts); },
+    catch: (cause) => authoredRefusal({ doing: "changing this secret's hosts", cause }),
+  });
+
+  return json({ body: { ok: true } });
+})));
+
+accountApi.delete('/secrets/:name', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    await c.get('account').stub.deleteSecret(c.get('owner'), decodeURIComponent(rawParam(c, 'name')));
+
+    return json({ body: { ok: true } });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'deleting this secret', cause }),
+})));
+
+/** `reveal` lets that workspace's agents read the value itself. */
+accountApi.put('/secrets/:name/grants/:workspace', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, v.object({ reveal: v.boolean() })));
+
+  if (body === null) return err(400, 'Body must be JSON: { reveal: boolean }');
+
+  yield* Effect.tryPromise({
+    try: async () => {
+      await c.get('account').stub.grantSecret(c.get('owner'), {
+        name: decodeURIComponent(rawParam(c, 'name')), workspace: decodeURIComponent(rawParam(c, 'workspace')), reveal: body.reveal,
+      });
+    },
+    catch: (cause) => authoredRefusal({ doing: 'allowing this secret in a workspace', cause }),
+  });
+
+  return json({ body: { ok: true } });
+})));
+
+accountApi.delete('/secrets/:name/grants/:workspace', (c) => settle(Effect.tryPromise({
+  try: async () => {
+    await c.get('account').stub.revokeSecretGrant(c.get('owner'), {
+      name: decodeURIComponent(rawParam(c, 'name')), workspace: decodeURIComponent(rawParam(c, 'workspace')),
+    });
+
+    return json({ body: { ok: true } });
+  },
+  catch: (cause) => authoredRefusal({ doing: 'removing this secret from a workspace', cause }),
 })));
 
 accountApi.get('/models', async (c) => json({

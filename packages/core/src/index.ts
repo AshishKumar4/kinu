@@ -1535,8 +1535,10 @@ export {
 } from './safety/workspace-proposals';
 
 export {
-  SECRET_PATTERNS, redactSecrets, type SecretPattern,
+  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern, type SecretProvider,
 } from './safety/secret-patterns';
+
+export { parseDotenv, pastedSecrets, type DotenvEntry, type PastedSecret } from './safety/pasted-secrets';
 
 export {
   scanText, countDetections, secretSightings, type SecretFinding, type SecretSighting,

@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
-  BrainIcon, ChartBarIcon, DesktopIcon, DesktopTowerIcon, FlaskIcon, NotebookIcon, PaintBrushIcon, PlugIcon, TerminalIcon, UserCircleIcon,
+  BrainIcon, ChartBarIcon, DesktopIcon, DesktopTowerIcon, FlaskIcon, KeyIcon, NotebookIcon, PaintBrushIcon, PlugIcon, TerminalIcon, UserCircleIcon,
 } from "@phosphor-icons/react";
 import { tabCls } from "@/components/ui/form";
 
@@ -11,6 +11,7 @@ const SETTINGS_SECTIONS = {
   appearance: { label: "Appearance", Icon: PaintBrushIcon, about: "Your theme follows you to every device you sign in on. Light or dark is this device's own." },
   devices: { label: "Devices", Icon: DesktopTowerIcon, about: "Machines linked to this account. A workspace you approve can run commands on them." },
   providers: { label: "Providers", Icon: PlugIcon, about: "Model access for every workspace you own." },
+  secrets: { label: "Secrets", Icon: KeyIcon, about: "Keys and tokens your agents use without seeing them, in the workspaces you choose. Add them here, never in chat." },
   models: { label: "Models", Icon: BrainIcon, about: "Which model each tier and role uses, in every workspace you own." },
   memory: { label: "Memory", Icon: NotebookIcon, about: "What every workspace and agent of yours remembers about you, once you accept it." },
   computer: { label: "Computer", Icon: DesktopIcon, about: "The size of every workspace's computer, unless the workspace chooses its own." },

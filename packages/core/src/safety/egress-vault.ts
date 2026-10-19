@@ -39,6 +39,8 @@ export interface SecretSummary {
 /** The owner's consent for one workspace; `reveal` lets its agents read the value itself. */
 export interface SecretGrant {
   readonly workspace: string;
+  /** The workspace's own title, as the owner's roster shows it. */
+  readonly title: string;
   readonly reveal: boolean;
 }
 
@@ -99,14 +101,17 @@ function mintEgressPlaceholder(): string {
 
 const SecretRowSchema = v.object({ name: v.string(), hosts: v.string(), updated_at: v.number() });
 
-const GrantRowSchema = v.object({ workspace: v.string(), name: v.string(), reveal: v.number() });
+const GrantRowSchema = v.object({ workspace: v.string(), title: v.string(), name: v.string(), reveal: v.number() });
 
 const BindingRowSchema = v.object({ name: v.string(), hosts: v.string(), placeholder: v.string(), reveal: v.number() });
 
 /** Every secret and where it is granted, no secret material. */
 export function listSecrets(sql: SqlExec): SecretSummary[] {
-  const grants = sql.exec(`SELECT workspace, name, reveal FROM user_secret_grants ORDER BY workspace`).toArray()
-    .map((row) => v.parse(GrantRowSchema, row));
+  // A grant's workspace is registered: a grant needs one, and a workspace's removal takes its grants.
+  const grants = sql.exec(
+    `SELECT g.workspace, w.display_name AS title, g.name, g.reveal FROM user_secret_grants g
+       JOIN user_workspaces w ON w.name = g.workspace ORDER BY w.display_name`,
+  ).toArray().map((row) => v.parse(GrantRowSchema, row));
 
   return sql.exec(`SELECT name, hosts, updated_at FROM user_secrets ORDER BY name`).toArray().map((row) => {
     const secret = v.parse(SecretRowSchema, row);
@@ -115,7 +120,7 @@ export function listSecrets(sql: SqlExec): SecretSummary[] {
       name: secret.name,
       hosts: secret.hosts.split(' '),
       updatedAt: secret.updated_at,
-      grants: grants.filter((grant) => grant.name === secret.name).map((grant) => ({ workspace: grant.workspace, reveal: grant.reveal === 1 })),
+      grants: grants.filter((grant) => grant.name === secret.name).map((grant) => ({ workspace: grant.workspace, title: grant.title, reveal: grant.reveal === 1 })),
     };
   });
 }

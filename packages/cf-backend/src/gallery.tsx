@@ -59,6 +59,7 @@ import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { Modal } from "@/components/ui/Modal";
+import { SecretPasteFrame, secretsFixture } from "@/gallery-secrets";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { admitReviewAnnotations, FEEDBACK_ENDPOINT, reviewFeedbackText } from "@kinu.run/core";
@@ -215,7 +216,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty", "secretpaste"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -830,6 +831,7 @@ function builtinAuthFixture(path: string): Response | null {
 }
 
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  secretsFixture,
   builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,
@@ -7950,6 +7952,7 @@ async function mount() {
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "composer") node = <ComposerFrame />;
+  else if (frame === "secretpaste") node = <SecretPasteFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "historyauthority") node = <HistoryAuthorityFrame />;
   else if (frame === "rosterauthority") node = <RosterAuthorityFrame />;

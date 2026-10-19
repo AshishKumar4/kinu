@@ -49,7 +49,7 @@ describe('the owner adds secrets, and nothing ever hands a value back', () => {
     expect(placeholder).not.toContain(SECRET.slice(0, 8));
 
     const listed = await harness.userDO.listSecrets(harness.owner);
-    expect(listed).toEqual([{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], updatedAt: expect.any(Number), grants: [{ workspace: 'shop', reveal: false }] }]);
+    expect(listed).toEqual([{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], updatedAt: expect.any(Number), grants: [{ workspace: 'shop', title: 'shop', reveal: false }] }]);
     expect(JSON.stringify(listed)).not.toContain(SECRET);
     expect(JSON.stringify(listed)).not.toContain(placeholder);
     expect(JSON.stringify(await harness.userDO.grantedSecrets(harness.shop))).not.toContain(SECRET);
@@ -187,7 +187,7 @@ describe('the owner object opens a secret only for a workspace it is granted to'
     await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop', 'blog']);
     await harness.userDO.removeWorkspace(harness.owner, 'shop', USER_ID);
 
-    expect((await harness.userDO.listSecrets(harness.owner))[0]?.grants).toEqual([{ workspace: 'blog', reveal: false }]);
+    expect((await harness.userDO.listSecrets(harness.owner))[0]?.grants).toEqual([{ workspace: 'blog', title: 'blog', reveal: false }]);
   });
 });
 

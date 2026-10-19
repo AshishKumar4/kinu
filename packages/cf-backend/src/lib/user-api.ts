@@ -212,6 +212,40 @@ export const grantDeviceConsent = (deviceId: string, agentName: string) =>
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
   settle(api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`));
 
+/** The account's secrets as Settings lists them: never a value or a stand-in. */
+const SecretSummarySchema = v.object({
+  name: v.string(),
+  hosts: v.array(v.string()),
+  updatedAt: v.number(),
+  grants: v.array(v.object({ workspace: v.string(), title: v.string(), reveal: v.boolean() })),
+});
+
+export type SecretSummary = v.InferOutput<typeof SecretSummarySchema>;
+
+/** A secret as the owner writes it: its value leaves the browser once, here, and is never read back. */
+export interface SecretEntry {
+  readonly name: string;
+  readonly hosts: readonly string[];
+  readonly value: string;
+}
+
+export const listSecrets = () => settle(api(v.array(SecretSummarySchema), 'GET', '/secrets'));
+
+/** All or none, each granted to `grantTo`. */
+export const putSecrets = (entries: readonly SecretEntry[], grantTo: readonly string[]) =>
+  settle(api(OkSchema, 'POST', '/secrets', { entries: entries.map((entry) => ({ ...entry, hosts: [...entry.hosts] })), grantTo: [...grantTo] }));
+
+export const setSecretHosts = (name: string, hosts: readonly string[]) =>
+  settle(api(OkSchema, 'PUT', `/secrets/${encodeURIComponent(name)}/hosts`, { hosts: [...hosts] }));
+
+export const deleteSecret = (name: string) => settle(api(OkSchema, 'DELETE', `/secrets/${encodeURIComponent(name)}`));
+
+export const grantSecret = (name: string, workspace: string, reveal: boolean) =>
+  settle(api(OkSchema, 'PUT', `/secrets/${encodeURIComponent(name)}/grants/${encodeURIComponent(workspace)}`, { reveal }));
+
+export const revokeSecretGrant = (name: string, workspace: string) =>
+  settle(api(OkSchema, 'DELETE', `/secrets/${encodeURIComponent(name)}/grants/${encodeURIComponent(workspace)}`));
+
 export const listCredentials  = () => settle(api(v.array(CredentialSummarySchema), 'GET', '/credentials'));
 
 export const setCredential    = (key: string, value: Credential) =>

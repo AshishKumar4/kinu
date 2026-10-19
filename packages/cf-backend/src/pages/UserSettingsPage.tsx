@@ -15,6 +15,7 @@ import { useAccount } from "@/hooks/use-account";
 import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
+import { SecretsPanel } from "@/components/account/SecretsPanel";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
@@ -151,6 +152,8 @@ export default function UserSettingsPage() {
             </Card>
           </>
         )}
+
+        {section === "secrets" && <SecretsPanel />}
 
         {section === "models" && <ProfileCatalogSettings />}
 
