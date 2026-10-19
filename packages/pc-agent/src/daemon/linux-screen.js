@@ -314,8 +314,10 @@ function createLinuxSource({
     const child = spawn(command(mode), { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
     const said = [];
 
+    const forget = () => { helpers.delete(child); };
+
     helpers.add(child);
-    child.exited.finally(() => helpers.delete(child));
+    child.exited.then(forget, forget);
 
     const records = readRecords(child.stdout, (kind, bytes) => {
       if (kind === RECORD.frame) return onFrame(bytes);
