@@ -20,6 +20,7 @@ import { TierIdSchema, tierIdsOf,
 import type { RunEventInput } from '../events/types';
 import { diagnostics, settleLoggedSync } from '../obs/index';
 import { specWithoutAccount } from '../providers/types';
+import { fastAssignment } from './fast-tier';
 import { declaredReasoningEffort } from '../providers/reasoning-effort';
 import { currentOperationProfile } from './operation';
 import type { ActorReference } from '../identity/actor-handle';
@@ -39,6 +40,8 @@ const ProviderCatalogSnapshotSchema = v.looseObject({
   })), []),
   /** Declared levels by spec; a model absent here declares none. */
   reasoningEfforts: v.optional(v.record(v.string(), v.array(v.picklist(REASONING_EFFORTS))), {}),
+  /** What an unset fast tier may run on, cheapest first (`fast-tier.ts`). */
+  fast: v.optional(v.array(v.strictObject({ model: v.string(), contextWindow: v.optional(v.number()) })), []),
 });
 
 /** Input-side on purpose: `unavailableProviders` is optional to emit. */
@@ -203,6 +206,8 @@ interface CheckedAuthority {
   readonly provider: v.InferOutput<typeof ProviderCatalogSnapshotSchema>;
   readonly roles: RoleCatalog;
   readonly defaultAssignment: TierAssignment;
+  /** The account's assignment for a tier; for an unset `fast`, the pick from its providers (`fastAssignment`). */
+  assigned(id: TierId): TierAssignment | undefined;
   /** A stored tier that cannot serve runs on the account default, then Kinu's. */
   serving(id: TierId, stored: TierAssignment): TierAssignment;
   /** A pin is refused when no model of the chain is listed. */
@@ -259,11 +264,14 @@ function checkedAuthority(input: ProfileAuthorityInputs): Effect.Effect<CheckedA
     const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort | null =>
       declaredReasoningEffort(wanted, provider.reasoningEfforts[specWithoutAccount(spec)]);
 
+    const autoFast = fastAssignment(provider.fast, defaultAssignment) ?? undefined;
+
     return {
       envelope,
       provider,
       roles: { ...effectiveRoleCatalog(envelope.catalog), ...SYSTEM_ROLE_DEFINITIONS },
       defaultAssignment,
+      assigned: (id) => envelope.catalog.tiers[id] ?? (id === 'fast' ? autoFast : undefined),
       serving(id, stored) {
         if (servable(stored.model, stored.fallbacks ?? [])) return stored;
 
@@ -326,7 +334,7 @@ function chosenTier(authority: CheckedAuthority, input: TierChoice) {
 
     let tierId: TierId = requested;
     let source: TierSource;
-    let stored = envelope.catalog.tiers[requested];
+    let stored = authority.assigned(requested);
 
     if (stored) {
       source = explicitTier !== undefined ? 'explicit' : 'role';
@@ -382,7 +390,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     const workMode: WorkMode = role.plan === true ? 'plan' : input.workMode;
 
     const tierSlot = (id: TierId): TierRoute => {
-      const slot = authority.serving(id, id === 'default' ? authority.defaultAssignment : (envelope.catalog.tiers[id] ?? authority.defaultAssignment));
+      const slot = authority.serving(id, id === 'default' ? authority.defaultAssignment : (authority.assigned(id) ?? authority.defaultAssignment));
       const wanted = slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
 
       return Object.freeze({

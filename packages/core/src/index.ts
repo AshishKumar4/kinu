@@ -2157,6 +2157,7 @@ export {
   DEFAULT_ROLE_ID,
   providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
+  fastAssignment, fastCandidatesOf, type FastCandidate,
   agentRoleSwitch, changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,

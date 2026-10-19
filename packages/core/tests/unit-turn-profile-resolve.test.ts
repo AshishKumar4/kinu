@@ -11,6 +11,7 @@ import {
 } from '../src/profiles';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../src/providers/workers-ai';
 import { parseResolvedTurnProfile } from '../src/profiles/snapshot';
+import type { ModelMenu } from '../src/providers/registry';
 
 const TIERS: TierAssignments = {
   default: { model: 'm-default' },
@@ -579,5 +580,76 @@ describe('a turn under a tier the account named itself', () => {
     expect(() => parseResolvedTurnProfile({ value: { ...stored, tiers: missing } })).toThrow("a run's frozen turn profile");
     expect(() => parseResolvedTurnProfile({ value: { ...stored, tiers: { ...stored.tiers, 'Not A Tier!': stored.tiers.fast } } }))
       .toThrow("a run's frozen turn profile");
+  });
+});
+
+/**
+ * The owner, 2026-10-19: "the fast/quick model should be auto selected (unless overriden by user) based on what providers
+ * they have configured, and the cheapest and best from those". Rows carry models.dev's prices as read that day
+ * (USD per million tokens) and its windows.
+ */
+describe('an account that never set its fast tier', () => {
+  type Row = ModelMenu['models'][number];
+
+  const tools = ['tools' as const];
+
+  const row = (listedBy: string, id: string, contextWindow: number, cost: { input: number; output: number }): Row => ({
+    provider: listedBy, id, capabilities: tools, contextWindow, cost,
+  });
+
+  const WORKERS: readonly Row[] = [
+    row('workers-ai', '@cf/zai-org/glm-5.3', 1_048_576, { input: 1.4, output: 4.4 }),
+    row('workers-ai', '@cf/zai-org/glm-5.3-flash', 1_048_576, { input: 0.15, output: 0.5 }),
+    row('workers-ai', '@cf/qwen/qwen3-30b-a3b-fp8', 32_768, { input: 0.0509, output: 0.335 }),
+  ];
+
+  const ANTHROPIC: readonly Row[] = [
+    row('anthropic', 'claude-haiku-5-5', 1_000_000, { input: 0.1, output: 0.5 }),
+    row('anthropic', 'claude-haiku-4-5', 200_000, { input: 1, output: 5 }),
+  ];
+
+  const OPENAI: readonly Row[] = [
+    row('openai', 'gpt-6-luna', 1_050_000, { input: 0.1, output: 0.5 }),
+    row('openai', 'gpt-5-nano', 400_000, { input: 0.05, output: 0.4 }),
+  ];
+
+  /** The account's profile as its providers list `rows`, its main model glm-5.3, and `tiers` its own. */
+  function profileOver(rows: readonly Row[], tiers: TierAssignments = { default: { model: 'workers-ai/@cf/zai-org/glm-5.3' } }, roleId = 'task') {
+    const listing = providerListingOf({ models: [...rows], failures: [] });
+
+    return resolveTurnProfile({
+      envelope: envelope(catalog({ tiers })), provider: providerSnapshotOf(listing),
+      roleId, workMode: 'build', availableTools: [], activeSkills: [],
+    });
+  }
+
+  test("runs on the cheapest model its providers list that can do the work, failing over to each other provider's, then main", () => {
+    expect(profileOver(WORKERS).tiers.fast).toMatchObject({ model: 'workers-ai/@cf/zai-org/glm-5.3-flash', fallbacks: [{ model: 'workers-ai/@cf/zai-org/glm-5.3' }] });
+    expect(profileOver([...WORKERS, ...ANTHROPIC]).tiers.fast).toMatchObject({
+      model: 'anthropic/claude-haiku-5-5', fallbacks: [{ model: 'workers-ai/@cf/zai-org/glm-5.3-flash' }, { model: 'workers-ai/@cf/zai-org/glm-5.3' }],
+    });
+    expect(profileOver([...WORKERS, ...OPENAI]).tiers.fast.model).toBe('openai/gpt-6-luna');
+  });
+
+  // gpt-5-nano and qwen3-30b cost less, but fast reads what the main model wrote, and they hold less than it keeps.
+  test('never runs on a model that holds less than the main model keeps, however cheap', () => {
+    expect(profileOver([...WORKERS, ...OPENAI]).tiers.fast.model).not.toMatch(/nano|qwen/u);
+  });
+
+  test("prices a plan's model as the same model's API row, and an unpriced one after every priced", () => {
+    const plan = [{ provider: 'chatgpt', id: 'gpt-6-luna', capabilities: tools, contextWindow: 1_050_000 }];
+
+    expect(profileOver([...plan, ...WORKERS]).tiers.fast.model).toBe('workers-ai/@cf/zai-org/glm-5.3-flash');
+    expect(profileOver([...plan, ...OPENAI, ...WORKERS]).tiers.fast.model).toBe('chatgpt/gpt-6-luna');
+  });
+
+  test('a role on the fast tier runs its turns on the pick', () => {
+    expect(profileOver([...WORKERS, ...ANTHROPIC], undefined, 'researcher').tier).toMatchObject({ id: 'fast', model: 'anthropic/claude-haiku-5-5' });
+  });
+
+  test('a fast tier the owner set is run exactly as set', () => {
+    const tiers: TierAssignments = { default: { model: 'workers-ai/@cf/zai-org/glm-5.3' }, fast: { model: 'anthropic/claude-haiku-4-5' } };
+
+    expect(profileOver([...WORKERS, ...ANTHROPIC], tiers).tiers.fast).toMatchObject({ model: 'anthropic/claude-haiku-4-5', fallbacks: [] });
   });
 });
