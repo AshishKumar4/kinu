@@ -179,7 +179,7 @@ function inspecting(): VerifierSession {
 
       return Promise.resolve({ view: 'history', page: { status: 'end', items: runs.map((run, index) => ({
         id: `message-${String(index)}`, position: index, role: 'user', turnId: `turn-${String(index)}`,
-        runId: `run-${String(index)}`, content: run.brief, createdAt: 10 + index,
+        runId: `run-${String(index)}`, content: run.brief, parts: [{ type: 'text', text: run.brief }], createdAt: 10 + index,
       })) } });
     },
   };
@@ -239,7 +239,7 @@ describe("a helper's runs", () => {
         if (answer.view !== 'history' || request.view !== 'history') return answer;
 
         if (request.page.cursor === undefined) return { view: 'history', page: { status: 'more', next: { before: 5 }, items: [{
-          id: 'steer', position: 5, role: 'user', turnId: 'turn', runId: 'run-0', content: 'Use integer counts', createdAt: 100,
+          id: 'steer', position: 5, role: 'user', turnId: 'turn', runId: 'run-0', content: 'Use integer counts', parts: [{ type: 'text', text: 'Use integer counts' }], createdAt: 100,
         }] } };
 
         return answer;

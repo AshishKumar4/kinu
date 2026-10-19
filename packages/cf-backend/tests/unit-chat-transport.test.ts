@@ -94,7 +94,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
       for (const [id, heard] of received) if (!(exclude ?? []).includes(id)) heard.push(message);
     },
     getConnection: (id) => connections.get(id),
-    history: loadHistory ?? (async () => [...history]),
+    seed: loadHistory ?? (async () => [...history]),
+    media: async () => null,
     admitted: async (id) => history.some((row) => row.id === id) || reserved.has(id),
     sendState: async () => ({ status: 'none' }),
     awaitSend: async () => ({ status: 'none' }),

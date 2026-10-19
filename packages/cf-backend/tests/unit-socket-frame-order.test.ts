@@ -74,7 +74,8 @@ async function gated(handle: (name: string) => Promise<void> = async () => {}, r
     terminalFor: async () => null,
     hostedWindowName: () => null,
     chatRoomFor: () => room,
-    history: async () => undefined,
+    seed: async () => undefined,
+    media: async () => undefined,
     overviewChanged: () => {},
     connectionOpened: () => {},
     lastConnectionClosed: () => {},
@@ -114,7 +115,8 @@ test("the Stop's RPC keeps its place in the room's order ahead of the send that 
     steps: async function* () { yield* []; },
     broadcast: () => {},
     getConnection: () => undefined,
-    history: async () => [],
+    seed: async () => [],
+    media: async () => null,
     admitted: async () => false,
     send: async (_input, admitted) => {
       order.push('send');

@@ -22,7 +22,7 @@ import {
   type WorkspaceWork,
   createFactsStore,
   initEventsHubTables,
-  getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
+  getChatHistoryPage, keptMediaName, readSessionTranscript, CHAT_SESSION_ID,
   missingSubordinateHistory, inspectDescendant, readSubordinateInspection, SubordinateInspectionRequestSchema,
   type SubordinateInspectionRequest, type SubordinateInspectionResult,
   getEvolutionChangelog,
@@ -332,7 +332,7 @@ export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHist
     const files = inspectionFiles(db, resolveLocalAgent(name).cwd);
     const transcript = readSessionTranscript(sql, openWorkspaceMainActor(sql), CHAT_SESSION_ID, () => Promise.resolve(files));
 
-    return [...(await getChatHistoryPage(transcript, { limit })).items];
+    return [...(await getChatHistoryPage(transcript, { limit }, keptMediaName)).items];
   });
 }
 

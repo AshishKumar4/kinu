@@ -46,7 +46,7 @@ function workspace(tree: Readonly<Record<string, string | Uint8Array>>): Evidenc
       if (request.view !== 'history') return Promise.resolve(missing);
 
       return Promise.resolve({ view: 'history', page: { status: 'end', items: [{
-        id: 'message-1', position: 0, role: 'user', turnId: 'turn-1', runId: 'run-1', content: BRIEF, createdAt: 5,
+        id: 'message-1', position: 0, role: 'user', turnId: 'turn-1', runId: 'run-1', content: BRIEF, parts: [{ type: 'text', text: BRIEF }], createdAt: 5,
       }] } });
     },
     slateOp: (operation: JsonValue): Promise<JsonValue> => {

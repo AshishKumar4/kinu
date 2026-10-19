@@ -3123,7 +3123,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(room, message, exclude); },
-      history: (limit) => call((isolate, snapshot) => isolate.history(snapshot, limit)),
+      seed: () => call((isolate, snapshot) => isolate.seed(snapshot)),
+      media: (ref) => call((isolate, snapshot) => isolate.media(snapshot, ref)),
       admitted: (id) => call((isolate, snapshot) => isolate.admitted(snapshot, id)),
       send: async ({ id, ...words }, admitted) => await this.deliverWords(actorId, { id, input: { kind: 'words', ...words }, authorship: 'owner' }, true, admitted) ?? 'mid-turn',
       retry: (messageId) => whenActorTakesInput(this.boundSql, actorId, async () => {

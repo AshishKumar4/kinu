@@ -1,4 +1,5 @@
 import { ORCHESTRATOR_AGENT_SLUG } from '../cloud-wire';
+import type { MediaRef } from '../session/chat-media';
 
 /**
  * `/agents/*` transport policy: only the orchestrator namespace and hosted actors beneath it (`/actor/<name>`) route.
@@ -16,10 +17,21 @@ const HOSTED_ACTOR_SEGMENT = 'actor';
 
 const TRANSPORT_TAIL = `(?:/(?:${TRANSPORT_ENDPOINTS.join('|')}))?/?`;
 
+/** A chat image, fetched on its own: `chat-media/<actor id>/<message id>/<part>/<index>` beneath its workspace. */
+const CHAT_MEDIA_SEGMENT = 'chat-media';
+
+const CHAT_MEDIA_TAIL = `/${CHAT_MEDIA_SEGMENT}/[^/]+/[^/]+/\\d+/\\d+`;
+
 const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
   `^${ROOT_AGENT_PATH}/([^/]+)(?:${TRANSPORT_TAIL}`
-  + `|/${HOSTED_ACTOR_SEGMENT}/[^/]+${TRANSPORT_TAIL})$`,
+  + `|/${HOSTED_ACTOR_SEGMENT}/[^/]+${TRANSPORT_TAIL}|${CHAT_MEDIA_TAIL})$`,
 );
+
+/** The address a chat image is served at, as a workspace page fetches it (`chat-media.ts`). */
+export function chatMediaPath(workspace: string, actorId: string, ref: MediaRef): string {
+  return [ROOT_AGENT_PATH, encodeURIComponent(workspace), CHAT_MEDIA_SEGMENT, encodeURIComponent(actorId),
+    encodeURIComponent(ref.messageId), String(ref.partNo), String(ref.index)].join('/');
+}
 
 const CLI_TICKET_AGENT_PATH_RE = new RegExp(
   `^${ROOT_AGENT_PATH}/([^/]+)(?:/?$|/${HOSTED_ACTOR_SEGMENT}/[^/]+/?$)`,

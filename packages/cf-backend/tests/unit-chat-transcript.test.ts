@@ -7,6 +7,7 @@ import {
   type JsonObject, type MessagePartReference,
 } from '@kinu.run/core';
 import { claimFences } from '@kinu.run/core';
+import { chatSeed, keptMediaName } from '@kinu.run/core';
 
 const databases: Database[] = [];
 
@@ -53,7 +54,7 @@ describe('the CF public transcript over canonical references', () => {
     expect(t.store.entries().map((entry) => [entry.id, entry.position])).toEqual([
       ['opening', 0], ['steer', 1],
     ]);
-    expect((await t.store.history()).map((message) => message.id)).toEqual(['opening', 'steer']);
+    expect((await chatSeed(t.store, keptMediaName)).map((message) => message.id)).toEqual(['opening', 'steer']);
     expect(await t.store.lastUserMetadata()).toMatchObject({ [STEER_STEP_METADATA_KEY]: 2 });
   });
 
@@ -75,7 +76,7 @@ describe('the CF public transcript over canonical references', () => {
     if (finalText === undefined) throw new Error('fixture has no final text reference');
     const entry = await t.store.prepareAssistant({ id: 'answer', turnId: 'opening', runId: 'run', parts, finalText });
     t.store.appendAssistant(entry);
-    const answer = (await t.store.history()).at(-1);
+    const answer = (await chatSeed(t.store, keptMediaName)).at(-1);
 
     expect(answer?.parts).toEqual([
       { type: 'text', text: 'I will inspect the files.', state: 'done' },
@@ -101,7 +102,7 @@ describe('the CF public transcript over canonical references', () => {
 
     if (finalText === undefined) throw new Error('fixture has no display text reference');
     t.store.appendAssistant(await t.store.prepareAssistant({ id: 'answer', turnId: 'opening', runId: 'run', parts, finalText }));
-    expect((await t.store.history()).at(-1)?.parts.at(-1)).toEqual({ type: 'text', text: 'The check passed.', state: 'done' });
+    expect((await chatSeed(t.store, keptMediaName)).at(-1)?.parts.at(-1)).toEqual({ type: 'text', text: 'The check passed.', state: 'done' });
     const selected = t.history.context.selected();
 
     if (selected !== null) expect(t.history.context.entries(selected).some((entry) => entry.messageId === 'display-answer')).toBe(false);

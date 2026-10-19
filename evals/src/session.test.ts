@@ -261,13 +261,20 @@ test('clearing a conversation is the callable the Clear control calls: done when
   const server = Bun.serve({
     port: 0, hostname: '127.0.0.1',
     fetch(request, upgrading) {
-      if (new URL(request.url).pathname.endsWith('/get-messages')) return Response.json(messages);
-
       return socketOnly(request, upgrading);
     },
     websocket: {
       async message(socket, data) {
         const request = v.parse(RpcRequestFrameSchema, JSON.parse(data.toString()));
+
+        // The conversation as one page, drawn as the page reader draws it.
+        if (request.method === 'getChatHistoryPage') {
+          const items = messages.map((message, position) => ({ ...message, position, turnId: null, createdAt: position }));
+
+          socket.send(rpcReplyFrame({ requestId: request.id, result: { status: 'end', items } }));
+
+          return;
+        }
 
         if (request.method !== 'clearConversation') return;
         requested.resolve();
@@ -791,7 +798,7 @@ async function turnAfterDrop(state: (requestId: string) => JsonValue, dropAsk = 
             { id: 'answer', turnId: requestId, role: 'assistant', content: 'Wrote note.txt.' },
             { id: 'later', turnId: 'later', role: 'user', content: 'And now?' },
             { id: 'later-answer', turnId: 'later', role: 'assistant', content: 'Not this one.' },
-          ].map((entry, position) => ({ ...entry, position, createdAt: position }));
+          ].map(({ content, ...entry }, position) => ({ ...entry, parts: [{ type: 'text', text: content }], position, createdAt: position }));
 
           socket.send(rpcReplyFrame({ requestId: rpc.id, result: { status: 'end', items } }));
 

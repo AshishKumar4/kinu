@@ -52,6 +52,7 @@ import { type PublicSessionPlan } from '../../evals/src/session';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import type { TestChrome } from '../../scripts/test-chrome';
+import { rowText } from '@kinu.run/core';
 
 const SUITE = 'First-run · agent-chats-persist';
 
@@ -177,7 +178,7 @@ const HistoryPageSchema = v.object({ items: v.array(ChatHistoryEntrySchema) });
 function historyText(value: JsonValue): string {
   const parsed = v.safeParse(HistoryPageSchema, value);
 
-  return parsed.success ? parsed.output.items.map((entry) => entry.content).join(' ') : '';
+  return parsed.success ? parsed.output.items.map((entry) => rowText(entry)).join(' ') : '';
 }
 
 /** A request the page sends, and the reply its socket gets: the agents SDK's

@@ -11,6 +11,7 @@ import { asPane } from './helpers/agents-sdk';
 import { catalogTurn, fireAlarm, gatewayWorkspace, GATEWAY_CATALOG, reactivateOrchestratorHarness, until, workspaceMainActor, type StartedHarness } from './helpers/actor-harness';
 import { copyNextOpening } from './helpers/agent-facets';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
+import { rowText } from '@kinu.run/core';
 
 afterEach(() => { setSystemTime(); });
 
@@ -66,7 +67,7 @@ test("a delivery committed with its wake, whose alarm a reset kept from being se
   // The agent's chat holds the owner's words and its answer to them, as the owner reads it.
   const chat = (await restarted.agent.getChatHistoryPage({ actor: actorId, limit: 20 })).items;
 
-  const words = chat.findIndex((message) => message.role === 'user' && message.content.includes('OWED_WORDS_MARKER'));
+  const words = chat.findIndex((message) => message.role === 'user' && rowText(message).includes('OWED_WORDS_MARKER'));
 
   expect(words).toBeGreaterThanOrEqual(0);
   expect(chat.slice(words + 1).some((message) => message.role === 'assistant')).toBe(true);

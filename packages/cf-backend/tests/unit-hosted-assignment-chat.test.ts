@@ -8,6 +8,7 @@ import {
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { rowText } from '@kinu.run/core';
 
 test("a durable grandchild that only worked its assignment shows the task, from its hirer, and its answer", async () => {
   const gateway = stubAiBinding((run) => {
@@ -48,7 +49,7 @@ test("a durable grandchild that only worked its assignment shows the task, from 
 
   const { items } = await workspace.agent.getChatHistoryPage({ actor: actorId, limit: 20 });
 
-  expect(items.map(({ role, content, metadata }) => ({ role, content, from: metadata?.['kinuFrom'], event: metadata?.['kinuEvent'] }))).toEqual([
+  expect(items.map((item) => ({ role: item.role, content: rowText(item), from: item.metadata?.['kinuFrom'], event: item.metadata?.['kinuEvent'] }))).toEqual([
     { role: 'system', content: 'Durable task.', from: 'middle', event: 'subordinate_task' },
     { role: 'assistant', content: 'Durable done.', from: undefined, event: undefined },
   ]);

@@ -141,7 +141,9 @@ export {
   type ConversationTurnPair, type TurnPairReader,
 } from './identity/conversation-store';
 
-export { CHAT_SESSION_ID, TRANSCRIPT_WINDOW } from './session/transcript-schema';
+export { CHAT_PAGE_BYTES, CHAT_SESSION_ID } from './session/transcript-schema';
+
+export { keptMediaName, type MediaRef, type MediaUrl, type StoredImage } from './session/chat-media';
 
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps,
@@ -807,6 +809,8 @@ export {
 export { ASKED, HeldReads, type Holds } from './utils/held-reads';
 
 export { rasterImage, type RasterImage } from './utils/raster-image';
+
+export { base64ToBytes } from './utils/base64';
 
 export { mediaImage, mediaTokens, UNPRICED_MEDIA_TOKENS } from './prompting/media-tokens';
 
@@ -1986,7 +1990,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { agentStatusFacts, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
+export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
@@ -2446,6 +2450,7 @@ export {
   hostedActorRoute,
   hostedActorSocketPath,
   HOSTED_ACTOR_ID_HEADER,
+  chatMediaPath,
 } from './http/agent-routing';
 
 export {

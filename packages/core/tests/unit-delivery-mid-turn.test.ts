@@ -8,6 +8,8 @@ import { jsonSchema, tool } from 'ai';
 import { present, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { pendingEventsDelivery } from '../src/subordinates/deliveries';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { chatSeed } from '../src/read-models/status';
+import { keptMediaName } from '../src/session/chat-media';
 import { sessionFixture } from './helpers-session';
 
 const USAGE: ScriptedTurnResult['usage'] = {
@@ -37,7 +39,7 @@ test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', as
     expect(prompts[1]).toContain('arrived while you were working');
     expect(prompts[1]).not.toContain('arrived while you were idle');
     // No turn of its own: the conversation is the owner's message and its one answer.
-    expect((await fixture.actor.stores.history.transcript(CHAT_SESSION_ID).history()).map((entry) => entry.role)).toEqual(['user', 'assistant']);
+    expect((await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName)).map((entry) => entry.role)).toEqual(['user', 'assistant']);
     // The live turn's end answered the batch: its events stay bound to the batch's turn, their lease closed.
     expect(fixture.actor.runtime.storage.sql<{ consumed_at: number | null }>`
       SELECT consumed_at FROM agent_log WHERE turn_id = ${batch.id} AND kind = 'event'`).toEqual([{ consumed_at: null }]);

@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 import { CHAT_SESSION_ID, CLEAR_NEEDS_IDLE, type ActorHandle, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { SharedCase } from '../cases';
+import { chatSeed, keptMediaName } from '@kinu.run/core';
 
 /** One question and its answer, as a settled turn records them. */
 async function exchange(history: SessionHistory, id: string, question: string, answer: string): Promise<void> {
@@ -17,7 +18,7 @@ async function exchange(history: SessionHistory, id: string, question: string, a
 }
 
 async function spoken(history: SessionHistory): Promise<string[][]> {
-  return (await history.transcript(CHAT_SESSION_ID).history()).map((message) => [
+  return (await chatSeed(history.transcript(CHAT_SESSION_ID), keptMediaName)).map((message) => [
     message.role, message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
   ]);
 }

@@ -1,7 +1,7 @@
 /** An agent's chat in its own isolate (D9), the workspace agent's included. */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
-  CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TRANSCRIPT_WINDOW, TerminalTransitions,
+  CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane, answerDrawsPages,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
@@ -131,7 +131,7 @@ export class FacetChat {
 
             return this.charged().then(async () => {
               // Its room is sent the transcript's newest messages with its end: they are this isolate's to read.
-              const window = await deps.database.history(TRANSCRIPT_WINDOW);
+              const window = await deps.database.seed();
 
               await workspace.turnEnded(event, deps.database.figures(), deps.database.takeActivity(), window);
             });
@@ -614,7 +614,7 @@ export class FacetChat {
 
     if (metadata === null) return;
     await transcript.amendMetadata(messageId, metadata);
-    await workspace.answerAmended(await database.history(TRANSCRIPT_WINDOW));
+    await workspace.answerAmended(await database.seed());
   }
 
   /** The stand-in lands first, as every actor's does: the model's name may be refused. The workspace plans the title. */

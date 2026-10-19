@@ -17,6 +17,7 @@ import {
   type WorkspaceActorDirectory,
 } from '@kinu.run/core';
 import { claimFences } from '@kinu.run/core';
+import { rowText } from '@kinu.run/core';
 
 interface InspectionFixture {
   readonly sql: ReturnType<typeof createTestWorkspace>['sql'];
@@ -194,7 +195,7 @@ describe('owner reads of retained subordinate paths', () => {
 
     expect(await read(fixture, { path: ['child', 'leaf'], view: 'history', page: {} })).toMatchObject({ view: 'missing' });
     expect(await read(fixture, { path: [], view: 'history', page: {}, actor: leaf.actorId })).toMatchObject({
-      view: 'history', page: { status: 'end', items: [{ content: 'kept answer' }] },
+      view: 'history', page: { status: 'end', items: [{ parts: [{ type: 'text', text: 'kept answer' }] }] },
     });
     expect(await read(fixture, { path: [], view: 'history', page: {}, actor: 'not-an-actor' })).toMatchObject({ view: 'missing' });
   });
@@ -255,8 +256,8 @@ describe('owner reads of retained subordinate paths', () => {
     const history = await read(fixture, { path: ['child'], view: 'history', page: { limit: 2 } });
 
     if (history.view !== 'history' || history.page.status !== 'more') throw new Error('Expected another history page');
-    expect(history.page.items.map((message) => message.content)).toEqual(['two', 'three']);
-    expect(await read(fixture, { path: ['child'], view: 'history', page: { limit: 2, cursor: history.page.next } })).toMatchObject({ page: { status: 'end', items: [{ content: 'one' }] } });
+    expect(history.page.items.map((message) => rowText(message))).toEqual(['two', 'three']);
+    expect(await read(fixture, { path: ['child'], view: 'history', page: { limit: 2, cursor: history.page.next } })).toMatchObject({ page: { status: 'end', items: [{ parts: [{ type: 'text', text: 'one' }] }] } });
   });
 
   test('request variants reject fields that cannot apply to the selected view', () => {
@@ -273,7 +274,7 @@ describe('owner reads of retained subordinate paths', () => {
       id: 'message', origin: 'input', message: { role: 'user', content: 'retained answer' },
     });
     expect(await read(fixture, { path: [name], view: 'history', page: {} })).toMatchObject({
-      view: 'history', path: [name], page: { status: 'end', items: [{ content: 'retained answer' }] },
+      view: 'history', path: [name], page: { status: 'end', items: [{ parts: [{ type: 'text', text: 'retained answer' }] }] },
     });
   });
 });

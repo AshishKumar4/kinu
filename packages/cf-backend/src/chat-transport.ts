@@ -19,7 +19,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
-  TRANSCRIPT_WINDOW, UIMessageSchema, type SentWords, type ChatTransport, type JsonObject, type OwedIntent, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
+  UIMessageSchema, type SentWords, type ChatTransport, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -47,7 +47,10 @@ export interface ChatWire {
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
-  history(limit?: number): Promise<UIMessage[]>;
+  /** The chat's newest page, oldest first: what a tab is sent as it connects or a turn ends (`chatSeed`). */
+  seed(): Promise<UIMessage[]>;
+  /** One image a page named; each crosses alone, never inside a page. */
+  media(ref: MediaRef): Promise<StoredImage | null>;
   /** A durable row or an accepted send's reservation: the hook resends its whole list per request. */
   admitted(id: string): Promise<boolean>;
   /** Each slate `agent.ask` reply: told where its message's card is shown, fed that turn's text deltas, and told when
@@ -306,7 +309,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** The connect frame is the pane's only seed, so a socket opening mid-turn gets the current window. */
   async onConnect(connection: ChatSocket): Promise<void> {
-    const history = await this.wire.history(TRANSCRIPT_WINDOW);
+    const history = await this.wire.seed();
 
     await this.announce(connection);
     sendIfOpen(connection, transcriptFrame(history));
@@ -503,7 +506,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     try {
       // The client resends only its window, so reconcile against the window.
-      const storedMessages = await this.wire.history(TRANSCRIPT_WINDOW);
+      const storedMessages = await this.wire.seed();
 
       const unseen = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage).filter((message) => message.role === 'user');
 
@@ -538,7 +541,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   retryRequest(requestId: string, shown: readonly UIMessage[]): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const newestAsked = (messages: readonly UIMessage[]): string | undefined => [...messages].reverse().find((message) => message.role === 'user')?.id;
-      const messageId = newestAsked(shown) ?? newestAsked(yield* attemptInItsWords('io', () => this.wire.history(TRANSCRIPT_WINDOW)));
+      const messageId = newestAsked(shown) ?? newestAsked(yield* attemptInItsWords('io', () => this.wire.seed()));
 
       if (messageId === undefined) return this.done(requestId, { error: 'There is no message to retry.' });
 
@@ -597,12 +600,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     for (const { connection, probeId } of this.parked.values()) this.notifyResuming(connection, live, probeId);
     this.parked.clear();
 
-    if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
+    if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.seed()));
   }
 
   /**
    * The answer row is durable before this. A turn that ends before this room opened it releases the tabs waiting on it.
-   * `window`: the transcript's newest {@link TRANSCRIPT_WINDOW} messages as `turnId` ended, told with its end by the
+   * `window`: the chat's newest page as `turnId` ended, told with its end by the
    * agent that holds them. A turn told ended after the next one opened was ended by that opening: its window now would
    * drop the answer streaming in.
    */
@@ -637,7 +640,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. */
   async closeLostTurn(turnId: string): Promise<void> {
-    this.closeTurn(turnId, this.live?.turnId === turnId ? await this.wire.history(TRANSCRIPT_WINDOW) : []);
+    this.closeTurn(turnId, this.live?.turnId === turnId ? await this.wire.seed() : []);
   }
 
   async deliver(event: SessionEvent): Promise<void> {
@@ -692,7 +695,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
       // The walk-back moved the durable head; every tab needs the stored transcript.
       case 'history-reverted':
-        this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
+        this.wire.broadcast(transcriptFrame(await this.wire.seed()));
 
         return;
 

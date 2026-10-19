@@ -10,6 +10,7 @@ import { CHAT_SESSION_ID, PLATFORM_CATALOG, SessionHistory, WORKSPACE_ROOT, acto
 import { AgentDatabase } from '../src/agent-facet/agent-database';
 import { makeCtx } from './helpers/platform-context';
 import { claimFences } from '@kinu.run/core';
+import { rowText } from '@kinu.run/core';
 
 function retainedDatabase() {
   const created = createTestWorkspace();
@@ -76,7 +77,7 @@ test('a retired actor keeps its spilled history readable without actor reacquisi
     const inspected = await f.database.inspect({ view: 'history', path: [], page: {} });
 
     if (inspected.view !== 'history') throw new Error('retained history was not inspectable');
-    expect(inspected.page.items.map(item => item.content)).toEqual([content]);
+    expect(inspected.page.items.map(item => rowText(item))).toEqual([content]);
     expect(f.sql`SELECT * FROM workspace_actors`).toEqual(before);
   } finally { f.db.close(); }
 });

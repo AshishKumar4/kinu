@@ -24,6 +24,7 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { NESTED_HIRE_ASK, NESTED_TASK_TITLE, NESTED_WORD } from './asks';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
+import { rowText } from '@kinu.run/core';
 
 const SUITE = 'First-run · agent-nested-chat';
 
@@ -113,7 +114,7 @@ async function lastAnswer(pane: PublicSocket, name: string): Promise<string> {
   const page = await ask(pane, 'getChatHistoryPage', [{ actor: snapshot.output.actorId, limit: 40 }]);
   const answers = page.ok ? v.safeParse(AnswersPageSchema, page.value) : null;
 
-  return answers?.success === true ? answers.output.items.filter((entry) => entry.role === 'assistant').at(-1)?.content ?? '' : '';
+  return answers?.success === true ? rowText({ role: 'assistant', parts: answers.output.items.filter((entry) => entry.role === 'assistant').at(-1)?.parts ?? [] }) : '';
 }
 
 /** What the Work tab reads, and the path of the owner it names for the grandchild's task. */

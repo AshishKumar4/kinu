@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementListing, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
-import { getChatHistoryPage, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
+import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -346,7 +346,7 @@ export class LocalAgentClient implements AgentClient {
   async history(): Promise<AgentTranscriptMessage[]> {
     const transcript = this.deps.rt.stores.history.transcript(CHAT_SESSION_ID);
 
-    return readConversation((request) => getChatHistoryPage(transcript, request));
+    return readConversation((request) => getChatHistoryPage(transcript, request, keptMediaName));
   }
 
   async status(): Promise<AgentClientStatus> {
