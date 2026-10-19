@@ -33,12 +33,21 @@ the computer's desktop is: the owner's session plus this workspace's grant on th
 stream over the device tunnel to the daemon, which connects to the PC's screen server on loopback only.
 
 Over the tunnel:
-- `screenOpen` is a new method, and `screenData` and `screenClose` are new frames. They sit beside `ptyOpen`,
-  `ptyInput` and `ptyOutput`.
+- `screenOpen` is a new method (JSON, as every method is): the hub opens a stream and numbers it, and the daemon answers
+  once it reaches the PC's screen server. `screenClose` is a JSON frame from either side.
+- The screen's bytes cross as **binary WebSocket messages**, never text: each is a 1-byte kind (data), the stream's
+  number as a big-endian u32, then up to 64 KiB of RFB. Both ends of the tunnel are WebSockets that carry binary (the
+  UserDO's hibernatable socket, `webSocketMessage(ws, string | ArrayBuffer)`, and Bun's client), and so does the
+  browser's socket to the UserDO. The stream number drops bytes a closed stream left in flight.
+- RFB paces itself: the client asks for each framebuffer update, so the daemon sends a frame only when the viewer can
+  take one, and a slow tunnel slows the frame rate, not memory.
 - A screen hub sits beside `DeviceTerminalHub`. It pairs the browser's socket with the daemon's stream, one viewer at
-  a time.
-- Bytes cross as base64 inside the tunnel's JSON frames, as a pane's bytes do today (`device-terminal.ts`, `fromPane`).
-  That costs a third over binary.
+  a time, and relays the bytes unread.
+
+Binary is a protocol change at the two ends' dispatch, and nowhere else. Today the hub decodes every message from a
+device as text before it parses it (`user-do.ts`, `webSocketMessage`), and so does the daemon (`index.js`, its socket's `message` listener); each
+gains a binary branch for screen data. No existing frame changes, and no daemon or hub of an earlier release ever meets a
+binary frame: the hub opens a screen only on a daemon whose `hello` reports one, and only such a daemon sends one.
 
 Where the PC's screen server comes from depends on the system:
 
@@ -70,6 +79,8 @@ Where the PC's screen server comes from depends on the system:
 
 ## Decisions for the owner
 
+Each has a recommendation, which is the default unless the owner says otherwise.
+
 1. **The screen escapes the sandbox.** Typing on a desktop drives the whole machine, whatever roots the workspace was
    given. Proposed:
    - A PC offers its Desktop only after the owner turns sharing on at that PC (`kinu desktop share`), on top of the
@@ -83,12 +94,11 @@ Where the PC's screen server comes from depends on the system:
      Environment.
 3. **macOS authentication.** Recommended: a VNC password set for Kinu. Rejected: Apple's account-password
    authentication, because the daemon would then hold the owner's login password.
-4. **Bandwidth.** Base64 in JSON frames for the first cut. A binary tunnel frame is a later protocol change.
 
 ## Pieces, in order
 
-1. Protocol and relay: the device reports `desktop` in `hello`; `screenOpen`, `screenData` and `screenClose`; the screen
-   hub; the route. Tested against a stub daemon that serves a fixed RFB framebuffer.
+1. Protocol and relay: the device reports `desktop` in `hello`; `screenOpen`, `screenClose` and the binary data frame;
+   the screen hub; the route. Tested against a stub daemon that serves a fixed RFB framebuffer.
 2. macOS relay in the daemon.
 3. Linux portal server in the daemon.
 4. Named PC sessions in the daemon, and the strip reading them.
