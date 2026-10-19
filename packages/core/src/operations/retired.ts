@@ -25,6 +25,8 @@ const RETIRED_MEMBERS = {
 /** `namespace.operation` → each retired field and what to use instead. */
 const RETIRED_FIELDS = {
   'agents.hire': { mission: '"message"' },
+  // `key`'s hold is milliseconds; a click's held keys had the same name, and models sent a click a duration.
+  'computer.click': { hold: '"modifiers", the modifiers held during the click, as "shift"; a click is not held for a time' },
   'workspace.startProcess': {
     env: 'the variables at the head of the command, as `PORT=4100 node server.js`',
     timeoutMs: 'stopProcess(processId) when the work is done',

@@ -89,8 +89,8 @@ describe('the desktop members', () => {
     const computer = computerOf(box);
 
     expect(Object.fromEntries(DESKTOP_MEMBERS.map((member) => [member, computer.declarations?.[member]?.call]))).toEqual({
-      screenshot: 'screenshot()', watch: 'watch(seconds, { fps })', click: 'click(at, { button, count, hold })', type: 'type(text)',
-      key: 'key(keys, { hold })', scroll: 'scroll(at, dy, { dx })', move: 'move(at)', drag: 'drag(from, to)',
+      screenshot: 'screenshot()', watch: 'watch(seconds, { fps })', click: 'click(at, { button, count, modifiers })', type: 'type(text)',
+      key: 'key(chord, { hold })', scroll: 'scroll(at, dy, { dx })', move: 'move(at)', drag: 'drag(from, to)',
     });
     expect(DESKTOP_MEMBERS.map((member) => slateAddressImpact({ namespace: 'computer', member }))).toEqual(DESKTOP_MEMBERS.map(() => null));
 
@@ -98,7 +98,7 @@ describe('the desktop members', () => {
     expect(await call(computer, 'screenshot')).toBe(SHOWN);
     expect(computer.declarations?.['screenshot']?.full).toContain('1280×768');
     expect(computer.declarations?.['click']?.full).toContain('x below 1280 and y below 768');
-    await call(computer, 'click', [10, 20], { button: 'right', count: 2, hold: 'Ctrl+cmd' });
+    await call(computer, 'click', [10, 20], { button: 'right', count: 2, modifiers: 'Ctrl+cmd' });
     await call(computer, 'type', 'hi');
     await call(computer, 'key', 'Enter');
     await call(computer, 'key', 'ctrl+/');
@@ -181,7 +181,7 @@ describe('the desktop members', () => {
 
     const refused: JsonValue[] = await Promise.all([
       call(computer, 'key', 'Entr'), call(computer, 'key', 'ctrl+Entr'), call(computer, 'key', 'ctrl++'),
-      call(computer, 'key', 'a+ctrl'), call(computer, 'click', [1, 2], { hold: 'q' }), call(computer, 'scroll', [1, 2], 0),
+      call(computer, 'click', [1, 2], { modifiers: 'q' }), call(computer, 'scroll', [1, 2], 0),
       call(computer, 'key', 'w', { hold: 10_001 }), call(computer, 'key', 'w', { hold: 0 }),
     ]);
 
@@ -197,7 +197,7 @@ describe('the desktop members', () => {
 
     const refused: JsonValue[] = await Promise.all([
       call(computer, 'key', ['Escape']), call(computer, 'key', ['ctrl', 's']), call(computer, 'key', ' '), call(computer, 'key', 'shift+ '),
-      call(computer, 'click', [1, 2], { hold: ['ctrl', 'shift'] }), call(computer, 'key', []),
+      call(computer, 'click', [1, 2], { modifiers: ['ctrl', 'shift'] }), call(computer, 'key', []),
     ]);
 
     expect(refused).toEqual(refused.map(() => expect.objectContaining({ success: false, reason: 'bad_input' })));
@@ -205,6 +205,40 @@ describe('the desktop members', () => {
       'send "Escape"', 'send "ctrl+s"', 'send "space"', 'send "shift+space"', 'send "ctrl+shift"', 'like "ctrl+s"',
     ]);
     expect(sent).toEqual([]);
+  });
+
+  // The rc22 release evals (minecraft, both legs): forward and jump at once, sent as "w+space" four times, was refused
+  // though the box presses any keys together.
+  test('keys pressed together are one chord, held as one', async () => {
+    const { box, actions } = desktopBox();
+    const computer = computerOf(box);
+
+    expect(await call(computer, 'key', 'w+space', { hold: 800 })).toBeNull();
+    expect(await call(computer, 'key', 'ctrl+w+Return')).toBeNull();
+    expect(actions()).toEqual([{ kind: 'key', keys: 'w+space', holdMs: 800 }, { kind: 'key', keys: 'ctrl+w+Return' }]);
+  });
+
+  // The rc22 release evals: `click({ at: [640, 360] })` and `click({ x: 640, y: 360 })`, each told only "Expected Array".
+  test('a point sent as an object is refused with the array to send', async () => {
+    const { box, sent } = desktopBox();
+    const computer = computerOf(box);
+
+    const refused: JsonValue[] = await Promise.all([
+      call(computer, 'click', { at: [640, 360] }), call(computer, 'click', { x: 640, y: 360 }), call(computer, 'move', { x: 7, y: 8 }),
+    ]);
+
+    expect(refused.map((answer) => /send \[[^\]]*\]/u.exec(JSON.stringify(answer))?.[0] ?? null)).toEqual(['send [640, 360]', 'send [640, 360]', 'send [7, 8]']);
+    expect(sent).toEqual([]);
+  });
+
+  // `key`'s hold is milliseconds; a click's held modifiers had the same name, and a model sent a click 500.
+  test("a click's held keys are its modifiers, and a hold sent to a click is told so", async () => {
+    const { box, actions } = desktopBox();
+    const computer = computerOf(box);
+
+    expect(await call(computer, 'click', [650, 660], { hold: 500 })).toMatchObject({ success: false, error: expect.stringContaining('"hold" was removed: use "modifiers"') });
+    expect(await call(computer, 'click', [650, 660], { modifiers: 'shift' })).toBeNull();
+    expect(actions()).toEqual([{ kind: 'click', at: [650, 660], button: 'left', count: 1, hold: ['shift'] }]);
   });
 
   test('a hold that names no duration is refused saying what hold is', async () => {

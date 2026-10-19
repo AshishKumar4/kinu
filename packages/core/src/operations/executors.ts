@@ -148,9 +148,9 @@ const desk = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, 
   op: Pick<Operation<I, O>, 'name' | 'help' | 'input' | 'output'> & { readonly impact: Impact },
 ) => defineOperation({ ns: 'computer', slate: false, ...op });
 
-const KEYS_ARE = '"Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "Page_Up", "Page_Down", "Up", "Down", '
-  + '"Left", "Right", "space", "F1"-"F12", or a letter, digit or punctuation mark; modifiers before it with "+": "ctrl+l", '
-  + '"ctrl+shift+t", "alt+Tab". Enter, Esc, cmd and win are understood.';
+const KEYS_ARE = 'Keys pressed together, joined by "+": "Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "Page_Up", '
+  + '"Page_Down", "Up", "Down", "Left", "Right", "space", "F1"-"F12", a letter, digit or punctuation mark, and modifiers: '
+  + '"ctrl+l", "ctrl+shift+t", "alt+Tab", or "w+space" for two at once. Enter, Esc, cmd and win are understood.';
 
 /** What a watch's frames cost, from the box's layout: each frame's size, then the image the default and the most make,
  *  as screenshots' worth of pixels, which is what an image costs. */
@@ -205,7 +205,7 @@ export function computerDesktop(screen: DesktopScreen) {
         at: point,
         button: 'Default "left".',
         count: '2 double-clicks, 3 triple-clicks; default 1.',
-        hold: 'Modifiers held during the click: "ctrl", "shift", "alt", "super", or several joined by "+".',
+        modifiers: 'Modifiers held during the click: "ctrl", "shift", "alt", "super", or several joined by "+".',
       }),
     }),
     type: desk({
@@ -213,9 +213,9 @@ export function computerDesktop(screen: DesktopScreen) {
       input: deskInput(DESKTOP_INPUTS.type, { text: 'At most 4,000 characters.' }),
     }),
     key: desk({
-      name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord of modifiers and a key.',
+      name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord: keys pressed together.',
       input: deskInput(DESKTOP_INPUTS.key, {
-        keys: `${KEYS_ARE} Always one string: "ctrl+l", never ["ctrl", "l"]; the space bar is "space".`,
+        chord: `${KEYS_ARE} Always one string: "ctrl+l", never ["ctrl", "l"]; the space bar is "space".`,
         hold: 'Milliseconds it stays down before it is released, as a game reads a held key; 1 to 10,000. There is no '
           + 'separate key down or key up: hold it for as long as it should act.',
       }),
