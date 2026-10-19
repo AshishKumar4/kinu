@@ -1,7 +1,7 @@
 // Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
-import { createCredentialCipher, mcpPresetById, type JsonObject } from '@kinu.run/core';
+import { asFetchFunction, createCredentialCipher, mcpPresetById, type JsonObject } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import {
   createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -109,6 +109,31 @@ describe('an MCP preset add', () => {
     const rows = sqlExec(h.db).exec(`SELECT id FROM user_mcp_servers`).toArray();
     expect(rows.length).toBe(0);
     h.close();
+  });
+
+  // Gmail's MCP answers anyone's initialize and tools/list, so it connected unsigned on staging (2026-10-19) and would
+  // have refused the first call of some turn. A registered app's server is not reached unsigned: its sign-in starts.
+  test("a registered app's server is answered 401 until signed in, without a request leaving, so its sign-in starts at add", async () => {
+    const h = harness({ mcpAppCredentials: ['google'] });
+    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'google' }, 'https://kinu.example');
+    const send = present(liveMcpTransport(added.id)?.fetch, "the server's transport fetch");
+    const network = globalThis.fetch;
+    const left: string[] = [];
+
+    globalThis.fetch = asFetchFunction(async (input) => {
+      left.push(new Request(input).url);
+
+      return new Response(null, { status: 200 });
+    });
+
+    try {
+      const unsigned = await send(present(mcpPresetById('google'), 'the Gmail preset').serverUrl, { method: 'POST', body: '{}' });
+
+      expect({ status: unsigned.status, challenge: unsigned.headers.get('www-authenticate'), left }).toEqual({ status: 401, challenge: 'Bearer', left: [] });
+    } finally {
+      globalThis.fetch = network;
+      h.close();
+    }
   });
 
   test('an oauth-app add runs under the registered client, and the row still claims the preset', async () => {

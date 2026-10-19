@@ -14,17 +14,28 @@ import type { McpConnectionStatus } from './servers';
  * The `fetch` every account MCP server's transport runs on. Credentials go via this closure, not `requestInit.headers`:
  * the SDK persists headers and requestInit to `cf_agents_mcp_servers` in plaintext, but not `fetch`. Headers are read per
  * request, attached only for the server's own origin, and redirects are `manual`. The SDK's token requests go through it
- * too, and it presents each refresh token once ({@link refreshingOnce}).
+ * too, and it presents each refresh token once ({@link refreshingOnce}). `signIn: 'first'` is for a server that must be
+ * signed in to before it is used: one that answers anyone's `initialize` and `tools/list` (Gmail's MCP, measured
+ * 2026-10-19) would connect unsigned and refuse the first call of some turn, so its endpoint is answered 401, as it
+ * answers a call, until the request carries a token, and the sign-in starts when the server is added.
  */
 export function mcpCredentialTransport(
   serverUrl: string,
   openHeaders: () => Promise<Record<string, string> | null>,
+  signIn: 'first' | 'when-asked' = 'when-asked',
 ): McpCredentialTransport {
-  const origin = new URL(serverUrl).origin;
+  const endpoint = new URL(serverUrl);
 
   return {
     fetch: refreshingOnce(async (url: string | URL, init?: RequestInit): Promise<Response> => {
-      if (new URL(url.toString()).origin !== origin) return fetch(url, init);
+      const at = new URL(url.toString());
+
+      if (at.origin !== endpoint.origin) return fetch(url, init);
+
+      if (signIn === 'first' && at.pathname === endpoint.pathname && !copyHeaders(init?.headers).has('authorization')) {
+        return new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
+      }
+
       const credential = await openHeaders();
 
       if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);

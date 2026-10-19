@@ -87,6 +87,11 @@ const CatalogOptionsSchema = v.pipe(v.string(), v.parseJson(), v.object({
   })),
 }));
 
+/** A registered app's server is signed in to before it is used, unless a token in `headers` stands in for the app. */
+function signInBy(appCredentials: { clientId: string } | null, hasHeaders: boolean): 'first' | 'when-asked' {
+  return appCredentials !== null && !hasHeaders ? 'first' : 'when-asked';
+}
+
 /** Each of `rows` whose server the catalog holds, with its catalog half; one it does not hold has no endpoint. */
 function withCatalog<Row extends { readonly id: string }>(rows: readonly Row[], catalog: ReadonlyMap<string, McpCatalogEntry>): Array<Row & McpCatalogEntry> {
   return rows.flatMap((row) => {
@@ -314,13 +319,6 @@ export class UserMcpServers {
       }
     }
 
-    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
-      ...(row.sessionId !== null && { sessionId: row.sessionId }),
-      ...(row.protocolVersion !== null && { protocolVersion: row.protocolVersion }),
-      ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id)),
-      type: row.transport,
-    };
-
     // `oauth-app` rows use the registered-app provider; the vendor rejects dynamic registration.
     const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
 
@@ -328,8 +326,15 @@ export class UserMcpServers {
       ? mcpAppCredentials(this.host.env, preset)
       : null;
 
+    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
+      ...(row.sessionId !== null && { sessionId: row.sessionId }),
+      ...(row.protocolVersion !== null && { protocolVersion: row.protocolVersion }),
+      ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id), signInBy(appCredentials, row.headers !== null)),
+      type: row.transport,
+    };
+
     if (callbackUrl) {
-      const authProvider = this.oauthProvider({ serverId: row.id, callbackUrl, appCredentials, scope: preset?.scope });
+      const authProvider = this.oauthProvider({ serverId: row.id, callbackUrl, appCredentials, preset });
 
       if (!appCredentials && stored?.client_id) authProvider.clientId = stored.client_id;
       transport.authProvider = authProvider;
@@ -454,14 +459,15 @@ export class UserMcpServers {
     readonly serverId: string;
     readonly callbackUrl: string;
     readonly appCredentials: { clientId: string; clientSecret: string } | null;
-    readonly scope: string | undefined;
+    readonly preset: McpPreset | undefined;
   }): RegisteredAppOAuthClientProvider | DurableObjectOAuthClientProvider {
     const { appCredentials } = input;
 
     const provider = appCredentials
       ? new RegisteredAppOAuthClientProvider({
           storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
-          clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
+          clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.preset?.scope,
+          authorize: input.preset?.authorize,
         })
       : new DurableObjectOAuthClientProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
 
@@ -509,10 +515,10 @@ export class UserMcpServers {
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
-    const authProvider = this.oauthProvider({ serverId: id, callbackUrl, appCredentials, scope: preset?.scope });
+    const authProvider = this.oauthProvider({ serverId: id, callbackUrl, appCredentials, preset });
 
     // The transport's fetch is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
-    const credential = mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id));
+    const credential = mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id), signInBy(appCredentials, headersJson !== null));
 
     let authUrl: string | null = null;
     const mgr = this.host.mcp;

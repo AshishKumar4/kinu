@@ -18,6 +18,8 @@ export interface McpPreset {
   readonly tokenLabel?: string;
   /** Sent as the provider's `clientMetadata.scope` on the vendor's authorize URL. */
   readonly scope?: string;
+  /** Set on the vendor's authorize URL: what its authorization server needs beyond OAuth's own parameters. */
+  readonly authorize?: Readonly<Record<string, string>>;
   readonly docsUrl: string;
 }
 
@@ -54,6 +56,9 @@ export const MCP_PRESETS: readonly McpPreset[] = [
     transport: 'streamable-http',
     auth: 'oauth-app',
     scope: 'https://www.googleapis.com/auth/gmail.readonly',
+    // Google issues a refresh token only to an offline request, and again only with consent asked once more
+    // (developers.google.com/identity/protocols/oauth2/web-server#offline): without it, Gmail signs out within the hour.
+    authorize: { access_type: 'offline', prompt: 'consent' },
     docsUrl: 'https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server',
   },
 ];
