@@ -67,17 +67,28 @@ describe('a run under a deadline', () => {
     expect(outcome.seconds).toBeGreaterThan(3);
   });
 
-  test('a silent run is told through its notice file before the kill, once per silent stretch', async () => {
-    // Prints what it was told, once: that output restarts the silence, and the second stretch ends in the kill.
-    const listens = "const { watch, readFileSync } = await import('node:fs'); const path = process.env.KINU_SILENCE_NOTICE ?? '';"
-      + " const watcher = watch(path, () => { const told = readFileSync(path, 'utf8'); if (told !== '') { console.log(`told: ${told.trim()}`); watcher.close(); } });"
-      + " console.log('listening');"
-      + ' await new Promise(() => {});';
+  // Armada, 2026-10-19 (feat/secrets b46b07f66): the run was killed untold. The watchdog is a timer on the runner's own
+  // loop; a tick held late by a busy test file beside it found the silence past both the notice and the bound, and gave
+  // the notice and the kill in one tick, leaving the run no time to answer it.
+  test('a silent run is told before the kill and given the rest of its bound to answer, however late the watchdog ticks', async () => {
+    const running = runUnderDeadline({ argv: ['bun', '-e', 'await new Promise(() => {})'], seconds: 1, label: 'silent', stdio: 'pipe' });
 
-    const outcome = await runUnderDeadline({ argv: ['bun', '-e', listens], seconds: 1, label: 'listens', stdio: 'pipe' });
+    // Hold this loop past the whole bound, as a busy neighbour does: the first tick after it is late by the whole bound.
+    Bun.sleepSync(1500);
+    const outcome = await running;
 
-    expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE });
-    expect(outcome.stdout.split('\n').filter((line) => line.startsWith('told: '))).toHaveLength(1);
+    expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE, notices: 1 });
+    expect(outcome.noticeToKill).toBeGreaterThanOrEqual(0.25);
+  });
+
+  test('the run is told where its notices are written: a file of its own, there before it starts', async () => {
+    const reads = "const { existsSync, readFileSync } = await import('node:fs'); const path = process.env.KINU_SILENCE_NOTICE ?? '';"
+      + " console.log(JSON.stringify({ path, there: existsSync(path), held: existsSync(path) ? readFileSync(path, 'utf8') : null }));";
+
+    const outcome = await runUnderDeadline({ argv: ['bun', '-e', reads], seconds: 30, label: 'reads', stdio: 'pipe' });
+
+    expect(outcome).toMatchObject({ killed: false, exitCode: 0, notices: 0, noticeToKill: null });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ there: true, held: '' });
   });
 
   // A suite of rows answers the notice by ending the row in flight (`endedNearSilence`, scripts/row-verdicts.ts): on
