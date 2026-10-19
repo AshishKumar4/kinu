@@ -97,9 +97,33 @@ async function execParts(workspace, command, options) {
   return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
+/**
+ * Why a file's bytes cannot pass this fs, which reads and writes the workspace's files as text: a PNG read here came
+ * back re-encoded and failed to inflate (rc22 release evals). Thrown, so a program never holds bytes that are not the
+ * file's.
+ */
+function notText(path, syscall) {
+  const error = new Error('EILSEQ: ' + path + ' is not UTF-8 text, and fs here moves text, so its bytes would not survive. '
+    + 'Move a binary file\'s bytes as base64 through the shell: "base64 -w 0 ' + path + '" reads them, "base64 -d" writes them.');
+  error.code = 'EILSEQ';
+  error.errno = -84;
+  error.syscall = syscall;
+  error.path = path;
+  return error;
+}
+
 function makeFs(workspace, cwd) {
-  const toText = (data) => typeof data === 'string' ? data : new TextDecoder().decode(data);
   const encodingOf = (options) => typeof options === 'string' ? options : options && options.encoding;
+
+  /** Bytes as the UTF-8 text they are, or null where they are not text. */
+  const asText = (data) => {
+    if (typeof data === 'string') return data;
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(data);
+    } catch {
+      return null;
+    }
+  };
 
   async function readFile(path, options) {
     const target = resolveAt(cwd, path);
@@ -107,12 +131,19 @@ function makeFs(workspace, cwd) {
     const refused = refusalOf(text);
     if (refused) throw fsError('ENOENT', refused, target, 'open');
     const encoding = encodingOf(options);
-    if (encoding === undefined || encoding === null) return new TextEncoder().encode(text);
+    if (encoding !== undefined && encoding !== null) return text;
+    // The file's bytes, which only text keeps: the text arrived decoded, and a byte that was not UTF-8 is gone from it.
+    if (text.includes('\uFFFD')) throw notText(target, 'open');
+    return new TextEncoder().encode(text);
+  }
+  function toText(data, target, syscall) {
+    const text = asText(data);
+    if (text === null) throw notText(target, syscall);
     return text;
   }
   async function writeFile(path, data) {
     const target = resolveAt(cwd, path);
-    const result = await workspace.fs.write(target, toText(data));
+    const result = await workspace.fs.write(target, toText(data, target, 'open'));
     const refused = refusalOf(result);
     if (refused) throw fsError('EACCES', refused, target, 'open');
   }
@@ -123,7 +154,7 @@ function makeFs(workspace, cwd) {
     } catch (cause) {
       if (!cause || cause.code !== 'ENOENT') throw cause;
     }
-    await writeFile(path, current + toText(data));
+    await writeFile(path, current + toText(data, resolveAt(cwd, path), 'open'));
   }
   async function readdir(path, options) {
     const target = resolveAt(cwd, path);

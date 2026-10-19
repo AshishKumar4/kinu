@@ -39,6 +39,28 @@ function machineProgram(rt: ReturnType<typeof createTestRuntime>['rt']): Execute
   })({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] }));
 }
 
+// rc22 release evals (8 trials): a PNG read with fs/promises came back as its text re-encoded, which failed to inflate.
+test("fs's readFile hands back a text file's bytes, and refuses a file whose bytes are not text, naming the shell's base64", async () => {
+  const { rt } = createWorkspaceRuntime();
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0xff]);
+
+  await rt.toolFiles.writeFile(`${WORKSPACE_ROOT}/chart.png`, png);
+  await writeText(rt.toolFiles, 'notes.md', 'héllo');
+
+  const out = await machineProgram(rt)({
+    code: `// Read a text file and a PNG as bytes
+const fs = require('fs/promises');
+const text = Array.from(await fs.readFile('notes.md'));
+const image = await fs.readFile('chart.png').then(() => 'read', (error) => [error.code, error.message]);
+return { text, image };`,
+  });
+
+  expect(out.result).toEqual({
+    text: Array.from(new TextEncoder().encode('héllo')),
+    image: ['EILSEQ', expect.stringContaining('"base64 -w 0 /home/main/chart.png" reads them')],
+  });
+});
+
 test('a program calls workspace.fs.text on the served workspace file plane', async () => {
   const { rt } = createWorkspaceRuntime();
   await writeText(rt.toolFiles, 'nested.md', 'nested workspace bytes');
