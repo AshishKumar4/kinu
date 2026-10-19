@@ -18,7 +18,9 @@ import { TurnContextBudget } from '../src/context-budget';
 import { createSandboxExecutor, sandboxFiles, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
 import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
-import { createFileTool, serveFile } from '../src/tools/file-operations';
+import { MemoryVFS } from '@nimbus-sh/core/vfs/memory.js';
+import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
+import { createFileTool, serveFile, type FileDeps } from '../src/tools/file-operations';
 
 type FileToolInput = JsonObject & { readonly op: string };
 
@@ -26,7 +28,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { bytesToBase64 } from '../src/utils/base64';
 
-import type { JsonValue, JsonObject } from '../src/utils/json';
+import { JsonValueSchema, type JsonValue, type JsonObject } from '../src/utils/json';
 import type { VfsDigestWrite } from '../src/types/primitives';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -345,7 +347,7 @@ describe('the codemode sandbox namespace', () => {
 		expect(fs.calls).toEqual([]);
 	});
 
-	test('computer.fs reads its root and home, clamping a climb above its root', async () => {
+	test('computer.fs reads its root and home, and refuses a path spelled above its root', async () => {
 		const fs = new ContainerFs();
 
 		for (const [path, body] of [['/x', 'root bytes'], ['/workspace/relative.md', 'home bytes'], ['/etc/hosts', 'machine hosts']]) {
@@ -357,7 +359,8 @@ describe('the codemode sandbox namespace', () => {
 
 		expect(await present(namespace.tools['fs.read'], 'computer.fs.read').execute('/x')).toContain('root bytes');
 		expect(await present(namespace.tools['fs.text'], 'computer.fs.text').execute('relative.md')).toBe('home bytes');
-		expect(await present(namespace.tools['fs.text'], 'computer.fs.text').execute('/../etc/hosts')).toBe('machine hosts');
+		expect(await present(namespace.tools['fs.text'], 'computer.fs.text').execute('/../etc/hosts')).toMatchObject({ success: false, reason: 'denied' });
+		expect(fs.calls.some((call) => call.includes('hosts'))).toBe(false);
 	});
 
 	test('computer.fs and file share reads, writes and edits in both directions', async () => {
@@ -397,20 +400,22 @@ describe('the codemode sandbox namespace', () => {
 	});
 });
 
-describe('a machine path reaches the plane as written, a climb above its root held there', () => {
+describe("a machine path reaches the plane as written; one spelled above the machine's root is refused", () => {
 	const cases = [
 		{ name: 'relative with home', home: '/workspace', path: 'x', expected: '/computer/workspace/x' },
-		{ name: 'relative without home', home: undefined, path: 'x', expected: 'x' },
+		{ name: "relative without home starts at the machine's root", home: undefined, path: 'x', expected: '/computer/x' },
 		{ name: 'trailing slash', home: '/workspace/', path: 'dir/', expected: '/computer/workspace/dir/' },
 		{ name: 'absolute trailing slash', home: undefined, path: '/dir/', expected: '/computer/dir/' },
-		{ name: 'clamp without collapsing an interior parent', home: undefined, path: '/a/../../x', expected: '/computer/a/../x' },
+		{ name: 'a parent inside the machine is left to its walk', home: undefined, path: '/a/b/../x', expected: '/computer/a/b/../x' },
+		{ name: 'a relative parent is left to its walk', home: '/workspace', path: '../etc/x', expected: '/computer/workspace/../etc/x' },
 		{ name: 'dot component', home: undefined, path: '/a/./x', expected: '/computer/a/./x' },
 		{ name: 'dot relative to home', home: '/workspace', path: '.', expected: '/computer/workspace/.' },
-		{ name: 'dot without home', home: undefined, path: '.', expected: '.' },
+		{ name: 'dot without home', home: undefined, path: '.', expected: '/computer/.' },
+		{ name: 'the root', home: undefined, path: '/', expected: '/computer/' },
 	];
 
-	/** The plane path `computer.fs.stat(path)` asks of the file operations. */
-	const asked = async (home: string | undefined, path: string): Promise<string> => {
+	/** The plane path `computer.fs.stat(path)` asks of the file operations, or what refused it. */
+	const asked = async (home: string | undefined, path: string): Promise<string | JsonValue> => {
 		const paths: string[] = [];
 
 		const files = { stat: { op: FILE.stat, run: async (input: JsonValue) => {
@@ -424,12 +429,42 @@ describe('a machine path reaches the plane as written, a climb above its root he
 			fileRoot: async () => (home === undefined ? { root: '/computer' } : { root: '/computer', home }),
 		} satisfies ExecutorProviderSurface;
 
-		await executorNamespace(provider, files).tools['fs.stat']?.execute(path);
+		const answered = await executorNamespace(provider, files).tools['fs.stat']?.execute(path);
 
-		return paths[0] ?? '';
+		return paths[0] ?? v.parse(JsonValueSchema, answered);
 	};
 
 	for (const each of cases) {
 		test(each.name, async () => { expect(await asked(each.home, each.path)).toBe(each.expected); });
 	}
+
+	// No guess at where a link leads: a spelling that climbs above the machine's root is refused, never rewritten.
+	for (const [home, path] of [[undefined, '/a/../../x'], [undefined, '/../etc/hosts'], ['/workspace', '../../x'], [undefined, '..']] as const) {
+		test(`${path} from ${home ?? '/'} is refused`, async () => {
+			expect(await asked(home, path)).toMatchObject({ success: false, reason: 'denied', error: expect.stringContaining('above') });
+		});
+	}
 });
+
+test("workspace.fs and file reach the same file through a link and the parents after it, as the plane walks them", async () => {
+	const tree = new CompositeVFS(new MemoryVFS());
+
+	await tree.mkdir('/home/main/deep/inner', { recursive: true });
+	await tree.writeFile('/home/main/target.txt', new TextEncoder().encode('target\n'));
+	await tree.symlink('/home/main/deep/inner', '/home/main/link');
+
+	// The workspace's plane over that tree as the cloud's is: the namespace walks every path, after a link as open(2) does.
+	const vfs = withMountTable({ namespace: async () => tree, home: '/home/main' }, []);
+	const deps: FileDeps = { vfs, home: '/home/main', planes: cloudPlanes('/home/main'), ledger: new TurnFileLedger(), budget: new TurnContextBudget() };
+	const files = serveFile(() => deps);
+
+	const workspace = {
+		name: 'workspace', tools: {}, positionalArgs: true, capabilities: new Set<ExecutorCapability>(), fileRoot: async () => ({ root: '' }),
+	} satisfies ExecutorProviderSurface;
+
+	const through = '/home/main/link/../../../../home/main/target.txt';
+
+	expect(await files.text.run({ path: through }, { callId: 'file-text' })).toMatchObject({ value: 'target\n' });
+	expect(await present(executorNamespace(workspace, files).tools['fs.text'], 'workspace.fs.text').execute(through)).toBe('target\n');
+});
+

@@ -126,27 +126,25 @@ const SLATES_DECLARATION = {
 const MachineFileCallSchema = v.looseObject({ path: v.string(), device: v.optional(v.string()) });
 
 /**
- * `path` on a machine whose files sit at `root` in the plane: a relative one from `home` (else as the plane resolves
- * it), and a `..` that would climb above the machine's root held there, as at `/` on any machine. Every other component
- * is left as written, for the plane to walk.
+ * `path` as the plane is handed it, on a machine whose files sit at `root` there. The workspace's own files are the
+ * plane's root, which walks every path itself, so its path is passed as written. On a mounted machine a relative path
+ * starts at its home, else its root, and every component is left for the plane and the machine to walk, after a link as
+ * open(2) does. Only a spelling that climbs above the machine's root is refused, since the plane would take that `..`
+ * out of the machine: where a link leads is never guessed.
  */
 function onMachine(root: string, home: string | undefined, path: string): string {
-  const written = path.startsWith('/') || home === undefined ? path : `${home.replace(/\/+$/u, '')}/${path}`;
-
-  if (!written.startsWith('/')) return written;
-  const kept: string[] = [];
+  if (root === '') return path;
+  const written = path.startsWith('/') ? path : `${(home ?? '').replace(/\/+$/u, '')}/${path}`;
   let depth = 0;
 
-  for (const part of written.split('/').filter((name) => name !== '')) {
-    if (part === '..') {
-      if (depth === 0) continue;
-      depth -= 1;
-    } else if (part !== '.') depth += 1;
+  for (const part of written.split('/')) {
+    if (part === '..') depth -= 1;
+    else if (part !== '' && part !== '.') depth += 1;
 
-    kept.push(part);
+    if (depth < 0) throw new KinuError('denied', `${path} climbs above this machine's root, which its own paths start at`);
   }
 
-  return `${root}/${kept.join('/')}${written.endsWith('/') && kept.length > 0 ? '/' : ''}`;
+  return `${root}${written}`;
 }
 
 /**
