@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
-import { CONTAINER_ENV } from './processes';
+import { CONTAINER_ENV, endProcess } from './processes';
 import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
 import { DEVBOX_WORKDIR } from './storage';
 
@@ -29,7 +29,8 @@ interface TerminalLanes {
   readonly server: WebSocket;
   readonly input: WritableStreamDefaultWriter<Uint8Array>;
   readonly output: ReadableStream<Uint8Array>;
-  readonly abort: AbortController;
+  /** Ends the PTY's tmux client, which leaves its session running (`endProcess`). */
+  readonly end: () => void;
 }
 
 class TerminalConnection {
@@ -42,7 +43,7 @@ class TerminalConnection {
     if (this.#closed) return;
     this.#closed = true;
 
-    if (!this.#exited) this.lanes.abort.abort();
+    if (!this.#exited) this.lanes.end();
     this.lanes.server.close(code, message);
   }
 
@@ -92,17 +93,18 @@ class TerminalConnection {
 }
 
 /** The PTY owns a tmux client, not the workspace shell; detaching must keep the session. */
-export function terminalSocket(container: Container, params: URLSearchParams, session: SessionRecord): Promise<Response> {
+export function terminalSocket(container: Pick<Container, 'exec'>, params: URLSearchParams, session: SessionRecord): Promise<Response> {
   return settle(Effect.gen(function* () {
     const size = yield* attemptSync('invalid-input', () => v.parse(Size, { cols: Number(params.get('cols') ?? 80), rows: Number(params.get('rows') ?? 24) }));
-    const abort = new AbortController();
 
     const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', ATTACH, 'devbox-terminal', session.id, session.cwd], {
-      pty: size, stdin: 'pipe', env: ENV, signal: abort.signal,
+      pty: size, stdin: 'pipe', env: ENV,
     }));
 
+    const end = (): void => { endProcess(container, process.pid, "ending a terminal's client"); };
+
     if (process.stdout === null || process.stdin === null) {
-      abort.abort();
+      end();
 
       return yield* Effect.fail(new DevboxError('process', 'native PTY did not provide its streams'));
     }
@@ -111,7 +113,7 @@ export function terminalSocket(container: Container, params: URLSearchParams, se
     const server = sockets[1];
     server.binaryType = 'arraybuffer';
     server.accept();
-    const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, abort });
+    const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, end });
     const cancelRead = connection.read();
     server.addEventListener('message', event => observe(Effect.promise(() => connection.accept(event)), {
       success: () => undefined,
