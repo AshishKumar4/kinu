@@ -1069,12 +1069,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('recoverBackgroundJobs leaves a job another live process runs to it, and recovers one whose process is gone', async () => {
     const { db, rt, session } = setup();
     const daemon = Bun.spawn(['sleep', '600']);
-    const gone = Bun.spawn(['true']);
-    await gone.exited;
-    // The daemon's pid as an earlier process recorded it, before that process ended and the pid was reused.
-    const reused = { ...osLeaseProcess(daemon.pid), generation: 'an-earlier-run' };
 
     try {
+      const gone = Bun.spawn(['true']);
+      await gone.exited;
+      // The daemon's pid as an earlier process recorded it, before that process ended and the pid was reused.
+      const reused = { ...osLeaseProcess(daemon.pid), generation: 'an-earlier-run' };
+
       for (const [id, fiber, holder] of [
         ['bgjob-held', 'f-held', osLeaseProcess(daemon.pid)],
         ['bgjob-gone', 'f-gone', osLeaseProcess(gone.pid)],
@@ -1095,6 +1096,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       expect(jobStatus(db, 'bgjob-reused')).toBe('failed');
     } finally {
       daemon.kill();
+      await daemon.exited;
     }
   });
 

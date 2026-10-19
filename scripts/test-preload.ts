@@ -57,19 +57,6 @@ afterAll(async () => {
   }
 });
 
-// Release this file's plugins, so the runner can collect the file. Under
-// `--parallel` each file runs in a fresh global, and a `Bun.plugin` callback,
-// the two below and every `mock.module` (which is a plugin too), keeps its
-// global and everything that global reached alive until the worker exits.
-// Measured 2026-09-24 on bun 1.4.0, `bun test --parallel=4 packages/cf-backend/`
-// (272 files): without this line the live global objects after a full GC grew
-// one per file (87 after 87 files) and one worker held 1.4 GB of heap; the
-// suite's cgroup peaked at 9.6 to 12.3 GB. With it: at most 5 live globals,
-// 161 MB of heap per worker, and a 2.5 to 3.1 GB peak. Without `--parallel`
-// the files share one global, and this hook runs once, after the last file.
-// `packages/test-utils/tests/preload-release.test.ts` proves it both ways.
-afterAll(() => { Bun.plugin.clearAll(); });
-
 // The two `cloudflare:` builtins the Agents SDK's ROOT module imports
 // (`EmailMessage` from cloudflare:email, `RpcTarget`/`exports` from
 // cloudflare:workers). They exist only inside workerd, so under `bun test`

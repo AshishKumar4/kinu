@@ -46,42 +46,26 @@ function checkpointedWrite(msg, { requested, content, options }, checkpoints, wr
  * judged path; the step runs where it still is (`atJudged`).
  */
 function replaceIfDigest(view, target, data, expected) {
-  // A raw view's path is the one requested, links and all, and is read and written through them as before; a judged
-  // path names no link, so one found in its place is refused.
-  const follow = view.raw === true ? 0 : NO_FOLLOW;
-
   return atJudged(view, target, { createParents: true }, (at) => {
     let found = null;
 
     try {
-      found = sha256Of(readFollowing(at, follow));
+      found = sha256Of(readEntry(at));
     } catch (cause) {
       if (cause.code !== 'ENOENT') throw cause;
     }
 
     if (found !== expected) return { ok: false, sha256: found };
     // A create only where nothing is yet; a replacement only of a file still there.
-    const flags = found === null ? fs.constants.O_CREAT | fs.constants.O_EXCL : fs.constants.O_TRUNC;
-    const fd = fs.openSync(at, fs.constants.O_WRONLY | flags | follow, 0o666);
-
-    try {
-      fs.writeFileSync(fd, data);
-    } finally {
-      fs.closeSync(fd);
-    }
+    writeEntry(at, found === null ? fs.constants.O_CREAT | fs.constants.O_EXCL : fs.constants.O_TRUNC, data);
 
     return { ok: true, sha256: sha256Of(data) };
   });
 }
 
-const NO_FOLLOW = fs.constants.O_NOFOLLOW ?? 0;
-
-/** Linux's O_PATH: a directory held by a walk that needs only search permission on it, as a path lookup does. */
-const O_PATH = 0o10000000;
-
-/** A file's bytes; `follow` 0 reads through a link in its last component, NO_FOLLOW refuses one. */
-function readFollowing(at, follow) {
-  const fd = fs.openSync(at, fs.constants.O_RDONLY | follow);
+/** The bytes of the file entry `at` names. */
+function readEntry(at) {
+  const fd = at.open(fs.constants.O_RDONLY);
 
   try {
     return fs.readFileSync(fd);
@@ -90,9 +74,9 @@ function readFollowing(at, follow) {
   }
 }
 
-/** `data` written over the file at `at`, created if absent; a link in its last component is refused. */
-function writeNoFollow(at, data) {
-  const fd = fs.openSync(at, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | NO_FOLLOW, 0o666);
+/** `data` written to the file entry `at` names, opened for writing with `flags`. */
+function writeEntry(at, flags, data) {
+  const fd = at.open(fs.constants.O_WRONLY | flags, 0o666);
 
   try {
     fs.writeFileSync(fd, data);
@@ -101,85 +85,7 @@ function writeNoFollow(at, data) {
   }
 }
 
-/** Why a judged path no longer holds: a command on this device swapped a link into it after the frame was judged. */
-function movedUnderneath(judged, cause) {
-  const error = new Error(`device path '${judged}' changed after it was checked: a directory in it is now a link`);
-  error.code = 'EACCES';
-  error.cause = cause;
-
-  return error;
-}
-
-/**
- * Runs one synchronous mutation `act` on the path a sandboxed view judged, where it still is when the mutation runs: a
- * frame waits in the checkpoint queue, and a command on this device may meanwhile swap a directory of the path for a
- * link out of the consented root. On Linux the directory is opened from `/`, one component at a time with O_NOFOLLOW
- * (creating any that `createParents` allows), and `act` gets `/proc/self/fd/<dir>/<name>`: no later swap moves it. On
- * macOS, with no such handle, the directory is resolved again and must be the one judged. A raw view judged nothing
- * the device's commands cannot reach themselves, so its path is used as it is.
- */
-function atJudged(view, judged, { createParents = false } = {}, act) {
-  if (view.raw === true) {
-    if (createParents) fs.mkdirSync(path.dirname(judged), { recursive: true });
-
-    return act(judged);
-  }
-
-  const dir = path.dirname(judged);
-
-  if (process.platform !== 'linux') {
-    if (createParents) fs.mkdirSync(dir, { recursive: true });
-
-    if (fs.realpathSync(dir) !== dir) throw movedUnderneath(judged, null);
-
-    return act(judged);
-  }
-
-  const flags = O_PATH | fs.constants.O_DIRECTORY | NO_FOLLOW;
-  let fd = fs.openSync('/', flags);
-
-  try {
-    for (const name of dir.split('/').filter((part) => part !== '')) {
-      const next = `/proc/self/fd/${fd}/${name}`;
-      let opened;
-
-      try {
-        if (createParents && !fs.existsSync(next)) fs.mkdirSync(next);
-        opened = fs.openSync(next, flags);
-      } catch (cause) {
-        if (fs.lstatSync(next, { throwIfNoEntry: false })?.isSymbolicLink()) throw movedUnderneath(judged, cause);
-        throw withPath(cause, judged);
-      }
-
-      fs.closeSync(fd);
-      fd = opened;
-    }
-
-    const held = `/proc/self/fd/${fd}`;
-
-    try {
-      return act(`${held}/${path.basename(judged)}`);
-    } catch (cause) {
-      throw withPath(cause, judged, held, dir);
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-/** `cause` naming the judged path the caller knows, not the descriptor path it ran on. */
-function withPath(cause, judged, descriptor, dir) {
-  if (descriptor !== undefined && typeof cause.message === 'string') {
-    cause.message = cause.message.split(descriptor).join(dir);
-
-    if (typeof cause.path === 'string') cause.path = cause.path.split(descriptor).join(dir);
-  } else if (typeof cause.message === 'string' && typeof cause.path === 'string') {
-    cause.message = cause.message.split(cause.path).join(judged);
-    cause.path = judged;
-  }
-
-  return cause;
-}
+const { atJudged } = require('./daemon/held.js');
 
 const sandbox = require('./sandbox.js');
 
@@ -1423,8 +1329,7 @@ function handle(msg, ws, ctx) {
       rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === METHODS.writeFile) {
       rpcWhenSettled(ws, id, checkpointedWrite(msg, { requested: params[0], content: params[1], options: params[2] }, checkpoints, (view, confined, data) => {
-        // A raw view's path is the one requested and is written through its links as before; a judged one names none.
-        atJudged(view, confined, { createParents: true }, (at) => { if (view.raw === true) fs.writeFileSync(at, data); else writeNoFollow(at, data); });
+        atJudged(view, confined, { createParents: true }, (at) => { writeEntry(at, fs.constants.O_CREAT | fs.constants.O_TRUNC, data); });
 
         return { success: true };
       }));
@@ -1442,7 +1347,7 @@ function handle(msg, ws, ctx) {
       const entry = view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'write');
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        atJudged(view, entry, {}, (at) => { fs.unlinkSync(at); });
+        atJudged(view, entry, {}, (at) => { at.unlink(); });
 
         return { success: true };
       }));
@@ -1451,7 +1356,7 @@ function handle(msg, ws, ctx) {
       const entry = rmdirEntry(view, msg);
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        atJudged(view, entry, {}, (at) => { fs.rmdirSync(at); });
+        atJudged(view, entry, {}, (at) => { at.rmdir(); });
 
         return { success: true };
       }));
@@ -1461,7 +1366,7 @@ function handle(msg, ws, ctx) {
       const confined = confinedDeviceViewPath(view, params[0], 'write');
 
       rpcWhenSettled(ws, id, mutation(checkpoints, null, null, () => {
-        atJudged(view, confined, { createParents: recursive }, (at) => { fs.mkdirSync(at, { recursive }); });
+        atJudged(view, confined, { createParents: recursive }, (at) => { at.mkdir(recursive); });
 
         return { success: true };
       }));

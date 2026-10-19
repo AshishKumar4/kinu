@@ -62,7 +62,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript,
+  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript, type TurnEndEvent,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -1205,8 +1205,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. */
-  private async hostedTurnEnded(actorId: string, event: SessionEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
-    const runId = event.type === 'turn-end' ? event.runId : '';
+  private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
+    const { runId } = event;
     const ended = new TurnFences(this.boundSql).ended(actorId, { runId });
 
     if (ended === null) {
@@ -1215,7 +1215,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return;
     }
 
-    this.chatRooms.hostedRoom(actorId)?.closeTurn(window);
+    this.chatRooms.hostedRoom(actorId)?.closeTurn(event.turnId, window);
     await this.chatTurnClosed(actorId, figures, ended === 'unfenced' ? null : ended, ended === 'unfenced' ? this.agentTurns.chatTurn(actorId) : ended.turnId);
   }
 
@@ -1242,7 +1242,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     diagnostics.event('agent.turn_end_lost', { turnId: open.turnId });
-    await this.chatRooms.hostedRoom(actorId)?.closeLostTurn();
+    await this.chatRooms.hostedRoom(actorId)?.closeLostTurn(open.turnId);
     await this.chatTurnClosed(actorId, null, expected, open.turnId);
   }
 

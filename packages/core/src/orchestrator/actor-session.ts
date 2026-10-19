@@ -800,7 +800,8 @@ export class ActorSession {
       tally.failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
 
       if (tally.failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
-      await emit({ type: 'error', message: renderThrownChain({ cause }) });
+      // A Stop ends the turn in its one name, whatever threw under it (an abort before the model's stream opened).
+      await emit({ type: 'error', message: active.abort.signal.aborted ? INTERRUPTED_TURN : renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
       this.liveStream = null;

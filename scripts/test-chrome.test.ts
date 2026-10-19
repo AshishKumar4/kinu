@@ -6,7 +6,7 @@
  * ladder's deadline.
  */
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { BROWSER_PROFILE_PARENT, scratchDir } from '../packages/test-utils/src/scratch';
@@ -104,8 +104,12 @@ test('closing an unresponsive browser ends every owned process and removes its p
   expect(existsSync(dirname(profile))).toBe(false);
 });
 
-test('a launcher killed outright takes its browser with it, and the profile it left is reaped as abandoned', async () => {
-  const launcher = spawnTest(['bun', HELD], { stdout: 'pipe', stderr: 'inherit' });
+test.each([false, true])('a killed launcher loses its browser and its profile is reaped (removed temporary parent: %j)', async (removed) => {
+  const temp = scratchDir('chrome', BROWSER_PROFILE_PARENT);
+
+  if (removed) rmSync(temp, { recursive: true, force: true });
+
+  const launcher = spawnTest(['bun', HELD], { stdout: 'pipe', stderr: 'inherit', env: { ...process.env, TMPDIR: temp } });
   const named = v.parse(v.object({ browser: v.number() }), JSON.parse(await firstLine(launcher.stdout)));
   const profile = profileOf(named.browser);
   const processes = runningFrom(profile);

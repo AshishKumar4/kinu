@@ -320,6 +320,39 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
   };
 }
 
+/* ── Stop, then a send ─────────────────────────────────────────────────── */
+
+/** The stop-then-send row's asks, numbered per attempt: one stopped as it opens, its call held until the row is done,
+ *  then a follow-up sent as the Stop leaves, answered at once. */
+export const STOPPED_ASK = 'Stop probe: wait before the first word';
+
+/** What the stopped ask's turn would answer: a page drawing it ran a message its Stop had stopped. */
+export const STOPPED_ANSWER = 'The stopped ask answered.';
+
+export const FOLLOW_UP_ASK = 'Stop probe: the follow-up';
+
+export const FOLLOW_UP_ANSWER = 'Followed up after the Stop';
+
+/** A new chat opened with this waits on its first call until its row lets the call go. */
+export const OPENING_ASK = 'New chat probe: wait before the first word.';
+
+export const OPENING_ANSWER = 'Opened after the wait.';
+
+/** The stop-then-send and new-chat rows' turns, or null for any other request. */
+export function stopProbeTurn(request: ScriptedRequest, stopped: HeldCall, opening: HeldCall): ScriptedAnswer | null {
+  const last = request.userTexts.at(-1) ?? '';
+
+  if (request.available.length === 0) return null;
+
+  if (last.includes(FOLLOW_UP_ASK)) return { text: `${FOLLOW_UP_ANSWER}${last.slice(last.indexOf(FOLLOW_UP_ASK) + FOLLOW_UP_ASK.length)}.` };
+
+  const held = (text: string, call: HeldCall): ScriptedAnswer => ({ text, pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: call.hold() } });
+
+  if (last.includes(STOPPED_ASK)) return held(STOPPED_ANSWER, stopped);
+
+  return last.includes(OPENING_ASK) ? held(OPENING_ANSWER, opening) : null;
+}
+
 /* ── The plan's own tasks ──────────────────────────────────────────────── */
 
 /** The handoff an approval enqueues names the approved plan; only a decision puts it in the conversation. */
