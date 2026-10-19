@@ -363,7 +363,16 @@ class ProviderCall {
   private readonly openResults = new Map<string, StepRecord['toolResults'][number]>();
   private responseSoFar: readonly ModelMessage[] = [];
   readonly finishedSteps: StepResult<ToolSet>[] = [];
-  private readonly pendingStepEvents: PendingStepEvent[] = [];
+  /** Each by the call's own number of the step it ends, from 1. */
+  private readonly pendingStepEvents: Array<{ readonly step: number; readonly event: PendingStepEvent }> = [];
+  /**
+   * Steps whose end the caller has read off the stream. The SDK passes a step's end on before it calls `onStepEnd`, so
+   * the caller may still hold that step's words when its hook runs: a step's hooks and its `step-finish` event wait
+   * until the caller has read them, so a step's words always precede its record. Unordered, a head's live words landed
+   * after its step's record once nothing else pulled the stream ahead (#m2180e).
+   */
+  private stepsRead = 0;
+  private readonly readWaiters: Array<{ readonly steps: number; readonly read: () => void }> = [];
   /** When the step's request left (`prepareStep`): a cache warm counts its TTL from there
    *  (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
@@ -461,7 +470,7 @@ class ProviderCall {
       this.openResults.delete(part.toolCallId);
     }
 
-    if (record.step !== undefined) this.pendingStepEvents.push({ ...record.step, responseMessages: record.messages });
+    if (record.step !== undefined) this.pendingStepEvents.push({ step: this.finishedSteps.length, event: { ...record.step, responseMessages: record.messages } });
 
     return own;
   }
@@ -481,11 +490,33 @@ class ProviderCall {
   }
 
   *takeStepEvents(): Generator<ChatEvent> {
-    while (this.pendingStepEvents.length > 0) {
-      const ev = this.pendingStepEvents.shift();
+    for (let next = this.pendingStepEvents[0]; next !== undefined && next.step <= this.stepsRead; next = this.pendingStepEvents[0]) {
+      this.pendingStepEvents.shift();
 
-      if (ev) yield { type: 'step-finish' as const, ...ev, source: 'native' };
+      yield { type: 'step-finish' as const, ...next.event, source: 'native' };
     }
+  }
+
+  /** Once the caller has read the end of the call's `steps`th step, or stopped reading. */
+  async untilRead(steps: number): Promise<void> {
+    if (this.stepsRead >= steps) return;
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    this.readWaiters.push({ steps, read: resolve });
+    await promise;
+  }
+
+  /** The caller stopped reading: nothing it has not read will be. */
+  stoppedReading(): void {
+    this.stepRead(Number.POSITIVE_INFINITY);
+  }
+
+  private stepRead(steps: number): void {
+    this.stepsRead = steps;
+
+    for (const waiter of this.readWaiters.filter((each) => each.steps <= steps)) waiter.read();
+
+    this.readWaiters.splice(0, this.readWaiters.length, ...this.readWaiters.filter((each) => each.steps > steps));
   }
 
   consume(chunk: TextStreamPart<ToolSet>): ChatEvent | null {
@@ -512,6 +543,7 @@ class ProviderCall {
 
       case 'finish-step':
         this.stepEnded(chunk.finishReason);
+        this.stepRead(this.stepsRead + 1);
 
         return null;
 
@@ -1047,6 +1079,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         }
 
         try {
+          await call.untilRead(call.finishedSteps.length);
           // Recorded: the step that ended is the turn's `stepCount - 1`, the number its request was prepared under.
           await extensions?.emitStepEnd({ stepNumber: stepCount - 1 });
           await opts.onStep?.(step, own);
@@ -1088,6 +1121,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
     } finally {
       let completed = false;
+
+      call.stoppedReading();
 
       try {
         if (!drained && call.streamError === undefined && call.stepFailure === null) consumer.abort();
