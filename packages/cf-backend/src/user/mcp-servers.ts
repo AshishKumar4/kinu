@@ -4,7 +4,7 @@ import {
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
-import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
+import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
@@ -441,7 +441,7 @@ export class UserMcpServers {
     readonly callbackUrl: string;
     readonly appCredentials: { clientId: string; clientSecret: string } | null;
     readonly scope: string | undefined;
-  }): RegisteredAppOAuthClientProvider | DurableObjectOAuthClientProvider {
+  }): KinuMcpOAuthProvider {
     const { appCredentials } = input;
 
     const provider = appCredentials
@@ -449,7 +449,7 @@ export class UserMcpServers {
           storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
           clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
         })
-      : new DurableObjectOAuthClientProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
+      : new KinuMcpOAuthProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
 
     provider.serverId = input.serverId;
 
