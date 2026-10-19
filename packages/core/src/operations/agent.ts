@@ -38,8 +38,8 @@ export const AGENT = {
   proposeScaffold: agentOp({
     name: 'proposeScaffold', impact: 'administer',
     help: 'A new version of your scaffold: `code` exports `async function* run(rt, task)` and reaches the host only through '
-      + '`host.*`; `rationale` is at least 50 characters. It goes live only after winning a shadow evaluation against the '
-      + 'current version; `baseVersion` branches from an archived one.',
+      + '`host.*`; `rationale` is at least 50 characters. It lands pending and goes live only when your owner promotes it; '
+      + 'one proposal is pending at a time. `baseVersion` branches from an archived one.',
     input: v.strictObject({
       rationale: v.pipe(v.string(), v.nonEmpty()), code: v.pipe(v.string(), v.nonEmpty()),
       baseVersion: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
@@ -58,7 +58,7 @@ export const AGENT = {
     output: v.strictObject({ status: v.literal('pending'), proposal: v.string(), note: v.string() }),
   }),
   scaffoldVersions: agentOp({
-    name: 'scaffoldVersions', help: 'Your scaffold versions with status, lineage and shadow-evaluation record.', impact: 'observe',
+    name: 'scaffoldVersions', help: 'Your scaffold versions with their status and lineage.', impact: 'observe',
     input: v.strictObject({ limit: Count('Most versions to list.') }), output: v.unknown(),
   }),
   schedule: agentOp({
