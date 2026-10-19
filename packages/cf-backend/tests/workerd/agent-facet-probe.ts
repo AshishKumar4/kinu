@@ -275,7 +275,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     bootId ??= crypto.randomUUID();
     const retired = this.actorDirectoryStore().retained(seat.actor.record.actorId)?.retiringAt != null;
     // Its chat as its own store keeps it once it is retired, read as a pane's seed is.
-    const messages: unknown = await facet.seed(this.agentSnapshot(seat.actor.record.actorId));
+    const messages: unknown = (await facet.seed(this.agentSnapshot(seat.actor.record.actorId))).messages;
 
     const chat = v.parse(v.array(ChatTextSchema), messages).map((message) => ({
       role: message.role, text: message.parts.flatMap((part) => (part.type === 'text' && part.text !== undefined ? [part.text] : [])).join(''),
