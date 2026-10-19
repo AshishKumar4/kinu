@@ -52,7 +52,7 @@ export const FILE = {
   }),
   edit: fileOp({
     name: 'edit',
-    help: 'Replace text in a file you have read, every edit applied together or none; refused when the file changed since.',
+    help: 'Replace text in a file you have read since the conversation was last compacted, every edit applied together or none; refused when the file changed since.',
     impact: 'mutate',
     input: v.strictObject({ path: Path, edits: described(v.pipe(v.array(FileEditSchema), v.minLength(1)), 'Matched against the file as last read.') }),
     output: v.strictObject({ ...Written, applied: v.array(v.strictObject({ line: v.number(), removedLines: v.number(), addedLines: v.number() })) }),

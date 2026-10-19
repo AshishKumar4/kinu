@@ -298,7 +298,7 @@ function fileOps(deps: FileDeps) {
           (action === 'edit' ? 'edit it: the text you are matching may have moved.' : 'replace it, so you know what you are discarding.') };
       case 'never':
         return { reason: 'unread', refusal:
-          `${path} has not been read here yet, so ${action === 'edit' ? 'editing' : 'overwriting'} it would be blind. ` +
+          `${path} has no read that still counts (a read counts until the conversation is compacted), so ${action === 'edit' ? 'editing' : 'overwriting'} it would be blind. ` +
           `Call op=read path=${path} first` +
           (action === 'edit' ? ', then copy old_text out of what it returns.' : '.') };
     }

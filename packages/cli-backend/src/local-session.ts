@@ -570,6 +570,7 @@ export class LocalAgentSession {
       ledger: this.actorSession.dynamic,
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
+      reads: this.actorSession.orchestrator.acc.ledgers.files,
       spend: { report: (report) => this.modelCallSink(report) },
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
@@ -2695,7 +2696,7 @@ export class LocalAgentSession {
 
     const compaction = hostedActorCompaction(actor, {
       logger: compactionDiagnostics, models, report: (_actor, call) => report(call), operations,
-      turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic },
+      turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic, reads: actor.session.orchestrator.acc.ledgers.files },
     });
 
     return {

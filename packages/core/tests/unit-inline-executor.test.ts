@@ -326,7 +326,7 @@ describe('workspace.fs.write over the workspace filesystem — what both backend
     // Callers branch on `reason`, and the declared codemode type promises it.
     expect(await exec.tools["fs.write"].execute('victim.txt', 'destroyed blind')).toEqual({
       success: false,
-      error: expect.stringContaining('has not been read here yet'),
+      error: expect.stringContaining('has no read that still counts'),
       reason: 'unread',
     });
     expect(await readText(vfs, 'victim.txt')).toBe('keep me');
@@ -458,7 +458,7 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     const fileTool = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
     await expect(execute({ op: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
-      .rejects.toThrow('has not been read here yet');
+      .rejects.toThrow('has no read that still counts');
   });
 });
 
