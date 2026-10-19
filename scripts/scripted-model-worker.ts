@@ -1,8 +1,8 @@
 /**
  * The scripted model on the network, for the tiers that drive a deployment: kinu.run and staging call it as an
  * account's `openai-compat` provider, the way a local run calls `startScriptedModel`, and it answers from the same
- * protocol and the same script (`tierModel`). Every answer is a pure function of the request, so this Worker holds no
- * state.
+ * protocol and the same script (`tierModel`). Every answer is a pure function of the request, but for an OAuth
+ * grant's refresh generation.
  *
  * It is its own Worker on a Workers Custom Domain, `scripted-model.kinu.run`, because the product's Worker may fetch a
  * Worker of the same account only through a service binding, the `global_fetch_strictly_public` flag, or a Custom
@@ -10,20 +10,99 @@
  * production's own configuration.
  *
  * It also answers Tavily's `/search` (scripted-search.ts) and serves an MCP server whose sessions end on cue
- * (scripted-mcp.ts). Its route is public, so it answers only a request bearing
- * `SCRIPTED_MODEL_KEY`, the secret deploy.sh uploads with it and the tiers store as the scripted account's model and
- * search keys (scripted-tier.ts), and it reads a body only up to MAX_BODY_BYTES.
+ * (scripted-mcp.ts), that server again behind OAuth with expiring access tokens and rotating refresh tokens
+ * (scripted-mcp-oauth.ts). Its route is public, so it answers only a request bearing `SCRIPTED_MODEL_KEY`, the secret
+ * deploy.sh uploads with it and the tiers store as the scripted account's model and search keys (scripted-tier.ts),
+ * except the OAuth routes a client reaches before and after a person authorizes, each of which checks what it was
+ * handed against that key. It reads a body only up to MAX_BODY_BYTES. A refresh grant's generation is its one state,
+ * held by `ScriptedOAuthGrants`.
  */
+import * as v from 'valibot';
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { timingSafeEqual } from '../packages/core/src/utils/crypto';
-import { SCRIPTED_MCP_PATH, scriptedMcp } from './scripted-mcp';
+import { SCRIPTED_MCP_PATH, scriptedMcp, type McpAnswer } from './scripted-mcp';
+import { OAUTH_AUTHORIZE_PATH, downFor, isPublicOAuthPath, scriptedOAuth, type GrantLedger } from './scripted-mcp-oauth';
 import { scriptedSearch } from './scripted-search';
 import { tierModel } from './tier-model';
 import { SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody } from './scripted-protocol';
 
+/** A Durable Object id, as much of it as this Worker reads. */
+interface GrantsId {
+  toString(): string;
+}
+
+/** The Durable Object namespace of `ScriptedOAuthGrants`, as much of it as this Worker calls. */
+interface GrantsNamespace {
+  idFromName(name: string): GrantsId;
+  get(id: GrantsId): { fetch(request: Request): Promise<Response> };
+}
+
 interface Env {
   readonly SCRIPTED_MODEL_KEY?: string;
+  readonly OAUTH_GRANTS?: GrantsNamespace;
 }
+
+/** Storage as a grant's object reads it: its generation and whether it is revoked. */
+export interface GrantStorage {
+  get(key: string): Promise<number | boolean | undefined>;
+  put(key: string, value: number | boolean): Promise<void>;
+}
+
+/**
+ * One OAuth grant's refresh generation. Its storage calls hold the object's input gate, so two refreshes of one grant
+ * are answered one after the other: the second presents a used generation and revokes the grant.
+ */
+export class ScriptedOAuthGrants {
+  constructor(private readonly state: { readonly storage: GrantStorage }) {}
+
+  async fetch(request: Request): Promise<Response> {
+    const presented = Number(new URL(request.url).searchParams.get('generation'));
+    const stored = await this.state.storage.get('generation');
+    const current = typeof stored === 'number' ? stored : 0;
+
+    if ((await this.state.storage.get('revoked')) === true || presented !== current) {
+      await this.state.storage.put('revoked', true);
+
+      return Response.json({ rotation: 'reused' });
+    }
+
+    await this.state.storage.put('generation', current + 1);
+
+    return Response.json({ rotation: 'rotated' });
+  }
+}
+
+/** The grants namespace as one process holds it, for a run with no Durable Objects: a map of objects, each over a map. */
+export function inMemoryGrants(): GrantsNamespace {
+  const objects = new Map<string, ScriptedOAuthGrants>();
+
+  return {
+    idFromName: (name) => ({ toString: () => name }),
+    get: (id) => {
+      const name = id.toString();
+      const kept = new Map<string, number | boolean>();
+      const object = objects.get(name) ?? new ScriptedOAuthGrants({ storage: { get: async (key) => kept.get(key), put: async (key, value) => { kept.set(key, value); } } });
+
+      objects.set(name, object);
+
+      return object;
+    },
+  };
+}
+
+const RotationSchema = v.object({ rotation: v.picklist(['rotated', 'reused']) });
+
+function grantLedger(grants: GrantsNamespace): GrantLedger {
+  return {
+    rotate: async (grant, generation) => {
+      const answer = await grants.get(grants.idFromName(grant)).fetch(new Request(`https://grants/rotate?generation=${String(generation)}`, { method: 'POST' }));
+
+      return v.parse(RotationSchema, await answer.json()).rotation;
+    },
+  };
+}
+
+const answered = (answer: McpAnswer): Response => new Response(answer.body, { status: answer.status, headers: answer.headers });
 
 /** A sixteenth of an isolate's memory: the body is read whole and parsed, so a larger one could take the isolate. */
 export const MAX_BODY_BYTES = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / 16;
@@ -62,14 +141,36 @@ async function boundedText(request: Request, limit: number): Promise<string | nu
   return new TextDecoder().decode(whole);
 }
 
+/** An OAuth route's answer (scripted-mcp-oauth.ts), or null where the path is none of them. */
+async function oauthAnswer(request: Request, env: Env, keyed: { readonly url: URL; readonly key: string; readonly keyed: boolean }): Promise<Response | null> {
+  if (env.OAUTH_GRANTS === undefined) return refused(503, 'this scripted model has no OAUTH_GRANTS binding, so it grants nothing');
+
+  const body = request.method === 'POST' ? await boundedText(request, MAX_BODY_BYTES) : '';
+
+  if (body === null) return refused(413, `the body is over ${String(MAX_BODY_BYTES)} bytes`);
+
+  const answer = await scriptedOAuth({
+    method: request.method, url: keyed.url, headers: request.headers, body, now: Date.now(), nonce: crypto.randomUUID().slice(0, 8),
+    key: keyed.key, keyed: keyed.keyed, ledger: grantLedger(env.OAUTH_GRANTS),
+  });
+
+  return answer === null ? null : answered(answer);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const key = env.SCRIPTED_MODEL_KEY ?? '';
 
     if (key === '') return refused(503, 'this scripted model has no SCRIPTED_MODEL_KEY, so it answers nobody');
+    const url = new URL(request.url);
+    const { pathname } = url;
+    const keyed = timingSafeEqual(request.headers.get('authorization') ?? '', `Bearer ${key}`);
 
-    if (!timingSafeEqual(request.headers.get('authorization') ?? '', `Bearer ${key}`)) return refused(401, 'unauthorized');
-    const { pathname } = new URL(request.url);
+    const oauth = isPublicOAuthPath(pathname) || pathname === OAUTH_AUTHORIZE_PATH ? await oauthAnswer(request, env, { url, key, keyed }) : null;
+
+    if (oauth !== null) return oauth;
+
+    if (!keyed) return refused(401, 'unauthorized');
 
     if (pathname === '/models' && request.method === 'GET') {
       return new Response(SCRIPTED_MODELS_BODY, { headers: { 'content-type': 'application/json' } });
@@ -85,12 +186,14 @@ export default {
     }
 
     if (pathname === SCRIPTED_MCP_PATH) {
+      const down = downFor(url, Date.now());
+
+      if (down !== null) return answered(down);
       const body = request.method === 'POST' ? await boundedText(request, MAX_BODY_BYTES) : '';
 
       if (body === null) return refused(413, `the body is over ${String(MAX_BODY_BYTES)} bytes`);
-      const answer = scriptedMcp({ method: request.method, session: request.headers.get('mcp-session-id'), body }, Date.now(), crypto.randomUUID().slice(0, 8));
 
-      return new Response(answer.body, { status: answer.status, headers: answer.headers });
+      return answered(scriptedMcp({ method: request.method, session: request.headers.get('mcp-session-id'), body }, Date.now(), crypto.randomUUID().slice(0, 8)));
     }
 
     if (pathname === '/chat/completions' && request.method === 'POST') {
