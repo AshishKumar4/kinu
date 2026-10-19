@@ -8,7 +8,8 @@ import { toUIMessageChunk, type TextStreamPart, type ToolSet, type UIMessageChun
 import { isServerCompaction } from './providers/server-compaction';
 
 export class ChatRelay {
-  readonly stream: ReadableStream<UIMessageChunk>;
+  /** Settles once its observer has read to the end; at once where nothing observes the call. */
+  readonly observed: Promise<void>;
 
   readonly #queue: UIMessageChunk[] = [];
 
@@ -17,15 +18,25 @@ export class ChatRelay {
 
   #wake: (() => void) | null = null;
 
-  /** The observer let go: nothing more is queued for it. */
-  #cancelled = false;
+  /** No observer, or one that let go: nothing more is queued for it. */
+  #cancelled: boolean;
 
   /** The provider's compaction summaries are for the model: the stream the owner sees leaves them out. */
   readonly #summaries = new Set<string>();
 
-  /** `describe`: the words a failure the stream carried shows the owner. */
-  constructor(private readonly options: { readonly tools: ToolSet | undefined; readonly describe: (failure: { readonly cause: unknown }) => string }) {
-    this.stream = new ReadableStream<UIMessageChunk>({
+  /** `observe` reads the chunks, if anything observes the call; `describe`: the words a failure the stream carried shows
+   *  the owner. */
+  constructor(
+    observe: ((chunks: ReadableStream<UIMessageChunk>) => Promise<void>) | undefined,
+    private readonly options: { readonly tools: ToolSet | undefined; readonly describe: (failure: { readonly cause: unknown }) => string },
+  ) {
+    this.#cancelled = observe === undefined;
+    this.observed = observe === undefined ? Promise.resolve() : observe(this.#chunks());
+  }
+
+  /** What the observer reads: the queue as it fills, then the end. */
+  #chunks(): ReadableStream<UIMessageChunk> {
+    return new ReadableStream<UIMessageChunk>({
       pull: async (controller) => {
         while (this.#queue.length === 0 && this.#end === undefined) await new Promise<void>((resolve) => { this.#wake = resolve; });
         this.#wake = null;

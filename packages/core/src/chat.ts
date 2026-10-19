@@ -1080,14 +1080,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     });
 
     // Fed from this loop's own reads, as each part is read; awaited in the tail.
-    const relay = opts.observeStream === undefined ? null : new ChatRelay({ tools: attempt.tools, describe: describeProviderError });
-    const observed = relay === null ? undefined : opts.observeStream?.(relay.stream);
+    const relay = new ChatRelay(opts.observeStream, { tools: attempt.tools, describe: describeProviderError });
 
     let drained = false;
 
     try {
       for await (const chunk of result.stream) {
-        relay?.push(chunk);
+        relay.push(chunk);
         const event = call.consume(chunk);
 
         if (event !== null) {
@@ -1102,7 +1101,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       drained = true;
     } catch (err) {
-      relay?.end({ error: err });
+      relay.end({ error: err });
 
       // The signal is authoritative: a provider may throw its abort reason before `onAbort` runs.
       if (opts.signal?.aborted) call.interrupted = true;
@@ -1115,11 +1114,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       let completed = false;
 
       call.stoppedReading();
-      relay?.end();
+      relay.end();
 
       try {
         if (!drained && call.streamError === undefined && call.stepFailure === null) consumer.abort();
-        await observed;
+        await relay.observed;
         completed = drained && !call.interrupted && call.streamError === undefined;
       } finally {
         // A failed seal is not permission to commit its partial rows on a second attempt.

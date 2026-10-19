@@ -1,7 +1,7 @@
 // What the owner sees of a model call is read off the chat loop's own reads, not a second branch of the call's stream:
 // it is the SDK's own UI stream of the same parts, less the provider's compaction summaries.
 import { expect, test } from 'bun:test';
-import { isStepCount, streamText, tool, toUIMessageStream, type TextStreamPart, type ToolSet } from 'ai';
+import { isStepCount, streamText, tool, toUIMessageStream, type TextStreamPart, type ToolSet, type UIMessageChunk } from 'ai';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
@@ -75,16 +75,17 @@ async function readAll<T>(stream: ReadableStream<T>): Promise<T[]> {
 
 test("the relay shows the SDK's own UI chunks for the parts the loop read, less the provider's summary", async () => {
   const parts = await partsOfACall();
-  const relay = new ChatRelay({ tools, describe });
-  const shown = readAll(relay.stream);
+  const shown: UIMessageChunk[] = [];
+  const relay = new ChatRelay(async (chunks) => { shown.push(...await readAll(chunks)); }, { tools, describe });
 
   for (const part of parts) relay.push(part);
   relay.end();
+  await relay.observed;
 
   const sdk = await readAll(toUIMessageStream({ stream: convertArrayToReadableStream(parts), tools, onError: describe }));
   const ofSummary = (chunk: (typeof sdk)[number]): boolean => 'id' in chunk && chunk.id === 's1';
 
-  expect(await shown).toEqual(sdk.filter((chunk) => !ofSummary(chunk)));
+  expect(shown).toEqual(sdk.filter((chunk) => !ofSummary(chunk)));
   expect(sdk.some(ofSummary)).toBe(true);
 });
 
@@ -92,20 +93,27 @@ test('a call that failed fails what the owner reads, after what was queued; one 
   const [first] = await partsOfACall();
 
   if (first === undefined) throw new Error('the call streamed no part');
-  const failed = new ChatRelay({ tools, describe });
-  const reader = failed.stream.getReader();
+  const read: UIMessageChunk[] = [];
+
+  const failed = new ChatRelay(async (chunks) => { for await (const chunk of chunks) read.push(chunk); }, { tools, describe });
 
   failed.push(first);
   failed.end({ error: new Error('the provider reset the connection') });
 
-  expect((await reader.read()).done).toBe(false);
-  await expect(reader.read()).rejects.toThrow('the provider reset the connection');
+  await expect(failed.observed).rejects.toThrow('the provider reset the connection');
+  expect(read).toHaveLength(1);
 
-  const dropped = new ChatRelay({ tools, describe });
+  const dropped = new ChatRelay(async (chunks) => { await chunks.cancel('the tab closed'); }, { tools, describe });
 
-  await dropped.stream.cancel('the tab closed');
+  await dropped.observed;
   dropped.push(first);
   dropped.end();
+
+  const unobserved = new ChatRelay(undefined, { tools, describe });
+
+  unobserved.push(first);
+  unobserved.end();
+  await unobserved.observed;
 });
 
 test('a pulled stage maps and drops each chunk as it is read, fails with its source, and lets its source go', async () => {
