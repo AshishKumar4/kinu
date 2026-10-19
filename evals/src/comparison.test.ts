@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { compareEvalResults, evalGateVerdict, fisherExact, validateEvalResults, whyIncomplete } from './comparison';
 import type { PlatformReport } from './platform';
 import { mannWhitney } from './shifts';
+import { DEFAULT_MODELS } from './config';
 
 /**
  * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
@@ -244,6 +245,39 @@ describe('compareEvalResults', () => {
       passed: 3, trials: 10,
       failedChecks: [{ check: 't1 late-returns-suspend-for-a-week', trials: 7 }],
     });
+  });
+
+  test('a report of two models compares the other against the default eval model, task by task, outside the verdict', () => {
+    const [reference] = DEFAULT_MODELS;
+    const other = 'opencode-go/gpt-6-luna';
+
+    const candidate = JSON.stringify({ testResults: [fileResult('chess', [
+      ...trialsOf(5, 5, { model: reference, durationMs: 600_000, costUsd: 0.4 }).map((trial, index) => ({ ...trial, trial: index + 1 })),
+      ...trialsOf(0, 5, { model: other, durationMs: 200_000, costUsd: 0.1 }).map((trial, index) => ({ ...trial, trial: index + 1 })),
+    ], NEXT)] });
+
+    const comparison = compareEvalResults(null, candidate);
+    const [row] = comparison.models;
+
+    expect(comparison.verdict).toBe('inconclusive');
+    expect(comparison.models).toHaveLength(1);
+    expect(row).toMatchObject({ taskId: 'chess', reference, model: other, referenceStats: { passed: 5, trials: 5 }, stats: { passed: 0, trials: 5 } });
+    expect(row?.reason === null ? row.pValue : null).toBeCloseTo(fisherExact({ passed: 5, trials: 5 }, { passed: 0, trials: 5 }), 10);
+    expect(row?.reason === null ? row.shifts.find((shift) => shift.measure === 'wallTimeMs') : null)
+      .toMatchObject({ baseline: { median: 600_000 }, candidate: { median: 200_000 }, rose: false });
+    expect(compareEvalResults(null, report('chess', trialsOf(5, 5, { model: reference }), NEXT)).models).toEqual([]);
+  });
+
+  test('two models\u2019 tasks with an infrastructure failure are shown, not compared', () => {
+    const [reference] = DEFAULT_MODELS;
+
+    const candidate = JSON.stringify({ testResults: [fileResult('chess', [
+      ...trialsOf(5, 5, { model: reference }).map((trial, index) => ({ ...trial, trial: index + 1 })),
+      ...[...trialsOf(4, 4, { model: 'opencode-go/gpt-6-luna' }), { pass: false, infra: true, model: 'opencode-go/gpt-6-luna' }]
+        .map((trial, index) => ({ ...trial, trial: index + 1 })),
+    ], NEXT)] });
+
+    expect(compareEvalResults(null, candidate).models.map((row) => row.reason)).toEqual(['infrastructure errors']);
   });
 
   test('a request the build refused fails its turn on the build: counted, compared and named, never infrastructure', () => {

@@ -162,7 +162,13 @@ async function main(): Promise<number> {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
     pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
+    'staging-only': { type: 'boolean', default: false },
   } });
+
+  // Staging alone measures the models a run names against each other on one build: no production leg, so no verdict.
+  if (values['staging-only'] && (values.pass || values.record || values.post !== undefined)) {
+    throw new Error('--staging-only measures models, never a build\'s verdict: drop --pass, --record and --post');
+  }
 
   const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
 
@@ -174,7 +180,7 @@ async function main(): Promise<number> {
 
   const origins: { leg: 'candidate' | 'baseline'; origin: string }[] = [{ leg: 'candidate', origin: target.origin }];
 
-  if (!values.pass) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
+  if (!values.pass && !values['staging-only']) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
 
   const builds = await Promise.all(origins.map(async ({ origin }) => (await deployedBuild({ origin })).sha));
 
