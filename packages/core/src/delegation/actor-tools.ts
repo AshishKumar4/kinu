@@ -6,7 +6,8 @@
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import { Cause, Effect, Exit } from 'effect';
-import { buildToolSurface, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
+import { buildToolSurface, surfaceStores, type BuiltinToolDeps, type CodemodeBuilder } from '../tools/builtins';
+import type { ServedStores } from '../tools/actor-stores';
 import type { AgentsToolDeps } from './agents-tool';
 import { createAgentsTool } from './agents-operations';
 import { agentsWired } from './agents-tool';
@@ -32,11 +33,16 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
   jobs: ActorJobs;
   /** The turn's crafted-tool record: its `eval` calls are observed here, where they run. Absent, none is. */
   craft?: TurnCraftLedger;
+  /** The store operations to project, when a caller already serves them (another mode's tools in the same call). */
+  served?: ServedStores;
 }
 
 export interface ActorToolsets {
   readonly turn: ToolSet;
   readonly raw: ToolSet;
+  /** The store operations both run, which the actor's other projections (its programs, a slate's call, its scaffold's
+   *  machines) take rather than serving their own. */
+  readonly stores: ServedStores;
 }
 
 /** Every builtin, plus `agents` when any delegation group is offered, each behind its replay policy (tools/effect-claim.ts). */
@@ -47,12 +53,15 @@ export function buildActorTools(deps: ActorToolsetDeps): ActorToolsets {
 
   const { codemode } = deps;
   const clamp = { files: deps.rt.storage, producer: 'eval' as const, images: true as const };
+  const stores = surfaceStores(deps);
+  // The budget its stores account into, which its other tools share.
+  const { budget } = stores.deps.files();
 
   // An actor's `eval` results are clamped to its context budget; a confined surface's are its run's to judge.
   const raw = buildToolSurface({
-    ...deps, extra,
+    ...deps, extra, served: stores,
     codemode: codemode && ((surface, reach) => withClampedToolResult(
-      codemode(surface, reach), deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,
+      codemode(surface, reach), deps.contextBudget ? { ...clamp, budget } : clamp,
     )),
   });
 
@@ -62,7 +71,7 @@ export function buildActorTools(deps: ActorToolsetDeps): ActorToolsets {
     turn.eval = observingCrafts(turn.eval, craftLedgerOver(deps.rt), deps.craft);
   }
 
-  return { raw, turn };
+  return { raw, turn, stores };
 }
 
 /** The crafted-tool store `rt` holds, opened on first use: a turn that records nothing reads none, and an agent's own

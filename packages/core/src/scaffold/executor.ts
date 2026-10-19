@@ -7,6 +7,7 @@
  * A throw or missing 'done' reports ok=false (or synthesizes 'done').
  */
 
+import type { ServedStores } from '../tools/actor-stores';
 import { namespaceDeclaration } from '../tools/operation-surfaces';
 import { executorNamespace } from '../tools/executor-operations';
 import * as v from 'valibot';
@@ -26,7 +27,7 @@ import {
   type JsonValue,
 } from '../utils/json';
 import { Effect, Result } from 'effect';
-import { renderThrownChain, KinuError, settle } from '../obs/index';
+import { renderThrownChain, KinuError, settle, settleSync } from '../obs/index';
 import type { WorkMode } from '../types/turn';
 import { bindTaskPlan } from '../tools/task-plan-scope';
 import { currentWorkMode, requireWorkModePermission, runWorkModeInvocation } from '../execution/work-mode';
@@ -198,6 +199,9 @@ export interface ScaffoldRunOptions extends ScaffoldRunControl {
   history?: ScaffoldHistoryReader;
   /** Scaffold code override for a pending-version run. Default: rt.identity.scaffold.read(). */
   scaffoldCodeOverride?: string;
+  /** The store operations the run's tools run, which each machine's `fs` runs too; null where this runtime holds no
+   *  machine and its program runs where they are (an agent's isolate, whose program the workspace runs). */
+  stores: ServedStores | null;
 }
 
 const ScaffoldEventSchema: v.GenericSchema<Exclude<ScaffoldEvent, { type: 'chat_chunk' | 'model_chunk' | 'model_output' }>> = v.variant('type', [
@@ -542,12 +546,22 @@ return __result;
 
 export function scaffoldProviders(
   rt: AgentRuntime,
-  control: ScaffoldRunControl,
+  control: ScaffoldRunControl & Pick<ScaffoldRunOptions, 'stores'>,
   mode: WorkMode,
 ): Array<{ name: string; fns: SandboxFunctions; types?: string }> {
   const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [];
+  const machines = rt.executionRouter?.getProviders() ?? [];
+  const { stores } = control;
 
-  const routerProviders = (rt.executionRouter?.getProviders() ?? []).map(executorNamespace);
+  if (stores === null) {
+    // A defect: the runtime holding a machine serves its tools here, so it holds their stores.
+    if (machines.length > 0) return settleSync(Effect.die(new Error('a scaffold reached machines without the store operations its tools run')));
+
+    return out;
+  }
+
+  // A machine's `fs` is the run's own file operations, which its native `file` tool and its programs run.
+  const routerProviders = machines.map((provider) => executorNamespace(provider, stores.file));
 
   for (const p of routerProviders) {
     const fns: SandboxFunctions = {};

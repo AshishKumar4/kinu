@@ -215,6 +215,24 @@ interrupted is re-driven through the slate host on the next wake": a
 its owner and is released; the test is red with the hook answering null alone.
 The URL-on-request path stays and is pinned by workerd `slate-durability`.
 
+M5. `exec` is the one way a program runs code, and its approval on the user's
+machines is production's: command review, strict mode, the bound-directory
+gate and device consent. `workspace.runCode` and its `program-on-user-files`
+rule went together. Decided 2026-10-19 (owner, through Main). The rule only
+ever guarded `runCode`: `workspace.exec('python3 -c …')` on a user-owned
+executor was judged by command review alone, so the rule was a second gate on
+one spelling, which the other spelling bypassed. Extending it to every command
+(`4846cfada`, `db52a3577`) changed approval policy inside a refactor and needed
+a classifier with no complete form. Reading by evidence asks for most
+development commands on the user's machine (`git status`, `npm test`,
+`PORT=3000 node server.js`). A list of interpreters and their options cannot
+be complete: review found `ruby -v -e`, `env -S`, substitutions inside `$(( ))`
+and subscripts, and php, Rscript and `python3.13` missing. Reversed in
+`052b53b1e`, with `safety/inline-program.ts`. Measured: the approval suites
+(`unit-execution-approval-gate`, `unit-deferred-approval`,
+`unit-approval-gate`) pass on production's rules, and an inline program over
+the user's files meets the command rules alone. Whether it should ask is O4.
+
 ## Workspace
 
 W1. Fabric's own `adoptGeneration` allocates the workspace's process
@@ -1991,3 +2009,11 @@ bounded 90-frame poll for the lazy plan chunk. Unfixed. Later note: 8f5703781
 (2026-09-18) gives the gallery a record-shaped `getToolDescriptions` answer
 and makes the landing drive await the plan chunk instead of 90 frames; the
 three rows have not been re-measured in this log.
+
+O4. Whether a program given as text on the user's own machine (`python3 -c`,
+`node -e`, a here-doc to an interpreter) should ask. Since M5 it is judged
+by command review alone, as `exec` always judged it. The two complete
+answers each cost something: asking unless every executed command is shown
+to run no supplied text asks for most development commands there; asking for
+a listed set of interpreters and options leaks every spelling the list lacks.
+Put to the owner 2026-10-19.

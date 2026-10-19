@@ -1,3 +1,9 @@
+import { createFileCodemodeProvider, createFileTool } from '../src/tools/file-operations';
+import type { CodemodeProvider } from '../src/types/codemode';
+import type { Tool } from 'ai';
+import { turnLedgers, type TurnLedgers } from '../src/orchestrator/turn-accumulator';
+import { builtinStoreDeps } from '../src/tools/builtins';
+import { serveStores, type ServedStores } from '../src/tools/actor-stores';
 import { type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Test helpers: in-memory SQLite via bun:sqlite, mock LLM, mock Executor. */
 
@@ -30,10 +36,24 @@ import { createScaffoldSurface } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
-import { initCodemodeStateTable } from '../src/identity/program-state';
 import { WORKSPACE_ROOT, workspacePath } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { workspaceShell } from '@kinu.run/test-utils';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { TurnContextBudget } from '../src/context-budget';
+import { serveFile, type FileDeps } from '../src/tools/file-operations';
+import { executorNamespace } from '../src/tools/executor-operations';
+import type { ExecutorProviderSurface } from '../src/execution/types';
+
+/** A machine namespace over the actor's served file operations, as actorNamespaces binds it in production. */
+export function fileNamespaceFor(rt: AgentRuntime, provider: ExecutorProviderSurface, overrides: Partial<FileDeps> = {}) {
+  const files: FileDeps = {
+    vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes,
+    memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), ...overrides,
+  };
+
+  return executorNamespace(provider, serveFile(() => files));
+}
 
 export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
   if (tableExists(sql, 'workspace_identity') && sql`SELECT id FROM workspace_identity LIMIT 1`.length > 0) return openWorkspaceMainActor(sql);
@@ -41,7 +61,6 @@ export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspace
   void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, ${name})`;
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
-  initCodemodeStateTable(execRaw);
 
   return new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name });
 }
@@ -283,6 +302,21 @@ export function createTestRuntime(opts?: {
 /** The actor's own past conversations, over its own rows. */
 export function conversationsFor(rt: AgentRuntime): ConversationRecall {
   return storesFor(rt).conversationSearch;
+}
+
+/** The native `file` tool over one set of file deps, as an actor's served set gives it. */
+export function fileToolOver(deps: FileDeps): Tool {
+  return createFileTool(serveFile(() => deps), deps);
+}
+
+/** `file.*` over file deps read per call, as an actor's served set gives it. */
+export function fileNamespaceOver(current: () => FileDeps): CodemodeProvider {
+  return createFileCodemodeProvider(serveFile(current));
+}
+
+/** A runtime's file, memory and task operations, as a turn surface serves them to its native tools and programs. */
+export function servedStoresFor(rt: AgentRuntime, ledgers: Pick<TurnLedgers, 'files' | 'context'> = turnLedgers()): ServedStores {
+  return serveStores(builtinStoreDeps({ rt, conversations: conversationsFor(rt), vectorStore: null, fileLedger: ledgers.files, contextBudget: ledgers.context }));
 }
 
 const runtimeStores = new WeakMap<AgentRuntime, AgentStores>();

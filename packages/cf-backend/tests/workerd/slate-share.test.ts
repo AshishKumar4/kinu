@@ -34,12 +34,12 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   const batch = await probe.viewerBatch(handle, CLAIM);
   expect(batch.probe).toBe('fixture-bytes');
   // Refused at the slate's server-wide bound, which every share of it meets, before its own share's grant is read.
-  expect(batch.mutateError).toContain('does not reach workspace.writeFile');
+  expect(batch.mutateError).toContain('does not reach workspace.fs.write');
 
   // The invocation retires on socket close; a replay refuses 'not running'.
   const socket = await probe.viewerSocket(handle, CLAIM);
   expect(socket.probe).toBe('fixture-bytes');
-  expect(socket.mutateError).toContain('does not reach workspace.writeFile');
+  expect(socket.mutateError).toContain('does not reach workspace.fs.write');
 
   // A call under a share must name the running invocation it rides.
   expect(await probe.unnamedShareCall(created.share.id)).toMatchObject({ ok: false, reason: 'denied' });
@@ -55,8 +55,8 @@ it('a public share serves the slate, admits the granted member, refuses the rest
     ['source:vitest', '/', 'ok'],
   ]);
   expect(rows[0]?.calls).toEqual([
-    { slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe', ok: true },
-    { slate: 'board', namespace: 'workspace', member: 'writeFile', impact: 'mutate', ok: false },
+    { slate: 'board', namespace: 'workspace', member: 'fs.text', impact: 'observe', ok: true },
+    { slate: 'board', namespace: 'workspace', member: 'fs.write', impact: 'mutate', ok: false },
   ]);
   expect(rows[1]?.calls).toEqual(rows[0]?.calls);
   expect(rows[2]?.calls).toEqual([]);
@@ -88,7 +88,7 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   expect(graph.slates).toEqual(['issues', 'triage-digest']);
   expect(impacts('triage-digest:slates.issues')).toEqual([['refresh', 'observe']]);
   expect(impacts('issues:mcp.github')).toEqual([['add_issue_comment', 'externalSend'], ['issue_read', 'observe']]);
-  expect(impacts('issues:workspace')).toEqual([['readFile', 'observe'], ['writeFile', 'mutate']]);
+  expect(impacts('issues:workspace')).toEqual([['fs.text', 'observe'], ['fs.write', 'mutate']]);
 
   const ShareSchema = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
 
@@ -97,8 +97,8 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   ).share.grant.members.map((member) => `${member.slate}:${member.namespace}.${member.member}`).sort();
 
   expect(await granted('public', [])).toEqual([
-    'issues:mcp.github.issue_read', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.readFile',
-    'triage-digest:slates.issues.refresh', 'triage-digest:workspace.readFile',
+    'issues:mcp.github.issue_read', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.fs.text',
+    'triage-digest:slates.issues.refresh', 'triage-digest:workspace.fs.text',
   ]);
   expect(await granted('users', [{ slate: 'issues', namespace: 'agent', member: 'send' }])).toContain('issues:agent.send');
 
@@ -197,12 +197,12 @@ it("a mutating member is granted by approval only, and on its owner's access eac
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   // The unapproved share above refuses the same call: the approval is the grant. Granted, it acts with the owner's
   // access, so it waits on them, with what it would write; the read beside it runs.
-  expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: expect.stringContaining('waits for the owner to approve it: writeFile on workspace') });
-  expect(await probe.ownerQueue()).toEqual([{ tool: 'writeFile', server: 'workspace', viewer: 'source:vitest', payload: ['/x', 'y'], revision: expect.any(String) }]);
+  expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: expect.stringContaining('waits for the owner to approve it: fs.write on workspace') });
+  expect(await probe.ownerQueue()).toEqual([{ tool: 'fs.write', server: 'workspace', viewer: 'source:vitest', payload: ['/x', 'y'], revision: expect.any(String) }]);
 
   // On their word it runs, once: the same call made again asks again.
   expect(await probe.ownerDecides(true)).toBe(1);
@@ -221,7 +221,7 @@ it("a viewer's approved write held while its dispatch prepares is never made onc
     await probe.start();
 
     const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-      await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+      await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
     await probe.viewerBatch(created.share.handle, CLAIM);
     expect(await probe.ownerDecides(true)).toBe(1);
@@ -238,7 +238,7 @@ it("the owner's 'Always for this slate' on a viewer's write lets every such writ
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   await probe.viewerBatch(created.share.handle, CLAIM);
   expect(await probe.ownerAlways()).toBe(1);
@@ -247,7 +247,7 @@ it("the owner's 'Always for this slate' on a viewer's write lets every such writ
   expect([await probe.viewerBatch(created.share.handle, CLAIM), await probe.viewerBatch(created.share.handle, CLAIM)])
     .toEqual([{ probe: 'fixture-bytes', mutateError: 'mutate answered' }, { probe: 'fixture-bytes', mutateError: 'mutate answered' }]);
   expect(await probe.ownerQueue()).toEqual([]);
-  expect((await probe.preapprovals()).members).toEqual(['writeFile']);
+  expect((await probe.preapprovals()).members).toEqual(['fs.write']);
 
   // The owner's edit is new code: it asks again.
   await probe.editBoard();
@@ -259,7 +259,7 @@ it("an approval taken back on the sheet leaves no approved ask of its shape to r
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   const write = async () => (await probe.viewerBatch(created.share.handle, CLAIM)).mutateError;
 
@@ -282,12 +282,12 @@ it("a standing approval stands at the revision it was given at, and an owner's e
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   expect(await probe.preapproveWrites()).toEqual([created.share.id]);
   const given = await probe.preapprovals();
 
-  expect(given).toEqual({ revision: expect.any(String), members: ['writeFile'] });
+  expect(given).toEqual({ revision: expect.any(String), members: ['fs.write'] });
 
   // The owner's edit is a new revision: what was approved for the old code stands for none of the new.
   const edited = await probe.editBoard();
@@ -301,7 +301,7 @@ it("an owner share's approval moves with its owner's own edit, and a review read
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   const shares = async () => v.parse(v.object({ ok: v.literal(true), value: v.array(LiveShareRecordSchema) }), await probe.liveShares()).value;
   const before = (await shares()).find((row) => row.id === created.share.id);

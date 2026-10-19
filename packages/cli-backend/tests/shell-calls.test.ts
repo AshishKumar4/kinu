@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { ToolExecutionOptions } from 'ai';
 import { codemodeSurface, createBashShell, DEVICE_REQUEST_OPTION, DeviceRequestOwnership, executorNamespace } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
-import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
+import { scratchDir, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { createCLIRuntime, createHostShell } from '../src/runtime';
 
@@ -28,8 +28,8 @@ const evalRuntime = createCLIRuntime(workspaceDatabase(join(scratchDir('cli-shel
 
 // Its executors alone: these cases call `workspace.exec` and nothing else.
 const { execute } = createNodeCodemodeToolFactory({
-  reach: narrowToolSurface(undefined), namespaces: (evalRuntime.executionRouter?.getProviders() ?? []).map(executorNamespace),
-})({ ...codemodeSurface(evalRuntime, {}), craftedTools: () => [] });
+  reach: narrowToolSurface(undefined), namespaces: (evalRuntime.executionRouter?.getProviders() ?? []).map((provider) => executorNamespace(provider)),
+})({ ...codemodeSurface(evalRuntime, {}, () => ({}), { stores: freshServedStores() }), craftedTools: () => [] });
 
 /** `eval` over the directory's runtime, called with the tool options a turn hands it. */
 function run(code: string, options: Partial<ToolExecutionOptions<unknown>> & { [DEVICE_REQUEST_OPTION]?: DeviceRequestOwnership } = {}) {

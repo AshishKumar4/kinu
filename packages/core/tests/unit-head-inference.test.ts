@@ -78,7 +78,8 @@ const deps = async (
 
   return {
     actor: seat.actor, runId: seat.runId, sources: seat.sources, compaction: fixtureCompaction(),
-    tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
+    // No store tools: nothing here runs a store's operations.
+    tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
   };
 };
 
@@ -323,14 +324,14 @@ describe('buildHeadAccumulatorTools', () => {
     const input = headInput({ allowedTools: ['record_evidence'] });
 
     // The head's own surface, as both backends build it.
-    const tools = buildHeadToolSet({
+    const served = buildHeadToolSet({
       input, capture, rt, conversations: conversationsFor(rt), jobs: actorJobsFor(rt),
       webSearch: { search: async (query) => ({ query, results: [], source: 'ceramic' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
       effectClaims: effectClaimsFor(rt),
     });
 
-    const report = await runHeadInference(preparedHeadRun(input, await deps(model, { tools, capture })));
+    const report = await runHeadInference(preparedHeadRun(input, await deps(model, { ...served, capture })));
     expect(report.toolCalls).toHaveLength(2);
 
     expect(report.toolCalls).toEqual(expect.arrayContaining([

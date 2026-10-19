@@ -1,4 +1,5 @@
 [
+  "actor_program_state",
   "device_consent_requests",
   "user_peer_grants",
   "user_schema_meta"

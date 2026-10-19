@@ -118,7 +118,7 @@ function renderNotReadyPage(host: string): Response {
   <h1><span class="dot"></span> Preview not ready</h1>
   <p>Port <code>${safePort}</code> is public, but the computer did not accept the connection.</p>
   <p>Usually nothing is listening on it yet: the agent exposed the port before it started a server. You can send the agent this:</p>
-  <pre>You exposed port ${safePort}, but nothing on your computer is serving on it. Start a supervised server first. For a static site: <code>sandbox.startProcess("python3 -m http.server ${safePort} --directory /workspace/&lt;app&gt;")</code>. For Node: <code>sandbox.startProcess("node server.js", {cwd:"/workspace/&lt;app&gt;"})</code>. Then call <code>sandbox.exposePort(${safePort})</code> again.</pre>
+  <pre>You exposed port ${safePort}, but nothing on your computer is serving on it. Start a supervised server first. For a static site: <code>computer.startProcess("python3 -m http.server ${safePort} --directory /workspace/&lt;app&gt;")</code>. For Node: <code>computer.startProcess("node server.js", {cwd:"/workspace/&lt;app&gt;"})</code>. Then call <code>computer.exposePort(${safePort})</code> again.</pre>
   <p class="hint">A supervised process comes back on its own after the computer restarts; a bare nohup job does not. If a supervised server was running, it is already restarting, so reload this page in a moment.</p>
   <button onclick="location.reload()">Reload preview</button>
   <div class="meta">sandbox=${safeSandboxId} · port=${safePort}</div>

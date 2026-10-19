@@ -50,6 +50,7 @@ test('a bound role governs provider tools, actual execution and the dynamic read
 
       try {
         await actor.session.execute(lease, {
+          stores: null,
           task: 'Try the effect under current permissions.', loopVersion: await actor.runtime.identity.scaffold.version(),
           chat: { modelSpec: 'test/model', model, system: 'Respect the current role.', tools }, extensions: [],
           dynamic: (_profile, available) => {

@@ -8,7 +8,7 @@ import { boundWriteCommand, type WriteSubject } from './bound-write';
 import { stableStringify } from './argument-digest';
 import type { JsonObject } from '../utils/json';
 import {
-  commandFilesOwner, dominant, reviewFileAccess, reviewProgram, reviewShellCommand,
+  dominant, reviewFileAccess, reviewShellCommand,
   type ApprovalResult, type FileAccess, type GatedExecutor,
 } from './command-review';
 
@@ -23,8 +23,8 @@ import {
  * alike in every field here are one action, and one answer runs one of them.
  */
 export interface ExecutionContext {
-  /** The member that runs it (`exec`, `startProcess`, `runCode`): a foreground command, a supervised process that
-   *  restarts, or a program are different invocations of the same words. */
+  /** The member that runs it (`exec`, `startProcess`): a foreground command and a supervised process that restarts
+   *  are different invocations of the same words. */
   readonly member?: string;
   /** The directory it starts in: resolved on the executor's session when the gate can, else as asked. */
   readonly cwd?: string;
@@ -32,15 +32,8 @@ export interface ExecutionContext {
   readonly shell?: string;
   /** The machine it runs on, of the several one executor reaches: its id, and its name for the owner. */
   readonly machine?: { readonly id: string; readonly name: string };
-  /** Its environment: the variable names, and a digest of names and values. */
-  readonly env?: { readonly names: readonly string[]; readonly sha256: string };
   /** A digest of what it reads on stdin. */
   readonly stdinSha256?: string;
-  /** The language a program runs in (`default` for the runtime's own), and whether its runtime may be installed first. */
-  readonly language?: string;
-  readonly install?: string;
-  /** The work limit the runtime enforces on it, in milliseconds: a run cut short is another invocation. */
-  readonly timeoutMs?: number;
   /** It runs as a background job: it may outlive the turn. The job's id is a Kinu label, outside the ask (see above). */
   readonly background?: true;
   /** What its named shell restores before it (directory and exported variables), as a digest: a call in that shell
@@ -53,11 +46,7 @@ export const ExecutionContextSchema = v.object({
   cwd: v.optional(v.string()),
   shell: v.optional(v.string()),
   machine: v.optional(v.object({ id: v.string(), name: v.string() })),
-  env: v.optional(v.object({ names: v.array(v.string()), sha256: v.string() })),
   stdinSha256: v.optional(v.string()),
-  language: v.optional(v.string()),
-  install: v.optional(v.string()),
-  timeoutMs: v.optional(v.number()),
   background: v.optional(v.literal(true)),
   shellState: v.optional(v.string()),
 }) satisfies v.GenericSchema<ExecutionContext>;
@@ -66,17 +55,13 @@ export const ExecutionContextSchema = v.object({
 export function executionContextKey(context: ExecutionContext): string {
   const json: JsonObject = {};
 
-  for (const field of ['member', 'cwd', 'shell', 'stdinSha256', 'language', 'install', 'shellState'] as const) {
+  for (const field of ['member', 'cwd', 'shell', 'stdinSha256', 'shellState'] as const) {
     const value = context[field];
 
     if (value !== undefined) json[field] = value;
   }
 
   if (context.machine !== undefined) json.machine = { id: context.machine.id, name: context.machine.name };
-
-  if (context.env !== undefined) json.env = { names: [...context.env.names], sha256: context.env.sha256 };
-
-  if (context.timeoutMs !== undefined) json.timeoutMs = context.timeoutMs;
 
   if (context.background !== undefined) json.background = context.background;
 
@@ -95,15 +80,7 @@ export function describeExecutionContext(context: ExecutionContext): string {
 
   if (context.shell !== undefined) parts.push(`shell ${JSON.stringify(context.shell)}`);
 
-  if (context.env !== undefined) parts.push(`env ${context.env.names.map((name) => JSON.stringify(name)).join(', ')}`);
-
   if (context.stdinSha256 !== undefined) parts.push(`stdin sha256:${context.stdinSha256.slice(0, 12)}`);
-
-  if (context.language !== undefined) parts.push(`language ${JSON.stringify(context.language)}`);
-
-  if (context.install !== undefined) parts.push(`install ${JSON.stringify(context.install)}`);
-
-  if (context.timeoutMs !== undefined) parts.push(`timeout ${String(context.timeoutMs)}ms`);
 
   if (context.background !== undefined) parts.push('as a background job');
 
@@ -117,10 +94,8 @@ export function describeExecutionContext(context: ExecutionContext): string {
  * member's `run` runs exactly this, so what an answer approves is what runs.
  */
 export interface CommandCall {
-  /** A shell command, or a program's source. */
+  /** The shell command. */
   readonly text: string;
-  /** Set when `text` is a program in this language, reviewed as one rather than as a shell command. */
-  readonly program?: string;
   /** Where it starts, as the member will be told; the gate resolves it on the executor's session. */
   readonly cwd?: string;
   /** The named shell it runs in. */
@@ -385,9 +360,7 @@ export function gateExec<R>(
     const { call } = prepared;
     const at = await executor.shellSession?.at(call.shell, call.cwd);
 
-    const review = call.program === undefined
-      ? reviewShellCommand(executor, call.text, at)
-      : reviewProgram(call.text, commandFilesOwner(executor, call.text, at));
+    const review = reviewShellCommand(executor, call.text, at);
 
     const cwd = at !== undefined && !at.mayBeUsers ? at.cwd : call.cwd;
 

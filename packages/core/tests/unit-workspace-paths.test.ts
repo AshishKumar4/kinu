@@ -8,12 +8,12 @@ import { Database } from 'bun:sqlite';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { toolExecute } from '@kinu.run/test-utils';
-import { createWorkspaceBundle } from './helpers';
+import { createWorkspaceBundle, fileToolOver } from './helpers';
 import { workspaceFilePlane } from '../src/vfs/mounts';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { withApprovalGatedFiles } from '../src/execution/approval';
-import { createFileTool } from '../src/tools/file-operations';
+
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import { readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
@@ -60,7 +60,7 @@ test('the file tool reads and writes where the walk lands, past its approval gat
     locate: null, parksWrites: true,
   }, { mode: () => 'strict' });
 
-  const file = toolExecute<JsonObject, JsonValue>(createFileTool({
+  const file = toolExecute<JsonObject, JsonValue>(fileToolOver({
     home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: gated, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
   }));
 
@@ -101,7 +101,7 @@ function gatedTool(workspace: ReturnType<typeof createWorkspaceBundle>, memory?:
     locate: null, parksWrites: true,
   }, { mode: () => 'strict' });
 
-  const file = toolExecute<JsonObject, JsonValue>(createFileTool({
+  const file = toolExecute<JsonObject, JsonValue>(fileToolOver({
     home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: gated, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
     ...(memory !== undefined && { memory }),
   }));

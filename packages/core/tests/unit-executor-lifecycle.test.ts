@@ -89,11 +89,6 @@ function nimbusBox(): SessionBox & { calls: string[]; execOptions: unknown[] } {
     },
     files: sessionFilesOver(),
     runtimes: {
-      async ensure(specs: string | string[]): Promise<undefined> {
-        calls.push(`ensure:${Array.isArray(specs) ? specs.join(",") : specs}`);
-
-        return undefined;
-      },
       async list() {
         calls.push("runtimes");
 
@@ -142,7 +137,7 @@ function nimbusWorkspace(box: SessionBox) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
-    box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+    box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
   });
 }
 
@@ -196,13 +191,12 @@ describe("executor lifecycle state", () => {
     expect(handle.calls).toEqual(["exec:echo ok"]);
   });
 
-  test("sandbox without a preview suffix refuses port exposure with the preview reason", async () => {
+  test("a computer without a preview suffix declares no inbound networking, so a program has no port members", async () => {
     const handle = sandboxHandle();
     const executor = createSandboxExecutor(handle);
 
-    const refused = { reason: "unsupported", error: expect.stringContaining("PREVIEW_HOST_SUFFIX") };
-    expect(await executor.tools.exposePort.execute(3000)).toMatchObject(refused);
-    expect(await executor.tools.listPorts.execute()).toMatchObject(refused);
+    expect(executor.capabilities.has("net_inbound")).toBe(false);
+    expect(executorNamespace(executor).tools.exposePort).toBeUndefined();
 
     if (!executor.exposePort) throw new Error("the sandbox provider has no exposePort seam");
     const provided = await executor.exposePort(3000);
@@ -225,8 +219,6 @@ describe("executor lifecycle state", () => {
       status: "not_configured",
     });
     expect(await executor.tools.exec.execute("echo ok"))
-      .toMatchObject({ reason: 'unavailable', error: expect.stringContaining('not configured') });
-    expect(await executor.tools.exposePort.execute(3000))
       .toMatchObject({ reason: 'unavailable', error: expect.stringContaining('not configured') });
 
     if (!executor.exposePort) throw new Error("the sandbox provider has no exposePort seam");
@@ -260,24 +252,6 @@ describe("executor lifecycle state", () => {
     expect(handle.execOptions).toEqual([{ cwd: "/workspace" }]);
   });
 
-  test("sandbox exists shell-quotes command substitutions in paths", async () => {
-    const handle = sandboxHandle();
-    const executor = createSandboxExecutor(handle);
-    const path = "/tmp/$(touch /tmp/pwned)";
-
-    expect(await executor.tools.exists.execute(path)).toBe("false");
-    expect(handle.calls).toContain(`exec:test -e '${path}' && echo true || echo false`);
-  });
-
-  test("sandbox exists maps a transport failure to a refusal, not a rejection", async () => {
-    const handle = sandboxHandle();
-    handle.exec = async () => { throw new Error("transport down"); };
-
-    const executor = createSandboxExecutor(handle);
-
-    expect(await executor.tools.exists.execute("/workspace/a.md"))
-      .toMatchObject({ reason: "io", error: expect.stringContaining("transport down") });
-  });
 
   test("sandbox port discovery preserves a real SDK failure", async () => {
     const handle = sandboxHandle();
@@ -329,7 +303,7 @@ describe("executor lifecycle state", () => {
       status: "idle",
     });
 
-    expect(await executor.tools.killProcess.execute(7)).toContain('"ok": true');
+    expect(await executor.tools.stopProcess?.execute('7')).toEqual({ stopped: true });
     expect(executor.getStatus?.().active).toBe(true);
     expect(box.calls).toContain("kill:7");
   });
@@ -404,7 +378,7 @@ describe("the sandbox namespace a program calls", () => {
     const provider = createSandboxExecutor(handle, { previewHostSuffix: 'kinu.example.test' });
     const direct = present(provider.exposePort, 'sandbox provider exposePort');
 
-    expect(await provider.tools.exposePort.execute(8787.5)).toMatchObject({ reason: 'bad_input' });
+    expect(await present(executorNamespace(provider).tools.exposePort, 'computer.exposePort').execute(8787.5)).toMatchObject({ reason: 'bad_input' });
     expect(await direct(8787.5)).toMatchObject({ supported: false, reason: expect.stringContaining('invalid port') });
     expect(handle.calls).toEqual([]);
   });
@@ -419,9 +393,10 @@ describe("the sandbox namespace a program calls", () => {
 
     const provider = createSandboxExecutor(handle, { previewHostSuffix: 'kinu.example.test' });
 
-    expect(await provider.tools.exposePort.execute(8787)).toMatchObject({ error: expect.stringContaining('listener RPC disconnected') });
-    expect(await present(provider.exposePort, 'direct sandbox exposure')(8787))
-      .toMatchObject({ supported: false, reason: expect.stringContaining('listener RPC disconnected') });
+    expect(await present(executorNamespace(provider).tools.exposePort, 'computer.exposePort').execute(8787))
+      .toMatchObject({ error: expect.stringContaining('listener RPC disconnected') });
+    // A failure keeps its class on the provider too: it is not an answer that the computer cannot serve ports.
+    await expect(present(provider.exposePort, 'direct sandbox exposure')(8787)).rejects.toThrow('listener RPC disconnected');
     expect(handle.calls).toEqual([]);
   });
 

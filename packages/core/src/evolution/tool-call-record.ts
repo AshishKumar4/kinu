@@ -88,13 +88,13 @@ function obfuscateSecrets(value: JsonValue): JsonValue {
 }
 
 const WRITE_PATTERNS: ReadonlyArray<RegExp> = [
-  /\bworkspace\.writeFile\s*\(\s*['"`]([^'"`]+)/g,
+  /\b(?:file|fs)\.(?:write|edit)\s*\(\s*['"`]([^'"`]+)/g,
   /(?:^|[|;&\n]|\s)>>?\s*(\S+)/g,
   /(?:^|[|;&\n]|\s)tee\s+(?:-\S+\s+)*(\S+)/g,
 ];
 
 const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
-  /\bworkspace\.readFile\s*\(\s*['"`]([^'"`]+)/g,
+  /\b(?:file|fs)\.(?:read|text)\s*\(\s*['"`]([^'"`]+)/g,
   /(?:^|[|;&\n]|\s)(?:cat|head|tail)\s+(?:-\S+\s+)*(\S+)/g,
   /(?:^|[|;&\n]|\s)rm\s+(?:-\S+\s+)*(\S+)/g,
   /\bgit\s+(?:checkout\s+--|restore)\s+(\S+)/g,

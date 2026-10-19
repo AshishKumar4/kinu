@@ -151,7 +151,8 @@ export const DB = {
     help: 'Declare a table. No operation takes SQL: each statement is built from its arguments against the table\'s declared '
       + 'columns. Re-declaring the same shape does nothing, and a different shape under an existing name is refused. '
       + "`blob` columns take and return base64, `json` columns any JSON document. `scope: 'actor'` rows are yours alone, "
-      + "`scope: 'workspace'` rows every agent's here.",
+      + "`scope: 'workspace'` rows every agent's here, and a `scope: 'private'` table is yours alone and kept from forks "
+      + 'and slates: the place for what one program leaves for the next.',
     input: v.strictObject({ spec: TableSpecSchema }), output: TableRecord,
   }),
   listTables: dbOp({ name: 'listTables', help: "This workspace's tables, with their scope and who declared each.", impact: 'observe', input: v.strictObject({}), output: v.array(TableRecord) }),

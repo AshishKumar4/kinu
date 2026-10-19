@@ -109,8 +109,7 @@ function headDeps(
 
   return {
     hostHead: headSeatFactory(parent, host, 'fixture-run', { writes, model: resolve }),
-    // A seated head's programs account into its own session's turn.
-    ledgers: (actor) => present(host.hosted(actor.reference), 'the hosted head').session.orchestrator.acc.ledgers,
+
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {
       probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });
@@ -544,14 +543,11 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
   });
 
-  test("a parent file error reaches the head with the errno the parent's VFS threw", async () => {
+  test("a shared workspace file error reaches the head with the original errno", async () => {
     const parent = makeParent();
     await writeText(parent.storage.vfs, 'notes', 'a file, not a directory');
     const rt = await createHeadRuntime(parent, 'errno');
-    const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
-
-    // The DO producer and this in-process one answer the same wire through `answerParentRpc`.
-    await expect(parentExec.tools.readdir.execute('notes')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    await expect(Promise.resolve(rt.toolFiles.readdir('notes'))).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
   test('a head of a parent bound to a directory runs its shell there: the machine is the workspace', async () => {
@@ -563,7 +559,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const stores = createAgentStores(() => rt.storage.sql, () => rt.actor,
       rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }));
 
-    const tools = buildHeadToolSet({
+    const { tools } = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
       conversations: stores.conversationSearch,
       codemode: () => tool({ description: 'x', inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result: 'unused' }) }),
@@ -724,7 +720,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       const write = (content: string) => envelope([{
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'eval',
         input: JSON.stringify({
-          code: `await workspace.readFile(${JSON.stringify(`${marker}.ts`)}).catch(() => null); await workspace.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
+          code: `await workspace.fs.text(${JSON.stringify(`${marker}.ts`)}).catch(() => null); await workspace.fs.write(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
         }),
       }], 'tool-calls');
 
@@ -771,30 +767,78 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
 });
 
 describe("a head's eval holds the namespaces the shared description promises", () => {
-  // Every backend's description promises `state.set`/`state.get` to every program, CLI heads included.
-  test('state.set and state.get work inside a local head, over its own scratch', async () => {
+  test('a head program keeps file, web, workspace and db but no memory, tasks or agents, and calls its kind tool', async () => {
+    const journal = makeJournal();
+
+    const code = [
+      'const kind = await tools.record_evidence({ kind: "fact", body: "program-kind-call" });',
+      'return { memory: typeof memory, tasks: typeof tasks, agents: typeof agents,',
+      'file: typeof file.text, web: typeof web.search, workspace: typeof workspace.fs.text, db: typeof db.select, kind };',
+    ].join('\n');
+
+    const runtime = createCLIHeadRuntime(headDeps(evalThenDone(code), { journal: () => journal }));
+    const input = aHeadInput({ id: 'admitted-head', task: 'check the program surface' });
+    journal.insertSpawn(input);
+    const report = await (await runtime.spawnHead(input)).run();
+
+    const outputs = journal.readSteps(input.id).flatMap((step) => step.parts.filter(isToolUIPart))
+      .filter((part) => getToolName(part) === 'eval').map((part) => part.state === 'output-available' ? part.output : null);
+
+    expect(outputs).toEqual([expect.objectContaining({ result: {
+      memory: 'undefined', tasks: 'undefined', agents: 'undefined',
+      file: 'function', web: 'function', workspace: 'function', db: 'function', kind: expect.stringContaining('evidence recorded'),
+    } })]);
+    expect(report.evidence).toEqual([expect.objectContaining({ kind: 'fact', body: 'program-kind-call' })]);
+  });
+
+  test('a head native file read and its program reads share both directions of the edit ledger', async () => {
+    const parent = makeParent();
+    await writeText(parent.storage.vfs, 'head-from-native.txt', 'first native\n');
+    await writeText(parent.storage.vfs, 'head-from-program.txt', 'first program\n');
+
+    const model = toolSequenceModel([
+      { name: 'file', input: { op: 'read', path: 'head-from-native.txt' } },
+      { name: 'eval', input: { code: 'return await file.edit("head-from-native.txt", [{ old_text: "first", new_text: "second" }]);' } },
+      { name: 'eval', input: { code: 'return await file.text("head-from-program.txt");' } },
+      { name: 'file', input: { op: 'edit', path: 'head-from-program.txt', edits: [{ old_text: 'first', new_text: 'second' }] } },
+    ]);
+
+    const runtime = createCLIHeadRuntime(headDeps(model, { parentRuntime: parent }));
+    const report = await (await runtime.spawnHead(aHeadInput({ id: 'head-shared-ledger' }))).run();
+
+    expect(report.status).toBe('completed');
+    expect(await readText(parent.storage.vfs, 'head-from-native.txt')).toBe('second native\n');
+    expect(await readText(parent.storage.vfs, 'head-from-program.txt')).toBe('second program\n');
+  });
+
+  test('a local head keeps private db scratch between programs', async () => {
     const journal = makeJournal();
     let step = 0;
 
     const model = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-state',
+      provider: 'fake', modelId: 'fake-private-db',
       doGenerate: async () => {
         step += 1;
 
-        const content = step === 1
+        const content = step <= 2
           ? [{
-            type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'eval',
+            type: 'tool-call' as const, toolCallId: `private-${String(step)}`, toolName: 'eval',
             input: JSON.stringify({
-              code: '// Keep a marker between programs\nawait state.set("marker", "kept");\nreturn await state.get("marker");',
+              code: step === 1 ? [
+                '// Keep a marker between programs',
+                'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "value", type: "text" }] });',
+                'await db.insert("scratch", [{ value: "kept" }]);',
+                'return "saved";',
+              ].join('\n') : 'return (await db.select("scratch"))[0].value;',
             }),
           }]
           : [{ type: 'text' as const, text: 'done' }];
 
         return {
           content,
-          finishReason: step === 1 ? 'tool-calls' as const : 'stop' as const,
+          finishReason: step <= 2 ? 'tool-calls' as const : 'stop' as const,
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-          response: { id: 'r', modelId: 'fake-state', timestamp: new Date(0) },
+          response: { id: 'r', modelId: 'fake-private-db', timestamp: new Date(0) },
           warnings: [],
         };
       },
@@ -810,9 +854,10 @@ describe("a head's eval holds the namespaces the shared description promises", (
       .filter((c) => getToolName(c) === 'eval')
       .map((c) => JSON.stringify(c.state === 'output-available' ? c.output : ''));
 
-    expect(outputs).toHaveLength(1);
-    expect(outputs[0]).toContain('kept');
-    expect(outputs[0]).not.toContain('ReferenceError');
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0]).toContain('saved');
+    expect(outputs[1]).toContain('kept');
+    expect(outputs.join('\n')).not.toContain('ReferenceError');
   });
 });
 

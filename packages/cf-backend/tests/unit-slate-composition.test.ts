@@ -365,18 +365,18 @@ test('a slate calling as a hosted actor reaches its own files and role, never th
   const childHome = agentHome(agentName);
   const asChild = await childCaller(parent.db, agentName, 'reader-1');
 
-  const call = (caller: SlateCaller, member: string, args: JsonValue[]) => surface(parent.agent, caller, 'reader')(['workspace', member], args);
+  const call = (caller: SlateCaller, member: string, args: JsonValue[]) => surface(parent.agent, caller, 'reader')(['workspace', 'fs', member], args);
 
-  expect(await call(asChild, 'writeFile', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
+  expect(await call(asChild, 'write', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
   expect(await readText(rootFiles, `${childHome}/note.md`)).toBe('mine');
   // Readable (homes are 0o755), but a write is the child's own EACCES.
-  expect(await call(asChild, 'readFile', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root only' });
-  expect(await call(asChild, 'writeFile', ['/home/main/private.md', 'stolen'])).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await call(asChild, 'text', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root only' });
+  expect(await call(asChild, 'write', ['/home/main/private.md', 'stolen'])).toMatchObject({ ok: false, reason: 'denied' });
   expect(await readText(rootFiles, '/home/main/private.md')).toBe('root only');
   // Under the root's own read-before-overwrite guard, which a blind write trips.
-  expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/main/private.md', 'blind'])).toMatchObject({ ok: false, reason: 'bad_input' });
-  expect(await call(ROOT_SLATE_CALLER, 'readFile', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root only' });
-  expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/main/private.md', 'root wrote'])).toMatchObject({ ok: true });
+  expect(await call(ROOT_SLATE_CALLER, 'write', ['/home/main/private.md', 'blind'])).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(await call(ROOT_SLATE_CALLER, 'text', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root only' });
+  expect(await call(ROOT_SLATE_CALLER, 'write', ['/home/main/private.md', 'root wrote'])).toMatchObject({ ok: true });
   expect(await readText(rootFiles, '/home/main/private.md')).toBe('root wrote');
 
   const scribe = {
@@ -388,13 +388,13 @@ test('a slate calling as a hosted actor reaches its own files and role, never th
 
   parent.agent.harnessInstallCatalog(scribe);
   changeRole('scribe');
-  expect(await call(asChild, 'readFile', ['/home/main/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await call(asChild, 'text', ['/home/main/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
 
   // Each call resolves the actor's current role, so revocation and restoration bite immediately.
   changeRole('task');
-  expect(await call(asChild, 'readFile', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root wrote' });
+  expect(await call(asChild, 'text', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root wrote' });
   changeRole('scribe');
-  expect(await call(asChild, 'readFile', ['/home/main/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await call(asChild, 'text', ['/home/main/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
 });
 
 test('a slate\'s file and memory calls use the caller\'s own plane and lose reach immediately with its role', async () => {
@@ -409,7 +409,7 @@ test('a slate\'s file and memory calls use the caller\'s own plane and lose reac
   });
 
   const caller = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'native-reader');
-  const read = async () => JSON.stringify(await surface(parent.agent, caller, 'native-reader')(['readFile'], ['/home/main/slate-note.txt']));
+  const read = async () => JSON.stringify(await surface(parent.agent, caller, 'native-reader')(['fs', 'text'], ['/home/main/slate-note.txt']));
   const memory = (asCaller: SlateCaller, member: string, args: JsonValue[]) => surface(parent.agent, asCaller, 'native-reader')(['memory', member], args);
 
   expect(await read()).toContain('root note');
@@ -450,7 +450,7 @@ test("a class's browser member is authorized at the host by its caller's role as
   child.actor.stores.config.setRoleSelection('scribe');
   expect(await authorize(caller, ['web', 'connectBrowser'])).toMatchObject({ ok: false, reason: 'denied' });
   // What runs at the host is never only authorized: its answer would be the class's to make up.
-  expect(await authorize(ROOT_SLATE_CALLER, ['readFile'])).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(await authorize(ROOT_SLATE_CALLER, ['fs', 'text'])).toMatchObject({ ok: false, reason: 'bad_input' });
 });
 
 test('a slate never reaches what only the agent does', async () => {
@@ -461,11 +461,11 @@ test('a slate never reaches what only the agent does', async () => {
   const call = (path: string[], args: JsonValue[] = []) => surface(actor.agent, ROOT_SLATE_CALLER, 'limited')(path, args);
 
   for (const path of [['agent', 'hire'], ['workspace', 'createTool'], ['workspace', 'slate'], ['report', 'send'], ['tasks', 'switchRole']]) {
-    expect(await call(path, [{ mission: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
+    expect(await call(path, [{ message: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
   }
 
   // A native tool is its own namespace on the surface, never a member of `tools`; `$` members are the agent's lifecycle.
-  expect(await call(['tools', 'agents'], [{ op: 'hire', role: 'task', mission: 'should not run' }]))
+  expect(await call(['tools', 'agents'], [{ op: 'hire', role: 'task', message: 'should not run' }]))
     .toMatchObject({ ok: true, value: { success: false, reason: 'missing' } });
   expect(await call(['slates', 'limited', '$share'])).toMatchObject({ ok: false });
   expect(await call(['tasks', 'list'])).toMatchObject({ ok: true });
@@ -480,7 +480,7 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
   await writeText(files, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
   const asOwner = surface(parent.agent, ROOT_SLATE_CALLER, 'board');
 
-  // As a program calls it: role, mission, then its options.
+  // As a program calls it: role, message, then its options.
   expect(await asOwner(['agents', 'hire'], ['task', 'Count the files in /home', { name: 'counter' }])).toMatchObject({ ok: true });
   expect((await parent.agent.listSubordinates()).map((entry) => entry.name)).toContain('counter');
 
@@ -631,7 +631,7 @@ test('a slate\'s file write in Plan is refused before it lands', async () => {
   const marker = '/home/main/slate-tool-approved';
   const planning: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
 
-  expect(await surface(actor.agent, planning, 'tool-gate')(['writeFile'], [marker, 'must not land'])).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await surface(actor.agent, planning, 'tool-gate')(['fs', 'write'], [marker, 'must not land'])).toMatchObject({ ok: false, reason: 'denied' });
   expect(await files.stat(marker)).toBeNull();
 });
 

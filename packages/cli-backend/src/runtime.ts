@@ -18,14 +18,14 @@ import { homedir, constants as osConstants } from 'node:os';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, actorHomeName, actorAffinity, MAIN_AGENT,
-  observeNamespace, withMountTable, type WriteObserver,
+  observeNamespace, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
-  answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
-  type ParentWorkspaceHandle, type ParentRpcWrite,
+  answerParentRpc, createParentExecutor,
+  type ParentWorkspaceHandle,
   DefaultExecutionRouter,
   adaptMemory,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
-  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
+  initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver,
@@ -44,7 +44,6 @@ import { hostWorkspaceExecutor } from './host-toolchain';
 import { agentHomeFiles, localFilePlane, localFileReach, spaceFiles, type LocalPlane } from './host-mount';
 import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@kinu.run/core';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { readLaunchDotenv } from './dotenv-provenance';
 import {
@@ -262,7 +261,6 @@ function buildCLIRuntime(
   // DDL here too: a runtime built without `initWorkspaceSchema` (branch worker,
   // `kinu evolve`, fixture) still reads the table on its first gated command.
   initAgentConfigTable(execRaw);
-  initCodemodeStateTable(execRaw);
   initScaffoldTables(execRaw);
   const agentConfig = actor.config;
   // Same endpoint and credentials as the routed-lane factory, so a tier's model is spelled one way.
@@ -382,7 +380,6 @@ function buildCLIRuntime(
   craftStore.ensureSchema();
   let approvalChannel: RequestShellApproval | null = null;
   let approvalDeferrals: DeferredApprovalChannel | null = null;
-  let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
   const ownerPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
@@ -446,8 +443,7 @@ function buildCLIRuntime(
   const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', localFileReach({ folder: cwd, space }, planes, agentVfs), approvalPolicy);
 
   executionRouter.register(hostWorkspaceExecutor({
-    vfs: toolFiles, files: agentVfs, home: ownHome, planes, memory, craftStore, shell, sql, actor,
-    ledger: () => turnFileLedgerProvider?.(),
+    vfs: toolFiles, files: agentVfs, home: ownHome, planes, craftStore, shell, sql, actor,
   }));
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
@@ -469,7 +465,6 @@ function buildCLIRuntime(
     ...(decide !== undefined && { decide }),
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
-    setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   }), {
     stores,
     filesForActor,
@@ -631,7 +626,6 @@ async function buildCLIHeadRuntime(
 
   const { stores } = opts;
   const agentStateVfs = parent.agentStateVfs;
-  const { cwd: folder } = parent;
   const writeObserver = opts.writeObserver;
 
   // `vfs://context` is this head's own history, not the parent's.
@@ -651,26 +645,10 @@ async function buildCLIHeadRuntime(
   // The same machine the parent's shell runs on.
   executionRouter.register(hostWorkspaceExecutor({
     vfs: toolFiles, files: agentVfs, home: parent.storage.home, planes: parent.planes,
-    memory: parent.memory, craftStore: parent.craftStore, shell, sql, actor,
+    craftStore: parent.craftStore, shell, sql, actor,
   }));
 
-  const parentVfs = withMountTable({ namespace: async () => parent.plane.composite.as(CRED_SESSION_USER, actor.actorId), home: folder }, parent.plane.mounts());
-
   const parentHandle: ParentWorkspaceHandle = {
-    read: (path) => answerParentRpc(path, async () => parentVfs.readFile(path)),
-    write: (input: ParentRpcWrite) => answerParentRpc(input.path, async () => {
-      if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
-      else await parentVfs.mkdir(input.path, { recursive: input.recursive });
-
-      return null;
-    }),
-    list: (path) => answerParentRpc(path, async () => parentVfs.readdir(path)),
-    stat: (path, options) => answerParentRpc(path, async () => parentVfs.stat(path, options)),
-    delete: (path) => answerParentRpc(path, async () => {
-      await parentVfs.unlink(path);
-
-      return null;
-    }),
     exec: (command) => answerParentRpc('', async () => {
       if (!parent.shell) throw new Error('the parent workspace has no shell');
 
@@ -678,10 +656,8 @@ async function buildCLIHeadRuntime(
     }),
   };
 
-  const parentFiles = createParentWorkspaceVfs(parentHandle);
   executionRouter.register(createParentExecutor({
     handle: parentHandle,
-    vfs: parentFiles,
     workspaceName: actor.name,
   }));
 

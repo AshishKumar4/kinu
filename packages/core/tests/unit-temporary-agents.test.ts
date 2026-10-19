@@ -309,7 +309,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
   test('a forked task hire starts with its birth-time conversation intact, and retires after its answer', async () => {
     const conversation: ModelMessage[] = [{ role: 'user', content: 'The ledger uses integer cents.' }];
     const scene = makeScene({ originContext: conversation });
-    expect(await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.', context: 'inherit' })).toMatchObject({ status: 'working', transcript: 'kept' });
+    expect(await startRun(scene, { role: 'auditor', message: 'Audit the ledger.', context: 'inherit' })).toMatchObject({ status: 'working', transcript: 'kept' });
     conversation[0] = { role: 'user', content: 'Changed after dispatch.' };
     expect(scene.assignments[0]?.inheritedContext).toEqual({ kind: 'fork', messages: [
       { id: 'ctx-0', role: 'user', content: 'The ledger uses integer cents.', createdAt: 0 },
@@ -324,7 +324,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     const conversation: ModelMessage[] = Array.from({ length: 51 }, () => ({ role: 'user', content: 'Earlier turn.' }));
     conversation.push({ role: 'assistant', content: 'A'.repeat(1000) + 'B'.repeat(1000) });
     const scene = makeScene({ fail: 'spawn', originContext: conversation });
-    await expect(scene.call('hire', { role: 'auditor', mission: 'Continue the audit.', context: 'inherit' }))
+    await expect(scene.call('hire', { role: 'auditor', message: 'Continue the audit.', context: 'inherit' }))
       .rejects.toMatchObject({ code: 'unavailable' });
     const inherited = scene.roster.requireExisting('auditor-a1b2c3').birth?.assignment?.inheritedContext;
     expect(inherited?.kind).toBe('fork');
@@ -345,11 +345,11 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
 
   test('lifetime decides the roster: a task hire leaves no live row after its answer and a durable hire does', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     await scene.report({ content: 'The ledger balances.' });
     expect(scene.roster.list()).toEqual([]);
 
-    const hired = await scene.call('hire', { role: 'auditor', mission: 'Audit the ledger.' });
+    const hired = await scene.call('hire', { role: 'auditor', message: 'Audit the ledger.' });
     expect(hired).toMatchObject({ name: expect.any(String) });
     expect(hired).not.toHaveProperty('answer');
     expect(scene.roster.list().map((entry) => entry.lifetime)).toEqual(['durable']);
@@ -358,7 +358,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
   test('the call says the agent is working, and its answer is one rail event that wakes the hirer', async () => {
     const scene = makeScene();
 
-    expect(await startRun(scene, { role: 'auditor', mission: 'Is the migration reversible?' })).toEqual({
+    expect(await startRun(scene, { role: 'auditor', message: 'Is the migration reversible?' })).toEqual({
       status: 'working', agent: TEMP_NAME, lifetime: 'task', role: 'auditor', answer: expect.stringContaining('arrives later'), transcript: 'kept',
     });
     expect(scene.calls).toEqual([`spawn:${TEMP_NAME}`, `assign:${TEMP_NAME}`]);
@@ -385,7 +385,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
 
   test('a child that reports blocked delivers its own words as the message', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Check the invoice totals.' });
+    await startRun(scene, { role: 'auditor', message: 'Check the invoice totals.' });
     await scene.report({ status: 'blocked', content: 'The ledger export is missing for March.' });
     expect(scene.lastReport()).toMatchObject({ status: 'blocked', content: 'The ledger export is missing for March.' });
     expect(scene.roster.list()).toEqual([]);
@@ -395,7 +395,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
   // hirer's rail, and a task hirer answered from the turn it spent on something else.
   test('a task hirer\'s answer is a later turn\'s while a hire\'s report waits unread on its rail', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(true);
 
     await scene.report({ content: 'Totals reconcile.' });
@@ -424,7 +424,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
   // Review P1 (integration/0963): the durable-only guard was the waiter's, and it kept the owner from deleting one.
   test('the owner deletes a working task hire, and it leaves the roster', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
 
     await present(scene.deps.team, 'the scene\'s team port').dismiss({ name: TEMP_NAME, keepHistory: false, requestedBy: 'user' });
 
@@ -434,7 +434,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
 
   test('a mid-work progress note does not settle the task agent; its answer is the second message', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     await scene.report({ status: 'progress', content: 'Reading the March export.', origin: 'report_tool' });
     expect(scene.published()).toBe(1);
     expect(await scene.call('list', {})).toMatchObject({
@@ -447,7 +447,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
 
   test('the finished turn relay settles the task agent without a report tool call', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Summarise the incident.' });
+    await startRun(scene, { role: 'auditor', message: 'Summarise the incident.' });
     await scene.report({ status: 'progress', origin: 'turn_end', content: 'Root cause: an unregistered callback URL.' });
     expect(scene.lastReport()).toMatchObject({ content: 'Root cause: an unregistered callback URL.' });
     expect(scene.roster.list()).toEqual([]);
@@ -455,7 +455,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
 
   test('a structured handoff travels on the message', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     await scene.report({
       content: 'Totals reconcile.',
       handoff: { concerns: ['March is reconciled against a copy, not the source export'] },
@@ -475,7 +475,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
       },
     });
 
-    expect(await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' })).toMatchObject({ status: 'working' });
+    expect(await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' })).toMatchObject({ status: 'working' });
     expect(scene.lastReport()).toMatchObject({ content: 'The answer reaches the parent before its assignment acknowledgement.' });
     expect(scene.wakes).toEqual([1]);
     expect(await scene.call('list', {})).toMatchObject({ subordinates: [] });
@@ -488,7 +488,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
       note: 'No helper agents yet: create one with op:"hire".',
     });
 
-    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     const running = await scene.call('list', {});
     expect(running).toMatchObject({
       subordinates: [{
@@ -517,7 +517,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
   // The detail arm must resolve released names, not only the active roster.
   test('a released temporary agent still resolves by name through list, while staying unaddressable', async () => {
     const scene = makeScene();
-    await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     await scene.report({ content: 'Totals reconcile.' });
 
     expect(await scene.call('list', {})).toMatchObject({ subordinates: [] });
@@ -530,7 +530,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
 
   test('a lost spawn acknowledgement retains its admitted birth for recovery', async () => {
     const scene = makeScene({ fail: 'spawn' });
-    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', message: 'Audit the ledger.' }));
     expect(failed.status).toBe('failed');
     expect(failed.reason).toBe('unavailable');
     expect(failed.answer).toContain('the facet substrate is unavailable');
@@ -552,7 +552,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     expect(before).toHaveLength(1);
     scene.calls.length = 0;
 
-    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', message: 'Audit the ledger.' }));
 
     expect(failed.status).toBe('failed');
     expect(failed.transcript).toBe('none');
@@ -564,7 +564,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
 
   test('a lost first-assignment acknowledgement retains the same issued actor', async () => {
     const scene = makeScene({ fail: 'assign' });
-    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', message: 'Audit the ledger.' }));
     expect(failed.reason).toBe('unavailable');
     expect(failed.answer).toContain('admission refused');
     const actor = scene.roster.requireExisting(TEMP_NAME).actorReference;
@@ -576,7 +576,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
 
   test('a failed recovery cleanup preserves both failure evidence and deletion intent', async () => {
     const scene = makeScene({ fail: 'assign', failRelease: true });
-    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
+    const failed = v.parse(FailedOutcome, await scene.call('hire', { lifetime: 'task', role: 'auditor', message: 'Audit the ledger.' }));
     expect(failed.answer).toContain('admission refused');
     const actor = scene.roster.requireExisting(TEMP_NAME).actorReference;
 
@@ -638,7 +638,7 @@ describe('a child that cannot answer still settles its hire', () => {
     if (ending === 'answered') continue;
     test(`a ${ending} turn settles the row and ${ending === 'interrupted' ? 'wakes no one' : 'delivers its failure'}`, async () => {
       const scene = makeScene();
-      await startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+      await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
       const report = present(await terminalTaskReport({ lifetime: 'task', ending, assistantText: '', narration: async () => [] }), 'the child\'s terminal report');
       await scene.report({ status: report.status, origin: 'turn_end', content: report.content, ...(report.quiet === true && { quiet: true }) });
       await scene.released();
@@ -687,7 +687,7 @@ describe('the two hire targets are decided by `role`', () => {
   test('a task-lifetime hire refuses a name, because the row is archived before anyone could use it', async () => {
     const scene = makeScene();
 
-    const pending = scene.call('hire', { lifetime: 'task', name: 'named-helper', role: 'auditor', mission: 'go' });
+    const pending = scene.call('hire', { lifetime: 'task', name: 'named-helper', role: 'auditor', message: 'go' });
 
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('never addressable');
@@ -695,11 +695,11 @@ describe('the two hire targets are decided by `role`', () => {
     expect(scene.roster.listAll()).toEqual([]);
   });
 
-  test('a blank mission is a failed call natively and in a program\'s failure census, and no agent is created', async () => {
+  test('a blank message is a failed call natively and in a program\'s failure census, and no agent is created', async () => {
     const scene = makeScene();
 
     // What the turn records of a native call that threw.
-    expect(await thrownOutcome(toolExecute<JsonObject, JsonValue>(createAgentsTool(scene.deps))({ op: 'hire', lifetime: 'task', role: 'auditor', mission: '   ' })))
+    expect(await thrownOutcome(toolExecute<JsonObject, JsonValue>(createAgentsTool(scene.deps))({ op: 'hire', lifetime: 'task', role: 'auditor', message: '   ' })))
       .toEqual({ success: false, reason: 'bad_input' });
 
     const hire = present(scene.sandbox().hire, 'the codemode hire entry');
@@ -740,20 +740,20 @@ describe('the two hire targets are decided by `role`', () => {
     expect(hire).toContain('"lifetime"');
     expect(hire).not.toContain('context_ref');
     const declared = present(createAgentsCodemodeProvider(() => scene.deps).declarations?.hire, 'agents.hire is declared').full;
-    expect(declared).toContain('hire(role: string, mission: string, options?: {');
+    expect(declared).toContain('hire(role: string, message: string, options?: {');
     expect(declared).toContain('lifetime?: "durable" | "task";');
     expect(declared).not.toContain('context_ref');
   });
 });
 
 describe('bulk material travels by path, not by field', () => {
-  test('a path named in the mission reaches the child brief and the bytes never do', async () => {
+  test('a path named in the message reaches the child brief and the bytes never do', async () => {
     const scene = makeScene();
     await seedFiles(scene.files, { '/spill/tool-output.txt': 'x'.repeat(5000) });
 
     await startRun(scene, {
       role: 'auditor',
-      mission: 'What failed in /spill/tool-output.txt? Read it yourself.',
+      message: 'What failed in /spill/tool-output.txt? Read it yourself.',
     });
 
     await scene.report({ content: 'A timeout on the third request.' });
@@ -764,7 +764,7 @@ describe('bulk material travels by path, not by field', () => {
 
   test('the retired fields are refused by name before any agent is created', () => {
     const scene = makeScene();
-    expect(nativeRefusal(scene.deps, { op: 'hire', lifetime: 'task', role: 'auditor', mission: 'Summarise', context_ref: ['/spill/missing.txt'] }))
+    expect(nativeRefusal(scene.deps, { op: 'hire', lifetime: 'task', role: 'auditor', message: 'Summarise', context_ref: ['/spill/missing.txt'] }))
       .toContain('unknown field "context_ref"');
     expect(nativeRefusal(scene.deps, { op: 'assign', agent: 'researcher', message: 'Survey auth', deadline_hint: 'today' }))
       .toContain('unknown field "deadline_hint"');
@@ -780,7 +780,7 @@ describe('the rung is structural, and so is its absence', () => {
     expect(declared).toContain('hire(');
     expect(declared).not.toContain('lifetime');
     // The field is not on the surface it reaches, so the call is refused before any agent is created.
-    const pending = scene.call('hire', { lifetime: 'task', role: 'auditor', mission: 'go' });
+    const pending = scene.call('hire', { lifetime: 'task', role: 'auditor', message: 'go' });
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('unknown field "lifetime"');
     expect(agentsActionsFor(scene.deps)).toContain('hire');
@@ -797,8 +797,8 @@ describe('the rung is structural, and so is its absence', () => {
 
     // At the cap the agent has no team at all: neither hire is an operation it has, and nothing is spawned.
     const refusals = await Promise.allSettled([
-      capped.call('hire', { lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }),
-      capped.call('hire', { role: 'auditor', mission: 'Audit the ledger.' }),
+      capped.call('hire', { lifetime: 'task', role: 'auditor', message: 'Audit the ledger.' }),
+      capped.call('hire', { role: 'auditor', message: 'Audit the ledger.' }),
     ]);
 
     const codes = refusals.map((settled) => (settled.status === 'rejected' ? v.parse(v.object({ code: v.string() }), settled.reason).code : null));

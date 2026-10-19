@@ -106,7 +106,7 @@ function buildSurface(opts?: {
     type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
   }), execute: async () => 'ran' });
 
-  const tools = buildHeadToolSet({
+  const { tools } = buildHeadToolSet({
     input: opts?.input ?? headInput(),
     capture,
     rt,

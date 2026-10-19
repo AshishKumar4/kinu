@@ -3,7 +3,7 @@ import type { SandboxHandle } from '../../src/index';
 /** Unused native stat and lifecycle routes: file fixtures override statFile with their filesystem's metadata. */
 export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
-  | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'
+  | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess' | 'supervisedProcessLogs'
   | 'listSupervisedProcesses' | 'portToken' | 'probePort' | 'resize' | 'portListeners' | 'answerRest' | 'statFile'
   | 'writeFileIfDigest' | 'desktop' | 'releaseDesktop'
 > = {
@@ -12,6 +12,7 @@ export const sandboxHandleLifecycle: Pick<
   writeFileIfDigest: async () => { throw new Error('this fixture does not replace files under a digest'); },
   startSupervisedProcess: async () => ({ processId: 'proc-1' }),
   stopSupervisedProcess: async () => ({ stopped: true }),
+  supervisedProcessLogs: async () => 'ready on 4100\n',
   listSupervisedProcesses: async () => [],
   portToken: async () => ({ urlToken: 'tok-1' }),
   probePort: async () => { throw new Error('this fixture does not probe a native listener'); },

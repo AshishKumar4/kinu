@@ -129,11 +129,11 @@ test('logical actors in one store keep live context, mode and structured tool da
   const rightLease = await bind({ actor: right.actor, turnId: 'right-turn', mode: 'plan', message: { role: 'user', content: 'right private input' } });
   const events: ChatEvent[] = [];
 
-  const leftRun = left.actor.execute(leftLease, { task: 'left', loopVersion: 0,
+  const leftRun = left.actor.execute(leftLease, { task: 'left', loopVersion: 0, stores: null,
     chat: { modelSpec: 'test/model', model: leftModel, system: 'sys', tools }, extensions: [], dynamic: () => ({ memoryTail: 'left dynamic context' }),
   }, event => { events.push(event); });
 
-  const rightRun = right.actor.execute(rightLease, { task: 'right', loopVersion: 0,
+  const rightRun = right.actor.execute(rightLease, { task: 'right', loopVersion: 0, stores: null,
     chat: { modelSpec: 'test/model', model: rightModel, system: 'sys', tools: {} }, extensions: [], dynamic: () => ({ memoryTail: 'right dynamic context' }),
   }, event => { events.push(event); });
 
@@ -188,7 +188,7 @@ test('a released lease cannot mutate or execute a newer turn of the same actor',
     content: [{ type: 'text', text: 'new answer' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
   }) });
 
-  const input = { task: 'new', loopVersion: 0, chat: { model, modelSpec: 'test/model', system: 'sys', tools: {} }, extensions: [], dynamic: () => ({}) };
+  const input = { task: 'new', loopVersion: 0, stores: null, chat: { model, modelSpec: 'test/model', system: 'sys', tools: {} }, extensions: [], dynamic: () => ({}) };
   const events: ChatEvent[] = [];
 
   try {
@@ -244,13 +244,13 @@ test.each(['dispatch', 'published'])('interrupting one actor at %s preserves its
   const second = await bind({ actor: right.actor, turnId: 'sibling-turn', mode: 'build', message: { role: 'user', content: 'finish your work' } });
   const events: ChatEvent[] = [];
 
-  const running = left.actor.execute(first, { task: 'hold', loopVersion: 0, chat: { modelSpec: 'test/model', model, system: 'sys', tools }, extensions: [], dynamic: () => ({}) }, event => {
+  const running = left.actor.execute(first, { task: 'hold', loopVersion: 0, stores: null, chat: { modelSpec: 'test/model', model, system: 'sys', tools }, extensions: [], dynamic: () => ({}) }, event => {
     events.push(event);
 
     if (event.type === 'tool-call') callSeen.resolve();
   });
 
-  const sibling = right.actor.execute(second, { task: 'finish', loopVersion: 0, chat: { modelSpec: 'test/model', model: otherModel, system: 'sys', tools: {} }, extensions: [], dynamic: () => ({}) }, event => { events.push(event); });
+  const sibling = right.actor.execute(second, { task: 'finish', loopVersion: 0, stores: null, chat: { modelSpec: 'test/model', model: otherModel, system: 'sys', tools: {} }, extensions: [], dynamic: () => ({}) }, event => { events.push(event); });
 
   try {
     await started.promise;
@@ -315,7 +315,7 @@ test('bound steer persistence reserves on accept and lands rows at the drain', a
   const lease = await bind({ actor, turnId: 'steer-turn', mode: 'build', message: { role: 'user', content: 'hold on' }, tools });
 
   const run = actor.execute(lease, {
-    task: 'hold', loopVersion: 0,
+    task: 'hold', loopVersion: 0, stores: null,
     chat: { modelSpec: 'test/model', model, system: 'sys', tools }, extensions: [], dynamic: () => ({}),
   }, () => {});
 

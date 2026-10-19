@@ -31,7 +31,7 @@ import {
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
   createTeamToolDeps,
   agentNamer,
-  type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
+  type ActorHost, type ActorToolsetDeps, type AgentsToolDeps, type BuiltinStoreInputs, type ServedStores,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
   type LoopOrigin, type NodeHomeHost,
@@ -233,7 +233,7 @@ import {
   unownedWorkspace,
   type ActorDynamicContextExtras,
   type HostedOwnerQuestions, type HostedPlanReviews,
-  type UntimedArms,
+  type UntimedArms, type OwnToolsHeld,
 } from "./actor-agent";
 import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
@@ -1408,7 +1408,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
-      slateBuild: (actor, slate) => this.slateBuildAs({ path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       deferrals: (actorId) => this.deferralChannel(actorId),
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
@@ -1484,14 +1483,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The host's own provisioner, the one every hosted runtime is built over, so the node's
       // disclosed boundary and its real credential are the same fact.
       nodeHome: (actor) => this.actorHomes.require(actor.record, actor.reference),
-      codemode: (actor, runtime, webSearch) => {
-        // A run's programs account into the run's own ledgers, across its calls.
-        const ledgers = turnLedgers();
+      // A run's programs run the store operations its native tools do (`CodemodeSurface.stores`), and report where its
+      // native `report` does.
+      codemode: (actor, runtime, webSearch) => (surface, reach) => {
+        const reported = surface.report;
 
-        return (surface, reach) => createCodemodeToolFactory({
+        return createCodemodeToolFactory({
           launch: this.codemodeLaunch(runtime.actor.actorId, 'owner'), workspace: this.workspaceName(),
         }).toolFor(surface, {
-          reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, webSearch, ledgers), SURFACE_POLICY.confined, { executor }),
+          reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, { search: webSearch, stores: surface.stores }), SURFACE_POLICY.program, {
+            executor, ...(reported !== undefined && { report: () => reported }),
+          }),
         });
       },
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
@@ -1537,17 +1539,22 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** A hire's, a head's or a swarm node's programs, as they reach its own planes (`SURFACE_POLICY.confined`). */
+  /** A hire's, a head's or a swarm node's programs, as they reach its own planes and what its native tools hold. */
   /** A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none. */
   protected hireOwnerWaits(actor: SeatedActor): OwnerWaitsHost | null {
     return isSubordinateOrigin(actor.record.origin) ? this.ownerWaitsOf(actor.handle.actorId, false) : null;
   }
 
-  private confinedActor(actor: SeatedActor, runtime: CFRuntime, search: WebSearchProvider, ledgers: TurnLedgers): SurfaceActor {
+  /** A hosted actor as its programs reach it, over the store operations its native tools run. */
+  private confinedActor(
+    actor: SeatedActor, runtime: CFRuntime,
+    held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly agents?: () => AgentsToolDeps },
+  ): SurfaceActor {
     return hostedSurfaceActor(actor, {
+      ...held.agents !== undefined && { agents: held.agents },
       ownerWaits: this.hireOwnerWaits(actor),
-      web: { search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
-      conversations: this.agentStores(actor.handle.actorId).conversations(), vectorStore: runtime.vectorStore, ledgers: () => ledgers,
+      web: { search: held.search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
+      stores: held.stores,
     });
   }
 
@@ -1597,7 +1604,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const ownerLane = { askOwner: false, submitPlan: false, replyToComment: false };
 
     return this.assembledSurface(actor, opened.surface, {
-      resolved, tools: run.tools, raw: run.tools, capture: run.capture, reports: { spoke: false, settled: false },
+      resolved, tools: run.tools, stores: run.stores, raw: run.tools, capture: run.capture, reports: { spoke: false, settled: false },
       ownerLane, offered: { ...run.tools, ...ownerLaneDeclarations(ownerLane) }, sources: run.sources, codemodeCapabilities: () => [],
     });
   }
@@ -1634,14 +1641,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Eval declares the turn's external tools in the description it is built with, and the tools above were built
     // before this turn read them.
-    if (Object.keys(surface.declared).length > 0) built = this.actorTools(actor, reach, workMode, scope);
+    if (Object.keys(surface.declared).length > 0) built = this.actorTools(actor, reach, workMode, { ...scope, served: built.stores });
     const held = { taskPlan: lane.taskPlan, surface, sql: runtime.storage.sql };
     const tools = this.turnTools(withToolText(built.turn, overrides.tools), held);
     // Its plans and questions commit in its own isolate's store, which builds these tools and keeps their receipts.
     const ownerLane = { askOwner: reach.turn.askOwner, submitPlan: reach.turn.submitPlan, replyToComment: reach.turn.replyToComment };
 
     const assembled = await this.assembledSurface(actor, surface, {
-      resolved, tools, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
+      resolved, tools, stores: built.stores, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
       // `agent` / `llm` are reachable only inside `eval`: derived from the namespaces its programs reach.
       codemodeCapabilities: (asked) => (reach.actor.kind === 'workspace' ? codemodeCapabilitiesFor(this.ownNamespaces(asked)) : []),
       ...(artifacts.trial !== null && { trial: artifacts.trial }),
@@ -1705,52 +1712,78 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * its delegation, receipted under the execution `scope` names, over the ledgers it gives. The workspace's planes (its
    * jobs, its role switch, its external tools, its program namespaces) only where its reach names them.
    */
+  /** What an actor's builtins read its stores from (`builtinStoreDeps`): its native tools, and a slate's call as it. */
+  private storeInputs(actor: CFSeat, reach: ActorReach, ledgers: Pick<TurnLedgers, 'files' | 'context'>, profile: () => OperationProfile | null): BuiltinStoreInputs {
+    const { runtime } = actor;
+    // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.
+    const proposer = { by: 'agent', agent: actor.record.name } as const;
+    const account = reach.kind === 'workspace' ? this.account.memory(proposer) : this.account.ownedMemory(proposer);
+
+    return {
+      rt: runtime,
+      conversations: this.agentStores(actor.handle.actorId).conversations(),
+      // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace observed under the same words.
+      vectorStore: runtime.vectorStore,
+      facts: actor.stores.facts,
+      ...(account !== undefined && { account }),
+      contextBudget: ledgers.context,
+      fileLedger: ledgers.files,
+      slateBuild: reach.kind === 'workspace' ? (slate) => this.slateBuild(slate) : this.slateBuildFor(actor.record.name),
+      ...(reach.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => profile()?.inputs?.envelope ?? null) }),
+    };
+  }
+
+  /** `build` over the workspace agent as its own seat: the reach its policy gives it, and the operation its tools run under. */
+  private asRoot<A>(build: (seat: CFSeat, reach: ActorReach, operation: () => OperationProfile | null) => A): A {
+    const root = this.rootBound();
+
+    return build({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), () => this.operationProfile());
+  }
+
+  protected override ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs {
+    return this.asRoot((seat, reach, operation) => this.storeInputs(seat, reach, ledgers, operation));
+  }
+
   protected actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
     const { runtime } = actor;
     const webSearch = this.ownedModelServices.getWebSearchProvider();
-    // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.
-    const proposer = { by: 'agent', agent: actor.record.name } as const;
-    const account = reach.actor.kind === 'workspace' ? this.account.memory(proposer) : this.account.ownedMemory(proposer);
     const { report } = scope;
 
     const codemode = (finished: CodemodeSurface) => {
+      // A hire's programs report where its native `report` does.
+      const reported = finished.report;
+
       const operation = scope.profile();
       const factory = reach.actor.kind === 'workspace' ? this.workspaceCodemode() : createCodemodeToolFactory({ launch: this.codemodeLaunch(actor.handle.actorId, 'owner'), workspace: this.workspaceName() });
-      const confined = reach.actor.kind === 'confined' ? this.confinedActor(actor, runtime, webSearch, scope.ledgers) : null;
+
+      // Its programs run the store operations its native tools run (`CodemodeSurface.stores`).
+      const confined = reach.actor.kind === 'confined'
+        ? this.confinedActor(actor, runtime, { search: webSearch, stores: finished.stores, agents: () => this.actorAgentsToolDeps(actor, reach.actor, mode, scope.profile) })
+        : null;
 
       return factory.toolFor(finished, {
         // The role's own list, which no live resolution has intersected yet: the sandbox cannot bypass the role.
         reach: narrowToolSurface(operation?.inputs === null || operation === null ? undefined : effectiveRoleCatalog(operation.inputs.envelope.catalog)[operation.profile.role.id]?.allowedTools),
         namespaces: (executor) => (confined === null
-          ? actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, { executor })
-          : actorNamespaces(confined, SURFACE_POLICY.confined, { executor, ...(report !== undefined && { report: () => report }) })),
+          ? actorNamespaces(this.surfaceActor(mode, 'owner', finished.stores), SURFACE_POLICY.program, { executor })
+          : actorNamespaces(confined, SURFACE_POLICY.program, { executor, ...(reported !== undefined && { report: () => reported }) })),
       });
     };
 
     const deps: ActorToolsetDeps = {
-      rt: runtime,
+      ...this.storeInputs(actor, reach.actor, scope.ledgers, scope.profile),
+      ...(scope.served !== undefined && { served: scope.served }),
       workMode: mode,
-      conversations: this.agentStores(actor.handle.actorId).conversations(),
       // The store its effects commit to keeps each call's receipt (design v2 §4), keyed on the execution it serves.
       effectClaims: { actor: actor.handle, sql: runtime.storage.sql, execution: scope.execution, transaction: (body) => this.ctx.storage.transactionSync(body) },
       codemode,
-      contextBudget: scope.ledgers.context,
-      fileLedger: scope.ledgers.files,
       escalations: scope.ledgers.escalations,
       // Its `eval` runs here, over the workspace's crafted tools: scored here, and carried to its isolate's turn record.
       craft: scope.ledgers.craft,
       agents: this.actorAgentsToolDeps(actor, reach.actor, mode, scope.profile),
-      // Rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite what the workspace observed under the same words.
-      vectorStore: runtime.vectorStore,
-      facts: actor.stores.facts,
-      ...(account !== undefined && { account }),
       webSearch,
       jobs: reach.actor.kind === 'workspace' ? { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() } : this.hireJobs(actor, mode),
-      slateBuild: reach.actor.kind === 'workspace'
-        ? (slate) => this.slateBuild(slate)
-        : (slate) => this.slateBuildAs({ path: [{ name: actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       ...(reach.actor.kind === 'workspace' && { external: scope.external }),
-      ...(reach.actor.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => scope.profile()?.inputs?.envelope ?? null) }),
       ...(report !== undefined && { report }),
     };
 
@@ -1758,22 +1791,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** The workspace agent's own tools in `mode` outside any turn of its: a scaffold's rollout, a slate's call, a retry. */
-  protected override ownTools(mode: WorkMode, scope: string | null): ActorToolsets {
+  protected override ownTools(mode: WorkMode, scope: string | null, held?: OwnToolsHeld): ActorToolsets {
     const root = this.rootBound();
-    const operation = () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
+    const operation = () => this.operationProfile();
 
     return this.actorTools({ ...root, runtime: this.rt }, surfaceReach(actorPolicy(root.record), { authorship: 'owner', mode, awaitsReply: false }, true), mode, {
       // A call outside any operation (a slate's) is no turn's effect.
       execution: () => (scope === null ? currentOperationProfile(this.actorHandle()) ?? { turnId: WORKSPACE_RUN_ID, runId: WORKSPACE_RUN_ID } : { turnId: scope, runId: scope }),
-      ledgers: this.mainTurn()?.ledgers ?? turnLedgers(), external: () => this.mainTurn()?.declared ?? {}, profile: operation,
+      ledgers: held?.ledgers ?? this.ownLedgers(), external: () => this.mainTurn()?.declared ?? {}, profile: operation,
       driving: this.turnDrivingMetadata(),
+      ...(held?.stores !== undefined && { served: held.stores }),
     });
   }
 
   protected override ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps {
-    const root = this.rootBound();
-
-    return this.actorAgentsToolDeps({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), mode, () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null);
+    return this.asRoot((seat, reach, operation) => this.actorAgentsToolDeps(seat, reach, mode, operation));
   }
 
   /**
@@ -5837,6 +5869,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Whether a slate still builds, for an actor of this workspace acting as itself; DO-only, like `slateAs`. */
+  /** Whether a slate still builds, asked as the named actor builds it. */
+  private slateBuildFor(name: string): (slate: string) => Promise<SlateCallResult> {
+    return (slate) => this.slateBuildAs({ path: [{ name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate);
+  }
+
   async slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult> {
     return (await this.slates()).controller.build(caller, slate);
   }

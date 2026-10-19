@@ -85,8 +85,8 @@ interface TreeRead {
 
 /** Down the tree through the root's room: the relay's ledger, its own hire's, and the shallow helper's. */
 async function readTree(room: PublicSocket, top: readonly TaskHire[], history: readonly PublicMessage[]): Promise<TreeRead> {
-  const relay = top.find((hire) => hire.mission === RELAY_MISSION);
-  const shallow = top.find((hire) => hire.mission === sayWordMission(SHALLOW));
+  const relay = top.find((hire) => hire.message === RELAY_MISSION);
+  const shallow = top.find((hire) => hire.message === sayWordMission(SHALLOW));
   const relayRecord = relay === undefined ? null : await helperRecord(room, ROOT, relay.agent);
   const relayEvents = relayRecord?.events ?? [];
   const [deep] = taskHires(relayEvents);

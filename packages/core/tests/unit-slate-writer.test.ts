@@ -321,14 +321,14 @@ test('an edit arriving while approval awaits the capability graph is fenced in t
 test('a pending editor mark denies owner authority at the send before any new build publishes', async () => {
   const { controller, share, initial } = await controlledTree();
   controller.live.setAuthority(share.id, { mode: 'owner', grantRevision: initial }, {
-    slates: ['board'], members: [{ slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe' }],
+    slates: ['board'], members: [{ slate: 'board', namespace: 'workspace', member: 'fs.text', impact: 'observe' }],
   });
 
   const servers = new SharedServers({
     authoritiesOf: (slate) => controller.live.authoritiesOf(slate), revision: (slate) => slateRevision(controller.builds, slate), generation: () => 0,
   });
 
-  const call = { slate: 'board', chain: [], address: { namespace: 'workspace', member: 'readFile' } };
+  const call = { slate: 'board', chain: [], address: { namespace: 'workspace', member: 'fs.text' } };
   servers.within(call);
   await controller.writeShared('board', { 'a.ts': replace('redirected runtime config', 'before-a') }, 'pat');
 

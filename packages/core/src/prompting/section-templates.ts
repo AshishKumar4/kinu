@@ -122,7 +122,7 @@ export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
 /** Sized from the host's table, which the computer executor reports; the current size is volatile, so absent. `blind`:
  *  the turn's model takes no images, so it cannot see the desktop. */
 export const COMPUTER_EXECUTOR_LINE = definePromptSection(
-  "executors/sandbox",
+  "executors/computer",
   "{{#if sized}}{{defaultSize}}{{sizes}}{{/if}}{{#if blind}}{{/if}}",
   computerExecutorLine.trimEnd(),
 );

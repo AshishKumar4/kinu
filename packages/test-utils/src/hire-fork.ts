@@ -19,7 +19,7 @@ export const HIRE_FORK_PREFIX = [
 
 export function hireForkModel(context?: 'fresh' | 'inherit', lifetime: 'durable' | 'task' = 'durable') {
   const childRequests: ScriptedTurnOptions[] = [];
-  const hireInput = { op: 'hire', role: 'researcher', mission: HIRE_FORK_MISSION, lifetime };
+  const hireInput = { op: 'hire', role: 'researcher', message: HIRE_FORK_MISSION, lifetime };
 
   if (lifetime === 'durable') Object.assign(hireInput, { name: 'forked-reader' });
 
@@ -101,7 +101,7 @@ export function hireRetentionModel() {
     } else if (!parentFollowup && users.some((message) => message.content === HIRE_FORK_REQUEST) && !called('agents', 'hire')) {
       call = { id: 'hire-reader', name: 'agents', input: {
         op: 'hire', role: 'researcher', name: 'forked-reader',
-        mission: HIRE_FORK_MISSION, lifetime: 'durable', context: 'inherit',
+        message: HIRE_FORK_MISSION, lifetime: 'durable', context: 'inherit',
       } };
     }
 

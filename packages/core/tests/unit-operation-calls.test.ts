@@ -6,38 +6,36 @@
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { createTestSql } from '@kinu.run/test-utils';
-import { createProgramStateStore, initCodemodeStateTable } from '../src/identity/program-state';
+import { createTestRuntime } from './helpers';
 import { providersInWorkMode, runWorkModeInvocation } from '../src/execution/work-mode';
-import { createStateCodemodeProvider } from '../src/tools/state-operations';
+import { createDbCodemodeProvider } from '../src/tools/db-codemode';
 import { callOperation, codemodeNamespace, listOperations } from '../src/tools/operation-surfaces';
 import { defineOperation, serve } from '../src/operations/operation';
 import { toolsNamespace, withCraftedToolDeclarations } from '../src/tools/sandbox-contract';
 
-function stateProvider() {
-  const { sql, execRaw } = createTestSql();
+function dbProvider() {
+  const { stores } = createTestRuntime();
+  stores.appData.createTable({ name: 'drafts', scope: 'private', columns: [{ name: 'key', type: 'text' }, { name: 'value', type: 'json' }] });
 
-  initCodemodeStateTable(execRaw);
-
-  return createStateCodemodeProvider(createProgramStateStore(sql, 'caller', () => {}));
+  return createDbCodemodeProvider(stores.appData, { private: true });
 }
 
 const CALL = { callId: 'outside-eval' };
 
 describe('callOperation', () => {
   test('runs a namespace operation on its JSON input, as a program would', async () => {
-    const providers = [stateProvider()];
+    const providers = [dbProvider()];
 
-    await callOperation(providers, 'state.set', { key: 'draft', value: { lines: 3 } }, CALL);
+    await callOperation(providers, 'db.insert', { table: 'drafts', rows: [{ key: 'draft', value: { lines: 3 } }] }, CALL);
 
-    expect(await callOperation(providers, 'state.get', { key: 'draft' }, CALL)).toEqual({ value: { lines: 3 } });
+    expect(await callOperation(providers, 'db.select', { table: 'drafts', where: { key: 'draft' } }, CALL)).toEqual({ value: [{ key: 'draft', value: { lines: 3 } }] });
   });
 
   test('refuses an id the caller does not reach, and an input its operation does not take', async () => {
-    const providers = [stateProvider()];
+    const providers = [dbProvider()];
 
-    await expect(callOperation(providers, 'state.rename', {}, CALL)).rejects.toMatchObject({ code: 'missing' });
-    await expect(callOperation(providers, 'state.get', { name: 'draft' }, CALL)).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(callOperation(providers, 'db.rename', {}, CALL)).rejects.toMatchObject({ code: 'missing' });
+    await expect(callOperation(providers, 'db.select', { name: 'drafts' }, CALL)).rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('Plan refuses an operation it does not permit, and lists only what it does', async () => {

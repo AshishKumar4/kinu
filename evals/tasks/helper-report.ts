@@ -65,7 +65,7 @@ function waiting(events: readonly RunEvent[], output: import('../src/transcript'
   const inputs = callInputs(events, output);
 
   // A call as one line of text, its input whole where a step recorded it: the ledger row's `args` is a digest cut at 800
-  // characters, and a hire's `"op":"hire"` follows its mission.
+  // characters, and a hire's `"op":"hire"` follows its message.
   const callText = (event: Extract<RunEvent, { type: 'tool_call_end' }>): string =>
     JSON.stringify(inputs.has(event) ? inputs.get(event) : event.args ?? null);
 

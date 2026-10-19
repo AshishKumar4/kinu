@@ -48,7 +48,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
+import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
@@ -277,7 +277,7 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
               controller.enqueue({ type: 'stream-start', warnings: [] });
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call_hire', toolName: 'agents',
-                input: JSON.stringify({ op: 'hire', role: 'task', mission: script.hire?.mission }),
+                input: JSON.stringify({ op: 'hire', role: 'task', message: script.hire?.mission }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
               controller.close();
@@ -1131,7 +1131,7 @@ describe('LocalAgentHost', () => {
     }
   });
 
-  test("a hire's programs reach its own planes only, as on the cloud; the workspace's own agent reaches the whole surface", async () => {
+  test("a hire's programs reach its own planes and delegate as its native agents does, as on the cloud; only the workspace's own agent steers its lifecycle", async () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -1169,7 +1169,7 @@ describe('LocalAgentHost', () => {
       const seen = (agent: string): JsonValue => v.parse(v.object({ result: JsonValueSchema }), JSON.parse(present(reached.get(agent), `${agent}'s program`))).result;
 
       expect({ root: seen('root'), hire: seen('root/auditor') })
-        .toEqual({ root: ['object', 'function', 'object', 'object', 'function'], hire: ['undefined', 'undefined', 'undefined', 'undefined', 'function'] });
+        .toEqual({ root: ['object', 'function', 'object', 'object', 'function'], hire: ['object', 'undefined', 'object', 'object', 'function'] });
     } finally {
       await host.close();
     }
@@ -1792,7 +1792,7 @@ describe('LocalAgentHost', () => {
       task: 'Check the probe.', rationale: 'Check the probe.', mode: 'build', inheritedContext: [],
       mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
     }, {
-      actor: seat.actor, runId: seat.runId,
+      actor: seat.actor, runId: seat.runId, stores: servedStoresOf(seat.actor.runtime, seat.actor.stores.conversationSearch),
       sources: { ...seat.sources, models: { ...seat.sources.models, resolve: () => model } },
       clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     });
@@ -1880,7 +1880,7 @@ describe('LocalAgentHost', () => {
     await host.close();
 
     const { host: reopened } = makeHost(state, toolSequenceModel([
-      { name: 'agents', input: { op: 'hire', role: 'researcher', mission: 'must not be hired' } },
+      { name: 'agents', input: { op: 'hire', role: 'researcher', message: 'must not be hired' } },
     ]), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);

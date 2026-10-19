@@ -1,14 +1,15 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import { REAL_CLOCK } from '@kinu.run/core';
 import { jsonSchema, tool } from 'ai';
 import type { ModelMessage } from 'ai';
-import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel, servedStoresOf, toolExecute } from '@kinu.run/test-utils';
 import {
   startActorTurn, prepareActorProgram,
   runHeadInference, preparedHeadRun, HeadCapture,
-  initActorStateSchema,
+  initActorStateSchema, createFileTool, createInlineExecutor, DefaultExecutionRouter,
 } from '@kinu.run/core';
+import type { JsonObject, JsonValue } from '@kinu.run/core';
 import { defaultLoopOrigin } from '@kinu.run/core';
 import { headLoopSeams } from './actor-fixture';
 import type { ChatEvent, HeadInput } from '@kinu.run/core';
@@ -43,7 +44,7 @@ function headInput(): HeadInput {
 }
 
 async function runtime(source: string, version = 1) {
-  const { rt, testSql } = createTestRuntime();
+  const { rt, testSql, stores } = createTestRuntime();
   // Production initializer: claimed turns need the whole actor state plane, which `createTestRuntime` does not bootstrap.
   initActorStateSchema(makeWorkspaceSchemaSql(testSql.db));
   rt.executor = createSandboxedExecutor();
@@ -52,7 +53,8 @@ async function runtime(source: string, version = 1) {
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, rt.identity.scaffold.path + '.v' + version, source);
 
-  return { rt, files };
+  // The store operations a turn's tools run, which its scaffold's machines run too.
+  return { rt, files, served: servedStoresOf(rt, stores.conversationSearch) };
 }
 
 function unusedModel() {
@@ -74,7 +76,7 @@ test('abort after preparation refuses program entry before memory or text effect
 
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const reason = new Error('cancelled before first next');
@@ -92,7 +94,7 @@ test('cancellation retains an admitted memory effect but refuses subsequent effe
 
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);
@@ -110,7 +112,7 @@ test('hosted polled cancellation refuses a promoted direct effect without a sign
   const model = unusedModel();
 
   const report = await runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
+    ...headLoopSeams(rt, { model: () => model }), stores: null, clock: REAL_CLOCK, capture: new HeadCapture(),
     isAborted: () => true, abortReason: () => 'already cancelled',
     tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
   }));
@@ -128,14 +130,14 @@ test('a native refusal keeps the same failed outcome in the turn and in the head
     throw new KinuError('denied', 'fixture permission refused');
   } }) };
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools } });
 
   const events = await collect(prepared.events);
   expect(events.find(event => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'denied' });
 
   const report = await runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => unusedModel() }), clock: REAL_CLOCK, tools, capture: new HeadCapture(), isAborted: () => false,
+    ...headLoopSeams(rt, { model: () => unusedModel() }), stores: null, clock: REAL_CLOCK, tools, capture: new HeadCapture(), isAborted: () => false,
   }));
 
   expect(report.toolCalls).toMatchObject([{ name: 'fail', outcome: { success: false, reason: 'denied' } }]);
@@ -172,7 +174,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   const deltas: Array<{ kind: string; text: string }> = [];
 
   const report = await runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, tools, capture, isAborted: () => false,
+    ...headLoopSeams(rt, { model: () => model }), stores: null, clock: REAL_CLOCK, tools, capture, isAborted: () => false,
     reportMessages: produced => { messages.push(...produced); },
     reportDelta: (kind, text) => { deltas.push({ kind, text }); },
   }));
@@ -195,7 +197,7 @@ test('the turn receives a tool\'s actual output data, not its model-side renderi
     toModelOutput: () => ({ type: 'text', value: 'model-only representation' }),
   }) };
 
-  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model, system: 'sys', history: [], tools },
   });
 
@@ -228,7 +230,7 @@ test('a custom model call preserves completed tool messages when its next reques
   } });
 
   const running = runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
+    ...headLoopSeams(rt, { model: () => model }), stores: null, clock: REAL_CLOCK, capture: new HeadCapture(),
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema, execute: async () => value }) },
     reportMessages: produced => { messages.push(...produced); },
@@ -267,7 +269,7 @@ test('invalid native argument containers cannot become an empty successful call'
   const { rt } = await runtime('async function run() { await host.callTool("mutate", []); }');
   let effects = 0;
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [],
       tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
     },
@@ -279,13 +281,13 @@ test('invalid native argument containers cannot become an empty successful call'
 });
 
 test('router namespace effects use the same lifetime admission as host effects', async () => {
-  const { rt } = await runtime("async function run() { await workspace.writeFile('a.txt', 'one'); await workspace.writeFile('b.txt', 'two'); }");
+  const { rt, served } = await runtime("async function run() { await workspace.exec('echo one'); await workspace.exec('echo two'); }");
 
   if (rt.executionRouter === undefined) throw new Error('the runtime fixture has no execution router');
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let effects = 0;
-  rt.executionRouter.getProviders = () => [{ name: 'workspace', tools: { writeFile: {
+  rt.executionRouter.getProviders = () => [{ name: 'workspace', capabilities: new Set(['shell']), tools: { exec: {
     description: 'record an admitted effect', execute: async () => {
       effects++;
       started.resolve();
@@ -296,7 +298,7 @@ test('router namespace effects use the same lifetime admission as host effects',
   } } }];
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: served,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);
@@ -306,4 +308,44 @@ test('router namespace effects use the same lifetime admission as host effects',
   const events = await running;
   expect(effects).toBe(1);
   expect(events).toContainEqual(expect.objectContaining({ type: 'error', message: expect.stringContaining('stop namespace work') }));
+});
+
+test("a local scaffold's workspace.fs reads and writes through the real executor, on the ledger its turn's file tool keeps", async () => {
+  const { rt, served } = await runtime('');
+  const home = rt.storage.home;
+  const router = new DefaultExecutionRouter();
+
+  router.register(createInlineExecutor({ vfs: rt.toolFiles, craftStore: rt.craftStore, shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) }, filesOwner: 'agent' }));
+  rt.executionRouter = router;
+
+  await rt.toolFiles.mkdir(home, { recursive: true });
+
+  for (const [name, text] of [['notes.md', 'first notes\n'], ['seen.md', 'seen by the tool\n'], ['later.md', 'read by the program\n']] as const) {
+    await writeText(rt.toolFiles, `${home}/${name}`, text);
+  }
+
+  // The turn's native file tool, over the same served set: it reads one file before the program runs.
+  const file = toolExecute<JsonObject, JsonValue>(createFileTool(served.file, served.deps.files()));
+
+  await file({ op: 'read', path: `${home}/seen.md` });
+
+  await writeText(rt.agentStateVfs, `${rt.identity.scaffold.path}.v1`, `async function run() {
+    const notes = await workspace.fs.text(${JSON.stringify(`${home}/notes.md`)});
+    await workspace.fs.write(${JSON.stringify(`${home}/notes.md`)}, 'the program wrote\\n');
+    await workspace.fs.write(${JSON.stringify(`${home}/seen.md`)}, 'after the tool read it\\n');
+    const later = await workspace.fs.text(${JSON.stringify(`${home}/later.md`)});
+    await host.emit({ type: "text_delta", text: "read:" + notes + "|" + later });
+  }`);
+
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: served,
+    chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: new AbortController().signal } });
+
+  const events = await collect(prepared.events);
+
+  expect(events.filter((event) => event.type === 'error')).toEqual([]);
+  expect(events).toContainEqual(expect.objectContaining({ type: 'done', answer: 'read:first notes\n|read by the program\n' }));
+  // The program's read lets the turn's tool replace the file.
+  expect(await file({ op: 'write', path: `${home}/later.md`, content: 'the tool wrote\n' })).toMatchObject({ action: 'replaced' });
+  expect(await Promise.all(['notes.md', 'seen.md', 'later.md'].map((name) => readText(rt.toolFiles, `${home}/${name}`))))
+    .toEqual(['the program wrote\n', 'after the tool read it\n', 'the tool wrote\n']);
 });

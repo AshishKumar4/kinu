@@ -1,6 +1,6 @@
 /**
- * Nimbus long-running processes: a started process is still running when `startProcess` returns, the output
- * names the observe/stop calls, and a handle that cannot start one says so.
+ * Nimbus long-running processes: `startProcess` answers the id every other process member takes, and a handle that
+ * cannot start one says so.
  */
 import { describe, expect, test } from "bun:test";
 import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusStartResult, WORKSPACE_ROOT } from "../src/index";
@@ -25,7 +25,7 @@ function workspaceOver(box: SessionBox, runtimeCatalog?: boolean) {
 
   return createNimbusWorkspaceExecutor({
     box, runtimeCatalog,
-    inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+    inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
   });
 }
 
@@ -43,38 +43,33 @@ function runningStart(overrides: Partial<NimbusStartResult> = {}): NimbusStartRe
   };
 }
 
-describe("nimbus startProcess — the process is alive when the call returns", () => {
-  test("a running server reports pid, long-running state, and the observe/stop calls", async () => {
-    const nimbus = workspaceOver(handleWith(async () => runningStart()));
-    const out = await nimbus.tools.startProcess.execute("node server.js");
+describe("nimbus processes — one id from start to stop", () => {
+  test("the id startProcess answers is the one logs, listProcesses and stopProcess take", async () => {
+    const killed: number[] = [];
 
-    expect(out).toContain("started (long-running) pid=3000002");
-    expect(out).toContain("workspace.logs(3000002)");
-    expect(out).toContain("workspace.killProcess(3000002)");
-    expect(out).not.toContain("exited");
-    expect(out).not.toContain("exitCode");
-  });
+    const box: SessionBox = {
+      ...handleWith(async () => runningStart()),
+      processes: {
+        list: async () => [runningStart().process, { ...runningStart().process, pid: 9, command: "ls", longRunning: false, state: "exited" }],
+        kill: async (pid: number) => {
+          killed.push(pid);
 
-  test("a registered port is surfaced with the preview-URL pointer", async () => {
-    const nimbus = workspaceOver(handleWith(async () => runningStart({ ports: [{ port: 3000, pid: 3000002, registeredAt: 1, capability: "cap" }] })));
+          return { ok: true, pid };
+        },
+        logs: async (pid: number) => ({ pid, chunks: [], text: `server ${String(pid)} ready\n` }),
+      },
+    };
 
-    const out = await nimbus.tools.startProcess.execute("node server.js");
+    const nimbus = workspaceOver(box);
+    const started = await nimbus.tools.startProcess.execute("node server.js");
 
-    expect(out).toContain("listening on port 3000");
-    expect(out).toContain("exposePort");
-  });
+    expect(started).toEqual({ processId: "3000002" });
+    expect(await nimbus.tools.logs?.execute("3000002")).toBe("server 3000002 ready\n");
 
-  test("a process that already finished says so, with its exit code", async () => {
-    const nimbus = workspaceOver(handleWith(async () => runningStart({
-      command: "echo hi",
-      process: { pid: 7, command: "echo hi", argv: ["echo", "hi"], cwd: "/home/main", state: "exited", exitCode: 0, startTime: 1, endTime: 2, longRunning: false, attachedTty: false },
-      pid: 7,
-    })));
-
-    const out = await nimbus.tools.startProcess.execute("echo hi");
-
-    expect(out).toContain("already exited (exit 0)");
-    expect(out).toContain("workspace.logs(7)");
+    // Only what startProcess started is listed: a finished exec is no process to stop.
+    expect(await nimbus.tools.listProcesses?.execute()).toEqual([{ processId: "3000002", pid: 3000002, status: "running", command: "node server.js" }]);
+    expect(await nimbus.tools.stopProcess?.execute("3000002")).toEqual({ stopped: true });
+    expect(killed).toEqual([3000002]);
   });
 
   test("a handle without startProcess names the class on the first attempt", async () => {

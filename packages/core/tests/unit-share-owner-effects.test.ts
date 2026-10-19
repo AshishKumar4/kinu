@@ -14,20 +14,21 @@ import { preapproveSlateEffect } from '../src/slates/live-sharing';
 import { settle } from '../src/obs/effect';
 import type { ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
+import { slateCallAddress } from '../src/slates/surface';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 
 const grant: ShareGrant = {
   slates: ['board', 'digest'],
   members: [
-    { slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe' },
-    { slate: 'board', namespace: 'workspace', member: 'writeFile', impact: 'mutate' },
+    { slate: 'board', namespace: 'workspace', member: 'fs.text', impact: 'observe' },
+    { slate: 'board', namespace: 'workspace', member: 'fs.write', impact: 'mutate' },
     { slate: 'board', namespace: 'web', member: 'connectBrowser', impact: 'execute' },
-    { slate: 'digest', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+    { slate: 'digest', namespace: 'workspace', member: 'fs.text', impact: 'observe' },
   ],
 };
 
 /** Whether each member the owner's own requests call acts. */
-const IMPACTS = new Map([['readFile', false], ['writeFile', true], ['web.connectBrowser', true]]);
+const IMPACTS = new Map([['fs.text', false], ['fs.write', true], ['web.connectBrowser', true]]);
 
 /** `revisions` is each slate's revision now; the share approved `board`'s at `rev-1`. */
 function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>> = { board: 'rev-1', digest: 'rev-9' }, toolContract?: SharedServerDeps['toolContract']) {
@@ -88,8 +89,8 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
   /** The owner's own request to their shared slate: the server's like any other. */
   const ownersCall = async (member: string, args: JsonValue[] = [{ path: 'notes.md', text: 'hello' }]) => {
-    const [namespace, name] = member.includes('.') ? member.split('.') : ['workspace', member];
-    const send = await settle(servers.gate({ slate: 'board', chain: [], address: { namespace: namespace ?? '', member: name ?? '' }, effect: IMPACTS.get(member) ?? true, args, on: 'the owner' }));
+    const address = slateCallAddress(member.split('.'));
+    const send = await settle(servers.gate({ slate: 'board', chain: [], address, effect: IMPACTS.get(member) ?? true, args, on: 'the owner' }));
     const spend = send.admit();
 
     ran.push(`owner:${member}`);
@@ -109,72 +110,72 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 test('an owner share\'s acting call waits for the owner, then runs once on their approval', async () => {
   const { call, ran, asked, approveAll } = world('owner');
 
-  await expect(call('writeFile')).rejects.toThrow('waits for the owner to approve it: writeFile on workspace');
+  await expect(call('fs.write')).rejects.toThrow('waits for the owner to approve it: fs.write on workspace');
   expect(asked().map((kind) => (kind.kind === 'slate-effect' ? [kind.effect.slate, kind.effect.caller, kind.effect.tool, kind.effect.viewer, kind.effect.revision, kind.effect.payload] : kind.kind)))
-    .toEqual([['board', 'board', 'writeFile', 'user:ana', 'rev-1', { path: 'notes.md', text: 'hello' }]]);
+    .toEqual([['board', 'board', 'fs.write', 'user:ana', 'rev-1', { path: 'notes.md', text: 'hello' }]]);
   expect(ran).toEqual([]);
 
   await approveAll();
-  expect(await call('writeFile')).toMatchObject({ ok: true });
+  expect(await call('fs.write')).toMatchObject({ ok: true });
   // Spent: the same call made again is asked of the owner again.
-  await expect(call('writeFile')).rejects.toThrow('waits for the owner');
-  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:writeFile'], asked: 1 });
+  await expect(call('fs.write')).rejects.toThrow('waits for the owner');
+  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:fs.write'], asked: 1 });
 });
 
 test('an approval is spent once its call is handed on, even when the call fails after', async () => {
   const { call, ran, asked, approveAll } = world('owner');
 
-  await expect(call('writeFile')).rejects.toThrow('waits for the owner');
+  await expect(call('fs.write')).rejects.toThrow('waits for the owner');
   await approveAll();
-  await expect(call('writeFile', { fails: true })).rejects.toThrow('the call failed after it was handed on');
-  await expect(call('writeFile')).rejects.toThrow('waits for the owner');
-  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:writeFile'], asked: 1 });
+  await expect(call('fs.write', { fails: true })).rejects.toThrow('the call failed after it was handed on');
+  await expect(call('fs.write')).rejects.toThrow('waits for the owner');
+  expect({ ran, asked: asked().length }).toEqual({ ran: ['user:ana:fs.write'], asked: 1 });
 });
 
 test('an approval admits the exact call it was asked for, and no other payload', async () => {
   const { call, ran, approveAll } = world('owner');
 
-  await expect(call('writeFile')).rejects.toThrow('waits for the owner');
+  await expect(call('fs.write')).rejects.toThrow('waits for the owner');
   await approveAll();
-  await expect(call('writeFile', { args: [{ path: 'notes.md', text: 'something else' }] })).rejects.toThrow('waits for the owner');
+  await expect(call('fs.write', { args: [{ path: 'notes.md', text: 'something else' }] })).rejects.toThrow('waits for the owner');
   expect(ran).toEqual([]);
 });
 
 test("one principal. the owner's own request to their shared slate asks them for each effect too; an observing call asks no one", async () => {
   const owned = world('owner');
 
-  expect(await owned.call('readFile')).toMatchObject({ ok: true });
-  await expect(owned.ownersCall('writeFile')).rejects.toThrow('waits for the owner to approve it: writeFile on workspace');
+  expect(await owned.call('fs.text')).toMatchObject({ ok: true });
+  await expect(owned.ownersCall('fs.write')).rejects.toThrow('waits for the owner to approve it: fs.write on workspace');
   expect(owned.asked().map((kind) => (kind.kind === 'slate-effect' ? kind.effect.viewer : null))).toEqual(['the owner']);
   await owned.approveAll();
-  expect(await owned.ownersCall('writeFile')).toBe(true);
-  expect(owned.ran).toEqual(['user:ana:readFile', 'owner:writeFile']);
+  expect(await owned.ownersCall('fs.write')).toBe(true);
+  expect(owned.ran).toEqual(['user:ana:fs.text', 'owner:fs.write']);
 });
 
 test("an own share lends its server nothing, for anyone, and says who can turn on My access", async () => {
   const own = world('own');
 
-  await expect(own.call('readFile')).rejects.toThrow('Sam can turn on My access');
-  await expect(own.ownersCall('writeFile')).rejects.toThrow('can turn on My access');
+  await expect(own.call('fs.text')).rejects.toThrow('Sam can turn on My access');
+  await expect(own.ownersCall('fs.write')).rejects.toThrow('can turn on My access');
   expect({ ran: own.ran, asked: own.asked() }).toEqual({ ran: [], asked: [] });
 });
 
 test('an owner share whose slate moved past the approved revision lends nothing, observing or not, the owner\'s own request included', async () => {
   const { call, ownersCall, ran, asked } = world('owner', { board: 'rev-2', digest: 'rev-9' });
 
-  await expect(call('readFile')).rejects.toThrow('changed since its owner approved what it reaches');
-  await expect(call('writeFile')).rejects.toThrow('changed since its owner approved what it reaches');
-  await expect(ownersCall('writeFile')).rejects.toThrow('changed since its owner approved what it reaches');
+  await expect(call('fs.text')).rejects.toThrow('changed since its owner approved what it reaches');
+  await expect(call('fs.write')).rejects.toThrow('changed since its owner approved what it reaches');
+  await expect(ownersCall('fs.write')).rejects.toThrow('changed since its owner approved what it reaches');
   expect({ ran, asked: asked().length }).toEqual({ ran: [], asked: 0 });
 });
 
 test("a call from a slate the shared one hops to is held to the shared server's grant and revision, not its own", async () => {
   const { call, servers } = world('owner');
 
-  expect(await call('readFile', { slate: 'digest', chain: ['board'] })).toMatchObject({ ok: true });
+  expect(await call('fs.text', { slate: 'digest', chain: ['board'] })).toMatchObject({ ok: true });
   // The hop's own leaf the shared server's grant does not reach: refused, whoever the share is.
-  await expect(call('writeFile', { slate: 'digest', chain: ['board'] })).rejects.toThrow(/does not (grant|reach) workspace\.writeFile/u);
-  expect(() => { servers.within({ slate: 'digest', chain: ['board'], address: { namespace: 'workspace', member: 'writeFile' } }); }).toThrow('does not reach');
+  await expect(call('fs.write', { slate: 'digest', chain: ['board'] })).rejects.toThrow(/does not (grant|reach) workspace\.fs\.write/u);
+  expect(() => { servers.within({ slate: 'digest', chain: ['board'], address: { namespace: 'workspace', member: 'fs.write' } }); }).toThrow('does not reach');
 });
 
 test("a browser member the class runs waits on the owner when the host is asked to authorize it, and its refusal report asks nothing", async () => {
@@ -193,26 +194,26 @@ test("a browser member the class runs waits on the owner when the host is asked 
 test('a call whose share stops lending while its dispatch prepares never acts, and takes no approval', async () => {
   const revoked = world('owner');
 
-  await expect(revoked.call('writeFile')).rejects.toThrow('waits for the owner');
+  await expect(revoked.call('fs.write')).rejects.toThrow('waits for the owner');
   await revoked.approveAll();
-  await expect(revoked.call('writeFile', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
-  await expect(revoked.call('readFile', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
+  await expect(revoked.call('fs.write', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
+  await expect(revoked.call('fs.text', { meanwhile: () => { revoked.live.revoke('s1'); } })).rejects.toThrow('no longer shared');
   expect({ ran: revoked.ran, approved: revoked.queue.list().length }).toEqual({ ran: [], approved: 0 });
 
   // Turned back to each viewer's own access mid-call: what was admitted on the owner's access is not sent on it.
   const turned = world('owner');
 
-  await expect(turned.call('writeFile')).rejects.toThrow('waits for the owner');
+  await expect(turned.call('fs.write')).rejects.toThrow('waits for the owner');
   await turned.approveAll();
-  await expect(turned.call('writeFile', { meanwhile: () => { turned.live.setAuthority('s1', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('changed how it lends');
+  await expect(turned.call('fs.write', { meanwhile: () => { turned.live.setAuthority('s1', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('changed how it lends');
   expect(turned.ran).toEqual([]);
 
   // Its approval retired mid-call (the server's revision moved, or its owner took it back).
   const retired = world('owner');
 
-  await expect(retired.call('writeFile')).rejects.toThrow('waits for the owner');
+  await expect(retired.call('fs.write')).rejects.toThrow('waits for the owner');
   await retired.approveAll();
-  await expect(retired.call('writeFile', { meanwhile: () => { retired.queue.retireSlateEffects('board'); } })).rejects.toThrow('taken back');
+  await expect(retired.call('fs.write', { meanwhile: () => { retired.queue.retireSlateEffects('board'); } })).rejects.toThrow('taken back');
   expect(retired.ran).toEqual([]);
 });
 
@@ -221,24 +222,24 @@ test('a call on one share fails closed when another share of the same server sto
 
   both.live.add({ id: 's2', slate: 'board', visibility: 'public', handle: '9876543210', grant });
   both.live.setAuthority('s2', { mode: 'owner', grantRevision: 'rev-1' }, grant);
-  expect(await both.call('readFile')).toMatchObject({ ok: true });
+  expect(await both.call('fs.text')).toMatchObject({ ok: true });
   // s2 turns to each viewer's own access: the server lends nothing now, so s1's call is not sent either.
-  await expect(both.call('readFile', { meanwhile: () => { both.live.setAuthority('s2', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('can turn on My access');
+  await expect(both.call('fs.text', { meanwhile: () => { both.live.setAuthority('s2', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('can turn on My access');
 });
 
 test('a pre-approved tool and root run unasked at that revision only; another root, or another revision, asks', async () => {
   const pre = world('owner');
-  const preapproved: ShareGrant = { ...grant, preapproved: [{ slate: 'board', namespace: 'workspace', member: 'writeFile', root: {}, revision: 'rev-1' }] };
+  const preapproved: ShareGrant = { ...grant, preapproved: [{ slate: 'board', namespace: 'workspace', member: 'fs.write', root: {}, revision: 'rev-1' }] };
 
   pre.live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, preapproved);
-  expect(await pre.call('writeFile')).toMatchObject({ ok: true });
-  expect(await pre.ownersCall('writeFile')).toBe(true);
+  expect(await pre.call('fs.write')).toMatchObject({ ok: true });
+  expect(await pre.ownersCall('fs.write')).toBe(true);
   expect(pre.asked()).toEqual([]);
 
   const stale = world('owner');
 
   stale.live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, { ...grant, preapproved: [{ ...preapproved.preapproved?.[0] ?? { slate: '', namespace: '', member: '', root: {} }, revision: 'rev-0' }] });
-  await expect(stale.call('writeFile')).rejects.toThrow('waits for the owner');
+  await expect(stale.call('fs.write')).rejects.toThrow('waits for the owner');
 });
 
 test('R5-P1 roots by operation. "Always" on one repository never runs an operation whose handler takes its target by global ID', async () => {
@@ -321,12 +322,12 @@ test('R3-P1 fence. a sharing change fences its slate in the same call that write
 
 test("'Always for this slate' runs the asked call, then that tool on that root unasked at this revision; another root asks", async () => {
   const { call, ran, asked, approveAll, live, remembered } = world('owner');
-  const write = (path: string) => call('writeFile', { args: [{ path, text: 'hello' }] });
+  const write = (path: string) => call('fs.write', { args: [{ path, text: 'hello' }] });
 
   await expect(write('notes.md')).rejects.toThrow('waits for the owner');
   await approveAll('always');
   // It stands for this slate alone: no standing grant of the environment's is recorded for it.
-  expect({ preapproved: live.get('s1')?.grant.preapproved, remembered }).toEqual({ preapproved: [{ slate: 'board', namespace: 'workspace', member: 'writeFile', root: {}, revision: 'rev-1' }], remembered: [] });
+  expect({ preapproved: live.get('s1')?.grant.preapproved, remembered }).toEqual({ preapproved: [{ slate: 'board', namespace: 'workspace', member: 'fs.write', root: {}, revision: 'rev-1' }], remembered: [] });
 
   // The asked call runs on it, and every other write of the same tool and root runs unasked after it.
   expect(await write('notes.md')).toMatchObject({ ok: true });
@@ -334,20 +335,20 @@ test("'Always for this slate' runs the asked call, then that tool on that root u
   expect({ ran: ran.length, asked: asked().length }).toEqual({ ran: 2, asked: 0 });
 
   // Taken back on the sheet: the next write asks again.
-  live.withdrawPreapproval('board', { slate: 'board', namespace: 'workspace', member: 'writeFile', root: {} });
+  live.withdrawPreapproval('board', { slate: 'board', namespace: 'workspace', member: 'fs.write', root: {} });
   await expect(write('todo.md')).rejects.toThrow('waits for the owner');
 });
 
 test("'Always' leaves no one-shot approval behind it: taken back, the very call it was given on asks again", async () => {
   const { call, ran, asked, approveAll, live } = world('owner');
-  const write = () => call('writeFile', { args: [{ path: 'notes.md', text: 'hello' }] });
+  const write = () => call('fs.write', { args: [{ path: 'notes.md', text: 'hello' }] });
 
   await expect(write()).rejects.toThrow('waits for the owner');
   await approveAll('always');
   expect(await write()).toMatchObject({ ok: true });
 
   // Taken back on the sheet; the call it was given on, made again, is the owner's to answer again.
-  live.withdrawPreapproval('board', { slate: 'board', namespace: 'workspace', member: 'writeFile', root: {} });
+  live.withdrawPreapproval('board', { slate: 'board', namespace: 'workspace', member: 'fs.write', root: {} });
   await expect(write()).rejects.toThrow('waits for the owner');
   expect({ ran: ran.length, asked: asked().length }).toEqual({ ran: 1, asked: 1 });
 });
@@ -355,14 +356,14 @@ test("'Always' leaves no one-shot approval behind it: taken back, the very call 
 test("'Always' on a call another slate made names that caller, on the shared slate's shares", async () => {
   const { asked, approveAll, live, servers } = world('owner');
   const args = [{ path: 'notes.md' }];
-  const reaching: ShareGrant = { ...grant, members: [...grant.members, { slate: 'digest', namespace: 'workspace', member: 'writeFile', impact: 'mutate' }] };
+  const reaching: ShareGrant = { ...grant, members: [...grant.members, { slate: 'digest', namespace: 'workspace', member: 'fs.write', impact: 'mutate' }] };
 
   live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, reaching);
 
-  await expect(settle(servers.gate({ slate: 'digest', chain: ['board'], address: { namespace: 'workspace', member: 'writeFile' }, effect: true, args, on: 'user:ana' }))).rejects.toThrow('waits for the owner');
+  await expect(settle(servers.gate({ slate: 'digest', chain: ['board'], address: { namespace: 'workspace', member: 'fs.write' }, effect: true, args, on: 'user:ana' }))).rejects.toThrow('waits for the owner');
   expect(asked().map((kind) => (kind.kind === 'slate-effect' ? [kind.effect.slate, kind.effect.caller] : null))).toEqual([['board', 'digest']]);
   await approveAll('always');
-  expect(live.get('s1')?.grant.preapproved).toEqual([{ slate: 'digest', namespace: 'workspace', member: 'writeFile', root: {}, revision: 'rev-1' }]);
+  expect(live.get('s1')?.grant.preapproved).toEqual([{ slate: 'digest', namespace: 'workspace', member: 'fs.write', root: {}, revision: 'rev-1' }]);
 });
 
 test("R3-P1 pending edit. while an editor's change awaits review, the owner share lends nothing and says whose change it is", async () => {
@@ -371,5 +372,5 @@ test("R3-P1 pending edit. while an editor's change awaits review, the owner shar
   live.markEdit('board', 'pat@example.test', 'rev-1');
   expect(live.authoritiesOf('board')).toMatchObject([{ mode: 'owner', grantRevision: null, editedBy: 'pat@example.test' }]);
   expect(servers.authorityOf('board')).toEqual({ kind: 'none' });
-  await expect(call('readFile')).rejects.toThrow("pat@example.test's change to slate board is awaiting Sam's review");
+  await expect(call('fs.text')).rejects.toThrow("pat@example.test's change to slate board is awaiting Sam's review");
 });

@@ -68,7 +68,7 @@ cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
   async hello() { return { ok: true }; }
-  async manifest() { return await this.env.workspace.readFile("/slates/${SLATE}/package.json"); }
+  async manifest() { return await this.env.workspace.fs.text("/slates/${SLATE}/package.json"); }
   async docs() { return await this.env.workspace.mcp["${mcpName}"].search_cloudflare_documentation({ query: "Cloudflare Durable Objects storage" }); }
   async fetch() { return new Response("fork-probe-ok"); }
 }

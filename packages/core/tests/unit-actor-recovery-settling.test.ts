@@ -36,6 +36,7 @@ test('a sweep between a turn\'s answer and its claim settle leaves the claim to 
     await actor.session.openTurnInput(lease, { item: {}, message: { role: 'user', content: 'Read the file.' }, birthContext: async () => [] });
 
     await actor.session.execute(lease, {
+      stores: null,
       task: 'Read the file.', loopVersion: await actor.runtime.identity.scaffold.version(),
       chat: { modelSpec: 'test/model', model: scriptedTurnModel({ doGenerate: answer }), system: 'Answer.', tools: {} }, extensions: [],
       dynamic: () => ({ factsBlock: '' }),

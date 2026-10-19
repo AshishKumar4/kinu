@@ -22,6 +22,7 @@ import {
   allowedInPlan, inputJsonSchema, inputProblem, JSON_VALUE_MARK, jsonOf, operationId, typeJsonSchema,
   type Impact, type Operation, type OperationCall, type OperationResult, type Served,
 } from '../operations/operation';
+import { retiredField, retiredMembersOf } from '../operations/retired';
 
 const typeOf = (schema: JsonSchema): string => jsonSchemaToType(schema, 'T').replace(/^type T = /u, '').replaceAll(`"${JSON_VALUE_MARK}"`, 'JsonValue');
 
@@ -255,6 +256,10 @@ function callInput(op: Operation, args: readonly JsonValue[]): JsonObject {
   const { required } = fieldsOf(op);
   const options = v.safeParse(v.optional(JsonObjectSchema, {}), args[required.length]);
   const problem = arrangementProblem(op, args, options.success ? options.output : null);
+  // An option taken off the surface is told what replaced it, before what the call form takes.
+  const retired = options.success ? Object.keys(options.output).flatMap((key) => retiredField(operationId(op), key) ?? []) : [];
+
+  if (retired.length > 0) return settleSync(Effect.fail(new KinuError('bad_input', `${operationId(op)}: ${retired.join('; ')}`)));
 
   if (problem !== null || !options.success) return settleSync(Effect.fail(new KinuError('bad_input', `${op.ns}.${callForm(op)} takes ${problem ?? 'its options as one object'}`)));
 
@@ -299,7 +304,19 @@ function declarationOf(op: Operation): string {
 
   const doc = docs.length === 0 ? `/** ${op.help} */` : ['/**', ` * ${op.help}`, ...docs, ' */'].join('\n');
 
-  return `${doc}\n${op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
+  return `${doc}\n${op.name.split('.').at(-1) ?? op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
+}
+
+/** Each retired member of `ns` no served operation took back, as a call that refuses naming its successor. */
+function retiredMembers(ns: string, members: readonly Served[]): CodemodeProvider['tools'] {
+  const served = new Set(members.map(({ op }) => op.name));
+
+  return Object.fromEntries(retiredMembersOf(ns).filter(({ member }) => !served.has(member)).map(({ member, told }) => [member, {
+    description: told,
+    // It does nothing, so no work mode keeps it from saying so.
+    planAllowed: true,
+    execute: async () => await branchableToolCall(() => settle(Effect.fail(new KinuError('bad_input', told)))),
+  }]));
 }
 
 /** A namespace for programs and slates, over the same served operations; `summary` says what it is for. */
@@ -310,7 +327,7 @@ export function codemodeNamespace(ns: string, summary: string, members: readonly
     positionalArgs: true,
     operations: members,
     declarations: Object.fromEntries(members.map(({ op }) => [op.name, { full: operationDeclaration(op), call: callForm(op) }])),
-    tools: Object.fromEntries(members.map((served) => [served.op.name, {
+    tools: { ...retiredMembers(ns, members), ...Object.fromEntries(members.map((served) => [served.op.name, {
       description: served.op.help,
       ...(allowedInPlan(served.op) && { planAllowed: true }),
       // A refusal is the call's value, for the program to branch on.
@@ -327,13 +344,46 @@ export function codemodeNamespace(ns: string, summary: string, members: readonly
 
         return (await served.run(input, { callId: `codemode-${crypto.randomUUID()}`, ...(signal !== undefined && { signal }) })).value;
       }),
-    }])),
+    }])) },
   };
 }
 
-/** A namespace's full declaration, as `describe(ns)` answers it in a program. */
+/** A namespace's members as a program holds them: each by its own name, a group's (`fs.read`) in the group's object. */
+export interface NestedMembers<T> {
+  readonly [name: string]: T | Readonly<Record<string, T>>;
+}
+
+/** A namespace's members as a program holds them: `fs.read` under `fs`, every other member by its own name. */
+export function nestedMembers<T>(members: Readonly<Record<string, T>>): NestedMembers<T> {
+  const flat: Record<string, T> = {};
+  const groups = new Map<string, Record<string, T>>();
+
+  for (const [name, member] of Object.entries(members)) {
+    const [group = name, inner] = name.split('.');
+
+    if (inner === undefined) flat[name] = member;
+    else groups.set(group, Object.assign(groups.get(group) ?? {}, { [inner]: member }));
+  }
+
+  return { ...flat, ...Object.fromEntries(groups) };
+}
+
+/** A namespace's full declaration, as `describe(ns)` answers it in a program; a member group is its own object. */
 export function namespaceDeclaration(ns: string, declarations: Readonly<Record<string, MemberDeclaration>>): string {
-  return [`declare const ${ns}: {`, ...Object.values(declarations).map((declared) => declared.full.replace(/^/gmu, '  ')), '};'].join('\n');
+  const indented = (text: string, by: string): string => text.replace(/^/gmu, by);
+  const members: string[] = [];
+  const groups = new Map<string, string[]>();
+
+  for (const [name, declared] of Object.entries(declarations)) {
+    const [group = name, inner] = name.split('.');
+
+    if (inner === undefined) members.push(indented(declared.full, '  '));
+    else groups.set(group, [...groups.get(group) ?? [], indented(declared.full, '    ')]);
+  }
+
+  for (const [group, inner] of groups) members.push([`  ${group}: {`, ...inner, '  };'].join('\n'));
+
+  return [`declare const ${ns}: {`, ...members, '};'].join('\n');
 }
 
 /** Who calls an operation from outside eval: an actor, in the work mode it asks for, in a turn when one is open. */

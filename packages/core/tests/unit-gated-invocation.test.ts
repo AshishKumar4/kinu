@@ -119,7 +119,7 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
     router.register(createNimbusWorkspaceExecutor({
       box,
       shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/shared'] }),
-      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     }));
 
     return { start: present(router.getProvider('workspace'), 'the workspace').tools.startProcess, started };
@@ -224,43 +224,6 @@ describe('the member is part of the ask', () => {
     await exec.execute(GATED, { job: 'job-1', detached: new AbortController().signal });
 
     expect(queue.list().map((row) => row.context.background)).toEqual([undefined, true]);
-  });
-
-  test('two Nimbus programs alike but for their work limit are two asks', async () => {
-    const ran: Array<number | undefined> = [];
-    const { policy, queue } = owner('deny');
-    const live = prompts(2);
-
-    const box: SessionBox = {
-      ready: async () => {},
-      exec: async (command) => ({ command, success: true, stdout: '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 }),
-      runCode: async (code, options) => {
-        ran.push(options?.timeoutMs);
-
-        return { command: code, success: true, stdout: '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 };
-      },
-      files: sessionFilesOver(),
-    };
-
-    const { rt } = createTestRuntime();
-    const router = new DefaultExecutionRouter({ ...policy, requestApproval: live.ask });
-
-    router.register(createNimbusWorkspaceExecutor({
-      box,
-      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [] }),
-      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
-    }));
-
-    const runCode = present(present(router.getProvider('workspace'), 'the workspace').tools.runCode, 'runCode');
-    const long = runCode.execute(GATED, { language: 'shell', timeoutMs: 60_000 });
-    const short = runCode.execute(GATED, { language: 'shell', timeoutMs: 1 });
-
-    await live.shown;
-    expect(queue.list()).toHaveLength(2);
-
-    for (const prompt of live.asked) prompt.answer(prompt.request.context.timeoutMs === 1 ? 'allow' : 'deny');
-    await Promise.all([long, short]);
-    expect(ran).toEqual([1]);
   });
 });
 

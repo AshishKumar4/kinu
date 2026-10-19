@@ -10,7 +10,7 @@ const call = (name: string, args: JsonObject = {}): ToolCallRecord =>
   compactToolCall({ name, args, result: null });
 
 const write = (path: string): ToolCallRecord =>
-  call('eval', { code: `await workspace.writeFile("${path}", body);` });
+  call('eval', { code: `await workspace.fs.write("${path}", body);` });
 
 describe('delegationFeatures', () => {
   test('counts agents operations from a completed turn record', () => {
@@ -109,7 +109,7 @@ describe('executionPathSignals — backtracking', () => {
   test('re-reading a file the turn just wrote via code-mode', () => {
     const trace = [
       write('/src/auth.ts'),
-      call('eval', { code: 'const prev = await workspace.readFile("/src/auth.ts");' }),
+      call('eval', { code: 'const prev = await workspace.fs.text("/src/auth.ts");' }),
     ];
 
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
@@ -138,7 +138,7 @@ describe('executionPathSignals — backtracking', () => {
 
   test('order matters: reading before writing is not backtracking', () => {
     const trace = [
-      call('eval', { code: 'await workspace.readFile("/src/auth.ts");' }),
+      call('eval', { code: 'await workspace.fs.text("/src/auth.ts");' }),
       write('/src/auth.ts'),
     ];
 
@@ -148,7 +148,7 @@ describe('executionPathSignals — backtracking', () => {
   test('a call cannot backtrack over its own write', () => {
     const trace = [
       call('eval', {
-        code: 'await workspace.writeFile("/a.ts", x); await workspace.readFile("/a.ts");',
+        code: 'await workspace.fs.write("/a.ts", x); await workspace.fs.text("/a.ts");',
       }),
     ];
 

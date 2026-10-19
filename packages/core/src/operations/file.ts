@@ -10,6 +10,9 @@ const Lines = (text: string) => v.optional(described(v.pipe(v.number(), v.intege
 
 const Truncated = v.optional(described(v.strictObject({ shown: v.number(), total: v.number() }), 'Present when not all of it is shown.'));
 
+const ListTruncated = v.optional(described(v.strictObject({ shown: v.number(), total: v.number(), next: v.number() }),
+  'Present when not all of it is shown; `next` is the offset that continues the listing.'));
+
 /** A write into a slate's directory: whether the slate builds now, in the compiler's words when it does not. */
 export const SlateBuildNoteSchema = described(v.strictObject({ slate: v.string(), builds: v.boolean(), error: v.optional(v.string()) }),
   'A write under /slates/<id>/: whether that slate still builds. One that does not keeps showing its last working version.');
@@ -40,6 +43,13 @@ export const FILE = {
     input: v.strictObject({ path: Path, offset: Lines('The first line, 1-indexed; default 1.'), limit: Lines(`Lines to return; default ${String(FILE_READ_LINES)}.`) }),
     output: v.union([v.string(), ImageCarrierSchema]),
   }),
+  text: fileOp({
+    name: 'text',
+    help: 'A text file whole, as a string, with no line numbers and nothing cut; a later write or edit counts it as read in full. For a program, which holds the value: the file tool reads a window.',
+    impact: 'observe',
+    input: v.strictObject({ path: Path }),
+    output: v.string(),
+  }),
   edit: fileOp({
     name: 'edit',
     help: 'Replace text in a file you have read, every edit applied together or none; refused when the file changed since.',
@@ -56,10 +66,10 @@ export const FILE = {
   }),
   list: fileOp({
     name: 'list',
-    help: "A directory's entries.",
+    help: "A directory's entries, a page at a time.",
     impact: 'observe',
-    input: v.strictObject({ path: Path }),
-    output: v.strictObject({ path: v.string(), entries: v.array(v.string()), truncated: Truncated }),
+    input: v.strictObject({ path: Path, offset: v.optional(described(v.pipe(v.number(), v.integer(), v.minValue(0)), 'The first entry, 0-indexed; default 0.')) }),
+    output: v.strictObject({ path: v.string(), entries: v.array(v.string()), truncated: ListTruncated }),
   }),
   stat: fileOp({
     name: 'stat',

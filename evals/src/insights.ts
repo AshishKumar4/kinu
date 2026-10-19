@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, normalize } from 'node:path';
 import * as v from 'valibot';
-import { parseSync, Visitor, type VisitorObject } from 'oxc-parser';
+import { type Expression, parseSync, type Super, Visitor, type VisitorObject } from 'oxc-parser';
 import { JsonValueSchema, RunEventSchema, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { redactJson } from './redact';
 import type { Assertion, HarnessRun } from './results';
@@ -117,8 +117,18 @@ function lineCount(content: string): number {
   return kept === '' ? 0 : kept.split('\n').length;
 }
 
-/** A program's file writes, by namespace. */
-const PROGRAM_WRITES = new Map([['workspace', ['writeFile', 'editFile']], ['file', ['write', 'edit']]]);
+/**
+ * A program's file writes on the workspace plane, by the object they are called on. `workspace.writeFile` and
+ * `editFile` are the old surface's: a comparison's baseline leg runs the release before this one.
+ */
+const PROGRAM_WRITES = new Map([['workspace', ['writeFile', 'editFile']], ['file', ['write', 'edit']], ['workspace.fs', ['write', 'edit']]]);
+
+/** The object a call is made on, as `workspace` or `workspace.fs`; null for any other shape. */
+function calledOn(node: Expression | Super): string | null {
+  if (node.type === 'Identifier') return node.name;
+
+  return node.type === 'MemberExpression' && node.object.type === 'Identifier' && node.property.type === 'Identifier' ? `${node.object.name}.${node.property.name}` : null;
+}
 
 /** Only explicit write submissions count, never reading an output or mentioning it in a reply. */
 function writtenPaths(call: Call): string[] {
@@ -136,8 +146,10 @@ function writtenPaths(call: Call): string[] {
       CallExpression(node) {
         const callee = node.callee;
 
-        if (callee.type !== 'MemberExpression' || callee.object.type !== 'Identifier' || callee.property.type !== 'Identifier'
-          || PROGRAM_WRITES.get(callee.object.name)?.includes(callee.property.name) !== true) return;
+        if (callee.type !== 'MemberExpression' || callee.property.type !== 'Identifier') return;
+        const on = calledOn(callee.object);
+
+        if (on === null || PROGRAM_WRITES.get(on)?.includes(callee.property.name) !== true) return;
 
         const path = node.arguments[0];
 
@@ -311,10 +323,10 @@ function assignedHelper(call: Call, helpers: HelperObservations, add: RecordFact
   if (op === 'hire' && stringOf(answer.name) !== '') {
     const name = stringOf(answer.name);
 
-    add('helper-hired', { helper: name, mission: args.mission ?? null, lifetime: args.lifetime ?? null }, call.evidence);
+    add('helper-hired', { helper: name, message: args.message ?? null, lifetime: args.lifetime ?? null }, call.evidence);
     helpers.set(name, { status: null, runs: null, evidence: call.evidence });
 
-    return { helper: name, brief: stringOf(args.mission), evidence: call.evidence, call };
+    return { helper: name, brief: stringOf(args.message), evidence: call.evidence, call };
   }
 
   if ((op === 'assign' || op === 'message') && stringOf(args.agent) !== '') {

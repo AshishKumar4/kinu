@@ -21,12 +21,12 @@ it('R-P1 grant intersection. a viewer of the broader of two owner shares reaches
   await probe.start();
 
   const broad = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   await probe.share([]);
 
   // One server, one storage: the narrower share's bound holds for the broader share's viewers too. Not even asked.
-  expect((await probe.viewerBatch(broad.share.handle, CLAIM)).mutateError).toContain('does not reach workspace.writeFile');
+  expect((await probe.viewerBatch(broad.share.handle, CLAIM)).mutateError).toContain('does not reach workspace.fs.write');
   expect(await probe.ownerQueue()).toEqual([]);
 });
 
@@ -35,7 +35,7 @@ it('R-P1 owner lineage. a shared slate calling its binding under no request of t
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   // Asked by a viewer, the slate skips its runner and calls with no invocation: no write, and nothing for the owner to approve.
   expect(await probe.viewerCall(created.share.handle, CLAIM, 'raw')).toContain('called out under no request');
@@ -68,11 +68,11 @@ it("R2-P1 one principal. the owner's own call of their shared slate asks them fo
   const probe = subject('review2-owner-own');
 
   await probe.start();
-  await probe.share([{ namespace: 'workspace', member: 'writeFile' }]);
+  await probe.share([{ namespace: 'workspace', member: 'fs.write' }]);
   const seen = await probe.ownersOwnWrite();
 
-  expect(seen.first).toContain('waits for the owner to approve it: writeFile on workspace');
-  expect(seen.asked).toEqual(['the owner:writeFile']);
+  expect(seen.first).toContain('waits for the owner to approve it: fs.write on workspace');
+  expect(seen.asked).toEqual(['the owner:fs.write']);
   expect(seen.second).not.toContain('waits for the owner');
   expect(seen.after).toBe(0);
 });
@@ -87,8 +87,8 @@ it("R2-P1 hop lineage. a slate the shared one hops to is held to the shared serv
   const seen = await probe.hopWrites(created.share.handle, CLAIM);
 
   // The hop runs; its write, a leaf of the digest under the board's request, meets the board's bound and is refused.
-  expect(seen.viewer).toContain('does not reach workspace.writeFile');
-  expect(seen.owner).toContain('does not reach workspace.writeFile');
+  expect(seen.viewer).toContain('does not reach workspace.fs.write');
+  expect(seen.owner).toContain('does not reach workspace.fs.write');
   expect(seen.asked).toBe(0);
 });
 
@@ -128,8 +128,8 @@ it('R3-P2 one environment. a call the shared server makes runs in its environmen
   await probe.viewerCall(created.share.handle, CLAIM, 'probe');
   const environments = await probe.environments();
 
-  expect(environments[0]).toBe('readFile:owner');
-  expect(environments.slice(shared)).toEqual(['readFile:shared', 'readFile:shared']);
+  expect(environments[0]).toBe('fs.text:owner');
+  expect(environments.slice(shared)).toEqual(['fs.text:shared', 'fs.text:shared']);
 });
 
 // Fourth review of 870c59e83 (MechanicalToad, 2026-10-17): a bound inherited through a shared slate, and a member a running
@@ -156,7 +156,7 @@ it('R4-P1 nested lineage. a member a running tool reaches inside itself is refus
   const [shared, revoked, ...more] = await probe.craftedAcrossRevoke(created.share.id);
 
   // Shared, its grant never reached the member; revoked while the tool ran, it is not the owner's for that.
-  expect(shared).toContain('does not reach workspace.writeFile');
+  expect(shared).toContain('does not reach workspace.fs.write');
   expect(revoked).toContain('started before its sharing changed');
   expect(more).toEqual([]);
 });

@@ -6,8 +6,8 @@ const impact = (namespace: string, member: string) => slateAddressImpact({ names
 
 test('the impact table is what the grant, the graph and the audit row read', () => {
   const rows: readonly [string, string, string][] = [
-    ['workspace', 'readFile', 'observe'], ['workspace', 'readdir', 'observe'], ['computer', 'exists', 'observe'],
-    ['workspace', 'writeFile', 'mutate'], ['workspace', 'exec', 'execute'], ['computer', 'exposePort', 'administer'],
+    ['workspace', 'fs.text', 'observe'], ['workspace', 'fs.list', 'observe'], ['computer', 'fs.stat', 'observe'],
+    ['workspace', 'fs.write', 'mutate'], ['workspace', 'exec', 'execute'], ['computer', 'exposePort', 'administer'],
     ['db', 'select', 'observe'], ['db', 'insert', 'mutate'], ['db', 'dropTable', 'mutate'],
     ['memory', 'search', 'observe'], ['memory', 'recall', 'observe'], ['memory', 'remember', 'mutate'], ['memory', 'forget', 'mutate'],
     ['tasks', 'list', 'observe'], ['tasks', 'add', 'mutate'],

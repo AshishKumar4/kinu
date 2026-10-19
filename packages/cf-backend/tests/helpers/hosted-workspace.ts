@@ -145,7 +145,7 @@ export async function hostedWorkspace(
     modelOperations: () => undefined,
     tracing: () => createAgentTracing({ tracer: createRecordingTracer(), isolateGen: 1, selfPath: [], actor: { id: main.actorId, kind: 'main' } }),
     slate: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
-    slateBuild: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
+
     deferrals: () => undefined,
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,
     chosenWriteObserver: () => null,

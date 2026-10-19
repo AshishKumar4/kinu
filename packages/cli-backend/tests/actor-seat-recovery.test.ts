@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { HeadCapture, REAL_CLOCK, sha256Hex, type HeadInput, type HostedActor } from '@kinu.run/core';
-import { scratchDir, scriptedTurnModel, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
+import { scratchDir, scriptedTurnModel, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { workspaceHome, type CLIRuntime } from '../src/runtime';
 import { LocalAgentHost, type LocalAgentHostOptions } from '../src/agent-host/host';
@@ -86,7 +86,7 @@ test('startup claim recovery leaves a restarted node available to re-drive on th
     expect(home).toMatchObject({ exitCode: 0, stdout: process.env.HOME ?? '' });
 
     const result = await node.infer(head('retained-node'), {
-      actor: node.actor, runId: node.runId, sources: node.sources, clock: REAL_CLOCK,
+      actor: node.actor, runId: node.runId, stores: servedStoresOf(node.actor.runtime, node.actor.stores.conversationSearch), sources: node.sources, clock: REAL_CLOCK,
       tools: {}, capture: new HeadCapture(), isAborted: () => false,
     });
 
@@ -116,7 +116,7 @@ test('startup claim recovery leaves a restarted head available to re-drive with 
     await writeText(branch.actor.runtime.storage.vfs, join(workspace.folder, 'retained.txt'), 'retained change\n');
 
     const result = await branch.infer(head('retained-head'), {
-      actor: branch.actor, runId: branch.runId, sources: branch.sources, clock: REAL_CLOCK,
+      actor: branch.actor, runId: branch.runId, stores: servedStoresOf(branch.actor.runtime, branch.actor.stores.conversationSearch), sources: branch.sources, clock: REAL_CLOCK,
       tools: {}, capture, isAborted: () => false,
     });
 

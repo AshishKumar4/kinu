@@ -70,7 +70,7 @@ export async function sessionFixture(input: {
   const sources = {
     ...fixtureRunSources(actor, () => input.model),
     ...(input.budget !== undefined && { budget: input.budget }),
-    toolset: () => tools,
+    toolset: () => ({ tools, stores: null }),
     externalTools: async () => ({}),
     wiredToolNames: () => Object.keys(tools),
     codemodeCapabilities: () => [],

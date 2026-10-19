@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { fileNamespaceFor } from '../../core/tests/helpers';
 import { isStepCount, type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
@@ -27,7 +28,7 @@ import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import { validSummary } from '../../compaction/tests/helpers';
 import { resolverRest } from './helpers/local-session';
-import { scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
+import { scratchPath, scratchDir, workspaceDatabase, servedStoresOf } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const SESSION = 'kinu-itest:default';
@@ -156,7 +157,7 @@ describe('default compaction over the real storage plane', () => {
         task: 'Continue the inherited plan.', rationale: 'Continue the inherited plan.', mode: 'build', inheritedContext: [],
         mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
       }, {
-        actor: seat.actor, runId: seat.runId, sources: seat.sources, tools: {},
+        actor: seat.actor, runId: seat.runId, stores: servedStoresOf(seat.actor.runtime, seat.actor.stores.conversationSearch), sources: seat.sources, tools: {},
         opening: Array.from({ length: 24 }, (_, index): ModelMessage[] => [
           { role: 'user', content: `Task ${String(index)}: retain the decisions in this plan.` },
           { role: 'assistant', content: `Decision ${String(index)}: ${'x'.repeat(4_000)}` },
@@ -283,7 +284,7 @@ describe('default compaction over the real storage plane', () => {
     const workspace = rt.executionRouter?.getProvider('workspace');
 
     if (!workspace) throw new Error('expected the workspace executor');
-    const readBack = v.parse(v.string(), await workspace.tools.readFile.execute(snapshot.transcriptRelativePath));
+    const readBack = v.parse(v.string(), await fileNamespaceFor(rt, workspace).tools['fs.text']?.execute(snapshot.transcriptRelativePath));
 
     expect(readBack).toContain('output-0 ');
     expect(readBack).toContain('Task 0: please run step 0');

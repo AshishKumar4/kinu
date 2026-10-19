@@ -1,6 +1,6 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '@kinu.run/core';
 import { orchestratorHarness, chatSessionTurns, workspaceFiles } from './helpers/actor-harness';
 import * as v from 'valibot';
@@ -59,8 +59,8 @@ test('Plan blocks slate source restoration and authored calls without converting
   expect(await agent.slateCallAs({ caller: planCaller, id: 'app', name: 'workspace', lineage: UNSHARED }, { path: ['slates', 'peer', 'shell'], args: [], invocation: null })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await readText(files, path)).toBe('second');
   // The retained Build app has separate invocation authority from this Plan turn.
-  expect(await agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'app', name: 'workspace', lineage: UNSHARED }, { path: ['readFile'], args: [path], invocation: null })).toEqual({ ok: true, value: 'second' });
-  expect(await agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'app', name: 'workspace', lineage: UNSHARED }, { path: ['writeFile'], args: [path, 'build app wrote'], invocation: null })).toMatchObject({ ok: true });
+  expect(await agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'app', name: 'workspace', lineage: UNSHARED }, { path: ['fs', 'text'], args: [path], invocation: null })).toEqual({ ok: true, value: 'second' });
+  expect(await agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'app', name: 'workspace', lineage: UNSHARED }, { path: ['fs', 'write'], args: [path, 'build app wrote'], invocation: null })).toMatchObject({ ok: true });
   expect(await readText(files, path)).toBe('build app wrote');
   await chatSessionTurns(agent).settle({ messageId: 'done', text: 'Plan ready.', requestId: 'done' });
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
@@ -86,4 +86,27 @@ test('a planner role records Plan authority for deferred work even when the mess
   if (run === undefined) throw new Error('The real turn produced no run record');
   const events = await agent.getRunEvents(run.runId);
   expect(events.find((event) => event.type === 'turn_end')).toMatchObject({ workMode: 'plan' });
+});
+
+test("outside any turn, the agent's own file tool and a slate's call read and write through one ledger", async () => {
+  const { agent } = orchestratorHarness();
+  const files = workspaceFiles(agent);
+
+  await files.mkdir('/slates/app', { recursive: true });
+  await writeText(files, '/slates/app/package.json', JSON.stringify({ main: 'server.ts' }));
+  await writeText(files, '/slates/app/server.ts', 'export default {}');
+  await writeText(files, '/home/main/a.md', 'first a');
+  await writeText(files, '/home/main/b.md', 'first b');
+
+  const file = toolExecute<JsonValue, JsonValue>(present(agent.getTools().file, "the agent's file tool"));
+  const slate = async (path: string[], args: JsonValue[]) => await agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'app', name: 'workspace', lineage: UNSHARED }, { path, args, invocation: null });
+
+  // A read through the agent's own tool lets a slate's write through ...
+  await file({ op: 'read', path: '/home/main/a.md' });
+  expect(await slate(['fs', 'write'], ['/home/main/a.md', 'the slate wrote'])).toMatchObject({ ok: true });
+  // ... and a slate's read lets the agent's own tool write.
+  expect(await slate(['fs', 'text'], ['/home/main/b.md'])).toEqual({ ok: true, value: 'first b' });
+  expect(await toolExecute<JsonValue, JsonValue>(present(agent.getTools().file, "the agent's file tool"))({ op: 'write', path: '/home/main/b.md', content: 'the tool wrote' }))
+    .toMatchObject({ action: 'replaced' });
+  expect([await readText(files, '/home/main/a.md'), await readText(files, '/home/main/b.md')]).toEqual(['the slate wrote', 'the tool wrote']);
 });

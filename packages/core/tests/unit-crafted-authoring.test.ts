@@ -1,5 +1,5 @@
 // A live eval tried three times to save a file-reading tool, met three errors that never named the way a tool reads a
-// file, and concluded crafted tools cannot. They can, with `workspace.readFile`: the recorded programs, replayed, now
+// file, and concluded crafted tools cannot. They can, with `workspace.fs.text`: the recorded programs, replayed, now
 // meet errors that name it, and the declaration the model reads states the contract they broke.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -12,7 +12,7 @@ const [, WRAPPED, REQUIRED] = RECORDED_ATTEMPTS;
 /** The file attempt 1 read: the tool as a declaration, which the agent then wrapped in an eval script. */
 const REPORT_TOTALS_SOURCE = 'async function report_totals(args) {\n  return { total: 0, path: args.path };\n}\n';
 
-const BINDING = 'workspace.readFile(';
+const BINDING = 'workspace.fs.text(';
 
 const RefusalSchema = v.object({ ok: v.boolean(), error: v.string() });
 
@@ -20,7 +20,7 @@ function workspaceOf() {
   const { rt, db } = createTestRuntime();
 
   const provider = createInlineExecutor({
-    filesOwner: 'agent', vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql, actor: rt.actor,
+    filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, sql: rt.storage.sql, actor: rt.actor,
     shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
   });
 

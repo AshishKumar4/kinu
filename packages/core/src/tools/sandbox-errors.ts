@@ -3,6 +3,7 @@
  * `eval` into their corrections; every other error passes.
  */
 
+import { retiredNamespace } from '../operations/retired';
 import { isBuiltinToolName, TOOL_REACH } from './registry';
 import { CRAFTED_TOOL_NAMESPACE, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 
@@ -14,6 +15,9 @@ const NO_SUCH_MODULE = /No such module "[^"]+"\.?$/;
 export function explainSandboxError(error: string): string {
   if (NO_SUCH_MODULE.test(error)) return `${error} A program imports no modules: ${WORKSPACE_FILE_BINDINGS}.`;
   const name = UNDEFINED_IDENTIFIER.exec(error)?.[1];
+  const retired = name === undefined ? null : retiredNamespace(name);
+
+  if (retired !== null) return `${error}: ${retired}`;
 
   if (!name || !isBuiltinToolName(name)) return error;
 

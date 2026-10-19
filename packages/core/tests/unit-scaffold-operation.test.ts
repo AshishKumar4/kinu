@@ -6,7 +6,7 @@ import { createScaffoldLLMStream, createScaffoldCandidateSurface,
   currentOperationProfile,
   type ModelCallReport, type ModelOperationEvent, type ProfileCatalog,
 } from '../src/index';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, servedStoresFor } from './helpers';
 import type { ComposedRequest, ResolvedTurnProfile } from '../src/index';
 
 /** The live turn's assembly as a backend answers `composeRequest`: its system prompt and its dynamic block. */
@@ -15,7 +15,7 @@ function composed(profile: ResolvedTurnProfile, model: MockLanguageModelV3): () 
     profile,
     sessionKey: 'scaffold-operation',
     execution: {
-      loopVersion: 1, extensions: [], instructions: null,
+      loopVersion: 1, extensions: [], instructions: null, stores: null,
       chat: { model, modelSpec: profile.tier.model, system: 'the turn system prompt', tools: {} },
       dynamic: () => ({ runtime: { backend: 'cf', model: { id: profile.tier.model }, date: '2026-10-03' } }),
     },
@@ -140,7 +140,7 @@ for (const provider of ['openai', 'anthropic']) {
     let resolutions = 0;
 
     const surface = createScaffoldCandidateSurface({
-      rt, tools: () => ({}), history: undefined, compose: composed(profile, model),
+      rt, tools: () => ({}), stores: servedStoresFor(rt), history: undefined, compose: composed(profile, model),
       modelContext: async modelSpec => ({ id: modelSpec, contextWindow: 100_000, modelOutputLimit: 10_000 }),
       profile: async () => {
         resolutions += 1;
@@ -196,7 +196,7 @@ test('a long-lived candidate surface snapshots tools and profile per issued requ
   const tools: ToolSet = { tool_a: native };
 
   const surface = createScaffoldCandidateSurface({
-    rt, profile: async () => profile, compose: composed(profile, model),
+    rt, profile: async () => profile, compose: composed(profile, model), stores: servedStoresFor(rt),
     tools: () => {
       scopes.push(currentOperationProfile(rt.actor)?.profile.tiers.deep.model);
 

@@ -43,7 +43,7 @@ const SLATE = 'effectshare';
 // under the very call that made it.
 const MARK = `${SLATE}-mark.txt`;
 
-const WRITE = { slate: SLATE, namespace: 'workspace', member: 'writeFile' };
+const WRITE = { slate: SLATE, namespace: 'workspace', member: 'fs.write' };
 
 const waiting = (answer: SlateViewerAnswer<JsonValue> | null) => answer !== null && 'error' in answer && answer.error.includes('waits for the owner to approve it');
 
@@ -63,7 +63,7 @@ END
 cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async mark() { return await this.env.workspace.writeFile("${MARK}", "visitor"); }
+  async mark() { return await this.env.workspace.fs.write("${MARK}", "visitor"); }
   async fetch() { return new Response("owner-effects-probe-ok"); }
 }
 END`));
@@ -107,7 +107,7 @@ END`));
         goals.push({ what: 'visitor-write-waits-for-owner', reached: waiting(asked) && markBefore.includes('EFFECTS-NO-MARK'), detail: JSON.stringify({ asked, markBefore }) });
         goals.push({
           what: 'owner-sees-the-exact-call-parked',
-          reached: effect.length === 1 && effect[0]?.kind === 'slate-effect' && effect[0].effect.tool === 'writeFile' && JSON.stringify(effect[0].effect.payload).includes(MARK),
+          reached: effect.length === 1 && effect[0]?.kind === 'slate-effect' && effect[0].effect.tool === 'fs.write' && JSON.stringify(effect[0].effect.payload).includes(MARK),
           detail: JSON.stringify(effect),
         });
         goals.push({ what: 'approved-write-runs-once', reached: decided.length === 1 && ran !== null && 'value' in ran && markAfter.includes('visitor'), detail: JSON.stringify({ decided, ran, markAfter }) });
