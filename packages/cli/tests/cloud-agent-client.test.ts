@@ -851,7 +851,8 @@ describe('CloudAgentClient protocol', () => {
     );
 
     expect(rpc.method).toBe('revertConversation');
-    expect(rpc.args).toEqual(['m3']);
+    // A walk-back leaves files as they are: the agent is told what its rewound turns left.
+    expect(rpc.args).toEqual(['m3', { chatOnly: true }]);
     mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: null });
 
     const result = await forkPromise;

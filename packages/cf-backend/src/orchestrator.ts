@@ -53,7 +53,7 @@ import { AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads, userCredentials } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
-import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
+import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
@@ -97,7 +97,7 @@ import { createCodemodeToolFactory } from "./codemode-tool";
 import { BROWSER_PRELUDE } from './browser-prelude';
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
-import type { ToolSet, UIMessage } from "ai";
+import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
@@ -393,6 +393,11 @@ interface SourcePlanes {
 
 /** An assignment's delivery, as its metadata names it. */
 const AssignmentMetadataSchema = v.looseObject({ kinuEvent: v.literal('subordinate_task'), kinuMode: WorkModeSchema });
+
+/** A revert's choice, as its dialog sends it: `chatOnly` keeps the computer's work and tells the agent of it. */
+const RevertOptionsSchema = v.object({ chatOnly: v.optional(v.boolean()) });
+
+type RevertOptions = v.InferOutput<typeof RevertOptionsSchema>;
 
 /** A crossing as a producer that waits on it hears it: its value, or the agent's failure. The delivery stays owed either
  *  way the agent did not take it. */
@@ -1226,7 +1231,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. The room hears the end before
    *  this object writes it: a frame waits for the writes made before it, and the answer it tells of is already durable in
    *  the agent's own store (#103). */
-  private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
+  private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: ChatWindow): Promise<void> {
     const { runId } = event;
     const fences = new TurnFences(this.boundSql);
     const ended = fences.ending(actorId, runId);
@@ -6943,10 +6948,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Continue the chat from before `entryId`; open tabs get the reverted transcript via the
-   * session event this emits. */
+   * session event this emits. A chat-only rewind tells the agent what its rewound turns left on the computer
+   * (REWIND-0924), read without waking it. */
   @callable()
-  async revertConversation(entryId: string): Promise<void> {
-    await this.mainCall((isolate, snapshot) => isolate.revertTo(snapshot, entryId));
+  async revertConversation(entryId: string, options?: RevertOptions): Promise<void> {
+    // Parsed here too: a client's argument reaches this method unchecked.
+    const chatOnly = v.parse(RevertOptionsSchema, options ?? {}).chatOnly === true;
+    const told = chatOnly ? { computer: await this.executors.rewindComputer() } : undefined;
+
+    await this.mainCall((isolate, snapshot) => isolate.revertTo(snapshot, entryId, told));
   }
 
   /**

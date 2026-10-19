@@ -144,6 +144,52 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
     await harness.closeDeviceHarness();
   });
 
+  // L111 #4: an 'always' on its way back while the owner revoked bound 'allow' again, restoring the grant they took away.
+  test("an approval answering while the owner revokes restores nothing: the call does not run, and the next one asks", async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+    const owner = await testOwner();
+    // The answer that spends the owner's 'always' is the one in flight.
+    harness.whileAskAnswers = async (verdict) => {
+      if (verdict !== 'always') return;
+      harness.whileAskAnswers = null;
+      await harness.userDO.revokeDeviceConsent(owner, WORKSPACE, harness.deviceId);
+    };
+
+    await expect(harness.deviceCall(harness.workspace, 'readRange', ['/home/me/a.md', 0, 64], { agentName: WORKSPACE }))
+      .rejects.toThrow('changed while this call waited');
+    const bound = await harness.userDO.listDeviceConsents(owner);
+
+    harness.consentDecision = 'deny';
+    await expect(harness.deviceCall(harness.workspace, 'readRange', ['/home/me/a.md', 0, 64], { agentName: WORKSPACE }))
+      .rejects.toThrow(CONSENT_REFUSED);
+
+    expect({ bound, reads: harness.deviceFrames.filter((f) => f.method === 'readRange'), asked: harness.consentPrompts.length })
+      .toEqual({ bound: [], reads: [], asked: 2 });
+    await harness.closeDeviceHarness();
+  });
+
+  // L111 #4: a call admitted on a standing grant ran though the owner revoked it while the call waited to be sent.
+  test('a call admitted on a grant the owner revokes before it is sent does not run', async () => {
+    const owner = await testOwner();
+    let granted = false;
+
+    const harness = await deviceHarness('ashish@studio', async (frame) => {
+      // The probe before the send: the owner revokes while the admitted call waits on it.
+      if (granted && frame.method === DEVICE_METHOD.execAck) await harness.userDO.revokeDeviceConsent(owner, WORKSPACE, harness.deviceId);
+
+      return daemon(frame);
+    });
+
+    harness.grantDevice(WORKSPACE, harness.deviceId);
+    granted = true;
+
+    await expect(harness.deviceCall(harness.workspace, 'exec', ['make deploy'], { agentName: WORKSPACE, requestId: nextDeviceRequestId() }))
+      .rejects.toThrow('changed while this call waited');
+    expect(harness.deviceFrames.filter((f) => f.method === 'exec')).toEqual([]);
+    await harness.closeDeviceHarness();
+  });
+
   test('a grant belongs to one workspace: the sibling is still asked', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'always';

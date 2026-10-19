@@ -1524,7 +1524,7 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
   DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentAnswer, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
   type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
@@ -1703,6 +1703,8 @@ export {
 } from './orchestrator/chat-session';
 
 export type { DeliveredRun } from './orchestrator/chat-queue';
+
+export { CHAT_REWOUND_EVENT, type RewindComputer, type RewindTold } from './orchestrator/rewind-notice';
 
 export { startActorTurn } from './orchestrator/actor-turn';
 
@@ -2031,7 +2033,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
+export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage, type ChatWindow } from './read-models/status';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 

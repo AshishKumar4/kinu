@@ -30,7 +30,7 @@ test.each([
 
   try {
     await fixture.chat.send('plan the quarterly offsite', { id: 'q-1' });
-    const [question, answer, ...after] = await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName);
+    const [question, answer, ...after] = (await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName)).messages;
 
     expect([question?.id, answer?.role, answer?.parts, after]).toEqual(['q-1', 'assistant', [], []]);
     expect(turnFailure({ metadata: answer?.metadata })).toContain(cause);

@@ -3,7 +3,7 @@
 import type { ActorHandle } from '../identity/actor-handle';
 import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
-import { CHAT_PAGE_BYTES, CHAT_SESSION_ID } from '../session/transcript-schema';
+import { CHAT_PAGE_BYTES, CHAT_SEED_ROWS, CHAT_SESSION_ID } from '../session/transcript-schema';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { missionOf } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
@@ -148,11 +148,18 @@ export async function getChatHistoryPage(
   }));
 }
 
-/** What a tab is sent of a chat as it connects or a turn ends: its newest page, oldest first. */
-export async function chatSeed(transcript: SessionTranscriptReader, media: MediaUrl): Promise<UIMessage[]> {
-  const page = await transcript.drawnPage({ bytes: CHAT_PAGE_BYTES, media });
+/** A tab's window of its chat: its newest rows, oldest first, and where its scroll-back reads on from: the cursor of
+ *  the rows before them, or null when they reach the chat's start, so there is nothing older to ask for. */
+export interface ChatWindow {
+  readonly messages: UIMessage[];
+  readonly older: PositionCursor | null;
+}
 
-  return page.items.flatMap(({ message }) => (message === null ? [] : [message]));
+/** What a tab is sent of a chat as it connects or a turn ends: its newest window, within one page's bytes. */
+export async function chatSeed(transcript: SessionTranscriptReader, media: MediaUrl): Promise<ChatWindow> {
+  const page = await transcript.drawnPage({ bytes: CHAT_PAGE_BYTES, limit: CHAT_SEED_ROWS, media });
+
+  return { messages: page.items.flatMap(({ message }) => (message === null ? [] : [message])), older: page.status === 'more' ? page.next : null };
 }
 
 export type ChatHistoryPage = Page<ChatHistoryEntry, PositionCursor>;

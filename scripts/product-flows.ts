@@ -595,6 +595,15 @@ export interface AgentReturnVerdict {
  * report of 2026-09-23: every agent was present over the API and a reloaded page
  * showed none of them.
  */
+/**
+ * The chat column's conversation, whole: its pane shows the conversation's beginning once nothing older is left to read,
+ * by a page it read or by the window its room seeded it with, whose frame says it reaches the start (c1c9c18e9). A wait
+ * for the page read alone waited out the runner's bound on rc22 (2620e7c05): a short chat seeded whole reads none. An
+ * empty chat shows no edge, so this is for a chat that has rows.
+ */
+const CHAT_FROM_ITS_BEGINNING = `[...document.querySelectorAll('#chat [data-scroll-edge]')]
+  .some((edge) => edge.textContent?.includes('Beginning of the conversation') === true)`;
+
 export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentReturnVerdict> {
   const workspace = await createFlowWorkspace(target, 'agent-return');
   const elsewhere = await createFlowWorkspace(target, 'agent-elsewhere');
@@ -651,7 +660,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
-    // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own.
+    // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own; the workspace's own chat is
+    // empty here, and an empty pane always reads its newest page.
     await settledAfter(back, ledger, 'getWorkspaceOpening', 'getChatHistoryPage');
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
@@ -668,7 +678,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
       await back.click(`nav[aria-label="Chats"] [data-agent-tab="${agent}"] a`);
       await until(back, "the agent's page", `location.pathname === ${JSON.stringify(`${agentPath}${encodeURIComponent(agent)}`)}`);
       await until(back, "the agent's own composer", agentComposer(workspace, agent));
-      await settledAfter(back, ledger, 'getChatHistoryPage');
+      await until(back, "the agent's conversation from its beginning", CHAT_FROM_ITS_BEGINNING);
+      await settledAfter(back, ledger);
       conversation = v.parse(v.string(), await back.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
     }
 

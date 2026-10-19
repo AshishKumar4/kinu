@@ -69,7 +69,7 @@ describe('a rewind', () => {
     fixture.history.revertTo(CHAT_SESSION_ID, 'u1', () => Effect.void);
 
     expect(fixture.transcript.newestId()).toBeNull();
-    expect(await chatSeed(fixture.transcript, keptMediaName)).toEqual([]);
+    expect((await chatSeed(fixture.transcript, keptMediaName)).messages).toEqual([]);
 
     const rewound = logger.emitted.filter((line: RecordedLog) => line.event === 'session.transcript_rewound');
     expect(present(rewound[0], 'the recorded rewind').fields).toMatchObject({ from: 'u1', position: 0 });

@@ -35,22 +35,22 @@ describe('a dropped file goes out with the message', () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-      const pane = '[data-agent-pane="checkout-fixes/main"]';
+      const pane = '[data-agent-pane="api-worker/main"]';
       await page.waitForSelector(`${pane} textarea:not([disabled])`);
 
       await page.$eval(pane, (node) => {
         const files = new DataTransfer();
-        files.items.add(new File(['coupon,discount\nSAVE20,20\n'], 'coupons.csv', { type: 'text/csv' }));
+        files.items.add(new File(['route,status\nGET /api/health,500\n'], 'errors.csv', { type: 'text/csv' }));
         node.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
         node.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
       });
-      await page.waitForFunction((at) => (document.querySelector(`${at} [data-composer-root]`)?.textContent ?? '').includes('coupons.csv'), {}, pane);
+      await page.waitForFunction((at) => (document.querySelector(`${at} [data-composer-root]`)?.textContent ?? '').includes('errors.csv'), {}, pane);
 
-      await page.type(`${pane} textarea`, 'Check these coupons');
+      await page.type(`${pane} textarea`, 'Check these errors');
       await page.click(`${pane} button[aria-label="Send"]`);
       await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
 
-      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:coupons.csv', 'text:Check these coupons']);
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:errors.csv', 'text:Check these errors']);
       await page.close();
     });
   });

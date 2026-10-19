@@ -843,7 +843,7 @@ describe('daemon device path confinement', () => {
     // The checkpoint queue, held until the swap is made: a frame's mutation runs only once released.
     const ctx = {
       checkpoints: {
-        mutate: async (_request, _covered, apply) => {
+        mutate: async (_view, _request, _covered, apply) => {
           await queued;
 
           return apply(null);
@@ -939,6 +939,176 @@ describe('daemon device path confinement', () => {
     // The swap ran from the first frame to the last, and the daemon met the link after a frame was checked.
     expect(swapper.signalCode).toBe('SIGTERM');
     expect(refused).toBeGreaterThan(0);
+  });
+
+  // L111 #2: a read was judged, then opened by its name again; a command swapping a directory of it for a link in that
+  // instant had the unsandboxed daemon read, stat or list what the link led to, outside the consented root.
+  test('a read, a stat and a listing answer from where they were checked while a command swaps a link into the path', async () => {
+    const { project, inner, outside } = swapFixture();
+    fs.writeFileSync(path.join(outside, 'target.txt'), 'outside the root');
+    fs.writeFileSync(path.join(outside, 'private.md'), 'the owner\'s');
+    const target = path.join(inner, 'target.txt');
+
+    const frames = [
+      ['readRange', [target, 0, 64], (result) => Buffer.from(result.content, 'base64').toString('utf8') === 'outside the root'],
+      ['statPath', [target], (result) => result?.size === 'outside the root'.length],
+      ['listFiles', [inner, { offset: 0, limit: 50 }], (result) => result.entries.some((entry) => entry.name === 'private.md')],
+    ];
+
+    const escaped = {};
+    let refused = 0;
+
+    const swapper = Bun.spawn({
+      cmd: [process.execPath, '-e', SWAPPER],
+      env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+
+    try {
+      await swapper.stdout.getReader().read();
+
+      for (let attempt = 0; attempt < 3000; attempt += 1) {
+        const [method, params, outsideRead] = frames[attempt % frames.length];
+        const ws = fakeWs();
+
+        handle({ id: 'read-race', method, sandbox: scoped([project]), params }, ws, {});
+        const answer = await ws.response('read-race');
+
+        if (answer.error !== undefined) refused += 1;
+        else if (outsideRead(answer.result)) escaped[method] = (escaped[method] ?? 0) + 1;
+      }
+    } finally {
+      swapper.kill();
+      await swapper.exited;
+    }
+
+    expect(escaped).toEqual({});
+    expect(swapper.signalCode).toBe('SIGTERM');
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  // L111 #2, the macOS half: a listing that held the directory but read its names by its path again, keeping those the
+  // held directory also has, told a command which of the names it planted a swapped-in private directory shares: a
+  // listing showing only some of them. Every listing shows all the planted names or none of them, and no private one.
+  // (Mid-rename the view's realpath can judge a sibling inside the root, the directory aside or the project itself,
+  // measured with Bun 1.4.3: those listings are of directories this frame may read, and hold no planted name.)
+  test('a listing tells a command nothing of a private directory it swaps in for the checked one', async () => {
+    const root = scratchDir('daemon-list-planted');
+    const project = path.join(root, 'project');
+    const inner = path.join(project, 'inner');
+    const outside = path.join(root, 'private');
+    const planted = ['guess-1.md', 'guess-2.md', 'guess-3.md', 'guess-4.md'];
+
+    fs.mkdirSync(inner, { recursive: true });
+    fs.mkdirSync(outside);
+
+    for (const name of planted) fs.writeFileSync(path.join(inner, name), 'planted');
+    // The private directory holds one of the guesses, and a name of its own.
+    fs.writeFileSync(path.join(outside, 'guess-3.md'), 'private');
+    fs.writeFileSync(path.join(outside, 'payroll.xlsx'), 'private');
+    const shown = {};
+    let refused = 0;
+
+    const swapper = Bun.spawn({
+      cmd: [process.execPath, '-e', SWAPPER],
+      env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+
+    try {
+      await swapper.stdout.getReader().read();
+
+      for (let attempt = 0; attempt < 2000; attempt += 1) {
+        const ws = fakeWs();
+
+        handle({ id: 'list-race', method: 'listFiles', sandbox: scoped([project]), params: [inner] }, ws, {});
+        const answer = await ws.response('list-race');
+
+        if (answer.error !== undefined) refused += 1;
+        else {
+          const names = answer.result.map((entry) => entry.name).sort((a, b) => a.localeCompare(b)).join(' ');
+
+          shown[names] = (shown[names] ?? 0) + 1;
+        }
+      }
+    } finally {
+      swapper.kill();
+      await swapper.exited;
+    }
+
+    const whole = planted.join(' ');
+
+    const told = Object.keys(shown).filter((names) => names.includes('payroll.xlsx')
+      || (names !== whole && planted.some((name) => names.split(' ').includes(name))));
+
+    expect({ told, whole: (shown[whole] ?? 0) > 0 }).toEqual({ told: [], whole: true });
+    expect(swapper.signalCode).toBe('SIGTERM');
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  // A libc that cannot be bound lists nothing another way: the listing is refused, saying why.
+  test('a listing is refused, not read by its path, when the descriptor cannot be enumerated', async () => {
+    const project = scratchDir('daemon-list-unbound');
+    const ws = fakeWs();
+    const held = require('../src/daemon/held.js');
+
+    const failing = held.heldModule((name) => {
+      if (name === 'bun:ffi') throw new Error('no libc binding here');
+
+      return require(name);
+    });
+
+    fs.writeFileSync(path.join(project, 'a.txt'), 'a');
+
+    const refusal = (() => {
+      try {
+        failing.atJudged({ raw: false }, project, {}, (at) => at.list((entries) => entries));
+
+        return null;
+      } catch (cause) {
+        return { code: cause.code, said: cause.message.includes('cannot list') };
+      }
+    })();
+
+    handle({ id: 'listed', method: 'listFiles', sandbox: scoped([project]), params: [project] }, ws, {});
+    expect({ refusal, listed: (await ws.response('listed')).result.map((entry) => entry.name) }).toEqual({ refusal: { code: 'ENOTSUP', said: true }, listed: ['a.txt'] });
+  });
+
+  // L111 #2's review: a stat walked from / threw when a directory of its path was missing, where an absent path is null.
+  test('a stat of a path whose directory is not there yet answers null, followed or not', async () => {
+    const project = scratchDir('daemon-stat-missing');
+    const answers = [];
+
+    for (const follow of [true, false]) {
+      const ws = fakeWs();
+
+      handle({ id: 'absent', method: 'statPath', sandbox: scoped([project]), params: [path.join(project, 'not-made', 'file.txt'), { follow }] }, ws, {});
+      answers.push(await ws.response('absent'));
+    }
+
+    expect(answers).toEqual([{ id: 'absent', result: null }, { id: 'absent', result: null }]);
+  });
+
+  // L111 #2: a listing showed a link's target's size and time, though the link led out of the root.
+  test("a listed link out of the root shows its name alone, and one inside shows its target's size", async () => {
+    const root = scratchDir('daemon-listed-links');
+    const project = path.join(root, 'project');
+    fs.mkdirSync(project);
+    fs.writeFileSync(path.join(root, 'outside.txt'), 'outside the root');
+    fs.writeFileSync(path.join(project, 'inside.txt'), 'inside');
+    fs.symlinkSync(path.join(root, 'outside.txt'), path.join(project, 'out-link'));
+    fs.symlinkSync(path.join(project, 'inside.txt'), path.join(project, 'in-link'));
+    const ws = fakeWs();
+
+    handle({ id: 'links', method: 'listFiles', sandbox: scoped([project]), params: [project, { offset: 0, limit: 10 }] }, ws, {});
+    const { entries } = (await ws.response('links')).result;
+    const byName = Object.fromEntries(entries.map(({ name, ...rest }) => [name, rest]));
+
+    expect({ out: byName['out-link'], in: byName['in-link']?.size }).toEqual({ out: { type: 'file' }, in: 'inside'.length });
   });
 
   test('scoped native mutations stay inside the resolved root', async () => {
@@ -1271,12 +1441,15 @@ describe('daemon checkpoint protocol', () => {
     const { work, ctx } = setup({ gitBin: git.bin });
     const order = [];
 
-    const snapshot = ctx.checkpoints.ensure({ agent: 'a', turnId: 't1', sessionId: 's', dir: work }, work)
+    // A raw view's store, as the owner's own machine with its Sandbox switch off: its git runs as the daemon's own.
+    const raw = { raw: true };
+
+    const snapshot = ctx.checkpoints.ensure(raw, { agent: 'a', turnId: 't1', sessionId: 's', dir: work }, work)
       .then(() => { order.push('snapshot'); });
 
     await git.held;
     const listed = ctx.checkpoints.list('a', 50).then(() => { order.push('list'); });
-    const mutated = ctx.checkpoints.mutate(null, work, () => { order.push('mutation'); });
+    const mutated = ctx.checkpoints.mutate(raw, null, work, () => { order.push('mutation'); });
 
     try {
       await oneTurn();
@@ -2039,6 +2212,144 @@ describe('daemon process under Bun against a local hub', () => {
       expect(Buffer.from(tail.result.content, 'base64').toString('utf8')).toBe('xxxxxxxxxxEND');
       hub.socket().send(JSON.stringify({ id: 'rpc-noisyack00-1', method: 'execAck', params: ['rpc-noisysbx00-1', 1] }));
       await reply('rpc-noisyack00-1');
+    });
+  });
+
+  // L111 #3: a checkpoint directory was judged when its frame arrived, then git ran there by path, unsandboxed, once
+  // the queue reached it; a command swapping it for a link out of the root in between had the restore rewrite and
+  // delete what the link led to. Its git now runs in the frame's sandbox, where such a link leads nowhere.
+  test('a restore whose directory a command swaps for a link out of the root while it waits changes nothing there', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const shared = scratchDir('daemon-ckpt-swap');
+    const project = path.join(shared, 'project');
+    const inner = path.join(project, 'inner');
+    const other = path.join(project, 'other');
+    const outside = path.join(shared, 'outside');
+
+    for (const dir of [inner, other, outside]) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(inner, 'target.txt'), 'inside');
+    fs.writeFileSync(path.join(outside, 'target.txt'), 'the owner\'s');
+    fs.writeFileSync(path.join(outside, 'owner-only.txt'), 'the owner\'s alone');
+    // A git first on the daemon's PATH that holds a staging once armed, inside the root so the frame's sandbox runs it too.
+    const held = path.join(project, '.held-git');
+    fs.mkdirSync(held);
+    const fifo = await runToExit(['mkfifo', path.join(held, 'release')]);
+
+    if (fifo.exitCode !== 0) throw new Error(`mkfifo failed: ${fifo.stderr}`);
+    const realGit = (await runToExit(['bash', '-c', 'command -v git'])).stdout.trim();
+    fs.writeFileSync(path.join(held, 'git'), [
+      '#!/bin/bash',
+      `if [ "$1" = add ] && [ -e '${held}/armed' ] && mkdir '${held}/holding' 2>/dev/null; then read -r _ < '${held}/release'; fi`,
+      `exec '${realGit}' "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+
+    const tree = (dir) => fs.readdirSync(dir, { recursive: true }).map(String).sort((a, b) => a.localeCompare(b))
+      .map((name) => [name, fs.lstatSync(path.join(dir, name)).isFile() ? fs.readFileSync(path.join(dir, name), 'utf8') : 'dir']);
+
+    await withDaemon({ PATH: `${held}:${process.env.PATH}` }, async ({ hub, root, reply }) => {
+      const block = { tier: 'sandboxed', agentHome: path.join(root, 'agents', 'ws-swap', 'home'), roots: [project] };
+      const hint = (turnId, dir) => ({ agent: 'a', turnId, sessionId: 's', dir });
+      const send = (frame) => { hub.socket().send(JSON.stringify(frame)); };
+
+      send({ id: 'w1', method: 'writeFile', sandbox: block, params: [path.join(inner, 'seed.txt'), 'seed'], checkpoint: hint('t1', inner) });
+      expect((await reply('w1')).result?.success).toBe(true);
+      send({ id: 'l1', method: 'checkpointList', params: ['a', 50, 't1'] });
+      const [taken] = (await reply('l1')).result;
+      const outsideBefore = tree(outside);
+
+      // A snapshot ahead of the restore is held, so the restore is judged now and runs after the swap.
+      fs.writeFileSync(path.join(held, 'armed'), '');
+      send({ id: 'w2', method: 'writeFile', sandbox: block, params: [path.join(other, 'x.txt'), 'x'], checkpoint: hint('t2', other) });
+      expect(await until(() => fs.existsSync(path.join(held, 'holding')), 20_000)).toBe(true);
+      send({ id: 'r', method: 'checkpointRestore', sandbox: block, params: ['a', inner, taken.id] });
+      // Frames are handled in their order: a stat's answer means the restore before it was judged and queued.
+      send({ id: 'judged', method: 'statPath', sandbox: block, params: [inner] });
+      await reply('judged');
+      fs.renameSync(inner, path.join(project, 'inner-old'));
+      fs.symlinkSync(outside, inner);
+      await fs.promises.writeFile(path.join(held, 'release'), 'go\n');
+
+      const restored = await reply('r');
+      await reply('w2');
+      expect({ refused: restored.error?.message, outside: tree(outside) }).toEqual({
+        refused: `checkpoint directory '${inner}' is no longer inside ${project}, which this workspace was given on this device: something in its path now leads out of it, so no checkpoint reads or restores it`,
+        outside: outsideBefore,
+      });
+    });
+  });
+
+  // L111 #3: the same restore, confined, with nothing swapped: the tree comes back, and what was made since goes.
+  test('a confined restore puts the tree back and removes what was made since it', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const work = path.join(scratchDir('daemon-ckpt-confined'), 'project');
+    fs.mkdirSync(work);
+    fs.writeFileSync(path.join(work, 'kept.txt'), 'before');
+
+    await withDaemon(undefined, async ({ hub, root, reply }) => {
+      const block = { tier: 'sandboxed', agentHome: path.join(root, 'agents', 'ws-restore', 'home'), roots: [work] };
+      const send = (frame) => { hub.socket().send(JSON.stringify(frame)); };
+
+      send({ id: 'w', method: 'writeFile', sandbox: block, params: [path.join(work, 'seed.txt'), 'seed'], checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: work } });
+      await reply('w');
+      send({ id: 'l', method: 'checkpointList', params: ['a', 50, 't'] });
+      const [taken] = (await reply('l')).result;
+      fs.writeFileSync(path.join(work, 'kept.txt'), 'after');
+      fs.mkdirSync(path.join(work, 'made'));
+      fs.writeFileSync(path.join(work, 'made', 'since.txt'), 'new');
+
+      send({ id: 'r', method: 'checkpointRestore', sandbox: block, params: ['a', work, taken.id] });
+      const restored = await reply('r');
+
+      expect({ error: restored.error, kept: fs.readFileSync(path.join(work, 'kept.txt'), 'utf8'), since: fs.existsSync(path.join(work, 'made', 'since.txt')), seed: fs.existsSync(path.join(work, 'seed.txt')) })
+        .toEqual({ error: undefined, kept: 'before', since: false, seed: false });
+    });
+  });
+
+  // L111 #1: a sandboxed command writes its own tmp, so it can put a link where a later command's output spills. The
+  // supervisor, unsandboxed, followed it and wrote the output over whatever it named.
+  test('a spill opens neither a link planted at its name nor one put in place of its directory', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    await withDaemon(undefined, async ({ hub, root, reply }) => {
+      const block = { tier: 'sandboxed', agentHome: path.join(root, 'agents', 'ws-plant', 'home'), roots: [] };
+      const tmp = path.join(root, 'agents', 'ws-plant', 'tmp');
+      const noisy = "head -c 600000 /dev/zero | tr '\\0' x; printf END";
+      const ownerFile = path.join(root, 'owner-notes.md');
+      const ownerDir = path.join(root, 'owner-dir');
+
+      fs.writeFileSync(ownerFile, 'the owner\'s own notes');
+      fs.mkdirSync(ownerDir);
+      fs.mkdirSync(path.join(tmp, 'kinu-tool-output'), { recursive: true });
+      fs.symlinkSync(ownerFile, path.join(tmp, 'kinu-tool-output', 'device-rpc-plantlnk00-1.stdout.log'));
+
+      hub.socket().send(JSON.stringify({ id: 'rpc-plantlnk00-1', method: 'exec', sandbox: block, params: [noisy] }));
+      const atName = await reply('rpc-plantlnk00-1');
+
+      fs.rmSync(path.join(tmp, 'kinu-tool-output'), { recursive: true });
+      fs.symlinkSync(ownerDir, path.join(tmp, 'kinu-tool-output'));
+      hub.socket().send(JSON.stringify({ id: 'rpc-plantdir00-1', method: 'exec', sandbox: block, params: [noisy] }));
+      const asDir = await reply('rpc-plantdir00-1');
+
+      expect({
+        owner: fs.readFileSync(ownerFile, 'utf8'),
+        ownerDir: fs.readdirSync(ownerDir),
+        atName: atName.result.stdout.includes('saving /tmp/kinu-tool-output/device-rpc-plantlnk00-1.stdout.log failed'),
+        asDir: asDir.result.stdout.includes('saving /tmp/kinu-tool-output/device-rpc-plantdir00-1.stdout.log failed'),
+      }).toEqual({ owner: 'the owner\'s own notes', ownerDir: [], atName: true, asDir: true });
+
+      for (const id of ['rpc-plantlnk00-1', 'rpc-plantdir00-1']) {
+        hub.socket().send(JSON.stringify({ id: `${id}ack`, method: 'execAck', params: [id, 1] }));
+        await reply(`${id}ack`);
+      }
     });
   });
 

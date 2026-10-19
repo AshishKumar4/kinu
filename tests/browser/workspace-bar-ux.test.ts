@@ -55,18 +55,18 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.click(`${CHATS} a[aria-label="New chat"]`);
       await page.waitForSelector('[data-new-chat]');
 
-      await page.type('[data-new-chat] textarea', 'Audit the coupon rules');
+      await page.type('[data-new-chat] textarea', 'Audit the route bindings');
       await page.click('[data-new-chat] button[type="submit"]');
       await waitForNewChatOpen(page);
       // Named from its first words, which the workspace is asked to name it by.
-      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/audit-coupon-rules"] textarea');
+      await page.waitForSelector('[data-agent-pane="api-worker/agents/audit-route-bindings"] textarea');
       await page.waitForFunction((from) => Number(document.documentElement.dataset.galleryChatSends ?? '0') === from + 1, {}, before);
 
       // The opening is spent: leaving the chat and coming back sends nothing again.
       await page.click(`${CHATS} [data-agent-tab="main"] a`);
-      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"] textarea');
+      await page.waitForSelector('[data-agent-pane="api-worker/main"] textarea');
       await page.click(`${CHATS} [data-agent-tab]:not([data-agent-tab="main"]) a`);
-      await page.waitForSelector('[data-agent-pane^="checkout-fixes/agents/"] textarea');
+      await page.waitForSelector('[data-agent-pane^="api-worker/agents/"] textarea');
       expect(await sends()).toBe(before + 1);
       await page.close();
     });
@@ -76,10 +76,10 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin, '&createFails=1');
 
-      await startChat(page, 'Audit the coupon rules');
+      await startChat(page, 'Audit the route bindings');
       await page.waitForFunction((chain) => (document.querySelector('[data-new-chat]')?.textContent ?? '').includes(chain), {}, CREATE_REFUSAL_CHAIN);
       // The draft survives the refusal, so the retry is one click.
-      expect(await page.$eval('[data-new-chat] textarea', (field) => field.value)).toBe('Audit the coupon rules');
+      expect(await page.$eval('[data-new-chat] textarea', (field) => field.value)).toBe('Audit the route bindings');
 
       await page.click('[data-new-chat] button[type="submit"]');
       await waitForNewChatOpen(page);
@@ -106,7 +106,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await clickDialogButton(page, 'Cancel');
       expect(await chatText()).toBe(before);
 
-      await startChat(page, 'Audit the coupon rules');
+      await startChat(page, 'Audit the route bindings');
       await waitForNewChatOpen(page);
       const open = `${CHATS} [data-active]`;
 
@@ -201,13 +201,13 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     // a thinking level is written to THIS actor, never the workspace.
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
-      await startChat(page, 'Audit the coupon rules');
+      await startChat(page, 'Audit the route bindings');
       await waitForNewChatOpen(page);
       await page.waitForFunction(() => {
         const picker = document.querySelector('[data-agent-pane] [data-model-picker="Model"]');
         const trigger = picker?.closest('button');
 
-        return picker?.textContent?.includes('Claude Opus 4') === true && trigger instanceof HTMLButtonElement && !trigger.disabled;
+        return picker?.textContent?.includes('Muse Spark 1.3') === true && trigger instanceof HTMLButtonElement && !trigger.disabled;
       });
 
       // A real pointer press: the option commits on the pointer, not on a synthetic click().
@@ -227,7 +227,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
 
       await page.waitForFunction(() => (document.documentElement.dataset.galleryModelCalls ?? '').includes('setReasoningEffort'));
       const calls = await page.evaluate(() => JSON.parse(document.documentElement.dataset.galleryModelCalls ?? '[]'));
-      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'audit-coupon-rules'] }]);
+      expect(calls).toEqual([{ method: 'setReasoningEffort', args: ['high', 'audit-route-bindings'] }]);
       await page.close();
     });
   });
@@ -247,12 +247,12 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
         reads: document.documentElement.dataset.galleryGitHubReads,
       }));
 
-      expect(shown.repos[0]).toContain('fix/coupon-guard');
+      expect(shown.repos[0]).toContain('fix/sessions-binding');
       expect(shown.repos[0]).toContain('failing');
       expect(shown.items).toEqual([
-        ['acme/storefront#482', 'https://github.com/acme/storefront/pull/482', false],
-        ['acme/storefront#477', 'https://github.com/acme/storefront/issues/477', true],
-        ['acme/storefront-docs#61', 'https://github.com/acme/storefront-docs/pull/61', false],
+        ['acme/api-worker#482', 'https://github.com/acme/api-worker/pull/482', false],
+        ['acme/api-worker#477', 'https://github.com/acme/api-worker/issues/477', true],
+        ['acme/api-worker-docs#61', 'https://github.com/acme/api-worker-docs/pull/61', false],
       ]);
       expect(shown.checked).toBe('refreshed');
       // Opening the overview asks GitHub once, first; any later read takes the record as it stands.
@@ -269,17 +269,17 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.waitForSelector('[data-new-chat] textarea');
       await page.$eval('[data-new-chat] form', (form) => {
         const files = new DataTransfer();
-        files.items.add(new File(['sku,qty\nSAVE20,1\n'], 'cart.csv', { type: 'text/csv' }));
+        files.items.add(new File(['route,status\nGET /api/health,500\n'], 'errors.csv', { type: 'text/csv' }));
         form.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
         form.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
       });
-      await page.waitForFunction(() => (document.querySelector('[data-new-chat] [data-attachments]')?.textContent ?? '').includes('cart.csv'));
-      await page.type('[data-new-chat] textarea', 'Why does this cart 500?');
+      await page.waitForFunction(() => (document.querySelector('[data-new-chat] [data-attachments]')?.textContent ?? '').includes('errors.csv'));
+      await page.type('[data-new-chat] textarea', 'Why does this route 500?');
       await page.click('[data-new-chat] button[type="submit"]');
       await waitForNewChatOpen(page);
       await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
 
-      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:cart.csv', 'text:Why does this cart 500?']);
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:errors.csv', 'text:Why does this route 500?']);
       await page.close();
     });
   });
@@ -293,7 +293,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       await page.waitForSelector('[data-workspace-overview] [data-task-card]');
 
       await page.evaluate(() => {
-        const card = [...document.querySelectorAll('[data-task-card]')].find((node) => (node.textContent ?? '').includes('Serialize gift-card lines'));
+        const card = [...document.querySelectorAll('[data-task-card]')].find((node) => (node.textContent ?? '').includes('Move the webhook route onto openDb'));
 
         if (!(card instanceof HTMLElement)) throw new Error('no swarm-owned task card');
         card.click();
@@ -335,7 +335,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       }));
 
       expect(notice).toEqual({ alert: false, status: true });
-      await page.type('[data-composer-root] textarea', 'Look at the cart');
+      await page.type('[data-composer-root] textarea', 'Look at the logs');
       expect(await page.$('[data-composer-root] button[aria-label="Send"]:not([disabled])')).not.toBeNull();
       await page.close();
     });
@@ -417,7 +417,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
         await page.waitForSelector(`${rows} [data-workspace-chat]`);
-        await startChat(page, 'Audit the coupon rules');
+        await startChat(page, 'Audit the route bindings');
         await waitForNewChatOpen(page);
         const label = await openTab(page);
 
@@ -493,14 +493,14 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
   test('each conversation keeps its own draft across tab switches', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
-      await page.type('[data-agent-pane="checkout-fixes/main"] textarea', 'main draft');
-      await startChat(page, 'Audit the coupon rules');
+      await page.type('[data-agent-pane="api-worker/main"] textarea', 'main draft');
+      await startChat(page, 'Audit the route bindings');
       await waitForNewChatOpen(page);
-      await page.waitForSelector('[data-agent-pane^="checkout-fixes/agents/"] textarea');
+      await page.waitForSelector('[data-agent-pane^="api-worker/agents/"] textarea');
       expect(await page.$eval('[data-agent-pane] textarea', (field) => field.value)).toBe('');
 
       await page.click(`${CHATS} [data-agent-tab="main"] a`);
-      await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
+      await page.waitForSelector('[data-agent-pane="api-worker/main"]');
       expect(await page.$eval('[data-agent-pane] textarea', (field) => field.value)).toBe('main draft');
       await page.close();
     });

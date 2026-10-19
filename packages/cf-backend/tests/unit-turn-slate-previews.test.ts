@@ -80,7 +80,7 @@ test("a hire's slate edit is previewed on the hire's answer, and nowhere else", 
 
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Add an expiry column to the board.');
 
-  const hireAnswers = (await chatSeed(agentHistory(workspace, hire.actor.handle.actorId).history.transcript(CHAT_SESSION_ID), keptMediaName)).filter((message) => message.role === 'assistant');
+  const hireAnswers = (await chatSeed(agentHistory(workspace, hire.actor.handle.actorId).history.transcript(CHAT_SESSION_ID), keptMediaName)).messages.filter((message) => message.role === 'assistant');
 
   expect(hireAnswers.map((message) => slatesChanged({ metadata: message.metadata }))).toEqual([['board']]);
   expect(await workspace.agent.readWorkspaceFile('/slates/board/client.tsx'))
@@ -245,7 +245,7 @@ test("a hire whose report quotes the slate's line gets no second preview", async
 
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Add an expiry column to the board.');
 
-  const answer = (await chatSeed(agentHistory(workspace, hire.actor.handle.actorId).history.transcript(CHAT_SESSION_ID), keptMediaName)).filter((message) => message.role === 'assistant').at(-1);
+  const answer = (await chatSeed(agentHistory(workspace, hire.actor.handle.actorId).history.transcript(CHAT_SESSION_ID), keptMediaName)).messages.filter((message) => message.role === 'assistant').at(-1);
 
   expect(slatesChanged({ metadata: answer?.metadata })).toEqual([]);
   expect(previewsDrawn(answer)).toEqual(['board']);

@@ -177,7 +177,7 @@ describe('the Drive', () => {
         expect(await sections(page)).toEqual([{ title: 'Slates', tiles: ['Issue triage', 'Landing perf report', 'Standup notes'] }]);
         // A slate opens in its workspace, on its own tab.
         expect(await page.$eval('[data-drive-slate="issue-triage"] a', (a) => a.getAttribute('href')))
-          .toBe('/workspace/checkout-fixes?slate=issue-triage');
+          .toBe('/workspace/api-worker?slate=issue-triage');
         // The column places Slates, My stuff, then Shared with something new in it.
         expect(await places(page)).toEqual([['slates', 'page', false], ['mine', null, false], ['shared', null, true]]);
         await shoot(page, 'drive-slates-dark');
@@ -240,7 +240,7 @@ describe('the Drive', () => {
         const { pathname } = new URL(request.url());
 
         if (!pathname.startsWith('/api/user/pictures/')) await request.continue();
-        else if (pathname.startsWith('/api/user/pictures/checkout-fixes/issue-triage/')) await request.respond({ status: 200, contentType: 'image/png', body: PIXEL });
+        else if (pathname.startsWith('/api/user/pictures/api-worker/issue-triage/')) await request.respond({ status: 200, contentType: 'image/png', body: PIXEL });
         else await request.respond({ status: 404, body: 'No such picture.' });
       })));
       await page.setViewport(VIEWPORTS.desktop);

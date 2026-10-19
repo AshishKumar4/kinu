@@ -121,7 +121,7 @@ import type { ModelTestResult, UserDevice } from "@/lib/user-api";
 import { ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import { McpServerSummarySchema, type McpServerSummary } from "@kinu.run/core";
 import * as v from "valibot";
-import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryChatStartsAt, galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -171,9 +171,9 @@ const ROSTER = new URLSearchParams(location.search).get("roster") ?? "stock";
 
 const STOCK_ROSTER = {
   entries: [
-    { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
-      ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
-      : "Storefront", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: "api-worker", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
+      ? "Investigate intermittent 500s after the sessions binding rename and verify the release on staging"
+      : "API Worker", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
     { name: "perf-audit", displayName: "Dew", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
     { name: "email-triage", displayName: "Support inbox", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
     { name: "design-sys", displayName: "Kinu website", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5 },
@@ -210,7 +210,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
   "/api/user/devices/consents": [
     {
-      agentName: "checkout-fixes", deviceId: "dev_1", policy: "remembered",
+      agentName: "api-worker", deviceId: "dev_1", policy: "remembered",
       lastMethod: "exec", lastSummary: "bun test packages/core",
     },
   ],
@@ -304,7 +304,7 @@ function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
     return fixtureJson(frame === "devices"
       ? [
-        { agentName: "checkout-fixes", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" },
+        { agentName: "api-worker", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" },
         { agentName: "landing-page", deviceId: "dev-1", policy: "denied", lastMethod: "exec", lastSummary: null },
       ]
       : []);
@@ -810,7 +810,7 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
       origin: { by: "owner" },
       history: [
         { forgotten: false, value: "English, short answers", origin: { by: "owner" }, at: NOW - 864e5 },
-        { forgotten: false, value: "English", origin: { by: "owner", workspace: "Storefront" }, at: NOW - 6 * 864e5 },
+        { forgotten: false, value: "English", origin: { by: "owner", workspace: "API Worker" }, at: NOW - 6 * 864e5 },
       ],
     },
   ],
@@ -917,7 +917,7 @@ function deviceConnectFixture(path: string, method: string, body: BodyInit | nul
 
 /* One tile per card state; `gallery:overview` ({name, overview}) changes one and the roster socket carries it. */
 const STOCK_OVERVIEWS = new Map(Object.entries({
-  "checkout-fixes": { activity: "working", awaitsSettings: false, decisionsWaiting: 2, hasUpdates: false, latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration", run: null }, slates: [{ id: "coupon-board", title: "Coupon board", picture: null, visibility: null }], shares: [] },
+  "api-worker": { activity: "working", awaitsSettings: false, decisionsWaiting: 2, hasUpdates: false, latestRun: { status: "error", task: "Investigate intermittent 500s after the sessions binding rename", run: null }, slates: [{ id: "error-board", title: "Error board", picture: null, visibility: null }], shares: [] },
   "perf-audit": { activity: "working", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: null, task: "Make sync resume after a dropped connection", run: null }, slates: [], shares: [] },
   "email-triage": { activity: "idle", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: "completed", task: "Answer this week's refund requests", run: null }, slates: [], shares: [] },
   "design-sys": { activity: "unfinished", awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: { status: "error", task: "Kinu website", run: null }, slates: [], shares: [] },
@@ -949,7 +949,7 @@ const galleryRoster: RosterEntry[] = [
 ].map((entry) => {
   const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
 
-  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "checkout-fixes" ? GALLERY_LOGO : null };
+  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "api-worker" ? GALLERY_LOGO : null };
 });
 
 function galleryRosterCounts(): RosterCounts {
@@ -999,11 +999,11 @@ Object.assign(window, { galleryRosterSockets });
 const MEMORY_PROPOSALS = new Map<string, JsonValue>([
   ["waiting", {
     id: "amp_city", proposal: { kind: "fact", key: "owner_city", value: "Lisbon" },
-    origin: { by: "agent", workspace: "checkout-fixes", agent: "main" }, createdAt: NOW - 60_000,
+    origin: { by: "agent", workspace: "api-worker", agent: "main" }, createdAt: NOW - 60_000,
   }],
   ["timezone", {
     id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
-    origin: { by: "background", workspace: "Storefront" }, createdAt: NOW - 36e5,
+    origin: { by: "background", workspace: "API Worker" }, createdAt: NOW - 36e5,
   }],
 ]);
 
@@ -1106,7 +1106,7 @@ const rosterAuthorityHold = Promise.withResolvers<Response>();
 
 function MODEL_STUBS(): ModelMenuEntry[] {
   return [
-    { spec: "anthropic/claude-opus-4", label: "Claude Opus 4", provider: "Anthropic", reasoningEfforts: ["low", "medium", "high"] },
+    { spec: "opencode-go/muse-spark-1.3-contributor", label: "Muse Spark 1.3", provider: "OpenCode Go", reasoningEfforts: ["low", "medium", "high"] },
     { spec: "workers-ai/llama-4", label: "Llama 4 (Workers AI)", provider: "Workers AI" },
     { spec: "openai/gpt-5.6", label: "GPT-5.6", provider: "OpenAI" },
   ];
@@ -1293,7 +1293,7 @@ installShareModeFixture(frame, () => LIVE_SHARE, () => STANDING);
 const PROMPT = "$ ";
 
 /** A prompt as the computer's shell draws it: the box shown by its workspace's name (D93), the folder in blue. */
-const COMPUTER_PROMPT = "\x1b[01;32mroot@storefront\x1b[00m:\x1b[01;34m/workspace/storefront\x1b[00m# ";
+const COMPUTER_PROMPT = "\x1b[01;32mroot@api-worker\x1b[00m:\x1b[01;34m/workspace/api-worker\x1b[00m# ";
 
 /**
  * What each of the computer's sessions shows when it is opened (`GALLERY_SESSIONS`), and a PC's shell: the screens a
@@ -1306,33 +1306,33 @@ const PTY_SCREENS = {
     "Your branch is up to date with 'origin/main'.",
     "",
     "Changes not staged for commit:",
-    "  \x1b[31mmodified:   src/checkout/coupon.ts\x1b[0m",
+    "  \x1b[31mmodified:   workers/api/src/db.ts\x1b[0m",
     "",
     `${COMPUTER_PROMPT}`,
   ].join("\r\n"),
   s2: [
     `${COMPUTER_PROMPT}npm run dev`,
     "",
-    "> storefront@0.4.0 dev",
+    "> api@0.4.0 dev",
     "> vite",
     "",
     "  \x1b[32m\x1b[1mVITE\x1b[22m v5.4.8\x1b[39m  \x1b[2mready in \x1b[0m\x1b[1m412\x1b[22m\x1b[2m ms\x1b[22m",
     "",
     "  \x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m",
     "  \x1b[32m➜\x1b[39m  \x1b[1mNetwork\x1b[22m: \x1b[2muse \x1b[22m\x1b[1m--host\x1b[22m\x1b[2m to expose\x1b[22m",
-    "\x1b[2m10:41:07\x1b[22m \x1b[36m\x1b[1m[vite]\x1b[22m\x1b[39m \x1b[32mhmr update \x1b[39m\x1b[2m/src/checkout/Coupon.tsx\x1b[22m",
-    "\x1b[2m10:42:31\x1b[22m \x1b[36m\x1b[1m[vite]\x1b[22m\x1b[39m \x1b[32mpage reload \x1b[39m\x1b[2msrc/checkout/coupon.ts\x1b[22m",
+    "\x1b[2m10:41:07\x1b[22m \x1b[36m\x1b[1m[vite]\x1b[22m\x1b[39m \x1b[32mhmr update \x1b[39m\x1b[2m/src/routes/health.ts\x1b[22m",
+    "\x1b[2m10:42:31\x1b[22m \x1b[36m\x1b[1m[vite]\x1b[22m\x1b[39m \x1b[32mpage reload \x1b[39m\x1b[2msrc/db.ts\x1b[22m",
     "",
   ].join("\r\n"),
   s3: [
-    `${COMPUTER_PROMPT}npx vitest run src/checkout`,
+    `${COMPUTER_PROMPT}npx vitest run src/routes`,
     "",
-    " \x1b[7m\x1b[1m\x1b[36m RUN \x1b[39m\x1b[22m\x1b[27m \x1b[36mv2.1.2 \x1b[39m\x1b[90m/workspace/storefront\x1b[39m",
+    " \x1b[7m\x1b[1m\x1b[36m RUN \x1b[39m\x1b[22m\x1b[27m \x1b[36mv2.1.2 \x1b[39m\x1b[90m/workspace/api-worker\x1b[39m",
     "",
-    " \x1b[32m✓\x1b[39m src/checkout/cart.test.ts \x1b[2m(6 tests)\x1b[22m \x1b[90m41\x1b[2mms\x1b[22m\x1b[39m",
-    " \x1b[31m❯\x1b[39m src/checkout/coupon.test.ts \x1b[2m(4 tests | \x1b[22m\x1b[31m1 failed\x1b[39m\x1b[2m)\x1b[22m \x1b[90m38\x1b[2mms\x1b[22m\x1b[39m",
-    "   \x1b[31m×\x1b[39m applies a percentage coupon to the subtotal",
-    "     \x1b[31m→ expected 90 to be 81 // Object.is equality\x1b[39m",
+    " \x1b[32m✓\x1b[39m src/routes/users.test.ts \x1b[2m(6 tests)\x1b[22m \x1b[90m41\x1b[2mms\x1b[22m\x1b[39m",
+    " \x1b[31m❯\x1b[39m src/routes/health.test.ts \x1b[2m(4 tests | \x1b[22m\x1b[31m1 failed\x1b[39m\x1b[2m)\x1b[22m \x1b[90m38\x1b[2mms\x1b[22m\x1b[39m",
+    "   \x1b[31m×\x1b[39m reports the database as up",
+    "     \x1b[31m→ expected 'down' to be 'up' // Object.is equality\x1b[39m",
     "",
     " \x1b[2m Test Files \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (2)\x1b[39m",
     " \x1b[2m      Tests \x1b[22m \x1b[1m\x1b[31m1 failed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[1m\x1b[32m9 passed\x1b[39m\x1b[22m\x1b[90m (10)\x1b[39m",
@@ -1343,7 +1343,7 @@ const PTY_SCREENS = {
   "j-4f0c9a2e": [
     "\x1b[2m$ npm run deploy\x1b[0m",
     "",
-    "> storefront@0.4.0 deploy",
+    "> api@0.4.0 deploy",
     "> wrangler deploy --env production",
     "",
     " \x1b[33m⛅️ wrangler\x1b[39m 3.80.0",
@@ -1352,7 +1352,7 @@ const PTY_SCREENS = {
     "",
     "\x1b[33m?\x1b[39m \x1b[1mYou are about to deploy to production. Continue?\x1b[22m \x1b[2m(y/N)\x1b[22m ",
   ].join("\r\n"),
-  device: "\x1b[1mashish@Ashishs-MacBook\x1b[0m storefront % git pull\r\nAlready up to date.\r\n\x1b[1mashish@Ashishs-MacBook\x1b[0m storefront % ",
+  device: "\x1b[1mashish@Ashishs-MacBook\x1b[0m api-worker % git pull\r\nAlready up to date.\r\n\x1b[1mashish@Ashishs-MacBook\x1b[0m api-worker % ",
 } satisfies Record<string, string>;
 
 /** The screen a PTY lane replays as it opens: the computer's session's, or a PC's shell; none for the workspace's lane. */
@@ -1489,18 +1489,18 @@ window.WebSocket = new Proxy(window.WebSocket, {
 
 /** A real swarm tree at the size the view must survive; rows, not a tree, so it enters through `buildTree` like the socket payload. */
 const MCTS_ACTIONS = [
-  "Backfill coupon.kind from the discount table",
-  "Add a NOT NULL default and re-run the migration",
-  "Patch applyCoupon to tolerate a null kind",
-  "Reject null-kind coupons at the API edge",
-  "Recompute kind from percentage vs fixed amount",
-  "Roll the Tuesday migration back",
-  "Dual-write kind on the next checkout",
-  "Infer kind lazily in the cart serializer",
+  "Bind the sessions database under both names",
+  "Read SESSIONS_DB in openDb, falling back to DB",
+  "Fail by name when no binding is configured",
+  "Roll the config back to the DB binding",
+  "Move the webhook route onto openDb",
+  "Redeploy staging with the new binding",
+  "Read the binding once at the Worker's entry",
+  "Answer the health check from a cached probe",
   "Guard the 500 with a try/catch and log",
-  "Re-seed the coupon fixtures in staging",
-  "Split the migration into two deploys",
-  "Cache the resolved kind per coupon id",
+  "Re-seed the sessions table on staging",
+  "Split the rename into two deploys",
+  "Tail production for reads of env.DB",
 ];
 
 function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
@@ -1513,8 +1513,8 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
 
   const root = push({
     id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028, own_score: 0.028,
-    status: "open", action: "Find why the SAVE20 coupon 500s",
-    task: "Find why the SAVE20 coupon 500s and fix it.",
+    status: "open", action: "Find why /api/health 500s",
+    task: "Find why /api/health 500s and fix it.",
     observation: "Four candidate fixes explored; one line survived to depth 6.",
     created_at: NOW - 36e5,
   });
@@ -1573,7 +1573,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
         parent_id: parent.id, depth: parent.depth + 1, visits, value: score, own_score: score, status,
         action: MCTS_ACTIONS[(rows.length * 7 + parent.depth) % MCTS_ACTIONS.length],
         observation: status === "failed"
-          ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
+          ? "Branch errored: staging refused the migration while the old Worker still held its binding."
           : `Scored ${score.toFixed(2)} — ${status === "pruned" ? "below the prune floor, dropped" : "kept for the next round"}.`,
         created_at: NOW - 36e5 + rows.length * 9e3,
       });
@@ -1605,11 +1605,11 @@ const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
 const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   getWorkspaceSnapshot: {
     status: {
-      id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
-      displayName: "Storefront", purpose: "The store's checkout, cart and payments: keep them fast and correct.",
-      soul: "# Storefront\n\nI look after the checkout, the cart and payments. I read the migration before I guess.\n",
+      id: "agent_01j9x7q2m4apiworker", name: "api-worker-health-9935d3",
+      displayName: "API Worker", purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
+      soul: "# API Worker\n\nI look after the api Worker: its deploys, its database and its logs. I read the logs before I guess.\n",
       createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
-      messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null, reasoningEffort: "medium",
+      messageCount: 48, model: "opencode-go/muse-spark-1.3-contributor", forkLineage: null, reasoningEffort: "medium",
     },
     tools: { builtIn: [], crafted: [] },
     memoryContent: "",
@@ -1619,9 +1619,9 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
     // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
     chat: {
-      name: "checkout-coupon-bug-9935d3", actorId: "agent_01j9x7q2m4checkoutfixes", displayName: "Storefront", role: "default",
-      mission: "The store's checkout, cart and payments: keep them fast and correct.",
-      model: { model: "anthropic/claude-opus-4", source: "workspace" }, reasoningEffort: "medium",
+      name: "api-worker-health-9935d3", actorId: "agent_01j9x7q2m4apiworker", displayName: "API Worker", role: "default",
+      mission: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
+      model: { model: "opencode-go/muse-spark-1.3-contributor", source: "workspace" }, reasoningEffort: "medium",
       activePlan: null, messageCount: 48, pendingSteers: [],
     },
     branchRuns: [],
@@ -1629,7 +1629,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     slates: [],
     turnClaim: { kind: "settled" },
   },
-  getStoredModelSpec: "anthropic/claude-opus-4",
+  getStoredModelSpec: "opencode-go/muse-spark-1.3-contributor",
   getShellApprovalMode: "strict",
   getEvolutionChangelog: { entries: [], unseen: 0 },
 });
@@ -1641,7 +1641,7 @@ function withChat(snapshot: JsonObject, patch: JsonObject): JsonObject {
   return { ...snapshot, chat: { ...v.parse(JsonObjectSchema, snapshot.chat), ...patch } };
 }
 
-const WORKSPACE_PAGE_NAME = new URLSearchParams(location.search).get("ws") ?? "checkout-fixes";
+const WORKSPACE_PAGE_NAME = new URLSearchParams(location.search).get("ws") ?? "api-worker";
 
 // `&ws=handwrought-walnut-4166c321` is the untitled row: its snapshot answers a blank displayName.
 if (WORKSPACE_PAGE_NAME === "handwrought-walnut-4166c321") {
@@ -1803,24 +1803,24 @@ const MESSAGES: UIMessage[] = [
   }),
   msg({
     id: "u1", role: "user", createdAt: NOW - 6 * 60e3,
-    parts: [{ type: "text", text: "Audit the checkout flow, find why the SAVE20 coupon 500s, and fix it. Deploy to staging when green." }],
+    parts: [{ type: "text", text: "Audit the api Worker, find why /api/health answers 500, and fix it. Deploy to staging when green." }],
   }),
   msg({
     id: "a1", role: "assistant", createdAt: NOW - 5 * 60e3,
     parts: [
-      { type: "reasoning", text: "**Reproducing the failure**\n\nThe coupon path goes through `/api/cart/apply`. I should reproduce first, then bisect." },
-      { type: "reasoning", text: "**Bisecting**\n\nThe handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
-      { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "computer", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
-      { type: "tool-eval", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
-      { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },
+      { type: "reasoning", text: "**Reproducing the failure**\n\nEvery route that opens the database goes through `openDb`. I should reproduce first, then bisect." },
+      { type: "reasoning", text: "**Bisecting**\n\nThe route, `openDb`, then the config change that landed Tuesday. A 500 on every route that reads a session, and none on the static ones, points at the database binding." },
+      { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "computer", command: "curl -s localhost:8787/api/health" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'prepare')\"}" },
+      { type: "tool-eval", toolCallId: "t2", state: "output-available", input: { code: "// Which binding does the config give the database, and which does openDb read?\nconst config = JSON.parse(await fs.read(\"workers/api/wrangler.jsonc\"));\nreturn { configured: config.d1_databases.map((db) => db.binding), read: \"env.DB\" };" }, output: '{"configured":["SESSIONS_DB"],"read":"env.DB"}' },
+      { type: "text", text: "Found it. Tuesday's config renamed the sessions database's binding to `SESSIONS_DB`, but `openDb` still returns `env.DB`, which is undefined now.\n\n```ts\nreturn env.SESSIONS_DB ?? env.DB;\n```\n\nI'll patch `openDb`, add a regression test, and run the suite." },
       // A run of calls, not one.
-      { type: "tool-file", toolCallId: "t4", state: "output-available", input: { op: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
-      { type: "tool-file", toolCallId: "t5", state: "output-available", input: { op: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
+      { type: "tool-file", toolCallId: "t4", state: "output-available", input: { op: "read", path: "workers/api/src/db.ts" }, output: "…" },
+      { type: "tool-file", toolCallId: "t5", state: "output-available", input: { op: "read", path: "workers/api/wrangler.jsonc" }, output: "…" },
       // A quiet failure: state output-available, but the tool returned its own `{error}` (tools/builtins.ts); unsurfaced, it makes the group read clean.
-      { type: "tool-file", toolCallId: "t6", state: "output-available", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
-      { type: "tool-file", toolCallId: "t7", state: "output-available", input: { op: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
-      { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { op: "swarm", branches: 3, task: "Check every other call site that indexes `rules` by kind" }, output: "3 forks merged" },
-      { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "computer", command: "bun test packages/checkout" } },
+      { type: "tool-file", toolCallId: "t6", state: "output-available", input: { op: "edit", path: "workers/api/src/db.ts", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
+      { type: "tool-file", toolCallId: "t7", state: "output-available", input: { op: "write", path: "workers/api/test/integration/sessions-binding.test.ts" }, output: "ok" },
+      { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { op: "swarm", branches: 3, task: "Check every other route that reads `env.DB` itself" }, output: "3 forks merged" },
+      { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "computer", command: "bun test workers/api" } },
     ],
   }),
   msg({
@@ -1831,7 +1831,7 @@ const MESSAGES: UIMessage[] = [
   msg({
     id: "d1", role: "user",
     metadata: { kinuEvent: "event_drain" },
-    parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (coupon-tester): All 14 checkout regression tests green after the migration patch. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/shop): PR #212 review requested" }],
+    parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (binding-tester): All 14 of the Worker's regression tests green after the binding fix. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/api-worker): PR #212 review requested" }],
   }),
   // Copied from production: written before the author stamp, so a bare UUID id and the event name are its only markers.
   msg({
@@ -1847,38 +1847,38 @@ const MESSAGES: UIMessage[] = [
   msg({
     id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
-      { type: "reasoning", text: "The edit failed because old_text no longer matched after the formatter ran, so the file on disk is not the one I read; I should re-read it, apply the change against what is there now, then run the migration twice against a scratch database to prove it is idempotent, because staging already ran the first half of it on Tuesday and a second run must not double the backfill or touch the fixed-amount coupons it already set." },
-      { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the migration is idempotent before I let it near staging." },
+      { type: "reasoning", text: "The edit failed because old_text no longer matched after the formatter ran, so the file on disk is not the one I read; I should re-read it, apply the change against what is there now, then start the Worker against both binding names, because staging still binds the database as DB and production as SESSIONS_DB, and the fix must answer both until staging redeploys." },
+      { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the Worker starts against both binding names before I let it near staging." },
       // Its own row (a lone text part on either side stops it folding into a run) so its expanded state is inspectable.
       {
         type: "tool-run", toolCallId: "t9", state: "output-available",
         input: {
           runtime: "computer",
-          command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone",
+          command: "for f in workers/api/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone",
         },
-        output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
+        output: "-- checking workers/api/migrations/0006_users.sql\n-- checking workers/api/migrations/0007_sessions.sql",
       },
       { type: "text", text: "Migrations are clean. One more check before I loop back to the edit." },
       // A protocol-level failure: no `output`; the reason is in errorText.
       {
         type: "tool-run", toolCallId: "t10", state: "output-error",
-        input: { runtime: "workspace", command: "curl -sf https://ci.internal/status/checkout-fixes" },
+        input: { runtime: "workspace", command: "curl -sf https://ci.internal/status/api-worker" },
         errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443",
       },
       { type: "text", text: "CI didn't answer — checking the PR directly instead." },
       // No summarizer contract: name plus its one string argument; long enough to exercise truncation.
       {
         type: "dynamic-tool", toolCallId: "t11", toolName: "mcp_gh_search_pull_requests", state: "output-available",
-        input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
-        output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
+        input: { query: "repo:AshishKumar4/api-worker is:open head:fix/sessions-binding base:main status:success review-requested:AshishKumar4" },
+        output: "1 open PR: #212 \"Read the sessions database by its new binding\" — checks pending",
       },
       // A crafted tool: the result line attributes it; builtins and `mcp_` tools never do.
       {
-        type: "dynamic-tool", toolCallId: "t12", toolName: "bisect_migration", state: "output-available",
-        input: { migration: "packages/checkout/migrations/0042_coupon_kind.sql", column: "kind" },
-        output: "0042_coupon_kind.sql changed kind from fixed-only to nullable",
+        type: "dynamic-tool", toolCallId: "t12", toolName: "bisect_config", state: "output-available",
+        input: { config: "workers/api/wrangler.jsonc", key: "d1_databases" },
+        output: "3f2a91c renamed the binding DB to SESSIONS_DB",
       },
-      { type: "text", text: "CI didn't answer — retrying after the migration lands. PR #212 is already up for review." },
+      { type: "text", text: "CI didn't answer — retrying after the fix lands. PR #212 is already up for review." },
     ],
   }),
 ];
@@ -1961,11 +1961,11 @@ async function galleryResize(args: readonly unknown[]): Promise<JsonValue> {
 
 /** The computer's sessions (D90) as its box keeps them: a shell, a dev server listening, a test run that failed. */
 const GALLERY_SESSIONS: TerminalSession[] = [
-  { id: "shell", name: "shell", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 0, at: Date.now() - 20_000, command: "git status" }, ports: [], branch: "main", needsInput: false },
-  { id: "s2", name: "dev server", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main", needsInput: false },
-  { id: "s3", name: "tests", cwd: "/workspace/storefront", open: true, running: null, last: { exit: 1, at: Date.now() - 70_000, command: "npx vitest run src/checkout" }, ports: [], branch: "main", needsInput: false },
+  { id: "shell", name: "shell", cwd: "/workspace/api-worker", open: true, running: null, last: { exit: 0, at: Date.now() - 20_000, command: "git status" }, ports: [], branch: "main", needsInput: false },
+  { id: "s2", name: "dev server", cwd: "/workspace/api-worker", open: true, running: "node", last: null, ports: [5173], branch: "main", needsInput: false },
+  { id: "s3", name: "tests", cwd: "/workspace/api-worker", open: true, running: null, last: { exit: 1, at: Date.now() - 70_000, command: "npx vitest run src/routes" }, ports: [], branch: "main", needsInput: false },
   // An agent's job (D95) at a prompt: it waits for the person, or for its agent, to answer.
-  { id: "j-4f0c9a2e", name: "npm run deploy", cwd: "/workspace/storefront", open: true, running: "node", last: null, ports: [], branch: "main", needsInput: true, job: "4f0c9a2e-77d1-4f5b-9a63-0b2f6f0e1c55" },
+  { id: "j-4f0c9a2e", name: "npm run deploy", cwd: "/workspace/api-worker", open: true, running: "node", last: null, ports: [], branch: "main", needsInput: true, job: "4f0c9a2e-77d1-4f5b-9a63-0b2f6f0e1c55" },
 ];
 
 function gallerySessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
@@ -2014,19 +2014,22 @@ const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "pan
 /** `board=full`: Main's own tasks too, so the overview's board has a card in every lane, some with steps. */
 const BOARD_FULL = new URLSearchParams(location.search).get("board") === "full";
 
-function galleryTask(id: string, title: string, status: AgentTaskTree["status"], steps: readonly AgentTaskTree["status"][] = []): AgentTaskTree {
+/** A task and its steps as the store numbers them: `t` and the agent's next seq, steps taking the seqs after it. */
+function galleryTask(seq: number, title: string, status: AgentTaskTree["status"], steps: readonly AgentTaskTree["status"][] = []): AgentTaskTree {
+  const id = `t${String(seq)}`;
+
   return {
     id, parentId: null, title, status, updatedAt: 1, note: null,
-    subtasks: steps.map((step, at) => ({ id: `${id}-${String(at)}`, parentId: id, title: `Step ${String(at + 1)}`, status: step, updatedAt: 1, note: null })),
+    subtasks: steps.map((step, at) => ({ id: `t${String(seq + 1 + at)}`, parentId: id, title: `Step ${String(at + 1)}`, status: step, updatedAt: 1, note: null })),
   };
 }
 
 if (AGENTS_PANEL) {
   seedGalleryChat([
     // Hired by Main: its task arrives as an event naming the hirer, never as the person speaking.
-    msg({ id: "ca-u1", role: "user", createdAt: NOW - 6 * 60e3, metadata: delegatedTaskMetadata("main", "build"), parts: [{ type: "text", text: "Audit every coupon rule against the campaign table." }] }),
-    msg({ id: "ca-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Two rules skip the expiry check; both are in pricing.ts." }] }),
-  ], hostedActorSocketPath("coupon-auditor"));
+    msg({ id: "ca-u1", role: "user", createdAt: NOW - 6 * 60e3, metadata: delegatedTaskMetadata("main", "build"), parts: [{ type: "text", text: "Audit every route for a read of the old database binding." }] }),
+    msg({ id: "ca-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Two routes still read env.DB themselves; both are in routes/webhooks.ts." }] }),
+  ], hostedActorSocketPath("binding-auditor"));
 
   const docs = {
     name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", origin: "user",
@@ -2041,57 +2044,58 @@ function galleryActorId(name: string): string {
   return `actor-${name}`;
 }
 
-const GALLERY_PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
+const GALLERY_PLAN_MARKDOWN = `# Read the sessions database as \`SESSIONS_DB\`
 
-The checkout accepts archived coupons because the eligibility guard reads the campaign state after the discount has already been applied. This plan moves the guard ahead of mutation and keeps the current response contract.
+The api Worker fails every request that opens its database: yesterday's config renamed the D1 binding to \`SESSIONS_DB\`, but \`openDb\` still reads \`env.DB\`. This plan reads the database by its new name everywhere and keeps the health route's response.
 
 ## Scope
 
-- Read the coupon and campaign in one transaction.
-- Reject archived or expired campaigns before any cart row changes.
-- Keep the existing error code for clients that already handle an ineligible coupon.
+- Read the binding once, in \`openDb\`, by the name \`wrangler.jsonc\` gives it.
+- Move every route that reads \`env.DB\` itself onto \`openDb\`.
+- Keep \`/api/health\`'s response for the monitors that already poll it.
 
 ## Files
 
 \`\`\`text
-packages/
-├── core/
-│   ├── src/checkout/apply-coupon.ts
-│   └── tests/checkout/apply-coupon.test.ts
-└── cf-backend/
-    └── src/routes/checkout.ts
+workers/
+└── api/
+    ├── wrangler.jsonc
+    ├── src/
+    │   ├── db.ts
+    │   └── routes/webhooks.ts
+    └── test/integration/sessions-binding.test.ts
 \`\`\`
 
 ## Implementation
 
-1. Move the eligibility check before the cart update in \`applyCoupon\`.
-2. Return the existing \`coupon_ineligible\` result when the campaign is archived or expired.
-3. Keep the route adapter unchanged; it already maps that result to the public response.
+1. Read \`env.SESSIONS_DB\` in \`openDb\`, and fail with a clear error when the binding is missing.
+2. Move \`routes/webhooks.ts\` onto \`openDb\`; it is the one route that reads the binding itself.
+3. Leave the health route unchanged; it already reports what \`openDb\` answers.
 
 ## Verification
 
-- Run the focused checkout test with active, archived, and expired campaigns.
-- Exercise the route with the existing gallery fixture.
-- Confirm that a refused coupon leaves the cart total and discount rows unchanged.
+- Run the tests with the binding present and missing.
+- Run \`wrangler dev\` and curl \`/api/health\` locally.
+- Deploy to staging and watch \`wrangler tail\` for errors before production.
 
 ## Expected result
 
-The same request either applies one valid coupon atomically or returns \`coupon_ineligible\` without changing the cart.`;
+Every request opens the sessions database by its new binding, and \`/api/health\` answers \`ok\` with the database up.`;
 
 /* `?plan=late-heading` (mid-document h1) and `?plan=annotated-heading` (anchor on the leading h1): the header must promote
    neither. `?plan=read-only` is a settled plan. `?plan=code-path` names a file and line inline, the text Plannotator's own
    inline renderer turns into a hover preview that fetches `/api/doc`. */
 const GALLERY_PLAN_VARIANT = new URLSearchParams(location.search).get("plan");
 
-const GALLERY_PLAN_LATE_HEADING = `The guard runs after the discount lands, so an archived coupon still applies.
+const GALLERY_PLAN_LATE_HEADING = `The config renamed the binding, so every request that still reads \`env.DB\` fails.
 
-# Rejected: map the failure at the edge
+# Rejected: bind the database under both names
 
-Mapping it in the route hides the defect and leaves the cart already mutated.
+Binding it twice hides the rename and leaves the code reading a name the config no longer means.
 
 ## Scope
 
-- Read the coupon and campaign in one transaction.`;
+- Read the binding once, in \`openDb\`, by the name \`wrangler.jsonc\` gives it.`;
 
 const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   id: "gallery-plan-title-note",
@@ -2099,15 +2103,15 @@ const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   startOffset: 0,
   endOffset: 10,
   type: "COMMENT",
-  text: "Name the guard this repairs.",
-  originalText: "Repair the",
+  text: "Name the binding this reads.",
+  originalText: "Read the s",
   createdA: NOW,
   author: "Owner",
 };
 
-const GALLERY_PLAN_CODE_PATH = `# Repair the \`applyCoupon\` eligibility guard
+const GALLERY_PLAN_CODE_PATH = `# Read the sessions database as \`SESSIONS_DB\`
 
-Move the eligibility check in \`packages/core/src/checkout/apply-coupon.ts:42\` ahead of the cart update.
+Read the binding in \`workers/api/src/db.ts:12\` by the name the config gives it.
 
 [Reference](https://example.test/reference) [Jump](#details) [Local](/readme.md) [Unsafe](javascript:alert(1))
 
@@ -2123,7 +2127,7 @@ graph TD; A-->B
 \`\`\`
 
 $$
-\\frac{\\text{saved}}{\\text{cart}} \\le 0.2 \\quad \\href{javascript:alert(1)}{\\text{off}}
+\\frac{\\text{errors}}{\\text{requests}} \\le 0.001 \\quad \\href{javascript:alert(1)}{\\text{off}}
 $$`;
 
 const GALLERY_PLAN_CONTENTS = new Map([
@@ -2137,17 +2141,17 @@ const GALLERY_PLAN_CONTENT = GALLERY_PLAN_CONTENTS.get(GALLERY_PLAN_VARIANT ?? "
 const GALLERY_PLAN_THREAD: readonly ReviewAnnotation[] = [
   {
     id: "gallery-plan-scope", type: "COMMENT", blockId: "block-1", startOffset: 0, endOffset: 64, author: "Owner",
-    originalText: "The checkout accepts archived coupons because the eligibility guard",
-    text: "Does this also cover coupons whose campaign expires mid-checkout?", createdA: NOW - 20 * 60e3,
+    originalText: "The api Worker fails every request that opens its database: yest",
+    text: "Does this also cover the cron trigger, which opens the database outside a request?", createdA: NOW - 20 * 60e3,
   },
-  { id: "gallery-plan-all", type: "GLOBAL_COMMENT", text: "Split the route change into its own step so it can ship later.", author: "Owner", createdA: NOW - 19 * 60e3 },
+  { id: "gallery-plan-all", type: "GLOBAL_COMMENT", text: "Split the webhook change into its own step so it can ship later.", author: "Owner", createdA: NOW - 19 * 60e3 },
   {
     id: "gallery-plan-reply-scope", type: "REPLY", inReplyTo: "gallery-plan-scope", author: "agent", createdA: NOW - 2 * 60e3,
-    text: "Yes: the guard reads the campaign inside the same transaction, so an expiry between reads is caught. The revision says so in Scope.",
+    text: "Yes: the cron handler opens the database through `openDb` too, so it reads the new binding with the routes. The revision says so in Scope.",
   },
   {
     id: "gallery-plan-reply-all", type: "REPLY", inReplyTo: "gallery-plan-all", author: "agent", createdA: NOW - 60e3,
-    text: "The route adapter needs no change, so there is no route step to split; the revision drops it from Files.",
+    text: "The webhook route only moves onto `openDb`, so there is no step of its own to split; the revision folds it into Implementation.",
   },
 ];
 
@@ -2181,22 +2185,22 @@ let galleryAgentPlan: PlanReview = {
 const REVERT_THREAD: UIMessage[] = [
   msg({
     id: "rv-u1", role: "user", createdAt: NOW - 8 * 60e3,
-    parts: [{ type: "text", text: "Add the coupon-kind regression test and run the checkout suite." }],
+    parts: [{ type: "text", text: "Add the missing-binding regression test and run the Worker's suite." }],
   }),
   // The loop stopped mid-work after a settled call (a step ceiling), so only the turn's own end says it did not finish.
   msg({
     id: "rv-a1", role: "assistant", createdAt: NOW - 7 * 60e3, metadata: { [TURN_END_METADATA_KEY]: "incomplete" },
-    parts: [{ type: "tool-shell", toolCallId: "rv-call-1", state: "output-available", input: { command: "bun test tests/coupon-kind.test.ts" }, output: "14 pass\n0 fail" }],
+    parts: [{ type: "tool-shell", toolCallId: "rv-call-1", state: "output-available", input: { command: "bun test test/integration/sessions-binding.test.ts" }, output: "14 pass\n0 fail" }],
   }),
   msg({
     id: "rv-u2", role: "user", createdAt: NOW - 6 * 60e3,
-    parts: [{ type: "text", text: "Now rewrite the pricing service to read its rules from the campaign table." }],
+    parts: [{ type: "text", text: "Now move the webhook routes onto openDb, so none reads the binding itself." }],
   }),
   msg({
     id: "rv-a2", role: "assistant", createdAt: NOW - 5 * 60e3,
     parts: [
-      { type: "tool-shell", toolCallId: "rv-call-2", state: "output-available", input: { command: "bun test packages/pricing" }, output: "31 pass\n0 fail" },
-      { type: "text", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites." },
+      { type: "tool-shell", toolCallId: "rv-call-2", state: "output-available", input: { command: "bun test workers/api/src/routes" }, output: "31 pass\n0 fail" },
+      { type: "text", text: "Moved `routes/webhooks.ts` onto `openDb` and updated eleven call sites." },
     ],
   }),
 ];
@@ -2225,7 +2229,7 @@ function spliceThread(kept: boolean): UIMessage[] {
 const REVERT_CHECKPOINTS = new URLSearchParams(location.search).get("checkpoints");
 
 const REVERT_CHECKPOINT: FileCheckpointEntry = {
-  id: "c0ffee1", dir: "/pc/ashish-device/work/shop", at: NOW - 6 * 60e3,
+  id: "c0ffee1", dir: "/pc/ashish-device/work/api-worker", at: NOW - 6 * 60e3,
   turnId: "rv-u2", sessionId: "default", reason: "before turn",
 };
 
@@ -2241,20 +2245,20 @@ const REVERT_LISTING: FileCheckpointListing = REVERT_LISTINGS.get(REVERT_CHECKPO
 
 /* `&transcript=slates&slates=2`: the board twice, notes between, so the first board is superseded. */
 const SLATES_THREAD: UIMessage[] = [
-  msg({ id: "sb-u1", role: "user", createdAt: NOW - 9 * 60e3, parts: [{ type: "text", text: "Put this week's coupon redemptions on a board." }] }),
-  msg({ id: "sb-a1", role: "assistant", createdAt: NOW - 8 * 60e3, parts: [{ type: "text", text: "Here it is, grouped by code.\n\nslate://board" }] }),
+  msg({ id: "sb-u1", role: "user", createdAt: NOW - 9 * 60e3, parts: [{ type: "text", text: "Put this week's 500s on a board, by route." }] }),
+  msg({ id: "sb-a1", role: "assistant", createdAt: NOW - 8 * 60e3, parts: [{ type: "text", text: "Here it is, grouped by route.\n\nslate://board" }] }),
   msg({ id: "sb-u2", role: "user", createdAt: NOW - 7 * 60e3, parts: [{ type: "text", text: "Keep release notes beside it." }] }),
   msg({ id: "sb-a2", role: "assistant", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Started them.\n\nslate://notes" }] }),
-  msg({ id: "sb-u3", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Add when each coupon expires." }] }),
-  msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added an expiry column." }] }),
+  msg({ id: "sb-u3", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Add when each route last failed." }] }),
+  msg({ id: "sb-a3", role: "assistant", createdAt: NOW - 4 * 60e3, metadata: { [SLATES_CHANGED_METADATA_KEY]: ["board"] }, parts: [{ type: "text", text: "Added a last-failure column." }] }),
 ];
 
 /* `?transcript=page`: an answer whose own page the chat draws in place, and which the person may keep as a slate. */
 const PAGE_THREAD: UIMessage[] = [
-  msg({ id: "pg-u1", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Show me this week's coupon redemptions." }] }),
+  msg({ id: "pg-u1", role: "user", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Show me this week's 500s by route." }] }),
   msg({
     id: "pg-a1", role: "assistant", createdAt: NOW - 4 * 60e3,
-    parts: [{ type: "text", text: "Here they are, by code.\n\n<slate-ui name=\"redemptions\">\n<title>Coupon redemptions</title>\n<ul><li>SAVE20</li></ul>\n</slate-ui>\n\nSAVE20 leads." }],
+    parts: [{ type: "text", text: "Here they are, by route.\n\n<slate-ui name=\"errors\">\n<title>500s by route</title>\n<ul><li>/api/health</li></ul>\n</slate-ui>\n\n/api/health leads." }],
   }),
 ];
 
@@ -2282,13 +2286,13 @@ const SYSTEM_EVENT_ROWS: UIMessage[] = [
     "Your owner declined the workspace you proposed, \"Weekly digest\". Nothing was created."),
   harnessTurn("event-sandbox", { kinuEvent: "sandbox_lifecycle_failure", incidentId: "inc-1", stage: "checkpoint", reason: "The snapshot upload timed out after 3 tries." },
     "The workspace container failed at the checkpoint stage. Work written inside the container since the last good checkpoint is NOT durable.\n\nIncident id: inc-1"),
-  harnessTurn("event-plan-approved", { kinuEvent: "plan_approved", planId: "plan-1", revision: 2, decision: "approve", planTitle: "Typed coupon kinds" },
-    "The owner approved plan plan-1 revision 2.\n\nImplement the exact approved plan below.\n\n<approved-plan>\n# Typed coupon kinds\n</approved-plan>"),
-  harnessTurn("event-plan-feedback", { kinuEvent: "plan_feedback", planId: "plan-1", revision: 1, decision: "changes", planTitle: "Typed coupon kinds", feedback: "Split the backfill from the migration." },
+  harnessTurn("event-plan-approved", { kinuEvent: "plan_approved", planId: "plan-1", revision: 2, decision: "approve", planTitle: "Read the database by its new binding" },
+    "The owner approved plan plan-1 revision 2.\n\nImplement the exact approved plan below.\n\n<approved-plan>\n# Read the database by its new binding\n</approved-plan>"),
+  harnessTurn("event-plan-feedback", { kinuEvent: "plan_feedback", planId: "plan-1", revision: 1, decision: "changes", planTitle: "Read the database by its new binding", feedback: "Split the staging config from the code change." },
     "The owner asked for changes to plan plan-1 revision 1.\n\nRevise the plan with targeted submit_plan edits. Do not implement or create previews."),
   harnessTurn("event-slate", { kinuEvent: "slate", slate: "deploy-board", said: "Which region should the canary go to?", ask: true },
     "Slate deploy-board: Which region should the canary go to?\nYour answer's text streams to slate deploy-board as you write it: answer it in prose."),
-  harnessTurn("event-waits", { kinuEvent: "owner_waits_cleared", key: "plan:main:plan-1:2", what: "Typed coupon kinds" }, "Your owner has handled what you waited on: Typed coupon kinds"),
+  harnessTurn("event-waits", { kinuEvent: "owner_waits_cleared", key: "plan:main:plan-1:2", what: "Read the database by its new binding" }, "Your owner has handled what you waited on: Read the database by its new binding"),
   harnessTurn("event-take", { kinuEvent: "take_pick" }, "While you answered, the user redirected and that redirect ran as a parallel branch. Comparing both answers, the user picked the branch's."),
   harnessTurn("event-fork", { kinuEvent: FORK_INTERRUPTED_SIGNAL, runs: ["6xrijuf933p0jclpctw59"], heads: 9 },
     "9 head(s) across 1 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive."),
@@ -2357,7 +2361,7 @@ const PICTURES_THREAD: UIMessage[] = [
     id: "pc-a2", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
       { type: "text", text: "p95 fell from 540 ms to 230 ms. The charts are `bench/latency-before.png` and `bench/latency-after.png`." },
-      { type: "text", text: "The computer's browser renders the fix at `/computer/home/desktop.png`. Yesterday's capture, `screenshots/checkout-old.png`, is gone." },
+      { type: "text", text: "The computer's browser renders the fix at `/computer/home/desktop.png`. Yesterday's capture, `screenshots/health-old.png`, is gone." },
       { type: "text", text: "The reference render is https://upload.wikimedia.org/example/example-domain.png." },
     ],
   }),
@@ -2367,19 +2371,19 @@ const PICTURES_THREAD: UIMessage[] = [
 const GALLERY_ASK = {
   questions: [
     {
-      id: "storage", header: "Money", question: "How should prices be stored once the coupon fix lands?", recommended: 0,
+      id: "storage", header: "Binding", question: "How should the Worker read its database once the fix lands?", recommended: 0,
       options: [
-        { label: "Integer cents", description: "Exact sums; every display divides by 100.", preview: "price_cents  INTEGER NOT NULL\n-- 1999 → $19.99\nSELECT price_cents / 100.0" },
-        { label: "Decimal(10,2)", description: "Reads as written; the ORM maps it to a string.", preview: "price  DECIMAL(10,2) NOT NULL\n-- 19.99\nSELECT price" },
-        { label: "Keep floats", description: "No migration now; rounding stays a risk.", preview: "price  REAL NOT NULL\n-- 19.990000000000002" },
+        { label: "Fall back to DB", description: "Reads either name until every environment redeploys.", preview: "return env.SESSIONS_DB ?? env.DB;\n// staging keeps answering before it redeploys" },
+        { label: "New name only", description: "Fails loudly wherever an environment still binds DB.", preview: "return env.SESSIONS_DB;\n// staging 500s until it redeploys" },
+        { label: "Bind both names", description: "No code change; both names stay in the config.", preview: "\"d1_databases\": [\n  { \"binding\": \"DB\" },\n  { \"binding\": \"SESSIONS_DB\" }\n]" },
       ],
     },
     {
       id: "checks", header: "Checks", question: "Which checks should run before the staging deploy?", multi: true,
       options: [
-        { label: "Cart totals", description: "Every fixture cart sums to its receipt." },
-        { label: "Coupon stacking", description: "Two coupons on one cart, both orders." },
-        { label: "Old orders", description: "Orders placed before the migration still read." },
+        { label: "Health check", description: "Curl /api/health and read the database's state." },
+        { label: "Session reads", description: "Sign in, then read the session back." },
+        { label: "Old deployments", description: "A Worker still on the old binding still answers." },
       ],
     },
   ],
@@ -2412,11 +2416,11 @@ function galleryCloseQuestions(status: "answered" | "dismissed", answers: readon
 
 /** `?transcript=asked`: the turn that asked, ending on its call. */
 const ASKED_THREAD: UIMessage[] = [
-  msg({ id: "ask-u1", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Fix the SAVE20 coupon and get it to staging." }] }),
+  msg({ id: "ask-u1", role: "user", createdAt: NOW - 3 * 60e3, parts: [{ type: "text", text: "Fix the /api/health 500 and get it to staging." }] }),
   msg({
     id: "ask-a1", role: "assistant", createdAt: NOW - 2 * 60e3,
     parts: [
-      { type: "text", text: "The 500 comes from coupons stored without a kind; the fix is ready. Two choices are yours before I deploy." },
+      { type: "text", text: "The 500 comes from `openDb` reading the database by its old binding; the fix is ready. Two choices are yours before I deploy." },
       { type: "tool-ask_owner", toolCallId: "ask-1", state: "input-available", input: GALLERY_ASK },
     ],
   }),
@@ -2520,12 +2524,12 @@ function gallerySlates() {
 const TAKE_COUNT = Number(new URLSearchParams(location.search).get("takes") ?? 0);
 
 let galleryTakes: AlternateTakeSet = {
-  id: "take-1", turnId: "rv-a2", sessionId: "default", task: "Read the rules from the campaign table instead", winnerNodeId: "win",
+  id: "take-1", turnId: "rv-a2", sessionId: "default", task: "Move the webhook routes onto openDb", winnerNodeId: "win",
   chosenNodeId: null, createdAt: NOW - 5 * 60e3,
   candidates: ([
-    { nodeId: "win", text: "Rewrote `pricing-service.ts` against the campaign table and updated eleven call sites.", origin: "live" },
-    { nodeId: "alt", text: "Kept the service and read each rule from the campaign table at its three call sites.", origin: "branch" },
-    { nodeId: "alt2", text: "Moved the rules into a view over the campaign table; the service reads the view.", origin: "branch" },
+    { nodeId: "win", text: "Moved `routes/webhooks.ts` onto `openDb` and updated eleven call sites.", origin: "live" },
+    { nodeId: "alt", text: "Kept each route's own read and checked the binding at its three call sites.", origin: "branch" },
+    { nodeId: "alt2", text: "Moved the binding check into middleware the webhook routes share; each reads the database it is handed.", origin: "branch" },
   ] satisfies AlternateTakeSet["candidates"]).slice(0, TAKE_COUNT),
 };
 
@@ -2615,23 +2619,23 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     tasks: [
       ...document.documentElement.dataset.workMoved === "1" ? [{
         owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
-        tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+        tasks: [{ id: "t14", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
       }] : [],
       ...BOARD_FULL ? [{
         owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] }, plan: null,
         tasks: [
-          galleryTask("t-guard", "Move the eligibility guard ahead of the discount", "active", ["done", "done", "active", "open"]),
-          galleryTask("t-notes", "Write the release note for SAVE20", "open", ["open", "open"]),
-          galleryTask("t-alert", "Alert when coupon 5xx passes 1%", "open"),
-          galleryTask("t-repro", "Reproduce the archived-coupon 500", "done", ["done", "done", "done"]),
+          galleryTask(1, "Read the database by its new binding in openDb", "active", ["done", "done", "active", "open"]),
+          galleryTask(6, "Write the release note for the binding fix", "open", ["open", "open"]),
+          galleryTask(9, "Alert when /api 5xx passes 1%", "open"),
+          galleryTask(10, "Reproduce the /api/health 500", "done", ["done", "done", "done"]),
         ],
       }] : [],
       ...AGENTS_PANEL ? [{
-        owner: { actorId: galleryActorId("coupon-auditor"), name: "coupon-auditor", title: "Coupon auditor", retired: false, path: ["coupon-auditor"] }, plan: null,
-        tasks: [{ id: "t-audit", parentId: null, title: "Audit the coupon rules", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+        owner: { actorId: galleryActorId("binding-auditor"), name: "binding-auditor", title: "Binding auditor", retired: false, path: ["binding-auditor"] }, plan: null,
+        tasks: [{ id: "t1", parentId: null, title: "Audit every route for env.DB", status: "active", updatedAt: 1, note: null, subtasks: [] }],
       }, {
-        owner: { actorId: "swarm-actor-h1", name: "root-merge-1-h1", title: "packages/cart/src/serializer.ts", retired: false, path: null }, plan: null,
-        tasks: [{ id: "t-serialize", parentId: null, title: "Serialize gift-card lines", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+        owner: { actorId: "swarm-actor-h1", name: "root-merge-1-h1", title: "workers/api/src/routes/webhooks.ts", retired: false, path: null }, plan: null,
+        tasks: [{ id: "t1", parentId: null, title: "Move the webhook route onto openDb", status: "active", updatedAt: 1, note: null, subtasks: [] }],
       }] : [],
     ],
   }),
@@ -2680,7 +2684,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   // Keeping an answer's page: the kept slate is listed under the page's title, and the listing moves.
   slate: (args?: unknown[]) => {
     const [operation] = v.parse(v.tuple([v.object({ op: v.literal("save"), page: v.string() })]), args);
-    const kept = { id: "coupon-redemptions", title: operation.page === "pg-a1/redemptions" ? "Coupon redemptions" : operation.page };
+    const kept = { id: "errors-by-route", title: operation.page === "pg-a1/errors" ? "500s by route" : operation.page };
 
     GALLERY_KEPT_PAGES.push(kept);
     queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listSlates"] })); });
@@ -2695,7 +2699,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listFileCheckpoints: () => REVERT_LISTING,
   planFileRestore: () => ({
     dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id,
-    files: [{ path: "src/pricing-service.ts", kind: "modify" }, { path: "src/campaign-rules.ts", kind: "delete" }],
+    files: [{ path: "workers/api/src/routes/webhooks.ts", kind: "modify" }, { path: "workers/api/test/webhooks-db.test.ts", kind: "delete" }],
   }),
   restoreFileCheckpoint: () => ({
     dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id, files: [], preRestoreId: "5afe70",
@@ -2809,7 +2813,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
   // Answered by the root; the header renders the roster title, never `mission`.
   const [name] = v.parse(v.tuple([v.string()]), args);
   const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
-  // A fixture's agent (the coupon auditor) is answered as itself, so its pane is its own actor's.
+  // A fixture's agent (the binding auditor) is answered as itself, so its pane is its own actor's.
   const actor = latest?.name ?? name;
 
   return {
@@ -2819,7 +2823,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       displayName: latest?.displayName ?? "",
       role: "task",
       mission: "",
-      model: { model: "anthropic/claude-opus-4", source: "workspace" },
+      model: { model: "opencode-go/muse-spark-1.3-contributor", source: "workspace" },
       reasoningEffort: "medium",
       activePlan: galleryAgentPlan,
       messageCount: 0,
@@ -2861,8 +2865,13 @@ window.addEventListener("gallery:live-window", (event: Event) => {
     return index === asked.edited ? { ...row, parts: row.parts.map((part) => (typeof part.text === "string" ? { ...part, text: `${part.text} Edited live.` } : part)) } : row;
   });
 
-  galleryChatWindow("", restoredRows(entries));
+  const first = asked.rows[0];
+
+  galleryChatWindow("", restoredRows(entries), first !== undefined && first > 0 ? { before: first } : null);
 });
+
+// The seeded rows follow the stored ones.
+if (HISTORY_ROWS > 0) galleryChatStartsAt("", { before: HISTORY_ROWS });
 
 /** A stored row as the page reader draws a text-only one: its words as its one part. */
 const textEntry = ({ content, ...entry }: Omit<ChatHistoryEntry, "parts"> & { readonly content: string }): ChatHistoryEntry => ({ ...entry, parts: [{ type: "text", text: content }] });
@@ -2871,13 +2880,13 @@ function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
 
-  if (index % 2 === 0) return textEntry({ id, position: index, role: "user", turnId: null, content: `Question ${index}: what changed in the pricing guard this time?`, createdAt });
+  if (index % 2 === 0) return textEntry({ id, position: index, role: "user", turnId: null, content: `Question ${index}: what changed in openDb this time?`, createdAt });
 
   const kind = index % 10;
-  let content = `Answer ${index}. The guard now reads the campaign before it writes the cart.`;
+  let content = `Answer ${index}. openDb now reads the binding by its new name.`;
 
   if (kind === 1 || (HISTORY_UNEVEN && Math.floor(index / 40) % 2 === 0)) content += "\n\n" + "A longer explanation that wraps across several lines of the column. ".repeat(6);
-  else if (kind === 3) content += "\n\n```ts\nexport function guard(cart: Cart) {\n  if (cart.coupon?.archived) throw new Error('archived');\n  return apply(cart);\n}\n```";
+  else if (kind === 3) content += "\n\n```ts\nexport function openDb(env: Env) {\n  if (env.SESSIONS_DB === undefined) throw new MissingBinding('SESSIONS_DB');\n  return env.SESSIONS_DB;\n}\n```";
   else if (kind === 5) content += `\n\n![chart ${index}](${HISTORY_PICTURE})`;
   else if (kind === 7) content += "\n\nslate://board";
 
@@ -2913,16 +2922,16 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 /** `&agents=panel`: chats, hires nested two deep, a swarm and a helper. */
 const GALLERY_GITHUB: WorkspaceGitHubView = {
   repos: [
-    { repo: "acme/storefront", remote: true, lastPush: { ref: "refs/heads/fix/coupon-guard", at: NOW - 2 * 36e5 }, fetchedAt: NOW - 3 * 36e5,
-      branch: "fix/coupon-guard", ci: { state: "failure", at: NOW - 90 * 60e3 } },
-    { repo: "acme/storefront-docs", remote: true, lastPush: null, fetchedAt: NOW - 864e5, branch: "main", ci: { state: "success", at: NOW - 864e5 } },
+    { repo: "acme/api-worker", remote: true, lastPush: { ref: "refs/heads/fix/sessions-binding", at: NOW - 2 * 36e5 }, fetchedAt: NOW - 3 * 36e5,
+      branch: "fix/sessions-binding", ci: { state: "failure", at: NOW - 90 * 60e3 } },
+    { repo: "acme/api-worker-docs", remote: true, lastPush: null, fetchedAt: NOW - 864e5, branch: "main", ci: { state: "success", at: NOW - 864e5 } },
   ],
   items: [
-    { subject: "pr", repo: "acme/storefront", number: 482, title: "Guard archived coupons before the discount applies", url: "https://github.com/acme/storefront/pull/482",
-      state: "open", actors: [galleryActorId(WORKSPACE_PAGE_NAME), galleryActorId("coupon-auditor")], unattributed: false, lastAt: NOW - 2 * 36e5 },
-    { subject: "issue", repo: "acme/storefront", number: 477, title: "SAVE20 returns a 500 at checkout", url: "https://github.com/acme/storefront/issues/477",
+    { subject: "pr", repo: "acme/api-worker", number: 482, title: "Read the sessions database by its new binding", url: "https://github.com/acme/api-worker/pull/482",
+      state: "open", actors: [galleryActorId(WORKSPACE_PAGE_NAME), galleryActorId("binding-auditor")], unattributed: false, lastAt: NOW - 2 * 36e5 },
+    { subject: "issue", repo: "acme/api-worker", number: 477, title: "/api/health returns 500 after the Sept 22 deploy", url: "https://github.com/acme/api-worker/issues/477",
       state: "closed", actors: [], unattributed: true, lastAt: NOW - 3 * 36e5 },
-    { subject: "pr", repo: "acme/storefront-docs", number: 61, title: "Document the coupon kinds", url: "https://github.com/acme/storefront-docs/pull/61",
+    { subject: "pr", repo: "acme/api-worker-docs", number: 61, title: "Document the database bindings", url: "https://github.com/acme/api-worker-docs/pull/61",
       state: "merged", actors: [galleryActorId(WORKSPACE_PAGE_NAME)], unattributed: false, lastAt: NOW - 864e5 },
   ],
   observedAt: NOW - 3 * 60e3,
@@ -2931,26 +2940,26 @@ const GALLERY_GITHUB: WorkspaceGitHubView = {
 
 const GALLERY_AGENTS: PanelAgent[] = [
   mainPanelAgent({ activity: "working", actorId: galleryActorId(WORKSPACE_PAGE_NAME), figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } }),
-  { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
+  { colour: 1, key: galleryActorId("docs"), label: "Fix the /api/health 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
     figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
-  { colour: 2, key: galleryActorId("perf"), label: "Should checkout support gift cards?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
+  { colour: 2, key: galleryActorId("perf"), label: "Should the nightly sweep move to a cron trigger?", category: "user", activity: "idle", parent: "main", open: { kind: "chat", path: "perf" }, tab: true, input: true,
     figures: { tokens: 31_000, usd: 0.07, activeMs: 9 * 60_000, cacheEma: 0.9 } },
-  { colour: 3, key: galleryActorId("i18n"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
+  { colour: 3, key: galleryActorId("i18n"), label: "Read the overnight error logs", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "i18n" }, tab: true, input: true,
     figures: { tokens: 8_200, activeMs: 2 * 60_000, cacheEma: null } },
   { colour: 4, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true,
     figures: { tokens: 22_600, usd: 0.05, activeMs: 4 * 60_000, cacheEma: 0.86 } },
-  { colour: 5, key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
-    actorId: galleryActorId("coupon-auditor"), figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
-  { colour: 6, key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
+  { colour: 5, key: "a-scout", label: "Binding auditor", category: "hired", activity: "working", parent: "main", open: { kind: "chat", path: "binding-auditor" }, tab: false, input: true,
+    actorId: galleryActorId("binding-auditor"), figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
+  { colour: 6, key: "a-check", label: "Binding tester", category: "hired", activity: "waiting", parent: "a-scout", open: { kind: "chat", path: "binding-auditor/tester" }, tab: false, input: true,
     figures: { tokens: 6_100, activeMs: 45_000, cacheEma: null } },
   { colour: 7, key: "a-copy", label: "Changelog writer", category: "hired", activity: "idle", parent: galleryActorId("docs"), open: { kind: "chat", path: "docs/changelog" }, tab: false, input: true,
     figures: { tokens: 2_100, activeMs: 30_000, cacheEma: null } },
-  { colour: 0, key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h0", label: "workers/api/src/db.ts", category: "swarm", activity: "done", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false,
     figures: { tokens: 9_800, activeMs: 94_000, cacheEma: null } },
-  { colour: 0, key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h1", label: "workers/api/src/routes/webhooks.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false, actorId: "swarm-actor-h1", figures: { activeMs: 0, cacheEma: null } },
-  { colour: 0, key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "main",
+  { colour: 0, key: "root-merge-1/root-merge-1-h3", label: "workers/api/src/router.ts", category: "swarm", activity: "working", parent: "main",
     open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
   { colour: 8, key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
     figures: { tokens: 2_300, usd: 0.004, activeMs: 20_000, cacheEma: 0.5 } },
@@ -2979,6 +2988,10 @@ function rosterMoved(): void {
 }
 
 async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
+  // The choice the dialog sent: a chat-only rewind tells the agent what its turns left on the computer.
+  const chosen = v.safeParse(v.object({ chatOnly: v.boolean() }), args?.[1]);
+
+  document.documentElement.dataset.galleryRevertChatOnly = chosen.success ? String(chosen.output.chatOnly) : "unsaid";
   galleryRevertConversation(v.parse(v.string(), args?.[0]));
 
   return null;
@@ -3010,19 +3023,19 @@ const PARKED_ASKS: PendingAction[] = [
 /** The workspace's own plan awaiting review, as the queue lists it beside the work read's plan: `&asks=plan`. */
 const PLAN_ASKS: PendingAction[] = [{
   id: `plan:${WORKSPACE_PAGE_NAME}:${galleryAgentPlan.id}:${String(galleryAgentPlan.revision)}`, kind: "plan_review",
-  title: "Review the plan: Repair the applyCoupon eligibility guard", detail: null, at: NOW - 300_000,
+  title: "Review the plan: Read the sessions database as SESSIONS_DB", detail: null, at: NOW - 300_000,
   planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
 }];
 
 /** `&asks=mixed`: one of each kind that waits on the owner, and a version under trial that waits on nobody. */
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
-  { id: "park-write", kind: "deferred_action", title: "Replace src/pricing-service.ts", detail: null, at: NOW - 150_000, write: { path: "src/pricing-service.ts" } },
+  { id: "park-write", kind: "deferred_action", title: "Replace src/routes/webhooks.ts", detail: null, at: NOW - 150_000, write: { path: "src/routes/webhooks.ts" } },
   { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
     proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
   ...PLAN_ASKS,
-  { id: "plan:coupon-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit every coupon rule", detail: "Submitted by coupon-auditor", at: NOW - 200_000,
-    planRef: { owner: "coupon-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("coupon-auditor") },
+  { id: "plan:binding-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit the binding of every route", detail: "Submitted by binding-auditor", at: NOW - 200_000,
+    planRef: { owner: "binding-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("binding-auditor") },
   { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
@@ -3405,23 +3418,23 @@ async function agentPageFallback<T>(method: string, args: unknown[] | undefined)
 }
 
 /** A named-preset search. `prove` because its resolved axes are the least guessable from its name. */
-// `lean/Checkout/Coupon.lean` is invented along with the coupon table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
+// `lean/Api/Sessions.lean` is invented along with the sessions table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
 const PROVE_ROWS: MctsRow[] = [
   {
     id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
-    action: "Prove the coupon guard terminates",
-    task: "Prove that applyCoupon terminates for every coupon row, including kind = null.",
-    observation: "The workspace as found: lean/Checkout/Coupon.lean, 3 sorries.",
+    action: "Prove the expiry sweep terminates",
+    task: "Prove that the expiry sweep terminates for every session row, including expires_at = null.",
+    observation: "The workspace as found: lean/Api/Sessions.lean, 3 sorries.",
     created_at: NOW - 78e5,
   },
   {
     id: "pv001", parent_id: "pv000", depth: 1, visits: 4, value: 0.31, own_score: 0.31, status: "open",
-    action: "Induct on the discount list", observation: "Checker accepted 1 of 3 goals.",
+    action: "Induct on the session list", observation: "Checker accepted 1 of 3 goals.",
     created_at: NOW - 77e5,
   },
   {
     id: "pv002", parent_id: "pv000", depth: 1, visits: 1, value: 0.12, own_score: 0.12, status: "pruned",
-    action: "Case-split on kind first", observation: "Below the prune floor after one rollout.",
+    action: "Case-split on expiry first", observation: "Below the prune floor after one rollout.",
     created_at: NOW - 77e5,
   },
   {
@@ -3437,7 +3450,7 @@ const PROVE_ROWS: MctsRow[] = [
   },
   {
     id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, own_score: 0.94, status: "terminal",
-    action: "Discharge the null case from the guard",
+    action: "Discharge the null case from the sweep",
     observation: "Checker accepted 3 of 3 goals. No sorries remain.",
     created_at: NOW - 75e5,
   },
@@ -3447,46 +3460,46 @@ const PROVE_ROWS: MctsRow[] = [
 const SWARM_ROWS: MctsRow[] = [
   {
     id: "sw000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
-    action: "Reconcile the three coupon fixes",
-    task: "Reduce checkout p95 without regressing the coupon guard.",
+    action: "Reconcile the three latency fixes",
+    task: "Reduce /api p95 without regressing the health check.",
     observation: "The workspace as found: p95 = 412ms on the failing fixture.",
     created_at: NOW - 22e5,
   },
   {
     id: "sw001", parent_id: "sw000", depth: 1, visits: 3, value: 0.44, own_score: 0.44, status: "open",
-    action: "Cache the resolved kind per coupon id", observation: "p95 = 318ms.",
+    action: "Cache the opened database per request", observation: "p95 = 318ms.",
     created_at: NOW - 21e5,
   },
   {
     id: "sw002", parent_id: "sw000", depth: 1, visits: 2, value: 0.37, own_score: 0.37, status: "open",
-    action: "Index rules by kind at load", observation: "p95 = 341ms.",
+    action: "Prepare the session statements at load", observation: "p95 = 341ms.",
     created_at: NOW - 21e5,
   },
   {
     id: "sw003", parent_id: "sw000", depth: 1, visits: 1, value: 0.19, own_score: 0.19, status: "pruned",
-    action: "Precompute the whole discount table", observation: "p95 = 402ms — below the prune floor.",
+    action: "Precompute every route's query plan", observation: "p95 = 402ms — below the prune floor.",
     created_at: NOW - 21e5,
   },
   {
     id: "sw004", parent_id: "sw001", depth: 2, visits: 4, value: 0.71, own_score: 0.71, status: "open",
     action: "Reconcile the cache with the load-time index",
-    observation: "p95 = 244ms. Both parents' writes touched pricing.ts; this candidate is the merge.",
+    observation: "p95 = 244ms. Both parents' writes touched db.ts; this candidate is the merge.",
     created_at: NOW - 20e5,
   },
   {
     id: "sw005", parent_id: "sw002", depth: 2, visits: 2, value: 0.52, own_score: 0.52, status: "open",
-    action: "Narrow the index to the percentage path", observation: "p95 = 296ms.",
+    action: "Narrow the statements to the session path", observation: "p95 = 296ms.",
     created_at: NOW - 20e5,
   },
   {
     id: "sw006", parent_id: "sw002", depth: 2, visits: 1, value: 0.28, own_score: 0.28, status: "pruned",
-    action: "Index every rule field", observation: "p95 = 377ms — below the prune floor.",
+    action: "Prepare every statement", observation: "p95 = 377ms — below the prune floor.",
     created_at: NOW - 20e5,
   },
   {
     id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, own_score: 0.93, status: "terminal",
     action: "Drop the redundant second lookup",
-    observation: "p95 = 188ms. The guard's fixture still passes.",
+    observation: "p95 = 188ms. The health check's fixture still passes.",
     created_at: NOW - 19e5,
   },
   {
@@ -3519,7 +3532,7 @@ function swarmNode(
 /** For a preset run the run's `rationale` is the preset name: `journal.recordSplit` writes `resolved.label ?? resolved.preset`. */
 const PROVE_RUN: HeadRunView = {
   rootId: "pv000",
-  task: "Prove that applyCoupon terminates for every coupon row, including kind = null.",
+  task: "Prove that the expiry sweep terminates for every session row, including expires_at = null.",
   rationale: "prove",
   status: "completed",
   spawnedAt: NOW - 78e5,
@@ -3527,7 +3540,7 @@ const PROVE_RUN: HeadRunView = {
     swarmNode("pv001", "Discharge the termination goal", "expansion 1 of 3"),
     swarmNode("pv002", "Discharge the termination goal", "expansion 2 of 3"),
     swarmNode("pv004", "Discharge the termination goal", "expansion 3 of 3", {
-      status: "errored", errorMessage: "Checker refused: unknown identifier `discount_monotone`.",
+      status: "errored", errorMessage: "Checker refused: unknown identifier `expiry_monotone`.",
       lastStepAt: null,
     }),
     swarmNode("pv003", "Discharge the termination goal", "the strongest accepted line so far"),
@@ -3539,20 +3552,20 @@ const PROVE_RUN: HeadRunView = {
 /** `fan-in over k parents of depth d` is quoted from `strategy/swarm-run.ts`: the surface parses the count out of it. */
 const SWARM_RUN: HeadRunView = {
   rootId: "sw000",
-  task: "Reduce checkout p95 without regressing the coupon guard.",
+  task: "Reduce /api p95 without regressing the health check.",
   rationale: "conflict-reconciling ensemble",
   status: "completed",
   spawnedAt: NOW - 22e5,
   heads: [
-    swarmNode("sw001", "Reduce checkout p95", "expansion 1 of 3"),
-    swarmNode("sw002", "Reduce checkout p95", "expansion 2 of 3"),
-    swarmNode("sw003", "Reduce checkout p95", "expansion 3 of 3"),
-    swarmNode("sw004", "Reduce checkout p95", "fan-in over 3 parents of depth 1"),
-    swarmNode("sw005", "Reduce checkout p95", "expansion 1 of 2"),
-    swarmNode("sw006", "Reduce checkout p95", "expansion 2 of 2"),
-    swarmNode("sw007", "Reduce checkout p95", "expansion 1 of 2"),
-    swarmNode("sw008", "Reduce checkout p95", "expansion 2 of 2"),
-    swarmNode("sw009", "Reduce checkout p95", "fan-in over 2 parents of depth 2"),
+    swarmNode("sw001", "Reduce /api p95", "expansion 1 of 3"),
+    swarmNode("sw002", "Reduce /api p95", "expansion 2 of 3"),
+    swarmNode("sw003", "Reduce /api p95", "expansion 3 of 3"),
+    swarmNode("sw004", "Reduce /api p95", "fan-in over 3 parents of depth 1"),
+    swarmNode("sw005", "Reduce /api p95", "expansion 1 of 2"),
+    swarmNode("sw006", "Reduce /api p95", "expansion 2 of 2"),
+    swarmNode("sw007", "Reduce /api p95", "expansion 1 of 2"),
+    swarmNode("sw008", "Reduce /api p95", "expansion 2 of 2"),
+    swarmNode("sw009", "Reduce /api p95", "fan-in over 2 parents of depth 2"),
   ],
   merge: null,
 };
@@ -3564,21 +3577,21 @@ const SWARM_RUN: HeadRunView = {
 const REFUSED_ROWS: MctsRow[] = [
   {
     id: "rf000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
-    action: "Find a coupon row that breaks the guard",
-    task: "Find a coupon row that makes applyCoupon throw after the migration.",
-    observation: "The workspace as found: 41 coupon fixtures.",
+    action: "Find a session row that breaks the sweep",
+    task: "Find a session row that makes readSession throw after the migration.",
+    observation: "The workspace as found: 41 session fixtures.",
     created_at: NOW - 4e5,
   },
 ];
 
 const REFUSED_RUN: HeadRunView = {
   rootId: "rf000",
-  task: "Find a coupon row that makes applyCoupon throw after the migration.",
+  task: "Find a session row that makes readSession throw after the migration.",
   rationale: "ideate",
   status: "errored",
   spawnedAt: NOW - 4e5,
   heads: [
-    swarmNode("rf001", "Find a breaking coupon row", "expansion 1 of 5", {
+    swarmNode("rf001", "Find a breaking session row", "expansion 1 of 5", {
       status: "errored", lastStepAt: null,
       errorMessage: "Every node failed to provision a home: the workspace filesystem "
         + "has no credential on this host, so no candidate could be measured.",
@@ -3594,21 +3607,21 @@ const REFUSED_RUN: HeadRunView = {
 const RUNNING_ROWS: MctsRow[] = [
   {
     id: "lv000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
-    action: "Audit the coupon guard for unsafe kind reads",
-    task: "Audit every reader of coupon.kind across the checkout package and report the ones "
-      + "that can throw on a null kind, with the call path and a suggested guard.",
-    observation: "The workspace as found: 41 coupon fixtures, 9 readers.",
+    action: "Audit the Worker for reads of the old binding",
+    task: "Audit every reader of env.DB across the api Worker and report the ones "
+      + "that can throw on a missing binding, with the call path and a suggested fix.",
+    observation: "The workspace as found: 41 routes, 9 readers.",
     created_at: NOW - 42e4,
   },
   {
     id: "lv001", parent_id: "lv000", depth: 1, visits: 1, value: 0.72, own_score: 0.72, status: "open",
-    action: "Walk the cart serializer's null path",
-    observation: "Two readers dereference rules[kind] with no guard.",
+    action: "Walk the webhook route's database path",
+    observation: "Two readers call env.DB.prepare with no fallback.",
     created_at: NOW - 30e4,
   },
   {
     id: "lv002", parent_id: "lv000", depth: 1, visits: 1, value: 0.44, own_score: 0.44, status: "open",
-    action: "Check the admin coupon report",
+    action: "Check the admin sessions report",
     observation: "One reader, already guarded by an early return.",
     created_at: NOW - 26e4,
   },
@@ -3616,30 +3629,30 @@ const RUNNING_ROWS: MctsRow[] = [
 
 const RUNNING_RUN: HeadRunView = {
   rootId: "lv000",
-  task: "Audit every reader of coupon.kind across the checkout package and report the ones "
-    + "that can throw on a null kind, with the call path and a suggested guard.",
+  task: "Audit every reader of env.DB across the api Worker and report the ones "
+    + "that can throw on a missing binding, with the call path and a suggested fix.",
   rationale: "audit",
   status: "running",
   spawnedAt: NOW - 42e4,
   heads: [
-    swarmNode("lv001", "Walk the cart serializer's null path", "expansion 1 of 5", {
-      summary: "`serializeCart` reads `rules[coupon.kind].percent` with no guard — throws on "
-        + "every percentage coupon written before the migration.",
+    swarmNode("lv001", "Walk the webhook route's database path", "expansion 1 of 5", {
+      summary: "`handleWebhook` calls `env.DB.prepare` with no fallback — throws on "
+        + "every request since the binding was renamed.",
       wallClockMs: 118_000, spawnedAt: NOW - 40e4, lastStepAt: NOW - 30e4,
     }),
-    swarmNode("lv002", "Check the admin coupon report", "expansion 2 of 5", {
-      summary: "The admin report already returns early on a null kind. No fix needed here.",
+    swarmNode("lv002", "Check the admin sessions report", "expansion 2 of 5", {
+      summary: "The admin report already reads through openDb. No fix needed here.",
       wallClockMs: 96_000, spawnedAt: NOW - 40e4, lastStepAt: NOW - 26e4,
     }),
-    swarmNode("lv003", "Trace the pricing refactor's readers", "expansion 3 of 5", {
+    swarmNode("lv003", "Trace the router refactor's readers", "expansion 3 of 5", {
       status: "running", wallClockMs: 0,
       spawnedAt: NOW - 40e4, lastStepAt: NOW - 4e3,
     }),
-    swarmNode("lv004", "Audit the coupon report exporter", "expansion 4 of 5", {
+    swarmNode("lv004", "Audit the sessions report exporter", "expansion 4 of 5", {
       status: "running", wallClockMs: 0,
       spawnedAt: NOW - 40e4, lastStepAt: NOW - 11e3,
     }),
-    swarmNode("lv005", "Read the checkout API edge", "expansion 5 of 5", {
+    swarmNode("lv005", "Read the API's request edge", "expansion 5 of 5", {
       status: "aborted", wallClockMs: 31_000,
       spawnedAt: NOW - 40e4, lastStepAt: NOW - 34e4,
       errorMessage: "Stopped by the operator while it was reading the request validator.",
@@ -3648,11 +3661,11 @@ const RUNNING_RUN: HeadRunView = {
       status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
       spawnedAt: NOW - 18e4, lastStepAt: NOW - 9e3,
     }),
-    swarmNode("lv007", "Draft the guard for serializeCart", "expansion 2 of 3", {
+    swarmNode("lv007", "Draft the fix for handleWebhook", "expansion 2 of 3", {
       status: "running", depth: 2, parentId: "lv001", wallClockMs: 0,
       spawnedAt: NOW - 18e4, lastStepAt: null,
     }),
-    swarmNode("lv008", "Check whether inferKind belongs at the edge", "expansion 3 of 3", {
+    swarmNode("lv008", "Check whether the fallback belongs at the entry", "expansion 3 of 3", {
       status: "errored", depth: 2, parentId: "lv002", wallClockMs: 7_400,
       spawnedAt: NOW - 18e4, lastStepAt: NOW - 15e4,
       errorMessage: "Turn stalled: the provider asked this turn to wait 61s against a 45s budget, "
@@ -3663,13 +3676,13 @@ const RUNNING_RUN: HeadRunView = {
       spawnedAt: NOW - 12e4, lastStepAt: NOW - 21e3,
     }),
     // `head_journal.status` has six words; `interrupted` is the non-terminal one (reconciled, resume not yet ruled).
-    swarmNode("lv010", "Re-read the pricing resolver end to end", "expansion 4 of 5", {
+    swarmNode("lv010", "Re-read the router end to end", "expansion 4 of 5", {
       status: "budget_exceeded", depth: 2, parentId: "lv002", wallClockMs: 214_000,
       spawnedAt: NOW - 18e4, lastStepAt: NOW - 6e4,
       errorMessage: "Ran out of the depth this search granted it before it could finish "
-        + "reading the resolver.",
+        + "reading the router.",
     }),
-    swarmNode("lv011", "Diff the guard against the admin path", "expansion 5 of 5", {
+    swarmNode("lv011", "Diff the fix against the admin path", "expansion 5 of 5", {
       status: "interrupted", depth: 2, parentId: "lv002", wallClockMs: 0,
       spawnedAt: NOW - 18e4, lastStepAt: NOW - 12e4,
     }),
@@ -3684,45 +3697,45 @@ const RUNNING_RUN: HeadRunView = {
 const FORK_RUNS: ForkRunSummary[] = [
   {
     // First: the surface focuses the newest. `branches` counts settled rows, so 2 while nine nodes exist.
-    id: "lv000", name: "coupon.kind readers",
-    task: "Audit every reader of coupon.kind across the checkout package",
+    id: "lv000", name: "env.DB readers",
+    task: "Audit every reader of env.DB across the api Worker",
     startedAt: NOW - 42e4, status: "running",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: RUNNING_ROWS.length - 1, winnerScore: null,
   },
   {
     // Derived: `forkbig` generates 520 rows for this same run.
-    id: "n000", name: "SAVE20 500s",
-    task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
+    id: "n000", name: "/api/health 500s",
+    task: "Find why /api/health 500s", startedAt: NOW - 36e5,
     // From the same stores as each row's halves: a swarm writes both.
     status: "completed", hasSearchTree: true, hasNodeTranscripts: false,
     branches: MCTS_ROWS.length - 1, winnerScore: 0.91,
   },
   {
-    id: "sw000", name: "checkout p95",
-    task: "Reduce checkout p95 without regressing the coupon guard",
+    id: "sw000", name: "/api p95",
+    task: "Reduce /api p95 without regressing the health check",
     startedAt: NOW - 22e5, status: "completed",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: SWARM_ROWS.length - 1, winnerScore: 0.93,
   },
   {
-    id: "pv000", name: "applyCoupon terminates",
-    task: "Prove that applyCoupon terminates for every coupon row",
+    id: "pv000", name: "expiry sweep terminates",
+    task: "Prove that the expiry sweep terminates for every session row",
     startedAt: NOW - 78e5, status: "completed",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: PROVE_ROWS.length - 1, winnerScore: 0.94,
   },
   {
     // Branchless by construction: the root is the only row.
-    id: "rf000", name: "throwing coupon row",
-    task: "Find a coupon row that makes applyCoupon throw",
+    id: "rf000", name: "throwing session row",
+    task: "Find a session row that makes readSession throw",
     startedAt: NOW - 4e5, status: "failed",
     hasSearchTree: true, hasNodeTranscripts: true,
     branches: 0, winnerScore: null,
   },
   {
-    id: "root-merge-1", name: "rules-by-kind call sites",
-    task: "Check every other call site that indexes rules by kind",
+    id: "root-merge-1", name: "env.DB call sites",
+    task: "Check every other call site that reads env.DB",
     startedAt: NOW - 52e5, status: "completed", hasSearchTree: false,
     hasNodeTranscripts: true, branches: 5, winnerScore: null,
   },
@@ -3738,14 +3751,14 @@ const FORK_RUNS: ForkRunSummary[] = [
 
 function olderForks(): ForkRunSummary[] {
   const tasks = [
-    "Reproduce the checkout 500 against the staging snapshot",
-    "Work out which migration dropped the coupon index",
-    "Find every reader of rules[kind] outside checkout",
-    "Decide whether inferKind belongs at the edge or the reader",
-    "Trace the cart serializer's null path",
-    "Check the admin coupon report against the same guard",
+    "Reproduce the /api 500 against the staging snapshot",
+    "Work out which deploy renamed the database binding",
+    "Find every reader of env.DB outside the api Worker",
+    "Decide whether the fallback belongs at the entry or the reader",
+    "Trace the webhook route's database path",
+    "Check the admin sessions report against the same fix",
     "Compare the two candidate fixes on the failing fixture",
-    "Establish whether the 500 predates the pricing refactor",
+    "Establish whether the 500 predates the router refactor",
   ];
 
   return Array.from({ length: 31 }, (_, i) => {
@@ -3768,40 +3781,40 @@ function olderForks(): ForkRunSummary[] {
 
 const MERGED_RUN: HeadRunView = {
   rootId: "root-merge-1",
-  task: "Check every other call site that indexes rules by kind",
-  rationale: "Three call sites, three readers — cheaper in parallel than in sequence.",
+  task: "Check every other call site that reads env.DB",
+  rationale: "Five call sites, five readers — cheaper in parallel than in sequence.",
   status: "completed",
   spawnedAt: NOW - 52e5,
   heads: [
     {
-      id: "root-merge-1-h0", parentId: null, depth: 1, task: "packages/checkout/src/apply-coupon.ts", rationale: "the reported 500",
-      status: "completed", summary: "Two more reads of rules[kind]; both guarded by the same ?? inferKind fix.",
+      id: "root-merge-1-h0", parentId: null, depth: 1, task: "workers/api/src/db.ts", rationale: "the reported 500",
+      status: "completed", summary: "Two more reads of env.DB; both behind the same ?? fallback.",
       errorMessage: null, usage: { input: 8_420, output: 610 }, wallClockMs: 14_200,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5,
-      decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
+      decisions: [{ question: "Fix at the entry or at the reader?", choice: "at the reader", rationale: "the entry would still let the webhook route read the old name" }],
     },
     {
-      id: "root-merge-1-h1", parentId: null, depth: 1, task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
-      status: "completed", summary: "One read, already null-safe — no change needed here.",
+      id: "root-merge-1-h1", parentId: null, depth: 1, task: "workers/api/src/routes/webhooks.ts", rationale: "the lazy path",
+      status: "completed", summary: "One read, already through openDb — no change needed here.",
       errorMessage: null, usage: { input: 5_110, output: 240 }, wallClockMs: 9_800,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 515e4, decisions: [],
     },
     {
-      id: "root-merge-1-h2", parentId: null, depth: 1, task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
+      id: "root-merge-1-h2", parentId: null, depth: 1, task: "workers/admin/src/sessions-report.ts", rationale: "the reporting path",
       status: "errored", summary: null,
-      errorMessage: "the admin package is not checked out on this computer",
+      errorMessage: "the admin Worker is not checked out on this computer",
       usage: { input: 1_020, output: 0 }, wallClockMs: 2_100,
       spawnedAt: NOW - 52e5, lastStepAt: null, decisions: [],
     },
     {
-      id: "root-merge-1-h3", parentId: null, depth: 1, task: "packages/checkout/src/pricing.ts", rationale: "the discount maths",
-      status: "completed", summary: "Indexes by kind twice inside the percentage path; both reads are behind the same guard.",
+      id: "root-merge-1-h3", parentId: null, depth: 1, task: "workers/api/src/router.ts", rationale: "the request entry",
+      status: "completed", summary: "Opens the database twice on the session path; both reads are behind the same fallback.",
       errorMessage: null, usage: { input: 6_240, output: 380 }, wallClockMs: 11_400,
       spawnedAt: NOW - 52e5, lastStepAt: NOW - 512e4, decisions: [],
     },
     {
       // Closed by the settle: `HeadJournal.cacheMerge` terminalizes in-flight heads in the same transition, so a settled run has none running.
-      id: "root-merge-1-h4", parentId: null, depth: 1, task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
+      id: "root-merge-1-h4", parentId: null, depth: 1, task: "workers/api/src/routes/public.ts", rationale: "the public surface",
       status: "aborted", summary: null,
       errorMessage: "no report at the synthesis: the run merged what had arrived, and this head "
         + "was still in flight when it did",
@@ -3810,7 +3823,7 @@ const MERGED_RUN: HeadRunView = {
     },
   ],
   merge: {
-    narrative: "Three real call sites left — apply-coupon.ts and both reads in pricing.ts — and the same ?? inferKind guard covers all of them. The cart serializer is already null-safe. The admin report could not be checked; that package is not in this sandbox. The API routes were still being walked when this merged, so they are unread.",
+    narrative: "Three real call sites left — db.ts and both reads in router.ts — and the same ?? fallback covers all of them. The webhook route already reads through openDb. The admin report could not be checked; that Worker is not in this sandbox. The public routes were still being walked when this merged, so they are unread.",
   },
 };
 
@@ -3859,159 +3872,159 @@ const STOPPED_RUN: HeadRunView = {
 const TRANSCRIPTS = {
   "root-merge-1-h0": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h0",
-    task: "Audit packages/checkout/src/apply-coupon.ts for every read of rules[kind], and decide whether the ?? inferKind guard belongs at the request edge or at each reader. The reported 500 comes through /api/cart/apply with a percentage coupon created after Tuesday's migration, whose kind column is null.",
+    task: "Audit workers/api/src/db.ts for every read of env.DB, and decide whether the ?? fallback belongs at the request entry or at each reader. The reported 500 comes through /api/health since Tuesday's deploy renamed the binding to SESSIONS_DB, so env.DB is undefined.",
     rationale: "the reported 500",
     status: "completed",
     spawnedAt: NOW - 52e5, lastStepAt: NOW - 51e5, wallClockMs: 14_200,
     usage: { input: 8_420, output: 610 },
     steps: { status: "end", items: [
       { parts: [
-        { type: "reasoning", text: "The 500 is a dereference of `rules[kind]` where kind is null, so the fix has to sit where the dereference is — not where the value was created. That means I need every reader, not just the one in the stack trace.", state: "done" },
+        { type: "reasoning", text: "The 500 is a `.prepare` on an undefined `env.DB`, so the fix has to sit where the binding is read — not where it was renamed. That means I need every reader, not just the one in the stack trace.", state: "done" },
         { type: "text", text: "Reading the handler and both of its callers before changing anything.", state: "done" },
-        { type: "tool-file", toolCallId: "gallery-call-1", state: "output-available", input: { op: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "export function applyCoupon(cart: Cart, coupon: Coupon) {\n  const rule = rules[coupon.kind];\n  return rule.apply(cart, coupon);\n}" },
-        { type: "tool-grep", toolCallId: "gallery-call-2", state: "output-available", input: { pattern: "rules\\[", path: "packages/checkout" }, output: "apply-coupon.ts:14\napply-coupon.ts:31\nvalidate.ts:9" },
+        { type: "tool-file", toolCallId: "gallery-call-1", state: "output-available", input: { op: "read", path: "workers/api/src/db.ts" }, output: "export function openDb(env: Env): D1Database {\n  return env.DB;\n}" },
+        { type: "tool-grep", toolCallId: "gallery-call-2", state: "output-available", input: { pattern: "env\\.DB", path: "workers/api/src" }, output: "db.ts:10\nrouter.ts:31\nhealth.ts:9" },
       ] },
       { parts: [
-        { type: "text", text: "Three readers, one shape. `validate.ts:9` already guards; the two in `apply-coupon.ts` do not.", state: "done" },
-        { type: "tool-file", toolCallId: "gallery-call-3", state: "output-available", input: { op: "read", path: "packages/checkout/src/validate.ts" }, output: "const rule = rules[coupon.kind ?? inferKind(coupon)];" },
+        { type: "text", text: "Three readers, one shape. `health.ts:9` already falls back; the two in `db.ts` and `router.ts` do not.", state: "done" },
+        { type: "tool-file", toolCallId: "gallery-call-3", state: "output-available", input: { op: "read", path: "workers/api/src/routes/health.ts" }, output: "const db = env.SESSIONS_DB ?? env.DB;" },
       ] },
       { parts: [
-        { type: "reasoning", text: "Guarding at the edge would still let a null through the cart serializer, which reads the same table on the lazy path.", state: "done" },
-        { type: "text", text: "Guarding at the reader, and proving it with the suite.", state: "done" },
-        { type: "tool-file", toolCallId: "gallery-call-4", state: "output-available", input: { op: "edit", path: "packages/checkout/src/apply-coupon.ts" }, output: "2 hunks applied" },
-        { type: "tool-shell", toolCallId: "gallery-call-5", state: "output-available", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
+        { type: "reasoning", text: "Fixing at the entry would still let the webhook route read the old name, which it does on the lazy path.", state: "done" },
+        { type: "text", text: "Fixing at the reader, and proving it with the suite.", state: "done" },
+        { type: "tool-file", toolCallId: "gallery-call-4", state: "output-available", input: { op: "edit", path: "workers/api/src/db.ts" }, output: "2 hunks applied" },
+        { type: "tool-shell", toolCallId: "gallery-call-5", state: "output-available", input: { command: "bun test workers/api" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
       ] },
     ] },
     stepCount: 3,
     toolCount: 5,
-    answer: "Two more reads of `rules[kind]` in `apply-coupon.ts`, both fixed by the same `?? inferKind(coupon)` guard already used in `validate.ts:9`.\n\nGuarding at the **reader** rather than the request edge, because the cart serializer reads the same table on the lazy path and an edge guard would still let a null reach it. `bun test packages/checkout` is green (42 pass).",
+    answer: "Two more reads of `env.DB`, in `db.ts` and `router.ts`, both fixed by the same `?? env.DB` fallback already used in `health.ts:9`.\n\nFixing at the **reader** rather than the request entry, because the webhook route reads the binding on the lazy path and an entry fix would still let it read the old name. `bun test workers/api` is green (42 pass).",
     decisions: [{
-      question: "Guard at the edge or at the reader?",
+      question: "Fix at the entry or at the reader?",
       choice: "at the reader",
-      rationale: "the edge would still let a null through the cart serializer",
+      rationale: "the entry would still let the webhook route read the old name",
     }],
     errorMessage: null,
     path: [
-      { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
-      { id: "root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", depth: 1, status: "completed" },
+      { id: "root-merge-1", label: "Check every other call site that reads env.DB", depth: 0, status: "completed" },
+      { id: "root-merge-1-h0", label: "workers/api/src/db.ts", depth: 1, status: "completed" },
     ],
   },
   "root-merge-1-h1": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h1",
-    task: "Check packages/cart/src/serializer.ts — the lazy path that reads the same rules table.",
+    task: "Check workers/api/src/routes/webhooks.ts — the lazy path that reads the same binding.",
     rationale: "the lazy path", status: "running",
     spawnedAt: NOW - 42e3, lastStepAt: NOW - 9e3, wallClockMs: 0,
     usage: { input: 5_110 },
     steps: { status: "end", items: [{ parts: [
-                                      { type: "reasoning", text: "If this path already optional-chains, the guard belongs only in apply-coupon.", state: "done" },
-                                      { type: "text", text: "Opening the serializer.", state: "done" },
-                                      { type: "tool-file", toolCallId: "gallery-call-6", state: "output-available", input: { op: "read", path: "packages/cart/src/serializer.ts" }, output: "const rule = rules[coupon.kind]?.serialize;" },
+                                      { type: "reasoning", text: "If this path already reads through openDb, the fix belongs only in db.ts.", state: "done" },
+                                      { type: "text", text: "Opening the webhook route.", state: "done" },
+                                      { type: "tool-file", toolCallId: "gallery-call-6", state: "output-available", input: { op: "read", path: "workers/api/src/routes/webhooks.ts" }, output: "const db = openDb(env);" },
                                     ] }] },
     stepCount: 1,
     toolCount: 1,
     answer: null, decisions: [], errorMessage: null,
     path: [
-      { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "running" },
-      { id: "root-merge-1-h1", label: "packages/cart/src/serializer.ts", depth: 1, status: "running" },
+      { id: "root-merge-1", label: "Check every other call site that reads env.DB", depth: 0, status: "running" },
+      { id: "root-merge-1-h1", label: "workers/api/src/routes/webhooks.ts", depth: 1, status: "running" },
     ],
   },
   "root-merge-1-h2": {
     origin: "head", runId: "root-merge-1", nodeId: "root-merge-1-h2",
-    task: "Check packages/admin/src/coupon-report.ts — the reporting path.",
+    task: "Check workers/admin/src/sessions-report.ts — the reporting path.",
     rationale: "the reporting path", status: "errored",
     spawnedAt: NOW - 52e5, lastStepAt: null, wallClockMs: 2_100,
     usage: { input: 1_020 },
     steps: { status: "end", items: [] }, stepCount: 0, toolCount: 0, answer: null, decisions: [],
-    errorMessage: "the admin package is not checked out on this computer",
+    errorMessage: "the admin Worker is not checked out on this computer",
     path: [
-      { id: "root-merge-1", label: "Check every other call site that indexes rules by kind", depth: 0, status: "completed" },
-      { id: "root-merge-1-h2", label: "packages/admin/src/coupon-report.ts", depth: 1, status: "errored" },
+      { id: "root-merge-1", label: "Check every other call site that reads env.DB", depth: 0, status: "completed" },
+      { id: "root-merge-1-h2", label: "workers/admin/src/sessions-report.ts", depth: 1, status: "errored" },
     ],
   },
   // A competed branch: no tool loop, its `observation` is the whole output.
   n003: {
     origin: "rollout", runId: "n000", nodeId: "n003",
-    task: "Find why the SAVE20 coupon 500s",
+    task: "Find why /api/health 500s",
     rationale: "", status: "terminal",
     spawnedAt: NOW - 34e5, lastStepAt: null, wallClockMs: 0, usage: {},
     steps: { status: "end", items: [] }, stepCount: 0, toolCount: 0,
-    answer: "The percentage branch indexes `rules[coupon.kind]` and Tuesday's migration left `kind` null on every coupon created after it, so the lookup returns undefined and `.apply` throws. Guard the read with `?? inferKind(coupon)` — the shape `validate.ts` already uses — rather than backfilling the column, which would need a migration window the checkout path cannot take.",
+    answer: "`openDb` reads `env.DB` and Tuesday's deploy renamed the binding to `SESSIONS_DB`, so the read returns undefined and `.prepare` throws. Read `env.SESSIONS_DB ?? env.DB` — the shape `health.ts` already uses — rather than binding the database twice, which would hide the rename from every reader.",
     decisions: [], errorMessage: null,
     path: [
-      { id: "n000", label: "Find why the SAVE20 coupon 500s", depth: 0, status: "open" },
-      { id: "n001", label: "Look at the coupon rules table", depth: 1, status: "open" },
-      { id: "n003", label: "Guard the kind lookup at the reader", depth: 2, status: "terminal" },
+      { id: "n000", label: "Find why /api/health 500s", depth: 0, status: "open" },
+      { id: "n001", label: "Look at the Worker's bindings", depth: 1, status: "open" },
+      { id: "n003", label: "Read the binding by its new name", depth: 2, status: "terminal" },
     ],
   },
   // A Steer-as-Branch run: one head, its id derived from the run id.
   "steer-b7f21-head": {
     origin: "head", runId: "steer-b7f21", nodeId: "steer-b7f21-head",
-    task: "Actually, check the staging snapshot first — I don't think the migration ran there.",
+    task: "Actually, check staging first — I don't think the rename deployed there.",
     rationale: "mid-turn redirect",
     status: "completed",
     spawnedAt: NOW - 9e5, lastStepAt: NOW - 84e4, wallClockMs: 61_400,
     usage: { input: 5_140, output: 380 },
     steps: { status: "end", items: [
       { parts: [
-        { type: "reasoning", text: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.", state: "done" },
-        { type: "text", text: "Checking whether Tuesday's migration reached staging at all.", state: "done" },
-        { type: "tool-shell", toolCallId: "gallery-call-7", state: "output-available", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
+        { type: "reasoning", text: "If staging never deployed it, its working health check proves nothing about production and the whole comparison is off.", state: "done" },
+        { type: "text", text: "Checking whether Tuesday's rename reached staging at all.", state: "done" },
+        { type: "tool-shell", toolCallId: "gallery-call-7", state: "output-available", input: { command: "bunx wrangler deployments list --env staging" }, output: "3f2a91c  2026-08-11  fix: rename the sessions binding" },
       ] },
       { parts: [
-        { type: "text", text: "It did run, on the 11th. The snapshot is comparable after all.", state: "done" },
+        { type: "text", text: "It did deploy, on the 11th. Staging is comparable after all.", state: "done" },
       ] },
     ] },
     stepCount: 2,
     toolCount: 1,
-    answer: "Staging applied `0007_coupon_kind.sql` on 2026-08-11, so its null `kind` rows predate the migration exactly as production's do — the snapshot is a fair reproduction and the guard is still the right fix.",
+    answer: "Staging deployed the rename `3f2a91c` on 2026-08-11, so it reads the database by the new binding exactly as production does — staging is a fair reproduction and the fallback is still the right fix.",
     decisions: [], errorMessage: null,
     path: [
-      { id: "steer-b7f21-head", label: "Check the staging snapshot first", depth: 0, status: "completed" },
+      { id: "steer-b7f21-head", label: "Check staging first", depth: 0, status: "completed" },
     ],
   },
   // Two nodes of the live run, reachable from the run pane's node list.
   lv001: {
     origin: "head", runId: "lv000", nodeId: "lv001",
-    task: "Walk the cart serializer's null path: every read of coupon.kind in packages/cart/src, and for each one say whether a null kind can reach it and what the caller sees when it does.",
+    task: "Walk the webhook route's database path: every read of env.DB in workers/api/src/routes, and for each one say whether a missing binding can reach it and what the caller sees when it does.",
     rationale: "expansion 1 of 5",
     status: "completed",
     spawnedAt: NOW - 40e4, lastStepAt: NOW - 30e4, wallClockMs: 118_000,
     usage: { input: 9_180, output: 720 },
     steps: { status: "end", items: [
       { parts: [
-        { type: "reasoning", text: "The task names one file but the serializer re-exports from two others, so grepping the package is cheaper than reading it and less likely to miss a caller.", state: "done" },
+        { type: "reasoning", text: "The task names one file but the router re-exports from two others, so grepping the folder is cheaper than reading it and less likely to miss a caller.", state: "done" },
         { type: "text", text: "Listing the readers before I judge any of them.", state: "done" },
-        { type: "tool-shell", toolCallId: "gallery-call-8", state: "output-available", input: { command: "rg -n 'coupon\\.kind|rules\\[' packages/cart/src" }, output: "src/serializer.ts:88:  const rule = rules[coupon.kind];\nsrc/serializer.ts:141:  if (coupon.kind === 'fixed') {\nsrc/totals.ts:52:  const pct = rules[coupon.kind].percent;" },
+        { type: "tool-shell", toolCallId: "gallery-call-8", state: "output-available", input: { command: "rg -n 'env\\.DB' workers/api/src/routes" }, output: "src/routes/webhooks.ts:88:  const db = env.DB;\nsrc/routes/webhooks.ts:141:  if (env.DB === undefined) {\nsrc/routes/admin.ts:52:  const rows = env.DB.prepare(query);" },
       ] },
       { parts: [
-        { type: "text", text: "Three reads, two of them unguarded. `serializer.ts:141` compares rather than indexes, so a null kind takes the else branch and is fine.", state: "done" },
-        { type: "tool-read", toolCallId: "gallery-call-9", state: "output-available", input: { path: "packages/cart/src/serializer.ts", offset: 80, limit: 20 }, output: "  const rule = rules[coupon.kind];\n  return { ...line, discount: rule.apply(line.subtotal) };" },
+        { type: "text", text: "Three reads, two of them unguarded. `webhooks.ts:141` checks rather than calls, so a missing binding takes the early return and is fine.", state: "done" },
+        { type: "tool-read", toolCallId: "gallery-call-9", state: "output-available", input: { path: "workers/api/src/routes/webhooks.ts", offset: 80, limit: 20 }, output: "  const db = env.DB;\n  return await db.prepare(INSERT_EVENT).bind(event.id).run();" },
       ] },
       { parts: [
-        { type: "text", text: "Confirmed. `rule` is undefined for a null kind and `.apply` throws before anything is returned to the caller.", state: "done" },
+        { type: "text", text: "Confirmed. `db` is undefined once the binding is renamed and `.prepare` throws before anything is returned to the caller.", state: "done" },
       ] },
     ] },
     stepCount: 3,
     toolCount: 2,
-    answer: "`serializeCart` reads `rules[coupon.kind].percent` with no guard — it throws on every percentage coupon written before the migration. `totals.ts:52` has the same shape. `serializer.ts:141` compares instead of indexing and is safe. The guard belongs at both reads, spelled the way `validate.ts` already spells it: `rules[coupon.kind ?? inferKind(coupon)]`.",
+    answer: "`handleWebhook` reads `env.DB` with no fallback — it throws on every request since the binding was renamed. `admin.ts:52` has the same shape. `webhooks.ts:141` checks instead of calling and is safe. The fix belongs at both reads, spelled the way `openDb` now spells it: `env.SESSIONS_DB ?? env.DB`.",
     decisions: [], errorMessage: null,
     path: [
-      { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
-      { id: "lv001", label: "Walk the cart serializer's null path", depth: 1, status: "completed" },
+      { id: "lv000", label: "Audit every reader of env.DB", depth: 0, status: "running" },
+      { id: "lv001", label: "Walk the webhook route's database path", depth: 1, status: "completed" },
     ],
   },
   lv003: {
     origin: "head", runId: "lv000", nodeId: "lv003",
-    task: "Trace the pricing refactor's readers: which of them index rules by kind, and did the refactor introduce or remove a guard.",
+    task: "Trace the router refactor's readers: which of them read env.DB themselves, and did the refactor introduce or remove a fallback.",
     rationale: "expansion 3 of 5",
     status: "running",
     spawnedAt: NOW - 40e4, lastStepAt: NOW - 4e3, wallClockMs: 0,
     usage: { input: 4_260, output: 190 },
     steps: { status: "end", items: [
       { parts: [
-        { type: "reasoning", text: "A read that lost its guard and a read that never had one need different fixes, and only the history tells them apart.", state: "done" },
-        { type: "text", text: "Finding the refactor first — the guard may have moved rather than gone.", state: "done" },
-        { type: "tool-shell", toolCallId: "gallery-call-10", state: "output-available", input: { command: "git log --oneline -S'rules[' -- packages/pricing/src" }, output: "8c1f20a1 refactor(pricing): one rate table, read through a resolver" },
+        { type: "reasoning", text: "A read that lost its fallback and a read that never had one need different fixes, and only the history tells them apart.", state: "done" },
+        { type: "text", text: "Finding the refactor first — the fallback may have moved rather than gone.", state: "done" },
+        { type: "tool-shell", toolCallId: "gallery-call-10", state: "output-available", input: { command: "git log --oneline -S'env.DB' -- workers/api/src" }, output: "8c1f20a1 refactor(api): one router, every route through openDb" },
       ] },
       { parts: [
         { type: "text", text: "Reading that commit.", state: "done" },
@@ -4023,8 +4036,8 @@ const TRANSCRIPTS = {
     answer: null,
     decisions: [], errorMessage: null,
     path: [
-      { id: "lv000", label: "Audit every reader of coupon.kind", depth: 0, status: "running" },
-      { id: "lv003", label: "Trace the pricing refactor's readers", depth: 1, status: "running" },
+      { id: "lv000", label: "Audit every reader of env.DB", depth: 0, status: "running" },
+      { id: "lv003", label: "Trace the router refactor's readers", depth: 1, status: "running" },
     ],
   },
 } satisfies Record<string, NodeTranscriptView>;
@@ -4111,7 +4124,7 @@ const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): P
 
   if (method === "getFacts") return rpcResult([
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
-    { key: "checkout.coupon_kind", value: "nullable since Tuesday", confidence: 1, source: "migration 0042", lastObservedAt: NOW - 26e5 },
+    { key: "api.sessions_binding", value: "SESSIONS_DB since Tuesday", confidence: 1, source: "wrangler.jsonc", lastObservedAt: NOW - 26e5 },
   ]).json<T>();
 
   return stubRpc<T>(method, args);
@@ -4321,8 +4334,8 @@ function liveRun(stage: number): ForkRunSummary {
 
   return {
     id: "live000",
-    name: "SAVE20 500s",
-    task: "Find why the SAVE20 coupon 500s",
+    name: "/api/health 500s",
+    task: "Find why /api/health 500s",
     startedAt: NOW - 3e4,
     status: settled ? "completed" : "running",
     hasSearchTree: true,
@@ -4404,21 +4417,21 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 /** The bar over fixture chats: working, waiting, failed. */
 const GALLERY_CHATS: readonly PanelAgent[] = [
   mainPanelAgent({ activity: "working" }),
-  { colour: 1, key: galleryActorId("docs"), label: "Fix SAVE20 coupon 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
-  { colour: 2, key: galleryActorId("agent-4f2c"), label: "Speed up cart render", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 1, key: galleryActorId("docs"), label: "Fix the /api/health 500s", category: "user", activity: "waiting", parent: "main", open: { kind: "chat", path: "docs" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
+  { colour: 2, key: galleryActorId("agent-4f2c"), label: "Read the overnight error logs", category: "user", activity: "failed", parent: "main", open: { kind: "chat", path: "agent-4f2c" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
   { colour: 3, key: galleryActorId("review"), label: "Review: payments refactor", category: "user", activity: "working", parent: "main", open: { kind: "chat", path: "review" }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null } },
 ];
 
 function GalleryWorkspaceHeader({ active = "main" }: { active?: string }) {
   return (
     <WorkspaceHeader
-      workspace={{ name: "checkout-fixes", title: "Storefront", to: "/workspace/checkout-fixes/overview", editValue: "Storefront", rename: async () => {}, remove: () => {} }}
+      workspace={{ name: "api-worker", title: "API Worker", to: "/workspace/api-worker/overview", editValue: "API Worker", rename: async () => {}, remove: () => {} }}
       chats={GALLERY_CHATS.map((agent): ChatTab => (agent.key === "main"
-        ? { agent, to: "/workspace/checkout-fixes", rename: async () => {} }
-        : { agent, to: "/workspace/checkout-fixes", rename: async () => {}, remove: () => {} }))}
+        ? { agent, to: "/workspace/api-worker", rename: async () => {} }
+        : { agent, to: "/workspace/api-worker", rename: async () => {}, remove: () => {} }))}
       active={active}
-      newChat="/workspace/checkout-fixes/new"
-      trailing={<WorkspaceBarActions workspace="checkout-fixes" working={0} view={undefined} inspector={null} onAgents={() => {}} />}
+      newChat="/workspace/api-worker/new"
+      trailing={<WorkspaceBarActions workspace="api-worker" working={0} view={undefined} inspector={null} onAgents={() => {}} />}
     />
   );
 }
@@ -4435,7 +4448,7 @@ const REFRESH_NOTICE: readonly ComposerNotice[] = [{
 function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[] }) {
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<WorkMode>("build");
-  const [model, setModel] = useState("anthropic/claude-opus-4");
+  const [model, setModel] = useState("opencode-go/muse-spark-1.3-contributor");
 
   return (
     <div className="border-t p-border p-sidebar">
@@ -4595,7 +4608,7 @@ function ChatFrame() {
         <ChatMessages />
         <GalleryComposer notices={[
           ...REFRESH_NOTICE,
-          ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "fetch failed: provider stream reset before completion (anthropic/claude-opus-4)", refused: false } }),
+          ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "fetch failed: provider stream reset before completion (opencode-go/muse-spark-1.3-contributor)", refused: false } }),
           // The runtime refusing this tab, as `sunlit-stone-4a20` answers a resume ACK.
           ...turnEndNotices({ ...NO_TURN_END, chatError: { body: "Unauthorized", refused: true } }),
         ]} />
@@ -4670,33 +4683,34 @@ function ChatSteerFrame() {
 const CODE_THREAD: UIMessage[] = [
   msg({
     id: "cu1", role: "user", createdAt: NOW - 4 * 60e3,
-    parts: [{ type: "text", text: "Show me the fix for the SAVE20 coupon, how to run it, and the shape it returns." }],
+    parts: [{ type: "text", text: "Show me the fix for the /api/health 500, how to run it, and what it answers." }],
   }),
   msg({
     id: "ca1", role: "assistant", createdAt: NOW - 3 * 60e3,
     parts: [
       { type: "text", text: [
-        "The patch keeps percentage coupons on the branch the migration left null:",
+        "The patch reads the database by its new binding, and by the old one until staging redeploys:",
         "",
         "```ts",
-        "interface CouponRule { kind: 'fixed' | 'percent'; value: number }",
-        "const rule: CouponRule = rules[coupon.kind ?? inferKind(coupon)];",
-        "export function applyCoupon(cart: Cart, coupon: Coupon): Cart {",
-        "  return rule.kind === 'percent' ? cart.scale(rule.value) : cart.subtract(rule.value);",
+        "interface Env { SESSIONS_DB?: D1Database; DB?: D1Database }",
+        "export function openDb(env: Env): D1Database {",
+        "  const db = env.SESSIONS_DB ?? env.DB;",
+        "  if (db === undefined) throw new MissingBinding('SESSIONS_DB');",
+        "  return db;",
         "}",
         "```",
         "",
-        "Run the suite from the package root:",
+        "Run the suite from the Worker's folder:",
         "",
         "```bash",
-        "bun test packages/checkout --filter coupon-kind",
-        "git diff --stat migrations/0042_coupon_kind.sql",
+        "bun test workers/api --filter sessions-binding",
+        "git diff --stat workers/api/wrangler.jsonc",
         "```",
         "",
-        "and the handler now answers:",
+        "and /api/health now answers:",
         "",
         "```json",
-        "{ \"code\": \"SAVE20\", \"kind\": \"percent\", \"applied\": true, \"total\": 84.00 }",
+        "{ \"ok\": true, \"db\": \"up\", \"binding\": \"SESSIONS_DB\", \"latencyMs\": 14 }",
         "```",
       ].join("\n") },
     ],
@@ -4758,9 +4772,9 @@ function ChatLoadingFrame() {
 
 /* The real composer at reading width: at rest with a draft, mid-turn (Stop / Branch / Steer), and with a status row. */
 function ComposerFrame() {
-  const [value, setValue] = useState("Ship the coupon fix behind a preview first.");
+  const [value, setValue] = useState("Ship the binding fix behind a preview first.");
   const [mode, setMode] = useState<WorkMode>("build");
-  const [model, setModel] = useState("anthropic/claude-opus-4");
+  const [model, setModel] = useState("opencode-go/muse-spark-1.3-contributor");
   /* The thinking level travels with the model; the composer sizes the row, so the picker takes no width class. */
   const [effort, setEffort] = useState<ReasoningEffort | null>(null);
   const [parts, setParts] = useState<FileUIPart[]>([]);
@@ -4909,7 +4923,9 @@ function ChatHistoryFrame() {
     return yield* Effect.promise(() => rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>());
   })), []);
 
-  const { history, transcript } = useChatThread({ rpc: workspaceRpc(rpc), live, seeded: true });
+  // The live rows follow the stored ones, as the room's window says of its own.
+  const seedEdge = useMemo(() => (live[0] === undefined ? null : { from: live[0].id, older: { before: STORED_HISTORY.length } }), [live]);
+  const { history, transcript } = useChatThread({ rpc: workspaceRpc(rpc), live, seeded: true, seedEdge });
 
   const messagesRef = useGrowingScroll({
     grows: "up", content: transcript, fetched: history.entries, loading: history.loading,
@@ -5015,7 +5031,7 @@ function HistoryAuthorityFrame() {
             exhausted={history.exhausted}
             onRetry={history.retry}
             pending={<ConversationSkeleton />}
-            empty={<EmptyConversation mission="Audit checkout history" />}
+            empty={<EmptyConversation mission="Audit the Worker's deploy history" />}
           />
         </div>
         <div data-history-probe className="hidden">{JSON.stringify({
@@ -5033,8 +5049,8 @@ function RosterAuthorityFrame() {
   const roster = useWorkspaceRoster();
 
   const entry: WorkspaceEntry = {
-    name: "checkout-fixes",
-    displayName: "Storefront",
+    name: "api-worker",
+    displayName: "API Worker",
     createdAt: NOW - 7 * 864e5,
     lastVisited: NOW - 60e3,
   };
@@ -5102,7 +5118,7 @@ function ClientContinuityFrame() {
           <MarkdownContent content="![Loaded image](/assets/kinu-icon.svg)" />
         </div>
         <div data-image-failure>
-          <MarkdownContent content="![Checkout diagram](/assets/missing-continuity-image.png)" />
+          <MarkdownContent content="![Request flow diagram](/assets/missing-continuity-image.png)" />
         </div>
         <button data-continuity-reset type="button"
           onClick={() => { setDraft(""); setSends(0); setFiles([]); }}
@@ -5182,44 +5198,43 @@ function TabsFrame() {
 }
 
 /* Everything the agent emits that must survive a narrow chat column. */
-const MARKDOWN_SAMPLE = `Here is what the migration is doing wrong, and the patch.
+const MARKDOWN_SAMPLE = `Here is what the deploy is doing wrong, and the patch.
 
-The handler reads \`rules[coupon.kind]\` before \`kind\` is backfilled, so a percentage coupon dereferences \`undefined.percent\`. Fix is one line in \`apply-coupon.ts\` plus a guard in the migration.
+The Worker reads \`env.DB\` after the config renamed the binding to \`SESSIONS_DB\`, so every route that opens the database calls \`undefined.prepare\`. Fix is one line in \`db.ts\` plus an index in the migration.
 
 \`\`\`ts
-export function applyCoupon(cart: Cart, coupon: Coupon): Cart {
-  const kind = coupon.kind ?? inferKind(coupon);
-  const rule = rules[kind];
-  if (!rule) throw new CouponError(\`no pricing rule for kind=\${kind}\`, { code: coupon.code });
-  return rule.kind === "percent" ? discountByPercent(cart, rule.percent) : discountByAmount(cart, rule.amount);
+export function openDb(env: Env): D1Database {
+  const db = env.SESSIONS_DB ?? env.DB;
+  if (db === undefined) throw new MissingBinding(\`no database bound as SESSIONS_DB\`, { worker: "api" });
+  return db;
 }
 \`\`\`
 
 \`\`\`sql
-UPDATE coupons SET kind = CASE WHEN value <= 100 AND code LIKE '%PCT%' THEN 'percent' ELSE 'fixed' END WHERE kind IS NULL;
+CREATE INDEX IF NOT EXISTS sessions_expires_at ON sessions (expires_at) WHERE expires_at IS NOT NULL;
 \`\`\`
 
 \`\`\`bash
-bun test packages/checkout --reporter=verbose && bunx wrangler deploy --env staging --var COUPON_STRICT:1
+bun test workers/api --reporter=verbose && bunx wrangler deploy --env staging --var STRICT_BINDINGS:1
 \`\`\`
 
 plain fence, no language: code-block styling still applies even when there are no language-specific tokens to highlight
 \`\`\`
 
-| Coupon | Kind | Value | Status |
+| Route | Binding | p95 ms | Status |
 | --- | --- | ---: | --- |
-| SAVE10 | fixed | 10 | ok |
-| SAVE20 | null | 20 | **500** |
+| /api/users | SESSIONS_DB | 38 | ok |
+| /api/health | DB | 41 | **500** |
 
-1. Patch the migration
+1. Patch openDb
 2. Add the regression test
-   - one for \`percent\`
-   - one for the \`null\` row
+   - one for \`SESSIONS_DB\`
+   - one for the old \`DB\` name
 3. Re-run the suite
 
-> The backfill ran before the enum existed, which is why nothing failed in CI.
+> The rename shipped before the tests read the binding, which is why nothing failed in CI.
 
-See [the migration](https://example.com/migrations/0042) for the original.`;
+See [the config change](https://example.com/commits/3f2a91c) for the original.`;
 
 function MarkdownFrame() {
   return (
@@ -5277,7 +5292,7 @@ function GalleryModal() {
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
-          Remove <span className="font-medium p-text">Storefront</span> and delete everything in it? This cannot be undone.
+          Remove <span className="font-medium p-text">API Worker</span> and delete everything in it? This cannot be undone.
         </p>
       </Modal>
     </div>
@@ -5428,7 +5443,7 @@ function MarksFrame() {
           {BROWSER_TABS.map((browser) => (
             <div key={browser.strip} className="w-[300px] rounded-[10px] px-2 pt-2" style={{ background: browser.strip }}>
               <div className="flex h-[34px] w-[200px] items-center gap-2 rounded-t-[8px] px-3 text-[12px]" style={{ background: browser.tab, color: browser.text, fontFamily: "Arial, sans-serif" }}>
-                <img src={favicon} width={16} height={16} alt="" />Storefront · Kinu
+                <img src={favicon} width={16} height={16} alt="" />API Worker · Kinu
               </div>
             </div>
           ))}
@@ -5470,10 +5485,10 @@ function MarksFrame() {
 }
 
 const BRAIN_STATUS = {
-  name: "checkout-coupon-bug-9935d3", displayName: "Storefront",
-  purpose: "The store's checkout, cart and payments: keep them fast and correct.", model: "anthropic/claude-opus-4",
+  name: "api-worker-health-9935d3", displayName: "API Worker",
+  purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.", model: "opencode-go/muse-spark-1.3-contributor",
   scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
-  soul: "# Storefront", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
+  soul: "# API Worker", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
 const GALLERY_SLATE_ID = "sandbox-probe";
@@ -5536,24 +5551,24 @@ function ChatSlateFrame() {
 // The plan at its real shape: several steps, one active, one with subtasks, one dropped.
 const AGENT_TASKS = [
   {
-    id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
+    id: "t1", parentId: null, title: "Reproduce the /api/health 500", status: "done",
     updatedAt: NOW - 44e5, note: null, subtasks: [],
   },
   {
-    id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the coupon lookup",
+    id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the session lookup",
     status: "active", updatedAt: NOW - 8e5, note: null,
     subtasks: [
       { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", updatedAt: NOW - 21e5, note: null },
       { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", updatedAt: NOW - 6e5, note: "Client already bails at 8s — retrying past that is burn, not robustness." },
-      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", updatedAt: NOW - 30e5, note: null },
+      { id: "t7", parentId: "t2", title: "Check the same path in the admin Worker", status: "open", updatedAt: NOW - 30e5, note: null },
     ],
   },
   {
-    id: "t3", parentId: null, title: "Add a regression test for the expired-coupon branch",
+    id: "t3", parentId: null, title: "Add a regression test for the expired-session branch",
     status: "open", updatedAt: NOW - 52e5, note: null, subtasks: [],
   },
   {
-    id: "t4", parentId: null, title: "Rewrite the coupon docs page", status: "dropped",
+    id: "t4", parentId: null, title: "Rewrite the API docs page", status: "dropped",
     updatedAt: NOW - 40e5, note: null, subtasks: [],
   },
 ];
@@ -5565,7 +5580,7 @@ const WORKSPACE_WORK = {
       owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] },
       plan: {
         id: "plan-gateway", sessionId: "default", revision: 3,
-        content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-coupon branch.",
+        content: "# Gateway timeout repair\n\nPatch the gateway timeout, then prove the expired-session branch.",
         status: "pending", annotations: [], feedback: null, handoffAccepted: false,
         createdAt: NOW - 53e5, updatedAt: NOW - 9e5,
       },
@@ -5597,7 +5612,7 @@ const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null
 
 const BACKGROUND_JOBS: BackgroundJob[] = [
   {
-    id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
+    id: "bgjob-7c1e4a92", kind: "fork", label: "explore three session-lookup fixes",
     workMode: "build", status: "running", result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null,
     ...FIRST_DRIVE,
   },
@@ -5624,7 +5639,7 @@ const CHANGELOG = {
     },
     {
       id: "cl_3", kind: "fact", at: NOW - 50e5, scaffoldVersion: null, revert: true,
-      summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
+      summary: "Remembered: staging still binds the sessions database as DB",
       evidence: null,
     },
     {
@@ -5678,7 +5693,7 @@ const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind ===
 
 const BLUEPRINT_REACHES = ["mcp.github", "workspace", "memory", "slates.digest"];
 
-const BLUEPRINT_ID = "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
+const BLUEPRINT_ID = "api-worker~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
 
 const BLUEPRINT_VIEW: BlueprintView = {
   id: BLUEPRINT_ID,
@@ -5720,14 +5735,14 @@ const SHARE_GRAPH: SlateReach = {
     ] },
     { slate: "issue-triage", namespace: "workspace", title: "workspace", members: [
       { member: "fs.text", impact: "observe", risk: NO_RISK },
-      { member: "fs.write", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
+      { member: "fs.write", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace api-worker as you.") },
     ] },
     { slate: "issue-triage", namespace: "memory", title: "memory", members: [
       { member: "recall", impact: "observe", risk: NO_RISK },
       { member: "remember", impact: "mutate", risk: RISK("Changes your workspace memory as you: notes and remembered facts your agent reads back later.") },
     ] },
     { slate: "issue-triage", namespace: "agent", title: "agent", members: [
-      { member: "send", impact: "externalSend", risk: RISK("Sends agent.send out of workspace checkout-fixes as you: your agent reads it and acts on it.") },
+      { member: "send", impact: "externalSend", risk: RISK("Sends agent.send out of workspace api-worker as you: your agent reads it and acts on it.") },
     ] },
     { slate: "issue-triage", namespace: "ai", title: "ai", members: [
       { member: "run", impact: "execute", risk: RISK("Runs a model call on your inference. Every call spends it.") },
@@ -5776,7 +5791,7 @@ function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint";
 
   return (
     <div className="h-screen p-bg p-text">
-      <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
+      <ShareSlateDialog workspace="api-worker" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
         fixture={{
           mode,
           live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL, preapproved: STANDING },
@@ -6075,8 +6090,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
     ["/shared/Reports", [{ name: "q3-revenue.csv", type: "file", size: 12_904, mtimeMs: NOW - 5 * 864e5 }]],
     ["/skills", [{ name: "sql-triage", type: "dir", mtimeMs: NOW - 20 * 864e5 }]],
     ["/skills/sql-triage", [{ name: "SKILL.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
-    ["/slates", [{ name: "checkout-dashboard", type: "dir", mtimeMs: NOW - 2 * 864e5 }]],
-    ["/slates/checkout-dashboard", [{ name: "index.html", type: "file", size: 6_120, mtimeMs: NOW - 2 * 864e5 }]],
+    ["/slates", [{ name: "errors-dashboard", type: "dir", mtimeMs: NOW - 2 * 864e5 }]],
+    ["/slates/errors-dashboard", [{ name: "index.html", type: "file", size: 6_120, mtimeMs: NOW - 2 * 864e5 }]],
     ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
     ["/home/main", [
       { name: ".cache", type: "dir", mtimeMs: NOW - 12e5 },
@@ -6138,9 +6153,9 @@ const PC_MOUNT = `/pc/${PC_SEGMENT}`;
 const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 
 const FILES_TEXT = {
-  "/home/main/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
+  "/home/main/notes.md": "# Sessions binding regression\n\n- the 500s start with the Sept 22 config, which renamed DB to SESSIONS_DB\n- only the health route falls back to the old name\n- fix drafted in workers/api/src/db.ts\n",
   "/home/main/SOUL.md": "I keep this workspace's changes small and proven.\n",
-  "/home/main/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
+  "/home/main/AGENTS.md": "## Working agreements\n\nRun the Worker's suite before claiming a fix.\n",
   [`${PC_CONSENTED_ROOT}/quarterly-report.txt`]: "Q3 numbers, draft 2 — do not circulate.\n",
   [`${PC_CONSENTED_ROOT}/notes.html`]: "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
   "/computer/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
@@ -6157,6 +6172,9 @@ function noteListing(path: string): void {
 }
 
 /** One stateful frame for Environment and Files: `onSurface` is real, so a card's Files action lands the drive. */
+/** The workspace the Environment and Files frames are routed under. */
+const DRIVE_WORKSPACE = "api-worker";
+
 function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false }: {
   initialSurface: SurfaceKind;
   offlineDevice: boolean;
@@ -6332,6 +6350,8 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
           onExecute={runCommand} lastActiveExecutor="workspace"
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={workspaceRpc(filesRpc)}
+          // The frame's route names it, as the workspace page names its own: a machine connected here is granted to it.
+          workspace={DRIVE_WORKSPACE}
         />
       </div>
     </div>
@@ -6444,12 +6464,12 @@ const ACTIVITY_CACHE_SHOWN = new URLSearchParams(location.search).get("cache") =
 /** One nested label and one spent: a dollar cap, a token cap, blended pricing, and a `spent` badge. */
 const ACTIVITY_MISSIONS: WorkspaceSpend["missions"] = [
   {
-    label: "checkout-fixes", parent: null, limits: { usd: 25 },
+    label: "api-worker", parent: null, limits: { usd: 25 },
     spent: { tokens: 24_222_394, usd: 16.26 }, remaining: { usd: 8.74 },
     pricing: { blendedTokens: 0, source: "catalog" }, calls: 747, spawns: 3, exhausted: false,
   },
   {
-    label: "checkout-fixes/regression-sweep", parent: "checkout-fixes",
+    label: "api-worker/regression-sweep", parent: "api-worker",
     limits: { tokens: 2_000_000 },
     spent: { tokens: 2_004_118, usd: 1.42 }, remaining: { tokens: 0 },
     pricing: { blendedTokens: 118_400, source: "mixed" }, calls: 96, spawns: 0, exhausted: true,
@@ -6598,14 +6618,14 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
     id: "tc-quiet", role: "assistant",
     parts: [
       { type: "text", text: "Successful error-shaped data — the invocation completed normally, so these returned fields do not mark it as failed." },
-      { type: "tool-file", toolCallId: "tc1", state: "output-available", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
+      { type: "tool-file", toolCallId: "tc1", state: "output-available", input: { op: "edit", path: "workers/api/wrangler.jsonc", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
     ],
   }),
   msg({
     id: "tc-protocol", role: "assistant",
     parts: [
       { type: "text", text: "Protocol-level failure — the executor crashed before it could return anything; the reason lives in errorText, not output." },
-      { type: "tool-run", toolCallId: "tc2", state: "output-error", input: { runtime: "workspace", command: "curl -sf https://ci.internal/status/checkout-fixes" }, errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443" },
+      { type: "tool-run", toolCallId: "tc2", state: "output-error", input: { runtime: "workspace", command: "curl -sf https://ci.internal/status/api-worker" }, errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443" },
     ],
   }),
   msg({
@@ -6614,8 +6634,8 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
       { type: "text", text: "A multi-line `shell` command, expanded — a shell script, not an escaped JSON string." },
       {
         type: "tool-run", toolCallId: "tc3", state: "output-available",
-        input: { runtime: "computer", command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },
-        output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
+        input: { runtime: "computer", command: "for f in workers/api/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },
+        output: "-- checking workers/api/migrations/0006_users.sql\n-- checking workers/api/migrations/0007_sessions.sql",
       },
     ],
   }),
@@ -6625,8 +6645,8 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
       { type: "text", text: "An MCP tool with no known summarizer contract — the honest fallback (name + its one argument), and long enough to test truncation." },
       {
         type: "dynamic-tool", toolCallId: "tc4", toolName: "mcp_gh_search_pull_requests", state: "output-available",
-        input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
-        output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
+        input: { query: "repo:AshishKumar4/api-worker is:open head:fix/sessions-binding base:main status:success review-requested:AshishKumar4" },
+        output: "1 open PR: #212 \"Read the sessions database by its new binding\" — checks pending",
       },
     ],
   }),
@@ -6634,10 +6654,10 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
     id: "tc-group", role: "assistant",
     parts: [
       { type: "text", text: "Five finished calls with one failed invocation — the group's status comes from the error channel." },
-      { type: "tool-file", toolCallId: "tc5", state: "output-available", input: { op: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
-      { type: "tool-file", toolCallId: "tc6", state: "output-available", input: { op: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
-      { type: "tool-file", toolCallId: "tc7", state: "output-error", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, errorText: "old_text not found or not unique" },
-      { type: "tool-file", toolCallId: "tc8", state: "output-available", input: { op: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
+      { type: "tool-file", toolCallId: "tc5", state: "output-available", input: { op: "read", path: "workers/api/src/db.ts" }, output: "…" },
+      { type: "tool-file", toolCallId: "tc6", state: "output-available", input: { op: "read", path: "workers/api/wrangler.jsonc" }, output: "…" },
+      { type: "tool-file", toolCallId: "tc7", state: "output-error", input: { op: "edit", path: "workers/api/wrangler.jsonc", edits: [{}, {}] }, errorText: "old_text not found or not unique" },
+      { type: "tool-file", toolCallId: "tc8", state: "output-available", input: { op: "write", path: "workers/api/test/integration/sessions-binding.test.ts" }, output: "ok" },
       { type: "tool-agents", toolCallId: "tc9", state: "output-available", input: { op: "swarm", branches: 3, task: "Check every other call site" }, output: "3 forks merged" },
     ],
   }),
@@ -6652,12 +6672,12 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
       type: "tool-file" as const,
       toolCallId: `scan-${String(index)}`,
       state: "output-available" as const,
-      input: { op: "read", path: `packages/checkout/src/generated/module-${String(index)}.ts` },
+      input: { op: "read", path: `workers/api/src/generated/module-${String(index)}.ts` },
       output: "…",
     })),
     { type: "tool-run", toolCallId: "large-preview", state: "output-available", input: { runtime: "computer", command: "kinu expose 8789" }, output: { url: SLATE_GALLERY_URL, port: 8789 } },
-    { type: "tool-file", toolCallId: "large-edit", state: "output-available", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
-    { type: "tool-file", toolCallId: "large-write", state: "output-available", input: { op: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
+    { type: "tool-file", toolCallId: "large-edit", state: "output-available", input: { op: "edit", path: "workers/api/wrangler.jsonc", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
+    { type: "tool-file", toolCallId: "large-write", state: "output-available", input: { op: "write", path: "workers/api/test/integration/sessions-binding.test.ts" }, output: "ok" },
     { type: "tool-tasks", toolCallId: "large-task", state: "output-available", input: { op: "update", id: "t4", status: "done" }, output: "ok" },
   ],
 });
@@ -6726,34 +6746,34 @@ const STREAMING_MESSAGES: UIMessage[] = [
   msg({
     id: "st-text", role: "assistant",
     parts: [
-      { type: "text", state: "streaming", text: "The 500 is a deref on `rules[kind]`, and after Tuesday's migration percentage coupons carry `kind: null`. The caret belongs at the end of this sentence" },
+      { type: "text", state: "streaming", text: "The 500 is a `.prepare` on `env.DB`, and after Tuesday's deploy the database is bound as `SESSIONS_DB`. The caret belongs at the end of this sentence" },
     ],
   }),
   msg({
     id: "st-after-tools", role: "assistant",
     parts: [
-      { type: "text", state: "done", text: "Reading the handler and the migration that landed Tuesday." },
-      { type: "tool-file", toolCallId: "st1", state: "output-available", input: { op: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
-      { type: "tool-file", toolCallId: "st2", state: "output-available", input: { op: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
+      { type: "text", state: "done", text: "Reading `openDb` and the config that landed Tuesday." },
+      { type: "tool-file", toolCallId: "st1", state: "output-available", input: { op: "read", path: "workers/api/src/db.ts" }, output: "…" },
+      { type: "tool-file", toolCallId: "st2", state: "output-available", input: { op: "read", path: "workers/api/wrangler.jsonc" }, output: "…" },
     ],
   }),
   msg({
     id: "st-tool", role: "assistant",
     parts: [
       { type: "text", state: "done", text: "Running the regression suite before I touch anything else." },
-      { type: "tool-run", toolCallId: "st3", state: "input-available", input: { runtime: "computer", command: "bun test packages/checkout" } },
+      { type: "tool-run", toolCallId: "st3", state: "input-available", input: { runtime: "computer", command: "bun test workers/api" } },
     ],
   }),
   msg({
     id: "st-reasoning", role: "assistant",
     parts: [
-      { type: "reasoning", state: "streaming", text: "SAVE20 fails and SAVE10 does not, so the branch is percentage-vs-fixed rather than the lookup. Before I patch it I want the migration in front of me" },
+      { type: "reasoning", state: "streaming", text: "The health route fails and the static ones do not, so the cause is the database binding rather than the router. Before I patch it I want the config in front of me" },
     ],
   }),
   msg({
     id: "st-fence", role: "assistant",
     parts: [
-      { type: "text", state: "streaming", text: "Here is the guard, mid-fence:\n\n```ts\nconst rule = rules[kind] ?? inferKind(coupon);\nif (rule === undefined) return notApplicable(coupon);\n```" },
+      { type: "text", state: "streaming", text: "Here is the fix, mid-fence:\n\n```ts\nconst db = env.SESSIONS_DB ?? env.DB;\nif (db === undefined) throw new MissingBinding(\"SESSIONS_DB\");\n```" },
     ],
   }),
   msg({ id: "st-empty", role: "assistant", parts: [] }),
@@ -6811,7 +6831,7 @@ function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
 const ADVISOR_NOTES = {
   nit: "The commit message says 'fix typo' but the diff also renames two exported symbols. Split it or say so.",
   concern: "The retry loop in deploy.sh has no backoff cap. A stuck registry keeps it spinning for the whole turn budget.",
-  blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
+  blocker: "The config drops the DB binding while the old worker is still deployed. Roll the worker first or every session read 500s.",
 } satisfies Record<AdvisorSeverity, string>;
 
 /** Core's rank order, each as `sayAdvisorNote` writes it: its text the agent's, its note kept beside it. `blocker` is a
@@ -6877,7 +6897,7 @@ const EVENT_CARD_ROWS: UIMessage[] = [
 /** Every way a turn reaches the transcript, each under its own id: what the person said keeps their bubble, and nothing else does. */
 const PROVENANCE_MESSAGES: UIMessage[] = [
   msg({ id: "genesis", role: "user", metadata: { kinuEvent: GENESIS?.kind ?? "", signalId: "sig-genesis" }, parts: said(GENESIS?.text ?? "") }),
-  msg({ id: "typed", role: "user", parts: said("Audit the checkout flow.") }),
+  msg({ id: "typed", role: "user", parts: said("Audit the api Worker's routes.") }),
   msg({ id: "mcp", role: "user", metadata: { kinuEvent: "mcp", kinuAuthor: "operator" }, parts: said("Run the release checklist.") }),
   msg({ id: "programmatic:steer", role: "user", metadata: { kinuAuthor: "operator" }, parts: said("Use the staging database instead.") }),
   msg({ id: "invented", role: "user", metadata: { kinuEvent: "a_kind_invented_tomorrow" }, parts: said("Something new happened.") }),
@@ -6898,8 +6918,8 @@ function ProvenanceFrame() {
   );
 }
 
-const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n"
-  + "- Percentage coupons carry `kind: null` after Tuesday's migration.\n";
+const BRAIN_MEMORY = "## api Worker\n\n- Every route that reads a session goes through `openDb`.\n"
+  + "- The sessions database is bound as `SESSIONS_DB` since Tuesday's deploy.\n";
 
 /** One dropped connection failing every actor read at once; the banner text comes from the shipped formatter. */
 const LOST = "Network connection lost.";
@@ -6989,7 +7009,7 @@ function TranscriptFrame() {
           <BranchRunChip key={status}
             run={{
               branchId: "steer-b7f21", status,
-              task: "Actually, check the staging snapshot first — I don't think the migration ran there.",
+              task: "Actually, check staging first — I don't think the rename deployed there.",
               takeSetId: undefined, turnId: undefined, message: undefined,
             }}
             rpc={workspaceRpc(forkRpc)} headActivity={NO_HEAD_ACTIVITY}
@@ -7008,7 +7028,7 @@ const EXPLORATION_FRAMES = {
   forkfanin: true, forkrefused: true, forkrunning: true, forklive: true,
 } satisfies Record<string, true>;
 
-const GALLERY_WORKSPACE = "checkout-fixes";
+const GALLERY_WORKSPACE = "api-worker";
 
 /** Opened by the fixture, not a prop: the card ships shut, and `details` carries openness in the DOM. */
 function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
@@ -7111,17 +7131,17 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
         </p>
         {/* One stage or the other: a dimmed card behind a scrim measures neither. */}
         {modal ? (
-          <CreateWebhookModal agentName="checkout-fixes"
+          <CreateWebhookModal agentName="api-worker"
             onClose={() => { /* the dialog stays up for the capture */ }}
             onCreated={() => { /* the gate never submits */ }} />
         ) : (
           <>
             <NewWebhookCard
-              result={{ trigger_id: "01K5ZQ8F2P0000000000000001", url: "/api/workspaces/checkout-fixes/webhook/01K5ZQ8F2P0000000000000001/v1-8b2e4d17c9053fa6be71204d8ac3915f", auth_mode: "hmac", secret: LEAK_HMAC }}
+              result={{ trigger_id: "01K5ZQ8F2P0000000000000001", url: "/api/workspaces/api-worker/webhook/01K5ZQ8F2P0000000000000001/v1-8b2e4d17c9053fa6be71204d8ac3915f", auth_mode: "hmac", secret: LEAK_HMAC }}
               onDismiss={() => { /* the card stays up for the capture */ }}
             />
             <NewWebhookCard
-              result={{ trigger_id: "01K5ZQ8F2P0000000000000002", url: "/api/workspaces/checkout-fixes/webhook/01K5ZQ8F2P0000000000000002/v1-1d7fa39c50b2e846c3915f7b204d8ae2", auth_mode: "bearer", secret: LEAK_BEARER }}
+              result={{ trigger_id: "01K5ZQ8F2P0000000000000002", url: "/api/workspaces/api-worker/webhook/01K5ZQ8F2P0000000000000002/v1-1d7fa39c50b2e846c3915f7b204d8ae2", auth_mode: "bearer", secret: LEAK_BEARER }}
               onDismiss={() => { /* the card stays up for the capture */ }}
             />
             <AddServerCard onCancel={() => { /* the form stays up for the capture */ }}
@@ -7175,7 +7195,7 @@ function FeedbackScrollScene() {
 
 /** Must never reach a log: V8 puts `${name}: ${message}` on the first line of `error.stack`. */
 const RENDER_FAULT_MESSAGE =
-  "Cannot read properties of undefined (reading 'kind') for coupon MESSAGE_LEAKS_IF_REPORTED_0001";
+  "Cannot read properties of undefined (reading 'prepare') for session MESSAGE_LEAKS_IF_REPORTED_0001";
 
 /** One error across every render attempt, minted inside the first render: a fresh one per attempt could not prove the boundary dedupes. */
 let renderFault: TypeError | null = null;
@@ -7183,7 +7203,7 @@ let renderFault: TypeError | null = null;
 /** `?huge=1`: a stack far over the request bound, so the client must fit the report. */
 const HUGE_STACK = new URLSearchParams(location.search).get("huge") === "1";
 
-const HUGE_FRAME = "    at applyCoupon (http://127.0.0.1/assets/index-a1b2c3.js:1:2345)";
+const HUGE_FRAME = "    at openDb (http://127.0.0.1/assets/index-a1b2c3.js:1:2345)";
 
 /** Throw count: without it "one caught error, one report" is vacuous. */
 let renderFaultThrows = 0;
@@ -7328,7 +7348,7 @@ function DeviceSandboxFrame() {
           <DeviceRow
             key={device.id}
             device={device}
-            grants={[{ agentName: "checkout-fixes", deviceId: device.id, policy: "allow", lastMethod: "exec", lastSummary: null }]}
+            grants={[{ agentName: "api-worker", deviceId: device.id, policy: "allow", lastMethod: "exec", lastSummary: null }]}
             onDeviceChanged={() => {}}
             onGrantsChanged={() => {}}
             onError={() => {}}
@@ -7483,7 +7503,7 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
   const column = frameName === "files" ? "w-[860px]" : "w-[720px]";
 
   return {
-    entries: ["/workspace/checkout-fixes"],
+    entries: [`/workspace/${DRIVE_WORKSPACE}`],
     node: (
       <Routes>
         <Route path="/workspace/:agentId"
@@ -7503,7 +7523,7 @@ async function mctsExplorerFrame(run: string | null): Promise<MountedFrame> {
   const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
   serveGalleryRpc(run === null ? forkRpc : focusRun(run));
 
-  return routedPage(run === null ? "/swarm/checkout-fixes" : `/swarm/checkout-fixes?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
+  return routedPage(run === null ? "/swarm/api-worker" : `/swarm/api-worker?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
 
 function routedPage(entry: string, path: string, page: React.ReactNode, height = "h-screen"): MountedFrame {
@@ -7517,7 +7537,7 @@ function routedPage(entry: string, path: string, page: React.ReactNode, height =
 async function settingsFrame(): Promise<MountedFrame> {
   serveGalleryRpc(workspacePageRpc);
 
-  return routedPage("/workspace/checkout-fixes/settings", "/workspace/:agentId/:view", <WorkspacePage />);
+  return routedPage("/workspace/api-worker/settings", "/workspace/:agentId/:view", <WorkspacePage />);
 }
 
 /** Routed: tab, account and workspace selection live in the URL. */
@@ -7545,7 +7565,7 @@ async function homeFrame(): Promise<MountedFrame> {
 /** Routed so the report's route and workspace come from a resolved `/workspace/:agentId`. */
 function feedbackRoutedFrame(): MountedFrame {
   return {
-    entries: ["/workspace/checkout-fixes"],
+    entries: ["/workspace/api-worker"],
     node: (
       <Routes>
         <Route element={<Layout />}>
@@ -7558,10 +7578,10 @@ function feedbackRoutedFrame(): MountedFrame {
 
 /** ReplaceStates the address bar: the report reads `location.pathname`, which the MemoryRouter leaves at `/`. */
 function errorBoundaryFrame(): MountedFrame {
-  history.replaceState(null, "", `/workspace/checkout-fixes${location.search}`);
+  history.replaceState(null, "", `/workspace/api-worker${location.search}`);
 
   return {
-    entries: ["/workspace/checkout-fixes"],
+    entries: ["/workspace/api-worker"],
     node: (
       <Routes>
         <Route element={<Layout />}>
@@ -7611,7 +7631,7 @@ const DESIGN_FRAMES = new Map([
 
 function lazyRouteFrame(): MountedFrame {
   return {
-    entries: ["/workspace/checkout-fixes"],
+    entries: ["/workspace/api-worker"],
     node: (
       <Routes>
         <Route element={<Layout />}>

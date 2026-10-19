@@ -102,7 +102,7 @@ async function rowsOf(session: OpenedSession, role: 'user' | 'assistant'): Promi
 async function drawnTexts(session: OpenedSession): Promise<string[][]> {
   const transcript = readSessionTranscript(makeSql(session.db), session.rt.actor, CHAT_SESSION_ID, () => Promise.resolve(session.rt.storage.vfs));
 
-  return (await chatSeed(transcript, keptMediaName)).filter((message) => message.role === 'assistant')
+  return (await chatSeed(transcript, keptMediaName)).messages.filter((message) => message.role === 'assistant')
     .map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []));
 }
 

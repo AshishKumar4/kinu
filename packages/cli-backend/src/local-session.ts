@@ -1188,9 +1188,10 @@ export class LocalAgentSession {
     return this.chat.interrupt(cutoff === null ? undefined : { producer: 'self', seq: cutoff });
   }
 
-  /** Continue from before `entryId`; refused while a turn is held. */
-  revertConversation(entryId: string): Promise<void> {
-    return this.chat.revertTo(entryId);
+  /** Continue from before `entryId`; refused while a turn is held. A chat-only walk-back tells the agent what its
+   *  rewound turns left; this machine's processes and ports have no reader here, so the notice names none. */
+  revertConversation(entryId: string, options?: { readonly chatOnly?: boolean }): Promise<void> {
+    return this.chat.revertTo(entryId, options?.chatOnly === true ? {} : undefined);
   }
 
   clearConversation(): Promise<KinuError | null> {
