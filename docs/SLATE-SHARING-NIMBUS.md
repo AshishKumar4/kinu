@@ -176,6 +176,12 @@ The shared page learns nothing from a part's size, because it fixes the size.
 
 - **Editors** (workerd, real orchestrators for the owner, the editor and a Use person): `packages/cf-backend/tests/workerd/slate-editors.test.ts`: the editor reads and changes the slate through their own workspace; the change runs; the owner's access stays suspended through the owner's own next build until approved again; an import of the owner's other file does not build and is taken back whole; a Use person and a revoked editor change nothing; a shared slate never runs the image built before it was shared. Mutations `e1`–`e6` in the mutations directory, each red.
 
+- **Deployed rows** (`tests/first-run/`, run by `gate:first-run` on every staging publish): `users-share`, `owner-effects`,
+  `share-capability-cut`, `start-empty`, `gallery-listing`, `blueprint-fork`, `slate-parts` (the owner's own preview),
+  `slate-edit` (a second account edits from its own workspace; the owner's access is held until they approve it again)
+  and `slate-fork` (a second account forks a live share into its own workspace, from empty state). `public-share` runs
+  only on the CLI operator plan (`KINU_FIRST_RUN_OPERATOR=1`).
+
 - **Attack replays** (workerd, real host, real confined Nimbus processes; the viewer's account faked with the real
   `partCallVerdict`, `containedTool` and `EffectApprovals`): `packages/cf-backend/tests/workerd/personal-parts.test.ts`,
   7 attacks: the own part drawn and cut; every way out refused (shared storage, owner namespaces, network, browser),
