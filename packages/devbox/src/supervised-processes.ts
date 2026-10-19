@@ -169,8 +169,14 @@ export class SupervisedProcesses {
       const command = request.kind === 'restore' ? request.spec.command : request.command;
       const cwd = request.kind === 'restore' ? request.spec.cwd ?? DEVBOX_WORKDIR : request.cwd;
       const env = request.kind === 'native-start' ? undefined : owner?.env;
+
       // Asked again at every launch, so a restart holds the values as the owner left them, and no launch keeps them.
-      const revealed = request.kind !== 'native-start' && owner?.reveal === true ? yield* attempt('io', () => this.ports.revealed()) : undefined;
+      // An account that does not answer fails this launch with its reason: the job never runs short of a value it was
+      // allowed, and a retry or the next restore asks again.
+      const revealed = request.kind !== 'native-start' && owner?.reveal === true
+        ? yield* attempt('io', () => this.ports.revealed(), "the account did not answer with the values this job's agents may read")
+        : undefined;
+
       // An agent's job runs in a terminal session of its own, where a person can watch and answer it (D95).
       const session = request.kind === 'native-start' ? undefined : jobSessionId(processId);
       const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current, session, env, revealed })));

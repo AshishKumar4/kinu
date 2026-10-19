@@ -427,6 +427,29 @@ describe("a job its owner started reads the values its agents may read at each l
     expect(kept(made)).not.toContain(VALUE);
   });
 
+  class UnansweredBox extends Devbox {
+    protected override async revealedEnv(): Promise<Readonly<Record<string, string>>> {
+      throw new Error('account object unreachable');
+    }
+  }
+
+  test('an account that does not answer fails the start with that reason, and nothing is launched short of its value', async () => {
+    const made = harness(UnansweredBox);
+
+    await expect(made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, true)).rejects.toThrow('the account did not answer');
+    expect(made.container.launchEnvs).toEqual([]);
+  });
+
+  test('a restore whose account does not answer launches nothing, and leaves the job to be asked for again', async () => {
+    const made = harness(UnansweredBox);
+
+    made.rows.set(`devbox:proc:${REPAIR_ID}`, { processId: REPAIR_ID, command: COMMAND, cwd: '/workspace', createdAt: 1, env: { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, reveal: true });
+    await made.box.devboxStartup();
+
+    expect(made.container.launchEnvs).toEqual([]);
+    expect((await made.box.devboxState()).supervised.map((spec) => spec.processId)).toEqual([REPAIR_ID]);
+  });
+
   test("a job no owner started never asks, and its launch holds no value", async () => {
     const made = harness(RevealingBox);
 

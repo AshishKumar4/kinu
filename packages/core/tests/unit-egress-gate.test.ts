@@ -117,6 +117,14 @@ describe('planEgress', () => {
     expect(at(`https://maps.googleapis.com/${google.placeholder}?key=${google.placeholder}`).kind).toBe('refuse');
   });
 
+  test('over wss a secret read from a query parameter is substituted there, and refused anywhere else in the URL', () => {
+    const stream: EgressSecretBinding = { name: 'STREAM_KEY', hosts: ['stream.example.com'], position: { kind: 'query', name: 'key' }, placeholder: placeholder('w') };
+    const at = (url: string) => planEgress({ host: 'stream.example.com', url, headers: [] }, [stream]).kind;
+
+    expect([at(`wss://stream.example.com/v1?key=${stream.placeholder}`), at(`wss://stream.example.com/${stream.placeholder}?key=${stream.placeholder}`)])
+      .toEqual(['forward', 'refuse']);
+  });
+
   test("THE STORAGE CASE: an allowed host's URL naming the secret is refused, so it cannot be stored as a key name", () => {
     const cloudflare: EgressSecretBinding = { name: 'CLOUDFLARE_API_TOKEN', hosts: ['api.cloudflare.com'], position: { kind: 'authorization' }, placeholder: placeholder('c') };
 

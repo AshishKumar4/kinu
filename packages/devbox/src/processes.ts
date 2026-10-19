@@ -137,32 +137,28 @@ if [ -f "${SAVED_SESSIONS}/$2/screen" ]; then rm -f "${SAVED_SESSIONS}/$2/runnin
 while [ ! -e "$dir/piped" ]; do sleep 0.05; done
 printf '\\033[2m$ %s\\033[0m\\n' "$(cat "$dir/command")"
 [ -f "$dir/env" ] && . "$dir/env"
-if [ -p "$dir/revealed" ]; then eval "$(timeout 10 cat "$dir/revealed")"; rm -f "$dir/revealed"; fi
 sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" /bin/bash -c "$(cat "$dir/command")"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
 exec /bin/bash --rcfile ${SESSION_RC_FILE} -i`;
 
 /**
  * In a session (D95): the session's files, then the session, its pane copied to the job's one log. The values named in
- * `DEVBOX_REVEALED` reach the pane through a pipe in the job's directory, which holds nothing at rest; a pane that never
- * starts leaves its writer to give up, and no tmux client or server holds them.
+ * `DEVBOX_REVEALED` are the session's environment from its start, in tmux's memory only; a session that does not start
+ * fails the job with tmux's reason, as any failed start does.
  */
 const RUN_IN_SESSION = `session=$DEVBOX_SESSION
 ${INSTALL_SESSION_FILES}
 printf '%s\\n' "$DEVBOX_JOB_PANE" >${JOB_PANE_FILE}
 unset DEVBOX_SESSION DEVBOX_JOB_PANE
-if [ -n "\${DEVBOX_REVEALED:-}" ] && (umask 077; mkfifo "$dir/revealed"); then
-  revealed=$(for name in $DEVBOX_REVEALED; do eval "value=\\\${$name}"; printf "export %s='%s'\\n" "$name" "$(printf '%s' "$value" | sed "s/'/'\\\\\\\\''/g")"; done)
-  REVEALED=$revealed timeout 60 sh -c 'printf "%s\\n" "$REVEALED" >"$0/revealed"' "$dir" >/dev/null 2>&1 &
-  unset revealed
-fi
-# Gone before tmux runs: a server it starts takes its client's variables as every pane's.
-for name in \${DEVBOX_REVEALED:-}; do unset "$name"; done
-unset DEVBOX_REVEALED
 printf '%s' "$3" >"$dir/command"
 : >"$dir/stdout.log"; : >"$dir/stderr.log"
+# The values named in DEVBOX_REVEALED become the session's own, by tmux's -e, and leave this shell before tmux runs:
+# a server it starts takes its client's variables as every pane's.
+set --
+for name in \${DEVBOX_REVEALED:-}; do eval "set -- \\"\\$@\\" -e \\"\\$name=\\\${$name}\\""; unset "$name"; done
+unset DEVBOX_REVEALED
 tmux kill-session -t "=$session" 2>/dev/null
-if ! tmux -f ${TMUX_CONF_FILE} new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "sh ${JOB_PANE_FILE} $dir $session" 2>"$dir/stderr.log"; then
+if ! tmux -f ${TMUX_CONF_FILE} new-session -d -s "$session" -x 160 -y 48 -c "$cwd" "$@" "sh ${JOB_PANE_FILE} $dir $session" 2>"$dir/stderr.log"; then
   echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
   exit 0
 fi
@@ -295,7 +291,7 @@ export class Processes {
   /** With `session`, the job runs in that terminal session, where a person can watch and answer it (D95). */
   /**
    * `env` is written beside the job and read by its launch, in a session's pane too, which inherits no caller's
-   * variables. `revealed` is never written: it rides the launch in memory, and into a session's pane through a pipe.
+   * variables. `revealed` is never written: it rides the launch in memory, and into a session as its environment.
    */
   start(command: string, options: {
     readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string;

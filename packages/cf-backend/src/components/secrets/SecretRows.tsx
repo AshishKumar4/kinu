@@ -18,6 +18,8 @@ export interface SecretDraft {
   readonly value: string;
   readonly hosts: string;
   readonly position: SecretPosition;
+  /** The value as it stood in a chat draft, whatever the owner made of it here: what the draft's `$NAME` replaces. */
+  readonly found?: string;
 }
 
 /** Where a new secret goes unless the owner says otherwise: the Authorization header, as most APIs read a key. */

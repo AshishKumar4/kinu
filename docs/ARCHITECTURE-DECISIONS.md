@@ -1996,9 +1996,13 @@ cannot use a placeholder; for those the owner turns on "Agents may read the
 value" per workspace and secret. A value then lives only in memory: read from
 the account object for each command, held by a process the box keeps but never
 writes or restarts, and asked again at every launch of a supervised job the
-owner started, whose spec and directory hold placeholders alone (the job's
-pane receives it through a pipe). A named shell sets a call's variables after
-restoring its saved state and never saves them.
+owner started, whose spec and directory hold placeholders alone: the job's
+tmux session takes the values as its environment at its start (`new-session
+-e`, tmux 3.2+), and a launch whose account does not answer, or whose box is
+not yet configured, fails with that reason rather than running without them.
+A query-position value is encoded as one parameter's value, and every URL
+spelling of it is scrubbed from the answer. A named shell sets a call's
+variables after restoring its saved state and never saves them.
 
 S3. A chat draft holding a known credential shape (`secret-patterns.ts`, the
 provider shapes carrying their provider's variable and hosts) is held in the

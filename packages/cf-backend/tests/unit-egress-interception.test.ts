@@ -89,12 +89,12 @@ function execOnlyBox(): KinuDevbox {
 }
 
 /** The real owner object behind the stub, holding Stripe's secret for `kinu-main`, so the gate that decides is the one that ships. */
-async function realVault(options: { readonly granted: boolean; readonly position?: SecretPosition }): Promise<{ readonly env: ContainerEgressEnv<string>; readonly harness: TestUserDO; readonly placeholder: string }> {
+async function realVault(options: { readonly granted: boolean; readonly position?: SecretPosition; readonly value?: string }): Promise<{ readonly env: ContainerEgressEnv<string>; readonly harness: TestUserDO; readonly placeholder: string }> {
   const harness = createTestUserDO();
   const owner = await testOwner();
   const workspace = { workspaceToken: await provisionTestWorkspace(harness, PARAMS.workspaceName) };
   const position = options.position ?? { kind: 'authorization' };
-  await harness.userDO.putSecrets(owner, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position, value: SECRET }], [PARAMS.workspaceName]);
+  await harness.userDO.putSecrets(owner, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position, value: options.value ?? SECRET }], [PARAMS.workspaceName]);
   const placeholder = (await harness.userDO.grantedSecrets(workspace)).granted[0]?.placeholder ?? '';
 
   if (!options.granted) await harness.userDO.revokeSecretGrant(owner, { name: 'STRIPE_SECRET_KEY', workspace: PARAMS.workspaceName });
@@ -191,6 +191,53 @@ describe('a secret goes only in its credential position, whatever the allowed ho
 
       expect(placesOf(upstream.seen[0])).toEqual(['url']);
       expect(new URL(upstream.seen[0]?.url ?? 'https://x.invalid/').searchParams.get('key')).toBe(SECRET);
+    } finally { upstream.restore(); }
+  });
+
+  /** A value URL syntax reads: a separator, a plus, a slash, an equals, a percent, a fragment mark and spaces. */
+  const SYNTAX_VALUE = ['s&k', '+v/w=x%2', '#y token with space'].join('');
+
+  /** Every spelling of `value` a host could echo: as written, percent-encoded in either case of hex, and form-encoded. */
+  function spellings(value: string): string[] {
+    const encoded = encodeURIComponent(value);
+
+    return [value, encoded, encoded.replace(/%[0-9A-F]{2}/g, (hex) => hex.toLowerCase()), new URLSearchParams([['k', value]]).toString().slice(2)];
+  }
+
+  test('a value full of URL syntax is one parameter\'s value at the host, and no spelling of it comes back', async () => {
+    const { env, placeholder } = await realVault({ granted: true, position: { kind: 'query', name: 'key' }, value: SYNTAX_VALUE });
+
+    // A host that echoes the URL it got, and the value back in every spelling it might use.
+    const upstream = captureFetch((request) => {
+      const value = new URL(request.url).searchParams.get('key') ?? '';
+
+      return new Response(JSON.stringify({ url: request.url, echoes: spellings(value) }));
+    });
+
+    try {
+      const response = await handleContainerEgress(new Request(`https://api.stripe.com/v1/geocode?address=a%20b&key=${placeholder}&page=2`), env, PARAMS, undefined);
+      const sent = new URL(upstream.seen[0]?.url ?? 'https://x.invalid/');
+      const body = await response.text();
+
+      expect([...sent.searchParams]).toEqual([['address', 'a b'], ['key', SYNTAX_VALUE], ['page', '2']]);
+      expect(sent.hash).toBe('');
+      // The program's own bytes go as it wrote them.
+      expect(sent.search.startsWith('?address=a%20b&key=')).toBe(true);
+
+      for (const spelling of spellings(SYNTAX_VALUE)) expect(body).not.toContain(spelling);
+      expect(body).toContain(placeholder);
+    } finally { upstream.restore(); }
+  });
+
+  test('a WebSocket upgrade carrying it in its query parameter is substituted the same way', async () => {
+    const { env, placeholder } = await realVault({ granted: true, position: { kind: 'query', name: 'key' }, value: SYNTAX_VALUE });
+    const upstream = captureFetch(() => new Response('upgrade refused', { status: 426 }));
+
+    try {
+      await handleContainerEgress(new Request(`https://api.stripe.com/v1/stream?key=${placeholder}`, { headers: { upgrade: 'websocket', connection: 'Upgrade' } }), env, PARAMS, undefined);
+
+      expect(new URL(upstream.seen[0]?.url ?? 'https://x.invalid/').searchParams.get('key')).toBe(SYNTAX_VALUE);
+      expect(upstream.seen[0]?.headers.get('upgrade')).toBe('websocket');
     } finally { upstream.restore(); }
   });
 });

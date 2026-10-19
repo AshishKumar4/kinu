@@ -99,7 +99,10 @@ function MoveToSecrets({ found, workspace, onClose, onMoved }: {
   onClose: () => void;
   onMoved: (names: ReadonlyMap<string, string>) => void;
 }) {
-  const [rows, setRows] = useState<SecretDraft[]>(found.map((secret) => ({ name: secret.name, value: secret.value, hosts: secret.hosts.join(", "), position: secret.position })));
+  const [rows, setRows] = useState<SecretDraft[]>(found.map((secret) => ({
+    name: secret.name, value: secret.value, hosts: secret.hosts.join(", "), position: secret.position, found: secret.value,
+  })));
+
   const [allowHere, setAllowHere] = useState(workspace !== undefined);
   const { busy, error, run } = useLabelledStep(NOTHING_AFTER);
   const saving = busy !== null;
@@ -114,7 +117,8 @@ function MoveToSecrets({ found, workspace, onClose, onMoved }: {
           const entries = secretEntries(rows);
 
           await putSecrets(entries, allowHere && workspace !== undefined ? [workspace] : []);
-          onMoved(new Map(entries.map((entry) => [entry.value, entry.name])));
+          // Each row replaces what was found in the draft, edited or not; a row left out stays in the draft, to be asked about again.
+          onMoved(new Map(rows.flatMap((row): [string, string][] => (row.found === undefined || row.name.trim() === "" ? [] : [[row.found, row.name.trim()]]))));
         })}>{saving ? "Saving…" : `Save and use ${said}`}</FilledButton>
       </>}>
       <p className="p-row-text p-text-2">

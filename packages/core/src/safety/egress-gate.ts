@@ -152,6 +152,56 @@ export function egressPlaceholdersIn(facts: EgressRequestFacts): Set<string> {
   return present;
 }
 
+/** A URL as it leaves, and the pairs that scrub each way a URL can spell what was substituted into it. */
+export interface RevealedUrl {
+  readonly url: string;
+  readonly scrub: readonly ScrubReplacement[];
+}
+
+/** A query value as a form decodes it: `+` is a space. */
+function decodeQueryValue(raw: string): string {
+  return decodeURIComponent(raw.replaceAll('+', ' '));
+}
+
+/**
+ * `url` with each placeholder in a query value replaced by its secret, the value decoded first and encoded again, so a
+ * secret holding `&`, `#`, `+`, `%` or a space is one parameter's value and never a second parameter or a fragment; every
+ * other byte of the URL is left as the program wrote it. The gate admits a placeholder in a URL only as its secret's
+ * query parameter (`strayPosition`). The pairs scrub the encoded spellings from an answer that echoes the URL: the
+ * percent form (either case of hex) and the form's `+` for a space.
+ */
+export function revealUrl(url: string, reveal: readonly ScrubReplacement[]): RevealedUrl {
+  const at = url.indexOf('?');
+
+  if (at === -1) return { url, scrub: [] };
+  const end = url.indexOf('#', at);
+  const query = url.slice(at + 1, end === -1 ? undefined : end);
+  const scrub = new Map<string, string>();
+
+  const pairs = query.split('&').map((pair) => {
+    const equals = pair.indexOf('=');
+
+    if (equals === -1 || findEgressPlaceholders(pair.slice(equals + 1)).length === 0) return pair;
+    const decoded = decodeQueryValue(pair.slice(equals + 1));
+
+    for (const { find: placeholder, replaceWith: secret } of reveal) {
+      if (!decoded.includes(placeholder)) continue;
+      const encoded = encodeURIComponent(secret);
+
+      for (const spelling of [encoded, encoded.replace(/%[0-9A-F]{2}/g, (hex) => hex.toLowerCase()), encoded.replaceAll('%20', '+')]) {
+        if (spelling !== secret) scrub.set(spelling, placeholder);
+      }
+    }
+
+    return `${pair.slice(0, equals)}=${encodeURIComponent(scrubText(decoded, reveal))}`;
+  });
+
+  return {
+    url: `${url.slice(0, at + 1)}${pairs.join('&')}${end === -1 ? '' : url.slice(end)}`,
+    scrub: [...scrub].map(([find, replaceWith]) => ({ find, replaceWith })),
+  };
+}
+
 /** A header value as it leaves, and, for a Basic credential, the pair that scrubs its encoded form from the answer. */
 export interface RevealedHeader {
   readonly value: string;

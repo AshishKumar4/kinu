@@ -8,7 +8,8 @@ import {
   type CommandEnvironment, type SandboxHandle,
 } from '@kinu.run/core';
 import { AccountReads } from '../src/account-reads';
-import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
+import { revealedForJob } from '../src/egress/send-out';
+import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV } from './helpers/user-do';
 import { sandboxHandleLifecycle } from '../../core/tests/helpers/sandbox-handle-lifecycle';
 
 const AUTHORIZATION = { kind: 'authorization' } as const;
@@ -153,5 +154,23 @@ describe("a call that is not the owner's holds none of them", () => {
     // As `ActorAgent.codemodeLaunch` reads them for each run.
     expect(await reads.commandEnvironment('run', 'viewer')).toEqual({});
     expect(await reads.commandEnvironment('run', 'owner')).toEqual({ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: DB_VALUE });
+  });
+});
+
+describe("a job's values are read for it, or its launch fails", () => {
+  test('the box reads them as the owner capability for its own workspace, and an unreachable account or an unconfigured box fails the read', async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+    await provisionTestWorkspace(harness, 'shop');
+    await harness.userDO.putSecrets(owner, [{ name: 'DATABASE_PASSWORD', hosts: ['logs-db.dew.dev'], position: AUTHORIZATION, value: DB_VALUE }], ['shop']);
+    await harness.userDO.grantSecret(owner, { name: 'DATABASE_PASSWORD', workspace: 'shop', reveal: true });
+    const params = { ownerUserId: 'owner', workspaceName: 'shop' };
+
+    const answering = { ...TEST_USER_ENV, UserDO: { idFromName: (name: string) => name, get: () => harness.userDO } };
+    const unreachable = { ...TEST_USER_ENV, UserDO: { idFromName: (name: string) => name, get: () => ({ revealedSecretsFor: async (): Promise<never> => { throw new Error('connection lost'); } }) } };
+
+    expect(await revealedForJob(answering, params)).toEqual({ DATABASE_PASSWORD: DB_VALUE });
+    await expect(revealedForJob(unreachable, params)).rejects.toThrow('asking the account');
+    await expect(revealedForJob(answering, undefined)).rejects.toThrow('not yet configured');
   });
 });

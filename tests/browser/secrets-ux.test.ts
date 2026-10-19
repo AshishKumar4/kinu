@@ -130,6 +130,33 @@ describe('a secret pasted into the chat', () => {
     });
   });
 
+  test('a value edited in the move still takes the pasted token out of the draft, whole', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=secretpaste`, { waitUntil: 'networkidle0' });
+
+      await page.click('[data-composer-root] textarea');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[data-secret-offer-move]');
+      await page.click('[data-secret-offer-move]');
+      await page.waitForSelector('input[aria-label="Value of GITHUB_TOKEN"]');
+
+      // The owner trims the token's last character before saving it.
+      await page.click('input[aria-label="Value of GITHUB_TOKEN"]');
+      await page.keyboard.press('End');
+      await page.keyboard.press('Backspace');
+      await page.click('[data-secret-move-save]');
+      await page.waitForFunction(() => document.querySelector('[data-secret-offer]') === null);
+
+      const draft = await page.$eval('[data-composer-root] textarea', (box) => (box instanceof HTMLTextAreaElement ? box.value : ''));
+
+      expect(draft).toBe('label the new issues on kinu-run/kinu with this token $GITHUB_TOKEN');
+      expect(draft).not.toContain(GITHUB.slice(0, 12));
+      await page.close();
+    });
+  });
+
   test('a draft edited while the offer waits is checked again, and sending anyway sends what it says now', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

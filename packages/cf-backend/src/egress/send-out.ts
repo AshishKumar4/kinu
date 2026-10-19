@@ -7,7 +7,7 @@
 import { Cause, Effect } from 'effect';
 import {
   closeReason, createScrubStream, egressPlaceholdersIn, kinuUserAgent, objectNamed, observeGitHub, OwnerCapabilityUnavailableError,
-  ownerCaller, reoriginateRequest, revealHeader, scrubBytes, scrubText,
+  ownerCaller, reoriginateRequest, revealHeader, revealUrl, scrubBytes, scrubText,
   type EgressInjection, type EgressInjectionResult, type EgressRequestFacts, type GitHubRecorder, type ObjectNamespace,
   type OwnerCapabilityEnv, type ScrubReplacement, type UserCaller,
 } from '@kinu.run/core';
@@ -40,20 +40,21 @@ export interface ContainerEgressEnv<Id> extends OwnerCapabilityEnv {
  */
 /**
  * The values the workspace's agents may read, for a supervised job its owner started, at each of its launches: asked
- * of the owner's object with the owner capability, for the workspace this box was configured for. An account that does
- * not answer starts the job without them: its placeholders still hold.
+ * of the owner's object with the owner capability, for the workspace this box was configured for (`params`). A box not
+ * yet configured, or an account that does not answer, fails the launch with that reason (`supervised-processes.ts`).
  */
-export function revealedForJob<Id>(env: OwnerCapabilityEnv & { readonly UserDO: ObjectNamespace<Id, JobValuesClient> }, params: SecretVault): Promise<Readonly<Record<string, string>>> {
-  const owner: JobValuesClient = objectNamed(env.UserDO, params.ownerUserId);
+export function revealedForJob<Id>(
+  env: OwnerCapabilityEnv & { readonly UserDO: ObjectNamespace<Id, JobValuesClient> }, params: SecretVault | undefined,
+): Promise<Readonly<Record<string, string>>> {
+  return settle(Effect.gen(function* () {
+    if (params === undefined) return yield* new KinuError('unavailable', "This computer is not yet configured for its workspace, so it cannot ask for the values this job's agents may read.");
+    const owner: JobValuesClient = objectNamed(env.UserDO, params.ownerUserId);
 
-  return settle(Effect.catch(
-    attempt({ doing: "reading the values a job's agents may read", otherwise: 'unavailable' }, async () => owner.revealedSecretsFor(await ownerCaller(env), params.workspaceName)),
-    (failure) => Effect.sync(() => {
-      diagnostics.failure('secrets.job_values_unread', failure, { workspace: params.workspaceName });
-
-      return {};
-    }),
-  ));
+    return yield* attempt(
+      { doing: "asking the account for the values this job's agents may read", otherwise: 'unavailable' },
+      async () => owner.revealedSecretsFor(await ownerCaller(env), params.workspaceName),
+    );
+  }));
 }
 
 /** {@link sendOut} as a promise, for an egress whose own entry awaits it (`codemode-egress.ts`). */
@@ -132,9 +133,11 @@ function forwardUpstream(
     }
 
     headers.set('user-agent', kinuUserAgent(request.headers.get('user-agent')));
-    const target = scrubText(url.toString(), reveal);
+    const target = revealUrl(url.toString(), reveal);
 
-    const sent = yield* Effect.matchCause(Effect.promise(() => fetch(reoriginateRequest(request, target, {
+    injected.push(...target.scrub);
+
+    const sent = yield* Effect.matchCause(Effect.promise(() => fetch(reoriginateRequest(request, target.url, {
       headers,
       redirect: request.redirect === 'error' ? 'error' : 'manual',
     }))), {

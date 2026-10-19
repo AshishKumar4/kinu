@@ -129,15 +129,9 @@ export class KinuDevbox extends Devbox<Env> {
     };
   }
 
-  /**
-   * The values the workspace's agents may read, for a supervised job its owner started, at each of its launches: asked
-   * of the owner's object with the owner capability, for the workspace this box was configured for. A box not yet
-   * configured, or an account that does not answer, starts the job without them: its placeholders still hold.
-   */
+  /** The values a supervised job its owner started may read, asked at each of its launches (`revealedForJob`). */
   protected override async revealedEnv(): Promise<Readonly<Record<string, string>>> {
-    const params = await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY);
-
-    return params === undefined ? {} : await revealedForJob(this.env, params);
+    return await revealedForJob(this.env, await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY));
   }
 
   async #rootAgent(): Promise<SandboxRootClient | null> {
