@@ -67,19 +67,16 @@ export interface TurnLedgers {
 }
 
 /** Empty ledgers: a turn's own, which observes its crafted tools while `recordsCraft`, or a call's outside any turn. */
-/** The file ledger of an actor's programs outside any turn (a slate's calls), one per runtime it is asked for: a
- *  read in one call lets a write in the next, as within a turn. */
+/**
+ * The file ledger of an actor's programs outside any turn (a slate's calls), owned by its runtime: a read in one call
+ * lets a write in the next, as within a turn, for as long as the runtime lives, and goes with it. It holds what each
+ * file last showed, so it grows with the files read, not with how often they are.
+ */
 const standing = new WeakMap<AgentRuntime, TurnFileLedger>();
-
-/** File versions a standing ledger holds before it starts over: a turn's ledger resets at its end, and this one has
- *  none, so a slate saving one file for hours would otherwise keep every version it saved. Starting over only asks
- *  the next write to read first. */
-const STANDING_LEDGER_MAX = 512;
 
 export function standingFileLedger(runtime: AgentRuntime): TurnFileLedger {
   const held = standing.get(runtime) ?? new TurnFileLedger();
 
-  if (held.held > STANDING_LEDGER_MAX) held.reset();
   standing.set(runtime, held);
 
   return held;

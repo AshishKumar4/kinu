@@ -79,10 +79,12 @@ function carriedCoverage(before: string, after: string, covered: number, spans: 
 }
 
 export class TurnFileLedger {
-  /** Keyed on content digest, not path spelling, so two spellings of one file match. */
+  /** Keyed on content digest, not path spelling, so two spellings of one file match. A content no spelling last showed
+   *  is retired, so it holds one content per file however long it lives. */
   private readonly seen = new Map<string, SeenContent>();
-  /** Tells a file that moved on from one never read. */
-  private readonly seenPaths = new Map<string, VfsRevision | undefined>();
+  /** What each spelling last showed: its content's digest, and its revision. Tells a file that moved on from one never
+   *  read. */
+  private readonly seenPaths = new Map<string, { readonly fingerprint: string; readonly revision?: VfsRevision }>();
   private attempts = 0;
   private applied = 0;
   private readonly failures = new Map<FileEditOutcomeReason, number>();
@@ -90,11 +92,6 @@ export class TurnFileLedger {
   private readonly recoveredPaths = new Set<string>();
   /** Not cleared by `reset()`: a per-turn identity would count an agent's own re-edits as collisions. */
   private readonly author = newWriteAuthor();
-
-  /** How many file versions and paths it holds, a turn's or a standing ledger's whole memory. */
-  get held(): number {
-    return this.seen.size + this.seenPaths.size + this.failedPaths.size + this.recoveredPaths.size;
-  }
 
   reset(): void {
     this.seen.clear();
@@ -140,12 +137,20 @@ export class TurnFileLedger {
   }
 
   private record(path: string, entry: RangeCoverage): void {
+    const before = this.seenPaths.get(path)?.fingerprint;
+
     this.seen.set(entry.fingerprint, { coveredTo: entry.coveredTo, total: entry.total });
-    this.seenPaths.set(path, entry.revision);
+    this.seenPaths.set(path, entry.revision === undefined ? { fingerprint: entry.fingerprint } : { fingerprint: entry.fingerprint, revision: entry.revision });
+
+    // The path moved on: what it showed before is retired, unless another spelling of the file still shows it.
+    if (before === undefined || before === entry.fingerprint) return;
+
+    for (const shown of this.seenPaths.values()) if (shown.fingerprint === before) return;
+    this.seen.delete(before);
   }
 
   readRevision(path: string): VfsRevision | undefined {
-    return this.seenPaths.get(path);
+    return this.seenPaths.get(path)?.revision;
   }
 
   seenState(path: string, content: string, need: FileSeenNeed): FileSeenVerdict {
