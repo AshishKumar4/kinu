@@ -170,8 +170,6 @@ const ROSTER = new URLSearchParams(location.search).get("roster") ?? "stock";
 
 const STOCK_ROSTER = {
   entries: [
-    // Mail's frame: the personal assistant holds the owner's own address (docs/MAIL.md §7).
-    ...(frame === "mail" ? [{ name: "personal-assistant", displayName: "Personal assistant", createdAt: NOW - 20 * 864e5, lastVisited: NOW - 20e3 }] : []),
     { name: "api-worker", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
       ? "Investigate intermittent 500s after the sessions binding rename and verify the release on staging"
       : "API Worker", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
@@ -181,7 +179,7 @@ const STOCK_ROSTER = {
     // First-run row: titled by its first prompt, so it has no title yet, only its slug.
     { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3 },
   ],
-  total: frame === "mail" ? 6 : 5,
+  total: 5,
 };
 
 // Selected once so the profile's workspaceCount matches the list endpoint; the gate reads both.

@@ -319,7 +319,7 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 
 **Mailflare is a product reference only,** for behaviour: what a Gmail-like box offers. No Mailflare code, styles or assets are copied (provenance in §0).
 
-**The wireframe** is `packages/cf-backend/src/gallery-mail.tsx`, frame `mail`. It shows the Mail page at `/mail`, and at `&at=workspace` the API Worker workspace with the Agent tab's mail, its chats' pills, and scout's approval card. `&assistant=<name>` renames the assistant, and `&assistant=none` shows an account without one. The sidebar is the shell's own (`SidebarFooter`).
+**The wireframe** is `packages/cf-backend/src/gallery-mail.tsx`, frame `mail`. It shows the Mail page at `/mail`, and at `&at=workspace` the API Worker workspace with the Agent tab's mail, its chats' pills, and scout's approval card. `&assistant=<name>` renames the assistant, and `&assistant=none` shows an account without one. The sidebar is the shell's own (`SidebarFooter`), and does not list the assistant's workspace, which is Home; once the Home lane's frames are merged, the link takes `&roster=assistant`, their roster.
 
 ## 8. "AI native", concretely
 
