@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-10-17",
-  "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
+  "measuredAt": "2026-10-19",
+  "machine": "linux x64, AMD EPYC (8 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it",
   "rows": {
     "bun run gate:bench-corpus": {
@@ -831,18 +831,6 @@
       "loadAtStart": 0.24,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
-      "machine": "linux x64, AMD EPYC (8 threads)",
-      "wallSeconds": 122.94,
-      "cpuSeconds": 134.79,
-      "peakRssMb": 1507.97,
-      "peakRunnable": 17,
-      "peakCpuThreads": 4.49,
-      "meanThreads": 1.1,
-      "samples": 488,
-      "loadAtStart": 0.74,
-      "exit": 0
-    },
     "bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.63,
@@ -1096,6 +1084,7 @@
       "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-root-turn.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 144.35,
       "cpuSeconds": 331.25,
       "peakRssMb": 5007.2,
@@ -1104,8 +1093,7 @@
       "meanThreads": 2.29,
       "samples": 517,
       "loadAtStart": 0.38,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-provider-wait.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
@@ -1132,6 +1120,7 @@
       "exit": 0
     },
     "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
+      "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "wallSeconds": 59.73,
       "cpuSeconds": 46.26,
       "peakRssMb": 615.97,
@@ -1140,8 +1129,31 @@
       "meanThreads": 0.77,
       "samples": 271,
       "loadAtStart": 2.82,
+      "exit": 0
+    },
+    "bun scripts/verified-secret-scan.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
+      "wallSeconds": 32.84,
+      "cpuSeconds": 74.03,
+      "peakRssMb": 832.85,
+      "peakRunnable": 7,
+      "peakCpuThreads": 3.67,
+      "meanThreads": 2.25,
+      "samples": 168,
+      "loadAtStart": 0.08,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/verified-secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
+      "wallSeconds": 140.97,
+      "cpuSeconds": 160.1,
+      "peakRssMb": 1563.18,
+      "peakRunnable": 14,
+      "peakCpuThreads": 3.82,
+      "meanThreads": 1.14,
+      "samples": 555,
+      "loadAtStart": 1.46,
       "exit": 0,
-      "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
+      "machine": "linux x64, AMD EPYC (8 threads)"
     }
   }
 }
