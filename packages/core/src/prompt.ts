@@ -248,7 +248,6 @@ function renderPlanesSection(planes: PathPlanes, render: RenderSection): string 
   });
 }
 
-
 function renderAgentStateSection(surface: PromptSurface, render: RenderSection, isHired: boolean, pagesInAnswer: boolean): string {
   const tools = surface.builtinTools;
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];

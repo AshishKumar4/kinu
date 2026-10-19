@@ -190,12 +190,12 @@ export function addressingHint(planes: PathPlanes, written?: string): string {
 }
 
 /**
- * A plain path written under each plane's prefix, where that names another file than it did: a skill read as
- * `skills/x` meant `vfs://skills/x`, and a computer's `/workspace/app` is `computer://workspace/app`. Text only; none
- * is looked up.
+ * A plain path (never a reference or `~`) written under each plane's prefix, where that names another file than it
+ * did: a skill read as `skills/x` meant `vfs://skills/x`, and a computer's `/workspace/app` is `computer://workspace/app`.
+ * Text only; none is looked up.
  */
 function prefixedReadings(written: string, landed: string, planes: PathPlanes): Effect.Effect<string[]> {
-  if (written === '~' || written.startsWith('~/')) return Effect.succeed([]);
+  if (REFERENCE.test(written) || written === '~' || written.startsWith('~/')) return Effect.succeed([]);
   const rest = written.replace(/^(?:\.?\/)+/u, '');
   const rows = planes.prefixes.filter((row) => row.prefix !== DEVICE_PREFIX);
 

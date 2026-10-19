@@ -223,3 +223,10 @@ test('a read or search of a directory is told it is one, and how to look inside 
   await expect(file({ op: 'search', path: 'deep', query: 'beside' })).rejects
     .toThrow('`deep` is a directory, and `search` takes one file: list it with `list`, or search under it with `grep -rn` in a shell');
 });
+
+test('a reference that names nothing is told where it landed, with no prefix written over it', async () => {
+  const { file } = gatedTool(await linkedWorkspace());
+
+  await expect(file({ op: 'read', path: 'vfs://nowhere/x.md' })).rejects
+    .toThrow("`vfs://nowhere/x.md` is `/nowhere/x.md` here; a relative path starts at `/home/main`");
+});
