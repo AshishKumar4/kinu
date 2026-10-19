@@ -110,13 +110,13 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   } else if (lineage.status === "loading") {
     notice = <div className="flex justify-center py-4"><Loader size="sm" /></div>;
   } else if (versions.length === 0) {
-    notice = <p className="text-xs p-text-3">Only the bootstrap scaffold (v0) so far.</p>;
+    notice = <p className="p-row-text p-text-3">No other versions yet.</p>;
   }
 
   return (
     <section className="space-y-1.5">
       <div className="flex items-baseline gap-2">
-        <span className="p-eyebrow">Versions</span>
+        <span className="p-meta p-text-3">Prompt versions</span>
         <Badge variant="secondary">live v{currentVersion}</Badge>
       </div>
       {notice ?? (

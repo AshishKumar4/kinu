@@ -7003,6 +7003,26 @@ function AgentFrame() {
 }
 
 
+/** What the api Worker's agent has noted as it worked. */
+const AGENT_TAB_NOTES: MemoryEntry[] = [
+  { path: "memory/MEMORY.md", content: "A renamed D1 binding: read both names until every environment has redeployed.", matchScore: 1, updatedAt: "2026-10-19", savedBy: "main" },
+  { path: "memory/MEMORY.md", content: "Staging takes its migration before the deploy: wrangler d1 migrations apply SESSIONS_DB --env staging --remote", matchScore: 1, updatedAt: "2026-10-18", savedBy: "main" },
+];
+
+/** The Agent tab at the inspector's width (`frame=agenttab`): an agent that has worked a while, or, with `&state=new`, one that has not. */
+function AgentTabFrame() {
+  const fresh = new URLSearchParams(location.search).get("state") === "new";
+
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div data-gallery-inspector className="w-[380px] max-w-full min-h-screen border-x p-border p-sidebar px-4 py-5">
+        <AgentSurface snapshot={{ status: "ready", value: BRAIN_STATUS }} memory={fresh ? [] : AGENT_TAB_NOTES} memoryContent={fresh ? "" : BRAIN_MEMORY}
+          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={workspaceRpc(fresh ? workspacePageRpc : evolutionRpc)} workspace={WORKSPACE_PAGE_NAME} />
+      </div>
+    </div>
+  );
+}
+
 /** Five transcript states that must not render as one blank pane. */
 function TranscriptFrame() {
   return (
@@ -7956,6 +7976,7 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
