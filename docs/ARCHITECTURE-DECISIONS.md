@@ -1968,6 +1968,49 @@ route is unprobed. Unstored, an item is replayed whole (id and encrypted
 content). Both are proven on a CLI session against a fake of each backend
 (`cli-backend/tests/plan-compaction.test.ts`). OpenCode is not asked.
 
+## Secrets
+
+S1. The owner's keys and tokens live in the account's object, sealed with the
+credential cipher (`user_secrets`, AAD `<object>:secret:<name>`), each with the
+hosts it may be sent to (a hostname or `*.domain`; a bare or leading-label
+wildcard is refused, so a program cannot pick the destination). A workspace
+uses one only where the owner granted it (`user_secret_grants`, owner-only
+writes, Settings › Secrets), and the grant is read by the account object on
+every request that names it (`resolveEgressInjection(owner, facts, workspace)`,
+the workspace taken from the egress's sealed props). Nothing of the grant lives
+in a workspace: the earlier `egress-secret:<id>` approval grant was the
+workspace's own word, which this replaced (2026-10-19).
+
+S2. A granted secret is `$NAME` in every agent command on the workspace's box
+and its computer, `env.NAME`/`process.env.NAME` in eval (Worker Loader
+bindings), and `this.env.NAME` in an owner's slate server; a shared slate holds
+none and its egress spends none. Its value is a random placeholder that the one
+gate (`planEgress`) lets trusted egress replace only in a URL or header value
+(a Basic credential decoded and re-encoded), only toward its hosts and only
+over https or wss (6808df1f8), with the response scrubbed. Bodies are never
+substituted: an allowed host can publish a body. Raw TCP, request signing and
+form logins cannot use a placeholder; for those the owner turns on "Agents may
+read the value" per workspace and secret, and the value is read from the
+account object for each command and never kept by the workspace. A named shell
+sets a call's variables after restoring its saved state and never saves them.
+
+S3. A chat draft holding a known credential shape (`secret-patterns.ts`, the
+provider shapes carrying their provider's variable and hosts) is held in the
+browser before it is sent: moved to Secrets it becomes `$NAME`, or sent as
+written on the owner's word. Unknown shapes are not caught.
+
+S4. An MCP server's OAuth login is sealed at the Agents SDK's storage seam
+(`mcpOAuthStorage`, AAD `<object>:mcp-oauth`, not the key, because the SDK's
+`migrateServerId` copies values between keys raw). A login stored before this
+does not open and reads as none: that server shows "Needs sign-in" once.
+
+S5. A computer's published preview opens for the workspace's signed-in owner
+and the workspace's own fetches through the same entry, ticket and host-only
+cookie as a workspace preview; its URL is no bearer link. The owner can make one
+port a public link, confirmed; a new publication of the port is the owner's
+alone again. The cookie is trusted for its life (12 hours) without asking the
+workspace on each request, since only the owner-checked entry mints one.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
