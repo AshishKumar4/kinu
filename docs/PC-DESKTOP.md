@@ -2,7 +2,7 @@
 
 Design for the owner's review, 2026-10-19. Requests 1014-t ("a connected PC's desktop", m134) and 1019-aa ("one
 experience across the computer, PCs and the workspace, with desktop support for those that offer", m067, m134, #99).
-The wireframe is the gallery's `workspaceshell` frame with `&pc=granted&pcdesktop=ready|setup|permission|update`; its
+The wireframe is the gallery's `workspaceshell` frame with `&pc=granted&pcdesktop=ready|setup|permission`; its
 screenshots, dark and light, desktop and phone, are on the review page this note is published with.
 
 ## What the owner sees
@@ -19,11 +19,12 @@ A PC the workspace holds is a machine in the Environment column, like the comput
   - **setup**: something on the PC is missing. The daemon names it, for example "Install the Command Line Tools:
     xcode-select --install".
   - **permission**: the PC is showing its own prompt, and the screen opens once someone at the PC allows it.
-  - **update**: the daemon is older than this feature. `kinu update` brings it.
-  - A PC with no screen to share (no graphical session) has no Desktop tab at all.
+  - A PC with no screen to share (no graphical session, or sharing never turned on) has no Desktop tab at all.
 
-The device reports which of these applies when it connects, and again whenever it changes (`DEVICE_DESKTOP_STATES`,
-`packages/core/src/execution/device-desktop.ts`). The client reads it from the device's roster row (`desktop`).
+The device reports which of these applies in each `hello` (`DeviceDesktopSchema`,
+`packages/core/src/execution/device-desktop.ts`), and `kinu desktop share` reconnects it so the change shows at once. The
+client reads it from the device's roster row (`desktop`). A daemon older than the screen speaks device protocol 3, which
+the hub serves nothing on: it is pushed the update, as every daemon a protocol behind is.
 
 ## How the screen gets here
 
@@ -34,23 +35,31 @@ stream over the device tunnel to the daemon, which serves RFB itself. No screen 
 or anywhere else.
 
 Over the tunnel:
-- `screenOpen` is a new method (JSON, as every method is): the hub opens a stream and numbers it, and the daemon answers
-  once it reaches the PC's screen server. `screenClose` is a JSON frame from either side.
+- `screenOpen` is a new method (JSON, as every method is), on device protocol 4: the hub numbers a stream, and the
+  daemon answers once the stream is open. `screenClose` is a JSON frame from either side, with the reason when the PC
+  ends it. One stream at a time: a second open ends the first ("the screen opened in another tab").
 - The screen's bytes cross as **binary WebSocket messages**, never text: each is a 1-byte kind (data), the stream's
   number as a big-endian u32, then up to 64 KiB of RFB. Both ends of the tunnel are WebSockets that carry binary (the
   UserDO's hibernatable socket, `webSocketMessage(ws, string | ArrayBuffer)`, and Bun's client), and so does the
   browser's socket to the UserDO. The stream number drops bytes a closed stream left in flight.
 - RFB paces itself: the client asks for each framebuffer update, so the daemon sends a frame only when the viewer can
   take one, and a slow tunnel slows the frame rate, not memory.
-- A screen hub sits beside `DeviceTerminalHub`. It pairs the browser's socket with the daemon's stream, one viewer at
-  a time, and relays the bytes unread.
+- A screen hub sits beside `DeviceTerminalHub` (`device-screen.ts`). It pairs the browser's socket with the daemon's
+  stream, one viewer to a stream, and relays the bytes unread. Bytes for a stream it no longer holds close that stream
+  on the PC, and a stream no viewer speaks on for 30 seconds stops capturing.
+- The daemon's RFB server (`packages/pc-agent/src/daemon/screen.js`) speaks RFB 3.8 with no RFB security: the route
+  already proved the owner and the workspace's grant. It sends each frame as Tight, JPEG when the source gives JPEG and
+  deflated pixels otherwise, and reads the Environment client's own dialect. KasmVNC's client widens the pointer event
+  to 11 bytes, sends messages of its own at connect, maps the pointer by ExtendedDesktopSize, shows a one-rectangle
+  update only when the next arrives unless it ends with LastRect, and draws Raw rectangles from the wrong offset. Each
+  was measured against the vendored client in Chrome (`tests/browser/pc-desktop-client.test.ts`).
 
 Binary is a protocol change at the two ends' dispatch, and nowhere else. Today the hub decodes every message from a
 device as text before it parses it (`user-do.ts`, `webSocketMessage`), and so does the daemon (`index.js`, its socket's `message` listener); each
 gains a binary branch for screen data. No existing frame changes, and no daemon or hub of an earlier release ever meets a
 binary frame: the hub opens a screen only on a daemon whose `hello` reports one, and only such a daemon sends one.
 
-Where the PC's screen server comes from depends on the system:
+Where the daemon's screen comes from depends on the system:
 
 - **macOS: a small screen helper the daemon runs, speaking to it over stdio.** It captures with ScreenCaptureKit and
   drives input with `CGEventPost`, and the daemon turns that into RFB as it does on Linux.
@@ -105,12 +114,13 @@ Each has a recommendation, which is the default unless the owner says otherwise.
 ## Pieces, in order
 
 1. Protocol and relay: the device reports `desktop` in `hello`; `screenOpen`, `screenClose` and the binary data frame;
-   the screen hub; the route; `kinu desktop share`. Tested against a stub daemon that serves a fixed RFB framebuffer.
+   the screen hub; the route; the daemon's RFB server. Tested against a fixed screen, through the hub and through the
+   vendored client in Chrome. No system's source ships in it, so every PC reports none.
 2. Named PC sessions in the daemon, and the strip reading them.
-3. Linux portal server in the daemon.
+3. Linux portal source in the daemon, and `kinu desktop share`.
 4. The macOS helper, and its build and a measured run in the Mac proof.
 
-Each ships in a daemon release. A PC on an older daemon shows **update** and keeps its one shell.
+Each ships in a daemon release, which the hub pushes to every connected PC whose owner left updates on.
 
 ## Measured, and not
 
