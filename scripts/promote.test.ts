@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
-  adoptDownloads, adoptTarball, adoptedRecord, artifactDigest, builtKey, downloadsServed, evalVerdictRefusal, imagesStagingNeverRan, overrideKey,
-  planRollback, readDownloads, readEvalsVerdict, stagingReds, verifiedKey, verifyServing, writeOverride, type EvalVerdict, type Promotion, type Records,
+  adoptDownloads, adoptTarball, adoptedRecord, artifactDigest, builtKey, downloadsServed, evalsKey, evalVerdictRefusal, imagesStagingNeverRan, overrideKey,
+  planRollback, readDownloads, readEvalsVerdict, stagingReds, verifiedKey, verifyServing, withdraw, writeOverride, type EvalVerdict, type Promotion, type Records,
   type Verified,
 } from './promote';
 import { ResetSchema, type Reset } from './reset';
@@ -325,8 +325,24 @@ describe('an owner override', () => {
     const keys = new Map(Object.entries(held));
     const written: string[] = [];
 
-    return { written, read: (key) => keys.get(key), write: (key, text) => { written.push(key); keys.set(key, text); } };
+    return {
+      written, read: (key) => keys.get(key), write: (key, text) => { written.push(key); keys.set(key, text); }, delete: (key) => { keys.delete(key); },
+    };
   };
+
+  // rc22, 2026-10-19: a red staging deploy's end withdrew the built record with the verified one, so the owner's "ship
+  // now" override was refused as "staging never served 2620e7c05" while staging served it.
+  test('a red deploy\'s end leaves the build staging serves for an override to name; a new deploy forgets it first', async () => {
+    const records = { [builtKey(sha)]: JSON.stringify(built), [verifiedKey(sha)]: JSON.stringify(built), [evalsKey(sha)]: '{}' };
+    const red = bucket(records);
+    const replaced = bucket(records);
+
+    withdraw(red, sha, 'red');
+    withdraw(replaced, sha, 'publishing');
+    expect([red.read(verifiedKey(sha)), red.read(evalsKey(sha))]).toEqual([undefined, undefined]);
+    await expect(writeOverride(red, sha, owner, async () => undefined)).resolves.toMatchObject({ verdict: 'UNVERIFIED' });
+    await expect(writeOverride(replaced, sha, owner, async () => undefined)).rejects.toThrow(`staging never served ${sha}`);
+  });
 
   test('is written under its own key, never verified/, as staging served the build, UNVERIFIED with the words and the reds', async () => {
     const staging = bucket({ [builtKey(sha)]: JSON.stringify(built) });

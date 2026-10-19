@@ -457,8 +457,9 @@ finish() {
   cancel_build
   mark end
   report render || KINU_REDS=1
+  # A red run that published keeps staging's built record, the one an owner's override names (promote.ts withdraw).
   if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_REDS" != "0" ]; then
-    bun "$KINU_ROOT/scripts/promote.ts" forget || KINU_REDS=1
+    bun "$KINU_ROOT/scripts/promote.ts" withdraw || KINU_REDS=1
   fi
   exit "$KINU_REDS"
 }

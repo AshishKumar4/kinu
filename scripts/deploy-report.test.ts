@@ -47,7 +47,7 @@ verified=1
 trap 'printf "%s" "$verified"' EXIT
 mark() { :; }
 report() { return ${verdict.reds.length === 0 ? '0' : '1'}; }
-bun() { [ "$1" = "./scripts/promote.ts" ] && [ "$2" = "forget" ] && verified=0; }
+bun() { [ "$1" = "./scripts/promote.ts" ] && [ "$2" = "withdraw" ] && verified=0; }
 ${finish}
 finish
 `], { env: childEnv() });
