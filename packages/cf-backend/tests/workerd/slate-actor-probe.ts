@@ -2,18 +2,19 @@
  * Hosted Plan/eval probe: crafted-tool declarations are re-read, not cached,
  * and `plan` mode is refused at the seam `build` is admitted at.
  */
+import { freshServedStores } from '@kinu.run/test-utils';
 import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { CodemodeSurface, CraftedTool } from '@kinu.run/core';
-import { craftedToolDeclarations, DynamicContextLedger, selectInjectableCraftedTools, settleWorkspaceRoot, settleSharedRoots, WORKSPACE_ROOT } from '@kinu.run/core';
+import { craftedToolDeclarations, DynamicContextLedger, selectInjectableCraftedTools, settleWorkspaceRoot, settleSharedRoots, WORKSPACE_ROOT, serveStores } from '@kinu.run/core';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createCodemodeToolFactory, type CodemodeScope } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
-import { actorNamespaces, createAgentStores, adaptMemory, initWorkspaceSchema, SURFACE_POLICY, WorkspaceActorDirectory, turnLedgers, type ActorHandle, type ExecutorProviderSurface, type SqlExecutor, type SurfaceActor } from '@kinu.run/core';
+import { actorNamespaces, createAgentStores, adaptMemory, initWorkspaceSchema, SURFACE_POLICY, WorkspaceActorDirectory, type ActorHandle, type ExecutorProviderSurface, type SqlExecutor, type SurfaceActor } from '@kinu.run/core';
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initAgentDataTables, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
@@ -51,9 +52,11 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
   return {
     executors: () => scope.executors ?? [],
     web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
-    memory: () => ({ memory, actor: handle, conversations: stores.conversationSearch }),
-    files: files === undefined ? unreached : () => files,
-    tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+    stores: serveStores({
+      memory: () => ({ memory, actor: handle, conversations: stores.conversationSearch }),
+      files: files === undefined ? unreached : () => files,
+      tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+    }),
     db: stores.appData,
     agents: null, self: null, ownerWaits: null,
   };
@@ -96,7 +99,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     // The store holds `crafted`, read fresh per program as a runtime's surface reads it.
-    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), ledgers: turnLedgers() };
+    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), stores: freshServedStores() };
 
     const host = new SlateHost({
       ctx: this.ctx, workspace: 'binding-probe', builds: new SlateBuilds(this.ctx.storage.sql),
@@ -187,7 +190,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       name: 'stop-probe', storageKey: 'stop-probe',
     }, () => Effect.void);
 
-    const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [], ledgers: turnLedgers() }, {
+    const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [], stores: freshServedStores() }, {
       reach: narrowToolSurface(undefined),
       namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), SURFACE_POLICY.program, { executor }),
     }).execute;
@@ -241,7 +244,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       }], files: fileScope }), SURFACE_POLICY.program, { executor }),
     };
 
-    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], ledgers: { files: fileScope.ledger, context: fileScope.budget } }, scope) }).eval;
+    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], stores: freshServedStores() }, scope) }).eval;
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');

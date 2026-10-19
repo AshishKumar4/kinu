@@ -170,7 +170,8 @@ function literal(parts: readonly WordPart[]): Word {
 
     if (part.quoted !== 'single' && /[$`]/u.test(part.text)) return null;
 
-    if (part.quoted === 'none' && (/[*?[]/u.test(part.text) || (text === '' && part.text.startsWith('~')))) return null;
+    // A glob: `*`, `?`, or a bracket expression `[...]`, which only a closing `]` makes one (`[` alone is a command).
+    if (part.quoted === 'none' && (/[*?]|\[[^\]]*\]/u.test(part.text) || (text === '' && part.text.startsWith('~')))) return null;
     text += part.text;
   }
 

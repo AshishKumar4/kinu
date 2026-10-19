@@ -1,3 +1,4 @@
+import { servedStoresOf } from '@kinu.run/test-utils';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shipped workspace and facet bundles: isolated turns over one shared Nimbus file plane. */
 import { getAgentByName, type AgentContext } from 'agents';
@@ -220,7 +221,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     this.rt.craftStore.create({ name: 'double', description: 'doubles a number', code: 'async (n) => n * 2' });
     const seams = this.hostedSeams();
     const seat = await hostNodeSeat(seams, { nodeId: 'crafted-node', rootId: 'crafted-swarm', depth: 1 });
-    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)(codemodeSurface(seat.actor.runtime, {}), narrowToolSurface(undefined)) }).eval?.execute;
+    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)(codemodeSurface(seat.actor.runtime, {}, () => ({}), { stores: servedStoresOf(seat.actor.runtime, seat.actor.stores.conversationSearch) }), narrowToolSurface(undefined)) }).eval?.execute;
 
     if (execute === undefined) throw new Error('the node has no eval');
 

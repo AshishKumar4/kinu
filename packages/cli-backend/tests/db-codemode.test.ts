@@ -7,8 +7,8 @@ import {
   RunEventRecorder, WORKSPACE_RUN_ID,
   type ActorHandle, type JsonValue, type SqlExecutor,
 } from '@kinu.run/core';
-import { narrowToolSurface, turnLedgers, WORKSPACE_ROOT } from '@kinu.run/core';
-import { createTestActors, toolExecute, type TestActors } from '@kinu.run/test-utils';
+import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
+import { createTestActors, toolExecute, type TestActors, freshServedStores } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { makeWorkspaceSchemaSql } from '../src/runtime';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
@@ -56,7 +56,7 @@ function sandbox(): Sandbox {
 
       // `namespaces` is the production seam: the one list `actorNamespaces` builds, executors included.
       const factory = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [createDbCodemodeProvider(store, { private: true })] });
-      const tool = factory({ cwd: WORKSPACE_ROOT, ledgers: turnLedgers(), native: {}, external: () => ({}), craftedTools: () => [] });
+      const tool = factory({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] });
 
       return toolExecute(tool)({ code });
     },

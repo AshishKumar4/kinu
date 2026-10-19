@@ -66,13 +66,11 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
  */
 export function hostedCodemodeTool(actor: SeatedActor, search: WebSearchProvider): CodemodeBuilder {
   return (codemode, reach) => {
-    // A program here runs in this process, which holds no Browser Run socket client; its files account into the
-    // ledgers its native tools do.
+    // A program here runs in this process, which holds no Browser Run socket client; it runs the store operations its
+    // native tools run.
     const surface = hostedSurfaceActor(actor, {
       web: { search, files: actor.runtime.storage, browser: null },
-      conversations: actor.stores.conversationSearch,
-      vectorStore: null,
-      ledgers: () => codemode.ledgers,
+      stores: codemode.stores,
       // A head or a swarm node, whose run ends with it, holds no wait on its owner.
       ownerWaits: null,
     });

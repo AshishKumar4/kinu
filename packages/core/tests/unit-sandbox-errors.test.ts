@@ -23,9 +23,9 @@ import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-execu
 import { executorNamespace } from '../src/tools/executor-operations';
 import { createAgentsCodemodeProvider } from '../src/delegation/agents-operations';
 import { createReportCodemodeProvider } from '../src/tools/report-operations';
-import { createMemoryCodemodeProvider } from '../src/tools/memory-operations';
-import { createTasksCodemodeProvider } from '../src/tools/tasks-operations';
-import { createFileCodemodeProvider } from '../src/tools/file-operations';
+import { createMemoryCodemodeProvider, serveMemory } from '../src/tools/memory-operations';
+import { createTasksCodemodeProvider, serveTasks } from '../src/tools/tasks-operations';
+import { createFileCodemodeProvider, serveFile } from '../src/tools/file-operations';
 import { createDbCodemodeProvider } from '../src/tools/db-codemode';
 import { createWebCodemodeProvider } from '../src/tools/web-operations';
 import { createAgentSelfProvider } from '../src/tools/agent-self';
@@ -165,9 +165,9 @@ test('every member of every namespace refuses with the one declared Refusal, and
     { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }), undefined) },
     createAgentsCodemodeProvider(() => refusingDouble()),
     createReportCodemodeProvider(() => refusingDouble()),
-    createMemoryCodemodeProvider(() => refusingDouble()),
-    createTasksCodemodeProvider(refusingDouble(), refusingDouble()),
-    createFileCodemodeProvider(() => refusingDouble()),
+    createMemoryCodemodeProvider(serveMemory(() => refusingDouble())),
+    createTasksCodemodeProvider(serveTasks(refusingDouble(), refusingDouble())),
+    createFileCodemodeProvider(serveFile(() => refusingDouble())),
     createDbCodemodeProvider(refusingDouble(), { private: true }),
     createWebCodemodeProvider(refusingDouble()),
     createAgentSelfProvider(refusingDouble()),

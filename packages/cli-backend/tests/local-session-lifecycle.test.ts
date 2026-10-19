@@ -1,9 +1,9 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase, createRecordingLogger, freshServedStores } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
-import { narrowToolSurface, turnLedgers, WORKSPACE_ROOT } from '@kinu.run/core';
+import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
@@ -891,7 +891,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
       })],
-    })({ cwd: WORKSPACE_ROOT, ledgers: turnLedgers(), native: {}, external: () => ({}), craftedTools: () => [] });
+    })({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -918,7 +918,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         ...agentSelfRest,
         armCompactNow: async () => { arms++; },
       })],
-    })({ cwd: WORKSPACE_ROOT, ledgers: turnLedgers(), native: {}, external: () => ({}), craftedTools: () => [] });
+    })({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: 'return await agent.compactNow();',

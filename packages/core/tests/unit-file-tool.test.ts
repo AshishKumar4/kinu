@@ -7,8 +7,8 @@ import * as v from 'valibot';
 import { applyFileEdits, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
-import { createTestRuntime } from './helpers';
-import { createFileCodemodeProvider, createFileTool } from '../src/tools/file-operations';
+import { createTestRuntime, fileNamespaceOver, fileToolOver } from './helpers';
+
 import { FILE } from '../src/operations/file';
 import { operationId } from '../src/operations/operation';
 
@@ -30,7 +30,6 @@ import { KinuError } from '../src/obs/index';
 import { failedToolOutcome } from '../src/tools/outcome';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes, resolvePath } from '../src/vfs/resolve';
-
 
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
@@ -171,7 +170,6 @@ describe('applyFileEdits', () => {
     expect(out.reason).toBe('not_found');
   });
 });
-
 
 /** What a read showed of the file: each line's text after its number and tab, footer dropped. */
 function shownLines(output: string): string[] {
@@ -358,7 +356,6 @@ describe('the honest read, scanned rather than made resident', () => {
   });
 });
 
-
 describe('TurnFileLedger', () => {
 
   test('a leading BOM does not change the text identity observed by a read', () => {
@@ -423,7 +420,6 @@ describe('TurnFileLedger', () => {
     expect(ledger.active).toBe(true);
   });
 });
-
 
 /**
  * Plane with a ranged read like every production plane. `perRead` caps bytes per `readRange` so small
@@ -496,7 +492,6 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
 
       if (opts.revisions) stat.revision = revisions.get(path) ?? 1;
 
-
       return stat;
     },
     async unlink(path: string) { files.delete(path); },
@@ -511,7 +506,7 @@ type FileToolTestInput = FileToolInput | { op: string; path: string | number } |
 
 /** The entry as the tool surface serves it: behind the input check a program meets. */
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
-  const entry = withCheckedInput('file', createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
+  const entry = withCheckedInput('file', fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
 
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
@@ -540,7 +535,6 @@ test('a denied edit keeps its counter through the persisted file-edit event', as
   } finally { db.close(); }
 });
 
-
 describe('file tool', () => {
   test('read returns the content and authorizes the edit that follows', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
@@ -560,7 +554,7 @@ describe('file tool', () => {
     const long = Array.from({ length: FILE_READ_LINES + 500 }, (_, at) => `line ${String(at)} ${'w'.repeat(at % 7 === 0 ? FILE_READ_LINE_CHARS + 10 : 3)}`).join('\n');
     const vfs = memoryVfs({ 'big.md': long });
     const ledger = new TurnFileLedger();
-    const file = createFileCodemodeProvider(() => ({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
+    const file = fileNamespaceOver(() => ({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
     const { call } = toolFor(vfs, ledger);
 
     expect(await file.tools.text?.execute('big.md')).toBe(long);
@@ -782,7 +776,7 @@ describe('file tool', () => {
     };
 
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
-      const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
+      const entry = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
       await toolExecute(entry)({ op: 'write', path, content: 'x' });
     }
 
@@ -836,7 +830,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'big.txt': 'x'.repeat(500) });
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
-    const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
+    const entry = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
     const shown = v.parse(StringResultSchema, await toolExecute(entry)({ op: 'read', path: 'big.txt' }));
     expect(budget.snapshot().admittedChars).toBe(shown.length);
   });
@@ -861,7 +855,6 @@ describe('file tool', () => {
     await expect(call({ op: 'edit', path: 'a.ts', edits: [{ old_text: numbered, new_text: 'gone' }] })).rejects.toThrow('copy only the text after the tab');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
   });
-
 
   test('a path of the wrong type is refused, not fed to `path.trim()`', async () => {
     // A non-string path must be answered, not thrown as a TypeError.
@@ -1261,7 +1254,7 @@ describe('a bulk read is bounded where it is produced', () => {
   test('a listing past the ceiling continues from `next` until every entry has been seen', async () => {
     const names = plainNames(3_000);
     const vfs = { ...memoryVfs(), async readdir() { return names.map((name) => ({ name, type: 'file' as const })); } };
-    const file = createFileCodemodeProvider(() => ({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
+    const file = fileNamespaceOver(() => ({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
     const Page = v.object({ entries: v.array(v.string()), truncated: v.optional(v.object({ total: v.number(), next: v.number() })) });
     const seen: string[] = [];
 

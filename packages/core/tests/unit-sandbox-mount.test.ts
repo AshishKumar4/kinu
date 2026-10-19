@@ -1,3 +1,4 @@
+import { fileToolOver } from './helpers';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { sha256Hex } from '../src/safety/argument-digest';
 /**
@@ -20,7 +21,7 @@ import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { MemoryVFS } from '@nimbus-sh/core/vfs/memory.js';
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
-import { createFileTool, serveFile, type FileDeps } from '../src/tools/file-operations';
+import { serveFile, type FileDeps } from '../src/tools/file-operations';
 
 type FileToolInput = JsonObject & { readonly op: string };
 
@@ -212,7 +213,7 @@ function rig(fs: ContainerFs) {
 		vfs: mounted, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
 	};
 
-	const file = toolExecute<FileToolInput, JsonValue>(createFileTool(deps));
+	const file = toolExecute<FileToolInput, JsonValue>(fileToolOver(deps));
 	const namespace = executorNamespace(executor, serveFile(() => deps));
 
 	return { executor, mounted, file, namespace };

@@ -9,11 +9,11 @@ import {
 import type { ChatEvent } from '../src/chat';
 import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import type { JsonObject } from '../src/utils/json';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, fileToolOver } from './helpers';
 import { turnLedgers } from '../src/orchestrator/turn-accumulator';
 import { createInlineExecutor } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { createFileTool } from '../src/tools/file-operations';
+
 import { present, toolExecute } from '@kinu.run/test-utils';
 
 function makeRtWithMockedExecutor(execute: Executor['execute']) {
@@ -66,7 +66,7 @@ describe('runScaffold', () => {
 
     await runScaffold({ rt, task: 'x', emit: () => {}, llmStream: () => asyncOf(), ledgers });
 
-    const file = createFileTool({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: ledgers.files, budget: ledgers.context });
+    const file = fileToolOver({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: ledgers.files, budget: ledgers.context });
 
     expect(await toolExecute(file)({ op: 'write', path: '/home/main/notes.md', content: 'second\n' })).toMatchObject({ action: 'replaced' });
   });

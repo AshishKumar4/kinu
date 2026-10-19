@@ -6,7 +6,7 @@ import { expect, test } from 'bun:test';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { codemodeSurface, HeadJournal, narrowToolSurface, toolsInWorkMode, type JsonValue, type WebSearchProvider } from '@kinu.run/core';
-import { createRecordingLogger, present, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
+import { createRecordingLogger, present, toolExecute, unobservedSpend, servedStoresOf } from '@kinu.run/test-utils';
 import { LocalAgentSession } from '../src/local-session';
 import { hostedCodemodeTool } from '../src/head-runtime';
 import { fakeModel, toolSequenceModel, workspaceRuntime } from './helpers/local-session';
@@ -38,7 +38,7 @@ test("a swarm node's program reads its own context, as its file tool does, not i
     const node = seat.actor.runtime;
 
     const nodeEval = present(toolsInWorkMode('build', {
-      eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB)(codemodeSurface(node, {}, undefined, { ledgers: seat.actor.session.orchestrator.acc.ledgers }), narrowToolSurface(undefined)),
+      eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB)(codemodeSurface(node, {}, () => ({}), { stores: servedStoresOf(node, seat.actor.stores.conversationSearch, seat.actor.session.orchestrator.acc.ledgers) }), narrowToolSurface(undefined)),
     }).eval, "the node's eval");
 
     const program = await toolExecute<{ code: string }, { result: JsonValue }>(nodeEval)({ code: `return await workspace.fs.text(${JSON.stringify(WORKING)});` });

@@ -9,7 +9,10 @@ import type {
   CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink, RunEventRecorder,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { buildModelCallEvent, codemodeInputSchema, WORKSPACE_ROOT, WORKSPACE_RUN_ID, cloudPlanes } from '@kinu.run/core';
+import {
+  buildModelCallEvent, builtinStoreDeps, codemodeInputSchema, serveStores, turnLedgers, WORKSPACE_ROOT, WORKSPACE_RUN_ID, cloudPlanes,
+  type ConversationRecall, type ServedStores, type TurnLedgers,
+} from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
 import { createTestActors } from './actors';
 import {
@@ -127,6 +130,21 @@ function noScaffold(): Identity['scaffold'] {
     read: async () => refuse('a scaffold read', 'a runtime with a scaffold surface'),
     write: async () => refuse('a scaffold write', 'a runtime with a scaffold surface'),
   };
+}
+
+/**
+ * A runtime's file, memory and task operations, served as a turn surface serves them to its native tools and its
+ * programs alike (`CodemodeSurface.stores`), on `ledgers`.
+ */
+export function servedStoresOf(rt: AgentRuntime, conversations: ConversationRecall, ledgers: Pick<TurnLedgers, 'files' | 'context'> = turnLedgers()): ServedStores {
+  return serveStores(builtinStoreDeps({ rt, conversations, vectorStore: null, fileLedger: ledgers.files, contextBudget: ledgers.context }));
+}
+
+/** A program surface's store operations over a fresh test runtime, for a test whose programs reach no store of their own. */
+export function freshServedStores(): ServedStores {
+  const { rt, stores } = createTestRuntime();
+
+  return servedStoresOf(rt, stores.conversationSearch);
 }
 
 /** A minimal AgentRuntime with a fresh in-memory database. */

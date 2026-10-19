@@ -3,6 +3,7 @@
  * written only by proposal; a slate's memory never names the account. The facts store keeps importance, veracity and
  * who wrote each value, with every value a key held. Recall ranks with mnemopi's lexical rules (lexical-recall.ts).
  */
+import { serveStores } from '../src/tools/actor-stores';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createMemoryVfs, createTestFactsStore, createTestRuntime } from '@kinu.run/test-utils';
@@ -157,12 +158,14 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
   return {
     executors: () => [],
     web: { search: { search: unreached, fetch: unreached, render: unreached, screenshot: unreached }, files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: null },
-    memory: () => ({
+    stores: serveStores({
+      memory: () => ({
       memory: rt.memory, facts: stores.facts, actor: rt.actor, conversations: conversationsFor(rt), vectorStore: null,
       ...(account !== undefined && { account }),
     }),
-    files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
-    tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+      files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
+      tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+    }),
     db: stores.appData,
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,

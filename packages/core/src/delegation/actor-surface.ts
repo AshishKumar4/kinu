@@ -5,23 +5,18 @@
  * the one list everywhere.
  */
 import type { ExecutorProviderSurface } from '../execution/types';
-import type { AgentConfigStore } from '../config/store';
-import type { ConversationRecall } from '../memory/conversation-search';
-import type { VectorStore } from '../memory/vector-store';
-import type { AccountMemory } from '../memory/account';
 import type { SeatedActor } from '../state/actor-host';
-import type { TurnLedgers } from '../orchestrator/turn-accumulator';
 import type { Storage } from '../types/primitives';
 import type { CodemodeProvider } from '../types/codemode';
 import type { BrowserSessions, WebSearchProvider } from '../web/provider';
 import { createAgentSelfProvider, createHireOwnerWaitsProvider, type AgentSelfHost, type OwnerWaitsHost } from '../tools/agent-self';
 import { createDbCodemodeProvider, type AppDataStore } from '../tools/db-codemode';
 import { executorNamespace } from '../tools/executor-operations';
-import { createFileCodemodeProvider, serveFile, type FileDeps } from '../tools/file-operations';
-import { createMemoryCodemodeProvider, type MemoryDeps } from '../tools/memory-operations';
+import { createFileCodemodeProvider } from '../tools/file-operations';
+import type { ServedStores } from '../tools/actor-stores';
+import { createMemoryCodemodeProvider } from '../tools/memory-operations';
 import { createReportCodemodeProvider, type ReportDeps } from '../tools/report-operations';
-import { createTasksCodemodeProvider, type RoleSwitch } from '../tools/tasks-operations';
-import type { TaskListStore } from '../tools/task-store';
+import { createTasksCodemodeProvider } from '../tools/tasks-operations';
 import { createWebCodemodeProvider } from '../tools/web-operations';
 import { createAgentsCodemodeProvider } from './agents-operations';
 import type { AgentsToolDeps } from './agents-tool';
@@ -39,11 +34,8 @@ export interface SurfaceWeb {
 export interface SurfaceActor {
   readonly executors: () => readonly ExecutorProviderSurface[];
   readonly web: SurfaceWeb;
-  /** Its stores, read as its namespaces are built. */
-  readonly memory: () => MemoryDeps;
-  readonly files: () => FileDeps;
-  /** `roleSwitch` null: its programs switch no role, as a hire's role is its hirer's to set. */
-  readonly tasks: () => { readonly list: TaskListStore; readonly config: AgentConfigStore; readonly roleSwitch: RoleSwitch | null };
+  /** Its file, memory and task operations: where a caller holds native tools, the ones they run (`CodemodeSurface.stores`). */
+  readonly stores: ServedStores;
   readonly db: AppDataStore;
   /** Null for an actor with no inbox of its own to delegate from. */
   readonly agents: (() => AgentsToolDeps) | null;
@@ -97,11 +89,6 @@ export interface SurfaceCall {
   readonly report?: () => ReportDeps;
 }
 
-/** An actor's stores as a caller that never reaches the account sees them: its `memory.*` names no scope. */
-function withoutAccount(deps: MemoryDeps): MemoryDeps {
-  return { ...deps, account: undefined };
-}
-
 function webFor(web: SurfaceWeb, policy: SurfacePolicy): CodemodeProvider {
   const files = policy.webFiles ? web.files : null;
 
@@ -125,20 +112,19 @@ function agentNamespace(self: AgentSelfHost | null, ownerWaits: OwnerWaitsHost |
 export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call: SurfaceCall = {}): CodemodeProvider[] {
   const { agents, self } = actor;
   const executor = call.executor ?? ((provider) => provider);
-  const tasks = actor.tasks();
-  // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane.
-  const files = serveFile(actor.files);
+  const { stores } = actor;
 
   return [
     ...(policy.agents && agents !== null ? [createAgentsCodemodeProvider(agents)] : []),
-    createMemoryCodemodeProvider(policy.account ? actor.memory : () => withoutAccount(actor.memory())),
-    createFileCodemodeProvider(actor.files),
-    createTasksCodemodeProvider(tasks.list, tasks.config, tasks.roleSwitch ?? undefined),
+    createMemoryCodemodeProvider(policy.account ? stores.memory.account : stores.memory.own),
+    createFileCodemodeProvider(stores.file),
+    createTasksCodemodeProvider(stores.tasks),
     createDbCodemodeProvider(actor.db, { private: policy.private }),
     ...agentNamespace(self, actor.ownerWaits),
     ...(call.report === undefined ? [] : [createReportCodemodeProvider(call.report)]),
     webFor(actor.web, policy),
-    ...actor.executors().map((provider) => executorNamespace(executor(provider), files)),
+    // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane.
+    ...actor.executors().map((provider) => executorNamespace(executor(provider), stores.file)),
   ];
 }
 
@@ -146,36 +132,21 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
 export function hostedSurfaceActor(
   actor: SeatedActor,
   inputs: {
-    readonly web: SurfaceWeb; readonly conversations: ConversationRecall; readonly vectorStore: VectorStore | null; readonly account?: AccountMemory;
+    readonly web: SurfaceWeb;
+    /** Its store operations: where it holds native tools, theirs, so its programs run the same ones. */
+    readonly stores: ServedStores;
     /** Its `agent.*` of what waits on its owner from its own work; null where none is held for it. */
     readonly ownerWaits: OwnerWaitsHost | null;
     /** What its native `agents` delegates through, where it delegates; its programs delegate through the same. */
     readonly agents?: () => AgentsToolDeps;
-    /** The turn a program's files account into: read as its namespaces are built. */
-    readonly ledgers: () => Pick<TurnLedgers, 'files' | 'context'>;
-    /** Whether a slate still builds, for a write its programs make into one; absent where no slate host builds it. */
-    readonly slateBuild?: FileDeps['slateBuild'];
   },
 ): SurfaceActor {
   const { runtime, stores } = actor;
-  const { account } = inputs;
 
   return {
     executors: () => runtime.executionRouter?.getProviders() ?? [],
     web: inputs.web,
-    memory: () => ({
-      memory: runtime.memory, vectorStore: inputs.vectorStore, facts: stores.facts, actor: actor.handle, conversations: inputs.conversations,
-      ...(account !== undefined && { account }),
-    }),
-    files: () => {
-      const ledgers = inputs.ledgers();
-
-      return {
-        vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory, ledger: ledgers.files, budget: ledgers.context,
-        ...(inputs.slateBuild !== undefined && { slateBuild: inputs.slateBuild }),
-      };
-    },
-    tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+    stores: inputs.stores,
     db: stores.appData,
     agents: inputs.agents ?? null,
     self: null,

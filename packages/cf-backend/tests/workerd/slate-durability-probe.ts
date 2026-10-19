@@ -131,7 +131,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null, asOwner: true } : null }), workspace: this.name,
     });
 
-    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}), {
+    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}, () => ({}), { stores: this.surfaceActor('build').stores }), {
       reach: narrowToolSurface(undefined),
       // As the workspace agent's own programs run.
       namespaces: (executor) => actorNamespaces(this.surfaceActor('build'), SURFACE_POLICY.program, { executor }),

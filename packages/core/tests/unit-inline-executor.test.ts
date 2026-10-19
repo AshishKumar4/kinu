@@ -4,11 +4,11 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { createTestRuntime, fileNamespaceFor } from './helpers';
+import { createTestRuntime, fileNamespaceFor, fileNamespaceOver, fileToolOver } from './helpers';
 import { createInlineExecutor, type InlineExecutorDeps } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
-import { createFileCodemodeProvider, createFileTool, type FileDeps } from '../src/tools/file-operations';
+import { type FileDeps } from '../src/tools/file-operations';
 import { FILE_READ_LINE_CHARS } from '../src/types/file-edits';
 
 type FileToolInput = JsonObject & { readonly op: string };
@@ -23,7 +23,6 @@ import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { namespaceDeclaration, nestedMembers } from '../src/tools/operation-surfaces';
 import { KINU_NODE_MODULE_SOURCE } from '../src/execution/codemode-node-shim';
-
 
 const ToolSummarySchema = v.object({
   name: v.string(),
@@ -304,7 +303,7 @@ describe('workspace.fs.write over the workspace filesystem — what both backend
       },
     };
 
-    const file = toolExecute<FileToolInput, JsonValue>(createFileTool({
+    const file = toolExecute<FileToolInput, JsonValue>(fileToolOver({
       home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: racing, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory,
     }));
 
@@ -367,7 +366,7 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
       sql: rt.storage.sql,
     }), { ledger });
 
-    const file = createFileCodemodeProvider(() => ({
+    const file = fileNamespaceOver(() => ({
       home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory,
     }));
 
@@ -442,7 +441,7 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     }), { ledger });
 
     await exec.tools["fs.text"].execute('shared.md');
-    const fileTool = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
+    const fileTool = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
 
     expect(await execute({ op: 'edit', path: 'shared.md', edits: [{ old_text: 'shared', new_text: 'REPLACED' }] })).toMatchObject({ path: 'shared.md' });
@@ -455,7 +454,7 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     await writeText(rt.storage.vfs, 'unshared.md', 'content');
     const exec = buildExec(rt);
     await exec.tools["fs.text"].execute('unshared.md');
-    const fileTool = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
+    const fileTool = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
     await expect(execute({ op: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
       .rejects.toThrow('has not been read here yet');

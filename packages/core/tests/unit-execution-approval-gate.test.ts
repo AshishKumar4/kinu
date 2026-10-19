@@ -20,8 +20,8 @@ import { workspaceFilePlane } from '../src/vfs/mounts';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { fakeCommandMember, present, toolExecute, workspaceShell } from '@kinu.run/test-utils';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
-import { createWorkspaceBundle } from './helpers';
-import { createFileTool } from '../src/tools/file-operations';
+import { createWorkspaceBundle, fileToolOver } from './helpers';
+
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { JsonObject, JsonValue } from '../src/utils/json';
@@ -323,6 +323,10 @@ describe("a program given as text on the user's machine is put to them; one run 
     'echo x | bun',
     'node "$SCRIPT"',
     'sh -c "$COMMAND"',
+    // `[` is the test command, not a glob: its `-e` is no interpreter's.
+    'while [ ! -e finished ]; do sleep 0.05; done; echo served',
+    '[ -e notes.txt ] && cat notes.txt',
+    'ls *.js',
   ];
 
   const programRule = (request: ShellApprovalRequest): boolean => request.review.hits.some(({ rule }) => rule === 'program-on-user-files');
@@ -561,7 +565,7 @@ describe('a workspace shell over the user\'s mounts', () => {
         },
       });
 
-      const file = toolExecute<JsonObject & { readonly op: string }, JsonValue>(createFileTool({
+      const file = toolExecute<JsonObject & { readonly op: string }, JsonValue>(fileToolOver({
         home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: files,
         ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
       }));

@@ -5,10 +5,10 @@ import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { createMemoryVfs, createTestRuntime, seedFiles, toolExecute } from '@kinu.run/test-utils';
 import { runChat, type ChatEvent } from '../src/index';
-import { createFileTool } from '../src/tools/file-operations';
+
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
-import { createTasksCodemodeProvider } from '../src/tools/tasks-operations';
+import { createTasksCodemodeProvider, serveTasks } from '../src/tools/tasks-operations';
 import { createReportCodemodeProvider, type ReportDeps } from '../src/tools/report-operations';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { initAllTables, initTaskListTable, TaskListStore } from '../src/index';
@@ -16,7 +16,7 @@ import { initAllTables, initTaskListTable, TaskListStore } from '../src/index';
 import type { JsonObject, JsonValue } from '../src/utils/json';
 import type { FactsStore } from '../src/memory/facts';
 import type { PlanEdit, SubmitPlanToolDeps } from '../src/types/plans';
-import { conversationsFor } from './helpers';
+import { conversationsFor, fileToolOver } from './helpers';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 
@@ -59,7 +59,7 @@ function modelCalling(input: JsonObject) {
 
 async function toolResults(input: JsonObject, seed: Record<string, string>) {
   const store = await recordingVfs(seed);
-  const file = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: store.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
+  const file = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: store.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
   const results: Extract<ChatEvent, { type: 'tool-result' }>[] = [];
   const model = modelCalling(input);
 
@@ -115,7 +115,7 @@ describe('a program calling a namespace with a value the tool\'s schema refuses'
     const [task] = tasks.add(['ship it'], null, 1).added;
 
     if (task === undefined) throw new Error('the store added no task');
-    const provider = createTasksCodemodeProvider(tasks, rt.actor.config);
+    const provider = createTasksCodemodeProvider(serveTasks(tasks, rt.actor.config));
 
     const outcome = await provider.tools.update?.execute(task.id, 'finished');
 

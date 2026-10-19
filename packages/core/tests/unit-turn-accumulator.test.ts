@@ -1,4 +1,7 @@
 // TurnAccumulator: per-turn accounting behind `AgentOrchestrator.acc`.
+import type { CodemodeProvider } from '../src/types/codemode';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import * as v from 'valibot';
 import { compactToolCall } from '../src/evolution/tool-call-record';
 import { fnv1a64 } from '../src/utils/fnv1a';
 import { describe, test, expect } from 'bun:test';
@@ -6,37 +9,48 @@ import { Database } from 'bun:sqlite';
 import { standingFileLedger, TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { MissionGovernor } from '../src/mission-budget';
 import type { Usage } from '../src/usage';
-import { makeSql, makeExecRaw, createTestRuntime } from './helpers';
+import { makeSql, makeExecRaw, createTestRuntime, fileNamespaceOver } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { FAILURE_WITHOUT_ERROR } from '../src/events/types';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
 import { createCompletedTurnStore, initCompletedTurnTable } from '../src/evolution/session-window';
-import { createFileCodemodeProvider } from '../src/tools/file-operations';
+
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 
+/** `file.*` as a slate's calls take it: over the runtime's standing ledger, asked for again on every call. */
+function standingFiles(rt: AgentRuntime): CodemodeProvider {
+  return fileNamespaceOver(() => ({
+    vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: standingFileLedger(rt), budget: new TurnContextBudget(),
+  }));
+}
+
 test("a read through an actor's standing ledger authorizes the write after it, however many other files it has read", async () => {
+  const written: string[] = [];
+
   for (const others of [0, 1, 255, 256, 400]) {
     const { rt } = createTestRuntime();
-
-    // As a slate's calls take it: the runtime's standing ledger, asked for again on every call.
-    const file = createFileCodemodeProvider(() => ({
-      vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: standingFileLedger(rt), budget: new TurnContextBudget(),
-    }));
+    const file = standingFiles(rt);
 
     for (let at = 0; at < others; at++) await rt.toolFiles.writeFile(`/home/main/notes/${String(at)}.md`, new TextEncoder().encode(`note ${String(at)}\n`));
     await rt.toolFiles.writeFile('/home/main/plan.md', new TextEncoder().encode('plan\n'));
 
     for (let at = 0; at < others; at++) await file.tools.text?.execute(`/home/main/notes/${String(at)}.md`);
-    expect(await file.tools.text?.execute('/home/main/plan.md')).toBe('plan\n');
-    expect({ others, written: await file.tools.write?.execute('/home/main/plan.md', 'plan, revised\n') }).toMatchObject({ others, written: { action: 'replaced' } });
+    await file.tools.text?.execute('/home/main/plan.md');
+    written.push(v.parse(v.object({ action: v.string() }), await file.tools.write?.execute('/home/main/plan.md', 'plan, revised\n')).action);
   }
 
-  const { rt } = createTestRuntime();
+  expect(written).toEqual(['replaced', 'replaced', 'replaced', 'replaced', 'replaced']);
+});
 
-  // One per runtime, which owns it: it lives as long as the runtime and no longer.
-  expect(standingFileLedger(rt)).toBe(standingFileLedger(rt));
-  expect(standingFileLedger(createTestRuntime().rt)).not.toBe(standingFileLedger(rt));
+test("a runtime owns its standing ledger: a read through another runtime's lets no write here", async () => {
+  const { rt: one } = createTestRuntime();
+  const { rt: other } = createTestRuntime();
+
+  await one.toolFiles.writeFile('/home/main/plan.md', new TextEncoder().encode('plan\n'));
+  await other.toolFiles.writeFile('/home/main/plan.md', new TextEncoder().encode('plan\n'));
+  await standingFiles(one).tools.text?.execute('/home/main/plan.md');
+  expect(await standingFiles(other).tools.write?.execute('/home/main/plan.md', 'blind\n')).toMatchObject({ success: false, reason: 'unread' });
 });
 
 describe('a file ledger keeps what each path last showed', () => {

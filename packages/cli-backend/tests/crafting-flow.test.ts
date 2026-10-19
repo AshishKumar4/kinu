@@ -8,7 +8,7 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import { codemodeSurface, initWorkspaceSchema, narrowToolSurface, toolsInWorkMode, type JsonValue, type RunEvent, type WebSearchProvider } from '@kinu.run/core';
-import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
+import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase, servedStoresOf } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
@@ -140,7 +140,7 @@ test('a crafted tool is made, called, scored out, shared with a node, and still 
 
     // Crafted tools are the workspace's: a swarm node's eval calls main's, and main's scoring retired the same one there.
     const seat = await session.hostNode({ nodeId: 'crafting-node', rootId: 'crafting-swarm', depth: 1 });
-    const nodeEval = present(toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB)(codemodeSurface(seat.actor.runtime, {}, undefined, { ledgers: seat.actor.session.orchestrator.acc.ledgers }), narrowToolSurface(undefined)) }).eval, 'the node\'s eval');
+    const nodeEval = present(toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB)(codemodeSurface(seat.actor.runtime, {}, () => ({}), { stores: servedStoresOf(seat.actor.runtime, seat.actor.stores.conversationSearch, seat.actor.session.orchestrator.acc.ledgers) }), narrowToolSurface(undefined)) }).eval, 'the node\'s eval');
     const node = await toolExecute<{ code: string }, { result: JsonValue }>(nodeEval)({ code: 'return [await tools.doubleIt(21), typeof tools.brokenIt];' });
 
     expect(node.result).toEqual([42, 'undefined']);

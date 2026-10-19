@@ -680,11 +680,15 @@ export {
 
 export {
   buildBuiltinTools,
+  builtinStoreDeps,
+  type BuiltinStoreInputs,
   ownerLaneTools, ownerLaneDeclarations,
   codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
 } from './tools/builtins';
+
+export { serveStores, type ServedStores, type StoreDeps } from './tools/actor-stores';
 
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
 export {

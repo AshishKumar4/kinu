@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test';
 import { isStepCount } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, freshServedStores } from '@kinu.run/test-utils';
 import {
   ExtensionHost, runChat, TurnAccumulator,
   type CodemodeProvider, type ChatEvent,
 } from '@kinu.run/core';
-import { narrowToolSurface, turnLedgers, WORKSPACE_ROOT } from '@kinu.run/core';
+import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 
@@ -27,7 +27,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   });
 
   const tool = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: providers })({
-    cwd: WORKSPACE_ROOT, ledgers: turnLedgers(),
+    cwd: WORKSPACE_ROOT, stores: freshServedStores(),
     native: {}, external: () => ({}), craftedTools: () => [],
   });
 

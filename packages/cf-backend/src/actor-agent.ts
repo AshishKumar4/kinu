@@ -76,7 +76,8 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
-  EvolutionLanes, drainPendingEvents, ActorAdvisor, standingFileLedger, turnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
+  EvolutionLanes, drainPendingEvents, ActorAdvisor, standingFileLedger, turnLedgers, type TurnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
+  builtinStoreDeps, serveStores, type BuiltinStoreInputs, type BuiltinToolDeps, type ServedStores,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -144,7 +145,7 @@ import {
   activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
-  agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
+  toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
@@ -397,21 +398,21 @@ function hostedActorSurface(
     throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
   }
 
-  const files = scoped?.files ?? standingFileLedger(runtime);
+  const deps: BuiltinToolDeps = {
+    rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
+    conversations, ...(account !== undefined && { account }),
+    fileLedger: scoped?.files ?? standingFileLedger(runtime), contextBudget: ledgers.context,
+  };
+
+  // Served once: the slate's `tools.*` and its named namespaces run the same operations.
+  const stores = serveStores(builtinStoreDeps(deps));
 
   const surface = hostedSurfaceActor(actor, {
     web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    conversations, vectorStore: runtime.vectorStore, ...(account !== undefined && { account }), ledgers: () => ({ files, context: ledgers.context }),
-    ownerWaits: reach.ownerWaits,
+    stores, ownerWaits: reach.ownerWaits,
   });
 
-  const native = buildBuiltinTools({
-    rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
-    conversations, ...(account !== undefined && { account }),
-    fileLedger: files, contextBudget: ledgers.context,
-  });
-
-  return { actor: surface, native };
+  return { actor: surface, native: buildBuiltinTools(deps, stores) };
 }
 
 /** What a slate binding call runs with: the mode its actor's role leaves it, and that role's tool reach. */
@@ -2645,7 +2646,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const scope: CodemodeScope = { reach, nested: context.nested, namespaces: (executor) => actorNamespaces(actor, policy, { executor }) };
 
-    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input, scope)) ?? null;
+    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}, () => ({}), { stores: actor.stores }), route.name, route.input, scope)) ?? null;
   }
 
   /** Workspace read models belong to the root; the orchestrator supplies them. */
@@ -2762,29 +2763,18 @@ export abstract class ActorAgent extends Agent<Env> {
    * This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. A share's
    * viewer's calls reach the web without the pass the owner's carry to the workspace's own previews.
    */
-  protected surfaceActor(mode: WorkMode, as: 'owner' | 'viewer' = 'owner'): SurfaceActor {
+  /**
+   * This actor as a caller's namespaces are built over it. `stores`: the store operations a caller's native tools run,
+   * which its programs run too; a caller holding none (a slate) has them served here, over the same inputs.
+   */
+  protected surfaceActor(mode: WorkMode, as: 'owner' | 'viewer' = 'owner', stores?: ServedStores): SurfaceActor {
     return {
       executors: () => this.rt.executionRouter?.getProviders() ?? [],
       web: {
         search: as === 'owner' ? this.ownedModelServices.getWebSearchProvider() : this.ownedModelServices.getViewerWebSearchProvider(), files: this.rt.storage,
         browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
       },
-      memory: () => ({
-        memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
-        account: this.account.memory({ by: 'agent', agent: this.actorHandle().name }),
-      }),
-      files: () => {
-        // The turn the program runs in, else ledgers of the program's own.
-        const turn = this.mainTurn()?.ledgers;
-        const ledgers = turn ?? turnLedgers();
-
-        return {
-          vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
-          ledger: turn?.files ?? standingFileLedger(this.rt), budget: ledgers.context, slateBuild: (slate) => this.slateBuild(slate),
-        };
-      },
-      // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
-      tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
+      stores: stores ?? serveStores(builtinStoreDeps(this.ownStoreInputs())),
       // Plan is decided per table scope at invocation.
       db: this.stores.appData,
       agents: () => this.ownAgentsToolDeps(mode),
@@ -3237,6 +3227,17 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** The workspace agent's own tools in `mode` outside any turn of its, from the one factory every agent's are built by. */
   protected abstract ownTools(mode: WorkMode, scope: string | null): ActorToolsets;
+
+  /** What this agent's builtins read its stores from, as its own tools do: for a caller holding none of them (a slate). */
+  protected abstract ownStoreInputs(): BuiltinStoreInputs;
+
+  /**
+   * The ledgers this agent's own tools account into: its turn's, else, outside any turn, a budget of the call's own
+   * and its runtime's standing file ledger, which every caller outside a turn shares (`standingFileLedger`).
+   */
+  protected ownLedgers(): TurnLedgers {
+    return this.mainTurn()?.ledgers ?? { ...turnLedgers(), files: standingFileLedger(this.rt) };
+  }
 
   /** The workspace agent's delegation in `mode`, as its programs reach it. */
   protected abstract ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps;

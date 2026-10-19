@@ -1,3 +1,4 @@
+import { fileToolOver } from './helpers';
 import { exists, readText as nimbusReadText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** `/context` through the real composite plane, stores, and `file` dispatcher; assertions are on observed bytes and rows. */
 
@@ -16,7 +17,7 @@ import { decodeModelMessageValues, encodeModelMessageValues } from '../src/sessi
 import { composePrepareStep, type StepContextPlane } from '../src/prompting/prepare-step';
 import type { StepPruneBudget } from '../src/prompting/step-prune';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
-import { createFileTool } from '../src/tools/file-operations';
+
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
@@ -182,7 +183,7 @@ function fileTool(vfs: VFS): (input: {
   content?: string;
   edits?: Array<{ old_text: string; new_text: string }>;
 }) => Promise<JsonValue> {
-  return toolExecute<JsonObject, JsonValue>(createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
+  return toolExecute<JsonObject, JsonValue>(fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
 }
 
 async function readText(vfs: VFS, path: string): Promise<string> {

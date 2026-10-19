@@ -200,8 +200,8 @@ const ReadCallSchema = v.object({ op: v.literal('read') });
  * The native `file` tool. A read shows its own window, up to `FILE_READ_MAX_CHARS`, so only its larger cap applies to
  * it; any other result the turn's budget cannot hold is spilled, as any tool result is.
  */
-export function createFileTool(files: FileDeps): Tool {
-  const served = serveFile(() => files);
+/** The native `file` tool over the actor's served file operations; `files` is what its results are clamped into. */
+export function createFileTool(served: Readonly<Record<keyof typeof FILE, Served>>, files: Pick<FileDeps, 'vfs' | 'home' | 'budget'>): Tool {
   // A whole file is a program's to hold; the native tool reads a window of it.
   const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(served).filter((member) => member !== served.text));
   const clamp = { files: { vfs: files.vfs, home: files.home }, budget: files.budget, producer: 'file_read', images: true } as const;
@@ -211,9 +211,9 @@ export function createFileTool(files: FileDeps): Tool {
   return { ...others, execute: async (input, options) => await (v.is(ReadCallSchema, input) ? reads : others).execute?.(input, options) };
 }
 
-/** `file.*` for programs and slates, on the native tool's ledger. */
-export function createFileCodemodeProvider(current: () => FileDeps): CodemodeProvider {
-  return codemodeNamespace('file', 'Your workspace files, read and edited as the file tool does: an edit needs a read first.', Object.values(serveFile(current)));
+/** `file.*` for programs and slates: the operations the native tool runs, on its ledger. */
+export function createFileCodemodeProvider(served: Readonly<Record<keyof typeof FILE, Served>>): CodemodeProvider {
+  return codemodeNamespace('file', 'Your workspace files, read and edited as the file tool does: an edit needs a read first.', Object.values(served));
 }
 
 function fileOps(deps: FileDeps) {
