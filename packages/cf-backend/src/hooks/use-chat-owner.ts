@@ -140,16 +140,18 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    * Whether the server has answered the resume probe the SDK sends as this socket opens. Until it has, the chat is not
    * settled: `useChat` keeps one status for a resume and a send, so a send before the answer has its turn's state ended
    * by it (the Stop of a new chat's opening turn lasted 10 ms, 2026-10-14), and a stream the drop interrupted is still
-   * the SDK's to rejoin. `answered` settles once the answer is committed, after every reader of its frame: the SDK's
-   * own reader may run after this hook's, and the resume it then ends set the status a send had just set (a new chat's
-   * opening showed Send, not Stop, for its whole first wait, 2026-10-18).
+   * the SDK's to rejoin. `answered` is the open socket's wait for it, settled once the answer is committed, after every
+   * reader of its frame: the SDK's own reader may run after this hook's, and the resume it then ends set the status a
+   * send had just set (a new chat's opening showed Send, not Stop, for its whole first wait, 2026-10-18). The answered
+   * socket's own wait is the state, so a close and the next answer committed together still settle the next one.
    */
-  const [probeAnswered, setProbeAnswered] = useState(false);
+  const [answeredProbe, setAnsweredProbe] = useState<ReturnType<typeof Promise.withResolvers<void>> | null>(null);
+  const probeAnswered = answeredProbe !== null;
   const answered = useRef(Promise.withResolvers<void>());
 
   useEffect(() => {
-    if (probeAnswered) answered.current.resolve();
-  }, [probeAnswered]);
+    answeredProbe?.resolve();
+  }, [answeredProbe]);
 
   /** Its agent as the pane draws it: set by each completed load, cleared only by a switch to another chat, so it means
    *  "this chat has last known data". */
@@ -230,7 +232,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       // No close-code list: the SDK classifies terminal closes (`isTerminalCloseEvent`) and
       // publishes `connectionError`.
       setConnectionStatus("disconnected");
-      setProbeAnswered(false);
+      setAnsweredProbe(null);
 
       // The next socket asks anew: a send still waiting on this one's answer waits on that one's.
       const next = Promise.withResolvers<void>();
@@ -255,7 +257,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   // Whoever a frame names: a rename, stream bookkeeping, a provider wait, a turn's error.
   const everyFrame = useCallback((data: SocketFrame) => {
     if (data.type === "cf_agent_stream_resuming" || data.type === "cf_agent_stream_resume_none") {
-      setProbeAnswered(true);
+      setAnsweredProbe(answered.current);
     } else if (data.type === "provider_wait") {
       // Each wait in a chain replaces the one before.
       setProviderWait({
