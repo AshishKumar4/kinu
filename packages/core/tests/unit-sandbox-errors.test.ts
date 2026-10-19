@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { asSchema } from 'ai';
 import { present } from '@kinu.run/test-utils';
 import { explainSandboxError } from '../src/tools/sandbox-errors';
-import { BUILTIN_TOOLS, programDeclarations, TOOL_REACH } from '../src/tools/registry';
+import { BUILTIN_TOOLS, programDeclarations, renderCodemodeDescription, TOOL_REACH } from '../src/tools/registry';
 import { branchableToolCall, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
 import { codemodeFunction, nativeToolFunctions } from '../src/tools/sandbox-contract';
 import { censusToolFailures } from '../src/read-models/tool-failures';
@@ -257,6 +257,28 @@ describe('explainSandboxError', () => {
   test('an undefined identifier that is not a native tool name passes through unchanged', () => {
     const out = explainSandboxError('fooBarBaz is not defined');
     expect(out).toBe('fooBarBaz is not defined');
+  });
+
+  // `tools.<name>(input)` was the one qualified call form the description showed; Luna qualified namespaces with it.
+  test('the eval description calls a namespace member as the global it is, with a member it lists', () => {
+    const description = renderCodemodeDescription([createTasksCodemodeProvider(serveTasks(refusingDouble(), refusingDouble()))]);
+
+    expect(description).toContain('Namespaces are globals of the program, beside `tools` and never inside it: call a member as `tasks.add(...)`.');
+  });
+
+  // Luna wrote 58 of these on staging 5c522f12d; the engine's own words named no call to make instead.
+  test('a namespace member called through tools is told the global to call, as each engine words the miss', () => {
+    expect(explainSandboxError('tools.agent.jobResult is not a function'))
+      .toBe('tools.agent.jobResult is not a function: `tools` holds only native tools and those you save; `agent` is a global of the program: call `agent.jobResult(...)`');
+
+    expect(explainSandboxError("undefined is not an object (evaluating 'tools.tasks.add')")).toContain('`tasks` is a global of the program: call `tasks.add(...)`');
+    expect(explainSandboxError("tools.memory.search is not a function. (In 'tools.memory.search(\"x\")', 'tools.memory.search' is undefined)"))
+      .toContain('call `memory.search(...)`');
+  });
+
+  test('a retired member called through tools is told its successor', () => {
+    expect(explainSandboxError('tools.workspace.readdir is not a function'))
+      .toBe('tools.workspace.readdir is not a function: `tools` holds only native tools and those you save; `workspace` is a global of the program, and workspace.readdir was removed: use workspace.fs.list(path)');
   });
 
   test('an unrelated error message is never touched', () => {

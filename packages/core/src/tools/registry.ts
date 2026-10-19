@@ -376,10 +376,15 @@ export function renderCodemodeDescription(providers: readonly DescribedProvider[
     return provider.declarations === undefined && provider.types !== undefined && provider.types !== '' ? [`- ${provider.name}:${purpose}`] : [];
   });
 
+  // Members are listed unqualified, and `tools.<name>` was the one qualified form shown, so models wrote
+  // `tools.workspace.exec` (Luna, staging 5c522f12d): one member of a listed namespace shows the call as written.
+  const shown = providers.flatMap((provider) => reachedDeclarations(provider).slice(0, 1).map(([member]) => `\`${provider.name}.${member}(...)\``))[0];
+
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
-    'Namespaces, each with its members\' call forms: positional arguments, then one object of options. '
+    ...(shown === undefined ? [] : [`Namespaces are globals of the program, beside \`tools\` and never inside it: call a member as ${shown}.`]),
+    'Each namespace with its members\' call forms: positional arguments, then one object of options. '
       + 'Any call can resolve to a `Refusal`, `{ success: false, reason, error }`.',
     ...listed,
   ].join('\n');
