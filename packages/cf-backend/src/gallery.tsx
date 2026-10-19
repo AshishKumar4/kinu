@@ -135,14 +135,14 @@ const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.searc
 
 /**
  * `&pcdesktop=ready|setup|permission|update`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
- * `setup` poses a Mac whose Screen Sharing is off, as the daemon names the step.
+ * `setup` poses a Mac with no compiler for its capture helper, as the daemon names the step.
  */
 const SHELL_PC_DESKTOP: UserDevice["desktop"] = (() => {
   const state = SHELL_PC === null ? null : new URLSearchParams(location.search).get("pcdesktop");
 
   if (state === "ready") return { state, width: 1512, height: 982 };
 
-  if (state === "setup") return { state, detail: "Turn on Screen Sharing in System Settings › General › Sharing, then open this tab again." };
+  if (state === "setup") return { state, detail: "Install the Command Line Tools (xcode-select --install), then open this tab again." };
 
   return state === "permission" || state === "update" ? { state } : { state: "none" };
 })();

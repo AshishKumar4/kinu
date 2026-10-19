@@ -16,8 +16,8 @@ A PC the workspace holds is a machine in the Environment column, like the comput
 - **Desktop.** A PC that can share its screen gets a Desktop tab beside its sessions. The tab shows the PC's screen in
   the same client as the computer's, at the PC's own size, and can expand over the workspace the same way. A PC that
   isn't ready yet shows, where its screen would be, the one step on the PC that opens it:
-  - **setup**: something on the PC is off. The daemon names it, for example "Turn on Screen Sharing in System Settings ›
-    General › Sharing".
+  - **setup**: something on the PC is missing. The daemon names it, for example "Install the Command Line Tools:
+    xcode-select --install".
   - **permission**: the PC is showing its own prompt, and the screen opens once someone at the PC allows it.
   - **update**: the daemon is older than this feature. `kinu update` brings it.
   - A PC with no screen to share (no graphical session) has no Desktop tab at all.
@@ -30,7 +30,8 @@ The device reports which of these applies when it connects, and again whenever i
 There is one stream, RFB, the protocol the Environment's desktop client already speaks (`public/kasmvnc`). The browser
 opens `/api/workspaces/<workspace>/devices/<device>/desktop` (`desktopClientUrl(at, workspace, device)`). It is gated as
 the computer's desktop is: the owner's session plus this workspace's grant on the device. The owner's UserDO relays the
-stream over the device tunnel to the daemon, which connects to the PC's screen server on loopback only.
+stream over the device tunnel to the daemon, which serves RFB itself. No screen server listens on the PC, on loopback
+or anywhere else.
 
 Over the tunnel:
 - `screenOpen` is a new method (JSON, as every method is): the hub opens a stream and numbers it, and the daemon answers
@@ -51,11 +52,16 @@ binary frame: the hub opens a screen only on a daemon whose `hello` reports one,
 
 Where the PC's screen server comes from depends on the system:
 
-- **macOS: the system's own Screen Sharing**, an RFB server on 127.0.0.1:5900. The daemon handles its authentication
-  itself, with the VNC password the owner sets for it in System Settings › General › Sharing › Screen Sharing ("VNC
-  viewers may control screen with password"). `kinu desktop share` stores that password at 0600 beside `device.json`.
-  The browser side of the tunnel needs no authentication and never sees the password. **setup** means Screen Sharing is
-  off or no password is set.
+- **macOS: a small screen helper the daemon runs, speaking to it over stdio.** It captures with ScreenCaptureKit and
+  drives input with `CGEventPost`, and the daemon turns that into RFB as it does on Linux.
+  - It ships as Swift source in the release. `kinu desktop share` compiles it with `swiftc` into
+    `~/.kinu/desktop/kinu-screen`, a path that stays put across daemon updates, so macOS keeps the permissions it gave.
+  - **setup** means there is no `swiftc` (the Command Line Tools: `xcode-select --install`).
+  - **permission** is macOS's own Screen Recording and Accessibility prompts. They attach to the helper, and a rebuilt
+    helper asks again.
+  - Rejected: relaying the system's Screen Sharing. It would make Kinu hold a VNC password for the Mac, and it leaves a
+    VNC server listening on TCP 5900. The Mac proof (`packages/pc-agent/scripts/mac-held-proof.sh`) measures what that
+    server binds to.
 - **Linux: the daemon serves RFB itself, through the desktop portal.** The system's own server can't be relayed:
   GNOME 50.1's gnome-remote-desktop speaks RDP only. Measured on the workstation: `grdctl status` lists RDP and no VNC.
   The usual VNC servers aren't installed by default either (x11vnc and wayvnc are absent there).
@@ -84,26 +90,27 @@ Each has a recommendation, which is the default unless the owner says otherwise.
 1. **The screen escapes the sandbox.** Typing on a desktop drives the whole machine, whatever roots the workspace was
    given. Proposed:
    - A PC offers its Desktop only after the owner turns sharing on at that PC (`kinu desktop share`), on top of the
-     system's own consent (Screen Sharing on, or the portal's prompt), and only to a workspace that holds the PC.
-   - The PC shows that it is being viewed: the system's screen-sharing indicator in the menu bar or top bar.
+     system's own consent (macOS's Screen Recording prompt, or the portal's), and only to a workspace that holds the PC.
+   - The PC shows that it is being viewed: the system's screen-recording indicator in the menu bar or top bar.
    - Alternative: also ask per workspace, as a grant separate from its file and command access.
 2. **Linux source.** Recommended: the daemon serves RFB from the portal. Alternatives:
    - Require wayvnc, krfb or x11vnc installed. That's a setup step for most owners, and none of them is in the
      workstation's default install.
    - Add an RDP client to the browser for GNOME's own server. That means a second client and protocol in the
      Environment.
-3. **macOS authentication.** Recommended: a VNC password set for Kinu. Rejected: Apple's account-password
-   authentication, because the daemon would then hold the owner's login password.
+3. **macOS source.** Recommended: the helper above, so neither a password nor a listener exists. Alternative: relay the
+   system's Screen Sharing with a VNC password set for Kinu. That needs no compiler on the Mac, but Kinu holds the
+   password and port 5900 stays open while sharing is on.
 
 ## Pieces, in order
 
 1. Protocol and relay: the device reports `desktop` in `hello`; `screenOpen`, `screenClose` and the binary data frame;
-   the screen hub; the route. Tested against a stub daemon that serves a fixed RFB framebuffer.
-2. macOS relay in the daemon.
+   the screen hub; the route; `kinu desktop share`. Tested against a stub daemon that serves a fixed RFB framebuffer.
+2. Named PC sessions in the daemon, and the strip reading them.
 3. Linux portal server in the daemon.
-4. Named PC sessions in the daemon, and the strip reading them.
+4. The macOS helper, and its build and a measured run in the Mac proof.
 
-Steps 2 to 4 ship in a daemon release. A PC on an older daemon shows **update** and keeps its one shell.
+Each ships in a daemon release. A PC on an older daemon shows **update** and keeps its one shell.
 
 ## Measured, and not
 
@@ -116,4 +123,5 @@ Steps 2 to 4 ship in a daemon release. A PC on an older daemon shows **update** 
   - The portal path end to end. The workstation has no graphical session running now: its portal calls time out, and
     a screen share on the owner's own desktop needs them present to allow it.
   - Frame rate and input latency over the tunnel.
-  - All of macOS. Armada has no Mac, and the macOS proof for L111 is waiting on the same question to the owner.
+  - All of macOS: the helper's build, its permissions, and what Screen Sharing's listener binds to. Armada has no Mac;
+    the Mac proof measures them on the owner's.
