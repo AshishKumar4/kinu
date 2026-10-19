@@ -1,9 +1,10 @@
 import { Effect } from 'effect';
 import {
-  DEVICE_PTY_MAX_AXIS, nanoid, type UserCaller, DeviceTerminalHub, DEVICE_FRAMES, DEVICE_METHOD,
+  DEVICE_PTY_MAX_AXIS, nanoid, type UserCaller, DeviceTerminalHub, DEVICE_FRAMES, DEVICE_METHOD, NO_DEVICE_CONNECTED,
 } from '@kinu.run/core';
-import { attempt, attemptInItsWords, authoredRefusal, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
+import { attempt, attemptInItsWords, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
+import type { SessionRecord, TerminalSession } from '@kinu.run/devbox';
 import type { UserDevices } from './devices';
 import type { UserObjectHost } from './user-host';
 
@@ -15,6 +16,16 @@ const DeviceTerminalFrameSchema = v.variant('type', [
 ]);
 
 const TERMINAL_DEFAULT_AXIS = { cols: 80, rows: 24 } as const;
+
+const TERMINAL_RECONNECTED = 'the PC reconnected; open the terminal again';
+
+/** A session as the daemon keeps it (packages/pc-agent/src/daemon/terminals.js): its id, name and folder. */
+const DeviceSessionRecordSchema = v.object({ id: v.string(), name: v.string(), cwd: v.nullable(v.string()) });
+
+/** A session as the daemon lists it: whether a shell runs in it now, and what that shell runs. */
+const DeviceSessionSchema = v.object({
+  id: v.string(), name: v.string(), cwd: v.string(), open: v.boolean(), running: v.nullable(v.string()),
+});
 
 /** Control round-trip timeout, not the terminal's life; also the default for every other
  *  control call on this socket. */
@@ -51,13 +62,13 @@ export class UserTerminals {
       return new Response('Expected WebSocket', { status: 426 });
     }
 
-    const session = url.searchParams.get('session') ?? '';
+    const token = url.searchParams.get('session') ?? '';
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     let attached: { device: string; workspace: string };
 
     try {
-      attached = this._terminals.attach(session, server);
+      attached = this._terminals.attach(token, server);
     } catch (cause) {
       // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
       return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause }) }), { status: 409 });
@@ -69,32 +80,34 @@ export class UserTerminals {
     return new Response(null, init);
   }
 
-  /** Returns true if the frame was a terminal frame (so skip the RPC correlator); exit closes the pane. */
-  handleTerminalFrame(data: string): boolean {
+  /** Returns true if the frame was a terminal frame (so skip the RPC correlator); exit closes the pane. A device's frame
+   *  reaches only its own sessions' panes. */
+  handleTerminalFrame(deviceId: string, data: string): boolean {
     const frame = v.safeParse(DeviceTerminalFrameSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
     if (!frame.success) return false;
 
     if ('data' in frame.output) {
-      this._terminals.toPane(frame.output.session, bytesFromBase64(frame.output.data));
+      this._terminals.toPane(deviceId, frame.output.session, bytesFromBase64(frame.output.data));
 
       return true;
     }
 
-    this._terminals.paneExit(frame.output.session, frame.output.exitCode);
+    this._terminals.paneExit(deviceId, frame.output.session, frame.output.exitCode);
 
     return true;
   }
 
   /**
-   * Open a terminal on the owner's machine for one workspace; returns the session its pane attaches to.
-   * Goes through `deviceRpc` (tier, per-device grant, Sandbox switch); there is no other way to open one.
+   * Open the workspace's named session `session` on the owner's machine (its first when none is named), resuming a shell
+   * that runs detached; returns the token its pane attaches with. Goes through `deviceRpc` (tier, per-device grant,
+   * Sandbox switch); there is no other way to open one.
    */
   async openDeviceTerminal(
     caller: UserCaller,
     agentName: string,
     window: { cols: number; rows: number },
-    deviceId?: string,
+    target: { device?: string; session?: string },
   ): Promise<{ session: string }> {
     // Gate first: a refused caller must not learn whether a machine is connected.
     await this.host.requireTier(caller, 'device.rpc');
@@ -104,29 +117,91 @@ export class UserTerminals {
         Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
       );
 
-      const session = `pty-${nanoid(16)}`;
+      const token = `pty-${nanoid(16)}`;
       // Resolved before minting: several live devices and none named is an error.
-      const target = yield* this.host.devices.resolveDeviceForCall(deviceId, undefined);
+      const device = yield* this.host.devices.resolveDeviceForCall(target.device, undefined);
+      // The first session's id is the daemon's; a pane that names none learns it from the open's answer.
+      const named = target.session ?? (yield* this.firstSession(caller, agentName, device));
 
-      // Known before the machine is asked, so what its shell draws first waits for the pane.
-      this._terminals.register(session, target, agentName);
+      // Known before the machine is asked, so what its shell draws first, or a resumed one kept, waits for the pane.
+      this._terminals.register(token, { session: named, device, workspace: agentName });
       yield* attemptInItsWords('io', () => this.host.devices.deviceRpc(
         caller,
         DEVICE_METHOD.ptyOpen,
-        [bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows)],
-        { agentName, deviceId: target, requestId: session, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
-      )).pipe(Effect.tapError(() => Effect.sync(() => this._terminals.forget(session))));
+        [bounded(window.cols, TERMINAL_DEFAULT_AXIS.cols), bounded(window.rows, TERMINAL_DEFAULT_AXIS.rows), named],
+        { agentName, deviceId: device, requestId: token, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
+      )).pipe(Effect.tapError(() => Effect.sync(() => this._terminals.forget(token))));
 
-      // Unattached sessions are swept on the next open: this object's one alarm belongs to other work.
-      for (const stale of this._terminals.expired()) yield* this.closeDeviceTerminal(stale.session, stale.device);
+      // Tokens no pane spent are swept on the next open, their sessions detached: this object's one alarm belongs to
+      // other work.
+      for (const stale of this._terminals.expired()) yield* this.closeDeviceTerminal(stale.device, stale.session);
 
-      return { session };
+      return { session: token };
     }));
   }
 
-  closeDeviceTerminal(session: string, device: string): Effect.Effect<void> {
-    return attempt({ doing: 'close the device terminal', otherwise: 'unavailable' }, () => this._terminals.paneClosed(session, device)).pipe(
+  /** A device socket served its HELLO: panes open on the device were attached through an earlier socket, whose daemon
+   *  detached their sessions with it. Each closes, and opens again on this one. */
+  deviceConnected(deviceId: string): void {
+    this._terminals.endDevice(deviceId, TERMINAL_RECONNECTED);
+  }
+
+  /** A device socket closed. A replacement already live owns the device's panes now, and a late close from the socket it
+   *  replaced leaves them be. */
+  deviceClosed(deviceId: string): void {
+    if (this.host.devices._devices.liveSocket(deviceId) === null) this._terminals.endDevice(deviceId, NO_DEVICE_CONNECTED);
+  }
+
+  /** The pane closed: its session keeps running on the machine, detached (1014-t). */
+  closeDeviceTerminal(device: string, session: string): Effect.Effect<void> {
+    return attempt({ doing: 'detach the device terminal', otherwise: 'unavailable' }, async () => { this._terminals.paneClosed(device, session); }).pipe(
       Effect.catch((failure) => Effect.sync(() => diagnostics.failure('device.terminal_close_unsent', failure, { device }))),
     );
   }
+
+  /** The workspace's sessions on `deviceId`, as the strip reads the computer's (D90). */
+  async listDeviceSessions(caller: UserCaller, agentName: string, deviceId: string): Promise<TerminalSession[]> {
+    const listed = await this.sessionCall({ caller, agentName, deviceId, method: DEVICE_METHOD.ptyList, params: [] }, v.array(DeviceSessionSchema));
+
+    return listed.map((session) => ({ ...session, last: null, ports: [], branch: null, needsInput: false }));
+  }
+
+  async openDeviceSession(caller: UserCaller, agentName: string, deviceId: string, name?: string): Promise<SessionRecord> {
+    const params = name === undefined ? [] : [name];
+
+    return asRecord(await this.sessionCall({ caller, agentName, deviceId, method: DEVICE_METHOD.ptyCreate, params }, DeviceSessionRecordSchema));
+  }
+
+  async renameDeviceSession(caller: UserCaller, agentName: string, deviceId: string, request: { id: string; name: string }): Promise<SessionRecord> {
+    const params = [request.id, request.name];
+
+    return asRecord(await this.sessionCall({ caller, agentName, deviceId, method: DEVICE_METHOD.ptyRename, params }, DeviceSessionRecordSchema));
+  }
+
+  async closeDeviceSession(caller: UserCaller, agentName: string, deviceId: string, id: string): Promise<void> {
+    await this.sessionCall({ caller, agentName, deviceId, method: DEVICE_METHOD.ptyClose, params: [id] }, v.null());
+  }
+
+  private firstSession(caller: UserCaller, agentName: string, deviceId: string): Effect.Effect<string, KinuError> {
+    return attemptInItsWords('io', () => this.listDeviceSessions(caller, agentName, deviceId)).pipe(Effect.flatMap(([first]) => (
+      first === undefined ? Effect.fail(new KinuError('missing', 'this machine lists no terminal session for the workspace')) : Effect.succeed(first.id)
+    )));
+  }
+
+  /** A session call is a device call for this workspace: gated as a terminal's open is, its answer the daemon's JSON as
+   *  `schema` reads it. */
+  private async sessionCall<T>(
+    call: { caller: UserCaller; agentName: string; deviceId: string; method: string; params: string[] },
+    schema: v.GenericSchema<unknown, T>,
+  ): Promise<T> {
+    const { caller, agentName, deviceId, method, params } = call;
+    const answer = await this.host.devices.deviceRpc(caller, method, params, { agentName, deviceId, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS });
+
+    return v.parse(schema, answer === undefined ? null : JSON.parse(answer));
+  }
+}
+
+/** A daemon's record as the strip's: a session that never opened has no folder yet. */
+function asRecord(record: v.InferOutput<typeof DeviceSessionRecordSchema>): SessionRecord {
+  return { id: record.id, name: record.name, cwd: record.cwd ?? '' };
 }

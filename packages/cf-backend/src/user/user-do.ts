@@ -11,7 +11,7 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -813,8 +813,24 @@ export class UserDO extends Agent<Env> {
     return this.chatgpt.signOutChatGpt(caller, revoke);
   }
 
-  openDeviceTerminal(caller: UserCaller, agentName: string, window: { cols: number; rows: number }, deviceId?: string): ReturnType<UserTerminals['openDeviceTerminal']> {
-    return this.terminals.openDeviceTerminal(caller, agentName, window, deviceId);
+  openDeviceTerminal(caller: UserCaller, agentName: string, window: { cols: number; rows: number }, target: { device?: string; session?: string }): ReturnType<UserTerminals['openDeviceTerminal']> {
+    return this.terminals.openDeviceTerminal(caller, agentName, window, target);
+  }
+
+  listDeviceSessions(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserTerminals['listDeviceSessions']> {
+    return this.terminals.listDeviceSessions(caller, agentName, deviceId);
+  }
+
+  openDeviceSession(caller: UserCaller, agentName: string, deviceId: string, name?: string): ReturnType<UserTerminals['openDeviceSession']> {
+    return this.terminals.openDeviceSession(caller, agentName, deviceId, name);
+  }
+
+  renameDeviceSession(caller: UserCaller, agentName: string, deviceId: string, request: { id: string; name: string }): ReturnType<UserTerminals['renameDeviceSession']> {
+    return this.terminals.renameDeviceSession(caller, agentName, deviceId, request);
+  }
+
+  closeDeviceSession(caller: UserCaller, agentName: string, deviceId: string, id: string): ReturnType<UserTerminals['closeDeviceSession']> {
+    return this.terminals.closeDeviceSession(caller, agentName, deviceId, id);
   }
 
   openDeviceScreen(caller: UserCaller, agentName: string, deviceId?: string): ReturnType<UserScreens['openDeviceScreen']> {
@@ -1092,7 +1108,7 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      this.terminals._terminals.fromPane(terminal.session, terminal.device, message);
+      this.terminals._terminals.fromPane(terminal, message);
 
       return;
     }
@@ -1165,6 +1181,7 @@ export class UserDO extends Agent<Env> {
       }
 
       this.devices.recordDeviceHello(deviceId, hello.output);
+      this.terminals.deviceConnected(deviceId);
       this.screens.deviceConnected(deviceId);
       // Sent before the first wait, in the turn the HELLO arrived on its socket.
       const frame = this.devices.deviceUpdateFrame(deviceId, hello.output);
@@ -1198,7 +1215,7 @@ export class UserDO extends Agent<Env> {
     }
 
     // Terminal frames have no request id; the RPC correlator would silently drop them.
-    if (this.terminals.handleTerminalFrame(data)) return;
+    if (this.terminals.handleTerminalFrame(deviceId, data)) return;
 
     if (this.screens.handleScreenFrame(deviceId, data)) return;
     this.devices._devices.handleMessage(deviceId, data);
@@ -1210,7 +1227,7 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      return settle(this.terminals.closeDeviceTerminal(terminal.session, terminal.device));
+      return settle(this.terminals.closeDeviceTerminal(terminal.device, terminal.session));
     }
 
     const viewer = screenFromSocket(ws);
@@ -1222,11 +1239,8 @@ export class UserDO extends Agent<Env> {
     if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
     this.devices._devices.handleClose(deviceId, ws);
 
-    // The daemon hangs up its shells when the socket drops, so tell the panes.
-    for (const session of this.terminals._terminals.panesForDevice(deviceId)) {
-      this.terminals._terminals.endPane(session, NO_DEVICE_CONNECTED);
-    }
-
+    // The daemon detaches its shells when the socket drops, so the panes close; each opens again on the next socket.
+    this.terminals.deviceClosed(deviceId);
     this.screens.deviceClosed(deviceId);
 
     await this.devices.devicesMoved();

@@ -38,7 +38,9 @@ const DEVICE_NAME_MAX_LENGTH = 80;
 const MINTED_DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
 
 function deviceCallFrame(deviceId: string, workspace: string | null, frameSandbox: JsonObject | null, opts: Parameters<UserDevices['deviceRpc']>[3]): NonNullable<Parameters<DeviceTunnel['rpc']>[2]> {
-  const rpcOptions: NonNullable<Parameters<DeviceTunnel['rpc']>[2]> = { extra: { deviceId }, ...watchedOutput(opts) };
+  // The proven workspace: what the daemon keys a workspace's terminal sessions on (1014-t), never a claimed name.
+  const extra: JsonObject = workspace === null ? { deviceId } : { deviceId, workspace };
+  const rpcOptions: NonNullable<Parameters<DeviceTunnel['rpc']>[2]> = { extra, ...watchedOutput(opts) };
 
   if (opts?.checkpoint) {
     rpcOptions.extra = {

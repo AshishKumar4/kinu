@@ -35,7 +35,7 @@ export class DeviceOutputHubProbeDO extends DurableObject<Cloudflare.Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal !== null) {
-      this.terminals.fromPane(terminal.session, terminal.device, message);
+      this.terminals.fromPane(terminal, message);
 
       return;
     }
@@ -50,16 +50,17 @@ export class DeviceOutputHubProbeDO extends DurableObject<Cloudflare.Env> {
     return this.devices.hello(DEVICE, DEVICE_PROTOCOL_VERSION, features);
   }
 
+  /** A pane attaches to `session` with the session's own name as its token: one name per pane in this probe. */
   registerTerminal(session: string): void {
-    this.terminals.register(session, DEVICE, 'workspace-probe');
+    this.terminals.register(session, { session, device: DEVICE, workspace: 'workspace-probe' });
   }
 
   terminalOutput(session: string, bytes: Uint8Array): void {
-    this.terminals.toPane(session, bytes);
+    this.terminals.toPane(DEVICE, session, bytes);
   }
 
   terminalExit(session: string, exitCode: number): void {
-    this.terminals.paneExit(session, exitCode);
+    this.terminals.paneExit(DEVICE, session, exitCode);
   }
 
   /** The call as `UserDO.deviceRpc` frames it; with `losses`, it answers once that many outputs were logged as unsent. */

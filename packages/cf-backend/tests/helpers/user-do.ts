@@ -234,6 +234,8 @@ export interface DeviceFrame {
   device?: string;
   /** The id the hub stamped on the frame. */
   deviceId?: string;
+  /** The proven workspace the hub stamped on the frame, which the daemon keys a workspace's terminal sessions on. */
+  workspace?: string;
   /** Sandbox frame the daemon enforces; rides beside id/method/params because `DeviceTunnel` spreads `extra`. */
   sandbox?: JsonValue;
   /** The checkpoint hint the daemon snapshots under, on a mutating frame. */
@@ -249,6 +251,7 @@ const DeviceFrameSchema = v.object({
   sandbox: v.optional(JsonValueSchema),
   checkpoint: v.optional(JsonValueSchema),
   deviceId: v.optional(v.string()),
+  workspace: v.optional(v.string()),
   output: v.optional(v.boolean()),
 });
 

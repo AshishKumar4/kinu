@@ -185,8 +185,20 @@ function redactSecrets(text) {
   }).join(`
 `);
 }
-var CF_INTERNAL_REFERENCE, SECRET_PATTERNS, REDACTION_ONLY_PATTERNS, REDACTION_PASSES;
+var AUTHORIZATION, CREDENTIALED_URL, PROVIDER_CREDENTIALS, CF_INTERNAL_REFERENCE, SECRET_PATTERNS, REDACTION_ONLY_PATTERNS, CREDENTIAL_VALUE_IDS, REDACTION_PASSES;
 var init_secret_patterns = __esm(() => {
+  AUTHORIZATION = { kind: "authorization" };
+  CREDENTIALED_URL = /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]{8,}@/g;
+  PROVIDER_CREDENTIALS = [
+    { pattern: "[sr]k_live_[A-Za-z0-9]{16,}", provider: { name: "Stripe", variable: "STRIPE_SECRET_KEY", hosts: ["api.stripe.com"], position: AUTHORIZATION } },
+    { pattern: "gh[pousr]_[A-Za-z0-9]{36,}", provider: { name: "GitHub", variable: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], position: AUTHORIZATION } },
+    { pattern: "github_pat_[A-Za-z0-9_]{40,}", provider: { name: "GitHub", variable: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], position: AUTHORIZATION } },
+    { pattern: "xox[baprs]-[A-Za-z0-9-]{10,}", provider: { name: "Slack", variable: "SLACK_TOKEN", hosts: ["slack.com"], position: AUTHORIZATION } },
+    { pattern: "AIza[0-9A-Za-z_-]{35}", provider: { name: "Google", variable: "GOOGLE_API_KEY", hosts: ["*.googleapis.com"], position: { kind: "query", name: "key" } } },
+    { pattern: "npm_[A-Za-z0-9]{36}", provider: { name: "npm", variable: "NPM_TOKEN", hosts: ["registry.npmjs.org"], position: AUTHORIZATION } },
+    { pattern: "sk-ant-[A-Za-z0-9-]{20,}", provider: { name: "Anthropic", variable: "ANTHROPIC_API_KEY", hosts: ["api.anthropic.com"], position: { kind: "header", name: "x-api-key" } } },
+    { pattern: "sk-proj-[A-Za-z0-9_-]{20,}", provider: { name: "OpenAI", variable: "OPENAI_API_KEY", hosts: ["api.openai.com"], position: AUTHORIZATION } }
+  ];
   CF_INTERNAL_REFERENCE = new RegExp([
     "wiki\\.cfdata\\.org",
     "cloudflare" + "/ew\\b",
@@ -198,7 +210,8 @@ var init_secret_patterns = __esm(() => {
     {
       id: "aws-access-key",
       regex: /AKIA[A-Z0-9]{16}/g,
-      message: "AWS access key id"
+      message: "AWS access key id",
+      provider: { name: "AWS", variable: "AWS_ACCESS_KEY_ID", hosts: ["*.amazonaws.com"], position: AUTHORIZATION }
     },
     {
       id: "private-key",
@@ -208,6 +221,7 @@ var init_secret_patterns = __esm(() => {
     {
       id: "jwt",
       regex: /eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\./g,
+      whole: /eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+/g,
       message: "JWT with a payload"
     },
     {
@@ -220,7 +234,8 @@ var init_secret_patterns = __esm(() => {
       id: "cloudflare-user-token",
       regex: /\bcfut_[A-Za-z0-9_-]{48}\b/g,
       benign: /^\s*cfut_<your-[A-Za-z0-9-]+>\s*$/,
-      message: "Cloudflare user API token (revoke and replace it immediately)"
+      message: "Cloudflare user API token (revoke and replace it immediately)",
+      provider: { name: "Cloudflare", variable: "CLOUDFLARE_API_TOKEN", hosts: ["api.cloudflare.com"], position: AUTHORIZATION }
     },
     {
       id: "secret-assignment",
@@ -236,18 +251,19 @@ var init_secret_patterns = __esm(() => {
     {
       id: "kinu-token",
       regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/g,
+      whole: /\bp(?:ta|tc|dt)_[0-9a-f]{32}_[A-Za-z0-9_-]{20,}/g,
       benign: /<your-|\bp(?:ta|tc|dt)_(?:\.\.\.|\u2026)/,
       message: "Kinu access/CLI/device token (rotate it: a printed-once value that reached a file is compromised)"
     },
     {
       id: "provider-secret",
-      regex: /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/g,
+      regex: new RegExp(`\\b(?:${PROVIDER_CREDENTIALS.map(({ pattern }) => pattern).join("|")})`, "g"),
       benign: /<your-|example|placeholder/,
       message: "third-party provider credential, if this is a deliberate test fixture, ASSEMBLE it at runtime rather than declaring it in .secretscanignore: a declaration satisfies THIS scan, but GitHub push protection reads the source text and will block the push anyway"
     },
     {
       id: "credentialed-url",
-      regex: /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]{8,}@/g,
+      regex: CREDENTIALED_URL,
       benign: /<your-|localhost/,
       message: "connection string with embedded credentials"
     }
@@ -261,7 +277,8 @@ var init_secret_patterns = __esm(() => {
     {
       id: "openai-key",
       regex: /\bsk-[A-Za-z0-9]{20,}\b/g,
-      message: "OpenAI-shaped API key"
+      message: "OpenAI-shaped API key",
+      provider: { name: "OpenAI", variable: "OPENAI_API_KEY", hosts: ["api.openai.com"], position: AUTHORIZATION }
     },
     {
       id: "bearer-token",
@@ -275,6 +292,7 @@ var init_secret_patterns = __esm(() => {
       mask: "$1<redacted>$2"
     }
   ];
+  CREDENTIAL_VALUE_IDS = new Set(["aws-access-key", "jwt", "cloudflare-user-token", "kinu-token", "provider-secret", "openai-key"]);
   REDACTION_PASSES = [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS].map((pattern) => ({
     pattern,
     one: new RegExp(pattern.regex.source, pattern.regex.flags.replace("g", ""))

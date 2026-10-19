@@ -78,6 +78,11 @@ export const AGENT_RPC_ACCESS = {
   openComputerSession: 'interactive',
   renameComputerSession: 'interactive',
   closeComputerSession: 'interactive',
+  // A PC's sessions (1014-t) are the owner's too: their shells run on the owner's machine.
+  listDeviceSessions: 'interactive',
+  openDeviceSession: 'interactive',
+  renameDeviceSession: 'interactive',
+  closeDeviceSession: 'interactive',
   planFileRestore: 'interactive',
   clearBackgroundJobs: 'interactive',
   createTimerTrigger: 'interactive',

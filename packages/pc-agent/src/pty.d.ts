@@ -17,6 +17,8 @@ export interface ProcStat {
   readonly cpuTicks: number;
   readonly tasks: number;
   readonly startTicks: string;
+  /** The process group in the foreground of its controlling terminal (`tpgid`); 0 or -1 with none. */
+  readonly foreground: number;
 }
 
 export function procEntryGone(error: Error): boolean;

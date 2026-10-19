@@ -81,6 +81,100 @@ var require_held = __commonJS(function(exports2, module2) {
         list: (read) => read(fs.readdirSync(at, { withFileTypes: true }).map((entry) => listed(entry.name, entry, () => fs.lstatSync(path.join(at, entry.name), { throwIfNoEntry: false }))))
       };
     }
+    const DIRENT = process.platform === "darwin" ? {
+      library: "/usr/lib/libSystem.B.dylib",
+      fdopendir: process.arch === "x64" ? "fdopendir$INODE64" : "fdopendir",
+      readdir: process.arch === "x64" ? "readdir$INODE64" : "readdir",
+      errno: "__error",
+      type: 20,
+      name: 21
+    } : { library: "libc.so.6", fdopendir: "fdopendir", readdir: "readdir64", errno: "__errno_location", type: 18, name: 19 };
+    const DT_UNKNOWN = 0;
+    const DT_DIR = 4;
+    const DT_LNK = 10;
+    let libcDirent = null;
+    function direntCalls() {
+      if (libcDirent !== null)
+        return libcDirent;
+      const { dlopen, read, toArrayBuffer, CString } = load("bun:ffi");
+      const { symbols } = dlopen(DIRENT.library, {
+        dup: { args: ["i32"], returns: "i32" },
+        close: { args: ["i32"], returns: "i32" },
+        [DIRENT.fdopendir]: { args: ["i32"], returns: "ptr" },
+        [DIRENT.readdir]: { args: ["ptr"], returns: "ptr" },
+        closedir: { args: ["ptr"], returns: "i32" },
+        [DIRENT.errno]: { args: [], returns: "ptr" }
+      });
+      libcDirent = {
+        dup: (fd) => symbols.dup(fd),
+        close: (fd) => symbols.close(fd),
+        fdopendir: (fd) => symbols[DIRENT.fdopendir](fd),
+        readdir: (dir) => symbols[DIRENT.readdir](dir),
+        closedir: (dir) => symbols.closedir(dir),
+        errno: () => new Int32Array(toArrayBuffer(symbols[DIRENT.errno](), 0, 4)),
+        typeOf: (entry) => read.u8(entry, DIRENT.type),
+        nameOf: (entry) => new CString(entry, DIRENT.name).toString()
+      };
+      return libcDirent;
+    }
+    function libcFailure(errno, syscall, shown) {
+      const code = util.getSystemErrorName(-errno);
+      return Object.assign(new Error(`${code}: ${util.getSystemErrorMessage(-errno)}, ${syscall} '${shown}'`), { errno: -errno, code, syscall, path: shown });
+    }
+    function namesIn(held, shown) {
+      let calls;
+      try {
+        calls = direntCalls();
+      } catch (cause) {
+        throw Object.assign(new Error(`this device cannot list '${shown}' through the directory it checked: ${cause.message}`), { code: "ENOTSUP", cause });
+      }
+      const errno = calls.errno();
+      const copy = calls.dup(held);
+      if (copy < 0)
+        throw libcFailure(errno[0], "dup", shown);
+      const dir = calls.fdopendir(copy);
+      if (dir === null) {
+        const failed = libcFailure(errno[0], "fdopendir", shown);
+        calls.close(copy);
+        throw failed;
+      }
+      try {
+        const entries = [];
+        for (;; ) {
+          errno[0] = 0;
+          const entry = calls.readdir(dir);
+          if (entry === null) {
+            if (errno[0] !== 0)
+              throw libcFailure(errno[0], "readdir", shown);
+            return entries;
+          }
+          const name = calls.nameOf(entry);
+          if (name !== "." && name !== "..")
+            entries.push({ name, type: calls.typeOf(entry) });
+        }
+      } finally {
+        calls.closedir(dir);
+      }
+    }
+    function listedIn(held, shown, statOf) {
+      return namesIn(held, shown).map(({ name, type }) => {
+        let read = false;
+        let stat;
+        const own = () => {
+          if (!read) {
+            stat = statOf(name);
+            read = true;
+          }
+          return stat;
+        };
+        return {
+          name,
+          isDirectory: () => type === DT_UNKNOWN ? own()?.isDirectory() === true : type === DT_DIR,
+          isSymbolicLink: () => type === DT_UNKNOWN ? own()?.isSymbolicLink() === true : type === DT_LNK,
+          stat: own
+        };
+      });
+    }
     function listed(name, dirent, stat) {
       return { name, isDirectory: () => dirent.isDirectory(), isSymbolicLink: () => dirent.isSymbolicLink(), stat };
     }
@@ -111,7 +205,7 @@ var require_held = __commonJS(function(exports2, module2) {
           const held = fs.openSync(at, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
           try {
             const through = `/proc/self/fd/${held}`;
-            return read(fs.readdirSync(through, { withFileTypes: true }).map((child) => listed(child.name, child, () => fs.lstatSync(`${through}/${child.name}`, { throwIfNoEntry: false }))));
+            return read(listedIn(held, shown, (child) => fs.lstatSync(`${through}/${child}`, { throwIfNoEntry: false })));
           } finally {
             fs.closeSync(held);
           }
@@ -211,12 +305,9 @@ var require_held = __commonJS(function(exports2, module2) {
         },
         stat: () => lstatAt(dir, bytes, shown),
         list: (read) => {
-          const held = ok(openat(dir, bytes, DARWIN_O_SEARCH | O_NOFOLLOW, 0), "open");
+          const held = ok(openat(dir, bytes, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0), "open");
           try {
-            return read(fs.readdirSync(shown).flatMap((child) => {
-              const stat = child.includes("\x00") ? undefined : lstatAt(held, Buffer.from(`${child}\x00`), path.join(shown, child));
-              return stat === undefined ? [] : [{ name: child, isDirectory: () => stat.isDirectory(), isSymbolicLink: () => stat.isSymbolicLink(), stat: () => stat }];
-            }));
+            return read(listedIn(held, shown, (child) => lstatAt(held, Buffer.from(`${child}\x00`), path.join(shown, child))));
           } finally {
             fs.closeSync(held);
           }
@@ -1600,6 +1691,459 @@ var init_command_env = __esm(() => {
   ]);
 });
 
+// packages/pc-agent/src/daemon/screen.js
+var require_screen = __commonJS(function(exports2, module2) {
+  var zlib = require("zlib");
+  var protocol = require("./device-protocol.json");
+  var SCREEN_DATA = protocol.screenData;
+  var SCREEN_CLOSE_FRAME = protocol.frames.screenClose;
+  var RFB_VERSION = `RFB 003.008
+`;
+  var SECURITY_NONE = 1;
+  var MESSAGE = { setPixelFormat: 0, setEncodings: 2, updateRequest: 3, key: 4, pointer: 5, cutText: 6 };
+  var KASM_MESSAGE = { stats: 178, frameStats: 179, clipboard: 180, subscribeRelay: 182, relayData: 183, videoEncoders: 184, keepAlive: 185, directMouse: 188, maxVideoResolution: 252 };
+  var PENDING_MAX_BYTES = 16 * 1024 * 1024;
+  var ENCODING = { raw: 0, tight: 7, desktopSize: -223, lastRect: -224, extendedDesktopSize: -308 };
+  var TIGHT_JPEG = 144;
+  var TIGHT_BASIC_RESET = 1;
+  var TIGHT_MIN_TO_COMPRESS = 12;
+  var TIGHT_MAX_LENGTH = 4194303;
+  var SCREEN_BACKLOG_MAX_BYTES = 8 * 1024 * 1024;
+  var SCREEN_BACKLOG_RETRY_MS = 50;
+  var TIGHT_BAND_BYTES = 256 * 1024;
+  var SERVER_FORMAT = { bitsPerPixel: 32, depth: 24, bigEndian: false, trueColour: true, redMax: 255, greenMax: 255, blueMax: 255, redShift: 16, greenShift: 8, blueShift: 0 };
+  var VIEWER_ATTACH_MS = 30000;
+  var NO_SCREEN = "this PC shares no screen";
+  var OPENED_ELSEWHERE = "the screen opened in another tab";
+  var NO_VIEWER = "no viewer attached to the screen";
+  function screenFrames(stream, bytes) {
+    const frames = [];
+    for (let at = 0;at < bytes.byteLength; at += SCREEN_DATA.maxBytes) {
+      const part = bytes.subarray(at, at + SCREEN_DATA.maxBytes);
+      const frame = Buffer.alloc(SCREEN_DATA.headerBytes + part.byteLength);
+      frame.writeUInt8(SCREEN_DATA.kind, 0);
+      frame.writeUInt32BE(stream, 1);
+      frame.set(part, SCREEN_DATA.headerBytes);
+      frames.push(frame);
+    }
+    return frames;
+  }
+  function readScreenData(data) {
+    const bytes = Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data);
+    if (bytes.byteLength < SCREEN_DATA.headerBytes || bytes[0] !== SCREEN_DATA.kind)
+      return null;
+    return { stream: bytes.readUInt32BE(1), bytes: bytes.subarray(SCREEN_DATA.headerBytes) };
+  }
+  function pixelFormatBytes(format) {
+    const bytes = Buffer.alloc(16);
+    bytes.writeUInt8(format.bitsPerPixel, 0);
+    bytes.writeUInt8(format.depth, 1);
+    bytes.writeUInt8(format.bigEndian ? 1 : 0, 2);
+    bytes.writeUInt8(format.trueColour ? 1 : 0, 3);
+    bytes.writeUInt16BE(format.redMax, 4);
+    bytes.writeUInt16BE(format.greenMax, 6);
+    bytes.writeUInt16BE(format.blueMax, 8);
+    bytes.writeUInt8(format.redShift, 10);
+    bytes.writeUInt8(format.greenShift, 11);
+    bytes.writeUInt8(format.blueShift, 12);
+    return bytes;
+  }
+  function readPixelFormat(bytes) {
+    return {
+      bitsPerPixel: bytes.readUInt8(0),
+      depth: bytes.readUInt8(1),
+      bigEndian: bytes.readUInt8(2) !== 0,
+      trueColour: bytes.readUInt8(3) !== 0,
+      redMax: bytes.readUInt16BE(4),
+      greenMax: bytes.readUInt16BE(6),
+      blueMax: bytes.readUInt16BE(8),
+      redShift: bytes.readUInt8(10),
+      greenShift: bytes.readUInt8(11),
+      blueShift: bytes.readUInt8(12)
+    };
+  }
+  function compactLength(length) {
+    const bytes = [length & 127];
+    if (length > 127) {
+      bytes[0] |= 128;
+      bytes.push(length >> 7 & 127);
+      if (length > 16383) {
+        bytes[1] |= 128;
+        bytes.push(length >> 14 & 255);
+      }
+    }
+    return Buffer.from(bytes);
+  }
+  function clipboardLength(bytes) {
+    if (bytes.byteLength < 2)
+      return null;
+    let at = 2;
+    for (let entry = 0;entry < bytes[1]; entry += 1) {
+      if (bytes.byteLength < at + 1)
+        return null;
+      at += 1 + bytes[at];
+      if (bytes.byteLength < at + 4)
+        return null;
+      at += 4 + bytes.readUInt32BE(at);
+    }
+    return at;
+  }
+  var MESSAGE_LENGTH = {
+    [MESSAGE.setPixelFormat]: () => 20,
+    [MESSAGE.setEncodings]: (bytes) => bytes.byteLength < 4 ? null : 4 + 4 * bytes.readUInt16BE(2),
+    [MESSAGE.updateRequest]: () => 10,
+    [MESSAGE.key]: () => 8,
+    [MESSAGE.pointer]: (_bytes, kasm) => kasm ? 11 : 6,
+    [MESSAGE.cutText]: (bytes) => bytes.byteLength < 8 ? null : 8 + Math.abs(bytes.readInt32BE(4)),
+    [KASM_MESSAGE.stats]: () => 4,
+    [KASM_MESSAGE.frameStats]: () => 12,
+    [KASM_MESSAGE.clipboard]: clipboardLength,
+    [KASM_MESSAGE.subscribeRelay]: (bytes) => bytes.byteLength < 2 ? null : 2 + bytes[1],
+    [KASM_MESSAGE.relayData]: (bytes) => bytes.byteLength < 2 || bytes.byteLength < 6 + bytes[1] ? null : 6 + bytes[1] + bytes.readUInt32BE(2 + bytes[1]),
+    [KASM_MESSAGE.videoEncoders]: (bytes) => bytes.byteLength < 2 ? null : 2 + 4 * bytes[1],
+    [KASM_MESSAGE.keepAlive]: () => 1,
+    [KASM_MESSAGE.directMouse]: () => 10,
+    [KASM_MESSAGE.maxVideoResolution]: () => 5
+  };
+  function pointerEvent(message, kasm) {
+    if (!kasm)
+      return { mask: message[1], x: message.readUInt16BE(2), y: message.readUInt16BE(4), wheel: { x: 0, y: 0 } };
+    return { mask: message.readUInt16BE(1), x: message.readUInt16BE(3), y: message.readUInt16BE(5), wheel: { x: message.readInt16BE(7), y: message.readInt16BE(9) } };
+  }
+  function screenLayout(width, height) {
+    const layout = Buffer.alloc(4 + 16);
+    layout.writeUInt8(1, 0);
+    layout.writeUInt16BE(width, 4 + 8);
+    layout.writeUInt16BE(height, 4 + 10);
+    return [rectHead({ width, height }, ENCODING.extendedDesktopSize), layout];
+  }
+  function rectHead({ x = 0, y = 0, width, height }, encoding) {
+    const head = Buffer.alloc(12);
+    head.writeUInt16BE(x, 0);
+    head.writeUInt16BE(y, 2);
+    head.writeUInt16BE(width, 4);
+    head.writeUInt16BE(height, 6);
+    head.writeInt32BE(encoding, 8);
+    return head;
+  }
+  function tightPixels(format) {
+    return format.bitsPerPixel === 32 && format.depth === 24 && format.redMax === 255 && format.greenMax === 255 && format.blueMax === 255;
+  }
+  function tightBands(frame) {
+    const { width, height, raw } = frame;
+    const rows = Math.max(1, Math.floor(TIGHT_BAND_BYTES / (width * 3)));
+    const parts = [];
+    let rects = 0;
+    for (let top = 0;top < height; top += rows) {
+      const band = Math.min(rows, height - top);
+      const rgb = Buffer.alloc(width * band * 3);
+      for (let at = 0;at < width * band; at += 1) {
+        const from = (top * width + at) * 4;
+        rgb[at * 3] = raw[from + 2];
+        rgb[at * 3 + 1] = raw[from + 1];
+        rgb[at * 3 + 2] = raw[from];
+      }
+      const compressed = rgb.byteLength >= TIGHT_MIN_TO_COMPRESS;
+      const data = compressed ? zlib.deflateSync(rgb, { level: 1 }) : rgb;
+      parts.push(rectHead({ y: top, width, height: band }, ENCODING.tight), Buffer.from([TIGHT_BASIC_RESET]), ...compressed ? [compactLength(data.byteLength)] : [], data);
+      rects += 1;
+    }
+    return { parts, rects };
+  }
+  function rawPixels(frame, format) {
+    const { width, height, raw } = frame;
+    const out = Buffer.alloc(width * height * 4);
+    for (let at = 0;at < width * height; at += 1) {
+      const b = raw[at * 4], g = raw[at * 4 + 1], r = raw[at * 4 + 2];
+      const value = (Math.round(r * format.redMax / 255) << format.redShift | Math.round(g * format.greenMax / 255) << format.greenShift | Math.round(b * format.blueMax / 255) << format.blueShift) >>> 0;
+      if (format.bigEndian)
+        out.writeUInt32BE(value, at * 4);
+      else
+        out.writeUInt32LE(value, at * 4);
+    }
+    return out;
+  }
+  function createRfbSession({ source, send, end, log, backlogged, later }) {
+    let pending = Buffer.alloc(0);
+    let phase = "version";
+    let format = SERVER_FORMAT;
+    let encodings = new Set([ENCODING.raw]);
+    let screen = null;
+    let latest = null;
+    let size = null;
+    let layoutSent = false;
+    let kasm = false;
+    let sentSerial = -1;
+    let asked = null;
+    let retrying = false;
+    let ended = false;
+    function reportOpenFailure(error) {
+      log("device.screen_open_failed", error instanceof Error ? error.message : String(error));
+    }
+    function stop(reason) {
+      if (ended)
+        return;
+      ended = true;
+      screen?.close();
+      end(reason);
+    }
+    function sendUpdate(frame) {
+      const parts = [];
+      let rects = 0;
+      const resized = size.width !== frame.width || size.height !== frame.height;
+      if (encodings.has(ENCODING.extendedDesktopSize) && (resized || !layoutSent)) {
+        parts.push(...screenLayout(frame.width, frame.height));
+        rects += 1;
+        layoutSent = true;
+      } else if (resized) {
+        if (!encodings.has(ENCODING.desktopSize))
+          return stop("the PC's screen changed size, and this viewer can't follow it");
+        parts.push(rectHead(frame, ENCODING.desktopSize));
+        rects += 1;
+      }
+      size = { width: frame.width, height: frame.height };
+      if (frame.jpeg) {
+        if (!encodings.has(ENCODING.tight))
+          return stop("this viewer can't draw the PC's screen: it lacks Tight encoding");
+        if (frame.jpeg.byteLength > TIGHT_MAX_LENGTH)
+          return stop(`a frame of the PC's screen is ${frame.jpeg.byteLength} bytes, past the ${TIGHT_MAX_LENGTH} Tight carries`);
+        parts.push(rectHead(frame, ENCODING.tight), Buffer.from([TIGHT_JPEG]), compactLength(frame.jpeg.byteLength), Buffer.from(frame.jpeg));
+        rects += 1;
+      } else if (encodings.has(ENCODING.tight) && tightPixels(format)) {
+        const bands = tightBands(frame);
+        parts.push(...bands.parts);
+        rects += bands.rects;
+      } else {
+        parts.push(rectHead(frame, ENCODING.raw), rawPixels(frame, format));
+        rects += 1;
+      }
+      const head = Buffer.alloc(4);
+      const lastRect = encodings.has(ENCODING.lastRect);
+      head.writeUInt16BE(lastRect ? 65535 : rects, 2);
+      sentSerial = frame.serial;
+      send(Buffer.concat([head, ...parts, ...lastRect ? [rectHead({ width: 0, height: 0 }, ENCODING.lastRect)] : []]));
+    }
+    function maybeUpdate() {
+      if (ended || asked === null || latest === null)
+        return;
+      if (asked.incremental && latest.serial === sentSerial)
+        return;
+      if (backlogged()) {
+        if (!retrying) {
+          retrying = true;
+          later(() => {
+            retrying = false;
+            maybeUpdate();
+          });
+        }
+        return;
+      }
+      asked = null;
+      sendUpdate(latest);
+    }
+    async function openScreen() {
+      try {
+        screen = await source.open({
+          onFrame(frame) {
+            latest = frame;
+            maybeUpdate();
+          },
+          onEnd(reason) {
+            stop(reason);
+          }
+        });
+      } catch (err) {
+        return stop(`the PC's screen did not open: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (ended)
+        return screen.close();
+      const name = Buffer.from(screen.name, "utf8");
+      const init = Buffer.alloc(4);
+      init.writeUInt16BE(screen.width, 0);
+      init.writeUInt16BE(screen.height, 2);
+      size = { width: screen.width, height: screen.height };
+      const nameLength = Buffer.alloc(4);
+      nameLength.writeUInt32BE(name.byteLength, 0);
+      send(Buffer.concat([init, pixelFormatBytes(SERVER_FORMAT), nameLength, name]));
+      phase = "normal";
+      parse();
+      maybeUpdate();
+    }
+    function nextMessage() {
+      const measure = MESSAGE_LENGTH[pending[0]];
+      if (measure === undefined)
+        return -1;
+      const length = measure(pending, kasm);
+      return length === null || pending.byteLength < length ? null : length;
+    }
+    function handleMessage(message) {
+      const type = message[0];
+      if (type === MESSAGE.setPixelFormat) {
+        const wanted = readPixelFormat(message.subarray(4));
+        if (wanted.bitsPerPixel !== 32 || !wanted.trueColour)
+          return stop(`this viewer asked for ${wanted.bitsPerPixel}-bit ${wanted.trueColour ? "" : "colour-mapped "}pixels; the PC sends 32-bit true colour`);
+        format = wanted;
+      } else if (type === MESSAGE.setEncodings) {
+        encodings = new Set(Array.from({ length: message.readUInt16BE(2) }, (_, at) => message.readInt32BE(4 + at * 4)));
+      } else if (type === MESSAGE.updateRequest) {
+        asked = { incremental: (asked?.incremental ?? true) && message[1] !== 0 };
+      } else if (type === MESSAGE.key) {
+        screen.key(message[1] !== 0, message.readUInt32BE(4));
+      } else if (type === MESSAGE.pointer) {
+        const pointer = pointerEvent(message, kasm);
+        screen.pointer(pointer.mask, pointer.x, pointer.y, pointer.wheel);
+      } else if (type >= KASM_MESSAGE.stats) {
+        kasm = true;
+      }
+    }
+    function parse() {
+      while (!ended) {
+        if (phase === "version") {
+          if (pending.byteLength < 12)
+            return;
+          const version = pending.subarray(0, 12).toString("latin1");
+          pending = pending.subarray(12);
+          if (version !== RFB_VERSION)
+            return stop(`this viewer speaks ${JSON.stringify(version.trim())}; the PC speaks RFB 3.8`);
+          send(Buffer.from([1, SECURITY_NONE]));
+          phase = "security";
+        } else if (phase === "security") {
+          if (pending.byteLength < 1)
+            return;
+          const chosen = pending[0];
+          pending = pending.subarray(1);
+          if (chosen !== SECURITY_NONE)
+            return stop(`this viewer chose security type ${chosen}; the PC offers none other than ${SECURITY_NONE}`);
+          send(Buffer.alloc(4));
+          phase = "init";
+        } else if (phase === "init") {
+          if (pending.byteLength < 1)
+            return;
+          pending = pending.subarray(1);
+          phase = "opening";
+          openScreen().catch(reportOpenFailure);
+          return;
+        } else if (phase === "normal") {
+          if (pending.byteLength === 0)
+            return;
+          const length = nextMessage();
+          if (length === null)
+            return;
+          if (length < 0)
+            return stop(`the viewer sent a message the PC doesn't speak (type ${pending[0]})`);
+          const message = Buffer.from(pending.subarray(0, length));
+          pending = pending.subarray(length);
+          handleMessage(message);
+        } else {
+          return;
+        }
+      }
+    }
+    send(Buffer.from(RFB_VERSION, "latin1"));
+    return {
+      receive(bytes) {
+        pending = Buffer.concat([pending, bytes]);
+        if (pending.byteLength > PENDING_MAX_BYTES)
+          return stop("the viewer sent more than a screen viewer sends");
+        parse();
+        maybeUpdate();
+      },
+      stop
+    };
+  }
+  function afterTimer(ms, fn) {
+    const timer = setTimeout(fn, ms);
+    return () => clearTimeout(timer);
+  }
+  function createScreens({ source, log, after = afterTimer }) {
+    let open = null;
+    function close(stream, reason, { tell }) {
+      if (open === null || open.stream !== stream)
+        return;
+      const ending = open;
+      open = null;
+      ending.cancelAttach();
+      ending.session.stop(reason);
+      if (tell)
+        sendJson(ending.ws, { type: SCREEN_CLOSE_FRAME, stream, reason });
+    }
+    function sendJson(ws, frame) {
+      try {
+        ws.send(JSON.stringify(frame));
+      } catch (err) {
+        log("device.screen_frame_unsent", frame.type, err instanceof Error ? err.message : String(err));
+      }
+    }
+    return {
+      desktop() {
+        return source === null ? { state: "none" } : source.desktop();
+      },
+      open(stream, ws) {
+        if (!Number.isInteger(stream) || stream < 0 || stream > 4294967295)
+          throw new Error("screenOpen expects a stream number");
+        if (source === null)
+          throw new Error(NO_SCREEN);
+        if (open !== null)
+          close(open.stream, OPENED_ELSEWHERE, { tell: true });
+        let ended = false;
+        const session = createRfbSession({
+          source,
+          log,
+          backlogged: () => Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > SCREEN_BACKLOG_MAX_BYTES,
+          later: (fn) => after(SCREEN_BACKLOG_RETRY_MS, fn),
+          send(bytes) {
+            if (ended)
+              return;
+            for (const frame of screenFrames(stream, bytes)) {
+              try {
+                ws.send(frame);
+              } catch (err) {
+                log("device.screen_data_unsent", stream, err instanceof Error ? err.message : String(err));
+                return;
+              }
+            }
+          },
+          end(reason) {
+            if (ended)
+              return;
+            ended = true;
+            if (open !== null && open.stream === stream) {
+              open.cancelAttach();
+              open = null;
+              sendJson(ws, { type: SCREEN_CLOSE_FRAME, stream, reason });
+            }
+          }
+        });
+        open = { stream, ws, session, spoke: false, cancelAttach: () => {} };
+        const opened = open;
+        opened.cancelAttach = after(VIEWER_ATTACH_MS, () => {
+          if (!opened.spoke)
+            close(stream, NO_VIEWER, { tell: true });
+        });
+        return { stream };
+      },
+      receive(stream, bytes) {
+        if (open === null || open.stream !== stream)
+          return false;
+        open.spoke = true;
+        open.session.receive(bytes);
+        return true;
+      },
+      closed(stream) {
+        close(stream, "the viewer closed the screen", { tell: false });
+      },
+      closeAll() {
+        if (open === null)
+          return [];
+        const stream = open.stream;
+        close(stream, "the tunnel closed", { tell: false });
+        return [stream];
+      }
+    };
+  }
+  module2.exports = { createScreens, readScreenData, screenFrames, SCREEN_CLOSE_FRAME };
+});
+
 // packages/core/src/checkpoints/format.ts
 var exports_format = {};
 __export(exports_format, {
@@ -2054,6 +2598,7 @@ var protocol = require("./device-protocol.json");
 var METHODS = Object.fromEntries(Object.keys(protocol.methods).map((name) => [name, name]));
 var FRAMES = protocol.frames;
 var chatgpt = require("./chatgpt.js");
+var screen = require_screen();
 var { runToExit } = update;
 var daemonPath = () => require.main.filename;
 var HOME_SETTING = process.env.KINU_HOME?.trim() ?? "";
@@ -2084,7 +2629,7 @@ var PTY_INPUT_FRAME = FRAMES.ptyInput;
 var PTY_RESIZE_FRAME = FRAMES.ptyResize;
 var PTY_OUTPUT_FRAME = FRAMES.ptyOutput;
 var PTY_EXIT_FRAME = FRAMES.ptyExit;
-var PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME]);
+var LIVE_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, screen.SCREEN_CLOSE_FRAME]);
 var LIVE_BACKLOG_MAX_BYTES = 256 * 1024;
 var RELAY_METHOD = METHODS.codexRelay;
 var RELAY_HEAD_FRAME = FRAMES.relayHead;
@@ -2495,7 +3040,9 @@ function sendLiveFrame(ws, frame) {
   }
   return true;
 }
-function handlePtyFrame(msg, ctx) {
+function handleLiveFrame(msg, ctx) {
+  if (msg.type === screen.SCREEN_CLOSE_FRAME)
+    return ctx?.screens?.closed(msg.stream);
   const sessions = ctx && ctx.sessions;
   if (!sessions)
     return log("device.terminal_frame_dropped", msg.type, "this daemon holds no terminals");
@@ -2745,10 +3292,12 @@ async function relayCall(ws, id, request) {
     ended.resolve();
   }
 }
-function answerLaterMethod(msg, ws) {
+function answerLaterMethod(msg, ws, ctx) {
   const { id, method, params } = msg;
   if (method === RELAY_METHOD)
     rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
+  else if (method === METHODS.screenOpen)
+    rpc(ws, id, screensOf(ctx).open(params[0], ws));
   else if (method === CHATGPT_METHODS.status)
     rpc(ws, id, chatgptSession.status());
   else if (method === CHATGPT_METHODS.signIn)
@@ -2781,8 +3330,8 @@ function rpcRequest(msg) {
   return { id, method, params };
 }
 function handle(msg, ws, ctx) {
-  if (PTY_FRAMES.has(msg.type))
-    return handlePtyFrame(msg, ctx);
+  if (LIVE_FRAMES.has(msg.type))
+    return handleLiveFrame(msg, ctx);
   const request = rpcRequest(msg);
   if (request === null)
     return;
@@ -2867,11 +3416,23 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       rpcWhenSettled(ws, id, checkpoints.restore(view, params[0], checkpointDirFor(view, params[1]), params[2]));
     } else {
-      answerLaterMethod(msg, ws);
+      answerLaterMethod(msg, ws, ctx);
     }
   } catch (err) {
     rpc(ws, id, null, err);
   }
+}
+function screenDataReceived(data, ctx) {
+  const received = screen.readScreenData(data);
+  if (received === null)
+    return false;
+  ctx.screens.receive(received.stream, received.bytes);
+  return true;
+}
+function screensOf(ctx) {
+  if (!ctx || !ctx.screens)
+    throw new Error("this daemon holds no screens");
+  return ctx.screens;
 }
 function readDeviceConfig(configPath = CONFIG_PATH) {
   let text;
@@ -3207,11 +3768,13 @@ async function main() {
     releaseMachine();
   });
   const sessions = pty.createSessions({ log });
+  const screens = screen.createScreens({ source: null, log });
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
     process.on(signal, () => {
       const ended = sessions.closeAll();
       if (ended.length > 0)
         log("device.terminals_closed_with_daemon", ended.join(" "));
+      screens.closeAll();
       exitWhenQuiet(0);
     });
   }
@@ -3221,7 +3784,8 @@ async function main() {
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, "ws");
   const ctx = {
     checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }),
-    sessions
+    sessions,
+    screens
   };
   const updater = update.createUpdater({
     layout: {
@@ -3258,6 +3822,7 @@ async function main() {
         const ended = ctx.sessions.closeAll();
         if (ended.length > 0)
           log("device.terminals_closed_with_socket", ended.join(" "));
+        ctx.screens.closeAll();
         log("device.update_handed_over", `successor connected; pid ${process.pid} exiting`);
         loop.stop();
         exitWhenQuiet(0);
@@ -3270,11 +3835,13 @@ async function main() {
       const ended = ctx.sessions.closeAll();
       if (ended.length > 0)
         log("device.terminals_closed_with_socket", ended.join(" "));
+      ctx.screens.closeAll();
     },
     dial(ticket) {
       const wsUrl = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
       log("Connecting to", WS_ORIGIN + "/pc/connect");
       const ws = mkWs(wsUrl);
+      ws.binaryType = "arraybuffer";
       ws.addEventListener("open", () => {
         log("Connected");
         if (!updater.pending())
@@ -3298,10 +3865,13 @@ async function main() {
             ...sandbox.helloCapability(SANDBOX_CAPABILITY),
             gpu: sandbox.gpuNodes()
           },
-          agentRoot: AGENT_ROOT
+          agentRoot: AGENT_ROOT,
+          desktop: ctx.screens.desktop()
         }));
       });
       ws.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string" && screenDataReceived(ev.data, ctx))
+          return;
         const payload = ev.data instanceof ArrayBuffer ? new TextDecoder().decode(ev.data) : String(ev.data);
         if (payload === PONG_FRAME)
           return;
