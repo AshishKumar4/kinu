@@ -30,9 +30,9 @@ const STOCK: SecretSummary[] = [
     name: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], position: AUTHORIZATION, updatedAt: NOW - 3 * DAY,
     grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }, { workspace: "email-triage", title: "Support inbox", reveal: false }],
   },
-  { name: "OPENAI_API_KEY", hosts: ["api.openai.com"], position: AUTHORIZATION, updatedAt: NOW - 40 * DAY, grants: [] },
   // Google reads a Maps key from `?key=`: the one place it may go.
   { name: "GOOGLE_MAPS_KEY", hosts: ["maps.googleapis.com"], position: { kind: "query", name: "key" }, updatedAt: NOW - 6 * DAY, grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }] },
+  { name: "OPENAI_API_KEY", hosts: ["api.openai.com"], position: AUTHORIZATION, updatedAt: NOW - 40 * DAY, grants: [] },
 ];
 
 let held: SecretSummary[] = new URLSearchParams(location.search).get("secrets") === "empty" ? [] : STOCK;
