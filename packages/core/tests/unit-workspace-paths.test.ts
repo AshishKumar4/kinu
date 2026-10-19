@@ -216,3 +216,10 @@ test('a path that names nothing is told what it names under each prefix', async 
   await expect(file({ op: 'stat', path: '/workspace/true-myth/src/maybe.ts' })).rejects.toThrow('`computer://workspace/true-myth/src/maybe.ts` is `/computer/workspace/true-myth/src/maybe.ts`');
 });
 
+// Luna searched the directory `archive` three times in a row on staging 5c522f12d; the refusal never said it was one.
+test('a read or search of a directory is told it is one, and how to look inside it', async () => {
+  const { file } = gatedTool(await linkedWorkspace());
+
+  await expect(file({ op: 'search', path: 'deep', query: 'beside' })).rejects
+    .toThrow('`deep` is a directory, and `search` takes one file: list it with `list`, or search under it with `grep -rn` in a shell');
+});

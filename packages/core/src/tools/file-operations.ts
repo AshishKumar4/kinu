@@ -119,8 +119,12 @@ function vfsFailure(planes: PathPlanes, input: { error: unknown }, action: strin
 
   const reason = editOutcomeReason(err.code);
 
+  if (err.code === 'EISDIR') {
+    return { reason, error: `${err.message}: \`${path}\` is a directory, and \`${action}\` takes one file: list it with \`list\`, or search under it with \`grep -rn\` in a shell` };
+  }
+
   // Only addressing mistakes get where the path landed; other errors carry their own reason.
-  const hint = err.code === 'ENOENT' || err.code === 'EISDIR' ? `: ${addressingHint(planes, path)}` : '';
+  const hint = err.code === 'ENOENT' ? `: ${addressingHint(planes, path)}` : '';
 
   return { reason, error: `${err.message}${hint}` };
 }
