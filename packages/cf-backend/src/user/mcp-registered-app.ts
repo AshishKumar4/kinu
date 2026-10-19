@@ -1,4 +1,4 @@
-import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
+import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import type { OAuthClientMetadata, StoredOAuthClientInformation } from '@modelcontextprotocol/client';
 
 export interface RegisteredAppProviderInit {
@@ -16,7 +16,7 @@ export interface RegisteredAppProviderInit {
  * `saveClientInformation` is a no-op: the env is the registration's source of truth.
  * Kept out of `mcp.ts`, whose static test imports would bind the real SDK before the stub.
  */
-export class RegisteredAppOAuthClientProvider extends KinuMcpOAuthProvider {
+export class RegisteredAppOAuthClientProvider extends DurableObjectOAuthClientProvider {
   private readonly clientSecret: string;
   private readonly scope: string | undefined;
 

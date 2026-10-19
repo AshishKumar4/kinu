@@ -904,10 +904,6 @@ let mcpWaited = 0;
 
 let mcpEstablishGate: Promise<void> | null = null;
 
-let mcpRestoreGate: Promise<void> | null = null;
-
-let mcpRestoreArrived: (() => void) | null = null;
-
 let mcpEstablishArrived: (() => void) | null = null;
 
 /** Named by the harness, not construction order: every stand-in Agent has its own manager. */
@@ -952,19 +948,6 @@ export function hangMcpEstablish(): McpEstablishGate {
   const arrival = Promise.withResolvers<void>();
   mcpEstablishGate = gate.promise;
   mcpEstablishArrived = () => { arrival.resolve(); };
-
-  return { entered: arrival.promise, release: () => { gate.resolve(); } };
-}
-
-/**
- * Holds every dial `restoreConnectionsFromStorage` starts, as a dial still on the wire is held: the connection
- * stays `connecting` until `release`. Unheld, a restored dial lands at once.
- */
-export function holdMcpRestore(): McpEstablishGate {
-  const gate = Promise.withResolvers<void>();
-  const arrival = Promise.withResolvers<void>();
-  mcpRestoreGate = gate.promise;
-  mcpRestoreArrived = () => { arrival.resolve(); };
 
   return { entered: arrival.promise, release: () => { gate.resolve(); } };
 }
@@ -1106,8 +1089,6 @@ export function resetRecordedMcp(): void {
   mcpWaited = 0;
   mcpEstablishGate = null;
   mcpEstablishArrived = null;
-  mcpRestoreGate = null;
-  mcpRestoreArrived = null;
 }
 
 /** The pinned SDK's probe status read (`client-zqKcsyFa.js:204-210`). */
@@ -1277,13 +1258,8 @@ class FakeMCPClientManager {
     return { ...row.transport, authProvider };
   }
 
-  /** `_restoreServer`: connect, then discover. Unheld, it lands before restore returns. */
+  /** `_restoreServer`: connect, then discover; it lands before restore returns. */
   private async restoreDial(connection: RecordedMcpConnection): Promise<void> {
-    if (mcpRestoreGate) {
-      mcpRestoreArrived?.();
-      await mcpRestoreGate;
-    }
-
     connection.connectionState = 'ready';
     this.changed();
   }
@@ -1304,8 +1280,17 @@ class FakeMCPClientManager {
     }
 
     const connection = this.mcpConnections[id];
+    const provider = connection?.options.transport.authProvider;
+    const signIn = mcpSignInRequired.get(id);
 
-    if (connection) connection.connectionState = 'ready';
+    // A server that answers 401 until signed in authorizes again, as `connectToServer` does.
+    if (connection && provider !== undefined && signIn !== undefined) {
+      provider.authUrl = signIn;
+      connection.connectionState = 'authenticating';
+    } else if (connection) {
+      connection.connectionState = 'ready';
+    }
+
     this.changed();
   }
 

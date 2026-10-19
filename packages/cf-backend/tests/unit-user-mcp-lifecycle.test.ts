@@ -6,7 +6,7 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  closeMcpTransport, holdMcpRestore, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
+  closeMcpTransport, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, requireMcpSignIn, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedConfiguredMcpServer, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
@@ -478,9 +478,9 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     first.close();
   });
 
-  test('a row that never held a credential keeps the SDK session state it had', async () => {
-    // Keyed on credential fields, not "the SDK persisted something": rewriting for `sessionId` would drop a
-    // resumable session on every activation.
+  test('a row that never held a credential resumes the session the SDK kept, on the transport the plane builds', async () => {
+    // The plane builds every transport, for its fetch; one that dropped `sessionId` would open a new session on every
+    // activation.
     const first = harness();
     await seedServer(first, 'plain');
     seedSdkMcpServer('plain', { type: 'auto', sessionId: 'sess-1', protocolVersion: '2026-07-28' });
@@ -490,7 +490,7 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     await h.userDO.userMcp_warmConnections(await testOwner());
 
     expect(persistedServerOptions('plain')).toBe(untouched);
-    expect(recordedMcpLifecycle().established).toEqual([]);
+    expect(liveMcpTransport('plain')).toMatchObject({ sessionId: 'sess-1', protocolVersion: '2026-07-28', fetch: expect.any(Function) });
     h.close();
     first.close();
   });
@@ -855,12 +855,13 @@ async function diagnosticsDuring(body: () => Promise<void>): Promise<LoggedLine[
 describe('a call finds its server usable, or says why not before sending', () => {
   test('a call that wakes the object waits for the dial its activation started, never failing "Not connected"', async () => {
     // Production, steady-valley-7d95009f at 14:44:54: the user object woke for the call, the restore dial was
-    // still out, and the call reached a client with no transport 128 ms later.
+    // still out, and the call reached a client with no transport 128 ms later. The activation dials every server on
+    // the transport it builds.
     const first = harness();
     const owner = await testOwner();
     await seedServer(first, 'srv1', { name: 'Cloudflare' });
     seedSdkMcpServer('srv1', {}, { name: 'Cloudflare' });
-    const dial = holdMcpRestore();
+    const dial = hangMcpEstablish();
     const h = createTestUserDO({ storage: first.db });
 
     const call = h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'execute', args: {}, id: 'woke-for-it' });
@@ -931,7 +932,7 @@ describe('MCP connections and calls are logged, classified', () => {
     const owner = await testOwner();
     await seedServer(first, 'srv1');
     seedSdkMcpServer('srv1');
-    const dial = holdMcpRestore();
+    const dial = hangMcpEstablish();
     const h = createTestUserDO({ storage: first.db });
 
     const lines = await diagnosticsDuring(async () => {

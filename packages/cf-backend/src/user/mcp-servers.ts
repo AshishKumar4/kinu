@@ -4,7 +4,7 @@ import {
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
-import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
+import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
@@ -76,10 +76,15 @@ interface McpCatalogEntry {
   readonly name: string;
   readonly serverUrl: string;
   readonly transport: McpTransport;
+  /** The session the SDK kept for the server, resumed rather than opened again when the plane builds its transport. */
+  readonly sessionId: string | null;
+  readonly protocolVersion: string | null;
 }
 
 const CatalogOptionsSchema = v.pipe(v.string(), v.parseJson(), v.object({
-  transport: v.optional(v.object({ type: v.optional(McpTransportSchema) })),
+  transport: v.optional(v.object({
+    type: v.optional(McpTransportSchema), sessionId: v.optional(v.string()), protocolVersion: v.optional(v.string()),
+  })),
 }));
 
 /** Each of `rows` whose server the catalog holds, with its catalog half; one it does not hold has no endpoint. */
@@ -91,11 +96,13 @@ function withCatalog<Row extends { readonly id: string }>(rows: readonly Row[], 
   });
 }
 
-/** The transport a catalog row's stored options name; none named is `auto`, as the SDK's restore reads it. */
-function catalogTransport(serverOptions: string | null): McpTransport {
+/** The transport a catalog row's stored options name (none named is `auto`, as the SDK's restore reads it), and the
+ *  session they keep. */
+function catalogTransport(serverOptions: string | null): Pick<McpCatalogEntry, 'transport' | 'sessionId' | 'protocolVersion'> {
   const parsed = serverOptions === null ? null : v.safeParse(CatalogOptionsSchema, serverOptions);
+  const stored = parsed?.success === true ? parsed.output.transport : undefined;
 
-  return parsed?.success === true ? parsed.output.transport?.type ?? 'auto' : 'auto';
+  return { transport: stored?.type ?? 'auto', sessionId: stored?.sessionId ?? null, protocolVersion: stored?.protocolVersion ?? null };
 }
 
 export interface McpToolSurface {
@@ -262,23 +269,19 @@ export class UserMcpServers {
   /** The SDK's catalog by server id, through its public listing. */
   private catalog(): Map<string, McpCatalogEntry> {
     return new Map(this.host.mcp.listServers().map((row) => [row.id, {
-      name: row.name, serverUrl: row.server_url, transport: catalogTransport(row.server_options),
+      name: row.name, serverUrl: row.server_url, ...catalogTransport(row.server_options),
     }]));
   }
 
   /**
-   * What the SDK cannot restore runs on a transport this plane builds: a sealed credential, on the seam it never
-   * persists, and a registered app's client, whose secret is the deployment's and which the SDK's restore, building the
-   * agent's default provider, would refresh and sign in without.
+   * Every server runs on a transport this plane builds, as the SDK cannot restore it: its `fetch`
+   * (`mcpCredentialTransport`) holds a sealed credential and presents each refresh token once, and a registered app's
+   * provider holds the deployment's client secret. Neither is data the SDK persists.
    */
   private needsOwnedTransport(row: McpHydrationRow): boolean {
     const live = this.host.mcp.mcpConnections[row.id]?.options.transport;
 
-    if (row.headers !== null) return live === undefined || !('fetch' in live) || live.fetch === undefined;
-    const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
-
-    return preset?.auth === 'oauth-app' && mcpAppCredentials(this.host.env, preset) !== null
-      && !(live?.authProvider instanceof RegisteredAppOAuthClientProvider);
+    return live === undefined || !('fetch' in live) || live.fetch === undefined;
   }
 
   /** Starts `connect` unless a dial of this server is in flight; its outcome lands on the connection, a failure logged. */
@@ -311,13 +314,12 @@ export class UserMcpServers {
       }
     }
 
-    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> =
-      row.headers === null
-        ? { type: row.transport }
-        : {
-            ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id)),
-            type: row.transport,
-          };
+    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
+      ...(row.sessionId !== null && { sessionId: row.sessionId }),
+      ...(row.protocolVersion !== null && { protocolVersion: row.protocolVersion }),
+      ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id)),
+      type: row.transport,
+    };
 
     // `oauth-app` rows use the registered-app provider; the vendor rejects dynamic registration.
     const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
@@ -453,7 +455,7 @@ export class UserMcpServers {
     readonly callbackUrl: string;
     readonly appCredentials: { clientId: string; clientSecret: string } | null;
     readonly scope: string | undefined;
-  }): KinuMcpOAuthProvider {
+  }): RegisteredAppOAuthClientProvider | DurableObjectOAuthClientProvider {
     const { appCredentials } = input;
 
     const provider = appCredentials
@@ -461,7 +463,7 @@ export class UserMcpServers {
           storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
           clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
         })
-      : new KinuMcpOAuthProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
+      : new DurableObjectOAuthClientProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
 
     provider.serverId = input.serverId;
 
@@ -509,10 +511,8 @@ export class UserMcpServers {
 
     const authProvider = this.oauthProvider({ serverId: id, callbackUrl, appCredentials, scope: preset?.scope });
 
-    // The credential is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
-    const credential = cfg.headers
-      ? mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id))
-      : {};
+    // The transport's fetch is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
+    const credential = mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id));
 
     let authUrl: string | null = null;
     const mgr = this.host.mcp;
