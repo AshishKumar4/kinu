@@ -344,8 +344,11 @@ export class UserMcpServers {
     return parseMcpHeaders(await this.host.vault.openMcpHeaders(serverId, row.headers));
   }
 
-  /** Fire-and-forget warmup its callers detach: waits for this activation's dials, then reads each
-   *  connected server's tool list. The dials themselves start at activation. */
+  /**
+   * Fire-and-forget warmup its callers detach: waits for this activation's dials, dials a failed or closed server once
+   * more, then reads each connected server's tool list. A failed server offers no descriptor, so no turn or slate
+   * reaches the call that would redial it; this is where it comes back.
+   */
   async userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
     await this.host.requireTier(caller, 'mcp.manage');
     const rows = this.host.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
@@ -354,6 +357,7 @@ export class UserMcpServers {
     try {
       await this.joinActivation();
       await this.host.mcp.waitForConnections();
+      await this.redialUnusable();
       await this.readMcpToolLists();
     } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
@@ -833,6 +837,17 @@ export class UserMcpServers {
     // `mcp.call_failed` classifies this refusal by the state it names.
     throw new KinuError('unavailable', `MCP server ${serverName} is ${reached}${why ? ` (${why})` : ''}, so the call was not sent.`
       + (reached === 'authenticating' ? ' Sign in to it again in Settings.' : ''));
+  }
+
+  /** Every failed or closed connection dialled once more, deduplicated with any dial in flight, and waited for. */
+  private async redialUnusable(): Promise<void> {
+    for (const [serverId, connection] of Object.entries(this.host.mcp.mcpConnections)) {
+      const state = observedMcpState(connection);
+
+      if (state === 'failed' || state === 'closed') this.dial(serverId, () => this.connectAndDiscover(serverId));
+    }
+
+    await Promise.all(this.dials.values());
   }
 
   private async connectAndDiscover(serverId: string): Promise<void> {

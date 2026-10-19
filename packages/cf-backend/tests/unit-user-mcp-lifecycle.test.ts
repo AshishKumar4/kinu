@@ -282,6 +282,24 @@ describe('the descriptor read is off the connection critical path', () => {
     h.close();
   });
 
+  // A dial that failed when the object woke left the server failed, and a failed server offers no descriptor, so no
+  // turn or slate ever reached the call that redials it: its tools stayed gone until the object woke again.
+  test('a warmup dials a failed server again, and the next read offers its tools', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await seedServer(h, 'srv1', { name: 'flaky' });
+    seedMcpTools('srv1', [{ name: 'go', inputSchema: { type: 'object' } }]);
+    liveConnection(h, 'srv1').connectionState = 'failed';
+
+    expect((await readSurface(h, owner)).unavailable.map((u) => u.server)).toEqual(['flaky']);
+    await h.userDO.userMcp_warmConnections(owner);
+
+    const surface = await readSurface(h, owner);
+    expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_flaky_go']);
+    expect(surface.unavailable).toEqual([]);
+    h.close();
+  });
+
   test('a deferred server contributes no descriptor, so it cannot reach the prompt', async () => {
     // Disjoint channels keep the cached system prompt independent of connection timing: absence
     // travels on `unavailable`, rendered into the dynamic ledger, not the byte-stable prefix.
