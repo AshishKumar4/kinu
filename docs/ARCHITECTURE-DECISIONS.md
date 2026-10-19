@@ -2037,6 +2037,18 @@ from the owner's. The computer's provider refuses a viewer's every member and
 its file plane (also mounted at `/computer`), at call time and when a share is
 granted; a share cannot grant a computer member.
 
+S8. A share's viewer's call on the workspace's own (Nimbus) box runs as the
+viewer (`withViewerPrincipal`, wrapping every agent's box): its own uid
+(`share_viewer`, outside the workspace group, umask 077), home and `/tmp`,
+named shells of its own, and an exec id marked `viewer-`, which Nimbus copies
+to every process the call starts. `egressFor` gives such a process an egress
+that names no owner, so a placeholder it finds (in a generated image, a job's
+files) is refused, never spent; an owner's process keeps the owner's egress.
+`sudo` and `su` are refused to the viewer's uid at each engine boot, so it
+writes none of the owner's files and never becomes anyone else. Residual: an
+owner's process that relays requests for whoever reaches it on loopback acts
+with the owner's egress; and a file grant acts as the agent it is given for.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

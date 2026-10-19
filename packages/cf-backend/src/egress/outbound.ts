@@ -50,6 +50,27 @@ export function parseEgressParams(ctx: { readonly props: unknown }): KinuEgressP
   return parsed.success ? parsed.output : undefined;
 }
 
+/**
+ * A process a share's viewer started on the workspace's box (`OrchestratorAgent.viewerEgress`): it holds none of the
+ * owner's secrets, so its egress names no owner, and a request naming a placeholder is refused before any vault.
+ */
+interface ViewerEgressParams {
+  readonly principal: 'viewer';
+  readonly workspaceName: string;
+}
+
+/** Whom an egress was minted for: the owner's (`KinuEgressParams`), or a share's viewer's. */
+export type EgressParams = KinuEgressParams | ViewerEgressParams;
+
+const ViewerEgressParamsSchema = v.object({ principal: v.literal('viewer'), workspaceName: v.pipe(v.string(), v.minLength(1)) });
+
+/** As {@link parseEgressParams}, a viewer's read first: a configuration naming a viewer is never read as an owner's. */
+export function parseEgressPrincipal(ctx: { readonly props: unknown }): EgressParams | undefined {
+  const viewer = v.safeParse(ViewerEgressParamsSchema, ctx.props);
+
+  return viewer.success ? viewer.output : parseEgressParams(ctx);
+}
+
 /** Must be on `ORCHESTRATOR_METHODS` too, or it is silently unreachable over a stub (`unit-egress-interception.test.ts`). */
 interface ContainerEventClient {
   acceptContainerEvent(body: JsonValue): Promise<ContainerEventResult>;
@@ -87,7 +108,7 @@ export class GitHubEgressRecorder implements GitHubRecorder {
 export function handleContainerEgress<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,
-  params: KinuEgressParams | undefined,
+  params: EgressParams | undefined,
   github: GitHubRecorder | undefined,
 ): Promise<Response> {
   return settle(Effect.gen(function* () {
@@ -102,7 +123,7 @@ export function handleContainerEgress<Id>(
 
     if (destination !== null) return destinationRefusal(url.hostname, destination);
 
-    return yield* sendOut(request, env, params, github);
+    return yield* sendOut(request, env, 'principal' in params ? null : params, github);
   }));
 }
 
@@ -125,7 +146,7 @@ function socketDestination(address: string): { readonly hostname: string; readon
  * that resolves to a private address is refused by Cloudflare at connect (PLATFORM_CATALOG 'worker.connect.private_address',
  * as fetch is by 'worker.fetch.private_address'), so the egress resolves nothing itself.
  */
-export function handleEgressConnect(socket: Socket, params: KinuEgressParams | undefined): Promise<void> {
+export function handleEgressConnect(socket: Socket, params: EgressParams | undefined): Promise<void> {
   return settle(Effect.gen(function* () {
     const opened = yield* attempt({ doing: 'reading where a workspace socket goes', otherwise: 'io' }, () => socket.opened);
     const address = opened.localAddress ?? '';
@@ -187,7 +208,7 @@ export function handleEgressConnect(socket: Socket, params: KinuEgressParams | u
  * program's servername where it named one other than the host, and its plaintext handed back. A refused host, or a
  * session that cannot be made, rejects with why: the program's socket fails with it.
  */
-export function handleEgressTls(target: EgressTlsTarget, params: KinuEgressParams | undefined): Promise<EgressStreams> {
+export function handleEgressTls(target: EgressTlsTarget, params: EgressParams | undefined): Promise<EgressStreams> {
   return settle(Effect.gen(function* () {
     const judged = params === undefined ? { refusal: { error: 'egress is not configured for this workspace yet' } } : egressHost(target.hostname);
 

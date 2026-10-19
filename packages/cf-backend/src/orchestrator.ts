@@ -66,7 +66,10 @@ import {
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
-import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@kinu.run/core';
+import {
+  agentArtifactDirectory, agentHome, agentIdentity, agentNameOfUid, confineAgentTmp, isViewerProcess, MAIN_AGENT, provisionAgentHome,
+  VIEWER_HOME_NAME, viewerCred, withViewerPrincipal, type ViewerPlace,
+} from '@kinu.run/core';
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
@@ -569,6 +572,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
+   * The egress of a process a share's viewer started (`isViewerProcess`): it names no owner, so no request of it is
+   * ever given a secret, and it is minted even for a workspace with an owner, whose own egress it must never fall to.
+   */
+  private viewerEgress(): WorkspaceEgress {
+    return this.ctx.exports.KinuEgress({ props: { principal: 'viewer', workspaceName: this.name } });
+  }
+
+  /**
    * The agent a workspace process acts for: the one whose own credential it runs under, or the workspace's own agent
    * for a session-user process an exec named (the owner's terminal names none). Null when it acts for nobody named.
    */
@@ -587,6 +598,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       egress: () => this.workspaceEgress(),
       egressFor: (process) => {
+        if (isViewerProcess(process, (uid) => agentNameOfUid(this.ctx.storage.sql, uid) === VIEWER_HOME_NAME)) return this.viewerEgress();
         const actorId = this.actingAgent(process);
 
         return actorId === null ? undefined : this.workspaceEgress(actorId);
@@ -669,8 +681,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.hostedWorkspace().serving();
   }
 
+  /** Each agent's view of the workspace's box, where a share's viewer's call runs as the viewer (`withViewerPrincipal`). */
   protected workspaceBox(shellId: string): HostedBox {
-    return this.hostedWorkspace().box(shellId);
+    const box = this.hostedWorkspace().box(shellId);
+
+    return { ...box, ...withViewerPrincipal(box, () => this.viewerPlace()) };
+  }
+
+  /** The viewer's own uid, home and `/tmp` on the box, provisioned as each of its calls asks (the first allocates them). */
+  private async viewerPlace(): Promise<ViewerPlace> {
+    const { root, confiner, sql } = await this.facetHomeHost();
+    const identity = agentIdentity(sql, VIEWER_HOME_NAME);
+
+    return {
+      home: provisionAgentHome(root, VIEWER_HOME_NAME, identity),
+      tmp: confineAgentTmp(confiner, VIEWER_HOME_NAME, identity),
+      cred: viewerCred(identity),
+    };
   }
 
   /** Every owner-library call crosses the UserDO capability gate. Absent until the workspace

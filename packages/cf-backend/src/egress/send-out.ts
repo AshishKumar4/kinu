@@ -74,7 +74,7 @@ export function sendOut<Id>(
 
     if (egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], github);
 
-    if (vault === null) return refusal(403, 'This program runs without the owner\'s secrets (a slate shared with others), so a request naming a secret placeholder is not sent.');
+    if (vault === null) return refusal(403, 'This runs for someone other than the workspace\'s owner (a share\'s viewer, or a slate shared with others) and holds none of the owner\'s secrets, so a request naming a secret placeholder is not sent.');
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
     const owner: EgressVaultClient = objectNamed(env.UserDO, vault.ownerUserId);
