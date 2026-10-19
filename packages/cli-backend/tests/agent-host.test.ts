@@ -1131,7 +1131,7 @@ describe('LocalAgentHost', () => {
     }
   });
 
-  test("a hire's programs reach its own planes only, as on the cloud; the workspace's own agent reaches the whole surface", async () => {
+  test("a hire's programs reach its own planes and delegate as its native agents does, as on the cloud; only the workspace's own agent steers its lifecycle", async () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -1169,7 +1169,7 @@ describe('LocalAgentHost', () => {
       const seen = (agent: string): JsonValue => v.parse(v.object({ result: JsonValueSchema }), JSON.parse(present(reached.get(agent), `${agent}'s program`))).result;
 
       expect({ root: seen('root'), hire: seen('root/auditor') })
-        .toEqual({ root: ['object', 'function', 'object', 'object', 'function'], hire: ['undefined', 'undefined', 'undefined', 'undefined', 'function'] });
+        .toEqual({ root: ['object', 'function', 'object', 'object', 'function'], hire: ['object', 'undefined', 'object', 'object', 'function'] });
     } finally {
       await host.close();
     }

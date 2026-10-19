@@ -13,7 +13,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
 import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
 import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH } from '@kinu.run/core';
-import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
+import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
@@ -22,7 +22,6 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
-import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import type { JsonValue } from '@kinu.run/core';
@@ -121,20 +120,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null, asOwner: true } : null }), workspace: this.name,
     });
 
-    const unreached = (): never => { throw new Error('this probe reaches no memory, files or tasks'); };
-
     const eval_ = factory.toolFor(codemodeSurface(this.rt, {}), {
       reach: narrowToolSurface(undefined),
-      // As a confined copy's programs run: state, tables, web and executors, with no memory, files or tasks to reach.
-      namespaces: (executor) => actorNamespaces({
-        executors: () => this.rt.executionRouter?.getProviders() ?? [],
-        web: {
-          search: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }), files: this.rt.storage,
-          browser: { sessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} }, prelude: BROWSER_PRELUDE },
-        },
-        memory: unreached, files: unreached, tasks: unreached,
-        db: this.stores.appData, programState: this.rt.actor.programState, agents: null, self: null, ownerWaits: null,
-      }, SURFACE_POLICY.confined, { executor }),
+      // As the workspace agent's own programs run.
+      namespaces: (executor) => actorNamespaces(this.surfaceActor('build'), SURFACE_POLICY.program, { executor }),
     });
 
     const execute = toolsInWorkMode('build', { eval: eval_ }).eval?.execute;

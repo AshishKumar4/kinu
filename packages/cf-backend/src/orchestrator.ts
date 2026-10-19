@@ -31,7 +31,7 @@ import {
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
   createTeamToolDeps,
   agentNamer,
-  type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
+  type AccountMemory, type ActorHost, type ActorToolsetDeps, type AgentsToolDeps,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
   type LoopOrigin, type NodeHomeHost,
@@ -1467,11 +1467,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // A run's programs account into the run's own ledgers, across its calls.
         const ledgers = turnLedgers();
 
-        return (surface, reach) => createCodemodeToolFactory({
-          launch: this.codemodeLaunch(runtime.actor.actorId, 'owner'), workspace: this.workspaceName(),
-        }).toolFor(surface, {
-          reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, webSearch, ledgers), SURFACE_POLICY.confined, { executor }),
-        });
+        return (surface, reach) => {
+          // A swarm node's programs report where its native `report` does.
+          const reported = surface.report;
+
+          return createCodemodeToolFactory({
+            launch: this.codemodeLaunch(runtime.actor.actorId, 'owner'), workspace: this.workspaceName(),
+          }).toolFor(surface, {
+            reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, { search: webSearch, ledgers }), SURFACE_POLICY.program, {
+              executor, ...(reported !== undefined && { report: () => reported }),
+            }),
+          });
+        };
       },
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
       publishDelta: (kind, delta) => { this.publishHeadStreamFrame({ headId: '', kind, delta }); },
@@ -1516,14 +1523,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** A hire's, a head's or a swarm node's programs, as they reach its own planes (`SURFACE_POLICY.confined`). */
+  /** A hire's, a head's or a swarm node's programs, as they reach its own planes and what its native tools hold. */
   /** A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none. */
   protected hireOwnerWaits(actor: SeatedActor): OwnerWaitsHost | null {
     return isSubordinateOrigin(actor.record.origin) ? this.ownerWaitsOf(actor.handle.actorId, false) : null;
   }
 
-  private confinedActor(actor: SeatedActor, runtime: CFRuntime, search: WebSearchProvider, ledgers: TurnLedgers): SurfaceActor {
+  private confinedActor(
+    actor: SeatedActor, runtime: CFRuntime,
+    held: { readonly search: WebSearchProvider; readonly ledgers: TurnLedgers; readonly account?: AccountMemory | undefined; readonly agents?: () => AgentsToolDeps },
+  ): SurfaceActor {
+    const { search, ledgers } = held;
+
     return hostedSurfaceActor(actor, {
+      ...held.account !== undefined && { account: held.account },
+      ...held.agents !== undefined && { agents: held.agents },
       ownerWaits: this.hireOwnerWaits(actor),
       slateBuild: this.slateBuildFor(actor.record.name),
       web: { search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
@@ -1694,16 +1708,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const { report } = scope;
 
     const codemode = (finished: CodemodeSurface) => {
+      // A hire's programs report where its native `report` does.
+      const reported = finished.report;
+
       const operation = scope.profile();
       const factory = reach.actor.kind === 'workspace' ? this.workspaceCodemode() : createCodemodeToolFactory({ launch: this.codemodeLaunch(actor.handle.actorId, 'owner'), workspace: this.workspaceName() });
-      const confined = reach.actor.kind === 'confined' ? this.confinedActor(actor, runtime, webSearch, scope.ledgers) : null;
+
+      const confined = reach.actor.kind === 'confined'
+        ? this.confinedActor(actor, runtime, {
+          search: webSearch, ledgers: scope.ledgers, account, agents: () => this.actorAgentsToolDeps(actor, reach.actor, mode, scope.profile),
+        })
+        : null;
 
       return factory.toolFor(finished, {
         // The role's own list, which no live resolution has intersected yet: the sandbox cannot bypass the role.
         reach: narrowToolSurface(operation?.inputs === null || operation === null ? undefined : effectiveRoleCatalog(operation.inputs.envelope.catalog)[operation.profile.role.id]?.allowedTools),
         namespaces: (executor) => (confined === null
           ? actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, { executor })
-          : actorNamespaces(confined, SURFACE_POLICY.confined, { executor, ...(report !== undefined && { report: () => report }) })),
+          : actorNamespaces(confined, SURFACE_POLICY.program, { executor, ...(reported !== undefined && { report: () => reported }) })),
       });
     };
 

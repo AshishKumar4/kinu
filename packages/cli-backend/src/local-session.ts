@@ -2532,7 +2532,7 @@ export class LocalAgentSession {
   }
 
   /** One list for both the turn resolver and the tool builder, so they cannot disagree. A hire's programs reach its own
-   *  planes only (`SURFACE_POLICY.confined`): no delegation, lifecycle or role switch of the workspace's. */
+   *  planes and delegate as its native `agents` does; no lifecycle or role switch of the workspace's. */
   private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
     const report = this.reportGateOpen() ? this.reportDeps : null;
     const reported = report === null ? {} : { report: () => report };
@@ -2546,7 +2546,8 @@ export class LocalAgentSession {
       conversations: this.ownConversations(), vectorStore: null, ledgers: () => acc.ledgers,
       // A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none.
       ownerWaits: isSubordinateOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
-    }), SURFACE_POLICY.confined, reported);
+      agents: () => this.agentsToolDeps(mode),
+    }), SURFACE_POLICY.program, reported);
   }
 
   /** This session's actor as its namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */

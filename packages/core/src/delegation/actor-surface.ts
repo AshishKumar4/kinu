@@ -1,6 +1,6 @@
 /**
  * An actor's namespaces, built once for every caller on every backend: its own programs, a caller outside eval acting
- * as it, a slate's call, a crafted tool a slate runs, and a confined copy's program. How each caller differs is its
+ * as it, a slate's call, a crafted tool a slate runs, and a hire's, head's or node's program. How each caller differs is its
  * policy, declared in `SURFACE_POLICY`; nothing else assembles a namespace list, so a role names, narrows and reaches
  * the one list everywhere.
  */
@@ -75,7 +75,8 @@ export interface SurfacePolicy {
 }
 
 export const SURFACE_POLICY = {
-  /** The actor's own programs. */
+  /** The actor's own programs, a hire's, a head's or a swarm node's alike: each reaches what its actor holds, as its
+   *  native tools do. */
   program: { state: true, agents: true, stores: true, webFiles: true, browser: 'program', account: true },
   /** A caller outside eval acting as the actor: an isolate running its turn, an operation call. */
   operations: { state: true, agents: true, stores: true, webFiles: true, browser: 'class', account: true },
@@ -86,11 +87,6 @@ export const SURFACE_POLICY = {
   /** A crafted tool a slate runs: a program of the actor's that delegates nothing, driving its caller's browser. */
   slateTool: { state: true, agents: false, stores: true, webFiles: true, browser: 'program', account: false },
   slateToolForViewer: { state: true, agents: false, stores: true, webFiles: true, browser: 'viewer', account: false },
-  /**
-   * A confined copy's program (a head, a swarm node, a hosted task turn): its memory, files and tasks reach it as its
-   * native tools, and it delegates through them, never from a program.
-   */
-  confined: { state: true, agents: false, stores: false, webFiles: true, browser: 'program', account: false },
 } as const satisfies Readonly<Record<string, SurfacePolicy>>;
 
 const VIEWER_BROWSER = 'this program holds no browser session; a share\'s viewer drives none of its owner\'s';
@@ -159,6 +155,8 @@ export function hostedSurfaceActor(
     readonly web: SurfaceWeb; readonly conversations: ConversationRecall; readonly vectorStore: VectorStore | null; readonly account?: AccountMemory;
     /** Its `agent.*` of what waits on its owner from its own work; null where none is held for it. */
     readonly ownerWaits: OwnerWaitsHost | null;
+    /** What its native `agents` delegates through, where it delegates; its programs delegate through the same. */
+    readonly agents?: () => AgentsToolDeps;
     /** The turn a program's files account into: read as its namespaces are built. */
     readonly ledgers: () => Pick<TurnLedgers, 'files' | 'context'>;
     /** Whether a slate still builds, for a write its programs make into one; absent where no slate host builds it. */
@@ -186,7 +184,7 @@ export function hostedSurfaceActor(
     tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
     db: stores.appData,
     programState: runtime.actor.programState,
-    agents: null,
+    agents: inputs.agents ?? null,
     self: null,
     ownerWaits: inputs.ownerWaits,
   };

@@ -55,6 +55,8 @@ export interface CodemodeSurface {
   readonly external: () => ToolSet;
   /** Where a program's relative paths start, its `process.cwd()`: the runtime's own (`PathPlanes.cwd`). */
   readonly cwd: string;
+  /** Where the native `report` reaches, on a turn its hirer drives: a program's `report.send` reaches the same. */
+  readonly report?: ReportDeps;
 }
 
 /** Core has no codegen; each backend supplies its factory. `reach` is the namespaces the allowed tools reach, for a
@@ -77,14 +79,16 @@ function askOwnerTool() {
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}),
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}), report?: ReportDeps,
 ): CodemodeSurface {
-  return {
+  const surface: CodemodeSurface = {
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     external: () => withCheckedInputs(external()),
     cwd: rt.planes.cwd,
   };
+
+  return report === undefined ? surface : { ...surface, report };
 }
 
 import type { SlateCallResult } from '../slates/rpc';
@@ -241,7 +245,7 @@ function installCodemode(
   const { rt } = deps;
   // `eval` reaches only the namespaces the allowed tools reach.
   surface.eval = withCheckedInput('eval', build(
-    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external), narrowToolSurface(deps.allowed),
+    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external, deps.report), narrowToolSurface(deps.allowed),
   ));
 }
 

@@ -8,7 +8,10 @@ import { sha256Hex } from '../src/safety/argument-digest';
 
 import { describe, test, expect } from 'bun:test';
 import { present, toolExecute } from '@kinu.run/test-utils';
-import { executorNamespace, onMachine } from '../src/tools/executor-operations';
+import * as v from 'valibot';
+import { executorNamespace } from '../src/tools/executor-operations';
+import { FILE } from '../src/operations/file';
+import type { ExecutorCapability, ExecutorProviderSurface } from '../src/execution/types';
 import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 import { renderCodemodeDescription } from '../src/index';
 import { TurnContextBudget } from '../src/context-budget';
@@ -394,7 +397,7 @@ describe('the codemode sandbox namespace', () => {
 	});
 });
 
-describe('onMachine preserves the plane walk', () => {
+describe('a machine path reaches the plane as written, a climb above its root held there', () => {
 	const cases = [
 		{ name: 'relative with home', home: '/workspace', path: 'x', expected: '/computer/workspace/x' },
 		{ name: 'relative without home', home: undefined, path: 'x', expected: 'x' },
@@ -406,7 +409,27 @@ describe('onMachine preserves the plane walk', () => {
 		{ name: 'dot without home', home: undefined, path: '.', expected: '.' },
 	];
 
+	/** The plane path `computer.fs.stat(path)` asks of the file operations. */
+	const asked = async (home: string | undefined, path: string): Promise<string> => {
+		const paths: string[] = [];
+
+		const files = { stat: { op: FILE.stat, run: async (input: JsonValue) => {
+			paths.push(v.parse(v.object({ path: v.string() }), input).path);
+
+			return { value: { path: '', size: 0, mtimeMs: 0, isDir: false } };
+		} } };
+
+		const provider = {
+			name: 'computer', tools: {}, positionalArgs: true, capabilities: new Set<ExecutorCapability>(),
+			fileRoot: async () => (home === undefined ? { root: '/computer' } : { root: '/computer', home }),
+		} satisfies ExecutorProviderSurface;
+
+		await executorNamespace(provider, files).tools['fs.stat']?.execute(path);
+
+		return paths[0] ?? '';
+	};
+
 	for (const each of cases) {
-		test(each.name, () => { expect(onMachine('/computer', each.home, each.path)).toBe(each.expected); });
+		test(each.name, async () => { expect(await asked(each.home, each.path)).toBe(each.expected); });
 	}
 });

@@ -13,7 +13,7 @@ import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createCodemodeToolFactory, type CodemodeScope } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
-import { actorNamespaces, createAppDataStore, SURFACE_POLICY, type ActorHandle, type ExecutorProviderSurface, type SqlExecutor, type SurfaceActor } from '@kinu.run/core';
+import { actorNamespaces, createAppDataStore, SURFACE_POLICY, type ActorHandle, type ExecutorProviderSurface, type SqlExecutor, type SurfaceActor, type SurfacePolicy } from '@kinu.run/core';
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
@@ -52,6 +52,9 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
   };
 }
 
+/** A probe actor's programs: the agent's own reach, less the memory, files and tasks a probe holds none of. */
+const PROBE_POLICY: SurfacePolicy = { ...SURFACE_POLICY.program, stores: false };
+
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
 }
@@ -84,7 +87,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     const scope: CodemodeScope = {
       reach: slateToolReach(narrowToolSurface(undefined)),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), SURFACE_POLICY.confined, { executor }),
+      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), PROBE_POLICY, { executor }),
     };
 
     // The store holds `crafted`, read fresh per program as a runtime's surface reads it.
@@ -182,7 +185,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [] }, {
       reach: narrowToolSurface(undefined),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), SURFACE_POLICY.confined, { executor }),
+      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), PROBE_POLICY, { executor }),
     }).execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');
@@ -232,7 +235,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor, { executors: [{
         name: 'workspace', positionalArgs: true, capabilities: new Set(), tools: {},
         fileRoot: async () => ({ root: '' }),
-      }], files: fileScope }), SURFACE_POLICY.confined, { executor }),
+      }], files: fileScope }), PROBE_POLICY, { executor }),
     };
 
     const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }, scope) }).eval;

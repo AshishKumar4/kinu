@@ -130,7 +130,7 @@ const MachineFileCallSchema = v.looseObject({ path: v.string(), device: v.option
  * it), and a `..` that would climb above the machine's root held there, as at `/` on any machine. Every other component
  * is left as written, for the plane to walk.
  */
-export function onMachine(root: string, home: string | undefined, path: string): string {
+function onMachine(root: string, home: string | undefined, path: string): string {
   const written = path.startsWith('/') || home === undefined ? path : `${home.replace(/\/+$/u, '')}/${path}`;
 
   if (!written.startsWith('/')) return written;

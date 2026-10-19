@@ -62,9 +62,9 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
 }
 
 /**
- * `eval` over one hosted actor, a head or a swarm node, as a confined copy's programs reach it
- * (`SURFACE_POLICY.confined`): everything binds off the actor's own handle, stores and runtime, never the parent's (a
- * fork must not move its parent's program state), and it never inherits the authority to delegate.
+ * `eval` over one hosted actor, a head or a swarm node: everything binds off the actor's own handle, stores and
+ * runtime, never the parent's (a fork must not move its parent's program state), and it never inherits the authority
+ * to delegate. A node's programs report where its native `report` does.
  */
 export function hostedCodemodeTool(
   actor: SeatedActor, search: WebSearchProvider, ledgers: () => Pick<TurnLedgers, 'files' | 'context'>,
@@ -79,5 +79,11 @@ export function hostedCodemodeTool(
     ownerWaits: null,
   });
 
-  return (codemode, reach) => createNodeCodemodeToolFactory({ namespaces: actorNamespaces(surface, SURFACE_POLICY.confined), reach })(codemode);
+  return (codemode, reach) => {
+    const reported = codemode.report;
+
+    return createNodeCodemodeToolFactory({
+      namespaces: actorNamespaces(surface, SURFACE_POLICY.program, reported === undefined ? {} : { report: () => reported }), reach,
+    })(codemode);
+  };
 }

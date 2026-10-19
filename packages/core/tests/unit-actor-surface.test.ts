@@ -53,14 +53,12 @@ test("each caller reaches the actor's own namespaces, less what its policy decla
     operations: named(actor, SURFACE_POLICY.operations),
     slate: named(actor, SURFACE_POLICY.slate),
     slateTool: named(actor, SURFACE_POLICY.slateTool),
-    confined: named(actor, SURFACE_POLICY.confined),
     noInbox: named({ ...actor, agents: null }, SURFACE_POLICY.program),
   }).toEqual({
     program: ['state', 'agents', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
     operations: ['state', 'agents', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
     slate: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
     slateTool: ['state', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
-    confined: ['state', 'db', 'web', 'workspace'],
     noInbox: ['state', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
   });
 });

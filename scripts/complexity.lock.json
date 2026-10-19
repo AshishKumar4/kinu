@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-17",
-  "files": 3366,
-  "functions": 88216,
+  "measuredAt": "2026-10-19",
+  "files": 3389,
+  "functions": 88895,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -210,10 +210,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
-      "complexity": 27
-    },
-    {
       "key": "packages/cli/src/commands/debug.ts#summarizeRun",
       "complexity": 27
     },
@@ -311,6 +307,10 @@
     },
     {
       "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
+      "complexity": 26
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.constructor",
       "complexity": 26
     },
     {
