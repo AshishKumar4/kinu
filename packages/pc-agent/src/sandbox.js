@@ -682,8 +682,11 @@ function buildLinuxArgv(view, options) {
 
   for (const file of view.hiddenFiles) argv.push('--ro-bind', '/dev/null', file);
 
-  // Kinu's own directories a confined program of the daemon writes (a checkpoint store), after the mask that hides them.
+  // Kinu's own directories a confined program of the daemon writes or reads (a checkpoint store), after the mask that
+  // hides them.
   for (const dir of options.writable ?? []) argv.push('--bind', dir, dir);
+
+  for (const dir of options.readable ?? []) argv.push('--ro-bind', dir, dir);
   // Last: a root holding it (the owner's home) would shadow it, and the mask on
   // Kinu's own directory, which holds it, would hide it.
   argv.push('--bind', view.agentHome, view.agentHome);
@@ -701,10 +704,11 @@ function buildLinuxArgv(view, options) {
  *  agent's own" expressible without enumerating what to hide. Kinu's own
  *  directory is denied after the consented roots, which may hold it, and the
  *  agent's directories inside it are allowed again after that. */
-function buildMacProfile(view, daemonDirs = []) {
+function buildMacProfile(view, daemonDirs = { writable: [], readable: [] }) {
   const subpath = (dir) => `(subpath ${JSON.stringify(dir)})`;
   // Kinu's directories a confined program of the daemon writes (a checkpoint store) are allowed again with the agent's.
-  const own = [view.agentHome, view.agentTmp, ...daemonDirs];
+  const own = [view.agentHome, view.agentTmp, ...daemonDirs.writable];
+  const readable = daemonDirs.readable.length === 0 ? [] : [`(allow file-read* ${daemonDirs.readable.map(subpath).join(' ')})`];
   const writable = [...own, ...view.roots, '/private/tmp', '/private/var/tmp'];
 
   return [
@@ -716,6 +720,7 @@ function buildMacProfile(view, daemonDirs = []) {
     `(allow file-read* file-write* ${writable.map(subpath).join(' ')})`,
     `(deny file-read* file-write* ${subpath(view.deviceHome)})`,
     `(allow file-read* file-write* ${own.map(subpath).join(' ')})`,
+    ...readable,
     `(allow file-read-metadata (literal "/Users") (literal ${JSON.stringify(view.home)}))`,
     '(allow file-write* (literal "/dev/null") (literal "/dev/dtracehelper") (literal "/dev/ptmx") (regex #"^/dev/ttys[0-9]+$"))',
     '(allow pseudo-tty) (allow ipc-posix-sem)',
@@ -832,19 +837,20 @@ function plan(options) {
 /**
  * A program the DAEMON runs in a frame's sandbox (L111 #3): its checkpoint git, which reads and writes the frame's work
  * tree. The view's own mounts or profile, so a directory a command swapped for a link out of the roots leads nowhere;
- * `writable` adds Kinu's directories it needs (its store), and `env` is the daemon's own for it, passed whole. Starts
+ * `writable` and `readable` add Kinu's directories it needs (its store), and `env` is the daemon's own, passed whole. Starts
  * in the agent's home, which always exists; the program enters its directory itself, inside.
  */
 function confined(options) {
   const platform = options.platform ?? os.platform();
   const { view, program, env } = options;
   const writable = options.writable ?? [];
+  const readable = options.readable ?? [];
 
   if (platform === 'darwin') {
-    return { argv: [MAC_SANDBOX_EXEC, '-p', buildMacProfile(view, writable), ...program], env, cwd: view.agentHome };
+    return { argv: [MAC_SANDBOX_EXEC, '-p', buildMacProfile(view, { writable, readable }), ...program], env, cwd: view.agentHome };
   }
 
-  return { argv: buildLinuxArgv(view, { cwd: view.agentHome, env, program, writable, gpu: [] }), env: {}, cwd: view.agentHome };
+  return { argv: buildLinuxArgv(view, { cwd: view.agentHome, env, program, writable, readable, gpu: [] }), env: {}, cwd: view.agentHome };
 }
 
 /**

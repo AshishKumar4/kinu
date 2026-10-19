@@ -65,7 +65,7 @@ export interface CheckpointHost<C> {
   readonly env: Readonly<Record<string, string | undefined>>;
   sha256(text: string): string;
   /** Runs `bin` to its exit with no deadline; `maxBuffer` bounds what it may print. A work tree's run is `confine`d. */
-  run(bin: string, args: readonly string[], options: { cwd: string; env: GitEnvironment; maxBuffer: number; confine: C | null }): Promise<CheckpointGitRun>;
+  run(bin: string, args: readonly string[], options: { cwd: string; env: GitEnvironment; maxBuffer: number; confine: C | null; writesStore: boolean }): Promise<CheckpointGitRun>;
   now(): number;
   /** Told of a snapshot that failed: it never blocks the mutation it preceded, so this is where it is seen. */
   log(message: string): void;
@@ -113,11 +113,16 @@ function failed(message: string): Error {
 /** The environment a git child runs under. */
 interface GitEnvironment { [name: string]: string }
 
-/** Where one git runs: its directory and environment, and the host's confinement for a work tree's (null for none). */
+/**
+ * Where one git runs: its directory and environment, the host's confinement for a work tree's (null for none), and
+ * whether it writes the store: a confined git that only reads it is given it read-only, so a work tree that leads into
+ * it cannot write there (L111 #3).
+ */
 interface GitPlace<C> {
   readonly cwd: string;
   readonly env: GitEnvironment;
   readonly confine: C | null;
+  readonly writesStore: boolean;
 }
 
 /** A failure and each cause under it, outermost first: the frame naming the real fault is often a cause deeper. */
@@ -159,6 +164,13 @@ export function createCheckpointEngine<C>(host: CheckpointHost<C>, options: Chec
     env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
+    // No hook and no monitor runs, whatever a store's own config names: a work tree's git can reach a store, and a
+    // store's git runs as the host's own process (L111 #3). Command-scope config outranks the repository's.
+    env.GIT_CONFIG_COUNT = '2';
+    env.GIT_CONFIG_KEY_0 = 'core.hooksPath';
+    env.GIT_CONFIG_VALUE_0 = host.devNull;
+    env.GIT_CONFIG_KEY_1 = 'core.fsmonitor';
+    env.GIT_CONFIG_VALUE_1 = 'false';
     // `stagingOutcome` parses git's own English diagnostics.
     env.LC_ALL = 'C';
 
@@ -168,18 +180,20 @@ export function createCheckpointEngine<C>(host: CheckpointHost<C>, options: Chec
   const storeEnv = (gitDir: string, workdir: string): GitEnvironment => ({ ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir });
 
   /** A store's own objects, refs and index, with no work tree: run in the store, which no command reaches. */
-  const storeOnly = (gitDir: string): GitPlace<C> => ({ cwd: gitDir, env: { ...isolatedEnv(), GIT_DIR: gitDir }, confine: null });
+  const storeOnly = (gitDir: string): GitPlace<C> => ({ cwd: gitDir, env: { ...isolatedEnv(), GIT_DIR: gitDir }, confine: null, writesStore: true });
 
-  /** A work tree with its store: run in the tree, `confine`d. */
-  const inTree = (gitDir: string, workdir: string, confine: C | null): GitPlace<C> => ({ cwd: workdir, env: storeEnv(gitDir, workdir), confine });
+  /** A work tree with its store: run in the tree, `confine`d, writing the store only where it says so. */
+  const inTree = (gitDir: string, workdir: string, confine: C | null, writesStore: boolean): GitPlace<C> => ({
+    cwd: workdir, env: storeEnv(gitDir, workdir), confine, writesStore,
+  });
 
   /** Neither a store nor a work tree: the host's own, as `--version` and a store's init are. */
-  const outside = (cwd: string): GitPlace<C> => ({ cwd, env: isolatedEnv(), confine: null });
+  const outside = (cwd: string): GitPlace<C> => ({ cwd, env: isolatedEnv(), confine: null, writesStore: true });
 
   /** A missing cwd fails the spawn the way a missing binary does; it is checked so it never reads as "no git". */
-  const runGit = async (args: readonly string[], { cwd, env, confine }: GitPlace<C>): Promise<CheckpointGitRun> => {
+  const runGit = async (args: readonly string[], { cwd, env, confine, writesStore }: GitPlace<C>): Promise<CheckpointGitRun> => {
     if (!disk.existsSync(cwd)) return { code: 1, stdout: '', stderr: `working directory not found: ${cwd}`, missing: false };
-    const run = await host.run(options.gitBin, args, { cwd, env, maxBuffer: GIT_OUTPUT_BYTES, confine });
+    const run = await host.run(options.gitBin, args, { cwd, env, maxBuffer: GIT_OUTPUT_BYTES, confine, writesStore });
 
     if (run.missing) {
       gitAvailable = false;
@@ -256,7 +270,7 @@ export function createCheckpointEngine<C>(host: CheckpointHost<C>, options: Chec
   /** `--ignore-errors`, so an unreadable path costs only that path; the skipped paths are named in the reason. The add
    *  reads the work tree, `confine`d; the tree is written in the store. */
   const stageCurrent = async (gitDir: string, workdir: string, confine: C | null): Promise<{ tree: string; unreadable: string[] }> => {
-    const add = await runGit(['add', '-A', '--ignore-errors'], inTree(gitDir, workdir, confine));
+    const add = await runGit(['add', '-A', '--ignore-errors'], inTree(gitDir, workdir, confine, true));
     const staged = stagingOutcome(add.code, add.stderr);
 
     if ('failure' in staged) throw failed(staged.failure);
@@ -355,16 +369,18 @@ export function createCheckpointEngine<C>(host: CheckpointHost<C>, options: Chec
     const files = await diffToCheckpoint(gitDir, abs, id, confine);
     // Out of any turn, so the restore is undoable without joining the armed turn's group.
     const preRestoreId = await snapshot({ agent, dir: abs, turn: null, reason: 'pre-restore', confine });
-    const tree = inTree(gitDir, abs, confine);
+    // The restore writes the work tree and only reads its store.
+    const tree = inTree(gitDir, abs, confine, false);
 
     await git(['read-tree', id], storeOnly(gitDir), 'checkpoint read-tree failed');
     // Files created since the checkpoint are untracked in its index: git removes them in the work tree, as it checks
     // the checkpoint's tree out, both `confine`d, never by a path this process opens itself. Literal pathspecs, a
-    // batch at a time, so no name reads as a pattern and no list outgrows an argument vector.
+    // batch at a time, so no name reads as a pattern and no list outgrows an argument vector; `-x`, so a name the work
+    // tree now ignores is removed as the plan said.
     const deleted = files.filter((change) => change.kind === 'delete').map((change) => change.path);
 
     for (let at = 0; at < deleted.length; at += RESTORE_DELETE_BATCH) {
-      await git(['--literal-pathspecs', 'clean', '-f', '-q', '--', ...deleted.slice(at, at + RESTORE_DELETE_BATCH)], tree, 'checkpoint restore failed');
+      await git(['--literal-pathspecs', 'clean', '-f', '-x', '-q', '--', ...deleted.slice(at, at + RESTORE_DELETE_BATCH)], tree, 'checkpoint restore failed');
     }
 
     await git(['checkout-index', '-a', '-f'], tree, 'checkpoint restore failed');

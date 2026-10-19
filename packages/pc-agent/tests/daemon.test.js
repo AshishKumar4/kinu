@@ -989,6 +989,21 @@ describe('daemon device path confinement', () => {
     expect(refused).toBeGreaterThan(0);
   });
 
+  // L111 #2's review: a stat walked from / threw when a directory of its path was missing, where an absent path is null.
+  test('a stat of a path whose directory is not there yet answers null, followed or not', async () => {
+    const project = scratchDir('daemon-stat-missing');
+    const answers = [];
+
+    for (const follow of [true, false]) {
+      const ws = fakeWs();
+
+      handle({ id: 'absent', method: 'statPath', sandbox: scoped([project]), params: [path.join(project, 'not-made', 'file.txt'), { follow }] }, ws, {});
+      answers.push(await ws.response('absent'));
+    }
+
+    expect(answers).toEqual([{ id: 'absent', result: null }, { id: 'absent', result: null }]);
+  });
+
   // L111 #2: a listing showed a link's target's size and time, though the link led out of the root.
   test("a listed link out of the root shows its name alone, and one inside shows its target's size", async () => {
     const root = scratchDir('daemon-listed-links');
@@ -2162,7 +2177,9 @@ describe('daemon process under Bun against a local hub', () => {
       send({ id: 'w2', method: 'writeFile', sandbox: block, params: [path.join(other, 'x.txt'), 'x'], checkpoint: hint('t2', other) });
       expect(await until(() => fs.existsSync(path.join(held, 'holding')), 20_000)).toBe(true);
       send({ id: 'r', method: 'checkpointRestore', sandbox: block, params: ['a', inner, taken.id] });
-      await new Promise((resolve) => { setTimeout(resolve, 200); });
+      // Frames are handled in their order: a stat's answer means the restore before it was judged and queued.
+      send({ id: 'judged', method: 'statPath', sandbox: block, params: [inner] });
+      await reply('judged');
       fs.renameSync(inner, path.join(project, 'inner-old'));
       fs.symlinkSync(outside, inner);
       await fs.promises.writeFile(path.join(held, 'release'), 'go\n');

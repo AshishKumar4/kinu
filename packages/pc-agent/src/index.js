@@ -368,6 +368,8 @@ const CHECKPOINT_GIT_MISSING = 127;
  * leads out of the roots is one it cannot see, and says so by its exit.
  */
 function checkpointGitRun(confine, bin, args, options) {
+  const { writesStore } = options;
+
   if (confine === null) return { file: bin, argv: [...args], cwd: options.cwd, env: options.env };
   const { view } = confine;
 
@@ -383,7 +385,9 @@ function checkpointGitRun(confine, bin, args, options) {
   // The work tree as the sandbox names it, where git looks for it inside.
   if (env.GIT_WORK_TREE !== undefined) env.GIT_WORK_TREE = view.insidePath(env.GIT_WORK_TREE);
   const program = ['bash', '-c', `cd -- "$1" || exit ${CHECKPOINT_TREE_UNSEEN}; shift; exec "$@"`, 'kinu-checkpoint', view.insidePath(options.cwd), bin, ...args];
-  const planned = sandbox.confined({ view, program, env, writable: [options.env.GIT_DIR ?? path.join(DEVICE_HOME, 'checkpoints')] });
+  const store = [options.env.GIT_DIR ?? path.join(DEVICE_HOME, 'checkpoints')];
+  // Read-only where git only reads it, so a work tree that leads into the store writes nothing there.
+  const planned = sandbox.confined({ view, program, env, writable: writesStore ? store : [], readable: writesStore ? [] : store });
 
   // The sandbox launcher is found on the daemon's own PATH, as a sandboxed command's is; git's environment is its own.
   return { file: planned.argv[0], argv: planned.argv.slice(1), cwd: planned.cwd, env: { PATH: process.env.PATH, ...planned.env } };
@@ -402,8 +406,8 @@ function createCheckpoints(opts = {}) {
   const engine = createCheckpointEngine({
     fs, path, homedir: os.homedir(), tmpdir: os.tmpdir(), devNull: os.devNull, env: process.env,
     sha256: (text) => crypto.createHash('sha256').update(text).digest('hex'),
-    run: async (bin, args, { cwd, env, maxBuffer, confine }) => {
-      const run = checkpointGitRun(confine, bin, args, { cwd, env });
+    run: async (bin, args, { cwd, env, maxBuffer, confine, writesStore }) => {
+      const run = checkpointGitRun(confine, bin, args, { cwd, env, writesStore });
       const { error, stdout, stderr } = await runToExit(run.file, run.argv, { cwd: run.cwd, env: run.env, maxBuffer, encoding: 'utf8' });
       // A code that is not an exit status (a signal, an overfull buffer) is git never finishing.
       const finished = error === null || Number.isInteger(error.code);
@@ -729,9 +733,23 @@ function statPathAnswer(msg) {
   const follow = (params[1] ?? {}).follow !== false;
   const view = viewFromFrame(msg);
   const confined = follow ? confinedDeviceViewPath(view, params[0], 'read') : view.resolveEntryPath(parseString(params[0], 'device paths must be strings'), 'read');
-  const stat = follow ? statJudged(view, confined) : atJudged(view, confined, {}, (at) => at.stat());
+  const stat = follow ? statJudged(view, confined) : heldStat(view, confined);
 
   return stat === undefined ? null : { size: stat.size, mtimeMs: stat.mtimeMs, type: statType(stat) };
+}
+
+/**
+ * The entry at a judged path, its own (a link's being the link's), read where it was judged; undefined when nothing is
+ * there, a missing directory of its path included, as a stat of an absent path is. A link put in place of a directory
+ * of it is still refused.
+ */
+function heldStat(view, judged) {
+  try {
+    return atJudged(view, judged, {}, (at) => at.stat());
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return undefined;
+    throw err;
+  }
 }
 
 /**
@@ -741,7 +759,7 @@ function statPathAnswer(msg) {
  */
 function statJudged(view, judged) {
   if (view.raw === true) return fs.statSync(judged, { throwIfNoEntry: false });
-  const stat = atJudged(view, judged, {}, (at) => at.stat());
+  const stat = heldStat(view, judged);
 
   if (stat !== undefined && stat.isSymbolicLink()) throw movedUnderneath(judged);
 

@@ -5,7 +5,7 @@
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -97,5 +97,37 @@ describe('one engine, one set of rules, on both hosts', () => {
 
     expect(await device.mutate(deviceWork, 't', () => 'the mutation ran')).toBe('the mutation ran');
     expect(await device.ensure(deviceWork, 't')).toBeTruthy();
+  });
+});
+
+// L111 #3's review: a work tree swapped for a link into its own store let a restore write a hook there, and the next
+// snapshot's store git, unconfined, ran it. No hook a store holds runs, on either host.
+describe('a store runs none of its hooks', () => {
+  test('a reference-transaction hook planted in the store is not run by the next snapshot', async () => {
+    const root = scratchDir('engine-hooks');
+    const project = join(root, 'project');
+    const ran = join(root, 'hook-ran');
+
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'a.txt'), 'one');
+    const { host } = engines(root);
+
+    host.beginTurn({ turnId: 't1', sessionId: 's' });
+    expect(await host.ensureCheckpoint(project)).toBeTruthy();
+
+    // A store is a bare repository: the directory its HEAD is in.
+    const stores = readdirSync(join(root, 'shadow'), { recursive: true }).map(String)
+      .filter((name) => name.endsWith('/HEAD') && !name.includes('/refs/') && !name.includes('/logs/')).map((name) => name.slice(0, -'/HEAD'.length));
+
+    for (const store of stores) {
+      mkdirSync(join(root, 'shadow', store, 'hooks'), { recursive: true });
+      writeFileSync(join(root, 'shadow', store, 'hooks', 'reference-transaction'), `#!/bin/sh\ntouch '${ran}'\n`, { mode: 0o755 });
+    }
+
+    writeFileSync(join(project, 'a.txt'), 'two');
+    host.beginTurn({ turnId: 't2', sessionId: 's' });
+    expect(await host.ensureCheckpoint(project)).toBeTruthy();
+
+    expect({ stores, ran: existsSync(ran) }).toEqual({ stores: [expect.any(String)], ran: false });
   });
 });

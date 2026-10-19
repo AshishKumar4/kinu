@@ -26,8 +26,7 @@ const { runToExit } = require('../update.js');
 
 const { errorDetail } = require('./log.js');
 
-/** held.js as the supervisor script carries it: the script outlives this daemon, and an update may replace the file. */
-const HELD_SOURCE = fs.readFileSync(path.join(__dirname, 'held.js'), 'utf8');
+const { heldModule } = require('./held.js');
 
 const { elidedOutput } = require('../../../core/src/execution/bounded-output.ts');
 
@@ -219,11 +218,7 @@ const { procStat, groupHasLiveProcess } = (${createProcReader.toString()})(fs);
 const elidedOutput = (${elidedOutput.toString()});
 const { execFile, spawn } = require('node:child_process');
 // A spill opens where it was judged, without following a link a sandboxed command put in its path (held.js).
-const { atJudged } = (() => {
-  const module = { exports: {} };
-  (function (module, exports) { ${HELD_SOURCE} })(module, module.exports);
-  return module.exports;
-})();
+const { atJudged } = (${heldModule.toString()})(require);
 
 // fd 4 is the record's \`life\`, handed over at this process's spawn: the kernel closes it however this process exits,
 // and the daemon reads that close as this supervisor gone.
