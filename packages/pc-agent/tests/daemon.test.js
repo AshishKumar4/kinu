@@ -992,8 +992,7 @@ describe('daemon device path confinement', () => {
   // L111 #2, the macOS half: a listing that held the directory but read its names by its path again, keeping those the
   // held directory also has, told a command which of the names it planted a swapped-in private directory shares: a
   // listing showing only some of them. Every listing shows all the planted names or none of them, and no private one.
-  // (Mid-rename the view's realpath can judge a sibling inside the root, the directory aside or the project itself,
-  // measured with Bun 1.4.3: those listings are of directories this frame may read, and hold no planted name.)
+  // (That a listing mid-rename is of the directory named, never a sibling, is the next test's.)
   test('a listing tells a command nothing of a private directory it swaps in for the checked one', async () => {
     const root = scratchDir('daemon-list-planted');
     const project = path.join(root, 'project');
@@ -1048,6 +1047,62 @@ describe('daemon device path confinement', () => {
     expect({ told, whole: (shown[whole] ?? 0) > 0 }).toEqual({ told: [], whole: true });
     expect(swapper.signalCode).toBe('SIGTERM');
     expect(refused).toBeGreaterThan(0);
+  });
+
+  // LEDGER-L111's open defect (2026-10-19): mid-rename, the view judged `project/inner` with Bun 1.4.3's realpathSync,
+  // which answered the project itself or the folder set aside, so a frame naming `inner` acted beside it. A decoy of the
+  // same name in the project tells the two apart: a frame reads and lists `inner`, or answers an error, and never the
+  // project. Before the fix, reads answered the decoy and listings the project's own names.
+  test('a frame acts on the path it named while a command moves a folder of it aside, a link in its place, and back', async () => {
+    const root = scratchDir('daemon-rename-race');
+    const project = path.join(root, 'project');
+    const inner = path.join(project, 'inner');
+
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(path.join(inner, 'planted.md'), 'planted');
+    fs.writeFileSync(path.join(project, 'planted.md'), 'the project\'s decoy');
+    const answered = {};
+    let refused = 0;
+
+    const outside = path.join(root, 'private');
+
+    fs.mkdirSync(outside);
+
+    const renamer = Bun.spawn({
+      cmd: [process.execPath, '-e', SWAPPER],
+      env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+
+    try {
+      await renamer.stdout.getReader().read();
+
+      for (let attempt = 0; attempt < 2000; attempt += 1) {
+        const ws = fakeWs();
+        const reading = attempt % 2 === 1;
+        const params = reading ? [path.join(inner, 'planted.md'), 0, 64] : [inner];
+
+        handle({ id: 'rename-race', method: reading ? 'readRange' : 'listFiles', sandbox: scoped([project]), params }, ws, {});
+        const answer = await ws.response('rename-race');
+
+        if (answer.error !== undefined) {
+          refused += 1;
+          continue;
+        }
+
+        const seen = reading ? Buffer.from(answer.result.content, 'base64').toString('utf8') : answer.result.map((entry) => entry.name).sort().join(' ');
+
+        answered[seen] = (answered[seen] ?? 0) + 1;
+      }
+    } finally {
+      renamer.kill();
+      await renamer.exited;
+    }
+
+    expect(Object.keys(answered).sort()).toEqual(['planted', 'planted.md']);
+    expect({ renaming: renamer.signalCode, raced: refused > 0 }).toEqual({ renaming: 'SIGTERM', raced: true });
   });
 
   // A libc that cannot be bound lists nothing another way: the listing is refused, saying why.
