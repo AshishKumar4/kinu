@@ -6,7 +6,7 @@
 import { useCallback, useMemo } from "react";
 import { Effect } from "effect";
 import { attempt, type KinuError } from "@kinu.run/core/obs";
-import { grantDeviceConsent, listDeviceConsents, type DeviceConsent } from "@/lib/user-api";
+import { grantDeviceConsent, listDeviceConsents, type DeviceConsent, type DeviceDesktop } from "@/lib/user-api";
 import { lastValue, useAsyncResource, type Revalidate } from "@/hooks/use-async-resource";
 import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
 
@@ -16,6 +16,8 @@ export interface AccountMachine {
   readonly connected: boolean;
   /** This workspace holds the machine: its commands and its terminal run there without asking. */
   readonly granted: boolean;
+  /** Its screen, as its daemon reports it. */
+  readonly desktop: DeviceDesktop;
 }
 
 export interface AccountMachines {
@@ -45,6 +47,7 @@ export function useAccountMachines(workspace: string): AccountMachines {
       id: device.id,
       label: device.label,
       connected: device.connected,
+      desktop: device.desktop,
       granted: consents.some((row) => row.deviceId === device.id && row.agentName === workspace && row.policy === HELD),
     }))), [devices, consents, workspace]);
 

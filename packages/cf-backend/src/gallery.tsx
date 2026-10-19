@@ -133,6 +133,20 @@ const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 /** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
 const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
 
+/**
+ * `&pcdesktop=ready|setup|permission|update`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
+ * `setup` poses a Mac whose Screen Sharing is off, as the daemon names the step.
+ */
+const SHELL_PC_DESKTOP: UserDevice["desktop"] = (() => {
+  const state = SHELL_PC === null ? null : new URLSearchParams(location.search).get("pcdesktop");
+
+  if (state === "ready") return { state, width: 1512, height: 982 };
+
+  if (state === "setup") return { state, detail: "Turn on Screen Sharing in System Settings › General › Sharing, then open this tab again." };
+
+  return state === "permission" || state === "update" ? { state } : { state: "none" };
+})();
+
 /** The shell's machines under `&env=computer` or `&pc=`, as `listMounts` and the snapshot's executors answer them. */
 const SHELL_MACHINES = {
   mounts: [
@@ -204,6 +218,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+      desktop: { state: "none" },
       version: null, servedVersion: null, update: "unreported", updateRefusal: null,
     },
   ],
@@ -736,17 +751,20 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
           capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0"],
         },
+        desktop: { state: "none" },
       },
       // `&devices=history`: a refused update and a machine that has never connected.
       ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
         id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
       }, {
         id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "files_only", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
       ...(frame === "devices" ? [{
@@ -755,6 +773,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
     ]);
@@ -889,6 +908,7 @@ function galleryConnectDevice(id: string, label: string, connected: boolean) {
     replacedAt: null,
     revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+    desktop: id === GALLERY_PC.id ? SHELL_PC_DESKTOP : { state: "none" },
     version: null, servedVersion: null, update: "unreported", updateRefusal: null,
   };
 }
@@ -7313,6 +7333,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
     replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
+    desktop: { state: "none" },
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current", updateRefusal: null,
   };
 }

@@ -358,7 +358,7 @@ async function contractRoute(url: URL, name: string, box: DurableObjectStub<Cont
   if (job !== null) return job;
 
   switch (url.pathname) {
-    case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
+    case '/view': return new Response(`<iframe src="${desktopClientUrl(url, name, null)}" style="width:1280px;height:800px;border:0"></iframe>`, { headers: { 'content-type': 'text/html' } });
     case '/golden': return Response.json({ id: await box.ensureGolden() });
     case '/inspection': return Response.json(await box.inspection());
     case '/processes': return Response.json({ processes: await box.processes() });

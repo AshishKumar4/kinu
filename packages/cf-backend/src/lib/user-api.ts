@@ -1,7 +1,7 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import { Cause, Effect } from 'effect';
 import {
-  AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
+  AccountMemoryProposalSchema, DEVICE_DESKTOP_STATES, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
@@ -154,6 +154,16 @@ const DeviceSandboxSchema = v.object({
   gpu: v.pipe(v.array(v.string()), v.readonly()),
 });
 
+/** The PC's screen as its daemon reports it (`DEVICE_DESKTOP_STATES`): its size while it can be opened, the step on it
+ *  before that. */
+const DeviceDesktopSchema = v.variant("state", [
+  v.object({ state: v.literal("ready"), width: v.number(), height: v.number() }),
+  v.object({ state: v.literal("setup"), detail: v.string() }),
+  v.object({ state: v.picklist(DEVICE_DESKTOP_STATES.filter((state) => state !== "ready" && state !== "setup")) }),
+]);
+
+export type DeviceDesktop = v.InferOutput<typeof DeviceDesktopSchema>;
+
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
@@ -167,6 +177,7 @@ const UserDeviceSchema = v.object({
   wholeMachine: v.boolean(),
   /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: DeviceSandboxSchema,
+  desktop: DeviceDesktopSchema,
   version: v.nullable(v.string()),
   servedVersion: v.nullable(v.string()),
   update: v.picklist(DEVICE_UPDATE_STATES),

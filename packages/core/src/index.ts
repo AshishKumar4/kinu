@@ -2241,6 +2241,8 @@ export {
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';
 
+export { DEVICE_DESKTOP_STATES, type DeviceDesktopState } from './execution/device-desktop';
+
 export {
   COPY_SCRIPT, GITHUB_ICON, REPO_URL,
   mark, markDocument, publicFooter, publicPage,

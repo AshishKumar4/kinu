@@ -108,6 +108,24 @@ function machinesOf(mounts: readonly EnvironmentInfo[], account: readonly Accoun
   ];
 }
 
+/** What a machine's Desktop tab shows: its screen at its size, or the step before it; null for no tab. */
+type MachineDesktop =
+  | { readonly kind: "screen"; readonly src: string; readonly width: number; readonly height: number }
+  | { readonly kind: "step"; readonly state: "setup" | "permission" | "update"; readonly detail: string | null }
+  | null;
+
+/** The computer's screen; a PC's as its daemon reports it (1014-t); none for the workspace. */
+function machineDesktop(machine: Machine, workspace: string): MachineDesktop {
+  if (machine.mount.name === "computer") return { kind: "screen", src: desktopClientUrl(location, workspace, null), ...DESKTOP_SIZE };
+  const desktop = machine.device?.desktop;
+
+  if (machine.device === null || desktop === undefined || desktop.state === "none") return null;
+
+  if (desktop.state === "ready") return { kind: "screen", src: desktopClientUrl(location, workspace, machine.device.id), width: desktop.width, height: desktop.height };
+
+  return { kind: "step", state: desktop.state, detail: desktop.state === "setup" ? desktop.detail : null };
+}
+
 function machineLabel(machine: Machine, exec: ExecutorInfo | undefined): string {
   return machine.device?.label ?? exec?.label ?? executorLabel(machine.mount.name);
 }
@@ -371,6 +389,7 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
       {device !== null && device.connected && !device.granted && <GiveAccess name={name} onGive={() => grant(device.id)} />}
       {(device === null || (device.connected && device.granted)) && (
         <EnvironmentView mount={mount} machineKey={machine.key} device={device?.id ?? null} exec={exec} name={name} workspace={workspace}
+          desktop={machineDesktop(machine, workspace)}
           restartingTo={restarting ? size.restartingTo ?? "" : null} executorOutputs={executorOutputs} onExecute={onExecute}
           sessions={computer ? sessions : null} shown={shown} wide={wide} />
       )}
@@ -403,7 +422,7 @@ function MachineActions({ mount, name, size, onOpenFiles }: {
 }
 
 /** Under the machine row: the machine's absence, its restart, or its tabs and its terminal or screen. */
-function EnvironmentView({ mount, machineKey, device, exec, name, workspace, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
+function EnvironmentView({ mount, machineKey, device, exec, name, workspace, desktop, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
   mount: EnvironmentInfo;
   /** The machine's key in the column: its tabs are kept under it. */
   machineKey: string;
@@ -412,6 +431,7 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, res
   exec: ExecutorInfo | undefined;
   name: string;
   workspace: string;
+  desktop: MachineDesktop;
   /** While a resize restarts the computer, the size it starts at. */
   restartingTo: string | null;
   executorOutputs: Map<string, ExecutorOutput[]>;
@@ -426,8 +446,6 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, res
   if (exec === undefined) return <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>;
 
   const tab = shown.tab(machineKey);
-  // Only the computer has a screen.
-  const desktop = exec.name === "computer" ? desktopClientUrl(location, workspace) : null;
 
   const tabs = (
     <SessionTabs label={`${name} sessions`} sessions={sessions?.sessions ?? null} current={tab} desktop={desktop !== null}
@@ -445,7 +463,7 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, res
     : [tab, ...(wide && shown.split !== null && shown.split !== tab ? [shown.split] : [])];
 
   const pane = (id: string, place: PanePlace) => (id === "desktop" && desktop !== null
-    ? <DesktopView name={name} src={desktop} />
+    ? <DesktopPane name={name} desktop={desktop} />
     : <SessionPane workspace={workspace} exec={exec} device={device} session={id} sessions={sessions}
       executorOutputs={executorOutputs} onExecute={onExecute} named={place !== "kept" && showing.length > 1}
       trailing={wide && sessions !== null ? <SplitToggle sessions={sessions} shown={shown} showing={id} /> : null} />);
@@ -542,17 +560,42 @@ function SplitToggle({ sessions, shown, showing }: { sessions: ComputerSessions;
   );
 }
 
+/** A machine's Desktop tab: its screen, or what it needs first, said where the screen would be. */
+function DesktopPane({ name, desktop }: { name: string; desktop: NonNullable<MachineDesktop> }) {
+  if (desktop.kind === "screen") return <DesktopView name={name} src={desktop.src} width={desktop.width} height={desktop.height} />;
+
+  return <div className="p-terminal-ground flex min-h-0 flex-1 flex-col"><DesktopStep name={name} state={desktop.state} detail={desktop.detail} /></div>;
+}
+
+/** What each step before a PC's screen says: what is on the PC, and what opens it. */
+const DESKTOP_STEPS = {
+  setup: (name: string, detail: string | null) => ({ title: `${name} needs one step first`, body: detail ?? "" }),
+  permission: (name: string) => ({
+    title: `Allow screen sharing on ${name}`,
+    body: `A prompt on ${name} asks to share its screen with Kinu. Its screen opens here once it is allowed there.`,
+  }),
+  update: (name: string) => ({
+    title: `Update Kinu on ${name}`,
+    body: <>Its daemon shares no screen yet. Run <code className="p-annotation whitespace-nowrap">kinu update</code> on it, and its desktop opens here.</>,
+  }),
+} satisfies Record<"setup" | "permission" | "update", (name: string, detail: string | null) => { readonly title: string; readonly body: ReactNode }>;
+
+function DesktopStep({ name, state, detail }: { name: string; state: "setup" | "permission" | "update"; detail: string | null }) {
+  const { title, body } = DESKTOP_STEPS[state](name, detail);
+
+  return <Absence icon={DesktopIcon} title={title}>{body}</Absence>;
+}
+
 /**
- * The computer's screen under its strip: in the column, or expanded over the workspace area with the rail folded. One
+ * A machine's screen under its strip: in the column, or expanded over the workspace area with the rail folded. One
  * frame either way, so expanding moves no client and reconnects nothing. Production f9c17ac7b opened a second client
  * in a new tab instead, on a page that drew it as a thin strip (the owner, 2026-10-14).
  */
-function DesktopView({ name, src }: { name: string; src: string }) {
+function DesktopView({ name, src, width, height }: { name: string; src: string; width: number; height: number }) {
   const title = `${name}'s desktop`;
   const area = useWorkspaceArea();
   const [expanded, setExpanded] = useState(false);
   const cover = useCover(area, expanded);
-  const { width, height } = DESKTOP_SIZE;
 
   return (
     <div data-desktop-view={cover === null ? undefined : "expanded"} style={cover ?? undefined}
