@@ -15,7 +15,7 @@ export const APP_ROUTES = {
   workspaceAgentPath: '/workspace/:agentId/agents/:subName/*',
   /** `overview`, `settings`, `new` or `desktop`: the workspace's own pages, under the bar the chats share. */
   workspaceView: '/workspace/:agentId/:view',
-  explore: '/swarm/:agentId',
+  swarm: '/swarm/:agentId',
   control: '/control',
   drive: '/drive',
   /** The Drive below its root: `*` is the folder path, any depth. */
@@ -28,7 +28,11 @@ export const APP_ROUTES = {
   sharedLive: '/shared/live/:workspace/:share',
   /** One personal part of a shared slate, in the app's own frame inside the slate's page (`slatePartFramePath`). */
   liveSlatePart: '/s/:workspace/:slate/parts/:part',
-  /** Slates people listed for anyone to use. */
+  /** Apps and workspaces people listed for anyone to open or install, Kinu's own first. */
+  explore: '/explore',
+  /** One listed workspace blueprint: what it does, what is inside, what it needs, and Install. */
+  exploreWorkspace: '/explore/workspaces/:blueprint',
+  /** Slates people listed for anyone to use: Explore's apps, at their first address. */
   gallery: '/gallery',
   /** One listed slate: what it uses, what a fork gets, and Open, Fork, Star. */
   gallerySlate: '/gallery/:workspace/:slate',

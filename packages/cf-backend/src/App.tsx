@@ -128,7 +128,7 @@ export default function App() {
             <Route path={APP_ROUTES.workspaceAgent} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.workspaceAgentPath} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.workspaceView} element={<Page label="workspace-view"><KeyedWorkspace /></Page>} />
-            <Route path={APP_ROUTES.explore} element={<Page label="swarm-explorer"><SwarmExplorer /></Page>} />
+            <Route path={APP_ROUTES.swarm} element={<Page label="swarm-explorer"><SwarmExplorer /></Page>} />
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
           </Route>
