@@ -3,7 +3,8 @@
 // 2026-10-01 trials sharing eval-service listed each other as peers and messaged each other.
 //
 // A trial's slot is its place in the run's whole matrix: every runner file, sorted, then model, arm and
-// trial. Each worker process works it out alone, and two trials of a run never share one. Before a trial opens, its
+// trial, from the first account of the block its run leased (scripts/evals-lease.ts). Each worker process works it out
+// alone, two trials of a run never share one, and two open runs never hold one block. Before a trial opens, its
 // account is checked: a workspace another run marks live means the slot is taken, one a stopped run left is deleted,
 // and a row the trial could inherit stops it, named.
 import * as v from 'valibot';
@@ -11,6 +12,7 @@ import {
   EVAL_TRIAL_ACCOUNTS, EVAL_WORKSPACE_LEASE_MS, inheritedRows, JsonValueSchema, parseEvalAccount, ProfileCatalogEnvelopeSchema, type EvalAccount,
   type JsonValue,
 } from '@kinu.run/core';
+import { evalWorkspaceStem } from '@kinu.run/test-utils';
 import { deleteWorkspace, listWorkspaces, webHeaders } from './workspace-roster';
 import type { EvalMatrix } from './config';
 import type { EvalTarget } from './workspace-roster';
@@ -33,15 +35,57 @@ export function trialSlot(place: TrialPlace): EvalAccount {
 
   if (taskAt === -1) throw new Error(`runner ${place.task} has no place in the run's matrix`);
   const needed = files.length * models.length * arms.length * trials;
-  const half = EVAL_TRIAL_ACCOUNTS / 2;
+  const [low, high] = halfOf(firstSlot > HALF);
   const slot = firstSlot - 1 + ((taskAt * models.length + models.indexOf(place.model)) * arms.length + arms.indexOf(place.arm)) * trials + place.trial;
   const account = parseEvalAccount(`trial-${String(slot)}`);
 
-  if (needed > half || account === null) {
-    throw new Error(`the run's matrix needs ${String(needed)} trial accounts, and its half of a deployment's has trial-${String(firstSlot)} to trial-${String(firstSlot - 1 + half)}`);
+  if (firstSlot - 1 + needed > high || account === null) {
+    throw new Error(`the run's matrix needs ${String(needed)} trial accounts from trial-${String(firstSlot)}, and its half of a deployment's has trial-${String(low)} to trial-${String(high)}`);
   }
 
   return account;
+}
+
+const HALF = EVAL_TRIAL_ACCOUNTS / 2;
+
+/** The accounts a deploy's one-trial pass takes (the upper half), or every other run (the lower): `[first, last]`. */
+function halfOf(pass: boolean): readonly [number, number] {
+  return pass ? [HALF + 1, EVAL_TRIAL_ACCOUNTS] : [1, HALF];
+}
+
+/** A run's hold on a block of trial accounts on the deployments it drives, as its armada job's label declares it. */
+export type SlotClaim = { readonly first: number; readonly last: number; readonly hosts: readonly string[] };
+
+const CLAIM = /\bslots (\d+)-(\d+) on (\S+)$/u;
+
+/** The label an eval run's armada job carries: its definitions and the block it holds, read back by {@link claimOf}. */
+export function claimLabel(sha: string, claim: SlotClaim): string {
+  return `evals ${sha.slice(0, 12)} slots ${String(claim.first)}-${String(claim.last)} on ${claim.hosts.join(',')}`;
+}
+
+/** The block a job's label claims, or null for a job that claims none. */
+export function claimOf(label: string): SlotClaim | null {
+  const [, first, last, hosts] = CLAIM.exec(label) ?? [];
+
+  return first === undefined || last === undefined || hosts === undefined ? null : { first: Number(first), last: Number(last), hosts: hosts.split(',') };
+}
+
+/**
+ * The first account of the lowest block of `size` in the run's half (`pass`) that no claim on any of `hosts` holds; null
+ * when every such block is held, and the run waits for one to end.
+ */
+export function freeBlock(size: number, pass: boolean, hosts: readonly string[], claims: readonly SlotClaim[]): number | null {
+  const [low, high] = halfOf(pass);
+  const held = claims.filter((claim) => claim.hosts.some((host) => hosts.includes(host)));
+
+  for (let first = low; first - 1 + size <= high;) {
+    const blocking = held.find((claim) => claim.first <= first - 1 + size && claim.last >= first);
+
+    if (blocking === undefined) return first;
+    first = blocking.last + 1;
+  }
+
+  return null;
 }
 
 /** Every trial account a matrix uses: the ones a deploy gives the eval provider keys. */
@@ -78,10 +122,16 @@ export async function trialInheritedRows(target: EvalTarget): Promise<{ inherite
     : { inherited: inheritedRows(rows, v.parse(ProfileCatalogEnvelopeSchema, catalog.value).version) };
 }
 
-/** Make `target`'s trial account its trial's own before the trial opens on it. */
-export async function prepareTrialAccount(target: EvalTarget, now: number): Promise<void> {
+/**
+ * Make `target`'s trial account its trial's own before the trial opens on it. A live workspace named for this trial
+ * (`subject`) is its own earlier attempt, which armada ran again once it lost it: the account is the trial's alone in
+ * its run's leased block, so the retry takes it back as it does a stopped run's. Any other live workspace is another
+ * run's, and stops it.
+ */
+export async function prepareTrialAccount(target: EvalTarget, now: number, subject?: string): Promise<void> {
   const workspaces = await listWorkspaces(target.origin, target.identity);
-  const live = workspaces.find((workspace) => now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS);
+  const own = subject === undefined ? null : evalWorkspaceStem(subject);
+  const live = workspaces.find((workspace) => now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS && (own === null || !workspace.name.startsWith(own)));
 
   if (live !== undefined) {
     throw new Error(`${accountOf(target)} is in use by another run: its workspace ${live.name} was marked live `

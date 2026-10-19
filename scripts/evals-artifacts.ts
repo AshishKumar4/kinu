@@ -7,6 +7,8 @@ export const TrialItemSchema = v.object({
   leg: v.picklist(['candidate', 'baseline']), origin: v.string(), task: v.string(),
   model: v.string(), arm: v.string(), trial: v.number(), trials: v.number(),
   models: v.array(v.string()), arms: v.array(v.string()), pass: v.boolean(),
+  /** The first account of the block the run leased (scripts/evals-lease.ts). */
+  firstSlot: v.number(),
 });
 
 export type TrialItem = v.InferOutput<typeof TrialItemSchema>;

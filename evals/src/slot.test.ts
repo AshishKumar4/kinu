@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, EVAL_WORKSPACE_LEASE_MS, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
+import { evalWorkspaceName } from '@kinu.run/test-utils';
 import { evalMatrix } from './config';
-import { prepareTrialAccount, trialAccounts, trialSlot } from './slot';
+import { claimLabel, claimOf, freeBlock, prepareTrialAccount, trialAccounts, trialSlot } from './slot';
 import type { EvalTarget } from './workspace-roster';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
@@ -23,7 +24,7 @@ describe('a trial\'s slot', () => {
 
   test('a matrix past the accounts a deployment has fails at once, saying how many it needs', () => {
     expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'order-book.eval.ts', matrix: { ...MATRIX, trials: 50 }, model: 'openrouter/ling', arm: 'product', trial: 50 }))
-      .toThrow('needs 600 trial accounts, and its half of a deployment\'s has trial-1 to trial-256');
+      .toThrow('needs 600 trial accounts from trial-1, and its half of a deployment\'s has trial-1 to trial-256');
   });
 
   // Staging deploy of c9fee59a0: its one-trial pass ran beside evals.yml's ten, and its task i took trial-(i+1), a slot of
@@ -36,6 +37,26 @@ describe('a trial\'s slot', () => {
     expect(pass).toHaveLength(TASK_FILES.length);
     expect(new Set(pass).size).toBe(pass.length);
     expect(measured.filter((account) => pass.includes(account))).toEqual([]);
+  });
+
+  // Staging 5c522f12d, 2026-10-19: a deploy's runs and an operator's ran on trial accounts each chose alone, and only the
+  // per-trial guard kept them apart. A run now takes a block no open run's claim holds on the same deployment.
+  test('a run takes the lowest block of its half that no open run on its deployment claims', () => {
+    const staging = 'staging.kinu.run';
+    const held = [claimOf(claimLabel('5c522f12d44f', { first: 1, last: 48, hosts: [staging] }))].filter((claim) => claim !== null);
+
+    expect(held).toEqual([{ first: 1, last: 48, hosts: [staging] }]);
+    expect(freeBlock(40, false, [staging], held)).toBe(49);
+    expect(freeBlock(40, false, ['kinu.run'], held)).toBe(1);
+    expect(freeBlock(8, true, [staging, 'kinu.run'], held)).toBe(257);
+    expect(freeBlock(40, false, [staging], [...held, { first: 49, last: 230, hosts: [staging] }])).toBeNull();
+    expect(claimOf('rc21')).toBeNull();
+  });
+
+  test('a block placed past its half fails at once, saying which accounts the half has', () => {
+    expect(() => trialSlot({ taskFiles: TASK_FILES, task: 'order-book.eval.ts', matrix: { ...MATRIX, firstSlot: 200 }, model: 'openrouter/ling', arm: 'product', trial: 10 }))
+      .toThrow('its half of a deployment\'s has trial-1 to trial-256');
+    expect(evalMatrix({ KINU_EVAL_FIRST_SLOT: '49' }, ['product']).firstSlot).toBe(49);
   });
 
 });
@@ -116,6 +137,20 @@ describe('opening on a trial account', () => {
     servers.push(configured.server, stale.server);
     await expect(prepareTrialAccount(configured.target, now)).resolves.toBeUndefined();
     await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
+  });
+
+  // Staging 5c522f12d, 2026-10-19: armada ran a Minecraft trial again (attempt 2) while attempt 1's workspace on its
+  // account, trial-33, was still marked live, and the retry was refused as another run's.
+  test('a retried trial takes its account back from its own earlier attempt; another run\'s live workspace still stops it', async () => {
+    const live = now - 126_000;
+    const retried = deployment({ workspaces: [{ name: evalWorkspaceName('minecraft-3'), lastVisited: live }] });
+    const rival = deployment({ workspaces: [{ name: evalWorkspaceName('chess-3'), lastVisited: live }] });
+
+    servers.push(retried.server, rival.server);
+    await expect(prepareTrialAccount(retried.target, now, 'minecraft-3')).resolves.toBeUndefined();
+    expect(retried.deleted).toHaveLength(1);
+    await expect(prepareTrialAccount(rival.target, now, 'minecraft-3')).rejects.toThrow('in use by another run');
+    expect(rival.deleted).toEqual([]);
   });
 
 });

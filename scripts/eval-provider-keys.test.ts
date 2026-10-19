@@ -130,7 +130,7 @@ describe('eval-service provider keys on every deployment it drives', () => {
     for (const refused of [false, true]) {
       const { server, accounts, at } = accountsDeployment();
 
-      const run = Bun.spawn([process.execPath, join(import.meta.dir, 'eval-provider-keys.ts'), refused ? origin : at], {
+      const run = Bun.spawn([process.execPath, join(import.meta.dir, 'eval-provider-keys.ts'), refused ? origin : at, '--accounts=3-5'], {
         env: childEnv({ HOME: homeWithKeys({ 'opencode-go.bearer': KEY }), KINU_EVAL_WEB_IDENTITY: IDENTITY, KINU_EVAL_MODELS: MODEL, KINU_EVAL_TRIALS: '1' }),
         stdout: 'pipe', stderr: 'pipe',
       });
@@ -143,9 +143,8 @@ describe('eval-service provider keys on every deployment it drives', () => {
         expect(`${stdout}${stderr}`).not.toContain(KEY);
 
         if (!refused) {
-          const trialAccounts = [...accounts.keys()].filter((name) => name !== 'eval-service');
-          expect(trialAccounts.length).toBeGreaterThan(0);
-          expect(trialAccounts.every((name) => name.startsWith('trial-'))).toBe(true);
+          // Only the block the run leased, the one its trials act as.
+          expect([...accounts.keys()].filter((name) => name !== 'eval-service').sort()).toEqual(['trial-3', 'trial-4', 'trial-5']);
           expect([...accounts.values()].every((account) => account.keys.has('opencode-go.bearer'))).toBe(true);
         }
       } finally {

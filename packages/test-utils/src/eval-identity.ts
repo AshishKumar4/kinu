@@ -96,12 +96,15 @@ export function evalNameSlug(name: string): string {
 }
 
 export function evalWorkspaceName(subject: string): string {
-  // The preview grammar caps names at 31 lowercase alphanumerics/hyphens; the random suffix wins over the subject.
-  const rand = Math.random().toString(36).slice(2, 8);
-  const room = 31 - EVAL_WORKSPACE_PREFIX.length - 1 - 6;
-  const slug = evalNameSlug(subject).slice(0, room).replace(/-+$/, '');
+  return `${evalWorkspaceStem(subject)}${Math.random().toString(36).slice(2, 8)}`;
+}
 
-  return `${EVAL_WORKSPACE_PREFIX}${slug}-${rand}`;
+/** What every workspace named for `subject` starts with: the name less its random suffix. The preview grammar caps
+ *  names at 31 lowercase alphanumerics/hyphens; the six-character suffix wins over the subject. */
+export function evalWorkspaceStem(subject: string): string {
+  const room = 31 - EVAL_WORKSPACE_PREFIX.length - 1 - 6;
+
+  return `${EVAL_WORKSPACE_PREFIX}${evalNameSlug(subject).slice(0, room).replace(/-+$/, '')}-`;
 }
 
 export type EvalTargetReason = 'deployment' | 'local';
