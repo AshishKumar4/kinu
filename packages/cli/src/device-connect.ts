@@ -172,8 +172,23 @@ const LINKED_ELSEWHERE = 'This machine is linked to another Kinu account, and th
   + 'Nothing was changed. To move it, run `kinu connect` signed in as the account it should belong to.';
 
 /** The scope a device's file calls get: the directory named, made absolute, or this user's home. */
-function deviceRoot(named: string | undefined): string {
+export function deviceRoot(named: string | undefined): string {
   return named === undefined || named.trim() === '' ? homedir() : resolve(named);
+}
+
+/**
+ * What linking from `root` gives the agent, said before it is confirmed (L111 #6): the folder by its absolute path, and
+ * what that folder is. A root of / is the whole machine with its commands unsandboxed; this user's home reaches the
+ * shell's startup files and git settings, which run outside the sandbox.
+ */
+export function describeConnectScope(root: string, home = homedir()): string[] {
+  if (root === '/') return ['Shares the whole machine, from /.', WHOLE_MACHINE_LINKED];
+
+  if (root === home) {
+    return [`Shares your whole home folder, ${root}.`, 'The agent can then change your shell startup files and git settings, which run outside the sandbox. Pass --root <project folder> to keep them out of reach.'];
+  }
+
+  return [`Shares ${root} and nothing beside it.`];
 }
 
 export interface DaemonStatus {

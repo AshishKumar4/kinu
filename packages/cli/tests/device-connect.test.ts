@@ -18,7 +18,7 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { type CloudDevice } from '../src/cloud-api';
-import { describeDeviceSandbox } from '../src/device-connect';
+import { describeConnectScope, describeDeviceSandbox } from '../src/device-connect';
 import { VERSION } from '../src/display';
 import { CloudAgentClient } from '../src/cloud-agent-client';
 import * as v from 'valibot';
@@ -1471,5 +1471,23 @@ describe('desktop command reuses device-connect', () => {
     `);
 
     expect(failure).toContain('Usage: kinu desktop [connect|status|logs]');
+  });
+});
+
+// L111 #6: the link question came with no word of the folder it shares, of / linking the whole machine unsandboxed, or of
+// a home folder reaching the shell's startup files.
+describe('the connect question says what it shares first', () => {
+  test('a project folder by its absolute path, the home folder with what it reaches, and / as the whole machine', () => {
+    expect({
+      project: describeConnectScope('/home/ada/project', '/home/ada'),
+      home: describeConnectScope('/home/ada', '/home/ada')[0],
+      reaches: describeConnectScope('/home/ada', '/home/ada')[1],
+      whole: describeConnectScope('/', '/home/ada'),
+    }).toEqual({
+      project: ['Shares /home/ada/project and nothing beside it.'],
+      home: 'Shares your whole home folder, /home/ada.',
+      reaches: expect.stringContaining('shell startup files and git settings, which run outside the sandbox'),
+      whole: ['Shares the whole machine, from /.', expect.stringContaining('its commands run as you')],
+    });
   });
 });
