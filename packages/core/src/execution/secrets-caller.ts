@@ -4,6 +4,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
@@ -49,4 +50,20 @@ export function providersWithoutOwnerSecrets(providers: readonly CodemodeProvide
       execute: (...args: unknown[]) => withholdingOwnerSecrets(() => entry.execute(...args)),
     }])),
   }));
+}
+
+/**
+ * Every exec id a viewer's call carries. Nimbus copies a process's exec id to each process it starts, one `sudo` starts
+ * included, so a viewer's process is known as one however it was started.
+ */
+const VIEWER_EXEC_PREFIX = 'viewer-';
+
+/** `id` as the current call names its process: marked when the call is a viewer's. */
+export function principalExecId(id: string): string {
+  return secretsCaller() === 'viewer' && !id.startsWith(VIEWER_EXEC_PREFIX) ? `${VIEWER_EXEC_PREFIX}${id}` : id;
+}
+
+/** A process a viewer's call started, however far down, or one running as the viewer's uid (`viewerUid`). */
+export function isViewerProcess(process: { readonly cred: VfsCred; readonly execId?: string }, viewerUid: (uid: number) => boolean): boolean {
+  return process.execId?.startsWith(VIEWER_EXEC_PREFIX) === true || viewerUid(process.cred.uid);
 }
