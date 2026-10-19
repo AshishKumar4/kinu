@@ -9,7 +9,7 @@ import { gatherEvidence, writeEvidence, type EvidenceReads, type WorkspaceEviden
 import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
 import { prepareTrialAccount } from './slot';
-import { ARMS, deployedBuild, openWorkspace, type EvalArm } from './target';
+import { ARMS, buildChanged, deployedBuild, openWorkspace, type EvalArm, type Served } from './target';
 import { type EvalTarget } from './workspace-roster';
 import {
   graded, taskTurns, type EvalCheck, type EvalRunInput, type EvalRunOutput, type EvalTask, type EvalTurn, type EvalTurnOutcome, type EvalTurnResult,
@@ -345,6 +345,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const errors: HarnessError[] = [];
       let session: KinuPublicSession | undefined;
       let productSha = 'unknown';
+      let served: Served | null = null;
       const account = identity.slotOf(input);
       let attempted: string | undefined;
       let turnStartedAt = Date.now();
@@ -360,7 +361,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
             const subject = `${task.id}-${String(input.trial)}`;
 
             await timeline.span('account', () => prepareTrialAccount(own, Date.now(), { subject, sequence: identity.sequence }));
-            productSha = (await timeline.span('build', () => deployedBuild(own))).sha;
+            served = await timeline.span('build', () => deployedBuild(own));
+            productSha = served.sha;
 
             const created = await timeline.span('open', () => openWorkspace(own, { subject, mission: task.mission, model: input.model }));
 
@@ -434,11 +436,10 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         }, errors, timeline);
 
       try {
-        const after = (await timeline.span('build', () => deployedBuild(target))).sha;
+        const after = await timeline.span('build', () => deployedBuild(target));
+        const changed = buildChanged(served ?? { sha: productSha, version: null }, after);
 
-        if (after !== productSha) {
-          errors.push({ name: 'EvalBuildChanged', message: `the deployment served ${productSha.slice(0, 12)} then ${after.slice(0, 12)} during the trial` });
-        }
+        if (changed !== null) errors.push({ name: 'EvalBuildChanged', message: changed });
       } catch (error) {
         errors.push({ name: 'InfraError', message: renderThrownChain({ cause: error }) });
       }
