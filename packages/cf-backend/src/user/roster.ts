@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
 import {
-  ForegroundReportSchema, rosterMatches, safeJsonParse, WorkspaceOverviewSchema, WS_OPEN, type AccountForegroundFrame, type AccountMemoryFrame, type RosterBucket,
+  ForegroundReportSchema, rosterMatches, safeJsonParse, textContains, WorkspaceOverviewSchema, WS_OPEN, type AccountForegroundFrame, type AccountMemoryFrame, type RosterBucket,
   type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type SqlExec, type WorkspaceOverview, type WorkspaceEntry,
 } from '@kinu.run/core';
 import {
@@ -91,13 +91,12 @@ function rosterEntry(row: RosterRow): RosterEntry {
 /** A superset, since the title shown is `workspaceDisplayTitle`'s; `rosterMatches` decides. */
 function searchClause(query: string) {
   const needle = query.trim().toLowerCase();
-  // LIKE folds ASCII case only.
+  // `textContains` folds ASCII case only.
   const ascii = new TextEncoder().encode(needle).length === needle.length;
 
   if (needle === '' || 'untitled workspace'.includes(needle) || !ascii) return { sql: '', bindings: [] };
-  const pattern = `%${needle.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
 
-  return { sql: " AND (w.display_name LIKE ? ESCAPE '\\' OR w.name LIKE ? ESCAPE '\\')", bindings: [pattern, pattern] };
+  return { sql: ` AND (${textContains('w.display_name')} OR ${textContains('w.name')})`, bindings: [needle, needle] };
 }
 
 const TileRowSchema = v.object({ name: v.string(), overview: v.string() });
