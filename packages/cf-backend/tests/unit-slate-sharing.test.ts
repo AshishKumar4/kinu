@@ -10,7 +10,7 @@ import { resetRecordedMcp, seedConfiguredMcpServer } from './helpers/agents-sdk'
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 
 /** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
-const UNSHARED = { incarnation: 'test', generation: 0 };
+const UNSHARED = { incarnation: 'test', generation: 0, ancestors: {} };
 
 type Owner = ReturnType<typeof orchestratorHarness>;
 

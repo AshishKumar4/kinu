@@ -290,7 +290,7 @@ export class SlateHost {
   private readonly heldLineage = new Map<string, SlateLineage>();
 
   private lineageOfProcess(process: ResidentSlateProcess): SlateLineage {
-    return this.lineages.get(process) ?? { incarnation: '', generation: -1 };
+    return this.lineages.get(process) ?? { incarnation: '', generation: -1, ancestors: {} };
   }
 
   /** Each slate's sharing generation now: what a request issued now is bound to. */
@@ -358,7 +358,7 @@ export class SlateHost {
       if (name === SLATE_STORAGE_BINDING) return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
       // The shared slates this process runs under (`SlateCaller.via`, minted into its bindings) bound it whatever request it
       // names, or none: a callee cannot drop the authority it inherited by dropping the record that names it.
-      const chain = [...new Set([...caller.via ?? [], ...issued?.chain ?? []])];
+      const chain = [...new Set([...Object.keys(caller.via ?? {}), ...issued?.chain ?? []])];
       const shared = [...chain, id].some((slate) => servers.authorityOf(slate).kind !== 'owner');
 
       // A shared server acts only under a request this host issued; a call naming none is no one's, and refused.
@@ -370,14 +370,15 @@ export class SlateHost {
         slate: id, chain, address: call.address, effect: call.effect, args: parsed.output.args, on, fence: { lineage, record: issued },
       });
 
-      // What a call reaches inside itself meets every shared server's bound as it stands then.
-      const within = (namespace: string, member: string) => { servers.within({ slate: id, chain, address: { namespace, member } }); };
+      // What a call reaches inside itself meets every shared server's bound as it stands then, its process and request
+      // held first to the sharing they began under.
+      const within = (namespace: string, member: string) => { servers.within({ slate: id, chain, address: { namespace, member }, fence: { lineage, record: issued } }); };
 
       // A viewer's request is held to its own share as it stands now, and the server's word on it with it.
       if (viewer !== undefined) {
         return await this.controller.viewers.call({
           share: viewer.share, id, request: parsed.output, chain, issued, gate: (call) => gate(call, viewer.subject),
-          bound: (address) => servers.bounded({ slate: id, chain, address }),
+          bound: (address) => servers.bounded({ slate: id, chain, address, fence: { lineage, record: issued } }),
           run: (route, nested, admit) => this.run(shareCaller(viewer.share), route, {
             nested: (namespace, member) => { within(namespace, member); nested(namespace, member); },
             admit,
@@ -482,9 +483,13 @@ export class SlateHost {
   private inheriting(caller: SlateCaller, chain: readonly string[]): SlateCaller {
     if (caller.share !== undefined) return caller;
 
-    const via = [...new Set([...caller.via ?? [], ...chain.filter((slate) => this.controller.servers.authorityOf(slate).kind !== 'owner')])];
+    // Each shared slate on the way, sealed at its sharing now; what the caller inherited keeps the seal it already has.
+    const sealed = chain.filter((slate) => caller.via?.[slate] === undefined && this.controller.servers.authorityOf(slate).kind !== 'owner')
+      .map((slate) => [slate, this.controller.generation(slate)] as const);
 
-    return via.length === 0 ? caller : { ...caller, via };
+    const via = { ...caller.via, ...Object.fromEntries(sealed) };
+
+    return Object.keys(via).length === 0 ? caller : { ...caller, via };
   }
 
   /** One Cap'n Web HTTP-batch RPC; the invocation id lives exactly as long as the call. */
@@ -540,7 +545,10 @@ export class SlateHost {
    * network its shares now allow.
    */
   async shareChanged(id: string): Promise<void> {
-    await this.controller.processes.stopWhere((running) => running.id === id && running.caller.share === undefined && running.caller.path.length === 0);
+    // Its own app, and every process that inherited its bound through it (`SlateCaller.via`): their lineage refuses
+    // them already, so this only ends what can no longer act.
+    await this.controller.processes.stopWhere((running) => (running.id === id && running.caller.share === undefined && running.caller.path.length === 0)
+      || running.caller.via?.[id] !== undefined);
   }
 
   /**
@@ -617,7 +625,8 @@ export class SlateHost {
     // Shared, the slate's server drives no browser of the owner's: only one its own call opened (Kitesurf).
     const unshared = caller.share === undefined && caller.via === undefined && this.controller.servers.authorityOf(id).kind === 'owner';
     // What the slate's sharing was when this launch chose its network: changed before it is running, it starts again.
-    const lineage: SlateLineage = { incarnation: crypto.randomUUID(), generation: this.controller.generation(id) };
+    // The shared slates it inherited its bound from are sealed into it as the hop sealed them (`SlateCaller.via`).
+    const lineage: SlateLineage = { incarnation: crypto.randomUUID(), generation: this.controller.generation(id), ancestors: { ...caller.via } };
     const actor = unshared ? await this.deps.browserActor(caller) : null;
     // Shared, it reaches the network as no one: its own preview hosts too.
     const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: unshared });

@@ -245,16 +245,16 @@ test('a server started, or a request made, under other sharing of its slate acts
   const then = live.generation('board');
   const record = { id: 'board', chain: [], incarnation: 'p1', generations: { board: then } };
 
-  expect(servers.lineage('board', { incarnation: 'p1', generation: then }, record)).toBeNull();
-  expect(servers.lineage('board', { incarnation: 'p2', generation: then }, record)?.message).toContain('another of its servers');
+  expect(servers.lineage('board', { incarnation: 'p1', generation: then, ancestors: {} }, record)).toBeNull();
+  expect(servers.lineage('board', { incarnation: 'p2', generation: then, ancestors: {} }, record)?.message).toContain('another of its servers');
   live.setAuthority('s1', { mode: 'own', grantRevision: null }, grant);
-  expect(servers.lineage('board', { incarnation: 'p1', generation: then }, null)?.message).toContain('started before its sharing changed');
-  expect(servers.lineage('board', { incarnation: 'p1', generation: live.generation('board') }, record)?.message).toContain("sharing changed since this request began");
+  expect(servers.lineage('board', { incarnation: 'p1', generation: then, ancestors: {} }, null)?.message).toContain('started before its sharing changed');
+  expect(servers.lineage('board', { incarnation: 'p1', generation: live.generation('board'), ancestors: {} }, record)?.message).toContain("sharing changed since this request began");
 });
 
 test('R3-P1 fence. a sharing change fences its slate in the same call that writes the row, before anything can await', () => {
   const { servers, live } = world('own');
-  const ownServer = { incarnation: 'p1', generation: live.generation('board') };
+  const ownServer = { incarnation: 'p1', generation: live.generation('board'), ancestors: {} };
 
   // The last share revoked: in that very call its server, started on each person's own access, is fenced. Nothing
   // awaited afterwards (unlisting it from the Gallery, stopping it) can leave it running with the owner's authority.
@@ -263,11 +263,11 @@ test('R3-P1 fence. a sharing change fences its slate in the same call that write
   expect(servers.lineage('board', ownServer, null)?.message).toContain('started before its sharing changed');
 
   // Shared again, and turned to the owner's access: each fences what ran before it.
-  const unshared = { incarnation: 'p2', generation: live.generation('board') };
+  const unshared = { incarnation: 'p2', generation: live.generation('board'), ancestors: {} };
 
   live.add({ id: 's2', slate: 'board', visibility: 'public', handle: '9876543210', grant });
   expect(servers.lineage('board', unshared, null)?.message).toContain('started before its sharing changed');
-  const shared = { incarnation: 'p3', generation: live.generation('board') };
+  const shared = { incarnation: 'p3', generation: live.generation('board'), ancestors: {} };
 
   live.setAuthority('s2', { mode: 'owner', grantRevision: 'rev-1' }, grant);
   expect(servers.lineage('board', shared, null)?.message).toContain('started before its sharing changed');

@@ -28,7 +28,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { accountIdFor } from '../src/auth/store';
 
 /** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
-const UNSHARED = { incarnation: 'test', generation: 0 };
+const UNSHARED = { incarnation: 'test', generation: 0, ancestors: {} };
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(result.reason + ': ' + result.error);

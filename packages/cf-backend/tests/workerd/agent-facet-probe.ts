@@ -340,7 +340,7 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
   async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>> {
     await this.target(workspace);
     // Minted as the host mints a process's bindings: with its lineage, here a process of an unshared slate.
-    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER, lineage: { incarnation: 'probe', generation: 0 } } satisfies SlateBindingProps;
+    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER, lineage: { incarnation: 'probe', generation: 0, ancestors: {} } } satisfies SlateBindingProps;
     const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
     await binding.call(['put'], ['seen', 'kept'], null);
     const answer = await binding.call(['get'], ['seen'], null);

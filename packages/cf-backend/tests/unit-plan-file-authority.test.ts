@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
 /** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
-const UNSHARED = { incarnation: 'test', generation: 0 };
+const UNSHARED = { incarnation: 'test', generation: 0, ancestors: {} };
 
 test('a real Plan turn reads files but cannot edit them, even after a Build turn starts', async () => {
   const { agent } = orchestratorHarness();
