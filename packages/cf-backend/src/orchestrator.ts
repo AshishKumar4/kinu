@@ -394,6 +394,11 @@ interface SourcePlanes {
 /** An assignment's delivery, as its metadata names it. */
 const AssignmentMetadataSchema = v.looseObject({ kinuEvent: v.literal('subordinate_task'), kinuMode: WorkModeSchema });
 
+/** A revert's choice, as its dialog sends it: `chatOnly` keeps the computer's work and tells the agent of it. */
+const RevertOptionsSchema = v.object({ chatOnly: v.optional(v.boolean()) });
+
+type RevertOptions = v.InferOutput<typeof RevertOptionsSchema>;
+
 /** A crossing as a producer that waits on it hears it: its value, or the agent's failure. The delivery stays owed either
  *  way the agent did not take it. */
 function heard<A>(crossed: CrossedDelivery, value: (admitted: DeliveryAnswer) => A): Promise<A> {
@@ -6921,10 +6926,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Continue the chat from before `entryId`; open tabs get the reverted transcript via the
-   * session event this emits. */
+   * session event this emits. A chat-only rewind tells the agent what its rewound turns left on the computer
+   * (REWIND-0924), read without waking it. */
   @callable()
-  async revertConversation(entryId: string): Promise<void> {
-    await this.mainCall((isolate, snapshot) => isolate.revertTo(snapshot, entryId));
+  async revertConversation(entryId: string, options?: RevertOptions): Promise<void> {
+    // Parsed here too: a client's argument reaches this method unchecked.
+    const chatOnly = v.parse(RevertOptionsSchema, options ?? {}).chatOnly === true;
+    const told = chatOnly ? { computer: await this.executors.rewindComputer() } : undefined;
+
+    await this.mainCall((isolate, snapshot) => isolate.revertTo(snapshot, entryId, told));
   }
 
   /**
