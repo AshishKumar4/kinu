@@ -9,11 +9,12 @@ import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
 import {
-  gatewayWorkspace, GATEWAY_CATALOG, makeEnv, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
-  type ActorHarness, type HarnessOrchestratorAgent,
+  driveUntil, gatewayWorkspace, GATEWAY_CATALOG, makeEnv, orchestratorHarness, ownDatabase, reactivateOrchestratorHarness, storedChat,
+  workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import type { Database } from 'bun:sqlite';
 import { chatCompletion, GATEWAY_MODEL, requestOf, stubAiBinding } from './helpers/platform-gateway';
-import { RunEventRecorder, type SendMetadata } from '@kinu.run/core';
+import { actorConnectionTag, RunEventRecorder, WORKSPACE_TITLE_SYSTEM_PROMPT, type SendMetadata } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
@@ -35,12 +36,13 @@ interface AdmissionSocket {
   readonly frame: (holds: (sent: readonly string[]) => boolean) => Promise<void>;
 }
 
-function connection(agent: { broadcast: (message: string, exclude?: string[]) => void }): AdmissionSocket {
+function connection(agent: { broadcast: (message: string, exclude?: string[]) => void }, tags: string[] = []): AdmissionSocket {
   const frames = new AwaitedList<string>();
   const sent = frames.items;
 
   const wire = socketConnection({
     id: 'admission-conn',
+    tags,
     send: (data: string) => { frames.push(data); },
   });
 
@@ -80,6 +82,11 @@ function doneFrames(sent: readonly string[]): Array<{ id: string; error?: string
 
     return [{ id: parsed.output.id, ...(parsed.output.error === true && { error: parsed.output.body }), ...(parsed.output.landed !== undefined && { landed: parsed.output.landed }) }];
   });
+}
+
+/** Whether an agent's own store holds `id`'s words: a send records them before it steers or queues them. */
+function sentWords(database: Database, id: string): boolean {
+  return database.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM pending_steers WHERE id = ?').get(id)?.n === 1;
 }
 
 /** `turn` for the loop's own seal; anything else is the harness plane's notices. */
@@ -251,5 +258,115 @@ describe('a chat request through the production gate', () => {
     expect(doneFrames(sent).find((done) => done.id === 'req-continue')).toEqual({ id: 'req-continue' });
     expect(asked).toEqual(['continue']);
     expect((await storedChat(harness)).filter((message) => message.role === 'assistant').map((message) => JSON.stringify(message.parts)).join(' ')).toContain('CONTINUED');
+  });
+
+  // The tab offers Send as soon as Stop is pressed (titled-chat, 1008-e): Continue reaches the agent while the turn the
+  // Stop cut is still ending. It is owed to no turn being stopped, but runs as one of its own, after the brief.
+  test('Continue sent while a stopped turn is still ending runs as a turn of its own, after the brief', async () => {
+    const harness = orchestratorHarness();
+    const { agent } = harness;
+    const { wire, sent, frame } = connection(agent);
+    const asked: string[] = [];
+    const opened = Promise.withResolvers<void>();
+    const unwound = Promise.withResolvers<void>();
+
+    await agent.activateActor();
+    const gate = agent.harnessChatGate();
+
+    agent.harnessSupplyTurnModel(scriptedTurnModel({
+      doGenerate: (options) => {
+        const prompt = JSON.stringify(options.prompt);
+
+        if (prompt.includes('Continue')) {
+          asked.push(prompt.includes('Log every lamp tonight.') ? 'continue after the brief' : 'continue alone');
+
+          return scriptedAnswerResult('CONTINUED');
+        }
+
+        asked.push('brief');
+        opened.resolve();
+
+        // The brief's turn holds at its model until it is stopped, and its call ends only once Continue reached the
+        // agent: a stopped turn is still ending when the next words come, as over staging's network.
+        return new Promise((_resolve, reject) => {
+          options.abortSignal?.addEventListener('abort', () => { unwound.promise.then(() => { reject(options.abortSignal?.reason); }, reject); });
+        });
+      },
+    }));
+
+    const opening = gate(wire, chatRequest('req-opening', 'Log every lamp tonight.'));
+
+    await opened.promise;
+
+    // As the tab sends them on Stop and at Send's return: one socket, in this order, none awaited.
+    const handled = [
+      gate(wire, JSON.stringify({ type: 'cf_agent_chat_request_cancel', id: 'req-opening' })),
+      gate(wire, JSON.stringify({ type: 'rpc', id: 'stop', method: 'cancelCurrentWork', args: [] })),
+      gate(wire, chatRequest('req-continue', 'Continue')),
+    ];
+
+    await driveUntil(harness, "Continue's words never reached the agent", () => sentWords(ownDatabase(harness, workspaceMainActor(harness.db).actorId), 'input-req-continue'));
+    unwound.resolve();
+
+    await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-continue'));
+    await Promise.all([opening, ...handled]);
+
+    expect(doneFrames(sent).find((done) => done.id === 'req-continue')).toEqual({ id: 'req-continue' });
+    expect(asked).toEqual(['brief', 'continue after the brief']);
+    expect((await storedChat(harness)).filter((message) => message.role === 'assistant').map((message) => JSON.stringify(message.parts)).join(' ')).toContain('CONTINUED');
+  });
+
+  // The same, in a new chat: an agent of its own, whose room calls into its isolate, as staging's titled-chat did.
+  test("an agent's Continue sent while its stopped turn is still ending runs as a turn of its own, after the brief", async () => {
+    const BRIEF = 'Log every lamp tonight.';
+    const asked: string[] = [];
+    const opened = Promise.withResolvers<void>();
+    const unwound = Promise.withResolvers<void>();
+
+    const gateway = stubAiBinding((run) => {
+      const said = JSON.stringify(requestOf(run).messages);
+
+      if (said.includes(WORKSPACE_TITLE_SYSTEM_PROMPT)) return chatCompletion(run, JSON.stringify({ title: 'Lamp log' }));
+
+      if (said.includes('Continue')) {
+        asked.push(said.includes(BRIEF) ? 'continue after the brief' : 'continue alone');
+
+        return chatCompletion(run, 'CONTINUED');
+      }
+
+      asked.push('brief');
+      opened.resolve();
+
+      // The brief's turn holds at its model until it is stopped, and its call ends only once Continue reached the agent.
+      return new Promise<Response>((_resolve, reject) => {
+        run.signal?.addEventListener('abort', () => { unwound.promise.then(() => { reject(run.signal?.reason); }, reject); });
+      });
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+
+    await workspace.agent.setSoul('# Purpose\n\nKeep the lamp log.');
+    const { subordinate } = await workspace.agent.createSubordinateAgent();
+    const actorId = v.parse(v.string(), subordinate.actorId);
+    const { wire, sent, frame } = connection(workspace.agent, [actorConnectionTag(actorId)]);
+    const gate = workspace.agent.harnessChatGate();
+    const opening = gate(wire, chatRequest('req-opening', BRIEF));
+
+    await opened.promise;
+
+    // As the tab sends them on Stop and at Send's return: one socket, in this order, none awaited.
+    const handled = [
+      gate(wire, JSON.stringify({ type: 'cf_agent_chat_request_cancel', id: 'req-opening' })),
+      gate(wire, JSON.stringify({ type: 'rpc', id: 'stop', method: 'cancelCurrentWork', args: [] })),
+      gate(wire, chatRequest('req-continue', 'Continue')),
+    ];
+
+    await driveUntil(workspace, "Continue's words never reached the agent", () => sentWords(ownDatabase(workspace, actorId), 'input-req-continue'));
+    unwound.resolve();
+    await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-continue'));
+    await Promise.all([opening, ...handled]);
+
+    expect(doneFrames(sent).find((done) => done.id === 'req-continue')).toEqual({ id: 'req-continue' });
+    expect(asked).toEqual(['brief', 'continue after the brief']);
   });
 });
