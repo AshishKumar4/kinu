@@ -17,7 +17,7 @@ import { commandTool, type ExecutorCapability, type ExecutorProvider, type Execu
 import { envContext } from './command-call';
 import { sha256Hex } from '../safety/argument-digest';
 import type { CommandCall } from '../safety/approval-gate';
-import { commandResult, exposedPortText, type CommandResult } from './exec-result';
+import { commandResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { parseInput, type JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -129,8 +129,6 @@ function nimbusCall(member: 'runCode' | 'startProcess', text: string, options: N
   };
 }
 
-const PortInputSchema = v.union([v.number(), v.object({ port: v.number() })]);
-
 const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
 
 function stringifyResult(input: { value: unknown }): string {
@@ -143,12 +141,11 @@ function stringifyResult(input: { value: unknown }): string {
   try { return JSON.stringify(input.value, null, 2); } catch (error) { return `unserializable process result: ${renderThrownChain({ cause: error })}`; }
 }
 
-/** What every member of the live session works over: its box, the one way a call through it marks the session in use
- *  and records its failure, and the exposure every port path shares. */
+/** What every member of the live session works over: its box, and the one way a call through it marks the session in
+ *  use and records its failure. */
 interface NimbusReach {
   readonly box: NimbusSandboxHandle;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
-  readonly exposeOn: (port: number) => Promise<PortExposureResult>;
 }
 
 /** `workspace.runCode`. */
@@ -285,85 +282,6 @@ function logsMember({ box, touch }: NimbusReach): ExecutorTool {
   };
 }
 
-/** `workspace.exposePort`. */
-function exposePortMember({ box, exposeOn }: NimbusReach): ExecutorTool {
-  return {
-    description: 'Expose a listening Nimbus port. Returns the preview URL, then one line: "verified" when a '
-      + 'request to the URL reaches the server, or "not reached" naming the preview-route gate that refused. '
-      + 'The check never calls your server.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      if (!box.ports?.expose) return handleLacks('ports');
-      const input = parseInput(PortInputSchema, { value: args[0] });
-      const port = v.is(v.number(), input) ? input : input?.port;
-
-      if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
-        return refusalOf(new KinuError('bad_input',
-          `nimbus exposePort: invalid port ${stringifyResult({ value: args[0] })}`));
-      }
-
-      try {
-        const exposed = await exposeOn(port);
-
-        return exposed.supported
-          ? exposedPortText(exposed.url, port, exposed.route)
-          : refusalOf(new KinuError('unsupported', exposed.reason));
-      } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
-      }
-    },
-  };
-}
-
-/** `workspace.unexposePort`. */
-function unexposePortMember({ box, touch }: NimbusReach): ExecutorTool {
-  return {
-    description: 'Stop exposing a Nimbus port.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      const ports = box.ports;
-
-      if (!ports?.unexpose) return handleLacks('ports');
-      const unexpose = ports.unexpose.bind(ports);
-      const input = parseInput(PortInputSchema, { value: args[0] });
-      const port = v.is(v.number(), input) ? input : input?.port;
-
-      if (port === undefined || !Number.isFinite(port)) {
-        return refusalOf(new KinuError('bad_input',
-          `nimbus unexposePort: invalid port ${stringifyResult({ value: args[0] })}`));
-      }
-
-      try {
-        await touch(() => unexpose(port));
-
-        return `unexposed ${port}`;
-      } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus unexposePort ${port}`, cause: err }));
-      }
-    },
-  };
-}
-
-/** `workspace.listPorts`. */
-function listPortsMember({ box, touch }: NimbusReach): ExecutorTool {
-  return {
-    description: 'List Nimbus exposed ports.',
-    execute: async (): Promise<string | Refusal> => {
-      // No port API is not the same fact as no exposed ports (AGENTS.md).
-      const ports = box.ports;
-
-      if (!ports?.list) return handleLacks('ports');
-      const list = ports.list.bind(ports);
-
-      try {
-        const exposed = await touch(() => list());
-
-        return JSON.stringify(exposed.map((p) => ({ ...p, url: p.url ?? ports.url?.(p.port) })));
-      } catch (err) {
-        return refusalOf(nimbusFailure({ doing: 'nimbus listPorts', cause: err }));
-      }
-    },
-  };
-}
-
 /** `workspace.installRuntime`. */
 function installRuntimeMember({ box, touch }: NimbusReach): ExecutorTool {
   return {
@@ -455,7 +373,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     }
   };
 
-  const nimbus: NimbusReach = { box, touch, exposeOn };
+  const nimbus: NimbusReach = { box, touch };
 
   const tools: ExecutorProvider['tools'] = {
     runCode: runCodeMember(nimbus),
@@ -463,9 +381,6 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     stopProcess: stopProcessMember(nimbus),
     listProcesses: listProcessesMember(nimbus),
     logs: logsMember(nimbus),
-    exposePort: exposePortMember(nimbus),
-    unexposePort: unexposePortMember(nimbus),
-    listPorts: listPortsMember(nimbus),
     installRuntime: installRuntimeMember(nimbus),
     listRuntimes: listRuntimesMember(nimbus),
   };
@@ -488,7 +403,10 @@ export function nimbusSession(opts: NimbusSessionOpts) {
       : { configured: true, available: true, active, status: 'error', reason: lastError }),
     connect: async () => { await touch(() => box.ready()); },
     disconnect: async () => { active = false; },
-    exposePort: exposeOn,
+    // A workspace preview is addressed by its port alone: a name is said to be unsupported, never dropped.
+    exposePort: async (port: number, asked?: { readonly name?: string }): Promise<PortExposureResult> => (asked?.name === undefined
+      ? await exposeOn(port)
+      : { supported: false, reason: `a workspace preview is named by its port; call exposePort(${String(port)}) without a name` }),
     unexposePort: async (port: number) => {
       const ports = box.ports;
 

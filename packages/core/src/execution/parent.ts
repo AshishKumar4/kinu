@@ -12,7 +12,9 @@ import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { vfsErrorFromText } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { commandResult, existsTool } from './exec-result';
+import { commandAnswer, ExecPartsSchema, existsTool } from './exec-result';
+import { shellExecOptions } from './shell-session';
+import { shellQuote } from '../utils/shell';
 import { Effect } from 'effect';
 import { attempt, KinuError, refusalOf, renderThrownChain, settle } from '../obs/index';
 import { parseInput } from '../utils/json';
@@ -129,15 +131,19 @@ export function createParentExecutor(deps: {
 
           if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'parent exec: command must be a string')) };
           const signal = readExecSignal({ context: args[1] });
+          const { cwd, name } = shellExecOptions({ value: args[1] });
 
-          // It takes nothing but the words: it starts at the parent workspace's root.
+          if (name !== undefined) return { refused: refusalOf(new KinuError('unsupported', 'parent exec: the parent workspace keeps no named shells for a fork')) };
+          // The handle takes only the words, starting at the parent workspace's root; a `cwd` is where they start instead.
+          const words = cwd === undefined ? command : `cd -- ${shellQuote(cwd)} && ${command}`;
+
           return {
-            call: { text: command, context: {}, ...(signal !== undefined && { signal }) },
-            run: async () => commandResult(await raceAbort(
-              () => deps.handle.exec(command),
+            call: { text: command, context: {}, ...(cwd !== undefined && { cwd }), ...(signal !== undefined && { signal }) },
+            run: async () => commandAnswer(await raceAbort(
+              () => deps.handle.exec(words),
               signal,
               'parent exec aborted: the command may still finish in the parent workspace',
-            )),
+            ), v.is(ExecPartsSchema, args[1]), false),
           };
         },
       ),

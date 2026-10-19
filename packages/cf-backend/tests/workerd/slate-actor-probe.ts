@@ -213,7 +213,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     const scope: CodemodeScope = {
       reach: narrowToolSurface(undefined),
       namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor, [{
-          name: 'workspace', positionalArgs: true,
+          name: 'workspace', positionalArgs: true, capabilities: new Set(),
           tools: {
             readFile: { planAllowed: true, description: 'Read the fixture file', execute: async () => files.readFileString('/home/main/plan-data.txt') },
             writeFile: { description: 'Modify the fixture file', execute: async () => {

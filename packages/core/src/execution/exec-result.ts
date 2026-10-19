@@ -66,6 +66,19 @@ export function commandResultAt(result: ExecOutcome, reportCwd: boolean): Comman
   return v.is(v.string(), answer) ? `cwd: ${result.cwd}\n${answer}` : { ...answer, error: `cwd: ${result.cwd}\n${answer.error}` };
 }
 
+/** An exec's options asking for `{ stdout, stderr, exitCode }` instead of the text. */
+export const ExecPartsSchema = v.object({ parts: v.literal(true) });
+
+/**
+ * A command's answer as its caller asked: with `parts`, `{ stdout, stderr, exitCode }` as the command wrote them, which a
+ * program reads and never parses back from the text; else the text (`commandResultAt`).
+ */
+export function commandAnswer(outcome: ExecOutcome, parts: boolean, reportCwd: boolean): CommandResult | { stdout: string; stderr: string; exitCode: number } {
+  return parts && outcome.refusal === undefined
+    ? { stdout: outcome.stdout ?? '', stderr: outcome.stderr ?? '', exitCode: outcome.exitCode ?? 0 }
+    : commandResultAt(outcome, reportCwd);
+}
+
 export function exposedPortText(url: string, port: number, route: PreviewRouteCheck): string {
   return route.reached
     ? `${url}\nverified: a request to this URL reaches the server on port ${String(port)}`

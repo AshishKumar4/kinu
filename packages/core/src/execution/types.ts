@@ -134,8 +134,10 @@ export interface ExecutorStatus {
   mounts?: string[];
 }
 
-/** What a program reaches of an executor: its members, and the status that sizes `computer.resize`. */
-export type ExecutorProviderSurface = Pick<ExecutorProvider, 'name' | 'tools' | 'positionalArgs' | 'getStatus'>;
+/** What a program reaches of an executor: its members, the capabilities that admit its machine members, its port
+ *  contract, and the status that sizes `computer.resize`. */
+export type ExecutorProviderSurface = Pick<ExecutorProvider,
+  'name' | 'tools' | 'positionalArgs' | 'getStatus' | 'capabilities' | 'exposePort' | 'unexposePort' | 'listExposedPorts'>;
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
 export interface ExecutorProvider {

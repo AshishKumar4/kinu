@@ -285,7 +285,7 @@ test('router namespace effects use the same lifetime admission as host effects',
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let effects = 0;
-  rt.executionRouter.getProviders = () => [{ name: 'workspace', tools: { writeFile: {
+  rt.executionRouter.getProviders = () => [{ name: 'workspace', capabilities: new Set(), tools: { writeFile: {
     description: 'record an admitted effect', execute: async () => {
       effects++;
       started.resolve();

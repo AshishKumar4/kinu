@@ -13,7 +13,7 @@ import type { CraftStore } from '../types/agent-runtime';
 import { withVfsErrorHint } from '../vfs/errno';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
-import { commandResult, existsTool } from '../execution/exec-result';
+import { commandAnswer, ExecPartsSchema, existsTool } from '../execution/exec-result';
 import { shellExecOptions } from '../execution/shell-session';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
@@ -35,7 +35,6 @@ import { SlateBuildNoteSchema } from '../operations/file';
 const StringSchema = v.string();
 
 /** `exec`'s options asking for the command's own output, not the text built from it. */
-const PartsSchema = v.object({ parts: v.literal(true) });
 
 const OptionalPathSchema = v.optional(v.string());
 
@@ -206,18 +205,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
         if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string')) };
         const options = shellExecOptions({ value: args[1] });
-        const parts = v.is(PartsSchema, args[1]);
 
         return {
           call: shellCall(command, options, { stdin: true }),
-          run: async () => {
-            const outcome = await shell.exec(command, options);
-
-            // A program reads what the command wrote; the text the model is shown is built from it, never parsed back.
-            return parts && outcome.refusal === undefined
-              ? { stdout: outcome.stdout, stderr: outcome.stderr, exitCode: outcome.exitCode }
-              : commandResult(outcome);
-          },
+          run: async () => commandAnswer(await shell.exec(command, options), v.is(ExecPartsSchema, args[1]), false),
         };
       },
     ),

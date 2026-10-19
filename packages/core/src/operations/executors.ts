@@ -4,7 +4,7 @@
  * Each executor is its own namespace on its own plane, so each member is its own operation.
  */
 import * as v from 'valibot';
-import { ExecutorPortSchema } from '../execution/types';
+import { ExecutorPortSchema, type ExecutorCapability } from '../execution/types';
 import { DESKTOP_INPUTS, WATCH_DEFAULT_FRAMES, watchSheet, type DesktopScreen } from '../execution/desktop';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { defineOperation, described, type Impact, type Operation } from './operation';
@@ -20,38 +20,88 @@ const executorOp = (ns: string) => <const I extends v.StrictObjectSchema<v.Objec
   op: Pick<Operation<I, O>, 'name' | 'help' | 'input' | 'output'> & { readonly impact: Impact },
 ) => defineOperation({ ns, slate: true, ...op });
 
+const Device = v.optional(described(v.string(), 'With several machines connected, which one, by name.'));
+
 const ProcessId = described(v.pipe(v.string(), v.nonEmpty()), 'The id `startProcess` answered.');
 
-/** What every machine that keeps long-running processes answers alike (`process_long`): one name and one shape each. */
-function processMembers(op: ReturnType<typeof executorOp>) {
+const RouteSchema = described(v.union([
+  v.strictObject({ reached: v.literal(true) }),
+  v.strictObject({ reached: v.literal(false), gate: v.string(), detail: v.string() }),
+]), 'Whether a request to the URL reaches the server, or the preview-route gate that refused it. The check never calls your server.');
+
+/** One executor op builder, each member's input widened by `option` (the device fleet's machine selector). */
+type MachineOp = ReturnType<typeof executorOp>;
+
+/** What every machine answers alike, each member under the capability that admits it: one name and one shape. */
+function machineMembers<const O extends v.ObjectEntries>(op: MachineOp, option: O) {
+  const input = <const E extends v.ObjectEntries>(entries: E) => v.strictObject({ ...entries, ...option });
+
   return {
-    startProcess: op({
-      name: 'startProcess', impact: 'administer',
-      help: 'Start a long-running process in the background, such as a server; it returns while the process runs. Put '
-        + 'variables at the head of the command (`PORT=4100 node server.js`). `logs` reads what it writes, `stopProcess` ends it.',
-      input: v.strictObject({ command: Command, cwd: v.optional(described(v.string(), 'Where it starts; default your home.')) }),
-      output: v.strictObject({ processId: v.string() }),
-    }),
-    stopProcess: op({
-      name: 'stopProcess', help: 'End a process `startProcess` started.', impact: 'administer',
-      input: v.strictObject({ processId: ProcessId }), output: v.strictObject({ stopped: v.boolean() }),
-    }),
-    listProcesses: op({
-      name: 'listProcesses', impact: 'observe',
-      help: 'The processes `startProcess` started, with their status. One stopped at a prompt reads "waiting for input", '
-        + 'its last line in `waiting`; where it has a terminal `session` the person can open, answer it with exec '
-        + '(`tmux send-keys -t \'=<session>:\' \'<answer>\' Enter`) when the answer is yours to give, or ask the person.',
-      input: v.strictObject({}),
-      output: v.array(v.strictObject({
-        processId: v.string(), pid: v.optional(v.number()), status: v.string(), restartable: v.optional(v.boolean()),
-        command: v.string(), session: v.optional(v.string()), waiting: v.optional(v.string()),
-      })),
-    }),
-    logs: op({
-      name: 'logs', help: 'What a process wrote, its most recent output.', impact: 'observe', output: Text,
-      input: v.strictObject({ processId: ProcessId, lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
-    }),
+    shell: {
+      exec: op({
+        name: 'exec', impact: 'execute', output: v.union([Text, v.strictObject({ stdout: v.string(), stderr: v.string(), exitCode: v.number() })]),
+        help: 'Run a shell command on this machine. Each call starts fresh in `cwd` (default its home) unless it names a shell, '
+          + 'which keeps its directory and exported variables.',
+        input: input({
+          command: Command,
+          cwd: v.optional(described(v.string(), 'Where the command starts.')),
+          name: v.optional(described(v.pipe(v.string(), v.nonEmpty()), 'A shell that keeps its directory and variables between calls naming it.')),
+          parts: v.optional(described(v.literal(true), 'Answer `{ stdout, stderr, exitCode }` as the command wrote them, instead of the text.')),
+        }),
+      }),
+    },
+    process_long: {
+      startProcess: op({
+        name: 'startProcess', impact: 'administer',
+        help: 'Start a long-running process in the background, such as a server; it returns while the process runs. Put '
+          + 'variables at the head of the command (`PORT=4100 node server.js`). `logs` reads what it writes, `stopProcess` ends it.',
+        input: input({ command: Command, cwd: v.optional(described(v.string(), 'Where it starts; default its home.')) }),
+        output: v.strictObject({ processId: v.string() }),
+      }),
+      stopProcess: op({
+        name: 'stopProcess', help: 'End a process `startProcess` started.', impact: 'administer',
+        input: input({ processId: ProcessId }), output: v.strictObject({ stopped: v.boolean() }),
+      }),
+      listProcesses: op({
+        name: 'listProcesses', impact: 'observe',
+        help: 'The processes `startProcess` started, with their status. One stopped at a prompt reads "waiting for input", '
+          + 'its last line in `waiting`; where it has a terminal `session` the person can open, answer it with exec '
+          + '(`tmux send-keys -t \'=<session>:\' \'<answer>\' Enter`) when the answer is yours to give, or ask the person.',
+        input: input({}),
+        output: v.array(v.strictObject({
+          processId: v.string(), pid: v.optional(v.number()), status: v.string(), restartable: v.optional(v.boolean()),
+          command: v.string(), session: v.optional(v.string()), waiting: v.optional(v.string()),
+        })),
+      }),
+      logs: op({
+        name: 'logs', help: 'What a process wrote, its most recent output.', impact: 'observe', output: Text,
+        input: input({ processId: ProcessId, lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
+      }),
+    },
+    net_inbound: {
+      exposePort: op({
+        name: 'exposePort', impact: 'administer',
+        help: 'A public URL for a port a process on this machine serves. Start the server first; nothing listening is refused with the fix.',
+        input: input({ port: ExecutorPortSchema, name: v.optional(described(v.string(), 'A label for the preview\'s address.')) }),
+        output: v.strictObject({ port: v.number(), url: v.string(), name: v.optional(v.string()), route: RouteSchema }),
+      }),
+      unexposePort: op({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: input({ port: ExecutorPortSchema }), output: v.null() }),
+      listPorts: op({
+        name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: input({}),
+        output: v.array(v.strictObject({ port: v.number(), url: v.string(), name: v.optional(v.string()), status: v.picklist(['listening', 'unknown', 'unreachable']) })),
+      }),
+    },
   } as const;
+}
+
+/** The capabilities that admit machine members, in the order a namespace lists them. */
+export const MACHINE_CAPABILITIES = ['shell', 'process_long', 'net_inbound'] as const satisfies readonly ExecutorCapability[];
+
+/** Every machine member a namespace may have, by capability: what `executorNamespace` admits from a machine's own set. */
+export function machineOperations(ns: string) {
+  const op = executorOp(ns);
+
+  return ns === 'device' ? machineMembers(op, { device: Device }) : machineMembers(op, {});
 }
 
 const ws = executorOp('workspace');
@@ -64,18 +114,6 @@ export const WORKSPACE = {
   }),
   readdir: ws({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.array(v.string()) }),
   exists: ws({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.boolean() }),
-  exec: ws({
-    name: 'exec', impact: 'execute', output: v.union([Text, v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() })]),
-    help: 'Run a command in the workspace shell, over the same files readFile reads: a POSIX shell with ~95 coreutils, pipes, '
-      + 'redirects, loops and variables. Each call starts fresh in `cwd` (default your home) unless it names a shell, which '
-      + 'keeps its directory and exported variables. Use sandbox or device only when the task needs that machine.',
-    input: v.strictObject({
-      command: Command,
-      cwd: v.optional(described(v.string(), 'Where the command starts.')),
-      name: v.optional(described(v.pipe(v.string(), v.nonEmpty()), 'A shell that keeps its directory and variables between calls naming it.')),
-      parts: v.optional(described(v.literal(true), 'Answer `{ stdout, stderr, exitCode }` as the command wrote them, instead of the text.')),
-    }),
-  }),
   listTools: ws({
     name: 'listTools', help: 'Your crafted tools, with each one\'s quality score.', impact: 'observe', input: v.strictObject({}),
     output: v.array(v.object({ name: v.string(), description: v.string(), qualityScore: v.number() })),
@@ -97,13 +135,6 @@ export const WORKSPACE = {
       install: v.optional(described(v.picklist(['never', 'ifMissing']), 'Install the runtime when missing; default never.')),
     }),
   }),
-  ...processMembers(ws),
-  exposePort: ws({
-    name: 'exposePort', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text,
-    help: 'A public URL for a port a process serves, then whether it was reached.',
-  }),
-  unexposePort: ws({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
-  listPorts: ws({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
   installRuntime: ws({ name: 'installRuntime', help: 'Install a language runtime, by spec.', impact: 'administer', input: v.strictObject({ spec: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
   listRuntimes: ws({ name: 'listRuntimes', help: 'The installed language runtimes.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
@@ -113,29 +144,16 @@ const sb = executorOp('computer');
 /** The computer container's members; `resize` is declared over the host's own size table. Its files are read and
  *  written through the workspace's, under `/computer`, as every plane's are. */
 export const COMPUTER = {
-  exec: sb({
-    name: 'exec', impact: 'execute', input: v.strictObject({ command: Command }), output: Text,
-    help: 'Run a command on your computer. Bun is the default toolchain here (`bun install`, `bun run`, `bun x`, `bun test`). '
-      + 'A computer restored after it slept keeps its source and lockfiles but not node_modules or build output: after a failed '
-      + 'import there, run `bun install` once.',
-  }),
   readdir: sb({
     name: 'readdir', help: 'A directory\'s entries; the working directory when no path is given.', impact: 'observe',
     input: v.strictObject({ path: v.optional(v.string()) }), output: Text,
   }),
   deleteFile: sb({ name: 'deleteFile', help: 'Delete a file on your computer.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
-  ...processMembers(sb),
   rest: sb({
     name: 'rest', help: '"now" saves and stops the computer, ending what runs; "keep" runs on until it asks again.', impact: 'administer',
     input: v.strictObject({ answer: v.picklist(['now', 'keep']) }), output: Text,
   }),
-  exposePort: sb({
-    name: 'exposePort', help: 'A public URL for a port the computer serves.', impact: 'administer',
-    input: v.strictObject({ port: ExecutorPortSchema, name: v.optional(v.string()) }), output: Text,
-  }),
-  unexposePort: sb({ name: 'unexposePort', help: 'Withdraw a port\'s public URL.', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text }),
-  listPorts: sb({ name: 'listPorts', help: 'The exposed ports and their URLs.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 
 /** `computer.resize` over the host's sizes, each described as it runs. */
@@ -244,21 +262,13 @@ const parent = executorOp('parent');
 export const PARENT = {
   readdir: parent({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.array(v.string()) }),
   exists: parent({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path }), output: v.boolean() }),
-  exec: parent({
-    name: 'exec', impact: 'execute', input: v.strictObject({ command: Command }), output: Text,
-    help: 'Run a command in the parent workspace\'s shell, the same coreutils its own agent has: the fast way to search it '
-      + '(`grep -rn TODO .`, `find . -name \'*.ts\'`).',
-  }),
 } as const;
 
 const device = executorOp('device');
 
-const Device = v.optional(described(v.string(), 'With several machines connected, which one, by name.'));
-
 /** The user's own machine; `unavailable` means none is attached, and the error says how to attach one. Its files are
  *  read and written through the workspace's, under `/pc/<machine>`, as every plane's are. */
 export const DEVICE = {
-  exec: device({ name: 'exec', help: 'Run a command on the machine.', impact: 'execute', input: v.strictObject({ command: Command, device: Device }), output: Text }),
   readdir: device({ name: 'readdir', help: 'A directory\'s entry names.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: v.array(v.string()) }),
   exists: device({ name: 'exists', help: 'Whether a path exists.', impact: 'observe', input: v.strictObject({ path: Path, device: Device }), output: v.boolean() }),
 } as const;

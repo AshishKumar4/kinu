@@ -11,8 +11,8 @@ import { callJob, createShellSession, machineShellCall, machineShellCwd, reports
 import { namedShellCall } from '../safety/approval-gate';
 import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
-import { commandResultAt, exposedPortText, type CommandResult, type ExecOutcome } from './exec-result';
-import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
+import { commandAnswer, ExecPartsSchema, type ExecOutcome } from './exec-result';
+import { classifyErrorCode, KinuError, refusalOf, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -206,7 +206,6 @@ const OptionalStringSchema = v.optional(v.string());
 /** `readdir({ path? })`: the working directory when `path` is absent or empty. */
 const ListOptionsSchema = v.optional(v.object({ path: v.optional(v.string()) }), {});
 
-const ExposeOptionsSchema = v.optional(v.object({ name: v.optional(v.string()) }), {});
 
 export function isSandboxTransientError(error: Error | string): boolean {
   const msg = (error instanceof Error ? error.message : error).toLowerCase();
@@ -219,7 +218,6 @@ export function isSandboxTransientError(error: Error | string): boolean {
 const notConfigured = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
 
 /** `unsupported`: the container works; no `PREVIEW_HOST_SUFFIX` means no retry can succeed. */
-const previewsUnconfigured = (): Refusal => refusalOf(new KinuError('unsupported', PREVIEWS_NOT_CONFIGURED));
 
 /** A transport failure left after its retries is the box out of reach, so `unavailable`, not `io`.
  *  A recognised cause keeps its own, more precise code. */
@@ -282,15 +280,13 @@ export interface SandboxExecutorOptions {
   readonly desktop?: { readonly driver: string; readonly screen: DesktopScreen };
 }
 
-/** What every member of the computer's surface works over: its handle (none: not configured), its named shells, whether
- *  previews are on, and the one way a call through it marks the computer in use. */
+/** What every member of the computer's surface works over: its handle (none: not configured), its named shells, and
+ *  the one way a call through it marks the computer in use. */
 interface Computer {
   readonly handle: SandboxHandle | undefined;
   readonly names: ShellSession;
   readonly shells: MachineShells | undefined;
-  readonly previews: boolean;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
-  readonly exposeOn: (box: SandboxHandle, port: number, name?: string) => Promise<PortExposureResult>;
 }
 
 /** `computer.exec`. */
@@ -329,7 +325,7 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
         },
       }, shell, shells))?.state ?? null);
 
-      return { call: named.call, run: async (pinned): Promise<CommandResult> => {
+      return { call: named.call, run: async (pinned) => {
         try {
           // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
           // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
@@ -351,7 +347,7 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
             // The container's answer, as every transport settles a command.
             const outcome: ExecOutcome = { ...call.settle(res) };
 
-            return commandResultAt(outcome, reportCwd);
+            return commandAnswer(outcome, v.is(ExecPartsSchema, args[1]), reportCwd);
           }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message)));
         } catch (err) {
           const own = classifyErrorCode({ cause: err }) === 'cancelled';
@@ -447,86 +443,6 @@ function existsMember({ handle, touch }: Computer): ExecutorTool {
   };
 }
 
-/** `computer.exposePort`. */
-function exposePortMember({ handle, previews, exposeOn }: Computer): ExecutorTool {
-  return {
-    description:
-      'Expose a TCP port from the computer. Returns the public preview URL, then one line: "verified" when a ' +
-      'request to the URL reaches the container port, or "not reached" naming the preview-route gate that ' +
-      'refused; that check never calls your server. PRE-REQUISITE: a SUPERVISED server must already be ' +
-      'listening on the port: start it with computer.startProcess, never a bare `nohup ... &` (unsupervised ' +
-      'children die with the container and do not come back). Nothing listening is refused with the fix.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      if (!handle) return notConfigured();
-
-      if (!previews) return previewsUnconfigured();
-      const p = parseInput(ExecutorPortSchema, { value: args[0] });
-      const name = parseInput(ExposeOptionsSchema, { value: args[1] })?.name;
-
-      if (p === undefined) {
-        return refusalOf(new KinuError('bad_input', `computer.exposePort: invalid port ${String(args[0])}`));
-      }
-
-      try {
-        const exposed = await exposeOn(handle, p, name);
-
-        // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
-        return exposed.supported
-          ? exposedPortText(exposed.url, p, exposed.route)
-          : refusalOf(new KinuError('bad_input', exposed.reason));
-      } catch (err) {
-        return refusalOf(sandboxFailure({ doing: `computer.exposePort ${p}`, cause: err }));
-      }
-    },
-  };
-}
-
-/** `computer.unexposePort`. */
-function unexposePortMember({ handle, touch }: Computer): ExecutorTool {
-  return {
-    description: 'Stop exposing a port.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      if (!handle) return notConfigured();
-      const port = parseInput(ExecutorPortSchema, { value: args[0] });
-
-      if (port === undefined) {
-        return refusalOf(new KinuError('bad_input', `computer.unexposePort: invalid port ${String(args[0])}`));
-      }
-
-      try {
-        // The box's revocation removes the port's row and withdraws its preview: nothing more to remove here.
-        await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
-
-        return `unexposed ${port}`;
-      } catch (err) {
-        return refusalOf(sandboxFailure({ doing: `computer.unexposePort ${port}`, cause: err }));
-      }
-    },
-  };
-}
-
-/** `computer.listPorts`. */
-function listPortsMember({ handle, previews }: Computer): ExecutorTool {
-  return {
-    description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
-    execute: async (): Promise<string | Refusal> => {
-      if (!handle) return notConfigured();
-
-      if (!previews) return previewsUnconfigured();
-
-      try {
-        // The tool is listPorts, the verb both executors declare. A read of the box's record, which never starts it,
-        // so no use of the box.
-        const ports = await withSandboxRetry(() => handle.getExposedPorts());
-
-        return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
-      } catch (err) {
-        return refusalOf(sandboxFailure({ doing: 'computer.listPorts', cause: err }));
-      }
-    },
-  };
-}
-
 /** `computer.startProcess`. */
 function startProcessMember({ handle, touch }: Computer): ExecutorTool {
   return commandTool(
@@ -550,7 +466,7 @@ function startProcessMember({ handle, touch }: Computer): ExecutorTool {
         { value: v.is(v.string(), rawOpts) ? rawOpts : rawOpts?.cwd },
       ) ?? WORKSPACE_BACKUP_DIR;
 
-      return { call: { text: command, cwd, context: {} }, run: async (): Promise<CommandResult> => {
+      return { call: { text: command, cwd, context: {} }, run: async () => {
         try {
           // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
           const started = await touch(async () => {
@@ -691,16 +607,13 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return { supported: true, url: exposed.url, port, name, route: exposed.route };
   };
 
-  const computer: Computer = { handle, names, shells, previews, touch, exposeOn };
+  const computer: Computer = { handle, names, shells, touch };
 
   const tools: ExecutorProvider['tools'] = {
     exec: execMember(computer),
     readdir: readdirMember(computer),
     deleteFile: deleteFileMember(computer),
     exists: existsMember(computer),
-    exposePort: exposePortMember(computer),
-    unexposePort: unexposePortMember(computer),
-    listPorts: listPortsMember(computer),
     startProcess: startProcessMember(computer),
     stopProcess: stopProcessMember(computer),
     // Inline, as resize is: the effect its answer runs is run at this exported factory, its bridge.
@@ -760,7 +673,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   const capabilities: ExecutorCapability[] = [
     'javascript', 'typescript', 'native_binary',
     'shell', 'npm', 'git', 'fs_owned',
-    'net_outbound', 'net_inbound', 'process_spawn', 'process_long',
+    'net_outbound', ...(previews ? (['net_inbound'] as const) : []), 'process_spawn', 'process_long',
   ];
 
   return {
@@ -802,11 +715,8 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
         return { supported: false, reason: `invalid port ${String(port)}` };
       }
 
-      try {
-        return await exposeOn(handle, port, opts?.name);
-      } catch (err) {
-        return { supported: false, reason: renderThrownChain({ cause: err }) };
-      }
+      // A failure keeps its class: the caller is told what failed, never that the computer cannot serve ports.
+      return await exposeOn(handle, port, opts?.name);
     },
 
     async unexposePort(port) {

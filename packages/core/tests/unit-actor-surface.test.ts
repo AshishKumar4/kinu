@@ -17,7 +17,7 @@ import { conversationsFor } from './helpers';
 const SHOT = { url: 'https://example.com/', retrievedAt: '2026-10-08T00:00:00.000Z', bytes: new Uint8Array([137, 80, 78, 71]) };
 
 const WORKSPACE: ExecutorProviderSurface = {
-  name: 'workspace', positionalArgs: true,
+  name: 'workspace', positionalArgs: true, capabilities: new Set(),
   tools: { readFile: { description: 'Read a file', planAllowed: true, execute: async () => 'contents' } },
 };
 

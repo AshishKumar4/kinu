@@ -14,7 +14,6 @@ import { DefaultExecutionRouter } from '../src/execution/router';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import type { SQLQueryBindings } from 'bun:sqlite';
 import type { SqlValue } from '@nimbus-sh/core';
-import type { ExecutorToolResult } from '../src/execution/types';
 import { present } from '@kinu.run/test-utils';
 import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 import { CommandResultSchema } from '../src/execution/exec-result';
@@ -24,10 +23,6 @@ import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 /** An executor's namespace as the model reads it. */
 const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {});
 
-
-function toolText(result: ExecutorToolResult): string {
-  return v.parse(v.string(), result);
-}
 
 function fakeBox() {
   const files = new Map<string, Uint8Array>();
@@ -111,8 +106,8 @@ describe('hosted Nimbus workspace provider', () => {
 
     const started = v.parse(v.object({ processId: v.string() }), await provider.tools.startProcess.execute('node server.js'));
     expect(await provider.tools.logs.execute(started.processId)).toContain('ready');
-    expect(await provider.tools.exposePort.execute(4321))
-      .toBe('https://4321.example.test\nverified: a request to this URL reaches the server on port 4321');
+    expect(await present(executorNamespace(provider).tools.exposePort, 'workspace.exposePort').execute(4321))
+      .toEqual({ port: 4321, url: 'https://4321.example.test', route: { reached: true } });
     expect(await provider.exposePort(4321)).toEqual({
       supported: true,
       port: 4321,
@@ -235,9 +230,10 @@ describe('hosted Nimbus workspace provider', () => {
     await expect(provider.listExposedPorts()).rejects.toMatchObject({
       name: 'KinuError[unsupported]', code: 'unsupported', message: expect.stringContaining(reason),
     });
-    expect(JSON.parse(toolText(await provider.tools.listPorts.execute()))).toEqual([
-      { port: 4321, unavailable: reason },
-    ]);
+    // A program asks the same contract, so it is told the same reason, never an empty list.
+    expect(await present(executorNamespace(provider).tools.listPorts, 'workspace.listPorts').execute()).toMatchObject({
+      success: false, reason: 'unsupported', error: expect.stringContaining(reason),
+    });
   });
 
   test('a port with a URL still lists, and one the host merely could not price is dropped', async () => {
@@ -322,7 +318,9 @@ describe('the workspace process and port surface', () => {
       list: async () => [],
     };
     const provider = blockedProvider(box);
-    expect(await provider.tools.exposePort.execute(8789)).toMatchObject({ reason: 'unsupported' });
+
+    // The caller acts on the reason: start the server, then expose it.
+    expect(await present(executorNamespace(provider).tools.exposePort, 'workspace.exposePort').execute(8789)).toMatchObject({ reason: 'bad_input' });
     const direct = await provider.exposePort(8789);
     expect(direct).toMatchObject({
       supported: false,
@@ -337,7 +335,7 @@ describe('the workspace process and port surface', () => {
       unexpose: async () => ({ ok: true }),
       list: async () => [],
     };
-    expect(await blockedProvider(box).tools.exposePort.execute(8789)).toMatchObject({ reason: 'io' });
+    expect(await present(executorNamespace(blockedProvider(box)).tools.exposePort, 'workspace.exposePort').execute(8789)).toMatchObject({ reason: 'io' });
   });
 });
 

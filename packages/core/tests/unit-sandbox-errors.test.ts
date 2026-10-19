@@ -1,3 +1,4 @@
+import { retiredMembersOf } from '../src/operations/retired';
 /**
  * What a codemode program receives when a call fails, and explainSandboxError: a ReferenceError for a
  * native tool used as a codemode global becomes a correction naming that tool's own namespace from TOOL_REACH.
@@ -156,7 +157,8 @@ test('every member of every namespace refuses with the one declared Refusal, and
     executorNamespace(createSandboxExecutor(refusingDouble(), { previewHostSuffix: 'preview.test' })),
     executorNamespace(createSandboxExecutor()),
     executorNamespace(createParentExecutor({ handle: refusingDouble() })),
-    executorNamespace(createDeviceTunnelExecutor(refusingDouble())),
+    // Its capabilities are read from the live fleet, so the double answers that one read: no machine is connected.
+    executorNamespace(createDeviceTunnelExecutor({ rpc: refusingDouble(), refreshStatus: refusingDouble(), status: () => ({ devices: [] }) })),
     { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }), undefined) },
     createStateCodemodeProvider(refusingDouble()),
     createAgentsCodemodeProvider(() => refusingDouble()),
@@ -171,7 +173,9 @@ test('every member of every namespace refuses with the one declared Refusal, and
 
   // What a program reads from `describe`: every member declared as a signature or a const (native tools by their schemas), and every
   // declared result admitting a Refusal.
+  // A retired member is no declared member: it only refuses, naming its successor.
   const undeclared = namespaces.filter((namespace) => namespace.name !== CRAFTED_TOOL_NAMESPACE).flatMap((namespace) => Object.keys(namespace.tools)
+    .filter((member) => !retiredMembersOf(namespace.name).some((retired) => retired.member === member))
     .filter((member) => namespace.declarations?.[member] === undefined
       && ![` ${member}(`, `const ${member}:`].some((form) => (namespace.types ?? '').includes(form)))
     .map((member) => `${namespace.name}.${member}`));

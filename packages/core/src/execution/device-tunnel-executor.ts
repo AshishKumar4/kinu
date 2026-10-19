@@ -12,7 +12,7 @@ import type { CheckpointFiles, OutputSink } from '../types/primitives';
 import { isVfsErrorCode, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { commandResultAt } from './exec-result';
+import { commandAnswer, ExecPartsSchema } from './exec-result';
 import { causeCodes, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
 import { DEVICE_METHOD } from './device-protocol';
@@ -396,7 +396,7 @@ class DevicePlane {
             () => settle(terminateDeviceExec(this.rpc, requestId, deviceId)),
           );
 
-          return commandResultAt(call.settle(v.parse(DeviceExecResultSchema, result)), reportCwd);
+          return commandAnswer(call.settle(v.parse(DeviceExecResultSchema, result)), v.is(ExecPartsSchema, args[1]), reportCwd);
         }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message))),
         catch: (cause) => ({ cause }),
       }).pipe(Effect.catch((failed) => {
