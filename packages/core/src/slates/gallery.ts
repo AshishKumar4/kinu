@@ -145,11 +145,11 @@ export class GalleryIndex {
     return { listing: listingOf(row, this.featured(now)) };
   }
 
-  /** Whether `workspace`'s slate is listed, and its picture's digest if so. */
-  listed(workspace: string, slate: string): { readonly picture: string | null } | null {
-    const row = this.db.exec('SELECT picture FROM gallery_listings WHERE workspace = ? AND slate = ?', workspace, slate).toArray()[0];
+  /** Whether `workspace`'s slate is listed, and if so by which share, and its picture's digest. */
+  listed(workspace: string, slate: string): { readonly share: string; readonly picture: string | null } | null {
+    const row = this.db.exec('SELECT share, picture FROM gallery_listings WHERE workspace = ? AND slate = ?', workspace, slate).toArray()[0];
 
-    return row === undefined ? null : { picture: v.parse(v.object({ picture: v.nullable(v.string()) }), row).picture };
+    return row === undefined ? null : v.parse(v.object({ share: v.string(), picture: v.nullable(v.string()) }), row);
   }
 
   /** A star from `email`, or its withdrawal; a slate that is not listed takes none. */

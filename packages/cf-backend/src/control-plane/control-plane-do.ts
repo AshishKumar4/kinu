@@ -154,8 +154,8 @@ export class ControlPlaneDO extends DurableObject<Env> {
     return this.gallery.slate(workspace, slate, viewer, Date.now());
   }
 
-  /** Whether `workspace`'s slate is listed, and its picture's digest if so. */
-  async galleryListed(caller: PresentedCaller, workspace: string, slate: string): Promise<{ readonly picture: string | null } | null> {
+  /** Whether `workspace`'s slate is listed, and if so by which share, and its picture's digest. */
+  async galleryListed(caller: PresentedCaller, workspace: string, slate: string): Promise<{ readonly share: string; readonly picture: string | null } | null> {
     await this.gate(caller, 'gallery.read');
 
     return this.gallery.listed(workspace, slate);

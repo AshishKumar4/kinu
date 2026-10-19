@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
+import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateAnswer, slateRevision as builtRevision, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -81,7 +81,7 @@ import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
-import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { browserCamera, initSlatePictureTable, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
@@ -636,6 +636,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const listing = await (await this.slates()).controller.list(ROOT_SLATE_CALLER);
 
         return new Set([...listing.slates, ...listing.problems].map((slate) => slate.id));
+      },
+      // A listed public share's view: entered as a visitor with no account enters its host, at its publication now.
+      share: async (id) => {
+        const { controller } = await this.slates();
+        const share = controller.live.get(id);
+
+        if (share?.revokedAt !== null || share.gallery === null || share.visibility !== 'public') return null;
+        const host = await slateShareUrl(this.env, this.name, share.handle);
+
+        return host === null ? null : { url: shareCaptureUrl(host), publication: builtRevision(controller.builds, share.slate) ?? '' };
       },
       camera: () => browserCamera(browser),
     };
@@ -4639,7 +4649,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (changed) {
           this.overviewChanged();
-          // A listed slate's card shows its picture: the Gallery is told the new one.
+          // A listed share's card shows its view's picture: the Gallery is told the new one.
           (yield* Effect.promise(async () => this.slates())).controller.relist();
         }
       }), phaseFailed(span, { doing: 'photographing the slates due a picture', otherwise: 'unavailable' }, (failure) => {
@@ -6107,18 +6117,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A deployment that gives shares no address has nothing to list.
       if (listing === null || url === null) {
         await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), { ...shared, listed: false });
+        // Off the Gallery first: its share's pictures go after, and their going never holds that back.
+        await this.pictures.unlisted(this.name, share.slate, share.id, this.env.SLATE_PICTURES);
 
         return;
       }
 
-      const read = await (await this.slates()).controller.readLiveShareRecord(share.id);
+      const { controller } = await this.slates();
+      const read = await controller.readLiveShareRecord(share.id);
       const title = read.ok ? read.value.title : share.slate;
 
-      // No picture: the camera shoots the owner's private preview, which draws with the owner's own reads, so its shot
-      // is never the share's to show. A card shows only a picture taken under the listed share's authority; none is.
+      // Its picture is one taken through the share itself, at this revision or until one is: never the camera's shot
+      // of the owner's private preview, which draws with the owner's own reads.
+      if (share.visibility === 'public' && this.pictureCapture() !== null) {
+        this.pictures.listed(share.slate, share.id, builtRevision(controller.builds, share.slate) ?? '', Date.now());
+        this.armDurableWake();
+      }
+
       await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), {
         ...shared, listed: true, url,
-        card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: null },
+        card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: this.pictures.shareDigest(share.slate, share.id) },
       });
     });
   }

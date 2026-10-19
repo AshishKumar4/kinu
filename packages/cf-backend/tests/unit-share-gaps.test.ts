@@ -22,6 +22,8 @@ import { accountRoutes } from '../src/user/account-routes';
 import { galleryRoutes } from '../src/gallery/routes';
 import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
+import { pictureKey, shareCaptureUrl, sharePictureKey } from '../src/slates/pictures';
+import { memoryBucket } from './helpers/r2';
 import type { AuthIdentity } from '../src/auth/session';
 import { present } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
@@ -765,11 +767,88 @@ test("R5-P1 private picture. a slate's shot of its owner's private preview never
   const made = await sharePublic(world, 'public');
 
   // The camera's shot of the owner's own preview of it, which draws with the owner's reads.
-  world.owner.db.run('INSERT INTO slate_pictures (slate, port, digest) VALUES (?, ?, ?)', ['issues', 20000, 'ab'.repeat(32)]);
+  world.owner.db.run("INSERT INTO slate_pictures (slate, view, port, digest) VALUES (?, 'preview', ?, ?)", ['issues', 20000, 'ab'.repeat(32)]);
   await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: true, line: 'Triage the open issues', category: 'work' }));
   await until(() => synced.length > 0, 'the Gallery told of the listing');
 
   expect(synced.map((sync) => (sync.listed ? sync.card.picture : 'unlisted'))).toEqual([null]);
+});
+
+test("Gallery picture. a listed share's card shows only the picture taken through the share itself, once it is", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+
+  tellGalleryInto(world, synced);
+  world.owner.agent.harnessDeclareEnv({ SLATE_PICTURES: memoryBucket() });
+  const made = await sharePublic(world, 'public');
+
+  // The Gallery told the card as the owner lists the share: what its picture is, each time.
+  const listed = async () => {
+    await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: true, line: 'Triage the open issues', category: 'work' }));
+    await until(() => synced.length > 0, 'the Gallery told of the listing');
+
+    return synced.splice(0).map((sync) => (sync.listed ? sync.card.picture : 'unlisted'));
+  };
+
+  // The owner's private preview picture of the slate is never the card's: until one is taken through the share, none.
+  world.owner.db.run("INSERT INTO slate_pictures (slate, view, port, digest) VALUES (?, 'preview', ?, ?)", ['issues', 20000, 'ab'.repeat(32)]);
+  expect(await listed()).toEqual([null]);
+  // Listed, its picture falls due, to be taken through the share's own host as a visitor with no account enters it.
+  expect(world.owner.db.query("SELECT view, due_at IS NOT NULL AS due FROM slate_pictures WHERE view <> 'preview'").all()).toEqual([{ view: made.share.id, due: 1 }]);
+  const host = await hostOf(world, made.share.handle);
+
+  expect(shareCaptureUrl(host)).toBe(`${host}${CONSENT_PATH}`);
+  // Taken (as the alarm's camera takes it): the card names that picture.
+  world.owner.db.run('UPDATE slate_pictures SET digest = ?, due_at = NULL WHERE view = ?', ['cd'.repeat(32), made.share.id]);
+  expect(await listed()).toEqual(['cd'.repeat(32)]);
+  // Taken off the Gallery: its share's pictures go with its listing.
+  await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: false }));
+  await until(() => synced.length > 0, 'the Gallery told of the unlisting');
+  expect(world.owner.db.query("SELECT view FROM slate_pictures WHERE view <> 'preview'").all()).toEqual([]);
+});
+
+test("Gallery picture. a share only its named people may open is never photographed for the Gallery", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+
+  tellGalleryInto(world, synced);
+  world.owner.agent.harnessDeclareEnv({ SLATE_PICTURES: memoryBucket() });
+  const made = await sharePublic(world, 'users');
+
+  await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: true, line: 'Triage the open issues', category: 'work' }));
+  await until(() => synced.length > 0, 'the Gallery told of the listing');
+
+  // A visitor with no account would be sent to sign in: there is nothing of it to take.
+  expect(world.owner.db.query("SELECT view FROM slate_pictures WHERE view <> 'preview'").all()).toEqual([]);
+});
+
+test("Gallery picture. the Gallery serves a listed slate's picture from its share's own pictures, never a private one", async () => {
+  const bucket = memoryBucket();
+  const shared = 'cd'.repeat(32);
+  const owners = 'ab'.repeat(32);
+
+  bucket.objects.set(sharePictureKey('issues-owner', 'issues', 's1', shared), new Uint8Array([1]));
+  // The owner's private preview picture, under the digest the index names in the second visit below.
+  bucket.objects.set(pictureKey('issues-owner', 'issues', owners), new Uint8Array([2]));
+
+  const picture = async (named: string) => {
+    const ControlPlaneDO = { idFromName: (name: string) => name, get: () => ({ galleryListed: async () => ({ share: 's1', picture: named }) }) };
+    const partialEnv: Partial<Env> = {};
+
+    Object.assign(partialEnv, { ...TEST_USER_ENV, ControlPlaneDO, SLATE_PICTURES: bucket });
+    // SAFETY: the picture route reaches the control plane's galleryListed and SLATE_PICTURES alone; the rest is the test env's own.
+    const env = partialEnv as Env;
+
+    return present(await serveFamily(galleryRoutes)(new Request(`https://app.test/api/gallery/issues-owner/issues/picture/${named}`), env), 'the picture').status;
+  };
+
+  expect(await picture(shared)).toBe(200);
+  // An index naming a private picture's digest (as one listed before the share's own pictures did) serves nothing.
+  expect(await picture(owners)).toBe(404);
 });
 
 test("a slate's first share can start empty: a copy made now, code only, named as a copy, and none made when refused", async () => {
