@@ -1,6 +1,6 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
-import { REAL_CLOCK } from '@kinu.run/core';
+import { REAL_CLOCK, turnLedgers } from '@kinu.run/core';
 import { jsonSchema, tool } from 'ai';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -74,7 +74,7 @@ test('abort after preparation refuses program entry before memory or text effect
 
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const reason = new Error('cancelled before first next');
@@ -92,7 +92,7 @@ test('cancellation retains an admitted memory effect but refuses subsequent effe
 
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);
@@ -128,7 +128,7 @@ test('a native refusal keeps the same failed outcome in the turn and in the head
     throw new KinuError('denied', 'fixture permission refused');
   } }) };
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools } });
 
   const events = await collect(prepared.events);
@@ -195,7 +195,7 @@ test('the turn receives a tool\'s actual output data, not its model-side renderi
     toModelOutput: () => ({ type: 'text', value: 'model-only representation' }),
   }) };
 
-  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
     chat: { modelSpec: 'test/model', model, system: 'sys', history: [], tools },
   });
 
@@ -267,7 +267,7 @@ test('invalid native argument containers cannot become an empty successful call'
   const { rt } = await runtime('async function run() { await host.callTool("mutate", []); }');
   let effects = 0;
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [],
       tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
     },
@@ -296,7 +296,7 @@ test('router namespace effects use the same lifetime admission as host effects',
   } } }];
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go',
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);

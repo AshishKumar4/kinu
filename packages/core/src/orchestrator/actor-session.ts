@@ -911,7 +911,7 @@ export class ActorSession {
 
     return operationProfileStream(startActorTurn({
       runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
-      program, scaffoldSpend: input.scaffoldSpend,
+      program, scaffoldSpend: input.scaffoldSpend, ledgers: this.orchestrator.acc.ledgers,
       assertActive: input.assertActive,
       scaffoldStreamOptions: input.scaffoldStreamOptions,
       chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,

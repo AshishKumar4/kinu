@@ -6,6 +6,7 @@ import type { ModelCallSpend } from '../events/model-call';
 import { scaffoldChatTransform } from '../scaffold/chat-transform';
 import { assertScaffoldActive, type ScaffoldRunControl } from '../scaffold/executor';
 import type { ActorTurnProgram } from './actor-program';
+import type { TurnLedgers } from './turn-accumulator';
 import { createScaffoldCallTool, createScaffoldHistory, createScaffoldLLMStream, type ScaffoldBridgeOpts } from './scaffold-host';
 
 export interface ActorTurnInput {
@@ -19,6 +20,8 @@ export interface ActorTurnInput {
   readonly scaffoldSpend?: ModelCallSpend;
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
   readonly assertActive?: () => void;
+  /** The turn's read ledger and budget, which its native `file` tool keeps; a scaffold's programs read into the same. */
+  readonly ledgers: Pick<TurnLedgers, 'files' | 'context'>;
 }
 
 /**
@@ -37,6 +40,7 @@ export function startActorTurn(input: ActorTurnInput): AsyncIterable<ChatEvent> 
       rt: input.runtime,
       workMode: input.mode,
       task: input.task,
+      ledgers: input.ledgers,
       ...control,
       llmStream: createScaffoldLLMStream({
         model: chat.model, spec: chat.modelSpec, tools: () => chat.tools,

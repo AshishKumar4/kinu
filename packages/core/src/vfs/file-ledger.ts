@@ -91,9 +91,9 @@ export class TurnFileLedger {
   /** Not cleared by `reset()`: a per-turn identity would count an agent's own re-edits as collisions. */
   private readonly author = newWriteAuthor();
 
-  /** How many file versions it holds, a turn's or a standing ledger's whole memory. */
+  /** How many file versions and paths it holds, a turn's or a standing ledger's whole memory. */
   get held(): number {
-    return this.seen.size + this.seenPaths.size;
+    return this.seen.size + this.seenPaths.size + this.failedPaths.size + this.recoveredPaths.size;
   }
 
   reset(): void {

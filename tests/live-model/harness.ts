@@ -141,7 +141,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     model: () => model,
     reportModelCall: liveModelCallSink(sql, rt.actor),
     // A node's eval as the CLI session builds it.
-    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch, () => ({ files: new TurnFileLedger(), context: new TurnContextBudget() })),
+    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch),
     webSearch,
     hostNode: () => Promise.reject(new Error(
       'this eval surface builds tools without a session, so it cannot seat a swarm node; '

@@ -10,8 +10,7 @@
 import { namespaceDeclaration } from '../tools/operation-surfaces';
 import { executorNamespace } from '../tools/executor-operations';
 import { serveFile } from '../tools/file-operations';
-import { scopedTurnSurface } from '../orchestrator/main-turn-surface';
-import { standingFileLedger } from '../orchestrator/turn-accumulator';
+import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -202,6 +201,9 @@ export interface ScaffoldRunOptions extends ScaffoldRunControl {
   history?: ScaffoldHistoryReader;
   /** Scaffold code override for a pending-version run. Default: rt.identity.scaffold.read(). */
   scaffoldCodeOverride?: string;
+  /** The turn's read ledger and budget, which its native `file` tool keeps: a machine's `fs` reads into the same. Absent
+   *  outside a turn, where the run keeps its own. */
+  ledgers?: { readonly files: TurnFileLedger; readonly context: TurnContextBudget };
 }
 
 const ScaffoldEventSchema: v.GenericSchema<Exclude<ScaffoldEvent, { type: 'chat_chunk' | 'model_chunk' | 'model_output' }>> = v.variant('type', [
@@ -546,18 +548,14 @@ return __result;
 
 export function scaffoldProviders(
   rt: AgentRuntime,
-  control: ScaffoldRunControl,
+  control: ScaffoldRunControl & Pick<ScaffoldRunOptions, 'ledgers'>,
   mode: WorkMode,
 ): Array<{ name: string; fns: SandboxFunctions; types?: string }> {
   const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [];
 
   // A machine's `fs` is the turn's own file operations, on the read ledger its `file` tool keeps.
-  const ledgers = scopedTurnSurface()?.ledgers;
-
-  const files = serveFile(() => ({
-    vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory,
-    ledger: ledgers?.files ?? standingFileLedger(rt), budget: ledgers?.context ?? new TurnContextBudget(),
-  }));
+  const ledgers = control.ledgers ?? { files: new TurnFileLedger(), context: new TurnContextBudget() };
+  const files = serveFile(() => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: ledgers.files, budget: ledgers.context }));
 
   const routerProviders = (rt.executionRouter?.getProviders() ?? []).map((provider) => executorNamespace(provider, files));
 

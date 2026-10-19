@@ -10,6 +10,11 @@ import type { ChatEvent } from '../src/chat';
 import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import type { JsonObject } from '../src/utils/json';
 import { createTestRuntime } from './helpers';
+import { turnLedgers } from '../src/orchestrator/turn-accumulator';
+import { createInlineExecutor } from '../src/tools/inline-executor';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { createFileTool } from '../src/tools/file-operations';
+import { present, toolExecute } from '@kinu.run/test-utils';
 
 function makeRtWithMockedExecutor(execute: Executor['execute']) {
   const { rt } = createTestRuntime();
@@ -34,6 +39,38 @@ async function* asyncOf(...items: ChatEvent[]): AsyncIterable<ChatEvent> {
 }
 
 describe('runScaffold', () => {
+  test("a scaffold's workspace.fs reads into the turn's own ledger, so a read there lets the turn's file tool replace the file", async () => {
+    const ledgers = turnLedgers();
+    const { rt } = createTestRuntime();
+
+    await rt.toolFiles.writeFile('/home/main/notes.md', new TextEncoder().encode('first\n'));
+    rt.identity.scaffold.read = async () => 'async function run() {}';
+    const router = new DefaultExecutionRouter();
+
+    router.register(createInlineExecutor({ vfs: rt.toolFiles, craftStore: rt.craftStore, shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) }, filesOwner: 'agent' }));
+    rt.executionRouter = router;
+
+    rt.executor = {
+      languages: ['javascript'],
+      execute: async (_code, providers) => {
+        if (!Array.isArray(providers)) throw new Error('expected resolved providers');
+        const workspace = providers.find((provider) => provider.name === 'workspace');
+
+        const read = await present(present(workspace, 'the workspace namespace').fns['fs.text'], 'workspace.fs.text')('/home/main/notes.md');
+
+        expect(read).toBe('first\n');
+
+        return { result: undefined };
+      },
+    };
+
+    await runScaffold({ rt, task: 'x', emit: () => {}, llmStream: () => asyncOf(), ledgers });
+
+    const file = createFileTool({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: ledgers.files, budget: ledgers.context });
+
+    expect(await toolExecute(file)({ op: 'write', path: '/home/main/notes.md', content: 'second\n' })).toMatchObject({ action: 'replaced' });
+  });
+
   test('forwards emits through to the emit callback', async () => {
     const events: ScaffoldEvent[] = [];
     const emit: ScaffoldEmitFn = (e) => { events.push(e); };

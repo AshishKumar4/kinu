@@ -1,6 +1,6 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
-import { REAL_CLOCK } from '@kinu.run/core';
+import { REAL_CLOCK, turnLedgers } from '@kinu.run/core';
 import { createHash } from 'node:crypto';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
@@ -66,13 +66,13 @@ test('an admitted version keeps its actual bytes across live-alias and later ver
     return NEW;
   };
 
-  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat });
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat, ledgers: turnLedgers() });
   Reflect.set(admitted.program, 'source', NEW);
   expect(admitted.program).toEqual({ kind: 'scaffold', version: 1, source: OLD,
     digest: createHash('sha256').update(OLD).digest('hex') });
   await writeText(files, rt.identity.scaffold.path + '.v1', NEW);
   expect(await text(admitted.events)).toBe('version one');
-  const next = await admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 2, chat });
+  const next = await admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 2, chat, ledgers: turnLedgers() });
   expect(await text(next.events)).toBe('version two');
   expect(aliasReads).toBe(0);
   expect(chatModel.doStreamCalls).toHaveLength(0);
@@ -80,14 +80,14 @@ test('an admitted version keeps its actual bytes across live-alias and later ver
 
 test('an actor Build turn does not inherit another actor\'s ambient Plan mode', async () => {
   const { rt, chat } = await fixture();
-  const admitted = await inWorkMode('plan', () => admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat }));
+  const admitted = await inWorkMode('plan', () => admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, chat, ledgers: turnLedgers() }));
   expect(await inWorkMode('plan', () => text(admitted.events))).toBe('version one');
 });
 
 test('Plan uses the builtin loop without reading or evaluating a promoted initializer', async () => {
   const { rt, files, chat } = await fixture();
   await writeText(files, rt.identity.scaffold.path + '.v1', 'throw new Error("promoted initializer ran");');
-  const admitted = await admitActorTurn({ runtime: rt, mode: 'plan', task: 'go', loopVersion: 1, chat });
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'plan', task: 'go', loopVersion: 1, chat, ledgers: turnLedgers() });
   expect(admitted.program).toEqual({ kind: 'builtin', version: 0 });
   expect(await text(admitted.events)).toBe('builtin answer');
 });
@@ -107,7 +107,7 @@ test('cancellation while the selected source is being read prevents a later prog
 
   const abort = new AbortController();
 
-  const admission = admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1,
+  const admission = admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 1, ledgers: turnLedgers(),
     chat: { ...chat, signal: abort.signal } });
 
   await reading.promise;
@@ -177,6 +177,7 @@ test('cancelling one actor interrupts its cooperative tool without cancelling th
   const inputSchema = jsonSchema<Record<string, never>>({ type: 'object', properties: {}, additionalProperties: false });
 
   const firstTurn = await admitActorTurn({
+    ledgers: turnLedgers(),
     runtime: first.rt, mode: 'build', task: 'first', loopVersion: 1,
     chat: { ...first.chat, signal: firstAbort.signal, tools: { hold: tool({ inputSchema,
       execute: (_input, { abortSignal }) => {
@@ -192,6 +193,7 @@ test('cancelling one actor interrupts its cooperative tool without cancelling th
   });
 
   const secondTurn = await admitActorTurn({
+    ledgers: turnLedgers(),
     runtime: second.rt, mode: 'build', task: 'second', loopVersion: 1,
     chat: { ...second.chat, signal: secondAbort.signal, tools: { hold: tool({ inputSchema,
       execute: async (_input, { abortSignal }) => {
@@ -241,7 +243,7 @@ test('the selected loop cancels its cooperative model request with the actor', a
 
   const abort = new AbortController();
 
-  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', task: 'wait', loopVersion: 1,
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', task: 'wait', loopVersion: 1, ledgers: turnLedgers(),
     chat: { ...chat, model: waitingModel, signal: abort.signal } });
 
   const done = text(admitted.events);

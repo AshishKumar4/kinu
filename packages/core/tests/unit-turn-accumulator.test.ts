@@ -30,6 +30,15 @@ test('the standing file ledger retains its cap, then resets past 512 held versio
   expect(standingFileLedger(createTestRuntime().rt).held).toBe(0);
 });
 
+test('a standing ledger counts the paths its failed edits name, so failures alone also start it over', () => {
+  const { rt } = createTestRuntime();
+  const ledger = standingFileLedger(rt);
+
+  for (let at = 0; at < 513; at++) ledger.recordEdit(`/notes/${String(at)}`, 'unread');
+  expect(ledger.held).toBe(513);
+  expect(standingFileLedger(rt).held).toBe(0);
+});
+
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
     const a = new TurnAccumulator();
