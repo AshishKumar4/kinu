@@ -9,7 +9,7 @@ function memoryShows(page: Page): Promise<string> {
 
     if (section.querySelector('[data-empty]') !== null) return 'empty';
 
-    return /Memory \w+/u.exec(section.textContent ?? '')?.[0] ?? 'nothing yet';
+    return /Memory \w+/u.exec(section.querySelector('[data-memory-file]')?.textContent ?? '')?.[0] ?? 'nothing yet';
   });
 }
 

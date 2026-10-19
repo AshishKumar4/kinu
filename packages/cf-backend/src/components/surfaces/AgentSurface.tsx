@@ -160,7 +160,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
         {!searching && memoryContent !== "" && (
           <details className="group/memory">
             <summary className="cursor-pointer p-meta p-text-3 hover:p-text">Memory file</summary>
-            <div className="mt-2 max-h-[420px] overflow-y-auto p-card px-4 py-3 prose-chat p-text"><MarkdownContent content={memoryContent} /></div>
+            <div data-memory-file className="mt-2 max-h-[420px] overflow-y-auto p-card px-4 py-3 prose-chat p-text"><MarkdownContent content={memoryContent} /></div>
           </details>
         )}
 

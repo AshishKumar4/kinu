@@ -7976,6 +7976,7 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
@@ -8021,7 +8022,6 @@ async function mount() {
   else if (frame === "provenance") node = <ProvenanceFrame />;
   else if (frame === "streaming") node = <StreamingFrame />;
   else if (frame === "agent") node = <AgentFrame />;
-  else if (frame === "agenttab") node = <AgentTabFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "slate") node = <SlatePreviewFrame />;
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
