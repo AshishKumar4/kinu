@@ -1,5 +1,6 @@
 /** One chat's connection and conversation: its socket, its transcript and sends, and the opening it reads. */
 import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import { useAgent } from "agents/react";
 import { Effect } from "effect";
 import {
@@ -275,8 +276,13 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   /** Openings whose landing is not known yet. The SDK sends the whole thread with each request and the room sends the
    *  agent every message in it the agent does not hold, so words a Stop handed back, this tab's Stop or another's, ran on
-   *  the next request: none carries these but the request that submits them. */
-  const unlanded = useRef(new Set<string>());
+   *  the next request: none carries these but the request that submits them. Each by its landing, which settles in the
+   *  microtasks its caller puts words no turn read back in the draft. */
+  const unlanded = useRef(new Map<string, Promise<void>>());
+
+  /** Stops still waiting on the landings they found unknown: the composer stays on the Stop until each is known, so words
+   *  a Stop hands back are in the draft before Send returns (1008-e: a Continue sent first ran without the brief). */
+  const [stopsLanding, setStopsLanding] = useState(0);
 
   const {
     messages,
@@ -314,8 +320,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   /** The one answer to "is a turn live", folded over the durable claim and the socket. The claim covers a turn
    *  that began before this tab loaded; the socket, one that begins while it is open. */
   const liveness = useMemo(
-    () => turnLiveness({ claim: turnClaim, streaming: isStreaming }),
-    [turnClaim, isStreaming],
+    () => turnLiveness({ claim: turnClaim, streaming: isStreaming || stopsLanding > 0 }),
+    [turnClaim, isStreaming, stopsLanding],
   );
 
   /** The latch is mutated in the statement that reads it, so a second press in one tick sees it
@@ -500,6 +506,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const abortChat = useCallback(async (): Promise<void> => {
     // Snapshot before the awaits: a Send admitted meanwhile owns the latch and must keep it.
     const aborting = sendLatch.current.owner;
+    const landing = [...unlanded.current.values()];
+
+    // Drawn with the Stop itself, never after it: Stop is pressed inside a transition, and the SDK's status is not.
+    if (landing.length > 0) flushSync(() => { setStopsLanding((stops) => stops + 1); });
 
     try {
       await Promise.all([
@@ -517,6 +527,12 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
           cause,
           otherwise: 'io',
         }));
+      }
+
+      // Released in the render the caller's restore of handed-back words lands in: both follow the same landings.
+      if (landing.length > 0) {
+        await Promise.all(landing);
+        setStopsLanding((stops) => stops - 1);
       }
     }
   }, [stop, rpc, extension]);
@@ -685,14 +701,19 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       });
 
       if (run !== null) {
-        unlanded.current.add(id);
+        const landed = Promise.withResolvers<void>();
+
+        unlanded.current.set(id, landed.promise);
 
         // Words no turn took leave the chat: they return to their composer.
         return settle(Effect.ensuring(
           Effect.tapError(attemptInItsWords("io", () => sendLanding(record, run, id)), (refused) => Effect.sync(() => {
             if (refused.code === "cancelled") setMessages((shown) => shown.filter((message) => message.id !== id));
           })),
-          Effect.sync(() => { unlanded.current.delete(id); }),
+          Effect.sync(() => {
+            unlanded.current.delete(id);
+            landed.resolve();
+          }),
         ));
       }
     }
