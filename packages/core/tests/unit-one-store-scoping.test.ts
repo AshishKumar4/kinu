@@ -39,8 +39,7 @@ import {
   initCurriculumTable, listProposedTasks, updateProposedTaskStatus,
 } from '../src/curriculum/proposer';
 import {
-  artifactBody, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, settleArtifact,
-  waitingCandidate, writeCandidate,
+  artifactBody, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, turnArtifacts,
 } from '../src/evolution/artifacts';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
@@ -541,7 +540,7 @@ describe('two actors, one database: proposed_tasks', () => {
 });
 
 describe('two actors, one database: artifact_versions', () => {
-  test('one artifact id carries a different promoted body per actor, and one actor\'s revert leaves the other\'s', () => {
+  test('one artifact id carries a different promoted body per actor, one actor\'s cold turn activates only its own, and one actor\'s revert leaves the other\'s', () => {
     const w = world();
     initArtifactTables(w.execRaw);
     const section = PROMPT_SECTIONS[0];
@@ -551,16 +550,15 @@ describe('two actors, one database: artifact_versions', () => {
     const evidence = { turns: ['t'], reason: 'incorrect' };
 
     for (const [actor, body] of [[w.a, 'a-source'], [w.b, 'b-source']] as const) {
-      writeCandidate(w.sql, actor, { artifactId: id, body, rationale: 'because', evidence, now: 1 });
+      stageArtifact(w.sql, actor, { artifactId: id, body, rationale: 'because', evidence, now: 1 });
     }
 
-    settleArtifact(w.sql, w.a, { artifactId: id, version: 1, status: 'current', now: 2 });
+    turnArtifacts(w.sql, w.a, true, 2);
     expect(w.count('artifact_versions')).toBe(2);
     expect(currentArtifacts(w.sql, w.a)[id]).toBe('a-source');
     expect(currentArtifacts(w.sql, w.b)[id]).toBeUndefined();
     expect(artifactBody(w.sql, w.b, id)).toBe(section.source);
-    expect(waitingCandidate(w.sql, w.a)).toBeNull();
-    expect(waitingCandidate(w.sql, w.b)?.body).toBe('b-source');
+    expect(listArtifactVersions(w.sql, w.b, id)[0]?.status).toBe('staged');
 
     revertArtifact(w.sql, w.b, id, 1);
     expect(currentArtifacts(w.sql, w.a)[id]).toBe('a-source');

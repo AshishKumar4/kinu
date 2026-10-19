@@ -8,7 +8,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 //
 // The refiner is a temporary agent (`agents.ask`) with no write authority: it
 // returns prose, this module parses it, and every write is made here against a
-// named owner. Nothing here promotes: sections land pending for held-out trials,
+// named owner. Nothing here promotes: sections are staged for the next cold turn,
 // skills wait for owner approval, subagent specs are refused, and facts must be
 // backed by the user's own sentence in the reviewed turns.
 
@@ -412,7 +412,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   return [
     'You are reviewing this agent\'s own recent failures to propose the SMALLEST typed edits',
     'that would have prevented them. You have no write access. Your answer is a proposal that',
-    'deterministic gates and behavioural trials will decide on.',
+    'deterministic gates and a judge of recorded turns will decide on.',
     '',
     `## The trajectory under review (${String(reviewed.length)} graded turns)`,
     '',
@@ -568,14 +568,14 @@ function checkQuote(quote: string, reviewed: readonly TurnRating[]): Result.Resu
   if (!said) {
     return Result.fail('not quoted by the user anywhere in the reviewed trajectory: a preference reaches '
       + "memory immediately, so the user's own words are the only evidence that can stand in "
-      + 'for a trial');
+      + 'for a judge');
   }
 
   return Result.void;
 }
 
 /**
- * The one immediate write: no trial can judge a user preference, so
+ * The one immediate write: no judge of recorded turns can weigh a user preference, so
  * {@link checkQuote} is the gate. Idempotent via the keyed `FactsStore.upsert`.
  * The quote rides the route into the changelog.
  */
@@ -607,8 +607,8 @@ function routeFact(
 }
 
 /**
- * A section edit takes the pre-live tests and waits for a live trial. A resumed pass adopts a waiting version with the
- * same words instead of writing a second one.
+ * A section edit takes the pre-live tests and is staged for the next turn whose prompt cache is cold. A resumed pass
+ * adopts a staged version with the same words instead of writing a second one.
  */
 async function routePromptSection(
   deps: RefinementDeps,
@@ -619,14 +619,14 @@ async function routePromptSection(
   const artifactId = sectionArtifact(edit.sectionId);
 
   const waiting = (version: number, note: string): RefinementRoute => ({
-    kind: 'prompt_section', owner, target: `${artifactId}@${String(version)}`, disposition: 'pending_trials',
-    reason: `${note}; the live prompt does not move until a live trial keeps it`,
+    kind: 'prompt_section', owner, target: `${artifactId}@${String(version)}`, disposition: 'staged',
+    reason: `${note}; the live prompt moves at the next turn whose prompt cache is cold`,
   });
 
   const already = listArtifactVersions(deps.control.sql, deps.control.rt.actor, artifactId)
-    .find((version) => (version.status === 'candidate' || version.status === 'trial') && version.body === edit.source);
+    .find((version) => version.status === 'staged' && version.body === edit.source);
 
-  if (already !== undefined) return waiting(already.version, 'waiting for a live trial (adopted from an earlier pass)');
+  if (already !== undefined) return waiting(already.version, 'staged (adopted from an earlier pass)');
   const decide = deps.control.rt.decide;
 
   if (decide === undefined) {
@@ -640,8 +640,8 @@ async function routePromptSection(
   return waiting(judged.version, 'passed the pre-live tests');
 }
 
-/** Applied when any artifact is in effect: a live fact plus a lost section
- *  trial is still a changed agent. */
+/** Applied when any artifact is in effect: a live fact plus a reverted section
+ *  is still a changed agent. */
 function settledStage(landed: number, undone: number): RefinementStage {
   if (landed > 0) return 'applied';
 
@@ -655,7 +655,7 @@ function settledStage(landed: number, undone: number): RefinementStage {
  * from callbacks, so it cannot drift. Null while anything is pending or when
  * the guarded transition finds the row already moved.
  */
-/** A section edit is pending until a live trial keeps or reverts it. */
+/** A section edit is pending until a cold turn makes it current, or the owner discards it. */
 function sectionRouteState(versions: readonly ArtifactVersion[], target: string): 'pending' | 'rolled_back' | 'promoted' {
   const row = versions.find((candidate) => `${candidate.artifactId}@${String(candidate.version)}` === target);
 
@@ -680,7 +680,7 @@ async function settleRoutes(
   rejected = request.routes.filter((route) => route.disposition === 'rejected').length;
 
   for (const route of request.routes) {
-    if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
+    if (route.disposition === 'staged' && route.kind === 'prompt_section') {
       const state = sectionRouteState(versions, route.target);
 
       if (state === 'pending') pending += 1;
@@ -737,7 +737,7 @@ async function settleRoutes(
   }
 
   if (rolledBack > 0) {
-    parts.push(`${String(rolledBack)} rolled back: the incumbent won its trials`);
+    parts.push(`${String(rolledBack)} rolled back`);
   }
 
   if (rejected > 0) parts.push(`${String(rejected)} rejected by you`);

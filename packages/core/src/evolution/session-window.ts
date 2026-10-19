@@ -61,8 +61,6 @@ export const CompletedTurnSchema = v.object({
   struggles: v.optional(v.pipe(v.array(StruggleSchema), v.readonly())),
   /** The tool lessons its steps listed, at the revision each saw; only these does the turn score. */
   shownLessons: v.optional(v.pipe(v.array(v.pipe(v.object({ id: v.string(), revision: v.number() }), v.readonly())), v.readonly())),
-  /** The live trial's arm the turn ran; its errors and steps are the trial's guardrails. */
-  trial: v.optional(v.object({ trialId: v.string(), segmentId: v.string(), arm: v.picklist(['candidate', 'incumbent']) })),
   /** The turn ended on a question to its owner: its call waits for the answer, so no tool result records it. */
   askedOwner: v.optional(v.boolean()),
 });

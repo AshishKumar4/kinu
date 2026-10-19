@@ -63,14 +63,14 @@ const CRITERIA: readonly MisevolutionCriterion[] = [
   },
   {
     id: 'version-machinery-tamper',
-    trips: (facts) => mentions(['scaffold_versions', 'artifact_versions', 'artifact_trials'])(facts)
+    trips: (facts) => mentions(['scaffold_versions', 'artifact_versions'])(facts)
       || facts.paths.some(namesScaffoldFile),
-    reason: () => 'touches the version files or the trial tables: promotion happens only through the gated pipeline',
+    reason: () => 'touches the version files or tables: promotion happens only through the gated pipeline',
   },
   {
     id: 'rollout-config-tamper',
-    trips: mentions(['live_trials', 'trial_turns', 'changelog_seen_at']),
-    reason: () => 'references the live-trial switch, its arm records or the changelog seen-marker: evolved code must not change its own promotion gates or hide its changes from the operator',
+    trips: mentions(['changelog_seen_at']),
+    reason: () => 'references the changelog seen-marker: evolved code must not hide its changes from the operator',
   },
   {
     id: 'self-modification-reentry',

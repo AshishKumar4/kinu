@@ -10,7 +10,7 @@ Today's nine loops have five defects. A clean exit counts as success: with no fo
 
 ## The design in one paragraph
 
-Two signals: rated satisfaction says whether the user was served; struggles say where the agent fought its tools. One proposer, with GEPA as its search, turns low-rated turns or a cluster of struggles into one small edit. GEPA scores candidates by a judge reading recorded turns, so nothing executes, and a frozen set of good turns sits inside its loop. A live trial on prompt-cache segments keeps the edit only if satisfaction rises with confidence and the struggle guardrails hold. The memory, lesson, crafted-tool, recovery, consolidation, refinement and experience loops stay, reading the new signals.
+Two signals: rated satisfaction says whether the user was served; struggles say where the agent fought its tools. One proposer, with GEPA as its search, turns low-rated turns or a cluster of struggles into one small edit. GEPA scores candidates by a judge reading recorded turns, so nothing executes, and a frozen set of good turns sits inside its loop. The edit is staged and becomes current at the next cold prompt cache (§5). The memory, lesson, crafted-tool, recovery, consolidation, refinement and experience loops stay, reading the new signals.
 
 ## 1. The satisfaction signal
 
@@ -65,11 +65,11 @@ Each turn records its struggles (tool, kind, count, a sample error), its error c
 
 1. **A lesson right after the turn.** A fast-tier reflector reads a struggling turn's struggles and the calls around them, and adds or updates one itemized lesson for that tool, as in ACE's evolving playbooks (Zhang et al., arXiv:2510.04618): one bullet with an id, its tool, helpful and harmful counts, and the turns that taught it. An update edits one bullet in place, so nothing is summarised away. A later turn that uses the tool without struggling counts as helpful, one that struggles as harmful; after 5 uses, a lesson with more harmful than helpful counts retires. Recovery findings and crafted-tool fitness stay.
 2. **A trigger for the proposer.** At least 3 struggles with one tool, over at least 2 turns in the last 14 days, start the proposer on that tool's description or schema text.
-3. **Live-trial guardrails** (section 5).
+3. **Watching an edit after it activates.**
 
 ## 3. One proposer, with GEPA as its search
 
-The proposer runs on the cadence lane when the agent has no trial running and either trigger holds: at least three turns rated 2 or lower in the last 14 days share a `wrong` reason, or a tool's struggles cluster as above. It edits one artifact:
+The proposer runs on the cadence lane when either trigger holds: at least three turns rated 2 or lower in the last 14 days share a `wrong` reason, or a tool's struggles cluster as above. It edits one artifact:
 
 | Artifact | Today's source | Edit allowed |
 |---|---|---|
@@ -99,24 +99,9 @@ Neither check runs the agent on the workspace, so neither changes it.
 
 A failed search is recorded and not repeated for the same turns.
 
-## 5. Live trials
+## 5. Staged edits, live at a cold cache
 
-### The unit is a cache segment
-
-Each agent has one durable conversation (`config/conversation.ts`), so per-conversation arms would put every turn on one arm. The arm is drawn instead at the start of each **segment**: a turn whose request finds the prompt cache already cold (`cacheKeptAliveUntil`, `orchestrator/chat-session.ts:1003`), or the first after a compaction. The prompt and tool definitions never change inside a segment, so caching is unaffected. The draw is a seeded 50/50 hash of trial and segment ids, the same on both backends.
-
-### The rules
-
-- One trial at a time per agent, on the main agent; subordinates, heads and swarm nodes use the incumbent.
-- The measure is mean rated satisfaction per segment, the random unit. The guardrails are tool errors and steps per turn.
-- Checks at 10, 20 and 30 rated segments per arm, each one-sided at α = 0.05/3.
-- **Keep** the candidate when the lower bound of (candidate − incumbent) satisfaction is above 0, the `corrected` rate has not risen, and neither guardrail is higher with confidence.
-- **Revert** when the satisfaction upper bound is below 0, when a guardrail is higher with confidence, at 30 segments per arm without a decision, or after 14 days.
-- A plumbing error reverts; it never promotes.
-
-### The record
-
-Each decision writes a changelog entry: the edit, its turns, GEPA's numbers, segments and satisfaction per arm with the interval, the `corrected` rates and the guardrails. The changelog revert undoes it at any time (`evolution/changelog.ts:681`).
+Live trials were deleted (2026-10-19): an edit that passed the pre-live tests is staged and becomes current at the next turn whose prompt cache is cold (docs/EVOLUTION.md, "Staged edits"). Within a cache segment the system prompt and tools are byte-identical, so evolution never costs a cache rewrite; the owner's revert is the one move that does not wait. What decides an edit is moving to a background review of recorded turns, watched after activation, in place of an A/B test.
 
 ## 6. Existing loops on the new signals
 
@@ -131,7 +116,7 @@ Each decision writes a changelog entry: the edit, its turns, GEPA's numbers, seg
 | Workspace experience import | Yes | Settles on the next rated turn: 4 or 5 adopts, 2 or lower discards. |
 | GEPA | Yes | The proposer's search, scored by the judge-only comparison. |
 | Session scaffold proposal | No | Replaced by the proposer. |
-| Shadow trials | No | Replaced by pre-live tests and live trials. |
+| Shadow trials | No | Replaced by pre-live tests and staged activation. |
 | Quality curve (scaffold replay) | No | Replaced by satisfaction over time. |
 
 **Deleted.**
@@ -145,7 +130,7 @@ Each decision writes a changelog entry: the edit, its turns, GEPA's numbers, seg
 
 ## 7. The Quality tab
 
-The Quality panel shows, per agent and per day: mean rated satisfaction with a 95% band, the `corrected` rate, tool errors and steps per turn, and the share of turns rated (by thumbs or the model). Beside them: the tools with the most struggles, a marker per promotion and revert linked to its changelog entry, and the current trial with its arms, segments, interval and guardrails. K_align, the replay sparkline and the calibration block go. On the CLI, `kinu alignment <name>` becomes `kinu quality <name>`, printing the same series from the same core reader.
+The Quality panel shows, per agent and per day: mean rated satisfaction with a 95% band, the `corrected` rate, tool errors and steps per turn, and the share of turns rated (by thumbs or the model). Beside them: the tools with the most struggles, and a marker per promotion and revert linked to its changelog entry. K_align, the replay sparkline and the calibration block go. On the CLI, `kinu alignment <name>` becomes `kinu quality <name>`, printing the same series from the same core reader.
 
 ## 8. Proof: learning on must beat learning off
 
@@ -158,12 +143,12 @@ Scripted replies are fixed whatever the agent did, so they carry no satisfaction
 
 **Learning wins when** the check pass rate and mean rated satisfaction over the last 50 segments are higher with learning on (95% interval over seeds above 0), tool errors and steps per turn are not higher, the held-out family does not regress, and reverting each kept promotion on a copy of the final state lowers the pass rate on the turns it targeted.
 
-Both arms' spend is recorded. **This run decides when promotions are on by default.** Until it wins, candidates that pass the pre-live tests wait in the changelog, and the owner can turn live trials on for an agent.
+Both arms' spend is recorded.
 
 ## Order of work
 
 1. Ratings, the Decision model setting and the new Quality tab. Ratings are shown; nothing is promoted. Delete the classifier and the clean-exit rule.
 2. Struggles: the per-turn record and the lesson reflector.
 3. The artifact store, the proposer with GEPA as its search, and the pre-live tests. Delete GEPA's live rollouts and the replay curve.
-4. Live trials with the guardrails, off by default. Delete shadow trials, section trials and `decidePromotion`.
+4. Delete shadow trials, section trials and `decidePromotion`; later, live trials too, for staged activation at a cold cache (§5).
 5. The reactive-user eval. Promotions are on by default only after it wins.

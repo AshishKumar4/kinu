@@ -16,7 +16,6 @@ import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents
 import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
 import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
-import { parseTrialVerdict } from './trial-rules';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
@@ -52,7 +51,7 @@ export interface ChangelogEntry {
   /** Epoch ms; drives ordering and the unseen count. */
   at: number;
   summary: string;
-  /** Evidence numbers: the trial's interval, the judge's counts. */
+  /** Evidence numbers: the judge's counts. */
   evidence: string;
   /** Only when a real revert path exists and the change is still in effect. */
   revert?: ChangelogRevertAction;
@@ -265,38 +264,27 @@ function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Chang
 
 const ARTIFACT_SUMMARY: Record<ArtifactStatus, string> = {
   current: 'I reworded my own',
-  candidate: 'I have new wording waiting for a trial of my',
-  trial: 'I am trialling new wording for my',
+  staged: 'After the next pause, I will reword my own',
   rolled_back: 'I reverted new wording for my',
   historical: 'I replaced earlier wording for my',
 };
 
-/** One entry per version: its turns and judge numbers, and once decided, the trial's arms and interval. */
+/** One entry per version: its turns and judge numbers. */
 function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  const verdicts = new Map(sql<{ artifact_id: string; version: number; verdict: string | null }>`
-    SELECT artifact_id, version, verdict FROM artifact_trials WHERE actor_id = ${actor.actorId} AND verdict IS NOT NULL`
-    .map((row) => [`${row.artifact_id}@${String(row.version)}`, row.verdict === null ? null : parseTrialVerdict(row.verdict)]));
-
   return listArtifactVersions(sql, actor).slice(0, limit).map((row) => {
     const key = `${row.artifactId}@${String(row.version)}`;
-    const verdict = verdicts.get(key);
     const judged = row.evidence === null ? '' : ` · ${String(row.evidence.turns.length)} turns (${row.evidence.reason})`;
-
-    const trial = verdict === undefined || verdict === null ? '' : ` · trial ${verdict.decision}: ${verdict.why}, satisfaction `
-      + `${verdict.satisfaction.diff.toFixed(2)} [${verdict.satisfaction.lo.toFixed(2)}, ${verdict.satisfaction.hi.toFixed(2)}] over `
-      + `${String(verdict.segments.candidate)}/${String(verdict.segments.incumbent)} segments, corrected `
-      + `${verdict.corrected.candidate.toFixed(2)} vs ${verdict.corrected.incumbent.toFixed(2)}`;
 
     const entry: ChangelogEntry = {
       id: `artifact:${key}:${row.status}`,
       kind: 'artifact',
       at: row.decidedAt ?? row.writtenAt,
       summary: `${ARTIFACT_SUMMARY[row.status]} ${row.artifactId}`,
-      evidence: `v${String(row.version)}: ${row.rationale}${judged}${trial}`,
+      evidence: `v${String(row.version)}: ${row.rationale}${judged}`,
     };
 
-    // Only a version a turn can still read has something to undo.
-    if (row.status === 'current' || row.status === 'candidate' || row.status === 'trial') entry.revert = { type: 'artifact_revert', target: key };
+    // Only a version a turn reads, or will, has something to undo.
+    if (row.status === 'current' || row.status === 'staged') entry.revert = { type: 'artifact_revert', target: key };
 
     return entry;
   });
@@ -308,16 +296,16 @@ const REFINEMENT_STAGE_PROSE = {
   requested: 'I have a review of my own recent failures queued',
   planning: 'I am reviewing my own recent failures',
   gated: 'I recorded what you told me from my own recent failures',
-  evaluating: 'I am testing a change I proposed to myself',
-  applied: 'I changed how I work, and the trials backed it',
-  rolled_back: 'I proposed a change to how I work and the trials refused it',
+  evaluating: 'A change I proposed to myself is waiting to take effect',
+  applied: 'I changed how I work',
+  rolled_back: 'I changed how I work, and that change was undone',
   refused: 'I reviewed my own recent failures and changed nothing',
 } satisfies Record<RefinementStage, string>;
 
 /** The three non-refusals are distinct kinds of "not live yet". */
 const REFINEMENT_DISPOSITION_PROSE = {
   applied: 'in effect now',
-  pending_trials: 'pending held-out trials',
+  staged: 'takes effect after the next pause',
   pending_owner_approval: 'staged, waiting for your approval',
   refused: 'refused by a gate',
   rejected: 'rejected by you',
@@ -367,7 +355,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
         item.revert = { type: 'fact_forget', target: route.target };
       }
 
-      if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
+      if (route.disposition === 'staged' && route.kind === 'prompt_section') {
         item.revert = { type: 'artifact_revert', target: route.target };
       }
 
@@ -496,8 +484,8 @@ export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenA
 
 /**
  * The changes that wait on the owner: a skill the agent wrote for itself, held until they approve it. Everything else
- * in the journal it did by itself and only records (facts learned, turns rated, a tuning run, a trial's
- * verdict, a refinement applied or refused), so none of it is a request (the owner, 2026-10-16). A pending scaffold
+ * in the journal it did by itself and only records (facts learned, turns rated, a tuning run, wording staged or
+ * reworded, a refinement applied or refused), so none of it is a request (the owner, 2026-10-16). A pending scaffold
  * is the queue's own row.
  */
 export function awaitingTheOwner(entries: readonly ChangelogEntry[]): ChangelogEntry[] {
@@ -538,7 +526,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
     const pending = getPendingScaffold(sql, actor);
 
     if (!pending || pending.version !== version) {
-      return { ok: false, error: `scaffold v${version} is no longer the pending under trial` };
+      return { ok: false, error: `scaffold v${version} is no longer the pending one` };
     }
 
     const result = await applyPromotionDecision(rt, pending, 'rollback', events);
@@ -565,7 +553,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
-/** A candidate or trial is discarded; a promoted version falls back to the one it replaced, or to the bundled text. */
+/** A staged version is discarded; a current one falls back to the one it replaced, or to the bundled text. */
 function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId: string, version: number): ChangelogRevertResult {
   const row = artifactVersion(sql, actor, artifactId, version);
 
@@ -573,11 +561,6 @@ function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId:
 
   if (row.status === 'rolled_back' || row.status === 'historical') {
     return { ok: false, error: `${artifactId} v${String(version)} is already ${row.status}: nothing to revert` };
-  }
-
-  if (row.status === 'trial') {
-    void sql`UPDATE artifact_trials SET status = 'reverted', decided_at = ${Date.now()}
-      WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND version = ${version} AND status = 'running'`;
   }
 
   revertArtifact(sql, actor, artifactId, version);

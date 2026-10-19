@@ -197,7 +197,7 @@ export function buildProgram(): Command {
       .command('acp <name>')
       .helpGroup(RUNNING)
       .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo)')
-      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
+      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons or proposals')
       .option('--transcript-dir <dir>', 'Where to store transcripts'),
   ).action(acpCommand);
 
@@ -208,7 +208,7 @@ export function buildProgram(): Command {
       .description('Run one task without the TUI and exit, for CI and scripts')
       .option('-w, --workspace <name>', 'Workspace to run (default: the only one configured)')
       .option('--json', 'Emit line-delimited JSON events')
-      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
+      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons or proposals')
       .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this run'),
   ).action(execCommand);

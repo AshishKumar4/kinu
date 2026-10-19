@@ -9,7 +9,7 @@ import { copyFileSync, cpSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
+import { scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   actorOverWorkspace, agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -99,6 +99,8 @@ export interface SharedBackend {
   /** Opens a turn of `mode` on the main actor and holds it at its model call until released, so a case
    *  acts while a turn runs. */
   readonly holdTurn: (text: string, mode: WorkMode) => Promise<HeldTurn>;
+  /** Each call the main actor's model was asked, in order, as the provider is sent it. */
+  readonly requests: () => readonly ScriptedTurnOptions[];
   /** Ends what opening the backend started, so no work it tracks outlives the case. */
   readonly end?: () => Promise<void>;
 }
@@ -120,7 +122,10 @@ const DONE_ANSWER = {
 function turnGate() {
   let held: { readonly arrived: ReturnType<typeof Promise.withResolvers<void>>; readonly released: ReturnType<typeof Promise.withResolvers<void>> } | null = null;
 
-  const model = scriptedTurnModel({ doGenerate: async () => {
+  const requests: ScriptedTurnOptions[] = [];
+
+  const model = scriptedTurnModel({ doGenerate: async (options) => {
+    requests.push(options);
     const hold = held;
 
     if (hold !== null) {
@@ -134,6 +139,7 @@ function turnGate() {
 
   return {
     model,
+    requests: () => requests,
     /** Starts `open`, a turn that resolves once it has ended, and resolves once that turn reaches the model. */
     async hold(open: () => Promise<void>): Promise<HeldTurn> {
       const hold = { arrived: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() };
@@ -178,6 +184,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
     history: main.history,
     chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
+    requests: gate.requests,
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), { mode })),
     sleepTime: (answer, enabled) => {
       const prompts = scriptedSleepTime(agent, answer);
@@ -319,6 +326,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       checkpoints.beginTurn(turn);
       await checkpoints.ensureCheckpoint(dir);
     },
+    requests: gate.requests,
     holdTurn: (text, mode) => gate.hold(async () => { await session.send(text, { id: crypto.randomUUID(), mode }); }),
     sleepTime: (answer, enabled) => {
       const prompts: string[] = [];

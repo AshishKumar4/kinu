@@ -43,7 +43,7 @@ import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
 import { initSubordinateRosterTable } from '../subordinates/roster';
 import { initTaskListTable } from '../tools/task-store';
-import { initArtifactTables, initTrialTables } from '../evolution/artifact-schema';
+import { initArtifactTables } from '../evolution/artifact-schema';
 import { initSlateStateTable } from '../slates/state';
 import { initEphemeralSlateTable } from '../slates/ephemeral';
 import { initExplorationRecordsTable } from '../strategy/records';
@@ -193,7 +193,6 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initMctsSearchTable(execRaw);
   initImportedExperienceTable(execRaw);
   initArtifactTables(execRaw);
-  initTrialTables(execRaw);
   initCompactionStateTables(execRaw);
   initAgentConfigTable(execRaw);
   // Durable, not in-memory: a DO hibernates soon after going idle.

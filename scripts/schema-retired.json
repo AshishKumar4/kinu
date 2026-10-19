@@ -1,6 +1,8 @@
 [
   "actor_program_state",
+  "artifact_trials",
   "device_consent_requests",
+  "trial_turns",
   "user_egress_secrets",
   "user_peer_grants",
   "user_schema_meta"

@@ -25,7 +25,6 @@ import { endedNearSilence } from '../../../../scripts/row-verdicts';
 
 const EVOLUTION: EvolutionConfigView = {
   learning: true,
-  liveTrials: false,
   advisorEnabled: false,
   advisorMinSeverity: 'concern',
 };

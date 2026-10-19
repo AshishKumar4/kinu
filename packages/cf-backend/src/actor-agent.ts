@@ -1348,7 +1348,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get lanes(): EvolutionLanes {
     this._lanes ??= new EvolutionLanes({
       engine: this.engine, budget: this.budget,
-      // Runs on the single off-turn cadence pass, beside the promotion gate's trials.
+      // Runs on the single off-turn cadence pass, beside the proposer.
       refinementLane: async () => { await refinementPass(this.refinementDeps); },
     });
 

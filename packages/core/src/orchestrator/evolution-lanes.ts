@@ -6,7 +6,7 @@
 //   Turn lane (outcome review): `settleTracked()` joins it, and all work a backend `track()`s, with no elapsed bound
 //     (owner ruling, 2026-08).
 //     A `oneShot` host defers it as a durable row drained by `runDeferredTurnReviews` at the next session open.
-//   Cadence lane (session/lifetime chain, the live trial and the proposer): one pass per settled turn, after the turn
+//   Cadence lane (session/lifetime chain and the proposer): one pass per settled turn, after the turn
 //     lane (`settleEvolution`), never joined; only started by a host that can afford to finish it. Safe because the
 //     session window closes only after its pass settles (`CompletedTurnStore.claim`).
 
@@ -82,8 +82,8 @@ export class EvolutionLanes {
   private sessionEvolution: Promise<void> | null = null;
   /** The pass `startEvolution` last started. Deliberately not joined by `settleTracked`. */
   private evolution: Promise<void> = Promise.resolve();
-  /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
-   *  and a no-op drain never hides a filled window. */
+  /** Cadence lane: the proposer's latch, separate from the window pass so a search never runs twice
+   *  and a no-op pass never hides a filled window. */
   private evolutionPass: Promise<void> | null = null;
 
   constructor(private readonly lanes: EvolutionLanesDeps) {}
@@ -213,7 +213,7 @@ export class EvolutionLanes {
   }
 
   /**
-   * Cadence lane: the evolution pass (trial, then proposer), then the session/lifetime chain once the window reaches the interval.
+   * Cadence lane: the evolution pass (the proposer), then the session/lifetime chain once the window reaches the interval.
    * The window is closed only after the chain settles. Never rejects. The window is claimed before any await:
    * `claim()` marks nothing, so a single tick is what keeps a second pass off it.
    */
@@ -238,8 +238,8 @@ export class EvolutionLanes {
   }
 
   /**
-   * The live trial's look first, so a decided trial frees the proposer this pass. The refinement lane runs last,
-   * whether or not a window was claimed; its trigger is durable debt.
+   * The proposer first. The refinement lane runs last, whether or not a window was claimed; its trigger is durable
+   * debt.
    */
   private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
     await this.runDueEvolution();

@@ -71,8 +71,6 @@
   "packages/core/src/evolution/gepa/mutate.ts#renderReflectionPrompt (unreached-export)",
   "packages/core/src/evolution/gepa/pareto.ts#parentSelectionWeights (unreached-export)",
   "packages/core/src/evolution/gepa/persistence.ts#persistGepaCandidate (unreached-export)",
-  "packages/core/src/evolution/proposer.ts#judgeOnlyVerdict (unreached-export)",
-  "packages/core/src/evolution/proposer.ts#proposerTrigger (unreached-export)",
   "packages/core/src/evolution/recovery.ts#MAX_RECOVERY_FINDINGS (unreached-export)",
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.now (unsupplied-field)",
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.proposal (unsupplied-field)",

@@ -16,12 +16,10 @@ import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { initCompletedTurnTable } from '../src/evolution/session-window';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { listRecoveryFindings } from '../src/evolution/recovery';
-import { sectionArtifact, writeCandidate } from '../src/evolution/artifacts';
-import { runningTrial } from '../src/evolution/trials';
-import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { AgentRuntime, Identity, SqlExecutor } from '../src/index';
+import type { DecisionPort } from '../src/providers/decision-model';
 import { actorReferenceOf, type ActorReference } from '../src/identity/actor-handle';
 import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/actor-claims';
 import type { ContextSelection } from '../src/session/context';
@@ -67,7 +65,8 @@ function scaffoldIdentity(record: WorkspaceActor, vfs: VFS, sql: SqlExecutor, ac
   };
 }
 
-function build(donor?: Database, unreadableActor?: string, automatic = false, installedBuild: string | null = 'test-build'): Fixture {
+function build(donor?: Database, unreadableActor?: string, automatic = false, options: { readonly installedBuild?: string | null; readonly decide?: DecisionPort } = {}): Fixture {
+  const { installedBuild = 'test-build', decide } = options;
   const db = donor ?? new Database(':memory:');
   const sql = wrapDatabase(db).sql;
   const execRaw = (ddl: string): void => { db.exec(ddl); };
@@ -138,6 +137,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
 
       return {
         ...template,
+        ...(decide !== undefined && { decide }),
         actor: bound.handle,
         storage: { vfs: plane, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
         agentStateVfs: plane,
@@ -162,7 +162,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
 
       return { actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId };
     },
-    rebuild: () => build(db, unreadableActor, automatic, installedBuild),
+    rebuild: () => build(db, unreadableActor, automatic, { installedBuild, ...(decide !== undefined && { decide }) }),
   };
 }
 
@@ -187,27 +187,29 @@ function claimOf({ actorId, turnId, epoch, runId, context }: ClaimSeed): ActorTu
 
 describe('one workspace database, many logical actors', () => {
   test('learning switched off between turns stops the independent background pass', async () => {
-    const fx = build(undefined, undefined, true);
+    const fx = build(undefined, undefined, true, { decide: async () => null });
     const actor = await fx.host.acquire(fx.main, { kind: 'actor' });
 
     try {
       const lease = actor.session.beginTurn({ runId: 'run', turnId: 'turn' }, 'build', 0);
       actor.session.reserveClaim(lease);
       actor.session.finishTurn(lease);
-      actor.handle.config.setLiveTrials(true);
-      const section = PROMPT_SECTIONS[0];
+      // Three struggles with one tool over two turns: the proposer's trigger, which a pass searches.
+      const struggle = { kind: 'repeated_failure', tool: 'shell', count: 2, sample: 'exit 1' };
 
-      if (section === undefined) throw new Error('the prompt-section registry is empty');
-      writeCandidate(fx.sql, actor.handle, {
-        artifactId: sectionArtifact(section.id), body: `${section.source.trimEnd()} Keep it short.`,
-        rationale: 'test candidate', evidence: { turns: ['turn'], reason: 'incorrect' },
-      });
+      for (const [turnId, struggles] of [['t1', [struggle, struggle]], ['t2', [struggle]]] as const) {
+        void fx.sql`INSERT INTO turn_struggles (actor_id, turn_id, errors, steps, struggles, created_at)
+          VALUES (${actor.handle.actorId}, ${turnId}, 2, 3, ${JSON.stringify(struggles)}, ${Date.now()})`;
+      }
+
+      const searches = () => fx.sql<{ n: number }>`SELECT count(*) AS n FROM gepa_runs WHERE actor_id = ${actor.handle.actorId}`[0]?.n;
+
       actor.handle.config.setLearning(false);
       await actor.session.orchestrator.runDueSessionEvolution();
-      expect(runningTrial(fx.sql, actor.handle)).toBeNull();
+      expect(searches()).toBe(0);
       actor.handle.config.setLearning(true);
       await actor.session.orchestrator.runDueSessionEvolution();
-      expect(runningTrial(fx.sql, actor.handle)).not.toBeNull();
+      expect(searches()).toBe(1);
     } finally {
       fx.host.releaseAll();
       fx.db.close();
@@ -591,7 +593,7 @@ describe('one workspace database, many logical actors', () => {
   /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
    *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
   async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null, cut?: 'provider' | 'work', messages?: ModelMessage[]) => Promise<void>; fx: Fixture; source: string }> {
-    const fx = build(undefined, undefined, false, hostBuild);
+    const fx = build(undefined, undefined, false, { installedBuild: hostBuild });
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const source = 'export default async function main() { return "retained"; }';
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);

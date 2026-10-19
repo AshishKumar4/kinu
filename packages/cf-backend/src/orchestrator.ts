@@ -24,7 +24,7 @@ import {
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
-  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifactBodies, withToolText,
+  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
@@ -1638,9 +1638,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const planes = this.turnPlanes(key.actorId, runtime, reach.actor);
     const resolved = await this.surfaceProfile(actor, turn, opened);
 
-    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
-    const artifacts = turnArtifactBodies(runtime.storage.sql, actor.handle, { ...(lane.opening ?? { answerId: '', cacheCold: false }), main: lane.opening !== undefined && reach.actor.kind === 'workspace' });
-    const overrides = artifactOverrides(artifacts.bodies);
+    // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
+    const overrides = artifactOverrides(turnArtifacts(runtime.storage.sql, actor.handle, lane.opening?.cacheCold ?? false));
     const reports: SubordinateReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
@@ -1666,7 +1665,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       resolved, tools, stores: built.stores, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
       // `agent` / `llm` are reachable only inside `eval`: derived from the namespaces its programs reach.
       codemodeCapabilities: (asked) => (reach.actor.kind === 'workspace' ? codemodeCapabilitiesFor(this.ownNamespaces(asked)) : []),
-      ...(artifacts.trial !== null && { trial: artifacts.trial }),
     });
 
     // Last, once its surface stands: a turn whose tools could not be described opened nothing.

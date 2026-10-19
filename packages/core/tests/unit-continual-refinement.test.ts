@@ -19,7 +19,7 @@ import { initTurnRatingTables } from '../src/evolution/ratings';
 import { buildChangelog } from '../src/evolution/changelog';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import {
-  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, settleArtifact,
+  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, turnArtifacts,
 } from '../src/evolution/artifacts';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
@@ -731,7 +731,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const row = present(store.get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'prompt_section');
-    expect(route.disposition).toBe('pending_trials');
+    expect(route.disposition).toBe('staged');
     expect(route.owner).toBe('artifact_versions');
     expect(route.target).toBe(`${ARTIFACT}@1`);
     expect(row.stage).toBe('evaluating');
@@ -1190,7 +1190,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       const routes = present(store.get(opened.id), 'the refinement row').routes;
       expect(routes).toHaveLength(3);
       expect(routeFor(routes, 'fact').disposition).toBe('applied');
-      expect(routeFor(routes, 'prompt_section').disposition).toBe('pending_trials');
+      expect(routeFor(routes, 'prompt_section').disposition).toBe('staged');
       // The same pending version every time.
       expect(routeFor(routes, 'prompt_section').target).toBe(
         routeFor(settledRoutes, 'prompt_section').target);
@@ -1254,7 +1254,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
       .toBe(BREVITY_SKILL);
     // Nothing went live off a proposal.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
-    expect(routeFor(row.routes, 'prompt_section').disposition).toBe('pending_trials');
+    expect(routeFor(row.routes, 'prompt_section').disposition).toBe('staged');
   });
 
   test('recovery leaves a claim this process is still running alone', async () => {
@@ -1381,8 +1381,8 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
   });
 });
 
-describe('promotion — a live trial is the only thing that applies', () => {
-  test('the section promotes when its trial keeps it, and only then does the request apply', async () => {
+describe('promotion — a cold turn is the only thing that applies', () => {
+  test('the section becomes current at the next turn whose cache is cold, and only then does the request apply', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 4);
 
@@ -1404,8 +1404,10 @@ describe('promotion — a live trial is the only thing that applies', () => {
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // The live trial decides; refinement promotes nothing.
-    settleArtifact(fx.rt.storage.sql, fx.rt.actor, { artifactId: ARTIFACT, version: 1, status: 'current' });
+    // Refinement promotes nothing: a warm turn still reads the incumbent, a cold one makes the staged section current.
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, false);
+    expect(overrides(fx.rt)[TARGET_ID]).toBeUndefined();
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
     expect(overrides(fx.rt)[TARGET_ID]).toBe(CANDIDATE);
 
     const settled = await advanceRefinementLane(deps);
@@ -1436,7 +1438,7 @@ describe('promotion — a live trial is the only thing that applies', () => {
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // The candidate trials badly: the live trial reverts it.
+    // The owner discards it before it runs.
     revertArtifact(fx.rt.storage.sql, fx.rt.actor, ARTIFACT, 1);
     expect(overrides(fx.rt)[TARGET_ID]).toBeUndefined();
 

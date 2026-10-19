@@ -1827,18 +1827,14 @@ export {
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
-// The proposer, its artifact store and live trials (docs/EVOLUTION-REDESIGN.md §3-5).
+// The proposer and its artifact store (docs/EVOLUTION-REDESIGN.md §3-4).
 export {
-  artifactOverrides, artifactVersion, bundledArtifact, currentArtifacts, listArtifactVersions,
-  sectionArtifact, toolArtifact, writeCandidate,
+  artifactOverrides, artifactVersion, currentArtifacts, listArtifactVersions,
+  sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
   type ArtifactOverrides, type ArtifactStatus, type ArtifactVersion,
 } from './evolution/artifacts';
 
 export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
-
-export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
-
-export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
 
 export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 

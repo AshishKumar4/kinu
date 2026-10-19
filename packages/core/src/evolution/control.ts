@@ -15,8 +15,6 @@ import {
   applyPromotionDecision, getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
 } from '../scaffold/versions';
 import { listArtifactVersions, type ArtifactVersion } from './artifacts';
-import { runningTrial } from './trials';
-import type { LiveTrial } from './trial-rules';
 import { runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './proposer';
 import { nanoid } from '../utils/nanoid';
 import { KinuError, settle } from '../obs/index';
@@ -147,10 +145,9 @@ export function listScaffoldVersions(
   }));
 }
 
-/** What evolution has in flight: the scaffold proposal awaiting the owner, the live trial, and the edits waiting for one. */
+/** What evolution has in flight: the scaffold proposal awaiting the owner, and the edits staged for the next cold turn. */
 export interface EvolutionStatus {
   readonly pendingScaffold: PendingScaffold | null;
-  readonly trial: LiveTrial | null;
   readonly waiting: readonly ArtifactVersion[];
   readonly versions: readonly ScaffoldVersionView[];
 }
@@ -158,8 +155,7 @@ export interface EvolutionStatus {
 export function getEvolutionStatus(sql: SqlExecutor, actor: ActorHandle): EvolutionStatus {
   return {
     pendingScaffold: getPendingScaffold(sql, actor),
-    trial: runningTrial(sql, actor),
-    waiting: listArtifactVersions(sql, actor).filter((version) => version.status === 'candidate'),
+    waiting: listArtifactVersions(sql, actor).filter((version) => version.status === 'staged'),
     versions: listScaffoldVersions(sql, actor, 10),
   };
 }

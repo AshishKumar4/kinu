@@ -62,7 +62,6 @@ import { MissionBudgetExhausted } from '../mission-budget';
 import { buildChangelog } from './changelog';
 import { DELEGATION_RUBRIC, delegationFeatures, renderDelegationFeatures } from './delegation-features';
 import { getCurrentScaffoldVersion } from '../scaffold/versions';
-import { advanceTrial, runningTrial, startTrial } from './trials';
 import { runProposer } from './proposer';
 
 const GeneralizedToolSchema = v.object({
@@ -652,21 +651,13 @@ export class EvolutionEngine {
   }
 
   /**
-     * The cadence lane's evolution pass: a look at the live trial, then a waiting candidate's trial when the owner
-     * has trials on, then, with no trial running, one proposer search if a trigger holds. Never rejects: each step's
-     * rows are durable, so a failure is said and the next pass resumes.
+     * The cadence lane's evolution pass: one proposer search if a trigger holds, its edit staged for the next turn whose
+     * prompt cache is cold. Never rejects: each step's rows are durable, so a failure is said and the next pass resumes.
      */
   async runDueEvolution(): Promise<void> {
-    if (!this.recordsTurns || this.rt.actor.parentActorId !== null) return;
-    const { sql } = this.rt.storage;
-    const { actor } = this.rt;
+    if (!this.recordsTurns || this.rt.actor.parentActorId !== null || this.rt.decide === undefined) return;
 
     try {
-      const looked = runningTrial(sql, actor);
-      const undecided = looked !== null && advanceTrial(sql, actor, looked) === null ? looked : null;
-      const trial = undecided ?? (this.agentConfig.getLiveTrials() ? startTrial(sql, actor) : null);
-
-      if (trial !== null || this.rt.decide === undefined) return;
       const outcome = await runProposer({ rt: this.rt, decide: this.rt.decide, reflect: this.rt.judgeModel ?? this.rt.llm, now: Date.now() });
 
       if (outcome.kind === 'searched') {

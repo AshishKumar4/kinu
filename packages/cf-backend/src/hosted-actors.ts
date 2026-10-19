@@ -7,7 +7,7 @@ import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask,
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
-  ReceiptExecution, ReportDeps, RunTurnSources, TaskPlan, TrialTurn, TurnAssemblySources, TurnLedgers,
+  ReceiptExecution, ReportDeps, RunTurnSources, TaskPlan, TurnAssemblySources, TurnLedgers,
   TurnOpening, TurnSurface,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
@@ -95,8 +95,6 @@ export interface ActorSurface {
   readonly reports: SubordinateReportLedger;
   /** Whether its turns are reviewed by an advisor. */
   readonly reviewsTurns: boolean;
-  /** The workspace agent's live trial arm, when its fresh turn draws one. */
-  readonly trial?: TrialTurn;
   /** What its isolate is told of its tools, and their digest: it is told them again only when the digest moves. */
   readonly descriptors: readonly AgentToolDescriptor[];
   readonly digest: string;

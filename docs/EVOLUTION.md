@@ -54,7 +54,7 @@ sequenceDiagram
 
     Agent->>Session: Every 5 turns → onSessionComplete(session)
     Session->>Session: Reflect only if a turn errored or drew negative feedback
-    Note over Session: The cadence lane: a look at the live trial, then the proposer when a trigger holds
+    Note over Session: The cadence lane: the proposer when a trigger holds, its edit staged for the next cold turn
 
     Note over Lifetime: Every 5 closed session windows
     Agent->>Lifetime: onLifetimeEvolution()
@@ -64,7 +64,7 @@ sequenceDiagram
 
 ## Turn-level evolution
 
-One per-agent setting, `learning` (`AgentConfigStore.getLearning`, on by default), decides whether an agent learns at all, on both backends: off, its turns record no ratings, struggles or lessons and the cadence lane proposes and trials nothing. `--no-auto-evolve` and `setEvolutionConfig({ learning: false })` set it; the engine reads it at each turn, so a change applies to the next one. A row a turn already owes is still settled.
+One per-agent setting, `learning` (`AgentConfigStore.getLearning`, on by default), decides whether an agent learns at all, on both backends: off, its turns record no ratings, struggles or lessons and the cadence lane proposes nothing. `--no-auto-evolve` and `setEvolutionConfig({ learning: false })` set it; the engine reads it at each turn, so a change applies to the next one. A row a turn already owes is still settled.
 
 A turn is reviewed when the next user message arrives. `AgentOrchestrator.observeUserTurn` claims the previous turn from the durable window and dispatches `reviewTurn()` (`packages/core/src/evolution/engine.ts`) with the new message as its follow-up, but only when that message continues the conversation. An interactive host or the Durable Object runs the review detached, so it never holds the turn queue. A one-shot host writes a durable row instead (`deferTurnReview`), and the next host that opens the workspace drains it through the same `reviewTurn` path.
 
@@ -94,7 +94,7 @@ The cadence lives in `AgentOrchestrator`, not the engine. Every five turns it ca
 
 ### The proposer
 
-One proposer edits the agent's own text and loop (docs/EVOLUTION-REDESIGN.md §3; `core/src/evolution/proposer.ts`). It runs on the cadence lane (`EvolutionEngine.runDueEvolution`) for the main agent only, when no live trial is running and a trigger holds in the last 14 days: three turns rated 2 or lower that share a `wrong` reason, or three struggles with one built-in tool over two turns. A trigger whose turns were already searched (a `gepa_runs` row with the same `target_ref`) does not fire again. The manual optimisation RPC (`runOptimization`, `kinu gepa --run`, Settings) starts the same search on a named artifact.
+One proposer edits the agent's own text and loop (docs/EVOLUTION-REDESIGN.md §3; `core/src/evolution/proposer.ts`). It runs on the cadence lane (`EvolutionEngine.runDueEvolution`) for the main agent only, when a trigger holds in the last 14 days: three turns rated 2 or lower that share a `wrong` reason, or three struggles with one built-in tool over two turns. A trigger whose turns were already searched (a `gepa_runs` row with the same `target_ref`) does not fire again. The manual optimisation RPC (`runOptimization`, `kinu gepa --run`, Settings) starts the same search on a named artifact.
 
 The proposer edits one artifact in `artifact_versions` (`core/src/evolution/artifacts.ts`): `section:<id>` (a prompt section), `tool:<name>.description`, or `tool:<name>.schema` (the input fields' description strings only; types, required fields and enum values stay the bundled schema's). A tool-struggle trigger edits that tool's text, its fields after a schema refusal; a reason trigger edits the section the decision model names. The scaffold stays in `scaffold_versions` and goes through `modifyScaffold` below. Prompt and tool assembly read each artifact's current version, else the bundled text, so an edit changes only the agent that promoted it.
 
@@ -114,8 +114,8 @@ GEPA (`core/src/evolution/gepa/`) is the search: reflective mutation over a Pare
 | Criterion | Rejects |
 |---|---|
 | `network-egress` | code naming `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` or `sendBeacon`, including through an alias, or stating one as a folded string (`Reflect.get(self, "fe" + "tch")`) |
-| `version-machinery-tamper` | `scaffold_versions`, `artifact_versions`, `artifact_trials`, a path to `scaffold/agent.js` or a versioned `agent.js.vN` |
-| `rollout-config-tamper` | `live_trials`, `trial_turns`, `changelog_seen_at` |
+| `version-machinery-tamper` | `scaffold_versions`, `artifact_versions`, a path to `scaffold/agent.js` or a versioned `agent.js.vN` |
+| `rollout-config-tamper` | `changelog_seen_at` |
 | `self-modification-reentry` | `proposeScaffold`, `modifyScaffold`, `applyPromotionDecision`, `applyScaffoldDecision`, `rollbackScaffold`, `checkMisevolution` |
 | `consent-weakening` | `shell_approval_mode`, `setShellApprovalMode`, `allow_all`, `device_consent` |
 | `unanalysable-code` | code that does not parse, reads `eval`, `Function` or `require` (a property or key of that name is not a read; `instanceof Function` is allowed), imports a module, uses `with`, takes `.constructor` out of an object other than to compare it or read its properties, or uses an unshadowed `globalThis`/`self`/`window`/`global` other than to read a property it names |
@@ -135,13 +135,11 @@ What it cannot see: a name built at runtime (a `join`, char codes, a decoded str
 
 `craft_tool` is the one exception. It skips `network-egress` because the codemode Worker exposes raw network globals: the same `fetch(...)` runs freely in an ephemeral `eval` call one line earlier, so vetoing only the persisted form buys no containment. Persistence changes blast radius over time, so the other criteria apply there in full.
 
-### Live trials
+### Staged edits: live at the next cold turn
 
-A candidate that passed the pre-live tests runs against the incumbent on the main agent (docs/EVOLUTION-REDESIGN.md §5; `core/src/evolution/trials.ts`). Trials are off until the owner turns them on (`live_trials`, `/trials on`); until then candidates wait in the changelog. One trial runs at a time.
+An edit that passed the pre-live tests is staged (`stageArtifact`, `core/src/evolution/artifacts.ts`), one per artifact: a later one takes the place of a staged one that never ran. It becomes current only at a turn whose prompt cache is cold, by the one cold policy both backends use (`openingCacheCold`: the last request's cache lifetime and the warming lane's kept-alive period have both ended). `turnArtifacts` makes each staged version current there, in place of the version it replaces, before the turn assembles, so within a cache segment every turn's system prompt and tools are byte-identical, whatever is staged meanwhile (`tests/backends/cases/evolution.ts`, on both backends). Each activation logs `evolution.artifact_activated`.
 
-The unit is a cache segment: a turn whose request finds the prompt cache cold opens one, and every later turn joins it until the cache goes cold again, so the prompt and tools never change inside a cached prefix. Each segment's arm is a seeded 50/50 hash of trial and segment ids (`drawArm`, FNV-1a), the same on both backends; `turnArtifactBodies` reads it at turn assembly and records the turn in `trial_turns`, and the completed turn carries it so its errors and steps are recorded.
-
-The cadence lane looks at the trial (`advanceTrial`) at 10, 20 and 30 rated segments per arm, each look one-sided at α = 0.05/3 (z = 2.128) on the difference of mean segment satisfaction. It keeps the candidate when the lower bound clears 0, the corrected rate has not risen and neither tool errors nor steps per turn are higher with confidence. It reverts when the upper bound falls below 0, a guardrail rose, the 30-segment look is undecided, 14 days pass, or the candidate no longer passes its static checks (a plumbing error). Each decision writes a changelog entry with its arms, interval and corrected rates; the entry's revert restores the version it replaced, or the bundled text.
+The owner's revert does not wait: a staged version is discarded, and a current one gives way to the version it replaced, or to the bundled text, from the next turn, at the cost of one cache rewrite.
 
 The scaffold's pending proposal is decided by the owner (`applyScaffoldDecision`), which re-runs the misevolution check against the on-disk file before it swaps.
 
@@ -170,8 +168,8 @@ winner. Every complete candidate, including the seed, is retained before later
 evaluation starts. An incomplete candidate gets no numeric aggregate. The shared
 metric boundary refuses non-finite scores and scores outside 0..1. Iteration counts
 include rejected proposals, independently of the accepted-candidate history.
-Section proposal and paired promotion trials propagate judge failures before
-writing the unmeasured proposal or trial.
+A section proposal propagates judge failures before writing the unmeasured
+proposal.
 
 ## Evolution changelog
 
@@ -184,7 +182,7 @@ Every self-modification shows up as a human-readable card (`core/src/evolution/c
 | `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
 | `gepa` | completed GEPA runs | not revertable |
 | `ratings` | `turn_ratings`: mean satisfaction with its interval, the corrected rate, and each rated turn's reason | not revertable |
-| `artifact` | `artifact_versions`, keyed `<artifactId>@<version>` because versions are numbered per artifact; a decided trial's arms, interval and corrected rates ride the entry | `artifact_revert` |
+| `artifact` | `artifact_versions`, keyed `<artifactId>@<version>` because versions are numbered per artifact; a staged or current version carries the revert | `artifact_revert` |
 | `refinement` | `refinement_requests`, one card per request with one child per routed edit | the children carry the owner's own revert |
 
 Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts`): `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores` row, `facts.forget`, and `revertArtifact`.
@@ -225,8 +223,8 @@ Every transition is `WHERE stage = <from>`, so a duplicate delivery writes nothi
 
 | Edit | Authority | What happens |
 |---|---|---|
-| `fact` | `agent_facts` (`FactsStore.upsert`) | Applied immediately, and only when the refiner quotes the user substantively. A trial cannot decide a preference, so the user's own words stand in as the evidence. The quote must be at least 20 characters and 4 words (a fragment like "one line" matches almost any conversation), and must appear in a user message or follow-up, never in the agent's own response. The accepted quote rides the route into the changelog. |
-| `prompt_section` | `artifact_versions` (`judgeAuthoredEdit`) | Takes the proposer's pre-live tests: the static checks, then the judge-only comparison over the request's low-rated turns and the regression set. A passing edit waits as a candidate; only a live trial promotes it. With no low-rated turn among the request's, it is refused. |
+| `fact` | `agent_facts` (`FactsStore.upsert`) | Applied immediately, and only when the refiner quotes the user substantively. A judge of recorded turns cannot weigh a preference, so the user's own words stand in as the evidence. The quote must be at least 20 characters and 4 words (a fragment like "one line" matches almost any conversation), and must appear in a user message or follow-up, never in the agent's own response. The accepted quote rides the route into the changelog. |
+| `prompt_section` | `artifact_versions` (`judgeAuthoredEdit`) | Takes the proposer's pre-live tests: the static checks, then the judge-only comparison over the request's low-rated turns and the regression set. A passing edit is staged; only a turn whose prompt cache is cold makes it current. With no low-rated turn among the request's, it is refused. |
 | `skill` | staged under `.kinu/`, promoted into the workspace VFS by `instruction_approvals` | Stages the bytes at `.kinu/refinement/<requestId>/<name>.md`, which nothing that builds a prompt reads. The owner's approval promotes them. Refuses a non-canonical path, a built-in's name, an unparsable file, a final path that already exists, and any standing approval or revocation for that path. |
 | `subagent_spec` | none | Refused by name. A subordinate's role and spec belong to that agent's own config, which a workspace reads and never writes. The finding is recorded; no mirror store is created. |
 
@@ -284,7 +282,7 @@ Settlement is derived, never notified. The lane reads `listPromptSectionVersions
 
 The settle scan covers `gated` and `evaluating`. `gated` is where a hard kill lands: `plan` routes the edits, advances to `gated`, and settles in the same pass, so a process killed between those two steps leaves a row with every owner write done and nothing watching it.
 
-A request is `applied` when at least one artifact is in effect: a promoted proposal, or a fact the user's own words earned. A preference that landed beside a section that lost its trials settles `applied`, with both counted in the detail, because calling it rolled back would misreport a fact that is live. A fact-only proposal therefore reaches `applied` rather than parking in `gated` with nothing to wait for.
+A request is `applied` when at least one artifact is in effect: a promoted proposal, or a fact the user's own words earned. A preference that landed beside a section that was reverted settles `applied`, with both counted in the detail, because calling it rolled back would misreport a fact that is live. A fact-only proposal therefore reaches `applied` rather than parking in `gated` with nothing to wait for.
 
 The proposal schema is `strictObject` at every level. An unknown field refuses the whole proposal rather than being dropped, because a dropped field is a claim the agent made that the harness silently overrode.
 

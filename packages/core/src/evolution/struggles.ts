@@ -75,18 +75,17 @@ export function initStruggleTables(execRaw: RawSqlExec): void {
 
 type ReviewedTurn = CompletedTurn & { readonly turnId: string };
 
-/** Whether a turn has anything to learn from: a struggle, a shown lesson whose tool it used and so scores, or a live
- *  trial's arm, whose guardrails read its errors and steps. A turn with none records nothing and owes no effect. */
-export function owesTurnLessons(turn: Pick<CompletedTurn, 'struggles' | 'shownLessons' | 'toolCalls' | 'trial'>): boolean {
-  return (turn.struggles ?? []).length > 0 || turn.trial !== undefined
-    || ((turn.shownLessons ?? []).length > 0 && turn.toolCalls.length > 0);
+/** Whether a turn has anything to learn from: a struggle, or a shown lesson whose tool it used and so scores. A turn with
+ *  none records nothing and owes no effect. */
+export function owesTurnLessons(turn: Pick<CompletedTurn, 'struggles' | 'shownLessons' | 'toolCalls'>): boolean {
+  return (turn.struggles ?? []).length > 0 || ((turn.shownLessons ?? []).length > 0 && turn.toolCalls.length > 0);
 }
 
-/** One row per struggling turn, and per turn a live trial ran. */
+/** One row per struggling turn. */
 export function recordTurnStruggles(sql: SqlExecutor, actor: ActorHandle, turn: ReviewedTurn, now = nowMs()): void {
   actor.assertCurrent();
 
-  if ((turn.struggles ?? []).length === 0 && turn.trial === undefined) return;
+  if ((turn.struggles ?? []).length === 0) return;
   const errors = turn.toolCalls.filter((call) => call.outcome?.success === false).length;
 
   void sql`INSERT INTO turn_struggles (actor_id, turn_id, errors, steps, struggles, created_at)

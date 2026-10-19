@@ -1,7 +1,7 @@
 /**
  * The roster's summary of one workspace, folded by the workspace from its own stores and pushed to its
- * owner's object when it changes. Only what waits on the owner is a decision; unseen changes and
- * auto-promoted trials are updates.
+ * owner's object when it changes. Only what waits on the owner is a decision; unseen changes, its own
+ * included, are updates.
  */
 import * as v from 'valibot';
 import type { PendingAction } from './pending-actions';

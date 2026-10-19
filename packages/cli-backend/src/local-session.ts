@@ -67,7 +67,7 @@ import { ActorSession, type ActorTurnLease,
   type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
-  turnArtifactBodies, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
+  turnArtifacts, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
   turnTags, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
@@ -1672,13 +1672,9 @@ export class LocalAgentSession {
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpeningAsk, round: ClaimedRound): Promise<PreparedTurn> {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
 
-    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it. No
-    // warming lane keeps a local conversation's cache.
-    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, {
-      answerId: opening.answerId, cacheCold: openingCacheCold(opening, null), main: this.rt.actor.parentActorId === null,
-    });
-
-    this.turnArtifacts = artifactOverrides(artifacts.bodies);
+    // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
+    // No warming lane keeps a local conversation's cache.
+    this.turnArtifacts = artifactOverrides(turnArtifacts(this.rt.storage.sql, this.rt.actor, openingCacheCold(opening, null)));
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
@@ -1710,7 +1706,7 @@ export class LocalAgentSession {
 
     return {
       execution: withCompactionTrigger(assembled.execution, this.compactionState, sessionKey, historyLength),
-      sessionKey, contextWindow: assembled.window.contextWindow, historyLength, trial: artifacts.trial, cacheKeptAliveUntil: null,
+      sessionKey, contextWindow: assembled.window.contextWindow, historyLength, cacheKeptAliveUntil: null,
     };
   }
 

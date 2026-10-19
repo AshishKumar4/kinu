@@ -85,7 +85,7 @@ export const RefinementProposalSchema = v.strictObject({
   edits: v.pipe(v.array(RefinementEditSchema), v.readonly()),
 });
 
-/** `fact` carries a quote checked against the reviewed trajectory: facts are written with no trial. */
+/** `fact` carries a quote checked against the reviewed trajectory: facts are written as they are reviewed. */
 export type RefinementEdit = Readonly<v.InferOutput<typeof RefinementEditSchema>>;
 
 export type RefinementProposal = Readonly<v.InferOutput<typeof RefinementProposalSchema>>;
@@ -128,11 +128,11 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
 };
 
 /**
- * Pending states differ: a fact is live now, a section awaits a trial, a skill awaits the owner.
+ * Pending states differ: a fact is live now, a section is staged for the next cold turn, a skill awaits the owner.
  * `refused` is a deterministic gate; `rejected` is the owner declining.
  */
 const REFINEMENT_DISPOSITIONS = [
-  'applied', 'pending_trials', 'pending_owner_approval', 'refused', 'rejected',
+  'applied', 'staged', 'pending_owner_approval', 'refused', 'rejected',
 ] as const;
 
 export type RefinementDisposition = (typeof REFINEMENT_DISPOSITIONS)[number];

@@ -501,8 +501,9 @@ The other three belong to the `EvolutionEngine`
   writes a reflection into memory; a strong one extracts a crafted tool into
   the CraftStore.
 - Session level: `onSessionComplete()` consolidates patterns.
-- Background: `runDueEvolution()` runs the proposer, whose edit to `agent.js`,
-  a prompt section or a tool description is kept only if a live trial wins.
+- Background: `runDueEvolution()` runs the proposer. Its edit to a prompt section
+  or a tool description is staged and becomes current at the next turn whose
+  prompt cache is cold; its edit to `agent.js` waits for the owner.
 - Lifetime: `onLifetimeEvolution()` runs craft consolidation.
 
 Hosted actors tick the step clock only: they record no turn into the evolution

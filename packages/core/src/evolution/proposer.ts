@@ -1,10 +1,9 @@
 /**
- * The one proposer (docs/EVOLUTION-REDESIGN.md §3-4). It runs on the cadence lane when no trial is running and a
- * trigger holds: three low-rated turns sharing a `wrong` reason, or three struggles with one tool over two turns, in
+ * The one proposer (docs/EVOLUTION-REDESIGN.md §3-4). It runs on the cadence lane when a trigger holds: three low-rated turns sharing a `wrong` reason, or three struggles with one tool over two turns, in
  * the last 14 days. It edits one artifact with GEPA as its search, scored by the judge-only comparison: the decision
  * model reads a recorded turn and the old and new text, and answers whether the new text `fixes` its failure and
- * whether it `harms` a good turn. Nothing runs the agent, so nothing touches the workspace. A passing edit waits as a
- * candidate; a search is recorded and never repeated for the same turns.
+ * whether it `harms` a good turn. Nothing runs the agent, so nothing touches the workspace. A passing edit is staged for
+ * the next turn whose prompt cache is cold; a search is recorded and never repeated for the same turns.
  */
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -25,7 +24,7 @@ import { finishGepaRun, makePersistingHooks, startGepaRun } from './gepa/persist
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor';
 import type { EvalInstance, GepaResult } from './gepa/types';
 import {
-  ArtifactEvidenceSchema, artifactBody, artifactEditRefusal, sectionArtifact, toolArtifact, writeCandidate, type ArtifactEvidence,
+  ArtifactEvidenceSchema, artifactBody, artifactEditRefusal, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence,
 } from './artifacts';
 
 const DAY_MS = 86_400_000;
@@ -52,7 +51,7 @@ const MAX_SCAFFOLD_LINES = 40;
 /** The scaffold is the one artifact not in `artifact_versions`. */
 export const SCAFFOLD_ARTIFACT = 'scaffold';
 
-export type ProposerTrigger =
+type ProposerTrigger =
   | { readonly kind: 'reason'; readonly reason: WrongReason; readonly turns: readonly string[] }
   | { readonly kind: 'tool'; readonly tool: string; readonly schema: boolean; readonly turns: readonly string[] };
 
@@ -75,7 +74,7 @@ function searched(rt: AgentRuntime, key: string): boolean {
 }
 
 /** The trigger that holds now, the larger first, skipping any whose turns were already searched. */
-export function proposerTrigger(rt: AgentRuntime, now: number): ProposerTrigger | null {
+function proposerTrigger(rt: AgentRuntime, now: number): ProposerTrigger | null {
   const since = now - WINDOW_MS;
   const byReason = new Map<WrongReason, string[]>();
 
@@ -196,7 +195,7 @@ function judgeMetric(decide: DecisionPort, artifactId: string, before: string) {
 }
 
 /** The pass rule of §4 over the winner's scores. */
-export function judgeOnlyVerdict(scores: ReadonlyMap<string, number>, set: readonly JudgedTurn[]): ArtifactEvidence & { readonly passes: boolean } {
+function judgeOnlyVerdict(scores: ReadonlyMap<string, number>, set: readonly JudgedTurn[]): ArtifactEvidence & { readonly passes: boolean } {
   const bad = set.filter((turn) => turn.side === 'bad');
   const regression = set.filter((turn) => turn.side === 'regression');
   const fixed = bad.filter((turn) => (scores.get(turn.id) ?? 0) > 0.5).length;
@@ -350,12 +349,12 @@ async function writeEdit(input: {
   // The record keeps the numbers, not the verdict they made.
   const stored = v.parse(ArtifactEvidenceSchema, evidence);
 
-  return { kind: 'searched', artifactId, version: writeCandidate(rt.storage.sql, rt.actor, { artifactId, body: after, rationale, evidence: stored, now }), detail };
+  return { kind: 'searched', artifactId, version: stageArtifact(rt.storage.sql, rt.actor, { artifactId, body: after, rationale, evidence: stored, now }), detail };
 }
 
 /**
  * An edit authored elsewhere (the continual-refinement lane) takes the same pre-live tests: the static checks, then
- * the judge-only comparison over the low-rated turns it answers and the regression set. It waits like the proposer's.
+ * the judge-only comparison over the low-rated turns it answers and the regression set. It is staged like the proposer's.
  */
 export async function judgeAuthoredEdit(deps: Omit<ProposerDeps, 'reflect' | 'now'>, input: {
   readonly artifactId: string;
@@ -385,7 +384,7 @@ export async function judgeAuthoredEdit(deps: Omit<ProposerDeps, 'reflect' | 'no
   if (!verdict.passes) return { refused: `the judge-only comparison refused it: ${detail}` };
 
   return {
-    version: writeCandidate(rt.storage.sql, rt.actor, {
+    version: stageArtifact(rt.storage.sql, rt.actor, {
       artifactId: input.artifactId, body: input.body, rationale: input.rationale, evidence: { ...verdict, reason: 'continual refinement' },
     }),
   };

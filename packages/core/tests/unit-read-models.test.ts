@@ -879,12 +879,12 @@ describe('config plane', () => {
     db.close();
   });
 
-  test('an evolution write answers with the EFFECTIVE config; live trials are off until turned on', () => {
+  test('an evolution write answers with the EFFECTIVE config; learning is on until turned off', () => {
     const { db, config } = workspace();
-    expect(getEvolutionConfig(config).liveTrials).toBe(false);
-    const effective = setEvolutionConfig(config, { liveTrials: true });
-    expect(effective.liveTrials).toBe(true);
-    expect(getEvolutionConfig(config).liveTrials).toBe(true)
+    expect(getEvolutionConfig(config).learning).toBe(true);
+    const effective = setEvolutionConfig(config, { learning: false });
+    expect(effective.learning).toBe(false);
+    expect(getEvolutionConfig(config).learning).toBe(false);
     db.close();
   });
 });

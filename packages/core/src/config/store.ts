@@ -45,7 +45,6 @@ export const AGENT_CONFIG_KEYS = {
   shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
   /** 'true' runs waiting edits as live trials on the main agent; off by default (docs/EVOLUTION-REDESIGN.md §5). */
-  liveTrials: 'live_trials',
   /** 'true' once an agent hosted in its own isolate has submitted a plan there: Work asks only those isolates (D9). */
   holdsPlans: 'holds_plans',
   /** 'true' once the workspace's own agent ran a turn in its isolate: only then does that isolate hold runs or spend (D9). */
@@ -124,8 +123,6 @@ export interface AgentConfigStore {
   revokeShellApproval(grants: readonly ApprovalGrant[]): void;
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
-  getLiveTrials(): boolean;
-  setLiveTrials(enabled: boolean): void;
   getHoldsPlans(): boolean;
   setHoldsPlans(): void;
   getHoldsTurns(): boolean;
@@ -200,7 +197,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
 
-    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
+    if (key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
   const remove = (key: string, ...others: string[]): void => {
@@ -209,7 +206,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId}
       AND key IN (SELECT value FROM json_each(${JSON.stringify(keys)}))`;
 
-    if (keys.some((name) => name === AGENT_CONFIG_KEYS.liveTrials || name === AGENT_CONFIG_KEYS.learning || name === AGENT_CONFIG_KEYS.changelogSeenAt)) markStoreChanged(sql);
+    if (keys.some((name) => name === AGENT_CONFIG_KEYS.learning || name === AGENT_CONFIG_KEYS.changelogSeenAt)) markStoreChanged(sql);
   };
 
   const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
@@ -362,8 +359,6 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setSleepTimeComputeEnabled(enabled) {
       set(AGENT_CONFIG_KEYS.sleepTimeCompute, enabled ? 'true' : 'false');
     },
-    getLiveTrials() { return get(AGENT_CONFIG_KEYS.liveTrials) === 'true'; },
-    setLiveTrials(enabled) { set(AGENT_CONFIG_KEYS.liveTrials, String(enabled)); },
     getHoldsPlans() { return get(AGENT_CONFIG_KEYS.holdsPlans) === 'true'; },
     setHoldsPlans() { set(AGENT_CONFIG_KEYS.holdsPlans, 'true'); },
     getHoldsTurns() { return get(AGENT_CONFIG_KEYS.holdsTurns) === 'true'; },

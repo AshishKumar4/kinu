@@ -316,7 +316,7 @@ export class FacetChat {
 
     return {
       execution: withCompactionTrigger(assembled.execution, state, key, historyLength),
-      sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength, trial: prepared.trial ?? null,
+      sessionKey: key, contextWindow: assembled.window.contextWindow, historyLength,
       cacheKeptAliveUntil: prepared.cacheKeptAliveUntil,
     };
   }

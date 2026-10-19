@@ -16,7 +16,6 @@ import { refusedRun, type RunEndOutcome } from '../subordinates/agent-isolate';
 import { driveExecution, type AssembledRound, type ClaimedRound } from './execution-driver';
 import { authoredTurnMetadata, stampAuthorship, turnTags, type TurnTags } from '../types/turn-metadata';
 import type { TurnAuthorship } from '../types/turn';
-import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
@@ -180,8 +179,6 @@ export interface PreparedTurn {
   readonly sessionKey: string;
   readonly contextWindow: number | null;
   readonly historyLength: number;
-  /** The live trial's arm this turn ran (`turnArtifactBodies`), recorded with the completed turn. */
-  readonly trial?: TrialTurn | null;
   /** Until when the conversation's warming lane kept the prompt cache warm for its last request, as the preparation
    *  noted this one ({@link TurnOpeningAsk}); null when nothing kept it. */
   readonly cacheKeptAliveUntil: number | null;
@@ -417,7 +414,6 @@ export class ChatSession {
   /** The asking turn the running turn continues from, while it is an answer's turn. */
   private resumingAsk: string | null = null;
   private messageId = '';
-  private turnTrial: TrialTurn | null = null;
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
   private readonly taskReminders = new TaskReminders();
@@ -1795,7 +1791,6 @@ export class ChatSession {
       project: async ({ lease, assembled, outcome }) => ({ claim: await this.projectTurn(item, event, lease, { round: assembled, execution: outcome }), stop: true }),
       // Stopped as it opened, or closed by its recovery: it ran nothing, and ends as an interrupted turn does.
       stopped: async ({ lease, outcome }) => {
-        this.turnTrial = null;
         await this.projectTurn(item, event, lease, { round: null, execution: outcome });
       },
       failed: async ({ lease, failure }) => {
@@ -1841,9 +1836,8 @@ export class ChatSession {
     };
 
     if (turnId) completedTurn.turnId = turnId;
-    const snapshot = snapshotCompletedTurn(this.actorSession.orchestrator, completedTurn);
 
-    return this.turnTrial === null ? snapshot : { ...snapshot, trial: this.turnTrial };
+    return snapshotCompletedTurn(this.actorSession.orchestrator, completedTurn);
   }
 
   /** Everything here may throw; runOpenedTurn owns what that means. */
@@ -1882,8 +1876,6 @@ export class ChatSession {
     }, round);
 
     const { cacheKeptAliveUntil } = prepared;
-
-    this.turnTrial = prepared.trial ?? null;
 
     const partial = item.continuation === undefined ? null : await this.actorSession.canonical.cutStep(item.continuation.openOutputs);
 

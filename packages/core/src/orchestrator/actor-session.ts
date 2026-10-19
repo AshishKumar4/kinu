@@ -339,7 +339,7 @@ export class ActorSession {
     return this.lastStep()?.recordedAt ?? null;
   }
 
-  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and a live trial's segment both use. */
+  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and staged evolution both use. */
   promptCacheCold(keptAliveUntil: number | null): boolean {
     const last = this.lastStep();
 

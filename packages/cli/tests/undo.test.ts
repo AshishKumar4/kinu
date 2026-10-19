@@ -323,7 +323,6 @@ describe('/advisor command surface', () => {
   function advisorClient(): AgentClient {
     const config: EvolutionConfigView = {
       learning: true,
-      liveTrials: false,
       advisorEnabled: false,
       advisorMinSeverity: DEFAULT_ADVISOR_MIN_SEVERITY,
     };
