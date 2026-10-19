@@ -155,6 +155,15 @@ class StepWords implements UnderlyingDefaultSource<Uint8Array> {
   }
 }
 
+/** A turn's live words crossing to its workspace's room, which tabs read. A relay its RPC session lost leaves the tabs the
+ *  answer at the turn's end, so its failure is the relay's, never the turn's: the room's side reads it so too
+ *  (`degradeRelay`). */
+function liveRelay(turnId: string, relay: () => Promise<void>): Effect.Effect<void> {
+  return attempt({ doing: "relaying an agent's live output to its workspace", otherwise: 'io' }, relay).pipe(Effect.catch((failure) => Effect.sync(() => {
+    diagnostics.failure('agent.live_output_failed', failure, { turn: turnId });
+  })));
+}
+
 /** A step's words on one stream, then its record (AGENTS.md Waste). */
 class HeadTrace {
   private live: { readonly words: StepWords; readonly sent: Promise<void> } | null = null;
@@ -184,10 +193,7 @@ class HeadTrace {
   }
 
   relay(words: StepWords): Promise<void> {
-    return settle(attempt({ doing: "relaying an agent's live head output", otherwise: 'io' },
-      () => this.workspace.traceStream(this.close, words.stream)).pipe(Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('agent.head_output_failed', failure, { turn: this.close.turnId });
-      }))));
+    return settle(liveRelay(this.close.turnId, () => this.workspace.traceStream(this.close, words.stream)));
   }
 
   private openStep(): { readonly words: StepWords; readonly sent: Promise<void> } {
@@ -449,7 +455,7 @@ export function facetTurnSources(turn: {
     models: { normalize: (spec) => registry.normalizeSpecSync(spec), resolve: (spec) => registry.resolveModel(spec, affinity), routed: routedModelReads(registry) },
     scaffoldSpend: { source: 'scaffold', report: spend.report, operations },
     operations,
-    observeStream: async (chunks) => { await turn.workspace.observe(lines(waits.around(chunks))); },
+    observeStream: (chunks) => settle(liveRelay(turn.turnId, () => turn.workspace.observe(lines(waits.around(chunks))))),
     paceStep: async (signal) => {
       const profile = unbound;
 
