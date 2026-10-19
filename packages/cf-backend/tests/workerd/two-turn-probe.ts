@@ -337,7 +337,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   async answerSlates(agent: string): Promise<AgentSlateUi> {
     const reason = (result: SlateAnswer<unknown>) => (result.ok ? 'ok' : result.reason);
     // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
-    const call = async (id: string) => reason(await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: id, name: 'workspace', lineage: { incarnation: 'probe', generation: 0 } }, { path: ['exists'], args: ['/home'], invocation: null }));
+    const call = async (id: string) => reason(await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: id, name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, { path: ['exists'], args: ['/home'], invocation: null }));
     const { items } = await this.agentCall(agent, (isolate, snapshot) => isolate.historyPage(snapshot, {}));
     const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
     const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
@@ -407,7 +407,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    */
   async answerPageModes(): Promise<AnswerPageModes> {
     const write = async () => {
-      const result = await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'a-page/card', name: 'workspace', lineage: { incarnation: 'probe', generation: 0 } }, {
+      const result = await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'a-page/card', name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, {
         path: ['writeFile'], args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
       });
 

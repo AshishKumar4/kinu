@@ -21,7 +21,7 @@ import { present, toolExecute } from '@kinu.run/test-utils';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
 /** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
-const UNSHARED = { incarnation: 'test', generation: 0 };
+const UNSHARED = { incarnation: 'test', generation: 0, ancestors: {} };
 
 /** The credential is the child's provisioned identity, looked up (hiring provisioned it), never allocated here. */
 async function childCaller(db: Database, agentName: string, actorName: string): Promise<SlateCaller> {

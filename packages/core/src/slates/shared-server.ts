@@ -26,10 +26,14 @@ export interface OwnerEffects {
   settle(spend: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<boolean>;
 }
 
-/** Where a process came from, as the host minted it into its bindings: its incarnation, and its slate's sharing then. */
+/**
+ * Where a process came from, as the host minted it into its bindings: its incarnation, its slate's sharing then, and the
+ * sharing of each shared slate it inherited its bound from (`SlateCaller.via`), sealed when it inherited it.
+ */
 export interface SlateLineage {
   readonly incarnation: string;
   readonly generation: number;
+  readonly ancestors: Readonly<Record<string, number>>;
 }
 
 /** Who makes a call through a slate's binding, as the host minted it there: the caller, the slate, the surface, the lineage. */
@@ -106,6 +110,11 @@ export class SharedServers {
       return new KinuError('denied', `Slate ${slate}'s server was started before its sharing changed, and acts no more`);
     }
 
+    // Every shared slate it inherited its bound from, as sealed then: one sharing otherwise ends the bound it ran under.
+    const ancestor = Object.entries(lineage.ancestors).find(([each, generation]) => this.deps.generation(each) !== generation);
+
+    if (ancestor !== undefined) return new KinuError('denied', `Slate ${ancestor[0]}'s sharing changed since slate ${slate} was started under it, and it acts no more`);
+
     if (record === null) return null;
 
     if (record.incarnation !== lineage.incarnation) return new KinuError('denied', `Slate ${slate} named a request issued to another of its servers`);
@@ -141,20 +150,26 @@ export class SharedServers {
     });
   }
 
-  /** Why the call is beyond the shared servers on its way now (lends nothing, or does not reach it); null if within. */
-  beyond(call: Pick<ServerCall, 'slate' | 'chain' | 'address'>, owner = 'Its owner'): KinuError | null {
+  /**
+   * Why the call is beyond the shared servers on its way now (lends nothing, or does not reach it); null if within. A
+   * fenced call (`ServerCall.fence`) is first held to the sharing its process and request began under.
+   */
+  beyond(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence'>, owner = 'Its owner'): KinuError | null {
+    const stale = call.fence === undefined ? null : this.lineage(call.slate, call.fence.lineage, call.fence.record);
+
+    if (stale !== null) return stale;
     const weighed = this.weigh({ ...call, effect: false, args: [], on: '' }, owner);
 
     return weighed.kind === 'refused' ? weighed.error : null;
   }
 
   /** {@link beyond}, naming the owner who can change it where the server lends nothing. */
-  bounded(call: Pick<ServerCall, 'slate' | 'chain' | 'address'>): Effect.Effect<KinuError | null> {
+  bounded(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence'>): Effect.Effect<KinuError | null> {
     return Effect.map(Effect.promise(async () => this.owner()), (owner) => this.beyond(call, owner));
   }
 
   /** What a call reaches inside itself, weighed by every shared server on its way now: it throws to refuse. */
-  within(call: Pick<ServerCall, 'slate' | 'chain' | 'address'>): void {
+  within(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence'>): void {
     const beyond = this.beyond(call);
 
     return settleSync(beyond === null ? Effect.void : Effect.fail(beyond));

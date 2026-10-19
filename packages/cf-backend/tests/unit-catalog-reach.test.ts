@@ -11,7 +11,7 @@ import { hostedSubordinateHarness, orchestratorHarness, workspaceFiles } from '.
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
 /** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
-const UNSHARED = { incarnation: 'test', generation: 0 };
+const UNSHARED = { incarnation: 'test', generation: 0, ancestors: {} };
 
 /** A role with programs and a shell, but no file tool. */
 const CODER = {
