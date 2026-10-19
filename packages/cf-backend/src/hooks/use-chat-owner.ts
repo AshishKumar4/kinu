@@ -326,28 +326,18 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   /** Every send that starts a turn, the opening's, the composers' and Retry's, begins once the socket's probe is
    *  answered: no caller can send into the probe's answer, and none checks for itself. A Stop pressed meanwhile
-   *  frees the latch, and the send never goes. Settles once the send's request has ended or never went; null when
-   *  another turn holds the latch. */
-  const startTurn = useCallback((begin: () => Promise<void>): Promise<void> | null => {
-    const ended = Promise.withResolvers<void>();
+   *  frees the latch, and the send never goes. The admitted run, which settles once the send's request has ended or
+   *  never went; null when another turn holds the latch. */
+  const startTurn = useCallback((begin: () => Promise<void>): Promise<void> | null => admitTurn(sendLatch.current, async () => {
+    const owner = sendLatch.current.owner;
 
-    const admitted = admitTurn(sendLatch.current, async () => {
-      try {
-        const owner = sendLatch.current.owner;
+    setModelFallbacks([]);
+    await answered.current.promise;
 
-        setModelFallbacks([]);
-        await answered.current.promise;
+    if (sendLatch.current.owner !== owner) return;
 
-        if (sendLatch.current.owner !== owner) return;
-
-        await begin();
-      } finally {
-        ended.resolve();
-      }
-    });
-
-    return admitted ? ended.promise : null;
-  }, []);
+    await begin();
+  }), []);
 
   // Read live, never latched. A stream whose socket closes mid-answer ends in an error (agents 0.26,
   // `interruptChatStream`) that the reconnect's resume replaces, clearing useChat's error as it starts: until the
@@ -736,11 +726,17 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const retryLastMessage = useCallback((): boolean => {
     if (messages.length === 0) return false;
 
-    return startTurn(() => {
+    const run = startTurn(() => {
       setFrameError(null);
 
       return regenerate();
-    }) !== null;
+    });
+
+    if (run === null) return false;
+    // Its stream tells how the turn ended; a run that fails outside it is reported, never dropped.
+    detach(Effect.promise(() => run));
+
+    return true;
   }, [startTurn, messages.length, regenerate]);
 
   /** Every per-chat call names a hosted chat's agent last; the workspace's names none. */
