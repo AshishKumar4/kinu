@@ -19,7 +19,7 @@ export const LOCKED_BASELINE: Baseline = {
   'context-assembly/skill-activation-precedence': 'a7c92856162098ca',
   'context-assembly/skill-tool-restriction': 'b0619fb621e18276',
   'context-assembly/surface-compilation': 'f2e00a4ebbfa5477',
-  'context-assembly/system-prefix': 'b92961c956f9c360',
+  'context-assembly/system-prefix': 'a2b59249ac11b3a1',
   'context-assembly/tool-index-is-family-neutral': '318996ce20ed0877',
   'context-assembly/unapproved-instructions-are-demoted': 'ecad391cc71e8445',
   'context-assembly/unconfigured-executors-excluded': '7dfe86f8a97be0ff',
