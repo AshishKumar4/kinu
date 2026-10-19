@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { EXECUTOR_MOUNTS } from './mounts';
 import { walkedPath } from './workspace-path';
+import { andList } from '../utils/text';
 
 /** A prefix: the name before `://`, and the subtree of `vfs://`, the one tree an agent sees, that it names. */
 interface PathPrefix {
@@ -178,15 +179,43 @@ export function shellReference(word: string, planes: PathPlanes): string | null 
  */
 export function addressingHint(planes: PathPlanes, written?: string): string {
   const references = referencePrefixes(planes).map((prefix) => `\`${prefix}://\``);
-  const named = references.length < 2 ? references.join('') : `${references.slice(0, -1).join(', ')} and ${references.at(-1) ?? ''}`;
-  const reading = [`a relative path starts at \`${planes.cwd}\` and \`~\` is \`${planes.home}\``, `${named} name this workspace's planes`];
+  const reading = [`a relative path starts at \`${planes.cwd}\` and \`~\` is \`${planes.home}\``, `${andList(references)} name this workspace's planes`];
 
   const landed = written === undefined ? Effect.succeed('') : Effect.match(resolvedPath(written, planes), {
     onFailure: (refused) => refused.message,
-    onSuccess: (at) => `\`${written}\` is \`${at.absolute}\` here`,
+    onSuccess: (at) => andList([`\`${written}\` is \`${at.absolute}\` here`, ...prefixedReadings(written, at.absolute, planes)]),
   });
 
   return settleSync(Effect.map(landed, (where) => [...(where === '' ? [] : [where]), ...reading].join('; ')));
+}
+
+/**
+ * A plain path written under each plane's prefix, where that names another file than it did: a skill read as
+ * `skills/x` meant `vfs://skills/x`, and a computer's `/workspace/app` is `computer://workspace/app`. Text only; none
+ * is looked up.
+ */
+function prefixedReadings(written: string, landed: string, planes: PathPlanes): string[] {
+  if (written === '~' || written.startsWith('~/')) return [];
+  const rest = written.replace(/^(?:\.?\/)+/u, '');
+  const named = new Set([landed]);
+
+  return planes.prefixes.flatMap((row) => {
+    if (row.prefix === DEVICE_PREFIX) return [];
+    const reference = `${row.prefix}://${rest}`;
+
+    return settleSync(Effect.match(vfsPath(row.prefix, rest, planes, reference), {
+      onFailure: () => [],
+      onSuccess: (vfs) => {
+        const at = onMachine(vfs, planes);
+        const view = planes.views.find((name) => holds(`/${name}`, vfs));
+
+        if (named.has(at)) return [];
+        named.add(at);
+
+        return [view === undefined ? `\`${reference}\` is \`${at}\`` : `\`${reference}\` is in the ${view} view`];
+      },
+    }));
+  });
 }
 
 /** The prefixes a reference in prose starts with here: every row's name, and each given machine's where machines mount. */

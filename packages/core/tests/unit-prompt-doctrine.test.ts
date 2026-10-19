@@ -22,3 +22,11 @@ describe('lead doctrine follows actor authority and available delegation', () =>
 
   });
 });
+
+// Staging 5c522f12d: the cloud prompt put `/home/main` beside "relative paths resolve there", and `vfs://` is `/` only 127
+// lines on; 23 trials' first skill read dropped `vfs://` and landed in the home.
+test('the prompt says a vfs:// path keeps its prefix, where it says how to name a file', () => {
+  const { rt } = createTestRuntime();
+
+  expect(buildSystemPromptSync(rt, full.opts)).toContain('and keep the prefix: `vfs://skills/x` starts at that tree\'s root, while `skills/x` is relative.');
+});

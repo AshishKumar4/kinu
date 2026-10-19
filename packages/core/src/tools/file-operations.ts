@@ -230,7 +230,7 @@ function fileOps(deps: FileDeps) {
       return failure(refused.reason, refused.error);
     }
 
-    return output ?? failure('missing', 'No path at ' + path);
+    return output ?? failure('missing', `No path at ${path}: ${addressingHint(deps.planes, path)}`);
   };
 
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>

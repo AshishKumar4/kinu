@@ -78,3 +78,8 @@ export function oneLineClip(text: string, max: number): string {
 export function utf8Bytes(text: string): number {
   return new TextEncoder().encode(text).byteLength;
 }
+
+/** Items as prose lists them: `a`, `a and b`, `a, b and c`. */
+export function andList(items: readonly string[]): string {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
+}
