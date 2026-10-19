@@ -34,6 +34,18 @@ export function transcriptRole(
   return row.role === 'user' && turnTags(row).author === 'harness' ? 'system' : row.role;
 }
 
+/** The newest row that opened a turn, the one a Retry names: the person's words, or what the harness gave its agent,
+ *  which the chat shows as `system` ({@link transcriptRole}) and the model was sent as `user`. */
+export function newestOpener(messages: readonly Pick<UIMessage, 'id' | 'role'>[]): string | undefined {
+  for (let at = messages.length - 1; at >= 0; at--) {
+    const message = messages[at];
+
+    if (message?.role === 'user' || message?.role === 'system') return message.id;
+  }
+
+  return undefined;
+}
+
 /**
  * Older pages as messages, oldest first, deduplicated (a duplicate React key silently drops one).
  * Pure over the fetched pages, so a pane can reuse it across stream ticks.

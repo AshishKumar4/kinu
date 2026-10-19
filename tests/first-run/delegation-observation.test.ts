@@ -52,13 +52,15 @@ test('refused, errored and malformed hires are not task hires', () => {
   }
 });
 
-test('an answer is delivered by the first message after the ask that names its helper, and the reply that follows it', () => {
+// rc21 (001f6d749), 2026-10-19: the chat showed the delivery as a `system` row and this read waited for a `user` one, so
+// the delegation case waited out its budget on an answer the hirer had already given.
+test('an answer is delivered by the first event after the ask that names its helper, as the chat shows it, and the reply that follows it', () => {
   const report = '1 event arrived while you were idle.\n- report from ask-task-ymhu3n: bramblelight';
 
   expect(delivered([
     { role: 'user', text: ASK },
     { role: 'assistant', text: 'WAITING' },
-    { role: 'user', text: report },
+    { role: 'system', text: report },
     { role: 'assistant', text: 'HIRED bramblelight' },
   ], ASK, 'ask-task-ymhu3n')).toEqual({ text: report, reply: 'HIRED bramblelight' });
 });
@@ -69,6 +71,7 @@ test('no message names the helper after the ask: nothing was delivered', () => {
     { role: 'user', text: ASK },
     { role: 'assistant', text: 'ask-task-ymhu3n is working' },
     { role: 'user', text: 'an unrelated message' },
+    { role: 'user', text: 'did ask-task-ymhu3n answer yet?' },
   ], ASK, 'ask-task-ymhu3n')).toBeNull();
 
   expect(delivered([{ role: 'user', text: 'ask-task-ymhu3n answered' }], ASK, 'ask-task-ymhu3n')).toBeNull();

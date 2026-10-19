@@ -2034,7 +2034,7 @@ export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, Position
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  restoredRows, rowText, transcriptRole, UIMessageSchema,
+  newestOpener, restoredRows, rowText, transcriptRole, UIMessageSchema,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf,
 } from './utils/ui-message';
 
