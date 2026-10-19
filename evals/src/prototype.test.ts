@@ -49,7 +49,7 @@ test('plans, briefs and reports about a browser check are not execution of a pro
 
   const plans = [
     { name: 'tasks', args: JSON.stringify({ op: 'add', titles: [words] }) },
-    { name: 'agents', args: JSON.stringify({ op: 'hire', mission: words }) },
+    { name: 'agents', args: JSON.stringify({ op: 'hire', message: words }) },
     { name: 'memory', args: JSON.stringify({ op: 'save', content: words }) },
   ];
 

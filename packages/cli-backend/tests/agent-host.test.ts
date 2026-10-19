@@ -277,7 +277,7 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
               controller.enqueue({ type: 'stream-start', warnings: [] });
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call_hire', toolName: 'agents',
-                input: JSON.stringify({ op: 'hire', role: 'task', mission: script.hire?.mission }),
+                input: JSON.stringify({ op: 'hire', role: 'task', message: script.hire?.mission }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
               controller.close();
@@ -1880,7 +1880,7 @@ describe('LocalAgentHost', () => {
     await host.close();
 
     const { host: reopened } = makeHost(state, toolSequenceModel([
-      { name: 'agents', input: { op: 'hire', role: 'researcher', mission: 'must not be hired' } },
+      { name: 'agents', input: { op: 'hire', role: 'researcher', message: 'must not be hired' } },
     ]), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);

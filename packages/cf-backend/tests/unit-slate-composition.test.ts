@@ -458,11 +458,11 @@ test('a slate never reaches what only the agent does', async () => {
   const call = (path: string[], args: JsonValue[] = []) => surface(actor.agent, ROOT_SLATE_CALLER, 'limited')(path, args);
 
   for (const path of [['agent', 'hire'], ['workspace', 'createTool'], ['workspace', 'slate'], ['report', 'send'], ['tasks', 'switchRole']]) {
-    expect(await call(path, [{ mission: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
+    expect(await call(path, [{ message: 'should not run' }]), path.join('.')).toMatchObject({ ok: false, reason: 'denied' });
   }
 
   // A native tool is its own namespace on the surface, never a member of `tools`; `$` members are the agent's lifecycle.
-  expect(await call(['tools', 'agents'], [{ op: 'hire', role: 'task', mission: 'should not run' }]))
+  expect(await call(['tools', 'agents'], [{ op: 'hire', role: 'task', message: 'should not run' }]))
     .toMatchObject({ ok: true, value: { success: false, reason: 'missing' } });
   expect(await call(['slates', 'limited', '$share'])).toMatchObject({ ok: false });
   expect(await call(['tasks', 'list'])).toMatchObject({ ok: true });
@@ -477,7 +477,7 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
   await writeText(files, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
   const asOwner = surface(parent.agent, ROOT_SLATE_CALLER, 'board');
 
-  // As a program calls it: role, mission, then its options.
+  // As a program calls it: role, message, then its options.
   expect(await asOwner(['agents', 'hire'], ['task', 'Count the files in /home', { name: 'counter' }])).toMatchObject({ ok: true });
   expect((await parent.agent.listSubordinates()).map((entry) => entry.name)).toContain('counter');
 

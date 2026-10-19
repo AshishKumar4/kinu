@@ -90,7 +90,7 @@ export function canaryScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   if (made === 0) return { text: 'Starting the swarm.', toolCall: { name: 'agents', arguments: { op: 'swarm', preset: 'ideate', task: loadText('node', load) } } };
 
-  if (made === 1) return { text: 'Hiring the helper.', toolCall: { name: 'agents', arguments: { op: 'hire', lifetime: 'task', role: 'task', mission: loadText('helper', load) } } };
+  if (made === 1) return { text: 'Hiring the helper.', toolCall: { name: 'agents', arguments: { op: 'hire', lifetime: 'task', role: 'task', message: loadText('helper', load) } } };
 
   const job = made - 2;
 

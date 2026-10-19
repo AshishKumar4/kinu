@@ -184,7 +184,7 @@ test("a hire whose isolate dies as its turn's report goes to its hirer is asked 
 
     return messages.some((message) => message.role === 'tool')
       ? chatCompletion(run, 'Handed off.')
-      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: MISSION } }, 'hire_0');
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: MISSION } }, 'hire_0');
   }));
 
   const reporting = delayNextTurnReport();
@@ -313,7 +313,7 @@ test("a hire whose assigned turn fails as it opens tells its hirer once, though 
 
     return messages.some((message) => message.role === 'tool')
       ? chatCompletion(run, 'Handed off.')
-      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: MISSION } }, 'hire_0');
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: MISSION } }, 'hire_0');
   }));
 
   // The hire's opening fails, as a workspace resetting fails it, and the report of that is lost on its first way.
@@ -386,7 +386,7 @@ test("a hire whose answer cannot commit tells its hirer its turn failed, once", 
 
     return messages.some((message) => message.role === 'tool')
       ? chatCompletion(run, 'Handed off.')
-      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: MISSION } }, 'hire_0');
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: MISSION } }, 'hire_0');
   }));
 
   const id = crypto.randomUUID();

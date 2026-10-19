@@ -176,17 +176,17 @@ The prompt doctrine converted 0% of eligible turns where a mechanical nudge in
 steers a turn toward delegating. `turn-steering.ts` keeps only its three
 loop-detection steers: `repeated_call`, `repeated_failure`, `no_progress`.
 
-1. One bounded question uses `agents({action:'hire', lifetime:'task', role, mission})`.
+1. One bounded question uses `agents({op:'hire', lifetime:'task', role, message})`.
    The call creates a full agent for the question, returns its answer as the
    tool result, and archives the row, keeping its transcript. Name oversize
-   material by workspace path in the mission, so the bytes reach that agent and
+   material by workspace path in the message, so the bytes reach that agent and
    never the caller.
 2. `swarm` fixes a search through `preset`, `objective`, and `depth`.
    Registered verifiers score verify-scored candidates. Nodes are full agents.
    See [EXPLORATION.md](./EXPLORATION.md).
 3. `hire` without `lifetime` (or with `lifetime:'durable'`) starts a persistent
    subordinate. With `context:'fresh'` (the default) it starts from its role and
-   mission; `context:'inherit'` also hands it the caller's recent turns.
+   message; `context:'inherit'` also hands it the caller's recent turns.
 
 A swarm derives its answer shape from `score` and `advance`, never `settle`.
 `score:"verify"` uses a registered verifier. `score:"judge"` uses `samples`
@@ -216,7 +216,7 @@ declaration, so it is absent from the schema rather than refused at call time.
 
 - A hired subordinate is a logical actor of the workspace object, with a full
   turn loop and a shared Nimbus session. `hire` with `role` takes a role and
-  mission; `hire` naming an existing `agent` hands it the workstream, with
+  message; `hire` naming an existing `agent` hands it the workstream, with
   `deliverable` optional. `msg` adds a note. `dismiss` archives unless
   `keep_history: false`.
 - A peer is another of the owner's workspaces, reached over EventsHub. `hire`
@@ -256,7 +256,7 @@ names the field.
 | Operation | Fields |
 |---|---|
 | `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `nodes`, `models`, `role`, `tier`, `budgetUsd`, `budgetTokens`, `budgetLabel` |
-| `hire` | `role`, `mission`, `name`, `tier`, `context`, `lifetime` (with a task-agent port) |
+| `hire` | `role`, `message`, `name`, `tier`, `context`, `lifetime` (with a task-agent port) |
 | `assign` | `agent`, `message`, `deliverable` (with a team), `topic` (with peers) |
 | `hireWorkspace` | `mission`, `message`, `agent` |
 | `message` | `agent`, `message`, `topic` (with peers) |
