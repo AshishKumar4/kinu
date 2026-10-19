@@ -19,8 +19,9 @@ import { initTurnRatingTables } from '../src/evolution/ratings';
 import { buildChangelog } from '../src/evolution/changelog';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import {
-  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, turnArtifacts,
+  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, toolArtifact, turnArtifacts,
 } from '../src/evolution/artifacts';
+import { BUILTIN_TOOL_DESCRIPTIONS } from '../src/tools/registry';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import {
@@ -1629,7 +1630,7 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     expect(briefs[0]).toContain('### Edit 1: prompt_section');
     expect(briefs[0]).toContain('Measured: the decision model judged it to fix 1.00');
     expect(briefs[0]).toContain('no, shorter please');
-    expect(briefs[0]).toMatch(/The prompt sections are \d+ bytes, against \d+ as bundled/u);
+    expect(briefs[0]).toMatch(/The prompt sections and tool texts are \d+ bytes, against \d+ as bundled/u);
     expect(routeFor(row.routes, 'fact')).toMatchObject({ disposition: 'refused', reason: 'the reviewer rejected it: one exchange is not a standing preference' });
     expect(routeFor(row.routes, 'prompt_section').disposition).toBe('staged');
     expect(fx.facts.all()).toEqual([]);
@@ -1681,6 +1682,75 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
       disposition: 'refused', reason: 'the reviewer still asked for a revision after the one the dreamer made: still too loose',
     });
     expect(sectionVersions(fx.rt)).toEqual([]);
+  });
+
+  test('a tool\'s own text is drafted, measured and reviewed like a section, and moves the tool only at a cold turn', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+    const described = `${BUILTIN_TOOL_DESCRIPTIONS.shell}\nA command's output past its limit is cut; say so.`;
+
+    const { port, requests } = scriptedRefiner(proposalText({
+      scope: 'workspace',
+      summary: 'shell output that was cut',
+      edits: [{
+        kind: 'tool_description', tool: 'shell', part: 'description', source: described,
+        rationale: 'three corrected turns all reported a whole log the shell had cut short',
+      }],
+    }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief, edits) => {
+      briefs.push(brief);
+
+      return acceptEvery(brief, edits);
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+    const tool = toolArtifact('shell', 'description');
+    const shell = () => artifactOverrides(currentArtifacts(fx.rt.storage.sql, fx.rt.actor)).tools.descriptions.shell;
+
+    expect(requests[0]?.task).toMatch(/- shell: description \d+ bytes, schema \d+ bytes/u);
+    expect(requests[0]?.task).toMatch(/- agents: description \d+ bytes\n/u);
+    expect(briefs[0]).toContain(`### Edit 0: tool_description ${tool} (artifact_versions)`);
+    expect(briefs[0]).toContain('Measured: the decision model judged it to fix 1.00');
+    expect(briefs[0]).toMatch(/The prompt sections and tool texts are \d+ bytes, against \d+ as bundled/u);
+    expect(routeFor(row.routes, 'tool_description')).toMatchObject({ disposition: 'staged', owner: 'artifact_versions', target: `${tool}@1` });
+
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, false);
+    expect(shell()).toBeUndefined();
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+    expect(shell()).toBe(described);
+  });
+
+  test('a tool\'s field text that drops a field is refused before anyone reviews it', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+
+    const { port } = scriptedRefiner(proposalText({
+      scope: 'workspace',
+      summary: 'shell fields',
+      edits: [{
+        kind: 'tool_description', tool: 'shell', part: 'schema', source: JSON.stringify({ command: 'The command to run.' }),
+        rationale: 'three corrected turns all passed a field the shell does not need at all',
+      }],
+    }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief, edits) => {
+      briefs.push(brief);
+
+      return acceptEvery(brief, edits);
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(briefs[0]).toContain('Refused by a fixed gate, whatever you say: the fields changed:');
+    expect(routeFor(row.routes, 'tool_description').disposition).toBe('refused');
+    expect(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, toolArtifact('shell', 'schema'))).toEqual([]);
   });
 
   test('the dreamer drafts on the deep tier and the reviewer judges on the fast one, each read-only on its own lane', async () => {

@@ -120,7 +120,7 @@ function builtinFieldDescriptions(tool: string): Record<string, string> | null {
 }
 
 /** The bundled text an artifact starts from; null for an id no assembly reads. */
-function bundledArtifact(artifactId: string): string | null {
+export function bundledArtifact(artifactId: string): string | null {
   const parsed = parseArtifactId(artifactId);
 
   if (parsed === null) return null;

@@ -331,7 +331,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
       // An excerpt; the full file comes only from `showRefinement`.
       const edit = request.proposal?.edits[index];
 
-      const source = edit?.kind === 'prompt_section' || edit?.kind === 'skill'
+      const source = edit?.kind === 'prompt_section' || edit?.kind === 'tool_description' || edit?.kind === 'skill'
         ? edit.source
         : undefined;
 
@@ -359,7 +359,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
         item.revert = { type: 'fact_forget', target: route.target };
       }
 
-      if (route.disposition === 'staged' && route.kind === 'prompt_section') {
+      if (route.disposition === 'staged' && route.owner === 'artifact_versions') {
         item.revert = { type: 'artifact_revert', target: route.target };
       }
 

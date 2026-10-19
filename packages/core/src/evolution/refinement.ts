@@ -43,7 +43,7 @@ const REFINEMENT_STAGES = [
 export type RefinementStage = (typeof REFINEMENT_STAGES)[number];
 
 export const REFINEMENT_EDIT_KINDS = [
-  'fact', 'prompt_section', 'skill', 'subagent_spec',
+  'fact', 'prompt_section', 'tool_description', 'skill', 'subagent_spec',
 ] as const;
 
 /** Exported so the refiner's brief states the same floor the parse enforces. */
@@ -64,6 +64,14 @@ const RefinementEditSchema = v.variant('kind', [
   v.strictObject({
     kind: v.literal('prompt_section'),
     sectionId: NonEmpty,
+    source: NonEmpty,
+    rationale: RationaleSchema,
+  }),
+  v.strictObject({
+    kind: v.literal('tool_description'),
+    tool: NonEmpty,
+    /** The tool's own description, or its input fields' descriptions as one JSON object. */
+    part: v.picklist(['description', 'schema']),
     source: NonEmpty,
     rationale: RationaleSchema,
   }),
@@ -116,6 +124,13 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
       rationale: RATIONALE_SLOT,
     },
     {
+      kind: 'tool_description',
+      tool: '<one built-in tool from the inventory above>',
+      part: 'description',
+      source: '<the whole replacement text, or for `schema` the whole JSON object of field descriptions>',
+      rationale: RATIONALE_SLOT,
+    },
+    {
       kind: 'skill',
       path: workspaceSkillPath('<name>'),
       source: '<the whole file>',
@@ -131,7 +146,7 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
 };
 
 /**
- * Pending states differ: a fact is live now, a section is staged for the next cold turn, a skill awaits the owner.
+ * Pending states differ: a fact is live now, a section or tool text is staged for the next cold turn, a skill awaits the owner.
  * `refused` is a deterministic gate; `rejected` is the owner declining.
  */
 const REFINEMENT_DISPOSITIONS = [

@@ -16,7 +16,8 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
 import { scoreAuthoredEdit } from './proposer';
-import { artifactBody, listArtifactVersions, sectionArtifact, stageArtifact, type ArtifactEvidence, type ArtifactVersion } from './artifacts';
+import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence, type ArtifactVersion } from './artifacts';
+import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { listTurnRatings, renderRating, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
 import {
@@ -440,11 +441,12 @@ function scoreEdits(
           return Result.isFailure(quoted) ? { edit, note: '', refused: quoted.failure } : { edit, note: `the user's own words: "${change.quote.trim()}"` };
         }
 
-        case 'prompt_section': {
+        case 'prompt_section':
+        case 'tool_description': {
           const decide = deps.control.rt.decide;
 
           if (decide === undefined) return { edit, note: '', refused: 'no decision model is wired to measure the edit' };
-          const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId: sectionArtifact(change.sectionId), body: change.source, turns: request.turnIds });
+          const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId: editOwnerAndTarget(change)[1], body: change.source, turns: request.turnIds });
 
           return 'refused' in scored ? { edit, note: '', refused: scored.refused } : { edit, note: scored.detail, artifact: scored.evidence };
         }
@@ -588,6 +590,14 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     .map((section) => `  - ${section.id} (${String(Buffer.byteLength(section.source, 'utf8'))} bytes)`)
     .join('\n');
 
+  const tools = Object.keys(BUILTIN_TOOL_DESCRIPTIONS).map((tool) => {
+    const description = artifactBody(sql, actor, toolArtifact(tool, 'description')) ?? '';
+    const schema = artifactBody(sql, actor, toolArtifact(tool, 'schema'));
+
+    return `  - ${tool}: description ${String(Buffer.byteLength(description, 'utf8'))} bytes`
+      + (schema === null ? '' : `, schema ${String(Buffer.byteLength(schema, 'utf8'))} bytes`);
+  }).join('\n');
+
   const facts = deps.facts.recentTopK(20);
 
   const factLines = facts.length === 0
@@ -614,6 +624,11 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     'Registered prompt sections (`prompt_section`): replacing one costs every turn its bytes,',
     'and a longer section must earn them with a strictly better measured score:',
     sections,
+    '',
+    'Built-in tool texts (`tool_description`): what the agent reads about each tool on every turn, its',
+    'description or its input fields\' descriptions (`schema`, one JSON object). Change one where the turns show',
+    'the agent misusing that tool; it costs every turn its bytes too:',
+    tools,
     '',
     'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
     'user stated in their own words, and quote those words verbatim from a turn above; a fact whose',
@@ -649,7 +664,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
       `  ${JSON.stringify(edit)}${index === answer.edits.length - 1 ? '' : ','}`),
     ']}',
     '',
-    `Valid \`kind\` values: ${REFINEMENT_EDIT_KINDS.join(', ')}. The four edits above are every shape`,
+    `Valid \`kind\` values: ${REFINEMENT_EDIT_KINDS.join(', ')}. The ${String(answer.edits.length)} edits above are every shape`,
     'this accepts, one object per edit, not a checklist. Propose the fewest edits that address the',
     'pattern you actually found. An empty `edits` array is a legitimate answer when the trajectory',
     'shows no addressable pattern.',
@@ -672,6 +687,7 @@ function draftedText(edit: RefinementEdit): string {
     case 'fact': return JSON.stringify(edit.value);
     case 'subagent_spec': return edit.spec;
     case 'prompt_section':
+    case 'tool_description':
     case 'skill': return edit.source;
   }
 }
@@ -689,6 +705,14 @@ function renderDraftedEdit(edit: RefinementEdit, index: number, evidence: EditEv
   ].join('\n');
 }
 
+/** Every text a turn reads that a dream may edit: the prompt sections, and each built-in tool's description and field text. */
+function evolvableTexts(): string[] {
+  return [
+    ...PROMPT_SECTIONS.map((section) => sectionArtifact(section.id)),
+    ...Object.keys(BUILTIN_TOOL_DESCRIPTIONS).flatMap((tool) => [toolArtifact(tool, 'description'), toolArtifact(tool, 'schema')]),
+  ];
+}
+
 /**
  * The reviewer's brief: the turns, earlier dreams, every drafted edit with its measured evidence, the size budget, and
  * the answer shape. Its answer decides which edits are routed.
@@ -699,8 +723,9 @@ function renderReviewerBrief(
   input: { readonly proposal: RefinementProposal; readonly evidence: readonly EditEvidence[]; readonly reviewed: readonly TurnRating[] },
 ): HelperBrief {
   const { sql, rt } = deps.control;
-  const bundled = PROMPT_SECTIONS.reduce((total, section) => total + Buffer.byteLength(section.source, 'utf8'), 0);
-  const current = PROMPT_SECTIONS.reduce((total, section) => total + Buffer.byteLength(artifactBody(sql, rt.actor, sectionArtifact(section.id)) ?? section.source, 'utf8'), 0);
+  const bytes = (text: string | null): number => Buffer.byteLength(text ?? '', 'utf8');
+  const bundled = evolvableTexts().reduce((total, artifactId) => total + bytes(bundledArtifact(artifactId)), 0);
+  const current = evolvableTexts().reduce((total, artifactId) => total + bytes(artifactBody(sql, rt.actor, artifactId)), 0);
   const example: v.InferInput<typeof DreamVerdictsSchema> = { verdicts: [{ edit: 0, verdict: 'accept', note: '<one sentence: why>' }] };
 
   return {
@@ -723,9 +748,9 @@ function renderReviewerBrief(
       '',
       '## Size',
       '',
-      `The prompt sections are ${String(current)} bytes, against ${String(bundled)} as bundled. Their budget is 10% over the`,
-      'bundled size, a placeholder until a measurement of prompt sizes against the cache\'s cost sets it: an edit that',
-      'grows them past it must shrink something else.',
+      `The prompt sections and tool texts are ${String(current)} bytes, against ${String(bundled)} as bundled. Their budget`,
+      'is 10% over the bundled size, a placeholder until a measurement of prompt sizes against the cache\'s cost sets it:',
+      'an edit that grows them past it must shrink something else.',
       '',
       '## Your answer',
       '',
@@ -804,6 +829,7 @@ function editOwnerAndTarget(edit: RefinementEdit): readonly [string, string] {
   switch (edit.kind) {
     case 'fact': return ['agent_facts', edit.key];
     case 'prompt_section': return ['artifact_versions', sectionArtifact(edit.sectionId)];
+    case 'tool_description': return ['artifact_versions', toolArtifact(edit.tool, edit.part)];
     case 'skill': return ['instruction_approvals', edit.path];
     case 'subagent_spec': return ['', edit.role];
   }
@@ -819,7 +845,8 @@ async function routeEditOnce(
     case 'fact':
       return routeFact(deps, edit, input.request, input.reviewed);
     case 'prompt_section':
-      return routePromptSection(deps, edit, input.artifact);
+    case 'tool_description':
+      return routeArtifactEdit(deps, edit, input.artifact);
     case 'skill':
       return routeSkill(deps, edit, input.request);
     case 'subagent_spec':
@@ -903,20 +930,19 @@ function routeFact(
 }
 
 /**
- * A section edit the reviewer accepted is staged for the next turn whose prompt cache is cold, with the numbers it was
- * measured by. A resumed pass adopts a staged version with the same words instead of writing a second one.
+ * A section or tool text the reviewer accepted is staged for the next turn whose prompt cache is cold, with the numbers
+ * it was measured by. A resumed pass adopts a staged version with the same words instead of writing a second one.
  */
-function routePromptSection(
+function routeArtifactEdit(
   deps: RefinementDeps,
-  edit: Extract<RefinementEdit, { kind: 'prompt_section' }>,
+  edit: Extract<RefinementEdit, { kind: 'prompt_section' | 'tool_description' }>,
   artifact: ArtifactEvidence | undefined,
 ): RefinementRoute {
-  const owner = 'artifact_versions';
-  const artifactId = sectionArtifact(edit.sectionId);
+  const [owner, artifactId] = editOwnerAndTarget(edit);
   const { sql, rt } = deps.control;
 
   const staged = (version: number, note: string): RefinementRoute => ({
-    kind: 'prompt_section', owner, target: `${artifactId}@${String(version)}`, disposition: 'staged',
+    kind: edit.kind, owner, target: `${artifactId}@${String(version)}`, disposition: 'staged',
     reason: `${note}; the live prompt moves at the next turn whose prompt cache is cold`,
   });
 
@@ -925,7 +951,7 @@ function routePromptSection(
 
   if (already !== undefined) return staged(already.version, 'staged (adopted from an earlier pass)');
 
-  if (artifact === undefined) return { kind: 'prompt_section', owner, target: artifactId, disposition: 'refused', reason: 'it was never measured' };
+  if (artifact === undefined) return { kind: edit.kind, owner, target: artifactId, disposition: 'refused', reason: 'it was never measured' };
 
   return staged(stageArtifact(sql, rt.actor, { artifactId, body: edit.source, rationale: edit.rationale, evidence: artifact }), 'accepted by the dream\'s reviewer');
 }
@@ -970,7 +996,7 @@ async function settleRoutes(
   rejected = request.routes.filter((route) => route.disposition === 'rejected').length;
 
   for (const route of request.routes) {
-    if (route.disposition === 'staged' && route.kind === 'prompt_section') {
+    if (route.disposition === 'staged' && route.owner === 'artifact_versions') {
       const state = sectionRouteState(versions, route.target);
 
       if (state === 'pending') pending += 1;
