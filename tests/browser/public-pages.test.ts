@@ -170,6 +170,8 @@ interface RailFact {
   readonly lanes: readonly number[];
   readonly visible: boolean;
   readonly roster: string;
+  /** The account menu in the rail's header: the account is reached through it, its email inside. */
+  readonly account: boolean;
 }
 
 /**
@@ -434,6 +436,7 @@ beforeAll(async () => {
             && getComputedStyle(first).display !== 'none'
             && first.getClientRects().length > 0,
           roster: first?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+          account: (first?.querySelector('[data-account-menu]') ?? null) !== null,
         };
       });
 
@@ -1147,7 +1150,7 @@ describe('the landing frames reuse the app rail', () => {
 
     expect(rail.visible).toBeTrue();
     expect(rail.roster).toContain('Storefront');
-    expect(rail.roster).toContain('ashish@example.com');
+    expect(rail.account).toBeTrue();
   });
 
   test('the frames read their roster from the page and open no socket', () => {

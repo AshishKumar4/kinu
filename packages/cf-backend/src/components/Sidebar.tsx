@@ -1,17 +1,11 @@
-import { useState, useCallback, useRef, type FormEvent, type RefObject } from "react";
+import { useState, type FormEvent, type RefObject } from "react";
 import { Link, NavLink, useLocation, useMatch } from "react-router-dom";
-import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
+import { TrashIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon,
   UsersThreeIcon, CaretRightIcon, EraserIcon,
 } from "@phosphor-icons/react";
-import { KinuLogo } from "./ui/KinuLogo";
-import { NewWorkspaceButton } from "./workspaces/NewWorkspaceButton";
-import { useAccount } from "@/hooks/use-account";
-import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
+import { SidebarHeader } from "./SidebarHeader";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
-import { lastValue } from "../hooks/use-async-resource";
-import { ModeToggle, ThemeToggle } from "./theme-toggle";
-import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
@@ -147,7 +141,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
     ? sectionMatch.params.agentId
     : undefined;
 
-  const onHome = useMatch({ path: "/", end: true }) !== null;
 
   const agentsNav = useAgentsNav();
   const { panel, drilled } = useOpenAgentsPanel(agentId);
@@ -161,46 +154,16 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
     rename: renameWorkspace,
   } = useWorkspaceRoster();
 
-  const account = useAccount();
-  const profile = lastValue(account.profile);
-  const profileFailed = account.profile.status === "error";
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);
 
-  const userMenuRef = useRef<HTMLDivElement>(null);
-
-  const closeUserMenu = useCallback(() => setShowUserMenu(false), []);
-  useCloseOnOutsideClick(showUserMenu, userMenuRef, closeUserMenu);
 
 
 
 
   return (
     <div className="group/side flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-between gap-2.5 pl-5 pr-3 pt-[18px] pb-2">
-        <Link to="/" className="flex items-center" aria-label="Kinu home">
-          <KinuLogo />
-        </Link>
-        {onCollapse && (
-          <button
-            type="button"
-            onClick={onCollapse}
-            aria-label="Hide sidebar"
-            title="Hide sidebar"
-            data-rail-collapse
-            className="rounded-md p-1.5 p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text"
-          >
-            <SidebarSimpleIcon size={17} />
-          </button>
-        )}
-      </div>
-
-      {!onHome && (
-        <div className="px-3.5 pb-1.5">
-          <NewWorkspaceButton className="h-10 w-full p-t-control" />
-        </div>
-      )}
+      <SidebarHeader onCollapse={onCollapse} />
       <nav aria-label="Primary" className="px-2 pt-1 space-y-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
@@ -275,47 +238,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         {panel !== null && <SidebarAgents panel={panel} onBack={agentsNav.back} />}
       </div>
       </div>
-      </div>
-
-      <div className="border-t p-border flex items-center gap-1 py-3.5 pl-4 pr-2.5 relative" ref={userMenuRef}>
-        <button
-          onClick={() => setShowUserMenu((shown) => !shown)}
-          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-        >
-          <div className="flex size-[26px] shrink-0 items-center justify-center rounded-full p-accent-subtle text-[12px] font-semibold p-accent-mark">
-            {profile?.email?.[0]?.toUpperCase() ?? '?'}
-          </div>
-          <span className="min-w-0 flex-1 truncate p-t-control p-text-4">
-            {profile?.email ?? (profileFailed ? 'Could not load your profile' : 'Loading…')}
-          </span>
-          <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-accent" />
-        </button>
-        <ThemeToggle />
-        {showUserMenu && (
-          <div className="absolute bottom-full left-2 right-2 mb-1 p-card p-1.5 p-shadow-menu border p-border z-10">
-            <Link to="/user/settings" onClick={() => setShowUserMenu(false)}
-              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
-              <GearIcon size={14} />
-              <span>Account settings</span>
-            </Link>
-            {profile?.controlPlane === true && (
-              <Link to="/control" onClick={() => setShowUserMenu(false)}
-                className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
-                <ShieldCheckIcon size={14} />
-                <span>Control plane</span>
-              </Link>
-            )}
-            <ModeToggle />
-            <FeedbackButton />
-            <a
-              href="/logout"
-              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover"
-            >
-              <SignOutIcon size={14} />
-              <span>Sign out</span>
-            </a>
-          </div>
-        )}
       </div>
 
       {deleteTarget && <RemoveWorkspaceDialog workspace={deleteTarget} onClose={() => setDeleteTarget(null)} />}
