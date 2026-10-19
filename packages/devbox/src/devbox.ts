@@ -3943,7 +3943,7 @@ const UTF8 = { LC_ALL: 'C.UTF-8' };
 
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
   return container.exec([...argv], {
-    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env }, signal: options.signal,
+    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env },
   });
 }
 

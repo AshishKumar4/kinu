@@ -1,6 +1,7 @@
 import type { DevboxGateway, GatewayProps } from './gateway';
 
-export type DevboxExecOptions = Pick<ContainerExecOptions, 'cwd' | 'env' | 'signal'>;
+/** No signal: the platform acts on one with a kill nobody can await (`endProcess`). */
+export type DevboxExecOptions = Pick<ContainerExecOptions, 'cwd' | 'env'>;
 
 export interface GatewayBindings {
   readonly DevboxGateway?: (options: { readonly props: GatewayProps }) => Pick<Service<DevboxGateway>, keyof Fetcher>;
