@@ -26,6 +26,8 @@ const { runToExit } = require('../update.js');
 
 const { errorDetail } = require('./log.js');
 
+const { heldModule } = require('./held.js');
+
 const { elidedOutput } = require('../../../core/src/execution/bounded-output.ts');
 
 /** Each exec stream stays far below the Worker WebSocket's documented 32 MiB
@@ -215,6 +217,8 @@ const fs = require('node:fs');
 const { procStat, groupHasLiveProcess } = (${createProcReader.toString()})(fs);
 const elidedOutput = (${elidedOutput.toString()});
 const { execFile, spawn } = require('node:child_process');
+// A spill opens where it was judged, without following a link a sandboxed command put in its path (held.js).
+const { atJudged } = (${heldModule.toString()})(require);
 
 // fd 4 is the record's \`life\`, handed over at this process's spawn: the kernel closes it however this process exits,
 // and the daemon reads that close as this supervisor gone.
@@ -303,7 +307,10 @@ function writeTerminalResult(kind, exitCode, signal) {
 /** One stream: the first HEAD bytes go to its file as they arrive, the last TAIL stay in a ring, every
  *  byte is counted, and once the stream outgrows both the whole of it goes to the spill file. close()
  *  writes core's elidedOutput, as BoundedOutput.finish does, so every executor reads the same.
- *  The spill is written at its host path and named by the path the command's own view gives it. */
+ *  The spill is written at its host path and named by the path the command's own view gives it. That
+ *  path is in the agent's own tmp, which its commands write: it is opened where it was judged, without
+ *  following a link one of them put at its name or in its directory (L111 #1), and written through the
+ *  descriptor it opened. */
 class Capture {
   constructor(file, spill, stream) {
     this.fd = fs.openSync(file, 'w+', 0o600);
@@ -339,8 +346,10 @@ class Capture {
       return;
     }
     try {
-      fs.mkdirSync(require('node:path').dirname(this.spillTarget.file), { recursive: true, mode: 0o700 });
-      this.spill = fs.openSync(this.spillTarget.file, 'w', 0o600);
+      const { O_WRONLY, O_CREAT, O_TRUNC } = fs.constants;
+
+      this.spill = atJudged({ raw: this.spillTarget.raw }, this.spillTarget.file, { createParents: true },
+        (at) => at.open(O_WRONLY | O_CREAT | O_TRUNC, 0o600));
       const head = Buffer.alloc(this.head);
       fs.readSync(this.fd, head, 0, this.head, 0);
       this.spillWrite(head);
@@ -1065,7 +1074,7 @@ function outputSpill(plan, requestId) {
   const at = (stream) => {
     const file = path.join(dir, `device-${requestId}.${stream}.log`);
 
-    return { file, shown: plan.view.raw ? file : plan.view.insidePath(file) };
+    return { file, shown: plan.view.raw ? file : plan.view.insidePath(file), raw: plan.view.raw === true };
   };
 
   return { stdout: at('stdout'), stderr: at('stderr') };

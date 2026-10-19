@@ -2,7 +2,7 @@
 // undefined for a pre-claim first call and Tavily never engages after the owner claims.
 import { describe, test, expect, afterEach } from 'bun:test';
 import type { AuthResolver, WorkersAiWebSearch } from '@kinu.run/core';
-import { buildCfWebSearchProvider } from '@kinu.run/core';
+import { buildCfWebSearchProvider, WEB_SEARCH_INDEX } from '@kinu.run/core';
 import { unobservedSpend } from '@kinu.run/test-utils';
 
 type WebSearchAsked = Parameters<WorkersAiWebSearch['websearch']>[0];
@@ -64,8 +64,8 @@ describe('buildCfWebSearchProvider — lazy per-call getAuth', () => {
 
     // Before anyone connected Tavily: the deployment's own search, on its gateway, on Ceramic.ai's index.
     const before = await provider.search('topic');
-    expect(before).toMatchObject({ source: 'ceramic', results: [{ title: 'First', url: 'https://example.com/a', snippet: 'Snippet.', position: 1 }] });
-    expect(binding.asked).toEqual([{ gatewayId: 'kinu-ai-gateway', query: 'topic', limit: 5, provider: 'ceramic' }]);
+    expect(before).toMatchObject({ source: WEB_SEARCH_INDEX, results: [{ title: 'First', url: 'https://example.com/a', snippet: 'Snippet.', position: 1 }] });
+    expect(binding.asked).toEqual([{ gatewayId: 'kinu-ai-gateway', query: 'topic', limit: 5, provider: WEB_SEARCH_INDEX }]);
 
     resolver = async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-x' } } : null);
 

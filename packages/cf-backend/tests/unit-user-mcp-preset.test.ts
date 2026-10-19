@@ -241,6 +241,27 @@ describe('a cold activation over a preset row', () => {
     woken.close();
     first.close();
   });
+
+  // Only a row with headers was rebuilt at activation; an app row signed in by OAuth alone was restored by the SDK with
+  // the agent's default provider, which holds no client secret, so its next refresh or sign-in reached the vendor as an
+  // unknown client, and Google's hour-long tokens expire well inside one idle account's life.
+  test('an oauth-app row with no headers restores with the registered-app provider', async () => {
+    const first = harness({ mcpAppCredentials: ['github'] });
+    const added = await first.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example');
+
+    const woken = createTestUserDO({ storage: first.db, mcpAppCredentials: ['github'] });
+    await woken.userDO.userMcp_list(await testOwner());
+
+    const provider = liveMcpTransport(added.id)?.authProvider;
+    expect(provider instanceof RegisteredAppOAuthClientProvider).toBe(true);
+
+    if (provider instanceof RegisteredAppOAuthClientProvider) {
+      expect(await provider.clientInformation()).toMatchObject({ client_id: 'test-github-client-id', client_secret: 'test-github-client-secret' });
+    }
+
+    woken.close();
+    first.close();
+  });
 });
 
 describe('the registered-app provider against the real SDK auth flow', () => {

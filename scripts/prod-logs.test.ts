@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
 import { canaryActivations } from './durability-canary-telemetry';
 import {
-  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, terminalEffectStates, type VersionRead, versionFindings, versionSignals,
-  workWindow,
+  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings,
+  versionSignals, workWindow,
 } from './prod-logs';
 
 const HOUR = 3_600_000;
@@ -352,4 +353,37 @@ test('a dropped startup row is an activation still: the ordinals count it, at an
 
   expect(read.map((activation) => [activation.ordinal, activation.at])).toEqual([[3, 10], [4, 20], [5, null], [6, 40]]);
   expect(canaryActivations([{ ordinal: 9, at: 5, version: null }], [startup(10, 3)])).toEqual([{ ordinal: 9, at: 5, version: null }]);
+});
+
+// Staging deploy of 001f6d749, 2026-10-19: thirty reads of a window no row landed in never agreed, because the API lists
+// groups of equal count in a different order each time and the idle wakes kept that order (measured on that window:
+// the same 16 objects, swapped in place, between reads a minute apart).
+test('a window that does not change reads the same however the API orders its tied groups', async () => {
+  const tied = [['b', 3], ['a', 3], ['c', 1]] as const;
+  let reads = 0;
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
+    const body = v.parse(v.looseObject({ granularity: v.optional(v.number()) }), await request.json());
+
+    const rows = reads++ % 2 === 0 ? tied : [tied[1], tied[0], tied[2]];
+    const data = rows.map(([object, value]) => ({ groups: [{ key: '$workers.durableObjectId', value: object }], value }));
+
+    const calculation = body.granularity === undefined
+      ? { alias: 'count', aggregates: data }
+      : { alias: 'count', series: [{ time: '2026-10-19 12:10:00', data }, { time: '2026-10-19 12:11:00', data: [...data].reverse() }] };
+
+    return Response.json({ success: true, result: { calculations: [calculation], statistics: { abr_level: 1 } } });
+  } });
+
+  try {
+    const t = new Telemetry('token', { worker: 'kinu-staging', from: Date.parse('2026-10-19T12:03:13Z'), to: Date.parse('2026-10-19T12:24:01Z') }, server.url.origin);
+    const counted = [await t.count({ filters: [], groupBy: ['$workers.durableObjectId'] }), await t.count({ filters: [], groupBy: ['$workers.durableObjectId'] })];
+    const minutes = [await t.buckets({ filters: [], groupBy: ['$workers.durableObjectId'] }, 60_000), await t.buckets({ filters: [], groupBy: ['$workers.durableObjectId'] }, 60_000)];
+
+    expect(counted[1]).toEqual(counted[0]);
+    expect(minutes[1]).toEqual(minutes[0]);
+    expect(counted[0]?.map((row) => row.groups[0])).toEqual(['a', 'b', 'c']);
+  } finally {
+    await server.stop(true);
+  }
 });

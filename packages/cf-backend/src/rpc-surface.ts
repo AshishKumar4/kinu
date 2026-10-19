@@ -330,7 +330,7 @@ const ORCHESTRATOR_METHODS = [
   'cancelOperation',
   // Reachable by a DO stub in this Worker, never a browser; none is `@callable`.
   'routeSlateShare',
-  'readLiveShare',
+  'openLiveShare',
   'shareLiveWith',
   'liveShareBundle',
   // The owner's share sheet's mode, Gallery listing and standing approvals, and a listed share's needs for the Gallery's

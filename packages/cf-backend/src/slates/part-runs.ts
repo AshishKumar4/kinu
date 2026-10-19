@@ -7,7 +7,7 @@ import {
   type PartAiAnswer, type PartConnectionAnswer, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateAppCall, type SlateController,
 } from '@kinu.run/core/slates';
 import {
-  JsonValueSchema, routeSlateCall, slateAuthority, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateTitle,
+  JsonValueSchema, routeSlateCall, sharedBuildRefusal, slateAuthority, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateTitle,
   type JsonValue, type SlateCallResult, type SlateRoute, type SlateSurfaceResult, type SlateSurfaceValue,
 } from '@kinu.run/core';
 import { attempt, KinuError, renderCauseChain, settle, settleSync } from '@kinu.run/core/obs';
@@ -239,7 +239,7 @@ export class PersonalParts {
 
       // A shared slate's parts run only an image built from its own tree, as its server does (`SlateHost.launch`).
       if (controller.live.isShared(slate) && good.image.scope !== 'tree') {
-        return { kind: 'failed', message: `${slate} is shared, so it runs only as its own files build; they do not build alone yet` } satisfies PartRunAnswer;
+        return { kind: 'failed', message: sharedBuildRefusal(slate) } satisfies PartRunAnswer;
       }
 
       const id = crypto.randomUUID();

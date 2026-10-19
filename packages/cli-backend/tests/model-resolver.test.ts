@@ -15,6 +15,7 @@ import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
+import { WEB_SEARCH_INDEX } from '@kinu.run/core';
 
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
@@ -75,7 +76,7 @@ describe('createLocalModelResolver', () => {
       const signedIn = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_search' } });
       const provider = createDefaultWebSearchProvider({ fetch, browser: { quickActions: async () => new Response('this test renders no page', { status: 500 }) }, ...(signedIn.firstPartySearch !== undefined && { firstParty: signedIn.firstPartySearch }) });
 
-      expect(await provider.search('raleigh events', { limit: 4 })).toMatchObject({ source: 'ceramic', results: [{ url: 'https://example.com/a', title: 'First' }] });
+      expect(await provider.search('raleigh events', { limit: 4 })).toMatchObject({ source: WEB_SEARCH_INDEX, results: [{ url: 'https://example.com/a', title: 'First' }] });
       expect(seen).toEqual([{ path: USER_WEB_SEARCH_PATH, authorization: 'Bearer ptc_search', body: JSON.stringify({ query: 'raleigh events', limit: 4 }) }]);
       expect(createLocalModelResolver({ llm: null }).firstPartySearch).toBeUndefined();
     } finally {

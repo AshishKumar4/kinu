@@ -83,9 +83,17 @@ describe('slate sharing surfaces', () => {
           const live = await freshPage(gallery, 'sharedialog', theme, viewport);
 
           try {
-            // Who can open it, the fork choice, and whose access it runs with: their own unless the owner picks theirs
-            // (docs/SLATE-SHARING-NIMBUS.md §2), with no reach of the owner's to list until then.
+            // Who can open it and Share, the choices said in one line: the safe defaults, each changed only when asked to.
             expect(await live.$eval('[data-share-access]', (element) => element.getAttribute('data-share-access'))).toBe('users');
+            expect(await live.$eval('[data-share-summary]', (element) => element.textContent ?? '')).toContain("Runs on each person's own access · Can be forked");
+            expect(await live.$$('[data-share-mode], [data-share-fork], [data-share-start], [data-share-limits]')).toHaveLength(0);
+            // Each share on one row, with who opened it through its link and how often, never who.
+            expect(await live.$$eval('[data-live-share-views]', (rows) => rows.map((row) => row.textContent)))
+              .toEqual(['12 people opened it · 40 opens (9 signed out)', '2 people opened it · 7 opens']);
+            await live.click('[data-share-options]');
+            await live.waitForSelector('[data-share-mode]');
+            // Whose access it runs with: their own unless the owner picks theirs (docs/SLATE-SHARING-NIMBUS.md §2), with no
+            // reach of the owner's to list until then.
             expect(await live.$eval('[data-share-mode][aria-checked="true"]', (element) => element.getAttribute('data-share-mode'))).toBe('own');
             expect(await live.$('[data-share-reach]')).toBeNull();
             expect(await live.$('[data-share-owner-warning]')).toBeNull();
@@ -144,6 +152,9 @@ describe('slate sharing surfaces', () => {
             const standing = await live.$eval('[data-share-always]', (element) => element.textContent ?? '');
             expect(standing).toContain('GitHub');
             expect(standing).toContain('acme');
+            // Folded under its count until opened.
+            expect(await live.$eval('[data-share-always]', (element) => element instanceof HTMLDetailsElement && element.open)).toBe(false);
+            await live.click('[data-share-always] summary');
             await live.click('[data-share-always-entry="issue-triage/mcp.github.create_issue"] [data-share-always-withdraw]');
             await live.waitForFunction(() => document.querySelector('[data-share-always-entry="issue-triage/mcp.github.create_issue"]') === null);
             expect(JSON.parse(await live.$eval('html', (root) => root.getAttribute('data-gallery-withdrawn')) ?? 'null'))
@@ -161,16 +172,20 @@ describe('slate sharing surfaces', () => {
             await live.waitForFunction(() => document.querySelector('[data-live-share="live-board-1"] [data-live-share-review]') === null);
             expect(await live.$('[data-share-submit]')).not.toBeNull();
 
-            // On the owner's access it is never listed, and the row says why.
-            expect(await live.$('[data-share-gallery-owner]')).not.toBeNull();
+            // On the owner's access it is never listed, and its menu says why.
+            await live.click('[data-live-share="live-board-1"] [data-drive-menu]');
+            expect(await live.$eval('[data-live-share="live-board-1"] [data-live-share-listing]', (item) => item.getAttribute('aria-disabled'))).toBe('true');
+            expect(await live.$eval('[data-live-share="live-board-1"] [role="menu"]', (menu) => menu.textContent ?? '')).toContain('Use their own access to list it.');
             expect(await live.$('[data-share-gallery]')).toBeNull();
 
-            // And it moves to each person's own access in one press: nothing of the owner's is used.
+            // And it moves to each person's own access in one press from its menu: nothing of the owner's is used.
             await live.click('[data-live-share="live-board-1"] [data-live-share-own]');
             await live.waitForSelector('[data-live-share="live-board-1"] [data-live-share-mode="own"]');
+            await live.click('[data-live-share="live-board-1"] [data-drive-menu]');
             expect(await live.$('[data-live-share="live-board-1"] [data-live-share-own]')).toBeNull();
 
             // Then it can be listed, by a line and a category asked for first.
+            await live.click('[data-live-share="live-board-1"] [data-live-share-listing]');
             await live.click('[data-share-gallery]');
             await live.type('[data-share-gallery-line]', 'Triage issues by label');
             await live.click('[data-share-gallery-category="developer"]');
@@ -187,6 +202,8 @@ describe('slate sharing surfaces', () => {
           const first = await freshPage(gallery, 'sharedialog-first', theme, viewport);
 
           try {
+            expect(await first.$eval('[data-share-summary]', (element) => element.textContent ?? '')).toContain("Runs on each person's own access · Shows what it holds now · Can be forked");
+            await first.click('[data-share-options]');
             expect(await first.$eval('[data-share-start][aria-checked="true"]', (element) => element.getAttribute('data-share-start'))).toBe('as-is');
             await first.click('[data-share-start="empty"]');
             // Each person added uses it, or edits it too.
@@ -208,8 +225,13 @@ describe('slate sharing surfaces', () => {
           const again = await freshPage(gallery, 'sharedialog', theme, viewport);
 
           try {
+            await again.click('[data-share-options]');
             await again.waitForSelector('[data-share-mode]');
             expect(await again.$('[data-share-start]')).toBeNull();
+            // A copy to fork is the secondary way, one link away at the foot.
+            await again.click('[data-share-switch="blueprint"]');
+            await again.waitForFunction(() => (document.querySelector('[role="dialog"]')?.textContent ?? '').includes('Publish'));
+            expect(await again.$('[data-share-switch="live"]')).not.toBeNull();
           } finally {
             await again.close();
           }

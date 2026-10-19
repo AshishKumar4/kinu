@@ -9,7 +9,7 @@ import { KinuError } from '../obs/error';
 import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, payloadReference, type SessionPayload } from './payload';
-import { rowText, UIMessageSchema } from '../utils/ui-message';
+import { rowText, transcriptRole, UIMessageSchema } from '../utils/ui-message';
 import { turnTags } from '../types/turn-metadata';
 import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
@@ -599,10 +599,16 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       }
 
       const projected = drawnParts(parts, entry.role, media);
-      const message: StoredUiMessage = { id: entry.id, role: entry.role, parts: projected };
+      const metadata = entry.metadata === null ? undefined : await this.payloads.read(entry.metadata);
 
-      if (entry.metadata !== null) message.metadata = await this.payloads.read(entry.metadata);
       this.actor.assertCurrent();
+
+      // The chat's one reading of a row's role, every reader's: the seed, a turn's frames and every page. A row the harness
+      // wrote shows as `system`; the model is still sent it as the `user` row it is stored as.
+      const role = entry.role === 'user' ? transcriptRole({ id: entry.id, role: entry.role, metadata }) : entry.role;
+      const message: StoredUiMessage = { id: entry.id, role, parts: projected };
+
+      if (metadata !== undefined) message.metadata = metadata;
 
       // Drawn from this store's own rows, so the SDK's validator, which walked every part of every read, is not run.
       const drawn = v.safeParse(UIMessageSchema, message);

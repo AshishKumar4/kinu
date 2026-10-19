@@ -34,4 +34,4 @@ export { browserSessions, initBrowserSessionTable, ownsBrowserSession, type Brow
 
 export { createWebCodemodeProvider, serveWeb, type WebDeps } from '../tools/web-operations';
 
-export { WEB, KITESURF_SESSION_ID } from '../operations/web';
+export { WEB, KITESURF_SESSION_ID, WEB_SEARCH_INDEX } from '../operations/web';

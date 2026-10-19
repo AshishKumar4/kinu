@@ -752,7 +752,8 @@ test('a slate\'s agent.send delivers one inbox signal naming the slate', async (
   expect(await call([{ text: 'done', data: { count: 2 } }])).toEqual({ ok: true, value: { outcome: 'queued' } });
   await opened;
   await turns.settle({ messageId: 'a-paged', text: 'paged' });
-  const admitted = (await storedChat(actor)).filter((message) => message.role === 'user');
+  // A slate's signal is the harness's to the agent: the chat shows it as `system`.
+  const admitted = (await storedChat(actor)).filter((message) => message.role === 'system');
   expect(admitted).toHaveLength(1);
   expect(admitted[0]).toMatchObject({
     parts: [{ type: 'text', text: 'Slate pager: done' }],

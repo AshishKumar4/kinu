@@ -18,7 +18,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
+  INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
   UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
@@ -551,8 +551,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** The Retry of the newest turn the client shows: its stream answers under this request once the agent takes it. */
   retryRequest(requestId: string, shown: readonly UIMessage[]): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
-      const newestAsked = (messages: readonly UIMessage[]): string | undefined => [...messages].reverse().find((message) => message.role === 'user')?.id;
-      const messageId = newestAsked(shown) ?? newestAsked((yield* attemptInItsWords('io', () => this.wire.seed())).messages);
+      const messageId = newestOpener(shown) ?? newestOpener((yield* attemptInItsWords('io', () => this.wire.seed())).messages);
 
       if (messageId === undefined) return this.done(requestId, { error: 'There is no message to retry.' });
 

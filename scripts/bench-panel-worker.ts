@@ -44,6 +44,7 @@ import { createCLIRuntime, makeSql, workspaceHome } from '../packages/cli-backen
 
 import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
 import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protocol';
+import { WEB_SEARCH_INDEX } from '@kinu.run/core';
 
 /** The spec a fork carries is its INDEX into the panel list, not a registry
  *  name: the bench talks to explicit provider configs rather than a credential
@@ -133,7 +134,7 @@ async function main(): Promise<void> {
   // A panel member does no live research — every arm must see the same world,
   // and a flaky search result is variance charged to whichever arm drew it.
   const noWeb: WebSearchProvider = {
-    search: async () => ({ query: '', results: [], source: 'ceramic' }),
+    search: async () => ({ query: '', results: [], source: WEB_SEARCH_INDEX }),
     fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
     render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
     screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),

@@ -24,6 +24,7 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
     url TEXT NOT NULL,
     picture TEXT,
     listed_at INTEGER NOT NULL,
+    viewers INTEGER NOT NULL DEFAULT 0, /* a projection: the owner workspace's distinct signed-in viewers of the share (slate_share_views), as its last listing sync carried them */
     PRIMARY KEY (workspace, slate)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS gallery_stars (
@@ -54,7 +55,7 @@ const TRENDING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const ListingRow = v.object({
   workspace: v.string(), slate: v.string(), share: v.string(), title: v.string(), line: v.string(), category: v.picklist(GALLERY_CATEGORIES),
-  owner_name: v.string(), url: v.string(), picture: v.nullable(v.string()), listed_at: v.number(),
+  owner_name: v.string(), url: v.string(), picture: v.nullable(v.string()), listed_at: v.number(), viewers: v.number(),
   stars: v.number(), recent: v.number(), starred: v.number(),
 });
 
@@ -82,11 +83,12 @@ export class GalleryIndex {
     const { card } = sync;
 
     this.db.exec(
-      `INSERT INTO gallery_listings (workspace, slate, share, title, line, category, owner_name, url, picture, listed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO gallery_listings (workspace, slate, share, title, line, category, owner_name, url, picture, listed_at, viewers)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (workspace, slate) DO UPDATE SET share = excluded.share, title = excluded.title, line = excluded.line,
-         category = excluded.category, owner_name = excluded.owner_name, url = excluded.url, picture = excluded.picture`,
-      workspace, slate, share, card.title, card.line, card.category, card.ownerName, sync.url, card.picture, now,
+         category = excluded.category, owner_name = excluded.owner_name, url = excluded.url, picture = excluded.picture,
+         viewers = excluded.viewers`,
+      workspace, slate, share, card.title, card.line, card.category, card.ownerName, sync.url, card.picture, now, card.viewers,
     );
   }
 
@@ -213,7 +215,7 @@ export class GalleryIndex {
 function listingOf(row: Row, featured: ReadonlySet<string>): GalleryListing {
   return {
     workspace: row.workspace, slate: row.slate, share: row.share, title: row.title, line: row.line, category: row.category,
-    owner: { name: row.owner_name }, stars: row.stars, starred: row.starred > 0, listedAt: row.listed_at,
+    owner: { name: row.owner_name }, stars: row.stars, starred: row.starred > 0, viewers: row.viewers, listedAt: row.listed_at,
     featured: featured.has(`${row.workspace}/${row.slate}`), url: row.url,
     ...(row.picture !== null && { picture: row.picture }),
   };

@@ -27,6 +27,7 @@ import {
 } from '../src/index';
 import { imageCarrier } from '../src/types/tool-images';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
+import { WEB_SEARCH_INDEX } from '../src/index';
 
 const NO_BROWSER_RUN = { missing: 'this suite reaches no Browser Run' };
 
@@ -140,7 +141,7 @@ describe('web provider — search', () => {
     const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '' })).fetch, firstParty });
 
     expect(await provider.search('  the topic ', { limit: 7 })).toEqual({
-      query: 'the topic', source: 'ceramic',
+      query: 'the topic', source: WEB_SEARCH_INDEX,
       results: [
         { title: 'First', url: 'https://example.com/a', snippet: 'x'.repeat(600), position: 1 },
         { title: 'https://example.org/b', url: 'https://example.org/b', snippet: '', position: 2 },

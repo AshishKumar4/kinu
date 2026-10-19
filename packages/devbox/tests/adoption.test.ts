@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { ChainTestBox, asked, chainBox, chainHead } from './support/chain-box';
-import { KERNEL_READ, gate } from './support/devbox-harness';
+import { KERNEL_READ, deliver, gate } from './support/devbox-harness';
 import { DevboxError } from '../src/errors';
 import type { RestoreClockPhase } from '../src/restoration';
 
@@ -65,7 +65,9 @@ test('members that arrive while the adoption reads share its one read', async ()
   expect({ whileReading, ready: (await successor.devboxState()).ready }).toEqual({ whileReading: [KERNEL_READ], ready: true });
 });
 
-test('the adoption holds no block: the box\'s stop reaches the object while the read waits, and the member ends', async () => {
+// The owner's R1 (m193, 2026-10-19): resumption, too, runs in the box's own block, so nothing reaches the container
+// until the box has taken it or turned it over (D104, reversing D102's "holds no block").
+test('the adoption runs in a block: a stop arriving while the read waits is delivered after it, and stops the box', async () => {
   const { container, rows, successor } = await evicted();
   const committed = chainHead(rows);
   const read = gate();
@@ -74,13 +76,33 @@ test('the adoption holds no block: the box\'s stop reaches the object while the 
   const checkpoint = successor.checkpointNow('tick');
   await read.reached;
   const blocked = container.initGate !== undefined;
-  const stalled = await successor.stopStalled();
-  await successor.stop();
+  let stoppedWhileReading = true;
+  const stopped = deliver(container, async () => { await successor.stop(); });
+
+  await Promise.resolve();
+  stoppedWhileReading = container.running.running === false;
   read.release();
   const outcome = await checkpoint;
+  await stopped;
 
-  expect({ blocked, stalled, outcome: outcome.kind, committed: chainHead(rows), running: container.running.running })
-    .toEqual({ blocked: false, stalled: 'nothing', outcome: 'skipped', committed, running: false });
+  expect({ blocked, stoppedWhileReading, outcome: outcome.kind, committed: chainHead(rows), running: container.running.running })
+    .toEqual({ blocked: true, stoppedWhileReading: false, outcome: 'skipped', committed, running: false });
+});
+
+test('a fresh start configures its container inside the block it restores in, and nothing before it', async () => {
+  const { box, container } = chainBox();
+
+  await box.start();
+  let depth = 0;
+  const configured: { readonly step: string; readonly inBlock: boolean }[] = [];
+
+  for (const step of container.sequence) {
+    if (step === 'block:enter') depth += 1;
+    else if (step === 'block:exit') depth -= 1;
+    else if (step === 'intercept:https' || step === 'trust') configured.push({ step, inBlock: depth > 0 });
+  }
+
+  expect(configured).toEqual([{ step: 'intercept:https', inBlock: true }, { step: 'trust', inBlock: true }]);
 });
 
 test('an unready box answers its sessions from its records and its listeners as unknown, and reads nothing more', async () => {

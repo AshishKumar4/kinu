@@ -8,7 +8,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, escapeHtml, GallerySlateSchema, SLATE_QUERY_PARAM, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  APP_ROUTES, escapeHtml, GallerySlateSchema, SLATE_QUERY_PARAM, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, OwnedLiveShareSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type GalleryCategory, type GallerySlate, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
@@ -181,7 +181,7 @@ afterEach(() => {
 
 const sharePublic = (world: World, visibility: 'users' | 'public', fork?: boolean) => world.owner.agent.slate({
   op: 'share', id: 'issues', visibility, approved: [], fork,
-}).then((result) => answered(result, v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) })));
+}).then((result) => answered(result, v.object({ share: OwnedLiveShareSchema, url: v.nullable(v.string()) })));
 
 /**
  * The app's page for a share asking where to frame it, as `email` signed in on this deployment's own machine (its dev
@@ -193,7 +193,7 @@ const openShare = (world: World, body: { workspace: string; share: string }, ema
 );
 
 /** The owner's live shares not yet revoked. */
-const openShares = async (world: World) => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema)).filter((row) => row.revokedAt === null);
+const openShares = async (world: World) => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(OwnedLiveShareSchema)).filter((row) => row.revokedAt === null);
 
 /** The control plane, as far as the owner's workspace tells it its Gallery listings: each sync it is sent, in `synced`. */
 function tellGalleryInto(world: World, synced: GalleryListingSync[]): void {
@@ -272,6 +272,93 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   expect(await after?.text()).not.toContain(`/${CONSENT_PATH}`);
   const requests = answered(await world.owner.agent.slate({ op: 'viewerRequests', share: created.share.id }), v.array(v.looseObject({ viewer: v.string() })));
   expect(requests).toHaveLength(1);
+});
+
+test("share views. who opens a share through its link is counted in its owner's workspace, by a key no one can trace", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const made = await sharePublic(world, 'public');
+  const other = await sharePublic(world, 'public');
+  const open = async (share: string, email?: string) => (await openShare(world, { workspace: 'issues-owner', share }, email))?.status;
+
+  // Pat twice, Lee once, two visits signed out, and the owner, who is never counted.
+  for (const email of ['pat@example.test', 'pat@example.test', 'lee@example.test', undefined, undefined, 'owner@example.test']) {
+    expect(await open(made.share.id, email)).toBe(200);
+  }
+
+  expect(await open(other.share.id, 'pat@example.test')).toBe(200);
+  const views = Object.fromEntries((await openShares(world)).map((row) => [row.id, row.views]));
+
+  expect(views).toEqual({ [made.share.id]: { viewers: 2, opens: 5, signedOutOpens: 2 }, [other.share.id]: { viewers: 1, opens: 1, signedOutOpens: 0 } });
+  // Pat's key on each share: no id or email of theirs, and not the same key on two shares.
+  const keys = v.parse(v.array(v.object({ share: v.string(), viewer: v.string() })), world.owner.db.query("SELECT share, viewer FROM slate_share_views WHERE viewer <> '' ORDER BY share").all());
+  const pats = new Set(keys.map((row) => row.viewer));
+
+  expect(keys).toHaveLength(3);
+  expect(pats.size).toBe(3);
+  expect(keys.some((row) => row.viewer.includes(VIEWER_ID) || row.viewer.includes('example.test'))).toBe(false);
+
+  // A share that names people opens for no one else: a stranger's refused open is not counted.
+  const named = await sharePublic(world, 'users');
+
+  expect(await open(named.share.id, 'lee@example.test')).toBe(404);
+  expect((await openShares(world)).find((row) => row.id === named.share.id)?.views).toEqual({ viewers: 0, opens: 0, signedOutOpens: 0 });
+});
+
+test("share views. every answer that hands the owner a share holds its numbers as they are: made, named, listed, unlisted, turned", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const send = async (path: string, body: Readonly<Record<string, JsonValue>>) => present(await sharedRequest(world.env, owner, post(path, { workspace: 'issues-owner', ...body })), path);
+  // What holds of a share now beside its record, as the sheet reads it from the share it is answered.
+  const Holds = v.looseObject({ id: v.string(), paused: v.unknown(), stale: v.unknown(), views: v.unknown() });
+  const now = ({ paused, stale, views }: v.InferOutput<typeof Holds>) => ({ paused, stale, views });
+  const changed = async (path: string, body: Readonly<Record<string, JsonValue>>) => now(await jsonBody(await send(path, body), Holds));
+  const made = async (body: Readonly<Record<string, JsonValue>>) => (await jsonBody(await send('/api/shared/live', { slate: 'issues', ...body }), v.object({ share: Holds }))).share;
+
+  const fresh = { paused: false, stale: false, views: { viewers: 0, opens: 0, signedOutOpens: 0 } };
+  const first = await made({ visibility: 'public' });
+  const share = first.id;
+
+  expect(now(first)).toEqual(fresh);
+
+  for (const email of ['pat@example.test', 'pat@example.test', undefined]) await openShare(world, { workspace: 'issues-owner', share }, email);
+  const opened = { paused: false, stale: false, views: { viewers: 1, opens: 3, signedOutOpens: 1 } };
+
+  expect(await changed(LIVE_SHARE_LISTING_PATH, { share, listed: true, line: 'Triage the open issues', category: 'work' })).toEqual(opened);
+  expect(await changed(LIVE_SHARE_LISTING_PATH, { share, listed: false })).toEqual(opened);
+  expect(await changed(LIVE_SHARE_MODE_PATH, { share, mode: 'own' })).toEqual(opened);
+  // A share that names people: its answer is the share once they are recorded.
+  expect(now(await made({ visibility: 'users', emails: ['pat@example.test'] }))).toEqual(fresh);
+});
+
+test("share views. a listed share's card is told its viewers by its listing sync, at most once an hour, never per open", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+
+  tellGalleryInto(world, synced);
+  const made = await sharePublic(world, 'public');
+  const viewersTold = () => synced.splice(0).map((sync) => (sync.listed ? sync.card.viewers : 'unlisted'));
+  const open = async (email: string) => { await openShare(world, { workspace: 'issues-owner', share: made.share.id }, email); };
+
+  setSystemTime(new Date(1_800_000_000_000));
+  await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: true, line: 'Triage', category: 'work' }));
+  await until(() => synced.length > 0, 'the Gallery told of the listing');
+  expect(viewersTold()).toEqual([0]);
+
+  // Within the hour of its last word: counted, not told.
+  await open('pat@example.test');
+  await open('lee@example.test');
+  expect(synced).toEqual([]);
+
+  // An hour on, the next open tells it once, with every viewer since.
+  setSystemTime(new Date(1_800_000_000_000 + 60 * 60 * 1000));
+  await open('kim@example.test');
+  await until(() => synced.length > 0, 'the Gallery told of the viewers');
+  await open('pat@example.test');
+  expect(viewersTold()).toEqual([3]);
 });
 
 test("live host context. a share's host keeps the context its slate's page was framed with across its ticket and its consent", async () => {
@@ -495,7 +582,7 @@ test('a change whose card cannot reach the tile is made and says the list is beh
   const revoke = async (id: string) => present(await sharedRequest(world.env, owner, post('/api/shared/revoke', { workspace: 'issues-owner', share: id })), 'the revoke answer');
   const listed = async () => (await jsonBody(present(await sharedRequest(world.env, owner, new Request('https://app.test/api/shared')), 'the library'), SharedLibrarySchema)).mine;
 
-  const lives = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(LiveShareRecordSchema));
+  const lives = async () => answered(await world.owner.agent.slate({ op: 'liveShares' }), v.array(OwnedLiveShareSchema));
 
   const first = await share('public');
 
@@ -720,7 +807,7 @@ test("a share on its owner's access is refused where the slate is not at the rev
 
   expect((await mode({ share: made.share.id, mode: 'owner', revision: 'a-revision-it-is-not-at', approved }))?.status).toBe(400);
   expect((await mode({ share: 'no-such-share', mode: 'own' }))?.status).toBe(404);
-  expect(await jsonBody(present(await mode({ share: made.share.id, mode: 'own' }), 'the mode answer'), LiveShareRecordSchema))
+  expect(await jsonBody(present(await mode({ share: made.share.id, mode: 'own' }), 'the mode answer'), OwnedLiveShareSchema))
     .toMatchObject({ id: made.share.id, mode: 'own', grantRevision: null });
 });
 
@@ -743,18 +830,18 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
   const card = { line: 'Triage the open issues', category: 'work' } satisfies { line: string; category: GalleryCategory };
 
   expect((await listing({ share: made.share.id, listed: true, line: 'x'.repeat(141), category: 'work' }))?.status).toBe(400);
-  expect(await jsonBody(present(await listing({ share: made.share.id, listed: true, ...card }), 'the listing answer'), LiveShareRecordSchema))
+  expect(await jsonBody(present(await listing({ share: made.share.id, listed: true, ...card }), 'the listing answer'), OwnedLiveShareSchema))
     .toMatchObject({ id: made.share.id, mode: 'own', gallery: card });
   expect(await told()).toEqual([{
     share: made.share.id, workspace: 'issues-owner', slate: 'issues', handle: made.share.handle, listed: true, url: present(made.url, 'the share URL'),
-    card: { title: 'Issue triage', ...card, ownerName: expect.any(String), picture: null },
+    card: { title: 'Issue triage', ...card, ownerName: expect.any(String), picture: null, viewers: 0 },
   }]);
 
   // Its Gallery page names, from the share its index lists, the connections a visitor's own parts will ask them for.
   const page = async () => {
     const listed = {
       workspace: 'issues-owner', slate: 'issues', share: made.share.id, title: 'Issue triage', ...card, owner: { name: 'Owner' },
-      stars: 0, starred: false, listedAt: 1, featured: false, url: present(made.url, 'the share URL'),
+      stars: 0, starred: false, viewers: 0, listedAt: 1, featured: false, url: present(made.url, 'the share URL'),
     };
 
     const ControlPlaneDO = { idFromName: (name: string) => name, get: () => ({ gallerySlate: async (): Promise<GallerySlate | null> => ({ listing: listed }) }) };

@@ -295,13 +295,13 @@ export {
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
   ShareGrantSchema, ShareCardSchema,
-  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
+  OwnedLiveShareSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema, sharedBuildRefusal,
   type ShareKind, type LiveShareVisibility, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
   type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
   type ShareGrantMember, type ShareGrant, type ShareCard,
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
-  type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
+  type LiveShareRecord, type OwnedLiveShare, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
   LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, SlatePreapprovalsSchema,
   type SharePreapproval, type SlatePreapprovals, type SlatePreapprovalWithdraw,
@@ -1522,7 +1522,7 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
   DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentAnswer, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
   type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
@@ -2034,7 +2034,7 @@ export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, Position
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  restoredRows, rowText, transcriptRole, UIMessageSchema,
+  newestOpener, restoredRows, rowText, transcriptRole, UIMessageSchema,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf,
 } from './utils/ui-message';
 

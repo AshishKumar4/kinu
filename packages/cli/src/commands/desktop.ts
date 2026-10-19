@@ -12,6 +12,8 @@ import {
   joinDevice,
   waitingDots,
   WHOLE_MACHINE_LINKED,
+  describeConnectScope,
+  deviceRoot,
 } from '../device-connect';
 import { readDaemonLogTail } from '../daemon-log';
 import { ACCENT, DIM, ERR, OK } from '../display';
@@ -43,7 +45,7 @@ export function desktopCommand(action: string | undefined, opts: ConnectCommandO
       if (joining !== null && auth === null) return yield* joinByTicket(joining, opts);
 
       if (auth === null) return;
-      const name = yield* confirmConnect(opts.label);
+      const name = yield* confirmConnect(opts.label, opts.root);
 
       if (!name) {
         console.log(`${DIM('Nothing was installed. This machine is not linked.')}`);
@@ -141,7 +143,7 @@ function sessionOf(account: string): Effect.Effect<{ origin: string; token: stri
 
 function joinByTicket(joining: JoinTicket, opts: ConnectCommandOptions): Effect.Effect<void> {
   return Effect.gen(function* () {
-    const name = yield* confirmConnect(opts.label);
+    const name = yield* confirmConnect(opts.label, opts.root);
 
     if (!name) {
       console.log(`${DIM('Nothing was installed. This machine is not linked.')}`);
@@ -182,12 +184,16 @@ function refuseConnect(reason: string): Effect.Effect<never> {
   });
 }
 
-/** Linking is never a side effect: without a terminal to state the terms in, this refuses. Null when the answer is no. */
-function confirmConnect(label?: string): Effect.Effect<string | null> {
+/** Linking is never a side effect: without a terminal to state the terms in, this refuses. Null when the answer is no.
+ *  The folder it links from is said as it resolves, before the question (L111 #6). */
+function confirmConnect(label: string | undefined, root: string | undefined): Effect.Effect<string | null> {
   return Effect.gen(function* () {
     console.log('');
 
     for (const line of DEVICE_CONNECT_DISCLOSURE) console.log(`  ${DIM(line)}`);
+    console.log('');
+
+    for (const line of describeConnectScope(deviceRoot(root))) console.log(`  ${line}`);
     console.log('');
 
     if (!canPrompt()) {

@@ -259,6 +259,21 @@ describe('explainSandboxError', () => {
     expect(out).toBe('fooBarBaz is not defined');
   });
 
+  // Luna wrote 58 of these on staging 5c522f12d; the engine's own words named no call to make instead.
+  test('a namespace member called through tools is told the global to call, as each engine words the miss', () => {
+    expect(explainSandboxError('tools.agent.jobResult is not a function'))
+      .toBe('tools.agent.jobResult is not a function: `tools` holds only native tools and those you save; `agent` is a global of the program: call `agent.jobResult(...)`');
+
+    expect(explainSandboxError("undefined is not an object (evaluating 'tools.tasks.add')")).toContain('`tasks` is a global of the program: call `tasks.add(...)`');
+    expect(explainSandboxError("tools.memory.search is not a function. (In 'tools.memory.search(\"x\")', 'tools.memory.search' is undefined)"))
+      .toContain('call `memory.search(...)`');
+  });
+
+  test('a retired member called through tools is told its successor', () => {
+    expect(explainSandboxError('tools.workspace.readdir is not a function'))
+      .toBe('tools.workspace.readdir is not a function: `tools` holds only native tools and those you save; `workspace` is a global of the program, and workspace.readdir was removed: use workspace.fs.list(path)');
+  });
+
   test('an unrelated error message is never touched', () => {
     const messages = [
       'ENOENT: no such file or directory',

@@ -77,9 +77,11 @@ interface ConnectDevicePanelProps {
   flow: DeviceConnectFlow;
   devices: readonly UserDevice[] | null;
   rosterError?: string | null;
+  /** The workspace it is opened from, which the machine is granted to as it connects; null from Account settings. */
+  workspace?: string | null;
 }
 
-export function ConnectDevicePanel({ flow, devices, rosterError = null }: ConnectDevicePanelProps) {
+export function ConnectDevicePanel({ flow, devices, rosterError = null, workspace = null }: ConnectDevicePanelProps) {
   const state = useSyncExternalStore(flow.subscribe, flow.snapshot, flow.snapshot);
   const [label, setLabel] = useState("");
 
@@ -130,6 +132,13 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
     <div data-connect-state={state.kind} className="space-y-3">
       {/* Joined: the array is wrapped for an 80-column terminal, so its line breaks are not paragraph breaks. */}
       <p className="text-xs p-text-2 leading-relaxed">{DEVICE_CONNECT_DISCLOSURE.join(" ")}</p>
+      {/* Said before the command is made (L111 #6): a machine connected from a workspace is that workspace's at once. */}
+      {workspace !== null && (
+        <p data-connect-grant className="text-xs p-text-1 leading-relaxed">
+          Connected from here, it is <span className="font-medium">{workspace}</span>'s at once: its agents use this machine
+          without asking, until you take it back under Account settings → Devices. Before it links, the command shows the folder it shares.
+        </p>
+      )}
       {rosterError !== null && (
         <p className="p-meta p-danger">{rosterError}</p>
       )}
@@ -174,7 +183,7 @@ export function ConnectDeviceDialog({ workspace, onClose }: { workspace: string 
       {resource.status === "error" && (
         <LoadFailure what="your devices" message={resource.message} onRetry={reload} />
       )}
-      <ConnectDevicePanel flow={flow} devices={devices} />
+      <ConnectDevicePanel flow={flow} devices={devices} workspace={workspace ?? null} />
     </Modal>
   );
 }

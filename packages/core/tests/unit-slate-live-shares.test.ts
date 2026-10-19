@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
+import { initSlateLiveShareTables, SIGNED_OUT_VIEWER, SlateLiveShareStore } from '../src/slates/live-shares';
 import { setShareMode, shareLiveSlate } from '../src/slates/live-sharing';
 import { initSlateBuildTable, SlateBuilds } from '../src/slates/builds';
 import { GALLERY_CATEGORIES, type GalleryCategory } from '../src/slates/gallery-api';
@@ -391,6 +391,25 @@ test("a listed share's Gallery capture holds while it is listed, public and its 
     shares.add({ id: 's2', slate: 'digest', visibility: 'users', handle: 'abcdef0123', grant });
     shares.setListing('s2', { line: 'Digest', category: 'work' });
     expect(shares.galleryCapture('s2')).toBeNull();
+  } finally {
+    db.close();
+  }
+});
+
+test("a share's numbers: distinct people signed in, every open, and signed-out opens counted but never as people", () => {
+  const { db, shares } = shareDb();
+
+  try {
+    expect(shares.views('s1')).toEqual({ viewers: 0, opens: 0, signedOutOpens: 0 });
+
+    for (const viewer of ['key-pat', 'key-pat', 'key-lee', SIGNED_OUT_VIEWER, SIGNED_OUT_VIEWER, SIGNED_OUT_VIEWER]) shares.opened('s1', viewer);
+    shares.opened('s2', 'key-pat');
+
+    expect(shares.views('s1')).toEqual({ viewers: 2, opens: 6, signedOutOpens: 3 });
+    // One row per person: what is counted is a query over them, never a total kept beside.
+    expect(db.query("SELECT viewer, opens FROM slate_share_views WHERE share = 's1' ORDER BY viewer").all())
+      .toEqual([{ viewer: '', opens: 3 }, { viewer: 'key-lee', opens: 1 }, { viewer: 'key-pat', opens: 2 }]);
+    expect(shares.views('s2')).toEqual({ viewers: 1, opens: 1, signedOutOpens: 0 });
   } finally {
     db.close();
   }

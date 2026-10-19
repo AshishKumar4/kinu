@@ -23,7 +23,7 @@ import { useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import {
-  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type LiveShareRecord,
+  APP_ROUTES, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, LiveShareBodySchema, LiveShareListingBodySchema, LiveShareModeBodySchema, PartRunRequestSchema, slatePartFramePath, type OwnedLiveShare,
   type PartRunAnswer, type PartRunRequest, type SharePreapproval, type SlateConsent, type SlatePreapprovals,
 } from "@kinu.run/core";
 import { InlineSlate } from "@/components/slates/InlineSlate";
@@ -185,11 +185,11 @@ export function installPartsFixture(frame: string): void {
  * `standing`, and what was sent is on the root for a test to read. `shown` and `standing` are read at the first call, as
  * the gallery defines them further down.
  */
-export function installShareModeFixture(frame: string, shown: () => LiveShareRecord, standing: () => readonly SharePreapproval[]): void {
+export function installShareModeFixture(frame: string, shown: () => OwnedLiveShare, standing: () => readonly SharePreapproval[]): void {
   if (frame !== "sharedialog" && frame !== "sharedialog-first") return;
 
   const next = window.fetch.bind(window);
-  let share: LiveShareRecord | null = null;
+  let share: OwnedLiveShare | null = null;
   let left: readonly SharePreapproval[] | null = null;
 
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -202,7 +202,7 @@ export function installShareModeFixture(frame: string, shown: () => LiveShareRec
 
       document.documentElement.setAttribute("data-gallery-shared", JSON.stringify(body));
 
-      const made: LiveShareRecord = { ...shown(), id: "live-new", slate: body.start === "empty" ? `${body.slate}-copy` : body.slate, mode: body.mode ?? "own", grantRevision: body.revision ?? null, stale: false, gallery: null };
+      const made: OwnedLiveShare = { ...shown(), id: "live-new", slate: body.start === "empty" ? `${body.slate}-copy` : body.slate, mode: body.mode ?? "own", grantRevision: body.revision ?? null, stale: false, gallery: null };
 
       return Response.json({ share: made, url: `https://${made.slate}.example.kinu.run/` });
     }

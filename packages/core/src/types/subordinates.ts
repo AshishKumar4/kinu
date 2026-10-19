@@ -37,6 +37,8 @@ export interface TemporaryRunRequest {
   readonly role: RoleId;
   readonly roleLabel: string;
   readonly task: string;
+  /** What the hirer named it: its name is minted from this, and it shows as this. */
+  readonly name?: string;
   readonly inheritedContext?: SerializedMessage[];
   /** Workspace paths the child reads itself; programmatic callers only, not model-facing. */
   readonly contextRefs?: readonly string[];
