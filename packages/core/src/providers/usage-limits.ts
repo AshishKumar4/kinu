@@ -152,11 +152,11 @@ function openRouterLimits(read: LimitRead): Effect.Effect<readonly LimitWindow[]
 
 const OpenCodeGoWindowSchema = v.nullish(v.object({ percent: v.number(), resetsAt: v.nullish(v.string()) }));
 
-// Undocumented.
-const OpenCodeGoUsageSchema = v.object({ rolling: OpenCodeGoWindowSchema, weekly: OpenCodeGoWindowSchema, monthly: OpenCodeGoWindowSchema });
+// Undocumented; measured 2026-10-19: the windows sit under `usage`.
+const OpenCodeGoUsageSchema = v.object({ usage: v.object({ rolling: OpenCodeGoWindowSchema, weekly: OpenCodeGoWindowSchema, monthly: OpenCodeGoWindowSchema }) });
 
 function openCodeGoLimits(read: LimitRead): Effect.Effect<readonly LimitWindow[], KinuError> {
-  return Effect.map(getJson(OpenCodeGoUsageSchema, read, 'https://opencode.ai/zen/go/v1/usage', { headers: {}, what: 'OpenCode Go' }), (body) => {
+  return Effect.map(getJson(OpenCodeGoUsageSchema, read, 'https://opencode.ai/zen/go/v1/usage', { headers: {}, what: 'OpenCode Go' }), ({ usage: body }) => {
     return ([['5h', body.rolling], ['weekly', body.weekly], ['monthly', body.monthly]] as const).flatMap(([name, window]) => (window === undefined || window === null ? [] : [{
       name, usedPercent: window.percent, ...(isoMs(window.resetsAt) !== undefined && { resetsAt: isoMs(window.resetsAt) }),
     }]));
