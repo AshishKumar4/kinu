@@ -1,5 +1,5 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
-import { Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { GlobeIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview, OwedOwnerIntent } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
@@ -190,13 +190,23 @@ export function WorkSurface(props: WorkSurfaceProps) {
     arrival: props.workspacePlanArrival, surface, navigate: focus.navigate,
   });
 
+  // The reader's presses, and those the last commit drew: a landing queued before a press is the press's to replace,
+  // never to write back over it (staging rc20, live-memory: presence landed the strip on Files as Agent was pressed).
+  const presses = useRef(0);
+  const drawnPresses = useRef(0);
+
+  useLayoutEffect(() => { drawnPresses.current = presses.current; });
+
   // A tab the reader picks lands, presence known or not.
   const choose = useCallback((next: SurfaceKind) => {
+    presses.current += 1;
     setSettledFor(workspaceKey);
     focus.navigate(next);
   }, [workspaceKey, focus.navigate]);
 
   useEffect(() => {
+    if (presses.current !== drawnPresses.current) return;
+
     if (surface !== null && surface !== requested) focus.navigate(surface);
   }, [surface, requested, focus.navigate]);
 
