@@ -42,8 +42,6 @@ export type TodayTile = "needs" | "mail" | "workspaces" | "watching";
 
 export interface TodayProps {
   readonly now: number;
-  /** The assistant's name, as the owner called it: it gives each Important mail's reason. */
-  readonly assistant: string;
   readonly greeting: string;
   readonly own: readonly OwnAsk[];
   readonly roster: readonly RosterEntry[];
@@ -102,7 +100,7 @@ function Line({ children, quiet = false }: { children: ReactNode; quiet?: boolea
   return <span className={`block truncate text-[12.5px] leading-[18px] ${quiet ? "p-text-3" : "p-text"}`}>{children}</span>;
 }
 
-export function Today({ now, assistant, greeting, own, roster, goals, mail, watching, opened: initiallyOpened = null }: TodayProps) {
+export function Today({ now, greeting, own, roster, goals, mail, watching, opened: initiallyOpened = null }: TodayProps) {
   const [opened, setOpened] = useState<TodayTile | null>(initiallyOpened);
   const [shut, setShut] = useState(false);
   const navigate = useNavigate();
@@ -164,7 +162,7 @@ export function Today({ now, assistant, greeting, own, roster, goals, mail, watc
               <div className="mb-3" data-today-list="mail">
                 <div className="p-group">
                   {mail.items.map((item) => (
-                    <ImportantMailRow key={item.thread} mail={item} assistant={assistant}
+                    <ImportantMailRow key={item.thread} mail={item}
                       onOpen={() => { detach(Effect.promise(async () => navigate(`${MAIL_ROUTE}?thread=${encodeURIComponent(item.thread)}`))); }} />
                   ))}
                 </div>
