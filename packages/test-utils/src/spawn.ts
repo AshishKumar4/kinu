@@ -1,6 +1,7 @@
 import { attempt, KinuError, settle, settleSync, tolerate } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { closeSync, fstatSync, openSync, readFileSync } from 'node:fs';
+import { reportingEnv } from './ambient-env';
 
 /**
  * Whether `pid` is still running. A zombie waiting for its reaper has stopped, though `kill(pid, 0)` still reaches it:
@@ -46,9 +47,10 @@ export function spawnTest<
   Out extends Bun.Spawn.Readable,
   Err extends Bun.Spawn.Readable,
 >(command: readonly string[] | (Bun.Spawn.SpawnOptions<In, Out, Err> & { cmd: string[] }), options?: Bun.Spawn.SpawnOptions<In, Out, Err>): Bun.Subprocess<In, Out, Err> {
-  if ('cmd' in command) return Bun.spawn({ ...command, env: command.env ?? process.env });
+  // A child `bun test` reports every test whoever runs this one (`AGENT_MODE_ENV`).
+  if ('cmd' in command) return Bun.spawn({ ...command, env: reportingEnv(command.env ?? process.env) });
 
-  return Bun.spawn([...command], { ...options, env: options?.env ?? process.env });
+  return Bun.spawn([...command], { ...options, env: reportingEnv(options?.env ?? process.env) });
 }
 
 /** Runs `cmd` to its exit and hands back what it said. */

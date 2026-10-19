@@ -4,6 +4,7 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { AGENT_MODE_ENV } from '../src/ambient-env';
 import { present } from '../src/present';
 import { scratchDir } from '../src/scratch';
 import { killAndAwaitExit, recordedIn, runToExit, spawnTest } from '../src/spawn';
@@ -111,4 +112,22 @@ test('a Bun child creates scratch under the current preload environment, not the
   expect(created.startsWith(current + '/')).toBe(true);
   expect(existsSync(join(created, 'marker'))).toBe(true);
   expect(readdirSync(launch)).toEqual([]);
+});
+
+// Bun takes a caller carrying a coding agent's variable for an agent and prints no `(pass)` line, so a test that reads a
+// child's report read none on an agent's machine and every one on armada (ladder.test.ts, 2026-10-19).
+test('a child bun test reports its passes whoever runs this one: the agent variables never reach it', async () => {
+  const dir = scratchDir('agent-mode');
+  const suite = join(dir, 'one.test.ts');
+
+  writeFileSync(suite, 'import { test } from "bun:test";\ntest("one passes", () => {});\n');
+  const agent = Object.fromEntries(AGENT_MODE_ENV.map((name) => [name, '1']));
+
+  const reports = await Promise.all([undefined, agent].map(async (extra) => {
+    const run = await runToExit([process.execPath, 'test', suite], { cwd: dir, env: { ...process.env, ...extra } });
+
+    return (run.stdout + run.stderr).match(/^\(pass\) one passes/gmu)?.length ?? 0;
+  }));
+
+  expect(reports).toEqual([1, 1]);
 });

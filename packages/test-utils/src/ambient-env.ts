@@ -73,6 +73,24 @@ export function childEnv(overrides: Record<string, string | undefined> = {}): No
   return env;
 }
 
+/**
+ * The variables by which Bun takes its caller for a coding agent: under any of them `bun test` prints its failures and
+ * no `(pass)` line, so whatever reads a child's report reads no passes on an agent's machine and every pass on armada.
+ * Measured on Bun 1.4.3, 2026-10-19: each of the three alone silences them, and Bun offers no variable that undoes it.
+ */
+export const AGENT_MODE_ENV: readonly string[] = ['CLAUDECODE', 'AGENT', 'REPL_ID'];
+
+/** `env` without {@link AGENT_MODE_ENV}: a child `bun test` reports every test, whoever runs its parent. */
+export function reportingEnv(env: Readonly<Record<string, string | undefined>>): NodeJS.ProcessEnv {
+  const kept: NodeJS.ProcessEnv = {};
+
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && !AGENT_MODE_ENV.includes(name)) kept[name] = value;
+  }
+
+  return kept;
+}
+
 /** A plain object as {@link EnvByName}. Presence is the test, never truthiness: `KINU_BASE_URL=` clears. */
 export function envObject(env: Record<string, string | undefined>): EnvByName {
   return {
