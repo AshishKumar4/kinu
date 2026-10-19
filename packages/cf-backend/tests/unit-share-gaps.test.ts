@@ -8,7 +8,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, GallerySlateSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  APP_ROUTES, escapeHtml, GallerySlateSchema, SLATE_QUERY_PARAM, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, LiveShareRecordSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type GalleryCategory, type GallerySlate, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
@@ -272,6 +272,31 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   expect(await after?.text()).not.toContain(`/${CONSENT_PATH}`);
   const requests = answered(await world.owner.agent.slate({ op: 'viewerRequests', share: created.share.id }), v.array(v.looseObject({ viewer: v.string() })));
   expect(requests).toHaveLength(1);
+});
+
+test("live host context. a share's host keeps the context its slate's page was framed with across its ticket and its consent", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  // The context the share's app page frames the slate with: the app's origin, which its page frames its parts from.
+  const kept = new URLSearchParams({ [SLATE_QUERY_PARAM]: JSON.stringify({ origin: APP_ORIGIN, display: 'pane' }) }).toString();
+
+  // A share that names people: its ticket's exchange lands the visitor on the slate's page, framed as it was asked.
+  const named = await sharePublic(world, 'users');
+
+  await world.owner.agent.shareLiveWith(named.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
+  const opened = await jsonBody(present(await openShare(world, { workspace: 'issues-owner', share: named.share.id }, 'pat@example.test'), 'the open answer'), LiveShareOpenSchema);
+  const ticket = await handleSlateShareHostRequest(new Request(`${opened.url}&${kept}`, { headers: { 'cf-connecting-ip': '203.0.113.8' } }), world.env);
+
+  expect(ticket?.headers.get('location')).toBe(`/?${kept}`);
+
+  // A share whose grant asks its visitor's consent first: its page's Continue, and that exchange, keep it too.
+  const open = await sharePublic(world, 'public');
+  const url = await hostOf(world, open.share.handle);
+  const consent = await (present(await visit(world, url, '203.0.113.9', { path: `?${kept}` }), 'the consent page')).text();
+  const continued = `${CONSENT_PATH}&${kept}`;
+
+  expect(consent).toContain(escapeHtml(`/${continued}`));
+  expect((await visit(world, url, '203.0.113.9', { path: continued }))?.headers.get('location')).toBe(`/?${kept}`);
 });
 
 test('a users share link sends each visitor to sign in, then lets in its owner and the people it names as themselves, and no one else', async () => {

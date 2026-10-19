@@ -110,11 +110,11 @@ export class GalleryIndex {
     const where: string[] = [];
     const params: (string | number)[] = [];
 
+    // Its words anywhere in the title or the line, ASCII letters in either case: by `instr`, never a LIKE pattern, which
+    // a Durable Object's SQLite refuses whole past 50 bytes.
     if (query.q !== '') {
-      where.push('(l.title LIKE ? ESCAPE \'\\\' OR l.line LIKE ? ESCAPE \'\\\')');
-      const pattern = `%${query.q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
-
-      params.push(pattern, pattern);
+      where.push('(instr(lower(l.title), lower(?)) > 0 OR instr(lower(l.line), lower(?)) > 0)');
+      params.push(query.q, query.q);
     }
 
     if (query.category !== null) {

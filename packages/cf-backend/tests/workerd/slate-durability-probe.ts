@@ -24,6 +24,7 @@ import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller, parseSlateProject, slateAuthority } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
+import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
@@ -465,6 +466,61 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const approved = await target.approveWaitingEffects();
 
     return { owner, reached, waited, approved, viewer: await page() };
+  }
+
+  /**
+   * A public share on its owner's access whose one acting member is approved: a signed-out visitor's write through the
+   * share's own host (a Cap'n Web batch, as the visitor's page sends it) waits for the owner, who approves it on their
+   * stack; then the same write again. `mark` is where the write lands. What each write answered, and what was written.
+   */
+  async viewerApprovedWrite(input: { workspace: string; owner: string; mark: string }): Promise<{ waited: string; approved: string[]; ran: string; marked: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/effects/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Effects' } }));
+    await this.writeSlateFile(target, '/slates/effects/server.ts', [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      `  async mark() { return await this.env.workspace.writeFile(${JSON.stringify(input.mark)}, "visitor"); }`,
+      '}',
+    ].join('\n'));
+    // A share is cut from what the owner's own calls reached: run the write once, then take the owner's mark back.
+    await target.runProgram('return await workspace.slates.effects.mark();');
+    await target.executeInExecutor('workspace', `rm -f ${input.mark}`);
+    const owned = workspaceOwner(this.env, input.workspace);
+    const write = [{ slate: 'effects', namespace: 'workspace', member: 'writeFile' }];
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'effects', visibility: 'public', approved: write });
+
+    if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
+    const { id, handle } = v.parse(SharedValueSchema, shared.value).share;
+    const graph = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'effects' });
+    const revision = graph.ok ? v.parse(GraphValueSchema, graph.value).revision ?? '' : '';
+    const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision, approved: write });
+
+    if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
+
+    // The visitor's page: a Cap'n Web batch to the share's host, admitted past its consent.
+    const visit = async (): Promise<string> => {
+      const stub = slateBatchStub<{ mark: () => Promise<JsonValue> }>(
+        { request: (request) => target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, request, '/__rpc') }, 'ignored',
+      );
+
+      try {
+        return JSON.stringify(await stub.mark());
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      } finally {
+        stub[Symbol.dispose]();
+      }
+    };
+
+    const waited = await visit();
+    const approved = await target.approveWaitingEffects();
+    const ran = await visit();
+    // Read as the owner's workspace executor reads it, where the first-run row reads it.
+    const marked = JSON.stringify(await target.executeInExecutor('workspace', `cat ${input.mark} 2>&1 || echo NO-MARK`));
+
+    return { waited, approved, ran, marked };
   }
 
   /**

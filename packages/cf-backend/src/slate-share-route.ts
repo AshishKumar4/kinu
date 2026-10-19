@@ -9,7 +9,7 @@
 import {
   objectNamed,
   buildSlateShareHost, liveSharePagePath, parseSlateShareLabel, previewHostSuffix, previewPortSuffix, workspaceAddressRefusal,
-  ingressAdmitted, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
+  ingressAdmitted, keptSlateContext, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
@@ -104,7 +104,10 @@ shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
     return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
   }
 
-  return await viewerCookieResponse(env, { workspace, handle, subject, consent }, '/');
+  const kept = keptSlateContext(url);
+
+  // On to the slate's page, framed as it was asked for.
+  return await viewerCookieResponse(env, { workspace, handle, subject, consent }, kept === '' ? '/' : `/?${kept}`);
 });
 
 

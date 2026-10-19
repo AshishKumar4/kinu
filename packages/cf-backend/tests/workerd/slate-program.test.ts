@@ -71,3 +71,17 @@ it("a share's viewer runs the owner's approved crafted tool only as far as the g
     browsers: null, wrote: { error: expect.stringMatching(/does not (grant|reach) workspace\.writeFile/u) }, read: 'owner',
   });
 });
+
+it("a visitor's write on its owner's access runs once the owner approves it, and answers the visitor what it did", async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('viewer-approved-write'));
+
+  const ran = await subject.viewerApprovedWrite({ workspace: 'viewer-approved-write', owner: 'effects-owner', mark: 'effects-mark.txt' });
+
+  // Its first write waits; the owner approves it on their stack; the same write then runs once, as the real workspace
+  // dispatches it, and the visitor's page is answered what it wrote.
+  expect(ran.waited).toContain('waits for the owner to approve it: writeFile on workspace');
+  expect(ran.approved).toHaveLength(1);
+  expect(ran.ran).toBe(JSON.stringify('Written 7 bytes to effects-mark.txt'));
+  expect(ran.marked).toContain('visitor');
+});
+

@@ -9,6 +9,7 @@ import { Effect } from 'effect';
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
 import { detach } from '@kinu.run/core/obs';
+import { SLATE_QUERY_PARAM } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
@@ -296,6 +297,13 @@ describe("a slate's personal parts", () => {
         try {
           await page.waitForSelector('[data-shared-slate="team-board"]', SOON);
           expect(await page.$eval('[data-shared-title]', (node) => node.textContent)).toBe('Team board');
+
+          // The slate's page is framed with its host context, as the owner's previews frame it: the app's origin its page
+          // frames its parts from, and this page's theme.
+          const framed = new URL(await page.$eval('[data-shared-slate="team-board"]', (node) => node.getAttribute('src') ?? ''));
+          const context: unknown = JSON.parse(framed.searchParams.get(SLATE_QUERY_PARAM) ?? 'null');
+
+          expect(context).toMatchObject({ origin: new URL(page.url()).origin, theme, display: 'pane' });
 
           // The visitor allows their own GitHub at the share's page, and sees their part.
           const standup = await partFrame(page, 'standup');

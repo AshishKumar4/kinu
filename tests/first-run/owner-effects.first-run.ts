@@ -22,7 +22,7 @@ const DEFECT: FirstRunDefect = {
   missedBecause: 'Approving a member at share time was the only approval: the grant admitted the member, and nothing asked the owner about the call a stranger made with it.',
   provedRedAt: null,
   redDirection: 'RED on every deployment before share modes: POST /api/shared/live/mode answers 404, so the share stays on each viewer\'s own access and the write is refused for that instead of waiting. '
-    + 'Green requires the write to be refused as waiting for the owner, one parked action naming this share, the write to run once on its approval and leave its mark in the owner\'s tree, and the same write made again to wait again.',
+    + 'Green requires the write to be refused as waiting for the owner, one parked action naming this slate\'s server and its visitor, the write to run once on its approval and leave its mark in the owner\'s tree, and the same write made again to wait again.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'effects');
@@ -39,7 +39,9 @@ const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.n
 
 const SLATE = 'effectshare';
 
-const MARK = `/slates/${SLATE}/mark`;
+// Outside the slate's own tree: a slate's write into its own files is an edit of its code, which releases its process
+// under the very call that made it.
+const MARK = `${SLATE}-mark.txt`;
 
 const WRITE = { slate: SLATE, namespace: 'workspace', member: 'writeFile' };
 
@@ -86,8 +88,15 @@ END`));
         const marked = async () => v.parse(Exec, await session.execute('workspace', `cat ${MARK} 2>&1 || echo EFFECTS-NO-MARK`)).stdout ?? '';
         const asked = await write();
         const markBefore = await marked();
-        // The owner's decision stack, as the Work tab lists it: the asks this share made.
-        const parked = (await session.parkedCommands()).filter((row) => row.executor === `share:${share ?? ''}` && row.status === 'queued');
+
+        // The owner's decision stack, as the Work tab lists it: the asks this slate's server made, read as the Work tab reads
+        // them (one shared slate's server is one principal, so its asks are its slate's, whichever share they came through).
+        const parked = (await session.parkedCommands()).filter((row) => {
+          const kind = approvalKindOf({ command: row.command, executor: row.executor });
+
+          return row.status === 'queued' && kind.kind === 'slate-effect' && kind.effect.slate === SLATE;
+        });
+
         const decided = parked.length === 1 ? await session.decideParkedCommands(parked.map((row) => row.id), 'approved') : [];
         const ran = await write();
         const markAfter = await marked();

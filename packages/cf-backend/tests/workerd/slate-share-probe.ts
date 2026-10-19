@@ -20,7 +20,7 @@ import {
   type ActorHandle, MissionGovernor, provisionAgentHome, settleSharedRoots, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
-import { initSlateLiveShareTables, preapproveSlateEffect, slateDirectory } from '@kinu.run/core/slates';
+import { GalleryIndex, initGalleryTables, initSlateLiveShareTables, preapproveSlateEffect, slateDirectory } from '@kinu.run/core/slates';
 import { SlateHost, type SlateDispatchContext } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCallFrom, type SlateCaller, type SlateConsent, type SlateLineage } from '@kinu.run/core/slates';
@@ -956,7 +956,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
    * call it makes after is answered as the host answers it then.
    */
   async viewerAfterLastRevoke(handle: string, claim: ShareViewerClaim, share: string): Promise<SlateSurfaceResult> {
-    const admitted = await this.host.admitViewerRequest({ handle, claim, pathname: '/' });
+    const admitted = await this.host.admitViewerRequest({ handle, claim, pathname: '/', context: '' });
 
     if (admitted instanceof Response) throw new Error(`not admitted: ${admitted.status}`);
     this.host.controller.live.revoke(share);
@@ -1042,6 +1042,26 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   async requests(share: string): Promise<SlateCallResult> {
     return this.host.controller.operation(ROOT_SLATE_CALLER, { op: 'viewerRequests', share });
+  }
+
+  /**
+   * The Gallery's index in this object's own SQLite, as the control plane keeps it, holding one listing whose line is
+   * `line`: what a search for `q` finds, or its failure in its own words.
+   */
+  gallerySearch(line: string, q: string): { found: string[] } | { failed: string } {
+    initGalleryTables((ddl) => { this.ctx.storage.sql.exec(ddl); });
+    const index = new GalleryIndex(this.ctx.storage.sql);
+
+    index.sync({
+      share: 's1', workspace: 'probe', slate: 'board', handle: 'h1', listed: true, url: 'https://app.test/shared/live/probe/s1',
+      card: { title: 'Board', line, category: 'work', ownerName: 'Sam', picture: null },
+    }, 1);
+
+    try {
+      return { found: index.page({ q, sort: 'new', category: null, page: 0 }, null, 2).listings.map((listing) => listing.line) };
+    } catch (cause) {
+      return { failed: cause instanceof Error ? cause.message : String(cause) };
+    }
   }
 
   async revoke(share: string): Promise<SlateCallResult> {
