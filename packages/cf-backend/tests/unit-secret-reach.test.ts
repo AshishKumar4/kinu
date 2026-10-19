@@ -20,7 +20,7 @@ import { AccountReads } from '../src/account-reads';
 import { revealedForJob } from '../src/egress/send-out';
 import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV } from './helpers/user-do';
 import { sandboxHandleLifecycle } from '../../core/tests/helpers/sandbox-handle-lifecycle';
-import { hostedExplorationHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedExplorationHarness, hostedMainActor, orchestratorHarness } from './helpers/actor-harness';
 import { createTestRuntime } from '../../core/tests/helpers';
 
 const AUTHORIZATION = { kind: 'authorization' } as const;
@@ -243,8 +243,9 @@ describe("a viewer never reaches the owner's computer", () => {
   test('viewer dispatch refuses the computer on the workspace actor and on a hosted hop, while the owner still executes', async () => {
     const workspace = orchestratorHarness();
     const { actor } = await hostedExplorationHarness(workspace, 'shared-helper', { kind: 'head' });
+    const main = await hostedMainActor(workspace);
     const box = computer(async () => ({}));
-    present(workspace.agent.observeRuntime().executionRouter, 'workspace executors').register(box.provider);
+    present(main.actor.runtime.executionRouter, 'workspace executors').register(box.provider);
     present(actor.runtime.executionRouter, 'hosted executors').register(box.provider);
 
     for (const hops of [[], [{ name: actor.record.name }]]) {
