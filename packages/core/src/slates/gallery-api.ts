@@ -24,6 +24,8 @@ const GalleryListingSchema = v.object({
   owner: v.object({ name: v.string() }),
   stars: v.number(),
   starred: v.boolean(),
+  /** How many people signed in have opened it, as its workspace last said: refreshed by its listing sync, at most hourly. */
+  viewers: v.number(),
   listedAt: v.number(),
   /** Its picture's digest, taken from a fresh visit, once there is one: {@link galleryPicturePath}. */
   picture: v.optional(v.string()),

@@ -61,6 +61,8 @@ const GalleryCardSchema = v.object({
   ownerName: v.string(),
   /** The digest of the picture the workspace last took of the shared page, once there is one. */
   picture: v.nullable(v.string()),
+  /** Its share's distinct signed-in viewers as the workspace counts them now (`slate_share_views`): the Gallery's copy. */
+  viewers: v.number(),
 });
 
 export type GalleryCard = v.InferOutput<typeof GalleryCardSchema>;

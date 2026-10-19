@@ -29,7 +29,7 @@ export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps, type BlueprintReadin
 
 export type { DurableAppIdentity, DurableApps } from './durable-app';
 
-export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
+export { SIGNED_OUT_VIEWER, SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 
 export { confinedTo } from './scoped-reader';
 
