@@ -142,21 +142,10 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'config', name: 'setConfig', run: (u, c) => u.setConfig(c, 'default_model', 'x') },
   { capability: 'profile.resolve', name: 'getWorkspaceProfileCatalog', run: (u, c) => u.getWorkspaceProfileCatalog(c) },
 
-  { capability: 'auth_tokens', name: 'mintCliToken', run: (u, c) => u.mintCliToken(c, USER_ID, TOKEN_HASH) },
   { capability: 'auth_tokens', name: 'verifyCliToken', run: (u, c) => u.verifyCliToken(c, `ptc_${USER_ID}_${'x'.repeat(44)}`) },
   { capability: 'auth_tokens', name: 'listCliTokens', run: (u, c) => u.listCliTokens(c) },
-  { capability: 'auth_tokens', name: 'revokeCliTokenHash', run: (u, c) => u.revokeCliTokenHash(c, TOKEN_HASH) },
-  { capability: 'auth_tokens', name: 'mintAccessToken', run: (u, c) => u.mintAccessToken(c, USER_ID, 'ci', ['workspace.read']) },
   { capability: 'auth_tokens', name: 'verifyAccessToken', run: (u, c) => u.verifyAccessToken(c, `pta_${USER_ID}_${'x'.repeat(44)}`) },
   { capability: 'auth_tokens', name: 'listAccessTokens', run: (u, c) => u.listAccessTokens(c) },
-  { capability: 'auth_tokens', name: 'revokeAccessToken', run: (u, c) => u.revokeAccessToken(c, 'ci') },
-  {
-    capability: 'auth_tokens',
-    name: 'issueCliAgentConnectTicket',
-    run: (u, c) => u.issueCliAgentConnectTicket(c, {
-      userId: USER_ID, agentName: WORKSPACE, cliTokenHash: TOKEN_HASH,
-    }),
-  },
   {
     capability: 'auth_tokens',
     name: 'verifyCliAgentConnectTicket',
@@ -164,15 +153,7 @@ const GATED_CALLS: GatedCall[] = [
       userId: USER_ID, agentName: WORKSPACE,
     }),
   },
-  {
-    capability: 'auth_tokens',
-    name: 'registerBrowserSession',
-    run: (u, c) => u.registerBrowserSession(c, TOKEN_HASH, Date.now() + 60_000, {
-      email: 'person@example.com', displayName: null, provider: 'cloudflare', sub: 'cf-1', authTime: Date.now(),
-    }),
-  },
   { capability: 'auth_tokens', name: 'verifyBrowserSession', run: (u, c) => u.verifyBrowserSession(c, TOKEN_HASH) },
-  { capability: 'auth_tokens', name: 'revokeBrowserSession', run: (u, c) => u.revokeBrowserSession(c, TOKEN_HASH) },
   // Refusing a workspace's own revocation check would make revocation unenforceable on its CLI sockets.
   {
     capability: 'auth_tokens.socket',
@@ -185,8 +166,6 @@ const GATED_CALLS: GatedCall[] = [
     name: 'verifySocketSession',
     run: (u, c) => u.verifySocketSession(c, TOKEN_HASH),
   },
-  { capability: 'auth_tokens', name: 'revokeAllCliTokens', run: (u, c) => u.revokeAllCliTokens(c) },
-  { capability: 'auth_tokens', name: 'raiseCredentialFloor', run: (u, c) => u.raiseCredentialFloor(c, 1) },
   {
     capability: 'credentials.model',
     name: 'getCredentialsRevision',
@@ -214,6 +193,28 @@ interface OwnerOnlyCall {
  * device consent are `owner_only` capabilities refused before any method runs.
  */
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
+  // A CLI bearer, a CI token, a browser session and an agent-connect ticket each carry the whole account's authority: a
+  // workspace that could mint one would hold every sibling. Revoking them is the owner's too: a workspace could lock
+  // its owner out.
+  { capability: 'auth_tokens.mint', name: 'mintCliToken', run: (u, c) => u.mintCliToken(c, USER_ID, TOKEN_HASH) },
+  { name: 'mintAccessToken', run: (u, c) => u.mintAccessToken(c, USER_ID, 'ci', ['workspace.read']) },
+  {
+    name: 'issueCliAgentConnectTicket',
+    run: (u, c) => u.issueCliAgentConnectTicket(c, {
+      userId: USER_ID, agentName: WORKSPACE, cliTokenHash: TOKEN_HASH,
+    }),
+  },
+  {
+    name: 'registerBrowserSession',
+    run: (u, c) => u.registerBrowserSession(c, TOKEN_HASH, Date.now() + 60_000, {
+      email: 'person@example.com', displayName: null, provider: 'cloudflare', sub: 'cf-1', authTime: Date.now(),
+    }),
+  },
+  { capability: 'auth_tokens.revoke', name: 'revokeCliTokenHash', run: (u, c) => u.revokeCliTokenHash(c, TOKEN_HASH) },
+  { name: 'revokeAccessToken', run: (u, c) => u.revokeAccessToken(c, 'ci') },
+  { name: 'revokeBrowserSession', run: (u, c) => u.revokeBrowserSession(c, TOKEN_HASH) },
+  { name: 'revokeAllCliTokens', run: (u, c) => u.revokeAllCliTokens(c) },
+  { name: 'raiseCredentialFloor', run: (u, c) => u.raiseCredentialFloor(c, 1) },
   // A workspace that could add or grant a secret would grant itself the owner's keys; only the egress opens one.
   { capability: 'secrets.manage', name: 'listSecrets', run: (u, c) => u.listSecrets(c) },
   { name: 'putSecrets', run: (u, c) => u.putSecrets(c, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], value: 'sk_live_probe_value' }], []) },
@@ -372,7 +373,7 @@ describe('a registered workspace reaches the whole surface', () => {
     expect(kept).toContain('experience.read:searchExperience');
     expect(kept).toContain('experience.write:publishExperience');
     expect(kept).toContain('profile:getProfile');
-    expect(kept).toContain('auth_tokens:mintCliToken');
+    expect(kept).toContain('auth_tokens:verifyCliToken');
     expect(kept).toContain('credentials.model:getAuthHeaders(codex.oauth)');
     harness.close();
   });

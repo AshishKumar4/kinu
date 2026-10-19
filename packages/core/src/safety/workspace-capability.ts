@@ -62,8 +62,13 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'builtin_accounts': 'owner_only',
   'profile.resolve': 'workspace',
   'config': 'workspace',
-  /** CLI bearer tokens, CI access tokens, websocket tickets. Minting one is account takeover. */
+  /** Verifying a CLI bearer, a CI access token or a socket ticket, and listing them: none is minted or ended here. */
   'auth_tokens': 'workspace',
+  /** Minting a CLI bearer, a CI access token, a browser session or an agent-connect ticket. Owner-only: each carries the
+   *  whole account's authority, so a workspace that could mint one would hold every sibling. */
+  'auth_tokens.mint': 'owner_only',
+  /** Revoking sessions and tokens, or raising the credential floor. Owner-only: a workspace could lock its owner out. */
+  'auth_tokens.revoke': 'owner_only',
   /** Whether a bearer that authenticated a socket on this workspace may still act; names no token, mints nothing. */
   'auth_tokens.socket': 'workspace',
   /** Signing in to a subscription provider (ChatGPT, Claude). */
