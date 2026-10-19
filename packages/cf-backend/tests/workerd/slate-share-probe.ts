@@ -956,7 +956,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
    * call it makes after is answered as the host answers it then.
    */
   async viewerAfterLastRevoke(handle: string, claim: ShareViewerClaim, share: string): Promise<SlateSurfaceResult> {
-    const admitted = await this.host.admitViewerRequest({ handle, claim, pathname: '/' });
+    const admitted = await this.host.admitViewerRequest({ handle, claim, pathname: '/', context: '' });
 
     if (admitted instanceof Response) throw new Error(`not admitted: ${admitted.status}`);
     this.host.controller.live.revoke(share);

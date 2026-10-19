@@ -76,15 +76,23 @@ function refusedRun(part: string): Response {
   return Response.json({ kind: "failed", message: "Team board's code failed: digest is not a function." } satisfies PartRunAnswer);
 }
 
+/** The slate's page, as the share's host serves it (`?frame=shared-slate-page`), at an address of the gallery's own. */
+export const SHARED_SLATE_PAGE = "shared-slate-page";
+
+/** The slate's page as a whole document, for `SHARED_SLATE_PAGE`. */
+export function sharedSlateDocument(): string {
+  return slatePage(location.origin + location.pathname);
+}
+
 /**
  * The share's entry (`LIVE_SHARE_OPEN_PATH`): the slate's page as its host serves it, at an address of the page's own
- * origin. A share that names people answers no one signed out.
+ * origin, which the share's page frames with its host context as a host's address is. A share that names people answers
+ * no one signed out.
  */
 function openedShare(frame: string): Response {
   if (frame === "shared-live-signed-out") return Response.json({ error: "Sign in to open this share" }, { status: 401 });
-  const page = URL.createObjectURL(new Blob([slatePage(location.origin + location.pathname)], { type: "text/html" }));
 
-  return Response.json({ url: page, slate: SLATE, title: TITLE });
+  return Response.json({ url: `${location.origin}${location.pathname}?frame=${SHARED_SLATE_PAGE}`, slate: SLATE, title: TITLE });
 }
 
 /** The part routes, answered at the top as the server answers its one viewer. */

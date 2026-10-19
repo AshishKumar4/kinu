@@ -7,25 +7,33 @@
  * site, so the ticket's cookie reaches it inside the frame.
  */
 import { showing, detach } from "@kinu.run/core/obs";
-import type { LiveShareOpen } from "@kinu.run/core";
+import { slateFrameSrc, type LiveShareOpen } from "@kinu.run/core";
 import { Effect } from "effect";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
+import { useSlateHostContext } from "@/components/slates/InlineSlate";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { usePartHost } from "@/hooks/use-part-host";
 import { openLiveShare } from "@/lib/shared-api";
 import { signInAndReturn } from "@/lib/sign-in";
 
-/** The share's slate, framed, and the parts it hosts; a decision opens over it. */
+/**
+ * The share's slate, framed with its host context as the owner's previews frame it, so its page knows the app it answers
+ * to and frames its parts from; and the parts it hosts, a decision opening over it.
+ */
 function SharedSlate({ workspace, opened }: { workspace: string; opened: LiveShareOpen }) {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const decision = usePartHost({ workspace, slate: opened.slate, title: opened.title, slateFrame: frame });
+  const context = useSlateHostContext("pane", "window" in globalThis ? window.innerWidth : 0);
+  const contextRef = useRef(context);
+  // A snapshot, as the previews' is: a theme flip after it never reloads the slate.
+  const src = useMemo(() => slateFrameSrc(opened.url, contextRef.current), [opened.url]);
 
   return (
     <>
-      <iframe ref={frame} src={opened.url} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
+      <iframe ref={frame} src={src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
       {decision}
     </>
   );

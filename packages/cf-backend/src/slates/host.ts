@@ -10,7 +10,7 @@ import {
   ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, slateAddressImpact, SLATE_DRIVEN_MEMBERS,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
-  escapeHtml, publicPage, VIEWER_EXCHANGE_PATH,
+  escapeHtml, keptSlateContext, publicPage, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
   type SlateFileChange, type SlateOperation,
@@ -196,6 +196,8 @@ export class SlateHost {
     readonly handle: string;
     readonly claim: ShareViewerClaim;
     readonly pathname: string;
+    /** The host context its page was framed with, kept across the consent it may be asked first (`keptSlateContext`). */
+    readonly context: string;
   }): Promise<ViewerAdmitted | Response> {
     const admission = await this.controller.viewers.admit(input);
     const headers = { 'cache-control': 'no-store' };
@@ -204,7 +206,7 @@ export class SlateHost {
       case 'missing': return new Response('Not found', { status: 404, headers });
       case 'sign-in': return new Response(null, { status: 303, headers: { location: admission.entry, ...headers } });
       case 'too-many': return new Response('Too many requests', { status: 429, headers });
-      case 'consent': return await this.consentPage(admission.share, admission.namespaces);
+      case 'consent': return await this.consentPage(admission.share, admission.namespaces, input.context);
       case 'admitted': {
         const { caller, share, viewer } = admission;
         const invocation = crypto.randomUUID();
@@ -218,7 +220,7 @@ export class SlateHost {
   }
 
   /** What the grant reaches of the owner's, disclosed before anything of theirs runs. */
-  private async consentPage(share: LiveShareRecord, namespaces: readonly string[]): Promise<Response> {
+  private async consentPage(share: LiveShareRecord, namespaces: readonly string[], context: string): Promise<Response> {
     const project = await this.controller.project(CRED_SESSION_USER, share.slate);
     const owner = (await this.deps.ownerTitle?.()) ?? this.deps.workspace;
     const title = slateTitle(project, share.slate);
@@ -231,7 +233,7 @@ export class SlateHost {
 <p class="dim">This slate runs in ${escapeHtml(owner)}'s workspace and calls these connections with their credentials:</p>
 <ul>${reached}</ul>
 <p class="dim">What you do here runs as ${escapeHtml(owner)} and is logged for them.</p>
-<a class="btn solid" href="${VIEWER_EXCHANGE_PATH}?consent=1">Continue</a>
+<a class="btn solid" href="${escapeHtml(`${VIEWER_EXCHANGE_PATH}?consent=1${context === '' ? '' : `&${context}`}`)}">Continue</a>
 </section></main>`,
     });
 
@@ -244,7 +246,7 @@ export class SlateHost {
     request: Request,
     pathname: string,
   ): Promise<Response> {
-    const admission = await this.admitViewerRequest({ handle, claim, pathname });
+    const admission = await this.admitViewerRequest({ handle, claim, pathname, context: keptSlateContext(new URL(request.url)) });
 
     if (admission instanceof Response) return admission;
 

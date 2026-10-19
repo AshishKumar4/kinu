@@ -351,9 +351,9 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateSt
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
-  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateLinkId,
+  buildSlateHostContext, isSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
-  SlateFrameMessageSchema,
+  SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
 export {
