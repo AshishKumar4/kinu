@@ -1,6 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
-import type { ModelMessage, UIMessage } from 'ai';
+import type { ModelMessage } from 'ai';
 import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
@@ -24,7 +24,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, type Repair } from '@kinu.run/core';
-import type { MediaRef, MediaUrl, StoredImage } from '@kinu.run/core';
+import type { ChatWindow, MediaRef, MediaUrl, StoredImage } from '@kinu.run/core';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
@@ -491,7 +491,7 @@ export class AgentDatabase {
   }
 
   /** What a tab is sent of this chat as it connects or a turn ends: its newest page. */
-  async seed(): Promise<UIMessage[]> {
+  async seed(): Promise<ChatWindow> {
     return await chatSeed(this.readable().transcript, this.mediaUrl());
   }
 

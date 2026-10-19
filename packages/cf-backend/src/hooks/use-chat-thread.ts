@@ -1,6 +1,6 @@
 /** Staged derivation: a streamed token re-folds only the live window. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EMPTY_TRANSCRIPT_FOLD, extendTranscript, restoredRows, sealTranscript, type ChatHistoryEntry, type InlineSteer, type PositionPageRequest, type Transcript } from "@kinu.run/core";
+import { EMPTY_TRANSCRIPT_FOLD, extendTranscript, restoredRows, sealTranscript, type ChatHistoryEntry, type InlineSteer, type PositionCursor, type PositionPageRequest, type Transcript } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 
 import { MAX_PAGE, useHistoryPages, type HistorySegment } from "@/hooks/use-paged-scroll";
@@ -38,6 +38,13 @@ export interface ChatThread {
 
 const NO_IDS: ReadonlySet<string> = new Set();
 
+/** Where a window the room sent reads on from: `from` is its first row, `older` the cursor of the rows before it, null
+ *  when it reaches the chat's start. */
+export interface SeedEdge {
+  readonly from: string;
+  readonly older: PositionCursor | null;
+}
+
 /** Hoisted: a `= []` default mints a new array per render and breaks the thread memo. */
 const NO_STEER_RUNS: readonly InlineSteer[] = [];
 
@@ -46,6 +53,9 @@ interface ChatThreadInput {
   readonly live: readonly UIMessage[];
   /** A delivered empty list still starts the walk; only the store can say the conversation is empty. */
   readonly seeded: boolean;
+  /** The newest window's start, as the room sent it. Scroll-back continues from the row shown first, by its window's
+   *  cursor: never a page overlapping the rows already shown, and none at all when they reach the chat's start. */
+  readonly seedEdge?: SeedEdge | null;
   readonly steerRuns?: readonly InlineSteer[];
   /** Omitted: workspace pane. String: actor pane. Null: actor not known yet, so the walk waits. */
   readonly actor?: string | null;
@@ -72,17 +82,19 @@ function slideWindow(prev: Slide, next: readonly UIMessage[]): Slide {
   return { live: next, slid: NO_MESSAGES, gaps: prev.gaps + 1 };
 }
 
-/** At least one row, so it can be asked for. */
-function liveGap(segments: readonly HistorySegment[], total: number | undefined, live: number): ReserveRange | null {
+/** At least one row, so it can be asked for. `liveStart`: where the shown rows begin, when their window said. */
+function liveGap(segments: readonly HistorySegment[], total: number | undefined, live: number, liveStart: number | undefined): ReserveRange | null {
   const last = segments.at(-1);
 
   if (last === undefined || last.end === Infinity) return null;
+
+  if (liveStart !== undefined) return last.end < liveStart ? { start: last.end, end: liveStart } : null;
 
   return { start: last.end, end: Math.max(last.end + 1, (total ?? 0) - live) };
 }
 
 export function useChatThread({
-  rpc, live: frame, seeded, steerRuns = NO_STEER_RUNS, actor, total,
+  rpc, live: frame, seeded, seedEdge = null, steerRuns = NO_STEER_RUNS, actor, total,
 }: ChatThreadInput): ChatThread {
   const [slide, setSlide] = useState<Slide>(() => ({ live: frame, slid: NO_MESSAGES, gaps: 0 }));
   const current = slideWindow(slide, frame);
@@ -108,15 +120,25 @@ export function useChatThread({
     if (current.gaps > 0) reset();
   }, [current.gaps, reset]);
 
+  // Each window's start, kept: the rows shown first may be an earlier window's, slid up as newer ones came.
+  const edges = useRef(new Map<string, PositionCursor | null>());
+
+  if (seedEdge !== null) edges.current.set(seedEdge.from, seedEdge.older);
+  // Undefined while the window shown first has not said where it starts.
+  const older = live.length === 0 ? undefined : edges.current.get(live[0]?.id ?? "");
+  const liveStart = older === undefined ? undefined : older?.before ?? 0;
+
   const startable = actor !== null && (live.length > 0 || seeded);
-  const liveEdge = liveGap(segments, total, live.length)?.end;
+  const liveEdge = liveGap(segments, total, live.length, liveStart)?.end;
 
-  // Overlaps the live rows, so asked a live window larger.
+  // The first page back: from where the rows shown begin. With none shown it is the newest; with rows whose start is not
+  // said yet, it waits for it; with rows that reach the chat's start, there is none.
   const readNewest = useCallback((urgent: boolean) => {
-    const size = Math.min(MAX_PAGE, sizeFor(urgent) + live.length);
+    const size = Math.min(MAX_PAGE, sizeFor(urgent));
 
-    load(size, { limit: size });
-  }, [load, sizeFor, live.length]);
+    if (live.length === 0) load(size, { limit: size });
+    else if (older !== undefined && older !== null) load(size, { cursor: older, limit: size });
+  }, [load, sizeFor, live.length, older]);
 
   const loadMore = useCallback((urgent = false) => {
     if (!startable || busy() || pages.error !== null) return;
@@ -210,6 +232,7 @@ export function useChatThread({
     let top: ReserveRange | null = null;
 
     if (first !== undefined) top = first.start > 0 ? { start: 0, end: first.start } : null;
+    else if (liveStart !== undefined) top = liveStart > 0 ? { start: 0, end: liveStart } : null;
     else if (total !== undefined && total > live.length) top = { start: 0, end: total - live.length };
 
     const gaps: ReserveRange[] = [];
@@ -221,7 +244,7 @@ export function useChatThread({
       if (above !== undefined && below !== undefined) gaps.push({ start: above.end, end: below.start });
     }
 
-    const toLive = liveGap(segments, total, live.length);
+    const toLive = liveGap(segments, total, live.length, liveStart);
 
     if (toLive !== null) gaps.push(toLive);
     const before = new Map<string, ReserveRange>();
@@ -239,10 +262,10 @@ export function useChatThread({
     }
 
     return { top, before, tail: gaps[next] ?? null };
-  }, [segments, total, live.length, thread.entries, positions]);
+  }, [segments, total, live.length, liveStart, thread.entries, positions]);
 
   const history: ChatHistory = {
-    entries, loading: pages.loading, error: pages.error, exhausted: pages.exhausted,
+    entries, loading: pages.loading, error: pages.error, exhausted: pages.exhausted || (segments.length === 0 && older === null),
     errorRange: pages.error === null ? null : reading.current,
     loadMore, read, retry: pages.retry, reset,
   };

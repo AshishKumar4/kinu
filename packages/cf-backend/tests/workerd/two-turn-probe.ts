@@ -649,13 +649,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   /** Main's answers as its window reads them, from its own isolate. */
   private async assistantTexts(): Promise<string[]> {
-    return (await this.chatTransport.wire.seed()).flatMap((message) => (message.role === 'assistant'
+    return (await this.chatTransport.wire.seed()).messages.flatMap((message) => (message.role === 'assistant'
       ? [message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('')]
       : []));
   }
 
   private async conversationRows(): Promise<ParityRows['assistantMessages']> {
-    return (await this.chatTransport.wire.seed()).map((message, position) => ({
+    return (await this.chatTransport.wire.seed()).messages.map((message, position) => ({
       id: message.id, position, role: message.role, content: JSON.stringify(message),
     }));
   }

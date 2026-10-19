@@ -447,7 +447,7 @@ function SubordinateChatColumn({
   useEffect(() => () => { showPlanWindow(null); }, [showPlanWindow]);
 
   const chat = useChatThread({
-    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded,
+    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, seedEdge: state.seedEdge,
     steerRuns: state.steerRuns, actor: state.paneActorId,
   });
 
@@ -695,7 +695,7 @@ function OpenWorkspace({ onGone }: { onGone: (workspace: string) => void }) {
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
   const chat = useChatThread({
-    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
+    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, seedEdge: state.seedEdge, steerRuns: state.steerRuns,
     total: state.actorSnapshot?.messageCount,
   });
 

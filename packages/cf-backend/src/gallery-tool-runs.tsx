@@ -154,6 +154,6 @@ export function seedToolRuns(transcript: string | null): void {
     if (asked?.success !== true) return;
     const { agent } = asked.output;
 
-    galleryChatWindow(agent === undefined ? "" : hostedActorSocketPath(agent), [...THREAD, ASKED, liveTurn(asked.output)]);
+    galleryChatWindow(agent === undefined ? "" : hostedActorSocketPath(agent), [...THREAD, ASKED, liveTurn(asked.output)], null);
   });
 }

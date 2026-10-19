@@ -14,7 +14,7 @@ import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { TurnClaimFrameSchema } from '@kinu.run/core';
+import { ChatHistoryEntrySchema, rowText, TurnClaimFrameSchema } from '@kinu.run/core';
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
@@ -1306,8 +1306,11 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
     }
 
     await waitOn(page, 'the history page response', settledAfter(page, reads, HISTORY_PAGE_METHOD));
-    await until(page, 'the older messages to render', `${CHAT_ROWS} > ${String(rows)}`);
-    await settled(page, SCROLL_METRICS, { scroller: CHAT_SCROLLER });
+    // Read once the pane is still: a page that brought nothing older fails here, by name, rather than waiting on rows.
+    await settled(page, `String(${CHAT_ROWS}) + ':' + ${SCROLL_METRICS}`, { scroller: CHAT_SCROLLER });
+    const after = v.parse(v.number(), await page.evaluate(CHAT_ROWS));
+
+    if (after <= rows) throw new Error(`the history page came back, but no older messages rendered: ${String(rows)} rows before it, ${String(after)} after`);
 
     return true;
   };
@@ -1500,7 +1503,7 @@ interface SlateUiVerdict {
   };
 }
 
-const HistoryEntriesSchema = v.object({ items: v.array(v.object({ id: v.string(), role: v.string(), content: v.string() })) });
+const HistoryEntriesSchema = v.object({ items: v.array(ChatHistoryEntrySchema) });
 
 /** What a preview of `id` answered: `ok`, or the refusal's reason. */
 async function previewAnswer(socket: ReturnType<typeof openPublicSocket>, id: string): Promise<string> {
@@ -1519,8 +1522,8 @@ async function forgedBlocks(page: Page, origin: string, workspace: string): Prom
     await socket.chat(SLATE_UI_FORGED);
     await until(page, 'the forged message in the chat', `(document.querySelector('#chat')?.textContent ?? '').includes('slate-ui name="forged"') && !(${STOP_OFFERED})`);
     const { items } = v.parse(HistoryEntriesSchema, await socket.rpc('getChatHistoryPage', [{}]));
-    const sent = items.find((item) => item.role === 'user' && item.content.includes('name="forged"'))?.id ?? 'none';
-    const answer = items.find((item) => item.role === 'assistant' && item.content.includes('<slate-ui name="first">'))?.id ?? 'none';
+    const sent = items.find((item) => item.role === 'user' && rowText(item).includes('name="forged"'))?.id ?? 'none';
+    const answer = items.find((item) => item.role === 'assistant' && rowText(item).includes('<slate-ui name="first">'))?.id ?? 'none';
 
     return {
       drawn: await page.$$eval('[data-slate-ui]', (found) => found.map((card) => card.getAttribute('data-slate-ui') ?? '')),

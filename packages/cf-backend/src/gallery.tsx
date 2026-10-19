@@ -120,7 +120,7 @@ import type { ModelTestResult, UserDevice } from "@/lib/user-api";
 import { ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
 import { McpServerSummarySchema, type McpServerSummary } from "@kinu.run/core";
 import * as v from "valibot";
-import { galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryChatStartsAt, galleryChatWindow, galleryClearChat, galleryServerPush, seedGalleryChat, seededGalleryChatRows, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -2859,8 +2859,13 @@ window.addEventListener("gallery:live-window", (event: Event) => {
     return index === asked.edited ? { ...row, parts: row.parts.map((part) => (typeof part.text === "string" ? { ...part, text: `${part.text} Edited live.` } : part)) } : row;
   });
 
-  galleryChatWindow("", restoredRows(entries));
+  const first = asked.rows[0];
+
+  galleryChatWindow("", restoredRows(entries), first !== undefined && first > 0 ? { before: first } : null);
 });
+
+// The seeded rows follow the stored ones.
+if (HISTORY_ROWS > 0) galleryChatStartsAt("", { before: HISTORY_ROWS });
 
 /** A stored row as the page reader draws a text-only one: its words as its one part. */
 const textEntry = ({ content, ...entry }: Omit<ChatHistoryEntry, "parts"> & { readonly content: string }): ChatHistoryEntry => ({ ...entry, parts: [{ type: "text", text: content }] });
@@ -4907,7 +4912,9 @@ function ChatHistoryFrame() {
     return yield* Effect.promise(() => rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>());
   })), []);
 
-  const { history, transcript } = useChatThread({ rpc: workspaceRpc(rpc), live, seeded: true });
+  // The live rows follow the stored ones, as the room's window says of its own.
+  const seedEdge = useMemo(() => (live[0] === undefined ? null : { from: live[0].id, older: { before: STORED_HISTORY.length } }), [live]);
+  const { history, transcript } = useChatThread({ rpc: workspaceRpc(rpc), live, seeded: true, seedEdge });
 
   const messagesRef = useGrowingScroll({
     grows: "up", content: transcript, fetched: history.entries, loading: history.loading,
