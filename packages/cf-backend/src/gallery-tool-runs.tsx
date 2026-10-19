@@ -4,12 +4,13 @@
  * test run mid-way and a helper hired for the routes, and a run split by a preview it started and by a question for the
  * owner. `gallery:tool-run` with `{ calls, failAt?, answer?, agent? }` shows `agent`'s chat (the
  * workspace's by default) with a newest turn of that many calls, the newest running unless the answer has started; a
- * test drives the run through its states with it, against the claim it pushes.
+ * test drives the run through its states with it, against the claim it pushes. `&live=1` plays that turn itself, a
+ * call at a time, for a reader to watch the live run follow its newest step and settle.
  */
 import type { UIMessage } from "ai";
 import * as v from "valibot";
 import { hostedActorSocketPath } from "@kinu.run/core";
-import { galleryChatWindow, seedGalleryChat } from "@/gallery-agent-stub";
+import { galleryChatWindow, galleryServerPush, seedGalleryChat } from "@/gallery-agent-stub";
 import { SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 
 type Part = UIMessage["parts"][number];
@@ -157,12 +158,35 @@ export function seedToolRuns(transcript: string | null): void {
   seedGalleryChat(THREAD);
   seedGalleryChat(THREAD, hostedActorSocketPath(HIRED));
 
+  const show = (asked: v.InferOutput<typeof RunAskedSchema>): void => {
+    galleryChatWindow(asked.agent === undefined ? "" : hostedActorSocketPath(asked.agent), [...THREAD, ASKED, liveTurn(asked)], null);
+  };
+
   window.addEventListener("gallery:tool-run", (event: Event) => {
     const asked = event instanceof CustomEvent ? v.safeParse(RunAskedSchema, event.detail) : null;
 
-    if (asked?.success !== true) return;
-    const { agent } = asked.output;
-
-    galleryChatWindow(agent === undefined ? "" : hostedActorSocketPath(agent), [...THREAD, ASKED, liveTurn(asked.output)], null);
+    if (asked?.success === true) show(asked.output);
   });
+
+  if (new URLSearchParams(location.search).get("live") === "1") playLive(show);
+}
+
+/** Calls the played turn makes before its answer starts, and the one that fails. */
+const PLAYED_CALLS = 22;
+
+const PLAYED_FAILURE = 4;
+
+/** The newest turn as a reader would watch it: admitted, a call at a time, then its answer, then again from the start. */
+function playLive(show: (asked: v.InferOutput<typeof RunAskedSchema>) => void): void {
+  let step = 0;
+
+  const tick = (): void => {
+    if (step === 0) galleryServerPush(JSON.stringify({ type: "turn_claim", claim: { kind: "admitted", turnId: TOOL_RUN_TURN, claimedAt: Date.now() } }));
+
+    if (step < PLAYED_CALLS) show({ calls: step + 1, failAt: PLAYED_FAILURE });
+    else show({ calls: PLAYED_CALLS, failAt: PLAYED_FAILURE, answer: true });
+    step = step >= PLAYED_CALLS + 4 ? 0 : step + 1;
+  };
+
+  window.setInterval(tick, 900);
 }
