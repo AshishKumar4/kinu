@@ -1,8 +1,8 @@
 /**
  * The web search providers Kinu offers: the one table the `web` tool, Settings, onboarding, the answer's `source` and
- * the spend row read. A provider earns its entry on 36 queries judged blind (2026-10-19, docs/WEB-SEARCH.md): a mean
- * relevance of 3.0 or more of 4, under terms that allow an agent's use. Ceramic.ai, which Cloudflare's Web Search API
- * also serves and names its default, scored 1.72 and is not offered.
+ * the spend row read. A provider with its own API earns its entry on 36 queries judged blind (2026-10-19,
+ * docs/WEB-SEARCH.md): a mean relevance of 3.0 or more of 4, under terms that allow an agent's use. Every index
+ * Cloudflare's Web Search API serves is offered (owner, 2026-10-19), Exa first as the best of them.
  */
 import * as v from 'valibot';
 
@@ -70,8 +70,11 @@ const EXA: WebSearchProviderEntry = { label: 'Exa', cloudflare: true, direct: nu
 /** Linkup: 3.17 through Cloudflare, 32 answerable, 26 current, junk in 21; $5.00 per 1,000. */
 const LINKUP: WebSearchProviderEntry = { label: 'Linkup', cloudflare: true, direct: null };
 
+/** Ceramic.ai, the API's own default: 1.72 through Cloudflare, 11 answerable, junk in 18; $0.25 per 1,000. */
+const CERAMIC: WebSearchProviderEntry = { label: 'Ceramic', cloudflare: true, direct: null };
+
 /** In the order Settings offers them. */
-export const WEB_SEARCH_PROVIDER_IDS = ['exa', 'linkup'] as const;
+export const WEB_SEARCH_PROVIDER_IDS = ['exa', 'linkup', 'ceramic'] as const;
 
 export type WebSearchProviderId = (typeof WEB_SEARCH_PROVIDER_IDS)[number];
 
@@ -79,6 +82,7 @@ export type WebSearchProviderId = (typeof WEB_SEARCH_PROVIDER_IDS)[number];
 export const WEB_SEARCH_PROVIDERS = {
   exa: EXA,
   linkup: LINKUP,
+  ceramic: CERAMIC,
 } as const satisfies Readonly<Record<WebSearchProviderId, WebSearchProviderEntry>>;
 
 /** Who pays: the gateway Cloudflare's API runs on, or the person's own key at the provider. */

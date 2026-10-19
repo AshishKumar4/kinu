@@ -4,7 +4,7 @@ The `web` tool's search: which providers Kinu offers, who pays for a search, and
 
 ## W1. A provider is offered when it answers the 36 questions well (2026-10-19)
 
-Each candidate runs the same 36 questions (6 each: fresh news, docs lookups, pricing pages, code errors, long-tail facts, local and how-to), 5 results each, graded blind by one model call against a fixed rubric: relevance 0 to 4, answerable from the first three results, current as of 2026-10-19, any junk. A provider enters the registry at a mean relevance of 3.0 or more, under terms that allow an agent's use.
+Each candidate runs the same 36 questions (6 each: fresh news, docs lookups, pricing pages, code errors, long-tail facts, local and how-to), 5 results each, graded blind by one model call against a fixed rubric: relevance 0 to 4, answerable from the first three results, current as of 2026-10-19, any junk. A provider with its own API enters the registry at a mean relevance of 3.0 or more, under terms that allow an agent's use.
 
 Measured through Cloudflare's Web Search API (`POST /accounts/{id}/ai/websearch/`, gateway `kinu-ai-gateway-staging`):
 
@@ -14,7 +14,7 @@ Measured through Cloudflare's Web Search API (`POST /accounts/{id}/ai/websearch/
 | Linkup | 3.17 | 32/36 | 26/36 | 21/36 | 1602 ms | $5.00 |
 | Ceramic.ai | 1.72 | 11/36 | 11/36 | 18/36 | 525 ms | $0.25 |
 
-Ceramic.ai, the API's own default, is not offered. Exa is Kinu's default (commit 2d9afcb03).
+Exa is Kinu's default (commit 2d9afcb03). All three of the API's indexes are offered, Ceramic.ai included, on the owner's call (2026-10-19); the 3.0 bar governs providers with their own API.
 
 Closed to new customers, so not candidates: Google's Custom Search JSON API (developers.google.com/custom-search/v1/overview: no new customers, discontinued 2027-01-01) and Bing Web Search (retired 2025-08-11, learn.microsoft.com lifecycle notice).
 

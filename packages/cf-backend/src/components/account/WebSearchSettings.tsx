@@ -6,22 +6,22 @@
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
-import { ArrowSquareOutIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, XIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS,
   type CredentialSummary, type ProfileCatalogEnvelope, type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
 } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import {
-  deleteCredential, getProfileCatalog, listCloudflareAccounts, listCloudflareGateways, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
-  type CloudflareAccountStatus, type CloudflareGatewayStatus, type WebSearchAnswer,
+  deleteCredential, getProfileCatalog, listCloudflareAccounts, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
+  type CloudflareAccountStatus, type WebSearchAnswer,
 } from "@/lib/user-api";
 import { Choice, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Segmented } from "@/components/ui/Segmented";
 import { Status } from "@/components/ui/Status";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 /** What a Test searches for: a question an agent of the owner's asks. */
 const TEST_QUERY = "Cloudflare Durable Objects alarms API";
@@ -66,8 +66,7 @@ export function WebSearchSettings({ returnTo, place }: { returnTo: string; place
   const catalog = useAsyncResource(getProfileCatalog);
   const creds = useAsyncResource(listCredentials);
   const accounts = useAsyncResource(listCloudflareAccounts);
-  const gateways = useAsyncResource(listCloudflareGateways);
-  const reloadAll = () => { for (const read of [catalog, creds, accounts, gateways]) read.reload(); };
+  const reloadAll = () => { for (const read of [catalog, creds, accounts]) read.reload(); };
 
   return (
     <Framed place={place}>
@@ -77,7 +76,7 @@ export function WebSearchSettings({ returnTo, place }: { returnTo: string; place
             {(credentials) => (
               <SearchChoice place={place} envelope={envelope} credentials={credentials} saved={catalog.set} onKeySaved={creds.reload}
                 payer={<CardSlot resource={accounts.resource} what="your Cloudflare account" onRetry={reloadAll}>
-                  {(status) => <Payer status={status} gateways={lastValue(gateways.resource)} returnTo={returnTo} />}
+                  {(status) => <Payer status={status} returnTo={returnTo} />}
                 </CardSlot>} />
             )}
           </CardSlot>
@@ -131,26 +130,26 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
 
   return (
     <div className="space-y-6" data-web-search>
-      <Field label="Search with" hint={failure ?? (saving ? "Saving…" : "Applies from each agent's next search.")}>
+      <Field label="Search with" hint={failure ?? (saving ? "Saving…" : undefined)}>
         <div role="radiogroup" aria-label="Search with" className="grid gap-3 sm:grid-cols-2">
           <Tile billing="cloudflare" opened={opened} onPick={pick} disabled={saving}
             title="Cloudflare" badge="Default"
-            about="Cloudflare's Web Search API, billed through AI Gateway unified billing at each provider's list price." />
+            about="Paid through your Cloudflare account." />
           <Tile billing="key" opened={opened} onPick={pick} disabled={saving || KEYED_PROVIDERS.length === 0}
             title="Your own key"
-            about={KEYED_PROVIDERS.length === 0 ? "No provider takes a key of yours yet." : "The provider bills you directly, under your own account with it."} />
+            about={KEYED_PROVIDERS.length === 0 ? "No provider takes a key yet." : "Paid to the provider, with your API key."} />
         </div>
       </Field>
 
       {opened === "cloudflare" ? (
         <div className="space-y-3" data-web-search-cloudflare>
-          <Field label="Index" hint="Exa answered 35 of 36 test questions from its first three results; Linkup 32." inline>
-            <Segmented label="Search index"
+          <Field label="Provider" inline>
+            <Segmented label="Search provider"
               segments={CLOUDFLARE_INDEXES.map((id) => ({ id, label: WEB_SEARCH_PROVIDERS[id].label }))}
               value={primary.billing === "cloudflare" ? primary.provider : lastIndex}
               onChange={(provider) => detach(lead({ provider, billing: "cloudflare" }))} />
           </Field>
-          {payer}
+          {place === "settings" && payer}
         </div>
       ) : (
         <KeyEntry primary={primary} stored={stored} disabled={saving}
@@ -196,26 +195,19 @@ function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
   );
 }
 
-/** Who a search through Cloudflare bills: the account's own gateway once its sign-in grants search, else the deployment's. */
-function Payer({ status, gateways, returnTo }: { status: CloudflareAccountStatus; gateways: CloudflareGatewayStatus | null; returnTo: string }) {
+/** Said only where a search through Cloudflare is not paid through the person's own account: then this deployment pays. */
+function Payer({ status, returnTo }: { status: CloudflareAccountStatus; returnTo: string }) {
   if (!status.connected) {
     return <CloudflareAIConnectNotice returnTo={returnTo} action="Connect Cloudflare"
-      message="No Cloudflare account is connected, so this deployment's AI Gateway pays for your searches. Connect Cloudflare to bill your own." />;
+      message="No Cloudflare account is connected, so Kinu pays for these searches for now." />;
   }
 
   if (!status.webSearch) {
     return <CloudflareAIConnectNotice returnTo={returnTo} action="Sign in with Cloudflare again"
-      message="Your Cloudflare sign-in predates web search, so this deployment's AI Gateway pays for your searches. Sign in again to bill your own." />;
+      message="Sign in with Cloudflare again so these searches are paid through your account. Until then Kinu pays for them." />;
   }
 
-  const account = status.accounts.find((entry) => entry.id === status.selectedId)?.name ?? status.selectedId ?? "your account";
-
-  return (
-    <p className="flex items-center gap-2 p-meta p-text-3" data-web-search-payer="account">
-      <CheckIcon size={13} className="shrink-0 p-success" />
-      <span>Billed to <span className="p-text">{account}</span> through its AI Gateway <span className="whitespace-nowrap font-mono p-text">{gateways?.selectedId ?? "default"}</span>.</span>
-    </p>
-  );
+  return null;
 }
 
 /** A provider's key: pasted, stored with the account's credentials, and then its search leads the chain. */
@@ -268,7 +260,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
         </button>
       </form>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
-        {has ? <Status tone="success">Key stored</Status> : <span>Stored sealed with your other keys, and sent only to {WEB_SEARCH_PROVIDERS[provider].label}.</span>}
+        {has && <Status tone="success">Key stored</Status>}
         {has && (
           <button type="button" disabled={saving || disabled} onClick={() => detach(remove())} className="p-danger hover:underline">Remove key</button>
         )}
@@ -297,7 +289,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
   ].filter((route) => !chain.some(sameRoute(route)));
 
   return (
-    <Field label="If it fails" hint="Each backup is asked at once when the search before it refuses; the last is asked again after a refusal that may pass, as many times as Settings › Models sets.">
+    <Field label="If it fails" hint="Tried in order when the one before it fails.">
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Web search backups">
         {backups.map((route, at) => (
           <span key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}
@@ -319,7 +311,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
               if (route !== undefined) onChange([...backups, route]);
             }} />
         )}
-        {candidates.length === 0 && backups.length === 0 && <span className="p-meta p-text-3">Nothing else to fall back on: add a provider's key.</span>}
+        {candidates.length === 0 && backups.length === 0 && <span className="p-meta p-text-3">None.</span>}
       </div>
     </Field>
   );
@@ -350,7 +342,7 @@ function SearchTest({ route }: { route: WebSearchRoute }) {
 
   return (
     <div className="space-y-2">
-      <Field label="Test" hint={`One search through ${routeLabel(route)} for "${TEST_QUERY}", as an agent's would go.`} inline>
+      <Field label="Test" hint={`Searches ${routeLabel(route)} once.`} inline>
         <Button size="sm" variant="secondary" disabled={running} onClick={() => detach(run())} data-web-search-test>
           {running && <Loader size="sm" />} Search
         </Button>
