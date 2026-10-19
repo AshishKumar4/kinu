@@ -16,8 +16,8 @@ async function workspaceShell() {
   const shell = present((await hostedMainActor(workspace)).actor.runtime.shell, "main's shell");
 
   return {
-    owner: async (command: string) => await shell.exec(command),
-    viewer: async (command: string) => await withholdingOwnerSecrets(() => shell.exec(command)),
+    owner: async (command: string, name?: string) => await shell.exec(command, name === undefined ? {} : { name }),
+    viewer: async (command: string, name?: string) => await withholdingOwnerSecrets(() => shell.exec(command, name === undefined ? {} : { name })),
   };
 }
 
@@ -71,3 +71,19 @@ test('a placeholder a viewer copies is refused at the egress, without asking any
 
   expect(answer.stdout).toContain("holds none of the owner's secrets");
 });
+
+test("a viewer's named shell never resumes the owner's, whatever the owner named theirs", async () => {
+  const { owner, viewer } = await workspaceShell();
+
+  // The owner's shell named as the viewer's own `build` would be, were the viewer's names only prefixed.
+  await owner('export OWNER_ONLY=owner-marker', 'share_viewer.build');
+  await owner('export OWNER_ONLY=owner-marker', 'build');
+  await viewer('export VIEWER_ONLY=viewer-marker', 'build');
+
+  expect((await viewer('printf %s "$OWNER_ONLY"', 'build')).stdout).toBe('');
+  expect((await viewer('printf %s "$OWNER_ONLY"', 'share_viewer.build')).stdout).toBe('');
+  expect((await viewer('printf %s "$VIEWER_ONLY"', 'build')).stdout).toBe('viewer-marker');
+  expect((await owner('printf %s "$OWNER_ONLY"', 'share_viewer.build')).stdout).toBe('owner-marker');
+  expect((await owner('printf %s "$VIEWER_ONLY"', 'build')).stdout).toBe('');
+});
+

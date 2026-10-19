@@ -683,9 +683,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Each agent's view of the workspace's box, where a share's viewer's call runs as the viewer (`withViewerPrincipal`). */
   protected workspaceBox(shellId: string): HostedBox {
-    const box = this.hostedWorkspace().box(shellId);
+    const workspace = this.hostedWorkspace();
+    const box = workspace.box(shellId);
 
-    return { ...box, ...withViewerPrincipal(box, () => this.viewerPlace()) };
+    return { ...box, ...withViewerPrincipal({ owner: box, viewer: workspace.viewerBox(shellId) }, () => this.viewerPlace()) };
   }
 
   /** The viewer's own uid, home and `/tmp` on the box, provisioned as each of its calls asks (the first allocates them). */
