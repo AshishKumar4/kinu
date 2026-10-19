@@ -53,14 +53,13 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       to={`/workspace/${workspace.name}`}
       className="p-card flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated"
     >
-      <SlatePicture workspace={workspace.name} slate={pictured} className="block aspect-[16/10] w-full border-b p-border object-cover object-top"
-        fallback={(
-          <span className="flex h-14 items-end border-b p-border p-recessed px-4 pb-2">
-            <WorkspaceLogo title={title} logo={workspace.logo} size={32} />
-          </span>
-        )} />
+      {/* Its primary slate's picture when it has one; without one, the card is a plain row led by the logo. */}
+      <SlatePicture workspace={workspace.name} slate={pictured} className="block aspect-[16/10] w-full border-b p-border object-cover object-top" fallback={null} />
       <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">
-        <span className="truncate p-row-text font-medium p-text">{title}</span>
+        <span className="flex min-w-0 items-center gap-2.5">
+          {pictured === undefined && <WorkspaceLogo title={title} logo={workspace.logo} size={24} />}
+          <span className="truncate p-row-text font-medium p-text">{title}</span>
+        </span>
         <span className="mt-1"><StatusChip workspace={workspace} /></span>
         {mission !== null && <span className="mt-1.5 line-clamp-2 p-meta p-text-3">{mission}</span>}
         {age !== null && <span className="mt-auto self-end pt-2 p-meta p-text-4 tabular-nums">{age}</span>}
