@@ -33,14 +33,15 @@ export const KIND_WORDS: Record<ExploreKind, { label: string; verb: string }> = 
   workspace: { label: "Workspace", verb: "Install" },
 };
 
-export function KindBadge({ kind, className = "" }: { kind: ExploreKind; className?: string }) {
+/** What it is, in a word. `onPicture`: solid, so it reads over any picture. */
+export function KindBadge({ kind, onPicture = false, className = "" }: { kind: ExploreKind; onPicture?: boolean; className?: string }) {
   const Icon = kind === "app" ? AppWindowIcon : SquaresFourIcon;
+  let ground = kind === "workspace" ? "bg-[var(--c-accent-subtle)] p-accent" : "bg-[var(--c-neutral-tint)] p-text-2";
+
+  if (onPicture) ground = `border p-border bg-[var(--c-surface)] shadow-sm ${kind === "workspace" ? "p-accent" : "p-text"}`;
 
   return (
-    <span data-explore-kind={kind}
-      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tracking-[0.01em] ${kind === "workspace"
-        ? "bg-[var(--c-accent-subtle)] p-accent"
-        : "bg-[var(--c-neutral-tint)] p-text-2"} ${className}`}>
+    <span data-explore-kind={kind} className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tracking-[0.01em] ${ground} ${className}`}>
       <Icon size={12} weight="bold" />{KIND_WORDS[kind].label}
     </span>
   );
@@ -118,7 +119,7 @@ function Card({ href, kind, id, title, line, picture, maker, needs, numbers }: {
         className="group flex h-full flex-col overflow-hidden rounded-[14px] border p-border p-surface p-card-lift focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--c-accent)]">
         <span className="relative block aspect-[16/10] shrink-0 overflow-hidden border-b p-border">
           {picture}
-          <KindBadge kind={kind} className="absolute left-2.5 top-2.5 shadow-sm backdrop-blur-md" />
+          <KindBadge kind={kind} onPicture className="absolute left-2.5 top-2.5" />
         </span>
         <span className="flex flex-1 flex-col gap-1.5 px-3.5 pb-3 pt-3">
           <span className="truncate p-row-text font-semibold p-text">{title}</span>
