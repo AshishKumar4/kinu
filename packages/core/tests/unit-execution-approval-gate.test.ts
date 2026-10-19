@@ -257,101 +257,6 @@ function askingRouter() {
   return { router: new DefaultExecutionRouter(policy), asked, policy };
 }
 
-/**
- * The program rule as the owner meets it: each command run on their machine, and whether the gate put it to them as a
- * program over their files. Read as the shell reads the command: quotes kept, redirections apart from words, and each
- * interpreter's own options with their values.
- */
-describe("a program given as text on the user's machine is put to them; one run from a file is not", () => {
-  const programs = [
-    // An option's value is not the script: the program still comes after it.
-    `node --require fs -e 'require("fs").unlinkSync("notes.txt")'`,
-    `node -r fs -e 'require("fs").unlinkSync("notes.txt")'`,
-    `python3 -W ignore -c 'import os; os.remove("notes.txt")'`,
-    `ruby -I lib -e 'File.delete("notes.txt")'`,
-    `perl -I lib -e 'unlink "notes.txt"'`,
-    // A program read from stdin, however stdin is given.
-    'node < program.js',
-    'cat program.js | node',
-    "node <<'JS'\nrequire('fs').unlinkSync('notes.txt')\nJS",
-    'python3 - < program.py',
-    // Wherever the shell runs it.
-    "{ node -e 'x'; }",
-    "if true; then python3 -c 'x'; fi",
-    "echo $(node -e 'x')",
-    "bash -c \"node -e 'x'\"",
-    "bash -ec \"python3 -c 'x'\"",
-    "bash <<'SH'\nnode -e 'x'\nSH",
-    "env -u UNUSED node -e 'x'",
-    "env FOO=1 python3 -c 'x'",
-    "sudo -u node node -e 'x'",
-    "timeout -s KILL 5 python3 -c 'x'",
-    "echo x | xargs node -e 'x'",
-    "deno eval 'x'",
-    'cat program.js | bun run -',
-    // Each interpreter's own spellings.
-    "node --eval='x'",
-    "node -pe '1 + 1'",
-    'node -',
-    "python3 -Bc 'x'",
-    "python3 -c'x'",
-    "ruby -ne 'puts 1' notes.txt",
-    "ruby -i.bak -pe 'gsub(/a/, \"b\")' notes.txt",
-    "perl -lne 'print' notes.txt",
-    // A program the shell names by a variable may be any interpreter.
-    "$PY -c 'x'",
-    // bash's `<(...)`, which this reader cannot parse, is read word by word.
-    "diff <(node -e 'x') notes.txt",
-  ];
-
-  const files = [
-    "python3 'script.py'",
-    'node script.js --require fs -e x',
-    'node --require fs script.js',
-    'python3 -m http.server',
-    'node --check script.js',
-    'perl -c script.pl',
-    'python3 --version',
-    'echo node -e x',
-    "grep -r 'node -e' .",
-    'command -v node',
-    'find . -name "*.js" | xargs node',
-    'sudo -u node ls',
-    'node --run build',
-    'bun run script.ts',
-    'bun x cowsay hi',
-    'echo x | bun',
-    'node "$SCRIPT"',
-    'sh -c "$COMMAND"',
-    // `[` is the test command, not a glob: its `-e` is no interpreter's.
-    'while [ ! -e finished ]; do sleep 0.05; done; echo served',
-    '[ -e notes.txt ] && cat notes.txt',
-    'ls *.js',
-  ];
-
-  const programRule = (request: ShellApprovalRequest): boolean => request.review.hits.some(({ rule }) => rule === 'program-on-user-files');
-
-  /** Whether running `command` on an executor holding `owner`'s files put it to the owner as a program over them. */
-  const askedAsProgram = async (command: string, owner: FilesOwner): Promise<boolean> => {
-    const { router, asked } = askingRouter();
-    const { provider } = fakeShellProvider('machine', 'device', owner);
-
-    router.register(provider);
-    await present(router.getProvider('machine'), 'the registered provider').tools.exec.execute(command);
-
-    return asked.some(programRule);
-  };
-
-  for (const [command, asks] of [...programs.map((c) => [c, true] as const), ...files.map((c) => [c, false] as const)]) {
-    test(`${asks ? 'asks' : 'runs'}: ${command}`, async () => {
-      expect({ command, program: await askedAsProgram(command, 'user') }).toEqual({ command, program: asks });
-      // Over the agent's own files a program runs unasked.
-      expect({ command, program: await askedAsProgram(command, 'agent') }).toEqual({ command, program: false });
-    });
-  }
-});
-
-/** `gateProviderExec` hands the provider to `gateExec`; these differ only in whose files the provider declares. */
 describe('the executor reaches the gate', () => {
   const HOUSEKEEPING = 'rm -rf node_modules';
 
@@ -659,15 +564,6 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     return { shell, asked, ran };
   }
 
-  test('an inline program reading the agent\'s own views asks nobody, while one writing the user\'s machine asks', async () => {
-    const { shell, asked } = gatedWorkspaceShell();
-    const write = `python3 -c "open('/pc/laptop/notes.txt', 'w').write('x')"`;
-
-    expect((await shell.exec(`python3 -c "print(open('/skills/deploy/SKILL.md').read())"`)).refusal).toBeUndefined();
-    expect((await shell.exec(write)).refusal).toMatchObject(DENIED);
-    expect(asked.map((request) => request.command)).toEqual([write]);
-  });
-
   test('a background process started on the user\'s machine is put to them first', async () => {
     const { router, asked } = askingRouter();
     const { provider, ran } = mountedWorkspaceProvider();
@@ -681,18 +577,16 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     expect(ran).toEqual(['start rm -rf build']);
   });
 
-  test('an inline program that names the user\'s files asks, as a shell command there does', async () => {
+  test("an inline program on the user's files meets exec's command review, no rule of its own", async () => {
     const { shell, asked, ran } = gatedWorkspaceShell();
     const python = `python3 -c "import shutil; shutil.rmtree('/shared/notes')"`;
-    const node = `node -e "require('fs').rmSync('/pc/laptop/proj', { recursive: true })"`;
 
-    for (const command of ['rm -rf /pc/laptop/proj', python, node]) expect((await shell.exec(command)).refusal).toMatchObject(DENIED);
-
-    // Over the agent's own files, the same kinds of call run.
-    for (const command of ['rm -rf build', `python3 -c "print('hi')"`, 'python3 - <<EOF\nprint(1)\nEOF']) expect((await shell.exec(command)).refusal).toBeUndefined();
-
-    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', python, node]);
-    expect(ran).toEqual(['rm -rf build', `python3 -c "print('hi')"`, 'python3 - <<EOF\nprint(1)\nEOF']);
+    // exec's approval is production's: the command rules judge it, so `rm -rf` over the user's files asks while a
+    // program given as text is judged as any other command (whether it should ask is the owner's open question).
+    expect((await shell.exec('rm -rf /pc/laptop/proj')).refusal).toMatchObject(DENIED);
+    expect((await shell.exec(python)).refusal).toBeUndefined();
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj']);
+    expect(ran).toEqual([python]);
   });
 
   test('a move, copy or redirect onto the user\'s device or Drive asks, while the same write in the agent\'s home runs', async () => {

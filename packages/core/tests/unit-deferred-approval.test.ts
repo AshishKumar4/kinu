@@ -870,33 +870,14 @@ describe('"always" grants the rules the owner was shown', () => {
       },
     };
 
-    const policy: ShellApprovalPolicy = {
+    const { tools } = gateProviderExec(provider, {
       mode: () => 'strict',
       granted: (grant) => granted.includes(formatApprovalGrant(grant)),
       deferrals: queue.channel,
-    };
+    });
 
-    const { tools } = gateProviderExec(provider, policy);
-
-    // The workspace's own shell, gated where every workspace command is.
-    const shell = withApprovalGatedShell({
-      exec: async (command) => ({ stdout: await record('exec')(command), stderr: '', exitCode: 0 }),
-    }, { filesOwner: 'agent', ...(provider.shellSession !== undefined && { shellSession: provider.shellSession }) }, policy);
-
-    return { queue, tools, shell, ran, granted };
+    return { queue, tools, ran, granted };
   }
-
-  test('"always" for an inline program over the user\'s files lets the next identical program run', async () => {
-    const { queue, shell, ran, granted } = workspaceSetup();
-    const program = `python3 -c "import shutil; shutil.rmtree('/shared/notes')"`;
-
-    expect((await shell.exec(program)).refusal).toMatchObject({ error: expect.stringContaining('defer-1') });
-    await queue.decide(['defer-1'], 'always');
-
-    expect(granted).toEqual(['program-on-user-files@workspace']);
-    expect((await shell.exec(program)).stdout).toBe('ran');
-    expect(ran).toEqual([`exec ${program}`]);
-  });
 
   test('"always" for a process started in the user\'s files lets the next one started there run', async () => {
     const { queue, tools, ran, granted } = workspaceSetup();

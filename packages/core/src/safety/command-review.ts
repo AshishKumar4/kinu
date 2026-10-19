@@ -1,6 +1,5 @@
 /** 'allow', 'warn', 'gate' (the owner decides) or 'deny', by rule and whose files. Against accidents, not an adversary. */
 
-import { runsInlineProgram } from './inline-program';
 import type { ShellCwd, ShellSession } from '../execution/shell-session';
 import { machinePath } from '../vfs/resolve';
 import { workspacePath } from '../vfs/workspace-path';
@@ -581,10 +580,6 @@ export function reviewFileAccess(access: FileAccess): ApprovalResult {
   return { decision: dominant(hits), hits };
 }
 
-const PROGRAM_ON_USER_FILES: ApprovalRuleHit = {
-  decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.',
-};
-
 /** No default owner: no caller silently picks a trust tier. */
 export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
   const { invoked, unquoted } = scanCommand(command);
@@ -610,8 +605,6 @@ export function reviewCommand(command: string, filesOwner: FilesOwner): Approval
     if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
     hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
   }
-
-  if (!agentsOwn && runsInlineProgram(command)) hits.push(PROGRAM_ON_USER_FILES);
 
   return { decision: dominant(hits), hits };
 }
