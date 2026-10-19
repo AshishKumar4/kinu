@@ -596,6 +596,13 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/pc-agent/src/daemon/screen.js",
+      "kind": "hand-parser",
+      "owner": "parse",
+      "sourceSha256": "c337be354bf6ca247fa6033434842aa27039ca45c063ca0e7a63aeff85ae4523",
+      "decision": "traversal"
+    },
+    {
       "file": "packages/pc-agent/src/update.js",
       "kind": "hand-parser",
       "owner": "parseUpdateFrame",

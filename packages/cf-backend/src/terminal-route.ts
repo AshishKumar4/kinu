@@ -175,8 +175,14 @@ async function deviceDesktop(call: TerminalCall, device: string): Promise<Respon
 }
 
 const DEVICE_SURFACE = {
-  terminal: { doing: "opening a terminal on this machine", reaching: "reaching this workspace to open a terminal", event: "terminal" },
-  desktop: { doing: "opening this machine's screen", reaching: "reaching this workspace to open a machine's screen", event: "desktop" },
+  terminal: {
+    doing: "opening a terminal on this machine", reaching: "reaching this workspace to open a terminal",
+    openFailed: "terminal.device_open_failed", refused: "terminal.device_refused",
+  },
+  desktop: {
+    doing: "opening this machine's screen", reaching: "reaching this workspace to open a machine's screen",
+    openFailed: "desktop.device_open_failed", refused: "desktop.device_refused",
+  },
 } as const;
 
 async function toDeviceHolder(
@@ -200,14 +206,14 @@ async function toDeviceHolder(
   } catch (cause) {
     const error = toKinuError({ doing: surface.reaching, cause, otherwise: "unavailable" });
 
-    diagnostics.failure(`${surface.event}.device_open_failed`, error, scope);
+    diagnostics.failure(surface.openFailed, error, scope);
 
     return err(503, renderThrownChain({ cause: error }));
   }
 
   if ("error" in opened) {
     // Already a rendered chain from the RPC's other side, so it rides as the cause.
-    diagnostics.failure(`${surface.event}.device_refused`, toKinuError({ doing: surface.doing, cause: opened.error, otherwise: "unavailable" }), scope);
+    diagnostics.failure(surface.refused, toKinuError({ doing: surface.doing, cause: opened.error, otherwise: "unavailable" }), scope);
 
     return err(503, opened.error);
   }
