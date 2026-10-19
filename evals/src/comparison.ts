@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { DEFAULT_MODELS } from './config';
 import { redact } from './redact';
 import { rate, seconds, sign, signed, tokens, usd } from './format';
 import { platformByTask, type PlatformReport, type TaskPlatform } from './platform';
@@ -78,6 +79,15 @@ export type EvalComparisonRow = Identity & (
  */
 export type EvalVerdict = 'improved' | 'regressed' | 'unchanged' | 'inconclusive';
 
+/**
+ * One task on one build, run by the default eval model and by another, compared as two builds are: the pass counts under
+ * Fisher's exact test, every other measure by its spread under Mann–Whitney. Information about the models, not a verdict.
+ */
+export type ModelRow = { taskId: string; arm: string; reference: string; model: string; referenceStats: EvalStats; stats: EvalStats } & (
+  | { reason: null; pValue: number; shifts: Shift[] }
+  | { reason: string }
+);
+
 /** What one report measured: the deployed build, and the commit whose task definitions it ran. */
 export type EvalSide = { productSha: string; evalCommit: string };
 
@@ -112,6 +122,8 @@ export type EvalComparison = {
   overall: { baseline: EvalStats | null; candidate: EvalStats };
   /** What Workers Logs said of each task's workspaces on each side; null when neither side was read. */
   platform: PlatformRows | null;
+  /** The candidate's other models against its reference model, task by task; empty when it ran one model. */
+  models: ModelRow[];
 };
 
 /** Each task on both sides as the platform saw it, with the Fisher exact test on its trials that saw a bug. */
@@ -189,6 +201,40 @@ function profiles(baseline: readonly Assertion[], candidate: readonly Assertion[
 
     return { model, baseline: before.length === 0 ? null : profile(before), candidate: profile(on(candidate, model)) };
   });
+}
+
+/**
+ * Each other model of one report against its reference, the default eval model when it ran and else the first by name,
+ * on every task and arm both ran. A pair whose trial counts differ or that met an infrastructure failure is shown, not
+ * compared, as between two builds.
+ */
+function modelRows(assertions: readonly Assertion[]): ModelRow[] {
+  const cohorts = [...group(assertions).values()];
+  const models = [...new Set(cohorts.map((cohort) => cohort.model))].sort();
+  const [reference] = models.includes(DEFAULT_MODELS[0]) ? [DEFAULT_MODELS[0]] : models;
+
+  return cohorts.flatMap((cohort): ModelRow[] => {
+    const base = cohorts.find((other) => other.model === reference && other.taskId === cohort.taskId && other.arm === cohort.arm);
+
+    if (reference === undefined || cohort.model === reference || base === undefined) return [];
+    const pair = { taskId: cohort.taskId, arm: cohort.arm, reference, model: cohort.model, referenceStats: stats(base), stats: stats(cohort) };
+
+    const blockers: readonly (readonly [boolean, string])[] = [
+      [base.assertions.length !== cohort.assertions.length, 'trial counts differ'],
+      [[...base.assertions, ...cohort.assertions].some(hasInfrastructureFailure), 'infrastructure errors'],
+    ];
+
+    const reason = blockers.find(([blocked]) => blocked)?.[1];
+
+    if (reason !== undefined) return [{ ...pair, reason }];
+
+    return [{ ...pair, reason: null, pValue: fisherExact(pair.referenceStats, pair.stats), shifts: shifts(base.assertions, cohort.assertions) }];
+  }).sort(byIdentity);
+}
+
+/** Rows in task, model, then arm order. */
+function byIdentity(left: Identity, right: Identity): number {
+  return left.taskId.localeCompare(right.taskId) || left.model.localeCompare(right.model) || left.arm.localeCompare(right.arm);
 }
 
 /** A report measures one build with one set of definitions, or it is two reports. */
@@ -640,8 +686,7 @@ export function compareEvalResults(
       shifts: shifts(before.assertions, after.assertions),
       checks: checkShifts(before.assertions, after.assertions),
     };
-  }).sort((left, right) => left.taskId.localeCompare(right.taskId)
-    || left.model.localeCompare(right.model) || left.arm.localeCompare(right.arm));
+  }).sort(byIdentity);
 
   const profiled = profiles(baselineAssertions, candidateAssertions);
   const platform = platformRows(baselineAssertions, candidateAssertions, reads);
@@ -657,6 +702,7 @@ export function compareEvalResults(
     profiles: profiled,
     overall: { baseline: baselineText === null ? null : stats({ assertions: baselineAssertions }), candidate: stats({ assertions: candidateAssertions }) },
     platform,
+    models: modelRows(candidateAssertions),
   };
 }
 
@@ -933,6 +979,44 @@ function profileTable(profiled: EvalComparison['profiles']): string[] {
   return lines;
 }
 
+const MODEL_MEASURES: readonly Measure[] = ['wallTimeMs', 'costUsd', 'modelSteps', 'outputTokens', 'toolErrors'];
+
+/** The candidate's models side by side, task by task, when it ran more than one: information, never in the verdict. */
+function modelSection(rows: readonly ModelRow[]): string[] {
+  const [first] = rows;
+
+  if (first === undefined) return [];
+
+  const lines = ['## Models on this build', '',
+    `Each model against ${first.reference}, reference → model: passes under Fisher\u2019s exact test, each measure as its median `
+      + 'with the middle half in brackets under a two-sided Mann\u2013Whitney test; p is shown where it is below 0.05.', '',
+    `| Task | Model | Passed | Δ pass | ${MODEL_MEASURES.map((measure) => MEASURE_LABEL[measure].name).join(' | ')} |`,
+    `| --- | --- | --- | --- | ${MODEL_MEASURES.map(() => '---').join(' | ')} |`];
+
+  for (const row of rows) {
+    const passed = `${bar(row.referenceStats)} → ${bar(row.stats)}`;
+
+    if (row.reason !== null) {
+      lines.push(`| ${row.taskId} | ${row.model} | ${passed} | _not compared: ${row.reason}_ | ${MODEL_MEASURES.map(() => '—').join(' | ')} |`);
+      continue;
+    }
+
+    const delta = (passRate(row.stats) - passRate(row.referenceStats)) * 100;
+    const pass = `${signed(delta, 0, ' pp')}${row.pValue < SIGNIFICANCE ? ` (p = ${row.pValue.toFixed(2)})` : ''}`;
+
+    const cells = MODEL_MEASURES.map((measure) => {
+      const shift = row.shifts.find((each) => each.measure === measure);
+
+      return shift === undefined ? '—' : `${spreadOf(measure, shift.baseline)} → ${spreadOf(measure, shift.candidate)}`
+        + (shift.pValue < SIGNIFICANCE ? ` (p = ${shift.pValue.toFixed(2)})` : '');
+    });
+
+    lines.push(`| ${row.taskId} | ${row.model} | ${passed} | ${pass} | ${cells.join(' | ')} |`);
+  }
+
+  return [...lines, ''];
+}
+
 /** What failed in one task and why, for the person who has to fix it; nothing when every run passed cleanly. */
 function failureSection(row: EvalComparisonRow, shared: Shared): string[] {
   const { candidate: side, baseline: before } = row;
@@ -1001,6 +1085,7 @@ export function renderEvalComparison(comparison: EvalComparison): string {
     WAITS_NOTE, '',
     METRICS_NOTE, '',
     ...profileTable(comparison.profiles), '',
+    ...modelSection(comparison.models),
     ...renderRunReport(comparison),
     ...comparison.rows.flatMap((row) => failureSection(row, shared)),
   ].join('\n');
