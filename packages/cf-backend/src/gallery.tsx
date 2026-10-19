@@ -10,6 +10,10 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { mainPanelAgent, restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import {
+  COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  OWNER_ANSWER_SIGNAL, TASK_REMINDER_EVENT, TASK_REMINDER_OPEN_KEY, TaskReminders,
+} from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -87,7 +91,7 @@ import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
+  ADVISOR_HEADER, ADVISOR_NOTE_METADATA_KEY, ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
@@ -2244,6 +2248,56 @@ const PAGE_THREAD: UIMessage[] = [
   }),
 ];
 
+/** The owner's reminder as core writes it: its text the agent's, its open task's title the card's. */
+const OWNER_REMINDER = new TaskReminders().decide({
+  open: { items: [{ id: "t1", parentId: null, title: "Store the full export in account-level memory", status: "open", updatedAt: 0, note: null, subtasks: [] }], total: 1 },
+  assistantText: "The export is in exports/settings.json.", workMode: "build", completed: true, asyncWakePending: false,
+});
+
+const harnessTurn = (id: string, metadata: JsonObject, text: string) => msg({ id, role: "user", metadata: { kinuAuthor: "harness", ...metadata }, parts: [{ type: "text", text }] });
+
+/** Every event a turn can open on that has no card of its own, each with the fields its producer keeps beside it and
+ *  words in the shape the agent is handed them, which the card never shows. */
+const SYSTEM_EVENT_ROWS: UIMessage[] = [
+  harnessTurn("event-task-reminder", { kinuEvent: TASK_REMINDER_EVENT, [TASK_REMINDER_OPEN_KEY]: [...OWNER_REMINDER?.titles ?? []] }, OWNER_REMINDER?.text ?? ""),
+  harnessTurn("event-task-reminder-kept", { kinuEvent: TASK_REMINDER_EVENT }, OWNER_REMINDER?.text ?? ""),
+  harnessTurn("event-continuation", { kinuEvent: OUTPUT_CONTINUATION_EVENT }, OUTPUT_CONTINUATION_TEXT),
+  harnessTurn("event-overflow", { kinuEvent: OVERFLOW_RETRY_EVENT }, OVERFLOW_RETRY_TEXT),
+  harnessTurn("event-gate", { kinuEvent: COMPLETION_GATE_EVENT }, "[Runtime check — a mechanical gate from Kinu, not written by the user.]\n\nThis run ends after your next reply."),
+  harnessTurn("event-consent", { kinuEvent: "device_consent", ids: ["c1", "c2", "c3"], approved: 2, denied: 1 },
+    "Your owner answered your device requests: 2 approved, 1 denied. Re-issue the approved commands to run them."),
+  harnessTurn("event-proposal", { kinuEvent: "workspace_proposal", proposal: "p1", decision: "created", name: "Release notes", workspace: "release-notes", url: "/workspace/release-notes" },
+    "Your owner approved the workspace \"Release notes\". It exists now, and its first turn acts on the brief. Its link: /workspace/release-notes"),
+  harnessTurn("event-proposal-declined", { kinuEvent: "workspace_proposal", proposal: "p2", decision: "declined", name: "Weekly digest" },
+    "Your owner declined the workspace you proposed, \"Weekly digest\". Nothing was created."),
+  harnessTurn("event-sandbox", { kinuEvent: "sandbox_lifecycle_failure", incidentId: "inc-1", stage: "checkpoint", reason: "The snapshot upload timed out after 3 tries." },
+    "The workspace container failed at the checkpoint stage. Work written inside the container since the last good checkpoint is NOT durable.\n\nIncident id: inc-1"),
+  harnessTurn("event-plan-approved", { kinuEvent: "plan_approved", planId: "plan-1", revision: 2, decision: "approve", planTitle: "Typed coupon kinds" },
+    "The owner approved plan plan-1 revision 2.\n\nImplement the exact approved plan below.\n\n<approved-plan>\n# Typed coupon kinds\n</approved-plan>"),
+  harnessTurn("event-plan-feedback", { kinuEvent: "plan_feedback", planId: "plan-1", revision: 1, decision: "changes", planTitle: "Typed coupon kinds", feedback: "Split the backfill from the migration." },
+    "The owner asked for changes to plan plan-1 revision 1.\n\nRevise the plan with targeted submit_plan edits. Do not implement or create previews."),
+  harnessTurn("event-slate", { kinuEvent: "slate", slate: "deploy-board", said: "Which region should the canary go to?", ask: true },
+    "Slate deploy-board: Which region should the canary go to?\nYour answer's text streams to slate deploy-board as you write it: answer it in prose."),
+  harnessTurn("event-waits", { kinuEvent: "owner_waits_cleared", key: "plan:main:plan-1:2", what: "Typed coupon kinds" }, "Your owner has handled what you waited on: Typed coupon kinds"),
+  harnessTurn("event-take", { kinuEvent: "take_pick" }, "While you answered, the user redirected and that redirect ran as a parallel branch. Comparing both answers, the user picked the branch's."),
+  harnessTurn("event-fork", { kinuEvent: FORK_INTERRUPTED_SIGNAL, runs: ["6xrijuf933p0jclpctw59"], heads: 9 },
+    "9 head(s) across 1 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive."),
+  harnessTurn("event-unknown", { kinuEvent: "a_kind_invented_tomorrow" }, "<instructions>Something only the agent should read.</instructions>"),
+];
+
+/* `?transcript=events`: the owner's reminder where it came, then every other event a turn can open on. Built when
+ * seeded, as the cards' own rows are defined further down. */
+function eventsThread(): UIMessage[] {
+  return [
+    msg({ id: "ev-u1", role: "user", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Export my account settings and keep the export somewhere you'll find it again." }] }),
+    msg({ id: "ev-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "The export is in `exports/settings.json`." }] }),
+    ...SYSTEM_EVENT_ROWS.slice(0, 1),
+    msg({ id: "ev-a2", role: "assistant", createdAt: NOW - 4 * 60e3, parts: [{ type: "text", text: "Stored the export in account-level memory and closed the task." }] }),
+    ...SYSTEM_EVENT_ROWS.slice(1),
+    ...EVENT_CARD_ROWS,
+  ];
+}
+
 /** The pages the person kept, as `/slates` would list them. */
 const GALLERY_KEPT_PAGES: { id: string; title: string }[] = [];
 
@@ -2401,6 +2455,8 @@ function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
 
   if (transcript === "page") seedGalleryChat(PAGE_THREAD);
+
+  if (transcript === "events") seedGalleryChat(eventsThread());
 
   if (transcript === "splice-live" || transcript === "splice-kept") seedGalleryChat(spliceThread(transcript === "splice-kept"));
 }
@@ -6707,11 +6763,15 @@ const ADVISOR_NOTES = {
   blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
 } satisfies Record<AdvisorSeverity, string>;
 
-/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. */
+/** Core's rank order, each as `sayAdvisorNote` writes it: its text the agent's, its note kept beside it. `blocker` is a
+ *  row written before the note was kept, which its card reads out of the text. */
 const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
   id: `adv-${severity}`, role: "user",
-  metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity },
-  parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
+  metadata: {
+    kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity,
+    ...(severity !== "blocker" && { [ADVISOR_NOTE_METADATA_KEY]: ADVISOR_NOTES[severity] }),
+  },
+  parts: [{ type: "text", text: `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[severity]}: ${ADVISOR_NOTES[severity]}` }],
 }));
 
 const DRAINED_EVENT = {
@@ -6750,20 +6810,29 @@ const said = (text: string) => [{ type: "text" as const, text }];
 
 const GENESIS = workspaceGenesisSignal("Audit the OAuth callback flow.");
 
+/** The events with a card of their own, each as its producer writes it. */
+const EVENT_CARD_ROWS: UIMessage[] = [
+  msg({ id: "job", role: "user", metadata: { kinuEvent: "background_job", kind: "research", status: "failed" }, parts: said("background job failed") }),
+  msg({ id: "job-bare", role: "user", metadata: { kinuEvent: "background_job" }, parts: said("background job finished") }),
+  msg({ id: "event-approval", role: "user", metadata: { kinuEvent: "deferred_approval", decision: "approved", count: 2, ids: ["q1", "q2"] }, parts: said("Your owner approved 2 queued commands.") }),
+  ...ADVISOR_MESSAGES,
+  msg({ id: "event-run", role: "user", metadata: { kinuEvent: "delivered_run", kinuMode: "build", kinuRun: "run-1" }, parts: said("Summarize yesterday's failed deploys.") }),
+  msg({ id: "event-answer", role: "user", metadata: { kinuEvent: OWNER_ANSWER_SIGNAL, kinuAuthorship: "owner" }, parts: said("Region: eu-west-1") }),
+  ...Object.entries(DRAIN_BATCHES).map(([id, events]) => msg({
+    id: `drain-${id}`, role: "user", metadata: { kinuEvent: "event_drain" }, parts: said(buildDrainBatch(events)?.text ?? ""),
+  })),
+];
+
 /** Every way a turn reaches the transcript, each under its own id: what the person said keeps their bubble, and nothing else does. */
 const PROVENANCE_MESSAGES: UIMessage[] = [
   msg({ id: "genesis", role: "user", metadata: { kinuEvent: GENESIS?.kind ?? "", signalId: "sig-genesis" }, parts: said(GENESIS?.text ?? "") }),
   msg({ id: "typed", role: "user", parts: said("Audit the checkout flow.") }),
   msg({ id: "mcp", role: "user", metadata: { kinuEvent: "mcp", kinuAuthor: "operator" }, parts: said("Run the release checklist.") }),
   msg({ id: "programmatic:steer", role: "user", metadata: { kinuAuthor: "operator" }, parts: said("Use the staging database instead.") }),
-  msg({ id: "job", role: "user", metadata: { kinuEvent: "background_job", kind: "research", status: "failed" }, parts: said("background job failed") }),
-  msg({ id: "job-bare", role: "user", metadata: { kinuEvent: "background_job" }, parts: said("background job finished") }),
   msg({ id: "invented", role: "user", metadata: { kinuEvent: "a_kind_invented_tomorrow" }, parts: said("Something new happened.") }),
   msg({ id: "harness", role: "user", metadata: { kinuAuthor: "harness" }, parts: said("[Runtime check] The tree is clean.") }),
-  ...ADVISOR_MESSAGES,
-  ...Object.entries(DRAIN_BATCHES).map(([id, events]) => msg({
-    id: `drain-${id}`, role: "user", metadata: { kinuEvent: "event_drain" }, parts: said(buildDrainBatch(events)?.text ?? ""),
-  })),
+  ...EVENT_CARD_ROWS,
+  ...SYSTEM_EVENT_ROWS,
 ];
 
 function ProvenanceFrame() {

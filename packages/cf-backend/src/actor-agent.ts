@@ -17,7 +17,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
-  isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent,
+  isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -2516,7 +2516,8 @@ export abstract class ActorAgent extends Agent<Env> {
         }
 
         case 'agent': {
-          const metadata: JsonObject = { slate: route.slate };
+          // `said` is the slate's own message, for the person's card; the text adds what the agent is told.
+          const metadata: JsonObject = { slate: route.slate, said: cardWords(route.text), ask: route.ask === true };
 
           if (route.data !== undefined) metadata.data = route.data;
 

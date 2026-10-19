@@ -1,12 +1,11 @@
-import { detach } from "@kinu.run/core/obs";
-import { Effect } from "effect";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { Link, Outlet, useLocation, useMatch, useNavigate } from "react-router-dom";
-import { GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
+import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
+import { GithubLogoIcon, ListIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
 import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
+import { NewWorkspaceIconButton } from "./workspaces/NewWorkspaceButton";
 import { composing } from "./ui/form";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
 import { OwnerAlerts } from "@/hooks/use-owner-alerts";
@@ -42,7 +41,6 @@ export default function Layout() {
 
 function Shell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const navigate = useNavigate();
   const location = useLocation();
   const { entries } = useAgentsNav();
   const [main, setMain] = useState<HTMLElement | null>(null);
@@ -88,9 +86,7 @@ function Shell() {
           <a href="https://github.com/AshishKumar4/kinu" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <GithubLogoIcon size={17} />
           </a>
-          <button type="button" onClick={() => detach(Effect.promise(async () => navigate("/")))} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
-            <PlusIcon size={16} />
-          </button>
+          <NewWorkspaceIconButton className="size-9 rounded-full" />
         </div>
       </header>
 

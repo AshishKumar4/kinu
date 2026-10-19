@@ -638,7 +638,7 @@ export const LADDER: readonly Gate[] = [
     // day (`stepPruneBatchTokens`, `SlateSummary.port`, a lazy default export,
     // `MOVIE_ASK`) plus `PLAN_MESSAGES` here, every one authored by a lane whose
     // own acceptance was green because `bun run check` does not contain this
-    // gate. It is in the ci tier, which proves every push to integration/**
+    // gate. It is in the ci tier, which proves every push to next-rc
     // on armada, so a merge cannot hand it on to main.
     // 15.2s measured 2026-09-10 on this tree, against the 7s declared when two
     // knip runs were the whole cost.
@@ -3973,7 +3973,7 @@ function ciVerdict(asked: string, sha: string, report: string): number {
   if (asked !== sha) throw new Error('the deployed revision is not HEAD');
   const file = armadaVerdict(root, sha);
 
-  if (file === null) throw new Error(`armada has no verdict for ${sha}; a push to integration/** or main proves it, or run \`bunx armada run ${sha}\``);
+  if (file === null) throw new Error(`armada has no verdict for ${sha}; a push to next-rc or main proves it, or run \`bunx armada run ${sha}\``);
 
   if (file.sha !== sha) throw new Error(`armada's verdict names ${file.sha}, not ${sha}`);
 

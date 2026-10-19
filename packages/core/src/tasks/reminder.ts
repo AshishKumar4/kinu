@@ -9,6 +9,13 @@ import { SYSTEM_REMINDER_TAG } from '../utils/prompt-sections';
 /** Admit pre-flight drops a signal once the ledger no longer owes its reminder row. */
 export const TASK_REMINDER_EVENT = 'task_reminder';
 
+/** A reminder the agent is owed: its text, and what it names, kept for the person's card. */
+export interface TaskReminder {
+  readonly text: string;
+  /** Each open task's and subtask's title, in the list's order: as many as the text counts. */
+  readonly titles: readonly string[];
+}
+
 /** Scoped to the turn that owed the reminder. */
 export const taskReminderIdempotencyKey = (scope: string): string => `task-reminder:${scope}`;
 
@@ -94,7 +101,7 @@ export class TaskReminders {
     readonly workMode: WorkMode;
     readonly completed: boolean;
     readonly asyncWakePending: boolean;
-  }): { readonly text: string } | null {
+  }): TaskReminder | null {
     if (!input.completed) return null;
 
     if (input.workMode === 'plan') return null;
@@ -113,7 +120,8 @@ export class TaskReminders {
 
     if (this.attempts >= TASK_REMINDER_MAX_ATTEMPTS) return null;
 
-    const incomplete = groups.reduce((count, tree) => count + (tree.status === 'open' || tree.status === 'active' ? 1 : 0) + tree.subtasks.length, 0);
+    // A finished task stays listed while a subtask under it is open; only what is open counts, and is named.
+    const titles = groups.flatMap((tree) => [...(tree.status === 'open' || tree.status === 'active' ? [tree.title] : []), ...tree.subtasks.map((subtask) => subtask.title)]);
 
     if (isAwaitingUserAnswer(input.assistantText)) return null;
 
@@ -122,7 +130,7 @@ export class TaskReminders {
     this.attempts += 1;
     this.awaitingProgress = true;
 
-    return { text: renderTaskReminder(groups, incomplete, this.attempts) };
+    return { text: renderTaskReminder(groups, titles.length, this.attempts), titles };
   }
 }
 

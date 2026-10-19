@@ -22,6 +22,7 @@ import type { ActorIdentity } from '../identity/actor-handle';
 import type { KinuError } from '../obs/index';
 import { reportReadsNarration, type TaskTurnEnding } from '../subordinates/temporary';
 import { turnTags } from '../types/turn-metadata';
+import type { TaskReminder } from '../tasks/reminder';
 import { announcementOf } from '../utils/ui-message';
 import type { TurnReportFacts } from './terminal-effects';
 import { turnLane } from '../delegation/turn-reach';
@@ -64,7 +65,7 @@ export interface TerminalTurnParts {
   /** The one output-limit continuation turn (`owesOutputLimitContinuation`). */
   readonly outputContinuation?: boolean;
   /** Decided by the caller, the only one that reads the list and the outcome together. */
-  readonly taskReminder?: { readonly text: string };
+  readonly taskReminder?: TaskReminder;
   /** The turn's end, owed its hirer ({@link TurnEnd}), keyed as the hirer's ingress dedupes. */
   readonly turnReport?: TurnEnd & { readonly sequenceId: string };
 }
@@ -90,7 +91,7 @@ export function chatTurnParts(input: Pick<OwedTerminalEffectsInput, 'credited' |
     credited: input.credited,
     ...(input.overflowRetry && { overflowRetry: true }),
     ...(input.outputContinuation && { outputContinuation: true }),
-    ...(input.taskReminder !== null && { taskReminder: { text: input.taskReminder.text } }),
+    ...(input.taskReminder !== null && { taskReminder: input.taskReminder }),
   };
 }
 
@@ -222,7 +223,11 @@ function followUpTurns(messageId: string, parts: Pick<TerminalTurnParts, 'overfl
   if (parts.outputContinuation) owed.push({ name: 'output_continuation', scope: messageId, lane: 'inline', input: {} });
 
   // No open tasks, no row.
-  if (parts.taskReminder) owed.push({ name: 'task_reminder', scope: messageId, lane: 'inline', input: { text: parts.taskReminder.text } });
+  if (parts.taskReminder) {
+    const { text, titles } = parts.taskReminder;
+
+    owed.push({ name: 'task_reminder', scope: messageId, lane: 'inline', input: { text, titles: [...titles] } });
+  }
 
   return owed;
 }
