@@ -1,5 +1,6 @@
 /** 'allow', 'warn', 'gate' (the owner decides) or 'deny', by rule and whose files. Against accidents, not an adversary. */
 
+import { runsInlineProgram } from './inline-program';
 import type { ShellCwd, ShellSession } from '../execution/shell-session';
 import { machinePath } from '../vfs/resolve';
 import { workspacePath } from '../vfs/workspace-path';
@@ -580,57 +581,6 @@ export function reviewFileAccess(access: FileAccess): ApprovalResult {
   return { decision: dominant(hits), hits };
 }
 
-/** Interpreters that take a program as text, as well as from a file. */
-const PROGRAM_INTERPRETERS: ReadonlySet<string> = new Set(['python', 'python3', 'perl', 'ruby', 'node', 'bun', 'deno']);
-
-/** Words that run a command named later among their arguments (`env -u NAME node`, `timeout -s KILL 5 node`). */
-const RUNNERS: ReadonlySet<string> = new Set(['sudo', 'command', 'exec', 'time', 'nice', 'nohup', 'env', 'timeout', 'xargs']);
-
-/** An interpreter's option that hands it the program as text: `-c`, `-e` or `-p`, combined as `-Bc` or `-ne`, or
- *  spelled `--eval` / `--print` with or without `=`. */
-const INLINE_OPTION = /^(?:-[A-Za-z]*[cep]|--eval|--print)(?:=|$)/u;
-
-/** Options that only report, so an interpreter given nothing else runs no program. */
-const REPORT_OPTIONS: ReadonlySet<string> = new Set(['-V', '--version', '-v', '-h', '--help']);
-
-const basename = (word: string): string => word.slice(word.lastIndexOf('/') + 1);
-
-/** Whether an interpreter given `rest` runs a program given as text: an inline option, a heredoc, `-`, or `deno eval` /
- *  `bun eval`, before any script file it is named; or, where nothing appends to its words (`bare`), nothing at all, so
- *  the program is read from stdin. */
-function inlineAfter(rest: readonly string[], bare: boolean): boolean {
-  for (const word of rest) {
-    if (INLINE_OPTION.test(word) || word === '-' || word.startsWith('<<') || word === 'eval') return true;
-
-    if (!word.startsWith('-')) return false;
-  }
-
-  return bare && !rest.some((word) => REPORT_OPTIONS.has(word));
-}
-
-/**
- * Whether one simple command's words (quoted text blanked) run an interpreter on a program given as text. The command
- * word follows any assignments; under a runner, whose options and their values vary, every later word naming an
- * interpreter is read as where the command may start, so no runner's grammar has to be parsed to see it.
- */
-function runsInlineProgram(words: readonly string[]): boolean {
-  const at = words.findIndex((word) => !ENV_ASSIGNMENT.test(word));
-  const head = basename(words[at] ?? '');
-
-  if (PROGRAM_INTERPRETERS.has(head)) return inlineAfter(words.slice(at + 1), true);
-
-  if (!RUNNERS.has(head)) return false;
-
-  // `xargs` appends its input to the command's words, so a bare interpreter under it is handed files.
-  return words.some((word, index) => index > at && PROGRAM_INTERPRETERS.has(basename(word)) && inlineAfter(words.slice(index + 1), head !== 'xargs'));
-}
-
-/** Whether any simple command of `unquoted` (quoted text blanked) runs an interpreter on a program given as text; a
- *  heredoc operator is its own word even written against the command (`node<<'JS'`). */
-function runsAnyInlineProgram(unquoted: string): boolean {
-  return unquoted.split(/[;&|()\n`{}]|\$\(/u).some((segment) => runsInlineProgram(segment.replace(/<</gu, ' << ').trim().split(/\s+/u).filter((word) => word !== '')));
-}
-
 const PROGRAM_ON_USER_FILES: ApprovalRuleHit = {
   decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.',
 };
@@ -661,7 +611,7 @@ export function reviewCommand(command: string, filesOwner: FilesOwner): Approval
     hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
   }
 
-  if (!agentsOwn && runsAnyInlineProgram(unquoted)) hits.push(PROGRAM_ON_USER_FILES);
+  if (!agentsOwn && runsInlineProgram(command)) hits.push(PROGRAM_ON_USER_FILES);
 
   return { decision: dominant(hits), hits };
 }

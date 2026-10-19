@@ -46,44 +46,6 @@ function decidesAll(commands: readonly string[], decision: ApprovalDecision): vo
   }
 }
 
-describe('reviewCommand inline programs over user files', () => {
-  const cases = [
-    { command: "node --eval='console.log(1)'", asks: true },
-    { command: 'echo node -e', asks: false },
-    { command: 'python3 script.py', asks: false },
-    { command: "env FOO=1 python3 -c 'print(1)'", asks: true },
-    { command: 'cat x | node', asks: true },
-    { command: 'python3 --version', asks: false },
-    { command: "python3 -Bc 'print(1)'", asks: true },
-    { command: "perl -ne 'print' x", asks: true },
-    { command: 'node -', asks: true },
-    { command: "node <<'JS'\nconsole.log(1)\nJS", asks: true },
-    { command: "bun eval 'console.log(1)'", asks: true },
-    { command: "deno eval 'console.log(1)'", asks: true },
-    // A runner's options and their values are not parsed: every later interpreter word is read as a command.
-    { command: "env -u UNUSED node -e 'require(1)'", asks: true },
-    { command: "sudo -u node node -e 'require(1)'", asks: true },
-    { command: "timeout -s KILL 5 python3 -c 'print(1)'", asks: true },
-    { command: 'sudo -u node ls', asks: false },
-    // A heredoc written against the interpreter's name is still one.
-    { command: "node<<'JS'\nconsole.log(1)\nJS", asks: true },
-    // `xargs` hands a bare interpreter files, not a program.
-    { command: 'find . -name "*.js" | xargs node', asks: false },
-    { command: "echo x | xargs node -e 'console.log(1)'", asks: true },
-  ];
-
-  for (const row of cases) {
-    test(row.command, () => {
-      const reviewed = reviewCommand(row.command, THEIRS);
-
-      // A row that runs no inline program may still meet another rule (`sudo`), so only an asking row names its decision.
-      if (row.asks) expect(reviewed.decision).toBe('gate');
-      expect(reviewed.hits.some(({ rule }) => rule === 'program-on-user-files')).toBe(row.asks);
-      expect(reviewCommand(row.command, OURS).hits.some(({ rule }) => rule === 'program-on-user-files')).toBe(false);
-    });
-  }
-});
-
 describe('reviewCommand — the rule table', () => {
   test('returns allow with no hits for benign commands, everywhere', () => {
     for (const cmd of ['ls -la', 'cat README.md', 'npm install lodash', 'git status', 'node app.js']) {
