@@ -296,7 +296,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     ...(lastShown !== undefined && { messages: lastShown }),
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
-    prepareSendMessagesRequest: ({ messages: thread }) => ({ body: { messages: thread.filter((message) => !stoppedOpenings.current.has(message.id)) } }),
+    // A Retry's window keeps them: the room reruns its newest user message, and sends the agent no words of it.
+    prepareSendMessagesRequest: ({ messages: thread, trigger }) => (trigger === "submit-message"
+      ? { body: { messages: thread.filter((message) => !stoppedOpenings.current.has(message.id)) } }
+      : {}),
   });
 
   useEffect(() => {
