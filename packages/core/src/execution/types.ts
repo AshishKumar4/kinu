@@ -40,7 +40,7 @@ export interface ExecutorTool {
 export type CommandTool = ExecutorTool & Required<Pick<ExecutorTool, 'prepare'>>;
 
 /** The members the approval gate holds: each must say what it runs. */
-export const COMMAND_MEMBERS = ['exec', 'startProcess', 'runCode'] as const;
+export const COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 
 /** A command member whose `execute` is its own reading run, so there is no second way to read a call. */
 export function commandTool(

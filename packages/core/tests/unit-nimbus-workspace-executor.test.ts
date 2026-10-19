@@ -87,7 +87,7 @@ describe('hosted Nimbus workspace provider', () => {
     expect(provider.name).toBe('workspace');
     expect(provider.kind).toBe('workspace');
     expect(declared(provider)).toContain('declare const workspace');
-    expect(declared(provider)).toContain('runCode(');
+    expect(declared(provider)).toContain('createTool(');
     const router = new DefaultExecutionRouter({ mode: () => 'allow_all' });
     router.register(provider);
     expect(router.getProviders().map((entry) => entry.name)).toEqual(['workspace']);

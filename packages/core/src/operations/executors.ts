@@ -127,16 +127,6 @@ export const WORKSPACE = {
     input: v.strictObject({ name: v.pipe(v.string(), v.nonEmpty()), description: v.pipe(v.string(), v.nonEmpty()), code: v.pipe(v.string(), v.nonEmpty()) }),
     output: v.object({ name: v.string(), action: v.picklist(['created', 'updated']) }),
   }),
-  runCode: ws({
-    name: 'runCode', help: 'Run a snippet in a language runtime of the workspace.', impact: 'execute', output: Text,
-    input: v.strictObject({
-      code: v.pipe(v.string(), v.nonEmpty()),
-      language: v.optional(v.picklist(['javascript', 'typescript', 'python', 'ruby', 'shell'])),
-      install: v.optional(described(v.picklist(['never', 'ifMissing']), 'Install the runtime when missing; default never.')),
-    }),
-  }),
-  installRuntime: ws({ name: 'installRuntime', help: 'Install a language runtime, by spec.', impact: 'administer', input: v.strictObject({ spec: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
-  listRuntimes: ws({ name: 'listRuntimes', help: 'The installed language runtimes.', impact: 'observe', input: v.strictObject({}), output: Text }),
 } as const;
 
 const sb = executorOp('computer');

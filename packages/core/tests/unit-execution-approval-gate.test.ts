@@ -16,8 +16,7 @@ import { type FilesOwner } from '../src/safety/command-review';
 import { type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
 import { createShellSession } from '../src/execution/shell-session';
 
-import { withMountTable, workspaceFilePlane } from '../src/vfs/mounts';
-import { skillsMount } from '../src/skills/view';
+import { workspaceFilePlane } from '../src/vfs/mounts';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { fakeCommandMember, present, toolExecute, workspaceShell } from '@kinu.run/test-utils';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
@@ -540,7 +539,7 @@ function mountedWorkspaceProvider() {
     disconnect: async () => {},
     tools: {
       startProcess: fakeCommandMember('Start a background process', record('start')),
-      runCode: fakeCommandMember('Run a program', record('code'), 'program'),
+      exec: fakeCommandMember('Run a command', record('exec')),
     },
   };
 
@@ -550,31 +549,29 @@ function mountedWorkspaceProvider() {
 describe('codemode calls on a workspace over the user\'s mounts', () => {
   const DENIED = { error: expect.stringContaining('Denied by the owner') };
 
-  test('a program reading the read-only skills view asks nobody, while one writing the user\'s machine asks', async () => {
-    const { router, asked } = askingRouter();
-    const db = new Database(':memory:');
-    const workspace = createWorkspaceBundle(db);
-    const { device } = deviceProject();
+  /** The workspace's own shell over the user's mounts, gated where every workspace command is. */
+  function gatedWorkspaceShell() {
+    const { asked, policy } = askingRouter();
+    const ran: string[] = [];
 
-    const mounted = withMountTable(workspace.vfs, [
-      skillsMount(() => workspace.vfs),
-      { name: 'pc', files: () => device, absentReason: () => 'no device', filesOwner: 'user' },
-    ]);
+    const shell = withApprovalGatedShell({
+      exec: async (command) => {
+        ran.push(command);
 
-    router.register({
-      ...mountedWorkspaceProvider().provider,
-      shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() }),
-    });
-    const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
-    const write = "open('/pc/laptop/notes.txt', 'w').write('x')";
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      },
+    }, { filesOwner: 'agent', shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/pc', '/shared'] }) }, policy);
 
-    try {
-      expect(await run.execute("print(open('/skills/deploy/SKILL.md').read())", { language: 'python' })).toBe('ok');
-      expect(await run.execute(write, { language: 'python' })).toMatchObject(DENIED);
-      expect(asked.map((request) => request.command)).toEqual([write]);
-    } finally {
-      db.close();
-    }
+    return { shell, asked, ran };
+  }
+
+  test('an inline program reading the agent\'s own views asks nobody, while one writing the user\'s machine asks', async () => {
+    const { shell, asked } = gatedWorkspaceShell();
+    const write = `python3 -c "open('/pc/laptop/notes.txt', 'w').write('x')"`;
+
+    expect((await shell.exec(`python3 -c "print(open('/skills/deploy/SKILL.md').read())"`)).refusal).toBeUndefined();
+    expect((await shell.exec(write)).refusal).toMatchObject(DENIED);
+    expect(asked.map((request) => request.command)).toEqual([write]);
   });
 
   test('a background process started on the user\'s machine is put to them first', async () => {
@@ -590,20 +587,18 @@ describe('codemode calls on a workspace over the user\'s mounts', () => {
     expect(ran).toEqual(['start rm -rf build']);
   });
 
-  test('a shell program is reviewed as a shell command, and one in another language that names the user\'s files asks', async () => {
-    const { router, asked } = askingRouter();
-    const { provider, ran } = mountedWorkspaceProvider();
-    router.register(provider);
-    const run = present(router.getProvider('workspace'), 'the workspace executor').tools.runCode;
-    const python = "import shutil; shutil.rmtree('/shared/notes')";
+  test('an inline program that names the user\'s files asks, as a shell command there does', async () => {
+    const { shell, asked, ran } = gatedWorkspaceShell();
+    const python = `python3 -c "import shutil; shutil.rmtree('/shared/notes')"`;
+    const node = `node -e "require('fs').rmSync('/pc/laptop/proj', { recursive: true })"`;
 
-    expect(await run.execute('rm -rf /pc/laptop/proj', { language: 'shell' })).toMatchObject(DENIED);
-    expect(await run.execute(python, { language: 'python' })).toMatchObject(DENIED);
-    expect(await run.execute('rm -rf build', { language: 'shell' })).toBe('ok');
-    expect(await run.execute("print('hi')", { language: 'python' })).toBe('ok');
+    for (const command of ['rm -rf /pc/laptop/proj', python, node]) expect((await shell.exec(command)).refusal).toMatchObject(DENIED);
 
-    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', python]);
-    expect(ran).toEqual(['code rm -rf build', "code print('hi')"]);
+    // Over the agent's own files, the same kinds of call run.
+    for (const command of ['rm -rf build', `python3 -c "print('hi')"`, 'python3 - <<EOF\nprint(1)\nEOF']) expect((await shell.exec(command)).refusal).toBeUndefined();
+
+    expect(asked.map((request) => request.command)).toEqual(['rm -rf /pc/laptop/proj', python, node]);
+    expect(ran).toEqual(['rm -rf build', `python3 -c "print('hi')"`, 'python3 - <<EOF\nprint(1)\nEOF']);
   });
 
   test('a move, copy or redirect onto the user\'s device or Drive asks, while the same write in the agent\'s home runs', async () => {

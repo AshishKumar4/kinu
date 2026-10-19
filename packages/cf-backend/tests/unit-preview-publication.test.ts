@@ -187,7 +187,7 @@ test('a port exposed again while its unexpose is still settling stays exposed', 
   setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
   await handle.exposePort(PORT, {});
   holding = true;
-  const unexpose = present(createSandboxExecutor(handle).tools.unexposePort, 'unexposePort').execute(PORT);
+  const unexpose = present(createSandboxExecutor(handle).unexposePort, 'unexposePort')(PORT);
 
   await notified.promise;
   setSystemTime(new Date('2026-03-01T12:00:01.000Z'));

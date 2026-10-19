@@ -89,11 +89,6 @@ function nimbusBox(): SessionBox & { calls: string[]; execOptions: unknown[] } {
     },
     files: sessionFilesOver(),
     runtimes: {
-      async ensure(specs: string | string[]): Promise<undefined> {
-        calls.push(`ensure:${Array.isArray(specs) ? specs.join(",") : specs}`);
-
-        return undefined;
-      },
       async list() {
         calls.push("runtimes");
 

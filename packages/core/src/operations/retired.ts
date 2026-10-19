@@ -6,6 +6,9 @@
 /** `namespace.member` → what replaced it, as a program calls it. */
 export const RETIRED_MEMBERS = {
   'workspace.killProcess': 'workspace.stopProcess(processId)',
+  'workspace.runCode': "workspace.exec(command): `node -e '…'`, `python3 -c '…'`, `ruby -e '…'`; for TypeScript, write a .ts file and run `node file.ts`",
+  'workspace.installRuntime': 'workspace.exec: a runtime installs the first time a command needs it',
+  'workspace.listRuntimes': 'the Execution status in your context, which lists what each machine runs',
 } as const satisfies Readonly<Record<string, string>>;
 
 /** `namespace.operation` → each retired field and what to use instead. */

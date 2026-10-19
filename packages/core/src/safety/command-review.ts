@@ -580,15 +580,13 @@ export function reviewFileAccess(access: FileAccess): ApprovalResult {
   return { decision: dominant(hits), hits };
 }
 
-/** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
-export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalResult {
-  const review = reviewCommand(code, filesOwner);
+const PROGRAM_ON_USER_FILES: ApprovalRuleHit = {
+  decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.',
+};
 
-  if (filesOwner === 'agent') return review;
-  const hits = [...review.hits, { decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.' } as const];
-
-  return { decision: dominant(hits), hits };
-}
+/** An interpreter handed its program as text (`python3 -c`, `node -e`, a heredoc), read with quoted text blanked: what
+ *  the program does to the files it names cannot be read from the line, so over the user's files it asks once. */
+const INLINE_PROGRAM = /(?:^|[\s;&|(`])(?:[\w./-]*\/)?(?:python3?|perl|ruby|node|bun|deno)(?:\s+-[\w-]+)*?(?:\s+(?:-c|-e|--eval|-p|--print|eval|-)(?=\s|$)|\s*<<)/u;
 
 /** No default owner: no caller silently picks a trust tier. */
 export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
@@ -615,6 +613,8 @@ export function reviewCommand(command: string, filesOwner: FilesOwner): Approval
     if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
     hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
   }
+
+  if (!agentsOwn && INLINE_PROGRAM.test(unquoted)) hits.push(PROGRAM_ON_USER_FILES);
 
   return { decision: dominant(hits), hits };
 }

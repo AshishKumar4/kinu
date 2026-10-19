@@ -14,14 +14,10 @@ import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
-import { envContext } from './command-call';
-import { sha256Hex } from '../safety/argument-digest';
-import type { CommandCall } from '../safety/approval-gate';
-import { commandResult, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { parseInput, type JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SessionExecOptions, SessionPort, SessionRunCodeOptions, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
+import type { SessionExecOptions, SessionPort, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
 import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 
 /**
@@ -31,7 +27,6 @@ import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
  */
 type NimbusExecOptions = Pick<SessionExecOptions, 'cwd' | 'env' | 'timeoutMs' | 'stdin' | 'cred' | 'shellId' | 'execId' | 'detach'>;
 
-type NimbusRunCodeOptions = NimbusExecOptions & Pick<SessionRunCodeOptions, 'language' | 'install'>;
 
 export type NimbusExecResult = ExecOutput;
 
@@ -50,10 +45,8 @@ export interface NimbusSandboxHandle {
   shellCwd?(shellId: string): Promise<string | null>;
   execStream?: (command: string, options?: NimbusExecOptions) => Promise<ExecStream>;
   startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
-  runCode?: (code: string, options?: NimbusRunCodeOptions) => Promise<NimbusExecResult>;
+  /** The runtime catalog, read to declare `python` and `native_binary`. */
   runtimes?: {
-    ensure?(specs: string | string[], options?: { force?: boolean }): Promise<JsonValue | undefined>;
-    install?(spec: string, options?: { force?: boolean }): Promise<JsonValue | undefined>;
     list?(): Promise<JsonValue | undefined>;
   };
   processes?: {
@@ -100,35 +93,6 @@ function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
 
 const StringSchema = v.string();
 
-/** The agent-facing option schema omits `cred`, so an invented one is stripped. Adding it would let agents choose their uid. */
-const NimbusRunCodeOptionsSchema: v.GenericSchema<NimbusRunCodeOptions> = v.object({
-  cwd: v.optional(v.string()),
-  env: v.optional(v.record(v.string(), v.string())),
-  timeoutMs: v.optional(v.number()),
-  stdin: v.optional(v.string()),
-  language: v.optional(v.picklist(['javascript', 'typescript', 'python', 'ruby', 'shell'])),
-  install: v.optional(v.picklist(['never', 'ifMissing'])),
-});
-
-/** What a Nimbus call runs, from the options its schema kept: `runCode` runs a program unless its language is the
- *  shell. Nimbus starts one without a directory in the home, and takes no named shell from an agent. */
-function nimbusCall(member: 'runCode' | 'startProcess', text: string, options: NimbusRunCodeOptions | undefined): CommandCall {
-  const language = options?.language;
-
-  return {
-    text,
-    ...(member === 'runCode' && language !== 'shell' && { program: language ?? 'default' }),
-    ...(options?.cwd !== undefined && { cwd: options.cwd }),
-    context: {
-      ...envContext(options?.env),
-      ...(options?.stdin !== undefined && { stdinSha256: sha256Hex(options.stdin) }),
-      ...(member === 'runCode' && { language: language ?? 'default' }),
-      ...(options?.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
-      ...(options?.install !== undefined && { install: options.install }),
-    },
-  };
-}
-
 const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
 
 function stringifyResult(input: { value: unknown }): string {
@@ -146,30 +110,6 @@ function stringifyResult(input: { value: unknown }): string {
 interface NimbusReach {
   readonly box: NimbusSandboxHandle;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
-}
-
-/** `workspace.runCode`. */
-function runCodeMember({ box, touch }: NimbusReach): ExecutorTool {
-  return commandTool('Run code in Nimbus using the requested language runtime.', (args) => {
-    const runCode = box.runCode;
-
-    if (!runCode) return { refused: handleLacks('runCode') };
-    const code = parseInput(StringSchema, { value: args[0] });
-
-    if (code === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus runCode: code must be a string')) };
-    const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
-
-    return {
-      call: nimbusCall('runCode', code, options),
-      run: async (): Promise<CommandResult> => {
-        try {
-          return commandResult(await touch(() => runCode(code, options)));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: 'nimbus runCode', cause: err }));
-        }
-      },
-    };
-  });
 }
 
 /** A process id as `startProcess` answers it: the Nimbus pid, as text. */
@@ -197,8 +137,9 @@ function startProcessMember({ box, touch }: NimbusReach): ExecutorTool {
 
     if (options === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: its options are `{ cwd? }`')) };
 
+    // Nimbus starts it in the home unless told a directory, and takes no named shell from an agent.
     return {
-      call: nimbusCall('startProcess', command, options),
+      call: { text: command, ...(options.cwd !== undefined && { cwd: options.cwd }), context: {} },
       run: async () => {
         try {
           return { processId: String((await touch(() => startProcess(command, options))).pid) };
@@ -282,55 +223,8 @@ function logsMember({ box, touch }: NimbusReach): ExecutorTool {
   };
 }
 
-/** `workspace.installRuntime`. */
-function installRuntimeMember({ box, touch }: NimbusReach): ExecutorTool {
-  return {
-    description: 'Install or ensure a Nimbus runtime such as python, bun, or clang.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      const spec = parseInput(StringSchema, { value: args[0] });
-
-      if (spec === undefined) {
-        return refusalOf(new KinuError('bad_input', 'nimbus installRuntime: spec must be a string'));
-      }
-
-      const runtimes = box.runtimes;
-      const install = runtimes?.install?.bind(runtimes);
-      const ensure = runtimes?.ensure?.bind(runtimes);
-
-      try {
-        if (install) await touch(() => install(spec));
-        else if (ensure) await touch(() => ensure(spec));
-        else return handleLacks('runtime installation');
-
-        return `installed ${spec}`;
-      } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus installRuntime ${spec}`, cause: err }));
-      }
-    },
-  };
-}
-
-/** `workspace.listRuntimes`. */
-function listRuntimesMember({ box, touch }: NimbusReach): ExecutorTool {
-  return {
-    description: 'List Nimbus runtimes.',
-    execute: async (): Promise<string | Refusal> => {
-      const runtimes = box.runtimes;
-
-      if (!runtimes?.list) return handleLacks('runtime listing');
-      const list = runtimes.list.bind(runtimes);
-
-      try {
-        return stringifyResult({ value: await touch(() => list()) });
-      } catch (err) {
-        return refusalOf(nimbusFailure({ doing: 'nimbus listRuntimes', cause: err }));
-      }
-    },
-  };
-}
-
-/** The live Nimbus session's process, port and runtime members, declared inside the workspace namespace, and the
- *  lifecycle the workspace executor reports. */
+/** The live Nimbus session's process members, declared inside the workspace namespace, and the lifecycle the
+ *  workspace executor reports. */
 export function nimbusSession(opts: NimbusSessionOpts) {
   const box = opts.box;
   let active = false;
@@ -376,13 +270,10 @@ export function nimbusSession(opts: NimbusSessionOpts) {
   const nimbus: NimbusReach = { box, touch };
 
   const tools: ExecutorProvider['tools'] = {
-    runCode: runCodeMember(nimbus),
     startProcess: startProcessMember(nimbus),
     stopProcess: stopProcessMember(nimbus),
     listProcesses: listProcessesMember(nimbus),
     logs: logsMember(nimbus),
-    installRuntime: installRuntimeMember(nimbus),
-    listRuntimes: listRuntimesMember(nimbus),
   };
 
   // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` install from the
