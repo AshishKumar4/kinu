@@ -8,7 +8,7 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedSdkMcpServer,
+  lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedMcpAnswer, seedMcpTools, seedSdkMcpServer,
 } from './helpers/agents-sdk';
 import { kvOf } from './helpers/platform-context';
 import { auth } from '@modelcontextprotocol/client';
@@ -307,6 +307,41 @@ describe('a cold activation over a preset row', () => {
 
     woken.close();
     first.close();
+  });
+});
+
+describe("a GitHub answer that a repository was not reached", () => {
+  /** A GitHub tool's error as its MCP server words it (github/github-mcp-server pkg/errors, `message: err`). */
+  async function answered(text: string): Promise<string> {
+    const h = harness({ mcpAppCredentials: ['github'] });
+    queueMcpAuthUrl('https://github.com/login/oauth/authorize?test');
+    const added = await h.userDO.userMcp_add(await testOwner(), { presetId: 'github' }, 'https://kinu.example');
+
+    seedMcpTools(added.id, [{ name: 'get_file_contents', inputSchema: { type: 'object' } }]);
+    seedMcpAnswer({ isError: true, content: [{ type: 'text', text }] });
+
+    try {
+      return await h.userDO.userMcp_callTool(await testOwner(), { serverId: added.id, name: 'get_file_contents', args: {}, id: crypto.randomUUID() });
+    } finally {
+      h.close();
+    }
+  }
+
+  // A 404 or 403 from GitHub does not say which account, app or policy kept the repository out of reach, so the agent is
+  // told GitHub's words, what can cause them, and where each is changed, never a single verdict.
+  test("keeps GitHub's words and lists what can cause them, with where each is changed", async () => {
+    const words = 'failed to get file contents: GET https://api.github.com/repos/kinu-run/billing-worker/contents/wrangler.toml: 404 Not Found []';
+    const answer = await answered(words);
+
+    expect(answer).toContain(JSON.stringify(words).slice(1, -1));
+    expect(answer).toContain('https://github.com/settings/connections/applications/test-github-client-id');
+    expect(answer).toContain('https://github.com/settings/installations');
+  });
+
+  test('an error that is not a repository out of reach is passed on as GitHub worded it, and nothing more', async () => {
+    const words = 'failed to create issue: POST https://api.github.com/repos/kinu-run/billing-worker/issues: GitHub API rate limit exceeded. Wait before retrying.';
+
+    expect(JSON.parse(await answered(words))).toEqual({ isError: true, content: [{ type: 'text', text: words }] });
   });
 });
 

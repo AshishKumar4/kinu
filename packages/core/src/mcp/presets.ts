@@ -20,7 +20,42 @@ export interface McpPreset {
   readonly scope?: string;
   /** Set on the vendor's authorize URL: what its authorization server needs beyond OAuth's own parameters. */
   readonly authorize?: Readonly<Record<string, string>>;
+  /** Told beside a tool's own error where its words alone mislead; null where they do not. `app` is the registered
+   *  app the deployment signs in through, if any. */
+  readonly explainError?: (text: string, app: { readonly clientId: string } | null) => string | null;
   readonly docsUrl: string;
+}
+
+/** A repository GitHub answered 404 or 403 for, as its MCP server words the REST error, or not found over GraphQL. */
+const GITHUB_REPO_REFUSED = /https:\/\/api\.github\.com\/repos\/([^/\s]+\/[^/\s:]+)\S*: (40[34]) /u;
+
+const GITHUB_REPO_UNRESOLVED = /Could not resolve to a Repository with the name '([^']+)'/u;
+
+/**
+ * GitHub answers 404 for a repository that does not exist and for one this sign-in cannot see, alike, and 403 for one
+ * an app or a policy keeps out: its answer does not say which. So the agent is told what GitHub's answer establishes,
+ * what can cause it, and where each cause is changed, never one verdict.
+ */
+function githubOutOfReach(text: string, app: { readonly clientId: string } | null): string | null {
+  const refused = GITHUB_REPO_REFUSED.exec(text);
+  const repository = refused?.[1] ?? GITHUB_REPO_UNRESOLVED.exec(text)?.[1];
+
+  if (repository === undefined) return null;
+  const forbidden = refused?.[2] === '403';
+
+  const policy = app === null
+    ? 'the organization restricts third-party apps'
+    : `the organization restricts third-party apps: its owner grants this app access, or a member requests it at https://github.com/settings/connections/applications/${app.clientId}`;
+
+  return [
+    forbidden
+      ? `GitHub refused this sign-in access to ${repository} (403). What can cause it:`
+      : `GitHub found no repository ${repository} for this sign-in. It answers so for a repository that does not exist under that name, and for one this sign-in cannot see. What can cause it:`,
+    ...(forbidden ? [] : ['- the owner or repository name differs from GitHub\'s;']),
+    '- the repository belongs to an account or organization this sign-in has no access to;',
+    `- ${policy};`,
+    '- where Kinu signs in through a GitHub App, the repository is not in the app\'s installation: https://github.com/settings/installations.',
+  ].join('\n');
 }
 
 export const MCP_PRESETS: readonly McpPreset[] = [
@@ -35,6 +70,7 @@ export const MCP_PRESETS: readonly McpPreset[] = [
     // What the default toolsets (context, repos, issues, pull_requests, users) challenge for: `repo`, and `read:org`
     // for teams and organization fields (github/github-mcp-server README, "OAuth Challenge Scopes", 2026-10-19).
     scope: 'repo read:org read:user',
+    explainError: githubOutOfReach,
     tokenFallback: { label: 'Personal access token' },
     docsUrl: 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens',
   },
