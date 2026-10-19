@@ -9,7 +9,10 @@ import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { Command } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { VfsRemoval } from '@nimbus-sh/core/vfs/vfs.js';
+import { removeWhole } from './mounts';
 import * as v from 'valibot';
 import { SOUL_FILE, SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
@@ -18,6 +21,12 @@ import { SHARED_ROOTS, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
 export const MAIN_AGENT = 'main';
+
+/**
+ * A share's viewer's home and identity row (`execution/viewer-principal.ts`): a usable home name, and never an agent's,
+ * whose name is a slug without `_`.
+ */
+export const VIEWER_HOME_NAME = 'share_viewer';
 
 /** Owner writes; everyone reads and traverses. */
 const AGENT_HOME_MODE = 0o755;
@@ -171,7 +180,7 @@ export interface HomeRootVfs {
   chmod(path: string, mode: number): void;
   exists(path: string): boolean;
   stat(path: string): { readonly uid: number; readonly gid: number; readonly mode: number };
-  removeRecursive(path: string): number;
+  removeRecursive(path: string): VfsRemoval | void;
 }
 
 /** Registers a confined principal against its physical storage root. */
@@ -307,7 +316,8 @@ export function releaseAgentHome(
     if (agentName === MAIN_AGENT) return yield* Effect.die(new Error('the workspace agent has no home to release'));
 
     for (const path of [agentHome(agentName), agentTmpRoot(agentName)]) {
-      if (root.exists(path)) root.removeRecursive(path);
+      // Whole, or the release stops: a principal released over files it still owns hands them to its uid's next holder.
+      if (root.exists(path)) removeWhole(root, path);
     }
 
     const identity = allocatedAgentIdentity(sql, agentName);
@@ -340,4 +350,28 @@ export function restoreAgentTmpConfinements(
 
     return restored;
   }));
+}
+
+/** The workspace shell's command table, as far as one command is replaced in it. */
+interface CommandTable {
+  resolve(name: string): Promise<Command | undefined>;
+  register(name: string, command: Command): void;
+}
+
+/**
+ * `sudo` and `su` refused to a process running as the viewer, at each engine boot: either would give it another uid,
+ * and with it the owner's files and processes. Every other caller runs them as before.
+ */
+export async function refuseViewerIdentityChange(commands: CommandTable, sql: SqlDatabase): Promise<void> {
+  for (const name of ['sudo', 'su']) {
+    const command = await commands.resolve(name);
+
+    if (command === undefined) continue;
+    commands.register(name, async (context) => {
+      if (context.cred === undefined || agentNameOfUid(sql, context.cred.uid) !== VIEWER_HOME_NAME) return await command(context);
+      await context.stderr.write(`${name}: a share's viewer runs only as itself on this workspace: its owner's files and processes are not its own\n`);
+
+      return 1;
+    });
+  }
 }

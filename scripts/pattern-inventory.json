@@ -596,6 +596,13 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/pc-agent/src/daemon/screen.js",
+      "kind": "hand-parser",
+      "owner": "parse",
+      "sourceSha256": "c337be354bf6ca247fa6033434842aa27039ca45c063ca0e7a63aeff85ae4523",
+      "decision": "traversal"
+    },
+    {
       "file": "packages/pc-agent/src/update.js",
       "kind": "hand-parser",
       "owner": "parseUpdateFrame",
@@ -734,6 +741,27 @@
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/safety/pasted-secrets.ts",
+      "kind": "regex-literal",
+      "owner": "DOTENV_LINE",
+      "sourceSha256": "058fc6cd11f40fbf2f16e06b1588ecac8e797b6943dd8e9d5f722a9d0b83fff4",
+      "decision": "grammar"
+    },
+    {
+      "file": "packages/core/src/safety/pasted-secrets.ts",
+      "kind": "regex-literal",
+      "owner": "isBenign",
+      "sourceSha256": "6486bdc306cc4527ad96cccf508b86b06cc35e6a112472a302185ca60914f60e",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/pasted-secrets.ts",
+      "kind": "hand-parser",
+      "owner": "parseDotenv",
+      "sourceSha256": "0ed4736a8d709af37ebc9e48685b709235483404fc8cefc7ee444a0ec4e974db",
+      "decision": "grammar"
     }
   ]
 }

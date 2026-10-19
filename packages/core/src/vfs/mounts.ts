@@ -12,7 +12,7 @@ import { Cause, Effect, Exit, Result } from 'effect';
 import type { FilesOwner } from '../safety/command-review';
 import type { ExecutorStatus } from '../execution/types';
 import { attempt, hold, KinuError, renderThrownChain, settle, settleSync, tolerateAsync } from '../obs/index';
-import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { CompositeVFS, type Principal, type VfsRoute } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { observeNamespace, type WriteObserver } from './write-events';
@@ -190,6 +190,19 @@ function partial(removal: VfsRemoval | void, spelled: (path: string) => string):
 	return { removed: removal.removed.map(spelled), remaining: removal.kept.map(spelled), failed: { path: spelled(failed.path), cause: failed.error } };
 }
 
+/**
+ * `path` removed whole, or refused naming what went and what stayed. Nimbus's rm -r keeps what it cannot remove and
+ * goes on (core 0.19, GNU's walk), so a caller that means all of it says so here.
+ */
+function refusePartialRemoval(path: string, kept: PartialRemoval | null): void {
+	if (kept !== null) throw new VfsError(isVfsError(kept.failed.cause) ? kept.failed.cause.code : 'EIO', partialTreeRemovalMessage(path, kept), path);
+}
+
+/** A synchronous plane's rm -r of `path`, all of it or refused ({@link refusePartialRemoval}). */
+export function removeWhole(files: { removeRecursive(path: string): VfsRemoval | void }, path: string): void {
+	refusePartialRemoval(path, partial(files.removeRecursive(path), (at) => at));
+}
+
 /** Shared by the composite plane's throw and the file manager's error value. */
 export function partialTreeRemovalMessage(path: string, removal: PartialRemoval): string {
 	const gone = removal.removed.length === 0 ? 'none' : removal.removed.join(', ');
@@ -325,6 +338,18 @@ function routeCreating(namespace: CompositeVFS, at: string, follow: boolean): Pr
 /** Where an operation on `at` lands: the operation's own lookup, a directory missing on the way ENOENT. */
 function routeStrict(namespace: CompositeVFS, at: string, follow: boolean): Promise<VfsRoute> {
 	return namespace.route(at, { follow });
+}
+
+/**
+ * Whether a mount point stands at `at` or under it, `at` resolved as the operation takes it (its leaf not followed). rm -r
+ * enters a mounted tree and removes what it holds (Nimbus 0.19, as Linux does) before it refuses the point itself, which
+ * would empty a device's, the computer's or an agent's own space; this plane refuses that walk first.
+ */
+async function holdsMountPoint(namespace: CompositeVFS, at: string): Promise<boolean> {
+	const named = namespacePath(await routeStrict(namespace, at, false));
+	const under = named === '/' ? '/' : `${named}/`;
+
+	return namespace.someMountPoint((point) => point === named || point.startsWith(under));
 }
 
 /** Whether `from` and `to` are on one mount, the directories a move would make passing as named. */
@@ -463,10 +488,13 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			return move(movable(namespace), source.at, target.at);
 		},
 		async removeRecursive(path) {
-			const { files, at } = await on(path);
-			const kept = await removeTree(files, at);
+			const { files, at, namespace } = await on(path);
 
-			if (kept !== null) throw new VfsError(isVfsError(kept.failed.cause) ? kept.failed.cause.code : 'EIO', partialTreeRemovalMessage(at, kept), at);
+			if (namespace !== null && await holdsMountPoint(namespace, at)) {
+				return await settle(Effect.fail(syscallError('EBUSY', 'rm', at, { detail: 'a mount point is at or under it' })));
+			}
+
+			refusePartialRemoval(at, await removeTree(files, at));
 		},
 		async resolve(path, options) {
 			const target = await on(path);

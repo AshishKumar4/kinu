@@ -46,6 +46,7 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
+import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
@@ -59,6 +60,7 @@ import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { Modal } from "@/components/ui/Modal";
+import { ComputerPreviewFrame, SecretPasteFrame, secretsFixture } from "@/gallery-secrets";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { admitReviewAnnotations, FEEDBACK_ENDPOINT, reviewFeedbackText } from "@kinu.run/core";
@@ -133,6 +135,20 @@ const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 /** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
 const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
 
+/**
+ * `&pcdesktop=ready|setup|permission`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
+ * `setup` poses a Mac with no compiler for its capture helper, as the daemon names the step.
+ */
+const SHELL_PC_DESKTOP: UserDevice["desktop"] = (() => {
+  const state = SHELL_PC === null ? null : new URLSearchParams(location.search).get("pcdesktop");
+
+  if (state === "ready") return { state, width: 1512, height: 982 };
+
+  if (state === "setup") return { state, detail: "Install the Command Line Tools (xcode-select --install), then open this tab again." };
+
+  return state === "permission" ? { state } : { state: "none" };
+})();
+
 /** The shell's machines under `&env=computer` or `&pc=`, as `listMounts` and the snapshot's executors answer them. */
 const SHELL_MACHINES = {
   mounts: [
@@ -206,6 +222,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+      desktop: { state: "none" },
       version: null, servedVersion: null, update: "unreported", updateRefusal: null,
     },
   ],
@@ -217,7 +234,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty", "secretpaste"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -437,8 +454,10 @@ function galleryChatGptStatus() {
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
 
-/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read. */
-const settingsSavedCredentials = new Map<string, JsonValue>();
+/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read.
+ *  `&keys=` names keys the account already holds (`tavily,exa`). */
+const settingsSavedCredentials = new Map<string, JsonValue>((new URLSearchParams(location.search).get("keys")?.split(",") ?? [])
+  .map((key) => [key, { kind: "bearer", token: "gallery" }]));
 
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
 function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -587,11 +606,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     ]);
   }
 
-  if (path === "/api/user/cloudflare/accounts") {
-    return fixtureJson({
-      connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
-    });
-  }
+  if (path === "/api/user/cloudflare/accounts") return Response.json(galleryCloudflareAccounts());
 
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;
@@ -738,17 +753,20 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
           capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0"],
         },
+        desktop: { state: "none" },
       },
       // `&devices=history`: a refused update and a machine that has never connected.
       ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
         id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
       }, {
         id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "files_only", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
       ...(frame === "devices" ? [{
@@ -757,6 +775,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
     ]);
@@ -765,8 +784,12 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** A saved catalog reads back. */
-let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
+/** A saved catalog reads back; `&chain=` starts it on a chosen web search. */
+let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = (() => {
+  const webSearch = galleryWebSearchChain();
+
+  return { catalog: webSearch === undefined ? BUILTIN_PROFILE_CATALOG : { ...BUILTIN_PROFILE_CATALOG, webSearch }, version: 0 };
+})();
 
 /** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused. */
 async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
@@ -832,6 +855,8 @@ function builtinAuthFixture(path: string): Response | null {
 }
 
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  secretsFixture,
+  galleryWebSearchTest,
   builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,
@@ -891,6 +916,7 @@ function galleryConnectDevice(id: string, label: string, connected: boolean) {
     replacedAt: null,
     revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+    desktop: id === GALLERY_PC.id ? SHELL_PC_DESKTOP : { state: "none" },
     version: null, servedVersion: null, update: "unreported", updateRefusal: null,
   };
 }
@@ -1933,6 +1959,8 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
 
   if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
 
+  if (method.endsWith("DeviceSession") || method === "listDeviceSessions") return rpcResult(v.parse(JsonValueSchema, galleryDeviceSessions(method, args ?? []))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -1986,6 +2014,32 @@ function gallerySessions(method: string, args: readonly unknown[]): readonly Ter
   if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
 
   return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
+}
+
+/** The PC's sessions (1014-t) as its daemon keeps them: its shell, and a build running in another. Its daemon reads no
+ *  last command, port or branch. */
+const GALLERY_DEVICE_SESSIONS: TerminalSession[] = [
+  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: null, needsInput: false },
+  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "cargo", last: null, ports: [], branch: null, needsInput: false },
+];
+
+function galleryDeviceSessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
+  if (method === "openDeviceSession") {
+    const record = { id: `pty-${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, name: `shell ${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, cwd: "" };
+
+    GALLERY_DEVICE_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
+
+    return record;
+  }
+
+  const at = GALLERY_DEVICE_SESSIONS.findIndex((session) => session.id === args[1]);
+  const found = GALLERY_DEVICE_SESSIONS[at];
+
+  if (method === "renameDeviceSession" && typeof args[2] === "string" && found !== undefined) GALLERY_DEVICE_SESSIONS[at] = { ...found, name: args[2] };
+
+  if (method === "closeDeviceSession" && found !== undefined) GALLERY_DEVICE_SESSIONS.splice(at, 1);
+
+  return method === "listDeviceSessions" ? GALLERY_DEVICE_SESSIONS : null;
 }
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
@@ -6980,6 +7034,26 @@ function AgentFrame() {
 }
 
 
+/** What the api Worker's agent has noted as it worked. */
+const AGENT_TAB_NOTES: MemoryEntry[] = [
+  { path: "memory/MEMORY.md", content: "A renamed D1 binding: read both names until every environment has redeployed.", matchScore: 1, updatedAt: "2026-10-19", savedBy: "main" },
+  { path: "memory/MEMORY.md", content: "Staging takes its migration before the deploy: wrangler d1 migrations apply SESSIONS_DB --env staging --remote", matchScore: 1, updatedAt: "2026-10-18", savedBy: "main" },
+];
+
+/** The Agent tab at the inspector's width (`frame=agenttab`): an agent that has worked a while, or, with `&state=new`, one that has not. */
+function AgentTabFrame() {
+  const fresh = new URLSearchParams(location.search).get("state") === "new";
+
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div data-gallery-inspector className="w-[380px] max-w-full min-h-screen border-x p-border p-sidebar px-4 py-5">
+        <AgentSurface snapshot={{ status: "ready", value: BRAIN_STATUS }} memory={fresh ? [] : AGENT_TAB_NOTES} memoryContent={fresh ? "" : BRAIN_MEMORY}
+          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={workspaceRpc(fresh ? workspacePageRpc : evolutionRpc)} workspace={WORKSPACE_PAGE_NAME} />
+      </div>
+    </div>
+  );
+}
+
 /** Five transcript states that must not render as one blank pane. */
 function TranscriptFrame() {
   return (
@@ -7331,6 +7405,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
     replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
+    desktop: { state: "none" },
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current", updateRefusal: null,
   };
 }
@@ -7668,7 +7743,11 @@ function nodeQuery(): string {
   return node === null ? "" : `?node=${encodeURIComponent(node)}`;
 }
 
-function workspacePageFrame(): MountedFrame {
+/** Home too, so a workspace created on it opens here with what its prompt carried. */
+async function workspacePageFrame(): Promise<MountedFrame> {
+  // Not a static import: that would fold the home page's chunk into the gallery's, which the setup modal's test holds apart.
+  const { default: HomePage } = await import("@/pages/HomePage");
+
   serveGalleryRpc(workspacePageRpc);
 
   seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
@@ -7680,6 +7759,7 @@ function workspacePageFrame(): MountedFrame {
       <>
         <GalleryNavigator />
         <Routes>
+          <Route index element={<div className="h-screen overflow-hidden p-bg p-text"><HomePage /></div>} />
           <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path={APP_ROUTES.workspaceAgentPath} element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
@@ -7848,6 +7928,8 @@ async function mount() {
   // Frames fully fixed by name; `entries` is the MemoryRouter location for frames that read a route param.
   const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
     ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
+    ["secretpaste", { node: <SecretPasteFrame />, entries: ["/"] }],
+    ["computerpreview", { node: <ComputerPreviewFrame />, entries: ["/"] }],
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_SHOWN} /></div>, entries: ["/"] }],
@@ -7930,6 +8012,7 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
@@ -7987,7 +8070,7 @@ async function mount() {
   else if (frame === "environment" || frame === "files") ({ node, entries } = driveFrame(frame));
   else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
-  else if (frame === "workspacepage") ({ node, entries } = workspacePageFrame());
+  else if (frame === "workspacepage") ({ node, entries } = await workspacePageFrame());
   else if (frame === "usersettingsstate") ({ node, entries } = userSettingsStateFrame());
   else if (frame === "devicesandbox") node = <DeviceSandboxFrame />;
   else if (dynamicFixture !== undefined) ({ node, entries } = await dynamicFixture());

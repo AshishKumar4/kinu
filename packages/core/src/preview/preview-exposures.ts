@@ -24,7 +24,29 @@ const EXPOSURE_SCHEMA = v.object({
   publishedAt: v.number(),
   /** When a listing last kept it alive; its generation stays `publishedAt`. */
   refreshedAt: v.optional(v.number()),
+  /** This publication, by a name no other has, even one in the same millisecond; what a public mark names. */
+  publication: v.optional(v.string()),
 });
+
+type Exposure = v.InferOutput<typeof EXPOSURE_SCHEMA>;
+
+/**
+ * The owner made one publication a public link, named by its `publication`: anyone holding the URL opens it. A key of
+ * its own, so a listing's refresh, which rewrites the exposure from what it read, never writes the owner's decision
+ * back over a later one; and a new publication of the port is never public by an old mark.
+ */
+const PUBLIC_SCHEMA = v.object({ publication: v.string() });
+
+function marked(exposure: Exposure, mark: v.InferOutput<typeof PUBLIC_SCHEMA> | null): boolean {
+  return exposure.publication !== undefined && mark?.publication === exposure.publication;
+}
+
+/** Longer than any publication lives between refreshes: a mark outlasts its exposure, never the other way round. */
+const PUBLIC_MARK_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+
+function publicKey(sandboxId: string, port: number): string {
+  return `sandbox-preview-public:${sandboxId.toLowerCase()}:${String(port)}`;
+}
 
 const REVOCATION_SCHEMA = v.object({ revokedBefore: v.number() });
 
@@ -58,22 +80,28 @@ export interface SandboxPreviewClaim {
   readonly token: string;
 }
 
-/** A record stamped in the same millisecond as the revocation watermark reads as revoked (fail closed). */
-export async function sandboxPreviewExposed(
+/**
+ * The published exposure `claim` names, and whether its owner made it public; null for one never published, withdrawn
+ * or under another token. A record stamped in the same millisecond as the revocation watermark reads as revoked (fail
+ * closed).
+ */
+export async function sandboxPreviewExposure(
   kv: KvStore,
   claim: SandboxPreviewClaim,
-): Promise<boolean> {
-  const [exposure, withdrawn] = await Promise.all([
+): Promise<{ readonly public: boolean } | null> {
+  const [exposure, withdrawn, mark] = await Promise.all([
     readKvJson(kv, exposureKey(claim.sandboxId, claim.port), EXPOSURE_SCHEMA),
     withdrawnBefore(kv, claim.sandboxId, claim.port),
+    readKvJson(kv, publicKey(claim.sandboxId, claim.port), PUBLIC_SCHEMA),
   ]);
 
-  if (exposure === null) return false;
+  if (exposure === null) return null;
 
-  if (withdrawn !== null && exposure.publishedAt <= withdrawn) return false;
+  if (withdrawn !== null && exposure.publishedAt <= withdrawn) return null;
 
-  return timingSafeEqual(exposure.tokenHash, await sha256Hex(claim.token));
+  return timingSafeEqual(exposure.tokenHash, await sha256Hex(claim.token)) ? { public: marked(exposure, mark) } : null;
 }
+
 
 /** Authenticated-path writer. Every write checks the watermark: in-flight calls during `destroyAgent` must
  *  not restore a record whose object is gone. */
@@ -85,8 +113,12 @@ export interface SandboxPreviewExposures {
   refresh(port: number, token: string): Promise<void>;
   /** Outranks every generation of this port so far; only a later publish exposes it again. */
   withdraw(port: number): Promise<void>;
-  /** What the edge answers for this sandbox's label: {@link sandboxPreviewExposed}. */
+  /** Whether the edge admits this sandbox's label at all ({@link sandboxPreviewExposure}). */
   exposed(port: number, token: string): Promise<boolean>;
+  /** Whether the port's published preview is a public link, or opens only for the workspace's owner; null, unpublished. */
+  isPublic(port: number): Promise<boolean | null>;
+  /** Makes the port's published preview a public link, or its owner's alone again; false when none is published. */
+  setPublic(port: number, open: boolean): Promise<boolean>;
   /** Watermark outranking every earlier record; used on workspace destruction. */
   revokeAll(): Promise<void>;
 }
@@ -101,13 +133,21 @@ export function sandboxPreviewExposures(
   const readRevocation = (): Promise<{ revokedBefore: number } | null> =>
     readKvJson(kv, revocationKey(sandboxId), REVOCATION_SCHEMA);
 
-  const write = async (port: number, token: string, publishedAt: number): Promise<void> => {
-    await writeKvJson(
-      kv,
-      exposureKey(sandboxId, port),
-      { tokenHash: await sha256Hex(token), publishedAt, refreshedAt: Date.now() },
-      PREVIEW_EXPOSURE_TTL_MS,
-    );
+  const write = async (port: number, exposure: Exposure): Promise<void> => {
+    await writeKvJson(kv, exposureKey(sandboxId, port), { ...exposure, refreshedAt: Date.now() }, PREVIEW_EXPOSURE_TTL_MS);
+  };
+
+  /** The port's record as it stands for this writer: none once withdrawn, or once its workspace was destroyed. */
+  const live = async (port: number): Promise<Exposure | null> => {
+    const [held, withdrawn, revocation] = await Promise.all([
+      readKvJson(kv, exposureKey(sandboxId, port), EXPOSURE_SCHEMA),
+      withdrawnBefore(kv, sandboxId, port),
+      readRevocation(),
+    ]);
+
+    if (held === null || (revocation !== null && revocation.revokedBefore >= born) || (withdrawn !== null && held.publishedAt <= withdrawn)) return null;
+
+    return held;
   };
 
   return {
@@ -119,30 +159,41 @@ export function sandboxPreviewExposures(
           return yield* Effect.die(new Error(`sandbox previews for ${sandboxId} were revoked: the workspace is being destroyed`));
         }
 
-        yield* Effect.promise(() => write(port, token, Date.now()));
+        // A new publication opens for the owner alone, whatever an earlier one of this port was.
+        yield* Effect.promise(async () => write(port, { tokenHash: await sha256Hex(token), publishedAt: Date.now(), publication: crypto.randomUUID() }));
       }));
     },
     async refresh(port, token) {
-      const [held, withdrawn, revocation] = await Promise.all([
-        readKvJson(kv, exposureKey(sandboxId, port), EXPOSURE_SCHEMA),
-        withdrawnBefore(kv, sandboxId, port),
-        readRevocation(),
-      ]);
+      const held = await live(port);
 
-      // Nothing published it, or its token is not this one: a listing vouches for nothing.
+      // Nothing published it, its token is not this one, or it was withdrawn since: a listing vouches for nothing.
       if (held === null || !timingSafeEqual(held.tokenHash, await sha256Hex(token))) return;
 
-      // This writer's workspace was destroyed, or the port withdrawn since this record's publish.
-      if ((revocation !== null && revocation.revokedBefore >= born) || (withdrawn !== null && held.publishedAt <= withdrawn)) return;
-
       if ((held.refreshedAt ?? held.publishedAt) > Date.now() - REFRESH_AFTER_MS) return;
-      await write(port, token, held.publishedAt);
+      await write(port, held);
+    },
+    async isPublic(port) {
+      const [held, mark] = await Promise.all([live(port), readKvJson(kv, publicKey(sandboxId, port), PUBLIC_SCHEMA)]);
+
+      return held === null ? null : marked(held, mark);
+    },
+    async setPublic(port, open) {
+      const held = await live(port);
+
+      // A publication from before marks were named is the owner's alone until the port is exposed again.
+      if (held?.publication === undefined) return false;
+
+      if (open) await writeKvJson(kv, publicKey(sandboxId, port), { publication: held.publication }, PUBLIC_MARK_TTL_MS);
+      else await kv.delete(publicKey(sandboxId, port));
+
+      return true;
     },
     async withdraw(port) {
       await writeKvJson(kv, withdrawalKey(sandboxId, port), { revokedBefore: Date.now() }, PREVIEW_EXPOSURE_TTL_MS);
       await kv.delete(exposureKey(sandboxId, port));
+      await kv.delete(publicKey(sandboxId, port));
     },
-    exposed: (port, token) => sandboxPreviewExposed(kv, { sandboxId, port, token }),
+    exposed: async (port, token) => (await sandboxPreviewExposure(kv, { sandboxId, port, token })) !== null,
     async revokeAll() {
       const now = Date.now();
       await writeKvJson(

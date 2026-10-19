@@ -1,11 +1,9 @@
 import { useState, useCallback } from "react";
 import { Loader } from "@cloudflare/kumo";
-import { DatabaseIcon } from "@phosphor-icons/react";
 import { scoreInterval, type GepaRunSummary, type GepaStopReason, type QualityDay } from "@kinu.run/core";
 import { StatusDot, toneFill, type StatusTone } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
-import { EmptyState } from "./shared";
 import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type GepaRunDetail = WorkspaceAnswer<"getGepaRun">;
@@ -40,7 +38,7 @@ export function GepaView({ rpc }: { rpc: WorkspaceRpc }) {
     return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
   }
 
-  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" />;
+  if (runs.length === 0) return <p className="p-row-text p-text-3">No runs yet.</p>;
 
   return (
     <div className="space-y-3 animate-fade-in overflow-y-auto h-full">
@@ -123,13 +121,13 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
   if (read === null) {
     if (resource.status === "error") return <LoadFailure what="how it's doing" message={resource.message} onRetry={reload} />;
 
-    return <div className="flex justify-center py-8" role="status"><Loader size="sm" /><span className="sr-only">Loading how it's doing</span></div>;
+    return <div className="flex justify-center py-8" role="status"><Loader size="sm" /><span className="sr-only">Loading activity</span></div>;
   }
 
   const { week, days } = read;
   const ratedDays = days.filter((day) => day.rated > 0).length;
 
-  if (ratedDays === 0) return <p className="p-row-text p-text-3">No rated turns yet. Your reply to a turn rates it, and so does a thumb.</p>;
+  if (ratedDays === 0) return <p className="p-row-text p-text-3">No rated turns yet.</p>;
 
   const corrected = Math.round(week.corrected.mean * week.rated);
   const thumbs = week.thumbs > 0 ? `, ${String(week.thumbs)} by your thumbs` : "";

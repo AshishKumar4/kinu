@@ -349,7 +349,7 @@ class DevicePlane {
       }
 
       // A device starts a command in its home, wherever that is on the machine.
-      const call = machineShellCall(command, options, { home: '~', scope: this.shells?.scope ?? '', stateDirectory: this.shells?.stateDirectory ?? '' });
+      const call = machineShellCall(command, options, { home: '~', scope: this.shells?.scope ?? '', stateDirectory: this.shells?.stateDirectory ?? '' }, []);
       const held = options.name === undefined ? undefined : `${deviceId ?? ''}\u0000${options.name}`;
       const ownership = readDeviceOwnershipContext({ context: args[1] });
       const reportCwd = reportsCwd({ context: args[1] });

@@ -155,6 +155,15 @@ class StepWords implements UnderlyingDefaultSource<Uint8Array> {
   }
 }
 
+/** A turn's live words crossing to its workspace's room, which tabs read. A relay its RPC session lost leaves the tabs the
+ *  answer at the turn's end, so its failure is the relay's, never the turn's: the room's side reads it so too
+ *  (`degradeRelay`). */
+function liveRelay(turnId: string, relay: () => Promise<void>): Effect.Effect<void> {
+  return attempt({ doing: "relaying an agent's live output to its workspace", otherwise: 'io' }, relay).pipe(Effect.catch((failure) => Effect.sync(() => {
+    diagnostics.failure('agent.live_output_failed', failure, { turn: turnId });
+  })));
+}
+
 /** A step's words on one stream, then its record (AGENTS.md Waste). */
 class HeadTrace {
   private live: { readonly words: StepWords; readonly sent: Promise<void> } | null = null;
@@ -184,10 +193,7 @@ class HeadTrace {
   }
 
   relay(words: StepWords): Promise<void> {
-    return settle(attempt({ doing: "relaying an agent's live head output", otherwise: 'io' },
-      () => this.workspace.traceStream(this.close, words.stream)).pipe(Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('agent.head_output_failed', failure, { turn: this.close.turnId });
-      }))));
+    return settle(liveRelay(this.close.turnId, () => this.workspace.traceStream(this.close, words.stream)));
   }
 
   private openStep(): { readonly words: StepWords; readonly sent: Promise<void> } {
@@ -258,14 +264,6 @@ function heldCredentials(workspace: AgentWorkspace): CredentialBroker {
   };
 
   return { client, held, revision: null };
-}
-
-function lines(chunks: ReadableStream<UIMessageChunk>): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-
-  return chunks.pipeThrough(new TransformStream<UIMessageChunk, Uint8Array>({
-    transform: (chunk, controller) => { controller.enqueue(encoder.encode(`${JSON.stringify(chunk)}\n`)); },
-  }));
 }
 
 function workspaceTools(
@@ -359,7 +357,7 @@ export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProvide
 /** A turn's provider waits, told on the answer stream its words already cross to the room (AGENTS.md Waste), so a wait
  *  costs no call of its own. One while no answer streams (its compaction's, its title's) is the ledger's alone. */
 class TurnWaits {
-  private told: ReadableStreamDefaultController<UIMessageChunk> | null = null;
+  private told: ((chunk: UIMessageChunk) => void) | null = null;
 
   constructor(private readonly actor: HostedActor, private readonly runId: string) {}
 
@@ -367,19 +365,22 @@ class TurnWaits {
     settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
       this.actor.stores.eventRecorder.emit(this.runId, { type: 'provider_wait', ...info });
     }, { provider: info.provider });
-    this.told?.enqueue({ type: PROVIDER_WAIT_PART, data: info, transient: true });
+    this.told?.({ type: PROVIDER_WAIT_PART, data: info, transient: true });
   };
 
-  around(chunks: ReadableStream<UIMessageChunk>): ReadableStream<UIMessageChunk> {
+  /** The answer's chunks as the lines its workspace relays, one a line, with the provider's waits told among them. */
+  lines(chunks: ReadableStream<UIMessageChunk>): ReadableStream<Uint8Array> {
     const answer = chunks.getReader();
+    const encoder = new TextEncoder();
+    const line = (chunk: UIMessageChunk): Uint8Array => encoder.encode(`${JSON.stringify(chunk)}\n`);
 
-    return new ReadableStream<UIMessageChunk>({
-      start: (controller) => { this.told = controller; },
+    return new ReadableStream<Uint8Array>({
+      start: (controller) => { this.told = (chunk) => { controller.enqueue(line(chunk)); }; },
       pull: async (controller) => {
         const next = await answer.read();
 
         if (!next.done) {
-          controller.enqueue(next.value);
+          controller.enqueue(line(next.value));
 
           return;
         }
@@ -449,7 +450,7 @@ export function facetTurnSources(turn: {
     models: { normalize: (spec) => registry.normalizeSpecSync(spec), resolve: (spec) => registry.resolveModel(spec, affinity), routed: routedModelReads(registry) },
     scaffoldSpend: { source: 'scaffold', report: spend.report, operations },
     operations,
-    observeStream: async (chunks) => { await turn.workspace.observe(lines(waits.around(chunks))); },
+    observeStream: (chunks) => settle(liveRelay(turn.turnId, () => turn.workspace.observe(waits.lines(chunks)))),
     paceStep: async (signal) => {
       const profile = unbound;
 

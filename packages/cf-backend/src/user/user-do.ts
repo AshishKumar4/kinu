@@ -11,10 +11,9 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, DEVICE_SCREEN_PATH, screenFromSocket, readScreenData, } from '@kinu.run/core';
 
-import type { AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
-import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
+import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
 // Re-exported for tests: the provider binds `agents/mcp/*` at load, so tests must import it
 // via user-do (after the stub lands), not mcp.ts directly.
@@ -40,6 +39,7 @@ import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
 import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
+import { UserScreens } from './screens';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall, type McpToolSurface } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
@@ -49,6 +49,8 @@ import {
 } from './sessions';
 
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
+import { UserSecrets } from './secrets';
+import { mcpOAuthStorage } from './mcp-oauth-storage';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
@@ -62,6 +64,7 @@ import { Effect } from 'effect';
 import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { EvalLeaseJobs } from './eval-leases';
+import { WorkspaceDeletionJobs } from './workspace-deletions';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -112,6 +115,7 @@ export class UserDO extends Agent<Env> {
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
     this.lifecycle.use(this.evalLeases);
+    this.lifecycle.use(this.workspaceDeletions);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
@@ -130,7 +134,9 @@ export class UserDO extends Agent<Env> {
 
   /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
   override onStart(): void {
-    if (this.storageRefusal === undefined) this.mcpServers.start();
+    if (this.storageRefusal !== undefined) return;
+    this.mcpServers.start();
+    this.workspaceDeletions.adoptMarked();
   }
 
   private readonly host: UserObjectHost = {
@@ -141,6 +147,8 @@ export class UserDO extends Agent<Env> {
   };
 
   private readonly credentials = new UserCredentials({ ...this.host, setConfig: (caller, key, value) => this.profile.setConfig(caller, key, value) });
+
+  private readonly secrets = new UserSecrets(this.host);
 
   private readonly sessions = new UserSessions({ ...this.host, sql: (query, ...values) => this.sql(query, ...values), accountName: () => this.name, getProfile: (caller) => this.profile.getProfile(caller), workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name) });
 
@@ -170,8 +178,14 @@ export class UserDO extends Agent<Env> {
     tearDown: (workspace) => this.workspaces.tearDownWorkspace(workspace, this.name),
   });
 
+  private readonly workspaceDeletions = new WorkspaceDeletionJobs({
+    marked: () => this.workspaces.markedForDeletion(),
+    tearDown: (workspace) => this.workspaces.tearDownWorkspace(workspace, this.name),
+  });
+
   private readonly workspaces = new UserWorkspaces({
-    ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, nudgeUnreported: () => { this.nudgeUnreported(); },
+    ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, deletions: this.workspaceDeletions,
+    nudgeUnreported: () => { this.nudgeUnreported(); },
   });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });
@@ -184,6 +198,8 @@ export class UserDO extends Agent<Env> {
   private readonly chatgpt = new UserChatGptSignIn({ ...this.host, devices: this.devices, vault: this.credentials });
 
   private readonly terminals = new UserTerminals({ ...this.host, devices: this.devices });
+
+  private readonly screens = new UserScreens({ ...this.host, devices: this.devices });
 
   private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
 
@@ -485,20 +501,44 @@ export class UserDO extends Agent<Env> {
     return { catalog, credentials };
   }
 
-  listEgressSecrets(caller: UserCaller): Promise<EgressSecretSummary[]> {
-    return this.credentials.listEgressSecrets(caller);
+  listSecrets(caller: UserCaller): Promise<SecretSummary[]> {
+    return this.secrets.listSecrets(caller);
   }
 
-  putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
-    return this.credentials.putEgressSecret(caller, input);
+  putSecrets(caller: UserCaller, entries: readonly SecretInput[], grantTo: readonly string[]): Promise<void> {
+    return this.secrets.putSecrets(caller, entries, grantTo);
   }
 
-  revokeEgressSecret(caller: UserCaller, id: string): ReturnType<UserCredentials['revokeEgressSecret']> {
-    return this.credentials.revokeEgressSecret(caller, id);
+  setSecretDestination(caller: UserCaller, name: string, destination: SecretDestination): Promise<void> {
+    return this.secrets.setSecretDestination(caller, name, destination);
   }
 
-  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> {
-    return this.credentials.resolveEgressInjection(caller, facts, grants);
+  deleteSecret(caller: UserCaller, name: string): Promise<void> {
+    return this.secrets.deleteSecret(caller, name);
+  }
+
+  grantSecret(caller: UserCaller, input: Parameters<UserSecrets['grantSecret']>[1]): Promise<void> {
+    return this.secrets.grantSecret(caller, input);
+  }
+
+  revokeSecretGrant(caller: UserCaller, input: Parameters<UserSecrets['revokeSecretGrant']>[1]): Promise<void> {
+    return this.secrets.revokeSecretGrant(caller, input);
+  }
+
+  grantedSecrets(caller: UserCaller): Promise<GrantedSecrets> {
+    return this.secrets.grantedSecrets(caller);
+  }
+
+  revealedSecrets(caller: UserCaller): Promise<Record<string, string>> {
+    return this.secrets.revealedSecrets(caller);
+  }
+
+  revealedSecretsFor(caller: UserCaller, workspace: string): Promise<Record<string, string>> {
+    return this.secrets.revealedSecretsFor(caller, workspace);
+  }
+
+  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
+    return this.secrets.resolveEgressInjection(caller, facts, workspace);
   }
 
   getCredentialEndpoint(caller: UserCaller, key: string): Promise<CredentialEndpoint | null> {
@@ -773,8 +813,28 @@ export class UserDO extends Agent<Env> {
     return this.chatgpt.signOutChatGpt(caller, revoke);
   }
 
-  openDeviceTerminal(caller: UserCaller, agentName: string, window: { cols: number; rows: number }, deviceId?: string): ReturnType<UserTerminals['openDeviceTerminal']> {
-    return this.terminals.openDeviceTerminal(caller, agentName, window, deviceId);
+  openDeviceTerminal(caller: UserCaller, agentName: string, window: { cols: number; rows: number }, target: { device?: string; session?: string }): ReturnType<UserTerminals['openDeviceTerminal']> {
+    return this.terminals.openDeviceTerminal(caller, agentName, window, target);
+  }
+
+  listDeviceSessions(caller: UserCaller, agentName: string, deviceId: string): ReturnType<UserTerminals['listDeviceSessions']> {
+    return this.terminals.listDeviceSessions(caller, agentName, deviceId);
+  }
+
+  openDeviceSession(caller: UserCaller, agentName: string, deviceId: string, name?: string): ReturnType<UserTerminals['openDeviceSession']> {
+    return this.terminals.openDeviceSession(caller, agentName, deviceId, name);
+  }
+
+  renameDeviceSession(caller: UserCaller, agentName: string, deviceId: string, request: { id: string; name: string }): ReturnType<UserTerminals['renameDeviceSession']> {
+    return this.terminals.renameDeviceSession(caller, agentName, deviceId, request);
+  }
+
+  closeDeviceSession(caller: UserCaller, agentName: string, deviceId: string, id: string): ReturnType<UserTerminals['closeDeviceSession']> {
+    return this.terminals.closeDeviceSession(caller, agentName, deviceId, id);
+  }
+
+  openDeviceScreen(caller: UserCaller, agentName: string, deviceId?: string): ReturnType<UserScreens['openDeviceScreen']> {
+    return this.screens.openDeviceScreen(caller, agentName, deviceId);
   }
 
   issueDeviceJoin(caller: UserCaller, workspace: string | null): ReturnType<UserDevices['issueDeviceJoin']> {
@@ -933,9 +993,9 @@ export class UserDO extends Agent<Env> {
     return this.userDrive.drive_abortDownload(caller, transferId);
   }
 
-  /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key. */
+  /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
-    return new KinuMcpOAuthProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
+    return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
   /** The deploy's walk (`scripts/reset.ts tables`): this account's tables and their rows, what its repair did, and the
@@ -1024,6 +1084,7 @@ export class UserDO extends Agent<Env> {
   private readonly _sockets = new Hono({ getPath: rawPath })
     .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
     .all(DEVICE_TERMINAL_PATH, async (c) => this.terminals.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
+    .all(DEVICE_SCREEN_PATH, async (c) => this.screens.acceptScreenSocket(c.req.raw, new URL(c.req.url)))
     // Frames a socket missed while it was down are not replayed, so a new one starts from what waits on the owner now.
     .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw, (socket) => {
       this.accountMemory.pendingMoved([socket]);
@@ -1047,7 +1108,16 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      this.terminals._terminals.fromPane(terminal.session, terminal.device, message);
+      this.terminals._terminals.fromPane(terminal, message);
+
+      return;
+    }
+
+    // A viewer's bytes are RFB, relayed unread.
+    const viewer = screenFromSocket(ws);
+
+    if (viewer) {
+      this.screens._screens.fromViewer(viewer, message);
 
       return;
     }
@@ -1055,6 +1125,15 @@ export class UserDO extends Agent<Env> {
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
+    // A screen's bytes are the one binary frame a daemon sends; every other frame is JSON text.
+    const screen = isTextWebSocketMessage(message) ? null : readScreenData(message);
+
+    if (screen) {
+      this.screens._screens.toViewer(deviceId, screen.stream, screen.bytes);
+
+      return;
+    }
+
     let data: string;
 
     if (isTextWebSocketMessage(message)) {
@@ -1102,6 +1181,8 @@ export class UserDO extends Agent<Env> {
       }
 
       this.devices.recordDeviceHello(deviceId, hello.output);
+      this.terminals.deviceConnected(deviceId);
+      this.screens.deviceConnected(deviceId);
       // Sent before the first wait, in the turn the HELLO arrived on its socket.
       const frame = this.devices.deviceUpdateFrame(deviceId, hello.output);
 
@@ -1134,7 +1215,9 @@ export class UserDO extends Agent<Env> {
     }
 
     // Terminal frames have no request id; the RPC correlator would silently drop them.
-    if (this.terminals.handleTerminalFrame(data)) return;
+    if (this.terminals.handleTerminalFrame(deviceId, data)) return;
+
+    if (this.screens.handleScreenFrame(deviceId, data)) return;
     this.devices._devices.handleMessage(deviceId, data);
   }
 
@@ -1144,18 +1227,21 @@ export class UserDO extends Agent<Env> {
     const terminal = terminalFromSocket(ws);
 
     if (terminal) {
-      return settle(this.terminals.closeDeviceTerminal(terminal.session, terminal.device));
+      return settle(this.terminals.closeDeviceTerminal(terminal, ws));
     }
+
+    const viewer = screenFromSocket(ws);
+
+    if (viewer) return this.screens._screens.closeStream(viewer.device, viewer.stream);
 
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
     this.devices._devices.handleClose(deviceId, ws);
 
-    // The daemon hangs up its shells when the socket drops, so tell the panes.
-    for (const session of this.terminals._terminals.panesForDevice(deviceId)) {
-      this.terminals._terminals.endPane(session, NO_DEVICE_CONNECTED);
-    }
+    // The daemon detaches its shells when the socket drops, so the panes close; each opens again on the next socket.
+    this.terminals.deviceClosed(deviceId);
+    this.screens.deviceClosed(deviceId);
 
     await this.devices.devicesMoved();
   }

@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import type { ReasoningEffort } from '../providers/reasoning-effort';
 import type { DecisionModel } from '../providers/decision-model';
 import type { NamedSwarmPreset } from './swarm';
+import type { WebSearchRoute } from '../providers/web-search';
 
 /** Kebab-case, lowercase-first: the same discipline role and skill names follow. */
 export type RoleId = string;
@@ -87,6 +88,8 @@ export interface ProfileCatalog {
   decisionModel?: DecisionModel | undefined;
   /** `SWARMS_BETA_SETTING`: the `agents` tool offers `swarm` only when true. */
   betaSwarms?: boolean | undefined;
+  /** The `web` tool's search chain, in order; absent is `DEFAULT_WEB_SEARCH_CHAIN`. Its last entry retries `retries`. */
+  webSearch?: readonly WebSearchRoute[] | undefined;
 }
 
 /** The account setting that offers swarms, named in Settings and in the refusal. */

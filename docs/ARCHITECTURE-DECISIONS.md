@@ -1968,6 +1968,92 @@ route is unprobed. Unstored, an item is replayed whole (id and encrypted
 content). Both are proven on a CLI session against a fake of each backend
 (`cli-backend/tests/plan-compaction.test.ts`). OpenCode is not asked.
 
+## Secrets
+
+S1. The owner's keys and tokens live in the account's object, sealed with the
+credential cipher (`user_secrets`, AAD `<object>:secret:<name>`), each with the
+hosts it may be sent to (a hostname or `*.domain`; a bare or leading-label
+wildcard is refused, so a program cannot pick the destination). A workspace
+uses one only where the owner granted it (`user_secret_grants`, owner-only
+writes, Settings › Secrets), and the grant is read by the account object on
+every request that names it (`resolveEgressInjection(owner, facts, workspace)`,
+the workspace taken from the egress's sealed props). Nothing of the grant lives
+in a workspace: the earlier `egress-secret:<id>` approval grant was the
+workspace's own word, which this replaced (2026-10-19).
+
+S2. A granted secret is `$NAME` in every command the owner's own calls run on
+the workspace's box and its computer, `env.NAME`/`process.env.NAME` in the
+owner's eval (Worker Loader bindings), and `this.env.NAME` in an owner's slate
+server. A call that is not the owner's (a share's viewer, a shared slate's
+server, a program either starts) holds none: who a call runs for is carried
+with it (`secrets-caller.ts`), past an approval that runs it later, and the
+account reads answer such a call with nothing. Its value is a random
+placeholder that the one gate (`planEgress`) lets trusted egress replace only
+in the secret's credential position (S6), only toward its hosts and only over
+https or wss, with the response scrubbed. Bodies are never substituted: an
+allowed host can publish a body. Raw TCP, request signing and form logins
+cannot use a placeholder; for those the owner turns on "Agents may read the
+value" per workspace and secret, which reaches the computer and eval only: the
+workspace's own (Nimbus) box always gets placeholders, since it writes a
+serving or watching Node/Bun program's environment into a generated image that
+every process on the box reads and its storage keeps. A value then lives only
+in memory: read from the account object for each computer command and eval
+run, and asked again at every launch of a supervised job the owner started, whose spec and directory hold placeholders alone: the job's
+tmux session takes the values as its environment at its start (`new-session
+-e`, tmux 3.2+). An owner's command, eval program or job whose account does
+not answer (or whose box is not yet configured) fails with that reason rather
+than running without its secrets; a viewer's never asks.
+A query-position value is encoded as one parameter's value, and every URL
+spelling of it is scrubbed from the answer. A named shell sets a call's
+variables after restoring its saved state and never saves them.
+
+S3. A chat draft holding a known credential shape (`secret-patterns.ts`, the
+provider shapes carrying their provider's variable and hosts) is held in the
+browser before it is sent: moved to Secrets it becomes `$NAME`, or sent as
+written on the owner's word. Unknown shapes are not caught.
+
+S4. An MCP server's OAuth login is sealed at the Agents SDK's storage seam
+(`mcpOAuthStorage`, AAD `<object>:mcp-oauth`, not the key, because the SDK's
+`migrateServerId` copies values between keys raw). A login stored before this
+does not open and reads as none: that server shows "Needs sign-in" once.
+
+S5. A computer's published preview opens for the workspace's signed-in owner
+and the workspace's own fetches through the same entry, ticket and host-only
+cookie as a workspace preview; its URL is no bearer link. The owner can make one
+port a public link, confirmed; a new publication of the port is the owner's
+alone again. The cookie is trusted for its life (12 hours) without asking the
+workspace on each request, since only the owner-checked entry mints one.
+
+S6. A secret rides only in its credential position: the Authorization header
+(Basic decoded) by default, else one named header or one named query
+parameter (`user_secrets.position`, parsed at the store, no default). A
+placeholder anywhere else in the URL or headers is refused before the vault
+opens anything, so an allowed host cannot be made to store or echo it.
+
+S7. No share's viewer, shared slate's server or other non-owner principal
+acts on the owner's computer (Main, 2026-10-19): its files and processes can
+hold the owner's credentials, and its egress cannot tell a viewer's request
+from the owner's. The computer's provider refuses a viewer's every member and
+its file plane (also mounted at `/computer`), at call time and when a share is
+granted; a share cannot grant a computer member.
+
+S8. A share's viewer's call on the workspace's own (Nimbus) box runs as the
+viewer (`withViewerPrincipal`, wrapping every agent's box): its own uid
+(`share_viewer`, outside the workspace group, umask 077), home and `/tmp`,
+named shells keyed in a `viewer:` domain outside the hash (an owner's are
+`agent:`, so no name either picks can meet the other's), and an exec id marked
+`viewer-`, which Nimbus copies
+to every process the call starts. `egressFor` gives such a process an egress
+that names no owner, so a placeholder it finds (in a generated image, a job's
+files) is refused, never spent; an owner's process keeps the owner's egress.
+`sudo` and `su` are refused to the viewer's uid at each engine boot, so it
+writes none of the owner's files and never becomes anyone else. A share's
+granted process and port control (listing, stopping and reading the logs of
+processes, exposing ports) stays the owner's delegated authority, as the
+owner chose to keep viewers' shell access (Main, 2026-10-19). Residual: an
+owner's process that relays requests for whoever reaches it on loopback acts
+with the owner's egress; and a file grant acts as the agent it is given for.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

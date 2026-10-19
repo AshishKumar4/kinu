@@ -11,7 +11,7 @@ test('process identity and ownership fields are read after the full command name
   const fields = ['R', '12', '34', '56', ...Array(7).fill('0'), '2', '3', '5', '7', '0', '0', '4', '0', '987'];
   const stat = parseProcStat(`99 (command ) (\n name) ${fields.join(' ')}`);
 
-  expect(stat).toEqual({ comm: 'command ) (\n name', state: 'R', ppid: 12, group: 34, session: 56, cpuTicks: 17, tasks: 4, startTicks: '987' });
+  expect(stat).toEqual({ comm: 'command ) (\n name', state: 'R', ppid: 12, group: 34, session: 56, cpuTicks: 17, tasks: 4, startTicks: '987', foreground: 0 });
   expect(procStat(process.pid, 'stat', true).ppid).toBe(process.ppid);
 });
 

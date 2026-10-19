@@ -366,9 +366,10 @@ export class TerminalTransitions {
     }
   }
 
-  /** The owner changed what decides a tier's model or credential, so a refusal only they could fix may answer now. With a
-   *  newly settled sequence (its claim releases them), the only way a parked effect falls due (AGENTS.md, T1-T3). */
-  async modelSettingsChanged(): Promise<void> {
+  /** The owner did what a parked effect waits on: changed what decides a tier's model or credential, so a refusal only
+   *  they could fix may answer now, or closed the questions a follow-up turn waited behind. With a newly settled sequence
+   *  (its claim releases them), the only way a parked effect falls due (AGENTS.md, T1-T3). */
+  async ownerActed(): Promise<void> {
     if (this.ledger.release() === 0) return;
     await this.deps.scheduleRetry(this.deps.now());
   }

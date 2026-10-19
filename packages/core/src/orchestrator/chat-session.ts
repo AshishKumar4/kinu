@@ -494,6 +494,10 @@ export class ChatSession {
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
   get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
+
+  /** What its wake waits on: a turn runs, or one queued may. One a question to the owner holds is parked until they close
+   *  it, and wakes nothing meanwhile; a Stop still finds it owed and cancels it. */
+  get turnRunnable(): boolean { return this.pumpActive || (this.queue.length > 0 && this.queue.some(this.runnable())); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
 
@@ -737,6 +741,12 @@ export class ChatSession {
 
   announcementOnDisk(identity: string): boolean {
     return this.onDisk(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`);
+  }
+
+  announcementHeld(identity: string): boolean {
+    const runs = this.runnable();
+
+    return this.runningAnnouncement !== identity && this.queue.some((item) => item.idempotencyKey === identity && !runs(item));
   }
 
   private readonly onDisk: (entryId: string) => boolean;
@@ -1183,7 +1193,11 @@ export class ChatSession {
   /** The owner's answer: the asking call's result, and the turn that continues from it, owed once its step's every
    *  question has closed. */
   answerQuestions(id: string, answers: readonly OwnerAnswer[]): Effect.Effect<void, KinuError> {
-    return Effect.andThen(this.actorSession.questions.answer(id, answers), Effect.sync(() => { this.resumeAnswered(); }));
+    return Effect.andThen(this.actorSession.questions.answer(id, answers), Effect.sync(() => {
+      this.resumeAnswered();
+
+      if (!this.actorSession.questions.hasOpen()) this.questionsClosed();
+    }));
   }
 
   /** `id`'s questions closed unanswered: the agent reads that, and a sibling's answer may now be resumed. */
@@ -1192,10 +1206,16 @@ export class ChatSession {
 
     this.resumeAnswered();
 
-    // What waited behind the questions may run now.
-    if (closed > 0) this.pump();
+    if (closed > 0) this.questionsClosed();
 
     return closed;
+  }
+
+  /** What waited behind the owner's questions may run now, and an effect parked behind them falls due: an isolate that
+   *  ended since lost the turn it queued, which the effect queues again. */
+  private questionsClosed(): void {
+    this.pump();
+    this.actorSession.orchestrator.track(this.ports.terminal().ownerActed(), 'releasing the effects parked behind questions to the owner');
   }
 
   /**
@@ -1213,7 +1233,7 @@ export class ChatSession {
 
   /** A Stop, a clear or a walk-back: nothing the agent asked is waited on or resumed; what waited behind it may run. */
   private abandonQuestions(): void {
-    if (this.actorSession.questions.abandon() > 0) this.pump();
+    if (this.actorSession.questions.abandon() > 0) this.questionsClosed();
   }
 
   /** Only a running turn keyed under `prefix`. */
@@ -1604,15 +1624,18 @@ export class ChatSession {
   }
 
   /**
-   * The next item to run. A question to the owner holds the agent as a call to them would: while one is open, only the
-   * owner's message, an answer's turn or the asking turn re-opened runs, ahead of the work it holds, which keeps its order.
+   * Which queued items may run now. A question to the owner holds the agent as a call to them would: while one is open,
+   * only the owner's message, an answer's turn or the asking turn re-opened runs, ahead of the work it holds, which keeps
+   * its order and runs once the question closes.
    */
-  private nextRunnable(): QueueItem | undefined {
-    const runs = (item: QueueItem): boolean => item.kind === 'user' || item.continuation !== undefined || item.tags.event === OWNER_ANSWER_SIGNAL;
-    const head = this.queue[0];
+  private runnable(): (item: QueueItem) => boolean {
+    const open = this.actorSession.questions.hasOpen();
 
-    if (head === undefined || runs(head) || !this.actorSession.questions.hasOpen()) return this.queue.shift();
-    const at = this.queue.findIndex(runs);
+    return (item) => !open || item.kind === 'user' || item.continuation !== undefined || item.tags.event === OWNER_ANSWER_SIGNAL;
+  }
+
+  private nextRunnable(): QueueItem | undefined {
+    const at = this.queue.findIndex(this.runnable());
 
     return at < 0 ? undefined : this.queue.splice(at, 1)[0];
   }
@@ -1699,7 +1722,7 @@ export class ChatSession {
 
     // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
     if (item.kind === 'user' && questions.mayWait()) {
-      questions.close('in_chat');
+      if (questions.close('in_chat').length > 0) this.questionsClosed();
       questions.retireResumes();
     }
 

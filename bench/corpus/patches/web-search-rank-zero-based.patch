@@ -1,13 +1,13 @@
-diff --git a/packages/core/src/web/provider.ts b/packages/core/src/web/provider.ts
-index 240559dc1..0ae9ad1a9 100644
---- a/packages/core/src/web/provider.ts
-+++ b/packages/core/src/web/provider.ts
-@@ -258,7 +258,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
-         title: title === undefined || title === '' ? item.url : title,
-         url: item.url,
-         snippet: (item.description ?? '').trim().slice(0, SNIPPET_CHARS),
--        position: i + 1,
-+        position: i,
+diff --git a/packages/core/src/web/search-chain.ts b/packages/core/src/web/search-chain.ts
+index 3c2f46abf..ddd1bae4a 100644
+--- a/packages/core/src/web/search-chain.ts
++++ b/packages/core/src/web/search-chain.ts
+@@ -192,7 +192,7 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
+         url: hit.url,
+         snippet: stripBase64Images((hit.snippet ?? '').trim()).slice(0, SNIPPET_CHARS),
+         ...(date !== undefined && date !== '' && { date }),
+-        position: at + 1,
++        position: at,
        };
      });
  

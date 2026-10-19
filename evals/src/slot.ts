@@ -116,10 +116,16 @@ export async function trialInheritedRows(target: EvalTarget): Promise<{ inherite
   const rows = v.parse(v.record(v.string(), v.number()), held.value);
 
   if ((rows.user_config ?? 0) === 0) return { inherited: inheritedRows(rows) };
-  const catalog = await read('/api/user/profile-catalog');
+  const [catalog, gateways] = await Promise.all([read('/api/user/profile-catalog'), read('/api/user/cloudflare/gateways')]);
 
-  return 'why' in catalog ? { why: catalog.why }
-    : { inherited: inheritedRows(rows, v.parse(ProfileCatalogEnvelopeSchema, catalog.value).version) };
+  if ('why' in catalog) return { why: catalog.why };
+
+  if ('why' in gateways) return { why: gateways.why };
+
+  return { inherited: inheritedRows(rows, {
+    catalog: v.parse(ProfileCatalogEnvelopeSchema, catalog.value).version > 0,
+    gateway: v.parse(v.looseObject({ selectedId: v.nullable(v.string()) }), gateways.value).selectedId !== null,
+  }) };
 }
 
 /**

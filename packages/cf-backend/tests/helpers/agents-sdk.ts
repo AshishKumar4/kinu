@@ -623,9 +623,10 @@ export function mockAgentsSdk(): void {
       authUrl: string | null = pendingMcpAuthUrl;
       /** `auth()` reads this off the constructor's third argument, as the real one does. */
       readonly redirectUrl: string;
-      constructor(_storage: DurableObjectStorage, _clientName?: string, baseRedirectUrl = '') {
+      constructor(storage: DurableObjectStorage, _clientName?: string, baseRedirectUrl = '') {
         this.redirectUrl = baseRedirectUrl;
         pendingMcpAuthUrl = null;
+        oauthStorages.push(storage);
       }
 
       // Answered as empty storage answers, so the real SDK auth flow runs against it.
@@ -637,7 +638,11 @@ export function mockAgentsSdk(): void {
       async codeVerifier(): Promise<string> { return 'test-code-verifier'; }
       async saveCodeVerifier(): Promise<void> {}
       async state(): Promise<string> { return `st.${this.serverId}`; }
-      redirectToAuthorization(url: URL): void { this.authUrl = url.toString(); }
+      /** What the flow discovered, kept for its callback leg, as the real one keeps it in storage. */
+      private discovered: JsonValue | undefined = undefined;
+      async saveDiscoveryState(state: JsonValue): Promise<void> { this.discovered = state; }
+      async discoveryState(): Promise<JsonValue | undefined> { return this.discovered; }
+      async redirectToAuthorization(url: URL): Promise<void> { this.authUrl = url.toString(); }
       async invalidateCredentials(): Promise<void> {}
     },
   }));
@@ -884,6 +889,18 @@ let mcpDiscoveryFailure: Error | null = null;
 /** `userMcp_add` constructs the provider itself, so the provider stub picks this up at construction. */
 let pendingMcpAuthUrl: string | null = null;
 
+/** The storage each OAuth provider was handed, in order: what the SDK would keep a login in. */
+const oauthStorages: DurableObjectStorage[] = [];
+
+/** The storage the last OAuth provider made was handed. */
+export function lastOAuthStorage(): DurableObjectStorage {
+  const storage = oauthStorages.at(-1);
+
+  if (storage === undefined) throw new Error('no OAuth provider has been made');
+
+  return storage;
+}
+
 export function queueMcpAuthUrl(authUrl: string): void {
   pendingMcpAuthUrl = authUrl;
 }
@@ -903,10 +920,6 @@ let mcpRestored = 0;
 let mcpWaited = 0;
 
 let mcpEstablishGate: Promise<void> | null = null;
-
-let mcpRestoreGate: Promise<void> | null = null;
-
-let mcpRestoreArrived: (() => void) | null = null;
 
 let mcpEstablishArrived: (() => void) | null = null;
 
@@ -952,19 +965,6 @@ export function hangMcpEstablish(): McpEstablishGate {
   const arrival = Promise.withResolvers<void>();
   mcpEstablishGate = gate.promise;
   mcpEstablishArrived = () => { arrival.resolve(); };
-
-  return { entered: arrival.promise, release: () => { gate.resolve(); } };
-}
-
-/**
- * Holds every dial `restoreConnectionsFromStorage` starts, as a dial still on the wire is held: the connection
- * stays `connecting` until `release`. Unheld, a restored dial lands at once.
- */
-export function holdMcpRestore(): McpEstablishGate {
-  const gate = Promise.withResolvers<void>();
-  const arrival = Promise.withResolvers<void>();
-  mcpRestoreGate = gate.promise;
-  mcpRestoreArrived = () => { arrival.resolve(); };
 
   return { entered: arrival.promise, release: () => { gate.resolve(); } };
 }
@@ -1106,8 +1106,6 @@ export function resetRecordedMcp(): void {
   mcpWaited = 0;
   mcpEstablishGate = null;
   mcpEstablishArrived = null;
-  mcpRestoreGate = null;
-  mcpRestoreArrived = null;
 }
 
 /** The pinned SDK's probe status read (`client-zqKcsyFa.js:204-210`). */
@@ -1277,13 +1275,8 @@ class FakeMCPClientManager {
     return { ...row.transport, authProvider };
   }
 
-  /** `_restoreServer`: connect, then discover. Unheld, it lands before restore returns. */
+  /** `_restoreServer`: connect, then discover; it lands before restore returns. */
   private async restoreDial(connection: RecordedMcpConnection): Promise<void> {
-    if (mcpRestoreGate) {
-      mcpRestoreArrived?.();
-      await mcpRestoreGate;
-    }
-
     connection.connectionState = 'ready';
     this.changed();
   }
@@ -1304,8 +1297,17 @@ class FakeMCPClientManager {
     }
 
     const connection = this.mcpConnections[id];
+    const provider = connection?.options.transport.authProvider;
+    const signIn = mcpSignInRequired.get(id);
 
-    if (connection) connection.connectionState = 'ready';
+    // A server that answers 401 until signed in authorizes again, as `connectToServer` does.
+    if (connection && provider !== undefined && signIn !== undefined) {
+      provider.authUrl = signIn;
+      connection.connectionState = 'authenticating';
+    } else if (connection) {
+      connection.connectionState = 'ready';
+    }
+
     this.changed();
   }
 

@@ -126,7 +126,9 @@ export type TerminalEffectStatus = 'pending' | 'completed' | 'blocked' | 'parked
 export type TerminalEffectOutcome =
   | { readonly status: 'completed'; readonly detail?: string }
   /** `held`: a live carrier already owns the work; the backoff is not doubled. */
-  | { readonly status: 'owed'; readonly detail: string; readonly held?: boolean };
+  | { readonly status: 'owed'; readonly detail: string; readonly held?: boolean }
+  /** Waits on the owner, with no clock: released as they act or a newer sequence settles (T1). */
+  | { readonly status: 'parked'; readonly detail: string; readonly waits: 'owner_question' };
 
 /** Built through {@link terminalEffect} so each entry keeps its real input type without casts. */
 export type TerminalEffect =
@@ -154,6 +156,8 @@ export function terminalEffect<I>(spec: {
 export interface OwedTurnQueue {
   announcementOnDisk(identity: string): boolean;
   announcementInFlight(identity: string): boolean;
+  /** Queued behind a question to the owner, which nothing runs past until it closes. */
+  announcementHeld(identity: string): boolean;
   appendOwedTurn(turn: { readonly text: string; readonly idempotencyKey: string; readonly event: string; readonly metadata?: JsonObject }): void;
 }
 
@@ -178,6 +182,9 @@ function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
       if (!loop.announcementInFlight(identity)) {
         loop.appendOwedTurn({ text: spec.text(input), idempotencyKey: identity, event: spec.event, ...(spec.metadata && { metadata: spec.metadata(input) }) });
       }
+
+      // Nothing runs it until the owner closes the question, so no clock asks again meanwhile.
+      if (loop.announcementHeld(identity)) return { status: 'parked', detail: 'the follow-up turn waits behind a question to the owner', waits: 'owner_question' };
 
       return { status: 'owed', detail: 'the follow-up turn is queued and not yet on disk' };
     },
@@ -877,6 +884,12 @@ export class TerminalEffectLedger {
 
     fault?.('after', name, row.scope);
 
+    if (outcome.status === 'parked') {
+      this.parkOnOwner(sequenceId, row, attempts, outcome);
+
+      return;
+    }
+
     if (outcome.status === 'owed') {
       if (outcome.held === true) {
         void this.deps.sql`UPDATE terminal_effects
@@ -952,6 +965,13 @@ export class TerminalEffectLedger {
 
   /** A real backend transaction also makes bun:sqlite safe against process death between the body and disposition. */
   private recordInline(sequenceId: string, row: PendingRow, outcome: TerminalEffectOutcome, nextAttemptAt: number): void {
+    if (outcome.status === 'parked') {
+      this.recordAttempt(sequenceId, row, nextAttemptAt);
+      this.parkOnOwner(sequenceId, row, row.attempts + 1, outcome);
+
+      return;
+    }
+
     const held = outcome.status === 'owed' && outcome.held === true;
     const status = outcome.status === 'completed' ? 'completed' : 'pending';
     const attempts = held ? row.attempts : row.attempts + 1;
@@ -1005,6 +1025,12 @@ export class TerminalEffectLedger {
       SET attempts = ${row.attempts + 1}, next_attempt_at = ${nextAttemptAt}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
+  }
+
+  /** Parked until the owner acts: no clock wakes the actor to ask again (T1). */
+  private parkOnOwner(sequenceId: string, row: PendingRow, attempts: number, outcome: Extract<TerminalEffectOutcome, { status: 'parked' }>): void {
+    this.record(sequenceId, row.key, 'parked');
+    diagnostics.event('turn.terminal_effect_parked', { sequence: sequenceId, effect: row.key, attempts, waits: outcome.waits });
   }
 
   private due(sequenceId: string, key: string): void {

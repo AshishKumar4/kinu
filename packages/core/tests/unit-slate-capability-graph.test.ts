@@ -107,6 +107,20 @@ test('helpers an owner\'s slate hired are in its graph, but no share carries the
   expect(() => cutShareGrant(hiring, [{ slate: 'board', namespace: 'agents', member: 'hire' }])).toThrow("agents.hire runs only in its owner's own slate; a share cannot grant it");
 });
 
+test("no share grants the owner's computer, including observing its files or processes", () => {
+  const computer = slateCapabilityGraph({
+    slate: 'issues', workspace: 'w', catalog: { mcp: [], slates: ['issues'] },
+    usage: () => used('computer.exec', 'computer.startProcess', 'computer.fs.text', 'computer.listProcesses', 'computer.exposePort', 'workspace.fs.text'),
+  });
+
+  expect(cutShareGrant(computer, []).members).toEqual([{ slate: 'issues', namespace: 'workspace', member: 'fs.text', impact: 'observe' }]);
+
+  for (const member of ['exec', 'startProcess', 'fs.text', 'listProcesses', 'exposePort']) {
+    expect(() => cutShareGrant(computer, [{ slate: 'issues', namespace: 'computer', member }]))
+      .toThrow(/computer.*viewer.*(?:credentials|secrets)/isu);
+  }
+});
+
 test('a dotted slate or server name is walked and looked up whole', () => {
   const dotted = slateCapabilityGraph({
     slate: 'root', workspace: 'w',

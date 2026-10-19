@@ -66,7 +66,10 @@ import {
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
-import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@kinu.run/core';
+import {
+  agentArtifactDirectory, agentHome, agentIdentity, agentNameOfUid, confineAgentTmp, isViewerProcess, MAIN_AGENT, provisionAgentHome,
+  VIEWER_HOME_NAME, viewerCred, withViewerPrincipal, type ViewerPlace,
+} from '@kinu.run/core';
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
@@ -207,7 +210,7 @@ import {
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
-  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants, egressGrants,
+  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
@@ -254,7 +257,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -553,8 +556,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /**
    * The workspace's egress: its commands' and programs' requests and sockets leave through Kinu's, as the sandbox's do,
    * minted with this workspace's owner as it opens, and for a process an agent started, with that agent
-   * (`actingAgent`), so what the egress records names it. Nothing is asked of the vault or the grants here: the egress
-   * asks for both (`egressGrants`) for a request that names a placeholder. A workspace with no owner keeps the isolate's
+   * (`actingAgent`), so what the egress records names it. Nothing is asked of the vault here: the egress asks the
+   * owner's object, which reads this workspace's grants, for a request that names a placeholder. A workspace with no owner keeps the isolate's
    * own network.
    */
   private workspaceEgress(actorId?: string): WorkspaceEgress | undefined {
@@ -566,6 +569,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (ownerUserId === null) return undefined;
 
     return this.ctx.exports.KinuEgress({ props: { workspaceName: this.name, ownerUserId, ...(actorId !== undefined && { actorId }) } });
+  }
+
+  /**
+   * The egress of a process a share's viewer started (`isViewerProcess`): it names no owner, so no request of it is
+   * ever given a secret, and it is minted even for a workspace with an owner, whose own egress it must never fall to.
+   */
+  private viewerEgress(): WorkspaceEgress {
+    return this.ctx.exports.KinuEgress({ props: { principal: 'viewer', workspaceName: this.name } });
   }
 
   /**
@@ -587,6 +598,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       egress: () => this.workspaceEgress(),
       egressFor: (process) => {
+        if (isViewerProcess(process, (uid) => agentNameOfUid(this.ctx.storage.sql, uid) === VIEWER_HOME_NAME)) return this.viewerEgress();
         const actorId = this.actingAgent(process);
 
         return actorId === null ? undefined : this.workspaceEgress(actorId);
@@ -669,8 +681,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.hostedWorkspace().serving();
   }
 
+  /** Each agent's view of the workspace's box, where a share's viewer's call runs as the viewer (`withViewerPrincipal`). */
   protected workspaceBox(shellId: string): HostedBox {
-    return this.hostedWorkspace().box(shellId);
+    const workspace = this.hostedWorkspace();
+    const box = workspace.box(shellId);
+
+    return { ...box, ...withViewerPrincipal({ owner: box, viewer: workspace.viewerBox(shellId) }, () => this.viewerPlace()) };
+  }
+
+  /** The viewer's own uid, home and `/tmp` on the box, provisioned as each of its calls asks (the first allocates them). */
+  private async viewerPlace(): Promise<ViewerPlace> {
+    const { root, confiner, sql } = await this.facetHomeHost();
+    const identity = agentIdentity(sql, VIEWER_HOME_NAME);
+
+    return {
+      home: provisionAgentHome(root, VIEWER_HOME_NAME, identity),
+      tmp: confineAgentTmp(confiner, VIEWER_HOME_NAME, identity),
+      cred: viewerCred(identity),
+    };
   }
 
   /** Every owner-library call crosses the UserDO capability gate. Absent until the workspace
@@ -1083,9 +1111,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           this.openingPlanes.delete(actorId);
         }
       },
-      // What its turns are built on, seeded as a turn's preparation seeds it; no surface is built for no turn.
+      // What its turns are built on, seeded as a turn's preparation seeds it; no surface is built for no turn. Not fenced
+      // by a deletion: every call into an isolate that has not opened its chat asks it first, the deletion's own Stop
+      // included, and work that would begin is refused where it enters.
       scaffold: async () => {
-        this.admitWork();
         const actor = await this.agentSeat(actorId);
 
         // As its turn's sources ask it first: the workspace agent's program is installed before it is read.
@@ -1352,7 +1381,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const record = this.actorDirectoryStore().retained(retirement.reference.actorId);
         const own = record !== null && hostedActorPlacement(record).homeName !== null;
         // Read before it retires: its questions leave the stack with it.
-        const asked = record !== null && actorReadHandle(this.boundSql, record).config.getHoldsQuestions();
+        const asked = record !== null && this.holdsQuestions(record.actorId);
 
         if (own) await this.agentTurns.beforeRetirement(record.actorId, retirement.destroy || retirement.interrupt);
 
@@ -1401,6 +1430,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       capabilityToken: () => this.workspaceCapabilityToken(),
       workspaceBox: (shellId) => this.workspaceBox(shellId),
       workspaceServing: () => this.workspaceServing(),
+      commandEnvironment: (use, caller) => this.account.commandEnvironment(use, caller),
       homeHost: () => this.facetHomeHost(),
       homes: this.actorHomes,
       // The root's durable program is always readable because the root is this runtime;
@@ -2268,6 +2298,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           await this.agentTurns.beforeRetirement(actor.actorId, true);
           continue;
         }
+
+        // One that may hold a question to its owner is stopped though its wake does not stand: the queue a question holds
+        // arms none, and an isolate that ended since keeps only the question, which the Stop dismisses.
+        if (this.holdsQuestions(actor.actorId)) await this.agentTurns.interrupt(actor.actorId, null);
 
         const held = rosterOf(actor);
 
@@ -3239,6 +3273,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.overviewChanged();
   }
 
+  /** Whether the agent was ever offered `ask_owner`, read off its row as it retires too. */
+  private holdsQuestions(actorId: string): boolean {
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    return record !== null && actorReadHandle(this.boundSql, record).config.getHoldsQuestions();
+  }
+
   /** Marks the agent as one the stack asks for questions; its call parks in its own isolate's store. */
   private offerAskOwner(config: AgentConfigStore): true {
     if (!config.getHoldsQuestions()) config.setHoldsQuestions();
@@ -4036,9 +4077,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** The grants that let this workspace's egress spend a vault secret, as they stand. Never `@callable`. */
-  async egressGrants(): Promise<ApprovalGrant[]> {
-    return egressGrants(getShellApprovalGrants(this.config).grants);
+  /** The owner changed this workspace's secrets (`user/secrets.ts`): its commands read them again. Never `@callable`. */
+  async secretsMoved(): Promise<void> {
+    this.account.secretsMoved();
   }
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
@@ -5416,7 +5457,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       if (this.wipe === undefined) {
         // Quieted already when its owner's teardown asked first; a deletion resumed after a restart quiets here.
-        yield* Effect.promise(async () => this.quietAgents());
+        yield* this.quietAgents();
         yield* Effect.promise(async () => this.releaseOutsideState());
       }
 
@@ -5468,7 +5509,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           async () => { await (await this.slates()).controller.endLiveShares(); }, { workspace: this.name });
       }
 
-      yield* Effect.promise(async () => this.quietAgents());
+      yield* this.quietAgents();
     }));
   }
 
@@ -5487,34 +5528,39 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * A deletion's quiet (design v2 §6), alike for every agent, with no first and no last: admission and the pumps are
-   * fenced, what every agent was owed is cancelled, every agent opened here stops and its closes drain while its calls
-   * still reach this object (a settled turn's effects read the registry with the workspace's capability), and only then
-   * is every call revoked.
+   * fenced, what every agent was owed is cancelled with its wake, every agent opened here stops and its closes drain while
+   * its calls still reach this object (a settled turn's effects read the registry with the workspace's capability), and
+   * only then is every call revoked. One quiet, joined by every caller, a deletion's and its destroy's, and kept: it
+   * never fails, since an agent it could not stop is logged and the destroy goes on without it.
    */
-  private quietAgents(): Promise<void> {
-    // One quiet, joined by every caller: a deletion's and its destroy's.
-    this.quieting ??= this.quietAgentsOnce();
+  private readonly quietAgents = flight(() => this.quietAgentsOnce(), { keep: 'exit' });
 
-    return this.quieting;
-  }
+  private quietAgentsOnce(): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.admitting.signal.aborted) this.admitting.abort(new KinuError('missing', 'This workspace is being deleted.'));
 
-  private quieting: Promise<void> | null = null;
+      this.ctx.storage.transactionSync(() => {
+        for (const actorId of this.deliveries.actors()) this.deliveries.cancel(actorId);
+      });
+      // Its agents' wakes end as it begins, and none is armed after: a deletion whose destroy fails wakes nothing.
+      yield* logged('workspace.agent_quiet_failed', { doing: "ending a deleted workspace's agents' wakes", otherwise: 'io' },
+        () => this.agentWakes.end(), { workspace: this.name });
 
-  private async quietAgentsOnce(): Promise<void> {
-    if (!this.admitting.signal.aborted) this.admitting.abort(new KinuError('missing', 'This workspace is being deleted.'));
+      // Each agent opened here is stopped, whether or not its wake said it held a turn, and its closes drain.
+      yield* Effect.forEach([...this.openedIsolates].filter((actorId) => this.liveActor(actorId)), (actorId) => logged(
+        'workspace.agent_quiet_failed', { doing: "stopping a deleted workspace's agent and draining its closes", otherwise: 'unavailable' },
+        async () => {
+          await this.agentTurns.interrupt(actorId, null);
+          await this.agentQuiet(actorId);
+        },
+        { workspace: this.name, actor: actorId },
+      ), { concurrency: 'unbounded', discard: true });
 
-    this.ctx.storage.transactionSync(() => {
-      for (const actorId of this.deliveries.actors()) this.deliveries.cancel(actorId);
+      yield* logged('workspace.agent_quiet_failed', { doing: "draining a deleted workspace's settled turns' closes", otherwise: 'unavailable' },
+        () => this.terminalClosed(), { workspace: this.name });
+
+      if (!this.deleting.signal.aborted) this.deleting.abort(new KinuError('missing', 'This workspace was deleted.'));
     });
-
-    await Promise.all([...this.openedIsolates].filter((actorId) => this.liveActor(actorId)).map(async (actorId) => {
-      await this.agentTurns.beforeRetirement(actorId, true);
-      await this.agentQuiet(actorId);
-    }));
-
-    await this.terminalClosed();
-
-    if (!this.deleting.signal.aborted) this.deleting.abort(new KinuError('missing', 'This workspace was deleted.'));
   }
 
   private async wipeStorage(): Promise<void> {
@@ -5904,6 +5950,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A share's caller carries its viewer through, so what the call reaches inside itself is held to the grant.
       dispatch: (caller, route, context) => this.slateCallDispatch(caller.path, route, caller.workMode, { ...context, ...(caller.share !== undefined && { viewer: true }) }),
       browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),
+      secrets: () => this.account.commandEnvironment('keep', 'owner'),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
@@ -6384,6 +6431,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.computerBox()?.closeTerminalSession(id);
   }
 
+  /** The workspace's named sessions on its PC `device` (1014-t), as the computer's read: the same rows, the same strip. */
+  @callable() async listDeviceSessions(device: string): Promise<readonly TerminalSession[]> {
+    return await this.requireOwnerUserDO().listDeviceSessions(await this.userCaller(), this.workspaceName(), device);
+  }
+
+  @callable() async openDeviceSession(device: string, name?: string): Promise<SessionRecord> {
+    return await this.requireOwnerUserDO().openDeviceSession(await this.userCaller(), this.workspaceName(), device, name);
+  }
+
+  @callable() async renameDeviceSession(device: string, id: string, name: string): Promise<SessionRecord> {
+    return await this.requireOwnerUserDO().renameDeviceSession(await this.userCaller(), this.workspaceName(), device, { id, name });
+  }
+
+  @callable() async closeDeviceSession(device: string, id: string): Promise<void> {
+    await this.requireOwnerUserDO().closeDeviceSession(await this.userCaller(), this.workspaceName(), device, id);
+  }
+
   /** The workspace's computer, where this deployment binds one. */
   private computerBox(): SandboxBox | undefined {
     return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
@@ -6782,7 +6846,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     recordOutput: (executorId, command, output) => { this.recordExecutorOutput(executorId, command, output); },
     broadcast: (frame) => { this.broadcast(frame); },
     ownerUserId: () => this.getOwnerUserId(),
-    openOwnerTerminal: async (window, device) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, device),
+    openOwnerTerminal: async (window, target) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, target),
+    openOwnerScreen: async (device) => await this.requireOwnerUserDO().openDeviceScreen(await this.userCaller(), this.workspaceName(), device),
   });
 
   @callable() executeInExecutor(executorId: string, command: string, device?: string) {
@@ -6835,12 +6900,37 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Opens via this object because only it holds the workspace capability token the hub needs.
    * `device`: the PC the pane names, when the account has several connected; the one connected without it.
    */
-  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
-    return this.executors.openDeviceTerminal(window, device);
+  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+    return this.executors.openDeviceTerminal(window, target);
+  }
+
+  /** As {@link openDeviceTerminal}, for the screen of the PC `device` (1014-t). */
+  openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
+    return this.executors.openDeviceScreen(device);
   }
 
   @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {
     return await this.executors.exposedPorts(executorId);
+  }
+
+  /** Whether the computer's published preview of `port` is a public link; null when none is published. */
+  @callable() async getComputerPreviewPublic(port: number): Promise<{ readonly public: boolean | null }> {
+    return { public: this.env.AUTH_KV === undefined ? null : await sandboxPreviewExposures(this.env.AUTH_KV, sandboxIdForWorkspace(this.name)).isPublic(port) };
+  }
+
+  /**
+   * The owner makes the computer's published preview of `port` a public link, opened by anyone holding its URL, or
+   * theirs alone again. A port exposed again opens for the owner alone, whatever its last publication was.
+   */
+  @callable() setComputerPreviewPublic(port: number, open: boolean): Promise<{ readonly public: boolean }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const kv = this.env.AUTH_KV;
+      const set = kv !== undefined && (yield* Effect.promise(() => sandboxPreviewExposures(kv, sandboxIdForWorkspace(this.name)).setPublic(port, open)));
+
+      if (!set) return yield* new KinuError('missing', `The computer has no published preview of port ${String(port)}: expose the port first.`);
+
+      return { public: open };
+    }));
   }
 
   /** `actor` names a child of this workspace: the read is its own config. */

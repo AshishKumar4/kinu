@@ -2510,11 +2510,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** Durable spec row is written before the process starts and is idempotent on (command, cwd):
-   *  a re-issue restarts under the same id; a failed start keeps the row for `stopSupervised`. */
-  async startSupervised(command: string, cwd?: string): Promise<{ processId: string }> {
+   *  a re-issue restarts under the same id; a failed start keeps the row for `stopSupervised`. `reveal`: the
+   *  workspace's owner started it, so each of its launches reads the values its agents may read (`revealedEnv`). */
+  async startSupervised(command: string, cwd?: string, env: Readonly<Record<string, string>> = {}, reveal = false): Promise<{ processId: string }> {
     return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       yield* attempt('io', () => this.ensureReady());
-      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR }));
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR, env, reveal }));
 
       if (result.kind !== 'started') return yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
       // Its session is listed beside the person's own, by what it runs (D95).
@@ -3260,6 +3261,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   protected async outboundPolicy(): Promise<OutboundPolicy> { return { routes: {} }; }
+
+  /**
+   * The values a supervised job its owner started may read, asked at each of its launches: a box with no account to
+   * ask has none. The job holds them in memory; nothing of them is written to its spec or its directory.
+   */
+  protected async revealedEnv(): Promise<Readonly<Record<string, string>>> { return {}; }
   /** The name the box answers to, one DNS label of at most 63 characters, read at each start (D96); unset, the
    *  platform's 64-character container id, which no DNS label holds. */
   protected async hostname(): Promise<string | undefined> { return undefined; }
@@ -3554,6 +3561,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return this.#supervisedClient ??= new SupervisedProcesses({
       storage: this.ctx.storage, lane: this.#resources, native: () => this.#processes(), generation: () => this.#generation,
       failedStop: (processId, cause) => this.#record('process', describe({ cause }), { processId }),
+      revealed: () => this.revealedEnv(),
     });
   }
 
@@ -3935,7 +3943,7 @@ const UTF8 = { LC_ALL: 'C.UTF-8' };
 
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
   return container.exec([...argv], {
-    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env }, signal: options.signal,
+    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env },
   });
 }
 

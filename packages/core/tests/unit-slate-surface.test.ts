@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  issuedSlateInvocation, routeSlateCall, routeViewerCall, slateCallAddress, SlateCallRequestSchema, type SlateInvocation, type SlateViewer,
+  admitNestedViewerCall, issuedSlateInvocation, routeSlateCall, routeViewerCall, slateCallAddress, SlateCallRequestSchema, type SlateInvocation, type SlateViewer,
 } from '../src/slates/surface';
 import type { ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
@@ -153,6 +153,18 @@ test('a viewer call refuses what the owner call refuses, then what the grant doe
   expect(() => viewerCall(['agents', 'hire'])).toThrow("agents.hire runs only in its owner's own slate, never for a share's viewer");
   expect(() => viewerCall(['agents', 'list'])).toThrow("agents.list runs only in its owner's own slate, never for a share's viewer");
   expect(() => viewerCall(['fs', 'write'], ['/a', 'x'])).toThrow('Slate issues does not grant workspace.fs.write to viewers');
+});
+
+test('a viewer cannot call the computer directly or from a crafted tool, even with an old grant naming it', () => {
+  for (const path of [['computer', 'exec'], ['computer', 'startProcess'], ['computer', 'fs', 'text'], ['computer', 'listProcesses'], ['computer', 'exposePort']]) {
+    const address = slateCallAddress(path);
+    const owner = call(path);
+    const grant: ShareGrant = { slates: ['issues'], members: [{ slate: 'issues', ...address, impact: owner.impact }] };
+
+    expect(() => routeViewerCall({ id: 'issues', request: { path, args: [], invocation: null }, chain: [], viewer, grant }))
+      .toThrow(/computer.*viewer.*(?:credentials|secrets)/isu);
+    expect(() => admitNestedViewerCall(grant, 'issues', address)).toThrow(/computer.*viewer.*(?:credentials|secrets)/isu);
+  }
 });
 
 test('a granted member routes with the impact the grant admits', () => {

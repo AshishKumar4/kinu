@@ -4,10 +4,11 @@ import {
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
-import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
+import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
+import { mcpOAuthStorage } from './mcp-oauth-storage';
 import type { UserCredentials } from './credentials';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -76,11 +77,21 @@ interface McpCatalogEntry {
   readonly name: string;
   readonly serverUrl: string;
   readonly transport: McpTransport;
+  /** The session the SDK kept for the server, resumed rather than opened again when the plane builds its transport. */
+  readonly sessionId: string | null;
+  readonly protocolVersion: string | null;
 }
 
 const CatalogOptionsSchema = v.pipe(v.string(), v.parseJson(), v.object({
-  transport: v.optional(v.object({ type: v.optional(McpTransportSchema) })),
+  transport: v.optional(v.object({
+    type: v.optional(McpTransportSchema), sessionId: v.optional(v.string()), protocolVersion: v.optional(v.string()),
+  })),
 }));
+
+/** A registered app's server is signed in to before it is used, unless a token in `headers` stands in for the app. */
+function signInBy(appCredentials: { clientId: string } | null, hasHeaders: boolean): 'first' | 'when-asked' {
+  return appCredentials !== null && !hasHeaders ? 'first' : 'when-asked';
+}
 
 /** Each of `rows` whose server the catalog holds, with its catalog half; one it does not hold has no endpoint. */
 function withCatalog<Row extends { readonly id: string }>(rows: readonly Row[], catalog: ReadonlyMap<string, McpCatalogEntry>): Array<Row & McpCatalogEntry> {
@@ -91,11 +102,13 @@ function withCatalog<Row extends { readonly id: string }>(rows: readonly Row[], 
   });
 }
 
-/** The transport a catalog row's stored options name; none named is `auto`, as the SDK's restore reads it. */
-function catalogTransport(serverOptions: string | null): McpTransport {
+/** The transport a catalog row's stored options name (none named is `auto`, as the SDK's restore reads it), and the
+ *  session they keep. */
+function catalogTransport(serverOptions: string | null): Pick<McpCatalogEntry, 'transport' | 'sessionId' | 'protocolVersion'> {
   const parsed = serverOptions === null ? null : v.safeParse(CatalogOptionsSchema, serverOptions);
+  const stored = parsed?.success === true ? parsed.output.transport : undefined;
 
-  return parsed?.success === true ? parsed.output.transport?.type ?? 'auto' : 'auto';
+  return { transport: stored?.type ?? 'auto', sessionId: stored?.sessionId ?? null, protocolVersion: stored?.protocolVersion ?? null };
 }
 
 export interface McpToolSurface {
@@ -262,23 +275,19 @@ export class UserMcpServers {
   /** The SDK's catalog by server id, through its public listing. */
   private catalog(): Map<string, McpCatalogEntry> {
     return new Map(this.host.mcp.listServers().map((row) => [row.id, {
-      name: row.name, serverUrl: row.server_url, transport: catalogTransport(row.server_options),
+      name: row.name, serverUrl: row.server_url, ...catalogTransport(row.server_options),
     }]));
   }
 
   /**
-   * What the SDK cannot restore runs on a transport this plane builds: a sealed credential, on the seam it never
-   * persists, and a registered app's client, whose secret is the deployment's and which the SDK's restore, building the
-   * agent's default provider, would refresh and sign in without.
+   * Every server runs on a transport this plane builds, as the SDK cannot restore it: its `fetch`
+   * (`mcpCredentialTransport`) holds a sealed credential and presents each refresh token once, and a registered app's
+   * provider holds the deployment's client secret. Neither is data the SDK persists.
    */
   private needsOwnedTransport(row: McpHydrationRow): boolean {
     const live = this.host.mcp.mcpConnections[row.id]?.options.transport;
 
-    if (row.headers !== null) return live === undefined || !('fetch' in live) || live.fetch === undefined;
-    const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
-
-    return preset?.auth === 'oauth-app' && mcpAppCredentials(this.host.env, preset) !== null
-      && !(live?.authProvider instanceof RegisteredAppOAuthClientProvider);
+    return live === undefined || !('fetch' in live) || live.fetch === undefined;
   }
 
   /** Starts `connect` unless a dial of this server is in flight; its outcome lands on the connection, a failure logged. */
@@ -311,14 +320,6 @@ export class UserMcpServers {
       }
     }
 
-    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> =
-      row.headers === null
-        ? { type: row.transport }
-        : {
-            ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id)),
-            type: row.transport,
-          };
-
     // `oauth-app` rows use the registered-app provider; the vendor rejects dynamic registration.
     const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
 
@@ -326,8 +327,15 @@ export class UserMcpServers {
       ? mcpAppCredentials(this.host.env, preset)
       : null;
 
+    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
+      ...(row.sessionId !== null && { sessionId: row.sessionId }),
+      ...(row.protocolVersion !== null && { protocolVersion: row.protocolVersion }),
+      ...mcpCredentialTransport(row.serverUrl, () => this.openMcpHeaderMap(row.id), signInBy(appCredentials, row.headers !== null)),
+      type: row.transport,
+    };
+
     if (callbackUrl) {
-      const authProvider = this.oauthProvider({ serverId: row.id, callbackUrl, appCredentials, scope: preset?.scope });
+      const authProvider = this.oauthProvider({ serverId: row.id, callbackUrl, appCredentials, preset });
 
       if (!appCredentials && stored?.client_id) authProvider.clientId = stored.client_id;
       transport.authProvider = authProvider;
@@ -452,16 +460,19 @@ export class UserMcpServers {
     readonly serverId: string;
     readonly callbackUrl: string;
     readonly appCredentials: { clientId: string; clientSecret: string } | null;
-    readonly scope: string | undefined;
-  }): KinuMcpOAuthProvider {
+    readonly preset: McpPreset | undefined;
+  }): RegisteredAppOAuthClientProvider | DurableObjectOAuthClientProvider {
     const { appCredentials } = input;
+
+    const storage = mcpOAuthStorage(this.host.ctx, this.host.env);
 
     const provider = appCredentials
       ? new RegisteredAppOAuthClientProvider({
-          storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
-          clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
+          storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
+          clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.preset?.scope,
+          authorize: input.preset?.authorize,
         })
-      : new KinuMcpOAuthProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
+      : new DurableObjectOAuthClientProvider(storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
 
     provider.serverId = input.serverId;
 
@@ -507,12 +518,10 @@ export class UserMcpServers {
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
-    const authProvider = this.oauthProvider({ serverId: id, callbackUrl, appCredentials, scope: preset?.scope });
+    const authProvider = this.oauthProvider({ serverId: id, callbackUrl, appCredentials, preset });
 
-    // The credential is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
-    const credential = cfg.headers
-      ? mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id))
-      : {};
+    // The transport's fetch is a closure, never data the SDK can persist; see `mcpCredentialTransport`.
+    const credential = mcpCredentialTransport(cfg.serverUrl, () => this.openMcpHeaderMap(id), signInBy(appCredentials, headersJson !== null));
 
     let authUrl: string | null = null;
     const mgr = this.host.mcp;
@@ -768,11 +777,23 @@ export class UserMcpServers {
         diagnostics.failure('mcp.call_failed', toKinuError({ doing: `calling ${name} on MCP server ${serverId}`, cause, otherwise: 'unavailable' }), { ...facts, kind });
       })),
       Effect.map((answer) => {
-        if (v.is(McpProtocolFailureSchema, answer)) diagnostics.event('mcp.call_failed', { ...observed(), kind: 'tool_error' });
+        if (!v.is(McpProtocolFailureSchema, answer)) return JSON.stringify(decodeJsonValue({ value: answer }));
+        diagnostics.event('mcp.call_failed', { ...observed(), kind: 'tool_error' });
 
-        return JSON.stringify(decodeJsonValue({ value: answer }));
+        return JSON.stringify(decodeJsonValue({ value: this.explained(serverId, answer) }));
       }),
     );
+  }
+
+  /** A server's own error, with what its preset says its words alone leave out (`McpPreset.explainError`). */
+  private explained(serverId: string, answer: CallToolResult): CallToolResult {
+    const presetId = this.host.sqlx<{ preset_id: string | null }>(`SELECT preset_id FROM user_mcp_servers WHERE id = ?`, serverId)[0]?.preset_id ?? null;
+    const preset = presetId === null ? undefined : mcpPresetById(presetId);
+    const text = answer.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n');
+    const app = preset?.auth === 'oauth-app' ? mcpAppCredentials(this.host.env, preset) : null;
+    const note = preset?.explainError?.(text, app);
+
+    return note === undefined || note === null ? answer : { ...answer, content: [...answer.content, { type: 'text', text: note }] };
   }
 
   private async dispatchUserMcpTool(call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Promise<CallToolResult> {

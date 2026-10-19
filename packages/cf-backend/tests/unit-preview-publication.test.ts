@@ -6,7 +6,7 @@ import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import {
   createSandboxExecutor,
-  sandboxPreviewExposed,
+  sandboxPreviewExposure,
   sandboxPreviewExposures,
   type SandboxPreviewExposures,
 } from '@kinu.run/core';
@@ -19,6 +19,11 @@ import {
 import type { KinuDevbox } from '../src/kinu-devbox';
 
 const SUFFIX = 'previews.example';
+
+/** Whether the edge admits `claim` at all, public or its owner's. */
+async function sandboxPreviewExposed(kv: KvStore, claim: Parameters<typeof sandboxPreviewExposure>[1]): Promise<boolean> {
+  return (await sandboxPreviewExposure(kv, claim)) !== null;
+}
 
 const SANDBOX_ID = 'kinu-hello';
 
@@ -405,6 +410,81 @@ describe('a revoked exposure is never resurrected by the lane that published it'
     await lane(kv, box).exposePort(PORT, {});
 
     expect(await sandboxPreviewExposed(kv, claim)).toBe(true);
+    setSystemTime();
+  });
+});
+
+describe("the owner's public-link decision is never undone by a write that read it earlier", () => {
+  const CLAIM = { sandboxId: SANDBOX_ID, port: PORT, token: TOKEN };
+
+  /** A store whose next write to a key matching its pause waits for `release`, as a request in flight across another does. */
+  interface PausingStore {
+    readonly kv: KvStore;
+    readonly release: () => void;
+    readonly reached: Promise<void>;
+  }
+
+  function pausing(kv: FakeKv, paused: (key: string) => boolean): PausingStore {
+    let release = (): void => {};
+
+    let arrive = (): void => {};
+
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+
+    const reached = new Promise<void>((resolve) => { arrive = resolve; });
+    let held = false;
+
+    return {
+      release: () => release(),
+      reached,
+      kv: {
+        get: (key) => kv.get(key),
+        delete: (key) => kv.delete(key),
+        put: async (key, value, options) => {
+          if (!held && paused(key)) {
+            held = true;
+            arrive();
+            await gate;
+          }
+
+          await kv.put(key, value, options);
+        },
+      },
+    };
+  }
+
+  test('a liveness refresh that read the record while it was public does not make it public again', async () => {
+    const kv = makeKv();
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+    await sandboxPreviewExposures(kv, SANDBOX_ID).setPublic(PORT, true);
+    setSystemTime(new Date(Date.now() + (EXPOSURE_LIFETIME_MS * 2) / 3));
+
+    const slow = pausing(kv, (key) => key.startsWith('sandbox-preview:'));
+    const refreshing = sandboxPreviewExposures(slow.kv, SANDBOX_ID).refresh(PORT, TOKEN);
+    await slow.reached;
+    await sandboxPreviewExposures(kv, SANDBOX_ID).setPublic(PORT, false);
+    slow.release();
+    await refreshing;
+
+    expect(await sandboxPreviewExposure(kv, CLAIM)).toEqual({ public: false });
+    setSystemTime();
+  });
+
+  test('making a publication public, across the port being published again, leaves the new publication private', async () => {
+    const kv = makeKv();
+    setSystemTime(new Date('2026-03-01T12:00:00.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+
+    const slow = pausing(kv, (key) => key.startsWith('sandbox-preview-public:'));
+    const opening = sandboxPreviewExposures(slow.kv, SANDBOX_ID).setPublic(PORT, true);
+    await slow.reached;
+    setSystemTime(new Date('2026-03-01T12:00:01.000Z'));
+    await sandboxPreviewExposures(kv, SANDBOX_ID).publish(PORT, TOKEN);
+    slow.release();
+    await opening;
+
+    expect(await sandboxPreviewExposure(kv, CLAIM)).toEqual({ public: false });
     setSystemTime();
   });
 });

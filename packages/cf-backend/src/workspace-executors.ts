@@ -56,7 +56,9 @@ export interface WorkspaceExecutorsHost {
   broadcast(frame: string): void;
   ownerUserId(): string | null;
   /** A terminal on the owner's machine, opened by the owner's account for this workspace. */
-  openOwnerTerminal(window: { cols: number; rows: number }, device: string | undefined): Promise<{ session: string }>;
+  openOwnerTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string }>;
+  /** The screen of the owner's machine `device`, opened by the owner's account for this workspace (1014-t). */
+  openOwnerScreen(device: string): Promise<{ session: string }>;
 }
 
 /** A terminal step's refusal as the pane reads it, or null once the step is done. */
@@ -265,18 +267,27 @@ export class WorkspaceExecutors {
   }
 
   /** `user` is the object holding both sockets; the route sends the pane's upgrade there. */
-  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
-    return settle(Effect.suspend((): Effect.Effect<{ session: string; user: string } | { error: string }> => {
+  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+    return settle(this.openOnOwner('opening a terminal on this machine', async () => this.host.openOwnerTerminal(window, target)));
+  }
+
+  /** As a terminal opens, for the machine's screen: `user` holds the device socket the viewer's bytes cross. */
+  openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
+    return settle(this.openOnOwner("opening this machine's screen", async () => this.host.openOwnerScreen(device)));
+  }
+
+  private openOnOwner(doing: string, open: () => Promise<{ session: string }>): Effect.Effect<{ session: string; user: string } | { error: string }> {
+    return Effect.suspend((): Effect.Effect<{ session: string; user: string } | { error: string }> => {
       const user = this.host.ownerUserId();
 
       if (!user) return Effect.succeed({ error: unownedWorkspace().message });
 
-      // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
-      return Effect.matchCause(Effect.promise(async () => this.host.openOwnerTerminal(window, device)), {
+      // Each refusal the user object authors (no device, an older daemon, consent) reaches the client as written.
+      return Effect.matchCause(Effect.promise(open), {
         onSuccess: (opened) => ({ session: opened.session, user }),
-        onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),
+        onFailure: (failed) => ({ error: terminalRefusal({ doing, cause: Cause.squash(failed) }) }),
       });
-    }));
+    });
   }
 
   /**

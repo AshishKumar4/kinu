@@ -7,7 +7,7 @@ import { createReadStream, readFileSync, writeFileSync } from 'node:fs';
 import { AGENT_MODE_ENV } from '../packages/test-utils/src/ambient-env';
 import { tolerate } from '@kinu.run/core/obs';
 import { spawnTest, scratchPath } from '@kinu.run/test-utils'
-import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
+import { DEADLINE_EXIT_CODE, runUnderDeadline, watchTick } from './deadline';
 import { GATE_DEADLINE_SECONDS, LADDER, scriptDeadline } from './ladder';
 import { runToExit } from '../packages/test-utils/src/spawn';
 
@@ -67,17 +67,34 @@ describe('a run under a deadline', () => {
     expect(outcome.seconds).toBeGreaterThan(3);
   });
 
-  test('a silent run is told through its notice file before the kill, once per silent stretch', async () => {
-    // Prints what it was told, once: that output restarts the silence, and the second stretch ends in the kill.
-    const listens = "const { watch, readFileSync } = await import('node:fs'); const path = process.env.KINU_SILENCE_NOTICE ?? '';"
-      + " const watcher = watch(path, () => { const told = readFileSync(path, 'utf8'); if (told !== '') { console.log(`told: ${told.trim()}`); watcher.close(); } });"
-      + " console.log('listening');"
-      + ' await new Promise(() => {});';
+  // Armada, 2026-10-19 (feat/secrets b46b07f66): a silent run was killed untold. The watchdog is a timer on the runner's
+  // own loop; a tick held late by a busy test file beside it found the silence past the notice and the bound at once.
+  test('a silent run is told before the kill and given the rest of its bound to answer, however late the tick', () => {
+    const bound = 1000;
+    const late = watchTick({ silentFrom: 0, noticed: -1, noticedAt: 0 }, 1500, bound);
+    const answered = watchTick({ silentFrom: 0, noticed: 0, noticedAt: 1500 }, 1750, bound);
 
-    const outcome = await runUnderDeadline({ argv: ['bun', '-e', listens], seconds: 1, label: 'listens', stdio: 'pipe' });
+    expect([late, answered]).toEqual([{ notice: true, kill: false }, { notice: false, kill: true }]);
+    // On time, as before: told at three quarters of the bound, killed at the bound.
+    expect([750, 1000].map((now) => watchTick({ silentFrom: 0, noticed: now === 750 ? -1 : 0, noticedAt: 750 }, now, bound)))
+      .toEqual([{ notice: true, kill: false }, { notice: false, kill: true }]);
+  });
 
-    expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE });
-    expect(outcome.stdout.split('\n').filter((line) => line.startsWith('told: '))).toHaveLength(1);
+  test('a run is told once per silent stretch: output starts a new one, and it is told again', () => {
+    const bound = 1000;
+
+    expect(watchTick({ silentFrom: 0, noticed: 0, noticedAt: 750 }, 900, bound)).toEqual({ notice: false, kill: false });
+    expect(watchTick({ silentFrom: 900, noticed: 0, noticedAt: 750 }, 1650, bound)).toEqual({ notice: true, kill: false });
+  });
+
+  test('the run is told where its notices are written: a file of its own, there before it starts', async () => {
+    const reads = "const { existsSync, readFileSync } = await import('node:fs'); const path = process.env.KINU_SILENCE_NOTICE ?? '';"
+      + " console.log(JSON.stringify({ there: existsSync(path), held: existsSync(path) ? readFileSync(path, 'utf8') : null }));";
+
+    const outcome = await runUnderDeadline({ argv: ['bun', '-e', reads], seconds: 30, label: 'reads', stdio: 'pipe' });
+
+    expect(outcome).toMatchObject({ killed: false, exitCode: 0 });
+    expect(JSON.parse(outcome.stdout)).toEqual({ there: true, held: '' });
   });
 
   // A suite of rows answers the notice by ending the row in flight (`endedNearSilence`, scripts/row-verdicts.ts): on

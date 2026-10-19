@@ -15,7 +15,6 @@ import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
-import { WEB_SEARCH_INDEX } from '@kinu.run/core';
 
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
@@ -62,23 +61,26 @@ describe('createLocalModelResolver', () => {
     }
   });
 
-  test("a signed-in CLI searches through its account's route; signed out it has no search of its own", async () => {
+  test("a signed-in CLI searches through its account's route; signed out it has no account search", async () => {
     const seen: Array<{ path: string; authorization: string | null; body: string }> = [];
 
-    // The platform at its HTTP edge, answering as Cloudflare's Web Search API does through the route.
+    // The platform at its HTTP edge, answering as its route does: the account's search, as the `web` tool reads it.
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
       seen.push({ path: new URL(request.url).pathname, authorization: request.headers.get('authorization'), body: await request.text() });
 
-      return Response.json({ items: [{ url: 'https://example.com/a', title: 'First', description: 'The first.' }] });
+      return Response.json({ query: 'wrangler deploy', source: 'exa', results: [{ title: 'Wrangler', url: 'https://developers.cloudflare.com/workers/wrangler/', snippet: 'The CLI.', position: 1 }] });
     } });
 
     try {
       const signedIn = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_search' } });
-      const provider = createDefaultWebSearchProvider({ fetch, browser: { quickActions: async () => new Response('this test renders no page', { status: 500 }) }, ...(signedIn.firstPartySearch !== undefined && { firstParty: signedIn.firstPartySearch }) });
+      const search = signedIn.accountSearch;
 
-      expect(await provider.search('raleigh events', { limit: 4 })).toMatchObject({ source: WEB_SEARCH_INDEX, results: [{ url: 'https://example.com/a', title: 'First' }] });
-      expect(seen).toEqual([{ path: USER_WEB_SEARCH_PATH, authorization: 'Bearer ptc_search', body: JSON.stringify({ query: 'raleigh events', limit: 4 }) }]);
-      expect(createLocalModelResolver({ llm: null }).firstPartySearch).toBeUndefined();
+      if (search === undefined) throw new Error('a signed-in resolver searches as its account');
+      const provider = createDefaultWebSearchProvider({ fetch, search, browser: { quickActions: async () => new Response('this test renders no page', { status: 500 }) } });
+
+      expect(await provider.search('wrangler deploy', { limit: 4 })).toMatchObject({ source: 'exa', results: [{ url: 'https://developers.cloudflare.com/workers/wrangler/', title: 'Wrangler' }] });
+      expect(seen).toEqual([{ path: USER_WEB_SEARCH_PATH, authorization: 'Bearer ptc_search', body: JSON.stringify({ query: 'wrangler deploy', limit: 4 }) }]);
+      expect(createLocalModelResolver({ llm: null }).accountSearch).toBeUndefined();
     } finally {
       await server.stop(true);
     }

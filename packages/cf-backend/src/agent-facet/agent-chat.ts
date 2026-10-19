@@ -653,7 +653,7 @@ export class FacetChat {
   /** The workspace's model settings changed: the next request is measured on them, and a refusal they fix may answer. */
   async modelSettingsChanged(): Promise<void> {
     this.session.reviseContext({ counted: true });
-    await this.terminal.modelSettingsChanged();
+    await this.terminal.ownerActed();
   }
 
   /** The forced rebuild the next turn assembly takes, under the key it reads. */
@@ -674,7 +674,7 @@ export class FacetChat {
   /** The next instant to wake it, or none: a turn running or queued, or effects still closing, is looked at again a lap
    *  later. */
   private owed(): number | null {
-    const busy = this.session.turnOwed || this.terminal.closing || this.terminal.hasIncomplete() || this.questions.owedResumes().length > 0;
+    const busy = this.session.turnRunnable || this.terminal.closing || this.terminal.hasIncomplete() || this.questions.owedResumes().length > 0;
 
     // The workspace keeps one wake per agent, the latest it was told: a turn waiting out its backoff names its end.
     const next = Math.min(

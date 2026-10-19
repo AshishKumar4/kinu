@@ -18,7 +18,6 @@ import { runNodeAgent, type NodeAgentDeps, type NodeAgentInput } from '../src/st
 import type { HeadInput } from '../src/heads/types';
 import type { WebSearchProvider } from '../src/web/index';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
-import { WEB_SEARCH_INDEX } from '../src/index';
 
 interface SurfaceStep {
   reported: boolean;
@@ -55,7 +54,7 @@ function contentFor(step: SurfaceStep): LanguageModelV4Content[] {
 }
 
 const stubWeb: WebSearchProvider = {
-  search: async (query: string) => ({ query, results: [], source: WEB_SEARCH_INDEX }),
+  search: async (query: string) => ({ query, results: [], source: 'exa' as const }),
   fetch: async (url: string) => ({ url, retrievedAt: '', markdown: '' }),
   render: async (url: string) => ({ url, retrievedAt: '', markdown: '' }),
   screenshot: async (url: string) => ({ url, retrievedAt: '', bytes: new Uint8Array() }),

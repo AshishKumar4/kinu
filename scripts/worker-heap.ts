@@ -210,8 +210,10 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 10_500
  *  once a model call's end comes from `onEnd` and the SDK's accessors, each a reader replaying every part the call
  *  streamed, are read no more (#m2180e): 280.3-291.8 MB over 12 runs alone, mean 286.3 MB, main's 216.7-228.5 MB, where
  *  6f59a1bc9 read 251.5-255.6 MB in main's over 3. The bound is that mean and four of the 34 runs' deviations: the seven
- *  readers back, about 33 MB, trip it. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 309_000_000;
+ *  readers back, about 33 MB, trip it. On 105bb6084, 2026-10-19, once the owner's view of a call reads the chat loop's
+ *  own parts and the per-part stages are pulled: 262.0-277.2 MB over 12 runs, mean 272.5 MB, main's 199.7-212.6 MB.
+ *  The bound is again that mean and four of the 34 runs' deviations. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 295_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on

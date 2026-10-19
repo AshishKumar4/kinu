@@ -13,12 +13,16 @@ import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
+import { principalExecId } from './secrets-caller';
 import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { parseInput, type JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SessionExecOptions, SessionPort, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
 import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
+import type { ShellState } from '@nimbus-sh/core/workspace/named-shells.js';
+import { sha256Hex } from '../safety/argument-digest';
+import { compareCodeUnits } from '../utils/text';
 
 /**
  * A command's options: the shared session contract's, as far as Kinu sets them. `cred` is host-injected only
@@ -43,6 +47,8 @@ export interface NimbusSandboxHandle {
   exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
   /** A named shell's directory as its last call left it; null before its first call. */
   shellCwd?(shellId: string): Promise<string | null>;
+  /** A named shell's saved directory and exact UTF-16 variables (`NimbusWorkspace.shellState`); null before its first call. */
+  shellState?(shellId: string): Promise<ShellState | null>;
   execStream?: (command: string, options?: NimbusExecOptions) => Promise<ExecStream>;
   startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
   /** The runtime catalog, read to declare `python` and `native_binary`. */
@@ -362,7 +368,7 @@ async function sessionCall(
 
   if (cred !== undefined) execOptions.cred = cred;
 
-  if (job !== undefined) execOptions.execId = job;
+  if (job !== undefined) execOptions.execId = principalExecId(job);
 
   // A job that outruns its window frees its shell for the next call; it runs on, and its later cd and exports are not kept.
   if (name !== undefined && detached !== undefined) execOptions.detach = detached;
@@ -395,7 +401,7 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
   // Absent: not started. Pending: starting, which nothing cancels until the box answers. Fulfilled: running until its exit.
   let launch: Promise<ExecStream> | undefined;
   // Named before it is sent, so a Stop whose start answer is lost can still find the command by it.
-  const execId = call.execOptions.execId ?? `exec-${crypto.randomUUID()}`;
+  const execId = call.execOptions.execId ?? principalExecId(`exec-${crypto.randomUUID()}`);
 
   return raceAbort(async () => {
     await box.ready();
@@ -440,14 +446,14 @@ async function stopUnanswered(box: NimbusSandboxHandle, execId: string): Promise
 }
 
 /**
- * A Nimbus session's state, digested in the session: its directory as a digest, then what `set` lists, every variable
- * the session keeps, sorted by name, each value quoted, so no value or name can pass for another. An ill-formed one,
- * holding a lone UTF-16 surrogate, is listed as `$'…'` with each surrogate `\uXXXX` (Kinu's Nimbus patch, ask 52), so
- * the pipe's `TextEncoder` loses nothing. A subshell first sets the pid Nimbus gives each command (`$`) to 0, so the
- * listing holds only what the session keeps. Nimbus keeps no function, alias, option or array between a named shell's
- * calls, and answers `export -p` with nothing.
+ * A named shell's state as the session keeps it, digested: its directory, then every variable sorted by name, as JSON,
+ * which writes a lone UTF-16 surrogate as its own escape, so no value or name can pass for another (Nimbus ask 52's
+ * `shellState`; a `set` listing loses them). Nimbus keeps no function, alias, option or array between a named shell's
+ * calls.
  */
-const SESSION_STATE = `( pwd | sha256sum; export '$=0'; set ) | sha256sum`;
+function shellStateDigest(state: ShellState): string {
+  return sha256Hex(JSON.stringify([state.cwd, Object.entries(state.env).sort(([a], [b]) => compareCodeUnits(a, b))]));
+}
 
 /**
  * Shell over the bytes nimbusSessionFiles exposes, its calls starting at `home`. `cred` is fixed at construction,
@@ -481,19 +487,15 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
     },
   };
 
-  if (shellCwd !== undefined) {
-    shell.cwd = shellCwd;
+  if (shellCwd !== undefined) shell.cwd = shellCwd;
+  const shellState = box.shellState?.bind(box);
 
-    // What the session restores, read inside it and digested there: its directory and variables.
+  // What the session restores, as it keeps it: its directory and variables.
+  if (shellState !== undefined) {
     shell.state = async (name) => {
-      if (await shellCwd(name) === null) return 'none';
-      const state: NimbusExecOptions = { shellId: name };
+      const state = await shellState(name);
 
-      if (place.cred !== undefined) state.cred = place.cred;
-      const read = await box.exec(SESSION_STATE, state);
-      const digest = read.exitCode === 0 ? /^[0-9a-f]{64}/.exec(read.stdout)?.[0] : undefined;
-
-      return digest ?? null;
+      return state === null ? 'none' : shellStateDigest(state);
     };
   }
 

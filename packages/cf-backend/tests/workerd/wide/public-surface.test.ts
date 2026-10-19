@@ -44,7 +44,8 @@ const FIXTURE_CREDENTIAL = {
   apiKey: 'probe-fixture-key',
 };
 
-const PINNED_MODEL = 'openai-compat/probe';
+/** The model the fixture credential serves: the owner's saved default, and what a pin names. */
+const FIXTURE_MODEL = 'openai-compat/probe';
 
 async function publicJson<T>(path: string, schema: v.GenericSchema<T>, init?: RequestInit): Promise<T> {
   const response = await env.PUBLIC_SURFACE.fetch(`${ORIGIN}${path}`, init);
@@ -61,9 +62,9 @@ const CatalogEnvelopeSchema = v.object({
 });
 
 /**
- * The fixture credential routes the pinned model to the fake via the product's credential store, not a flag. Titling
- * and memory reflection are not what these tests measure, so the owner's fast tier names the scripted model rather than
- * spending Workers AI quota on them.
+ * The fixture credential routes the fixture model to the fake via the product's credential store, not a flag, and the
+ * owner saves it as their default, as their settings do. Titling and memory reflection are not what these tests
+ * measure, so the owner's fast tier names the scripted model rather than spending Workers AI quota on them.
  */
 async function storeFixtureAccount(): Promise<void> {
   await publicJson(`/api/user/credentials/openai-compat.default`, v.object({ ok: v.boolean() }), {
@@ -73,7 +74,7 @@ async function storeFixtureAccount(): Promise<void> {
   });
 
   const current = await publicJson('/api/user/profile-catalog', CatalogEnvelopeSchema);
-  const catalog = { ...current.catalog, tiers: { ...current.catalog.tiers, fast: { model: 'openai-compat/probe-long' } } };
+  const catalog = { ...current.catalog, tiers: { ...current.catalog.tiers, default: { model: FIXTURE_MODEL }, fast: { model: 'openai-compat/probe-long' } } };
 
   await publicJson('/api/user/profile-catalog', v.unknown(), {
     method: 'PUT',
@@ -224,7 +225,7 @@ async function openPane(path: string): Promise<Pane> {
 
 describe('the public surface, driven inside the pool', () => {
   it('creates a workspace over REST and answers one socket turn', async () => {
-    // The fixture credential routes the pinned model to the fake via the product's credential store, not a flag.
+    // The fixture credential routes the fixture model to the fake via the product's credential store, not a flag.
     await storeFixtureAccount();
 
     const created = await publicJson('/api/user/workspaces', WorkspaceEntrySchema, {
@@ -246,20 +247,12 @@ describe('the public surface, driven inside the pool', () => {
     if (socket === null) throw new Error('the public chat route answered 101 without a WebSocket');
     socket.accept();
 
-    const pinned = Promise.withResolvers<unknown>();
     const turn = Promise.withResolvers<void>();
     socket.addEventListener('message', (event) => {
       const raw = v.is(v.string(), event.data) ? event.data : '';
       const frame = v.safeParse(FrameSchema, raw.startsWith('{') ? JSON.parse(raw) : {});
 
       if (!frame.success) return;
-
-      if (frame.output.type === 'rpc' && frame.output.id === 'pin' && frame.output.success !== undefined) {
-        if (frame.output.success) pinned.resolve(frame.output.result);
-        else pinned.reject(new Error(`setModel was refused: ${JSON.stringify(frame.output.error)}`));
-
-        return;
-      }
 
       if (frame.output.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE) return;
 
@@ -281,10 +274,8 @@ describe('the public surface, driven inside the pool', () => {
       turn.reject(new Error('the public chat socket closed before the turn finished'));
     });
 
-    // Asserted by containment because the deployment normalizes a spec; a substitution would answer from another lane.
-    socket.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
-    expect(v.parse(SetModelSchema, await pinned.promise).spec).toContain(PINNED_MODEL);
-
+    // No pin: the first turn runs on the default the owner saved, which alone the fake answers with an echo. The owner
+    // found a new workspace still on the deployment's default.
     socket.send(chatRequest(PROMPT, PROMPT));
     await turn.promise;
 
@@ -323,8 +314,8 @@ describe('two panes on one workspace object are two chat rooms', () => {
     const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
     const root = await openPane(rootPath);
 
-    root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
-    expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
+    root.send(rpcRequest('pin', 'setModel', [FIXTURE_MODEL]));
+    expect((await root.rpc('pin', SetModelSchema)).spec).toContain(FIXTURE_MODEL);
 
     // The `+` tab's own call, so the actor exists exactly as the product makes it.
     root.send(rpcRequest('hire', 'createSubordinateAgent', []));
@@ -368,8 +359,8 @@ async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; 
   const rootPath = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(created.name)}`;
   const root = await openPane(rootPath);
 
-  root.send(rpcRequest('pin', 'setModel', [PINNED_MODEL]));
-  expect((await root.rpc('pin', SetModelSchema)).spec).toContain(PINNED_MODEL);
+  root.send(rpcRequest('pin', 'setModel', [FIXTURE_MODEL]));
+  expect((await root.rpc('pin', SetModelSchema)).spec).toContain(FIXTURE_MODEL);
   root.send(rpcRequest('hire', 'createSubordinateAgent', []));
   const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
   const actorPath = `${rootPath}/${hostedActorSocketPath(actorName)}`;
@@ -519,12 +510,13 @@ describe('a workspace created over REST with a role, a model and an effort', () 
   it('reaches the new workspace before its first turn, and a refused request leaves no workspace', async () => {
     await storeFixtureAccount();
 
-    expect((await create({ name: 'pool-auditor', role: 'auditor', model: PINNED_MODEL, reasoningEffort: 'high' })).status).toBe(201);
-    expect(await runsOn('pool-auditor')).toEqual({ roleId: 'auditor', model: PINNED_MODEL, effort: 'high', pinned: PINNED_MODEL });
+    expect((await create({ name: 'pool-auditor', role: 'auditor', model: FIXTURE_MODEL, reasoningEffort: 'high' })).status).toBe(201);
+    expect(await runsOn('pool-auditor')).toEqual({ roleId: 'auditor', model: FIXTURE_MODEL, effort: 'high', pinned: FIXTURE_MODEL });
 
-    // One that names none, or the starting role, keeps the starting role and pins no model: it follows the account default.
+    // One that names none, or the starting role, keeps the starting role and pins no model: it follows the account
+    // default, and says so before its first turn.
     expect((await create({ name: 'pool-plain', role: 'task' })).status).toBe(201);
-    expect(await runsOn('pool-plain')).toMatchObject({ roleId: 'task', pinned: null });
+    expect(await runsOn('pool-plain')).toMatchObject({ roleId: 'task', model: FIXTURE_MODEL, pinned: null });
 
     const unknownEffort = await create({ name: 'pool-ultra', reasoningEffort: 'ultra' });
     const longName = await create({ name: 'a'.repeat(32) });
@@ -729,7 +721,7 @@ describe('a hosted actor\'s window acts only on its own actor', () => {
     const root = await openPane(rootPath);
 
     root.send(rpcRequest('model', 'getStoredModelSpec', []));
-    expect((await root.rpc('model', v.object({ spec: v.nullable(v.string()) }))).spec).toContain(PINNED_MODEL);
+    expect((await root.rpc('model', v.object({ spec: v.nullable(v.string()) }))).spec).toContain(FIXTURE_MODEL);
     root.close();
     await env.SURFACE_CONTROL.resetModelLog();
   });
