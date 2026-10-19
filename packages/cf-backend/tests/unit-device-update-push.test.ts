@@ -17,8 +17,8 @@ import { createRecordingLogger } from '@kinu.run/test-utils';
 
 const SERVED = '0.3.0+served1';
 
-/** The device protocol the previous release's daemon speaks (packages/pc-agent/tests/fixtures/protocol-4). */
-const PREVIOUS_PROTOCOL = new URL('../../pc-agent/tests/fixtures/protocol-4/device-protocol.json.txt', import.meta.url);
+/** The device protocol the previous release's daemon speaks (packages/pc-agent/tests/fixtures/protocol-3). */
+const PREVIOUS_PROTOCOL = new URL('../../pc-agent/tests/fixtures/protocol-3/device-protocol.json.txt', import.meta.url);
 
 const LINUX_X64 = '/downloads/kinu-cli-linux-x64.tar.gz';
 
@@ -363,7 +363,7 @@ describe('the Devices read model carries the version and the served build', () =
     expect((await devices(harness))[0]).toMatchObject({ connected: true, update: 'current' });
   });
 
-  test('a protocol-4 daemon from the previous release is pushed the update and given nothing else', async () => {
+  test('a protocol-3 daemon from the previous release is pushed the update and given nothing else', async () => {
     const harness = await connected();
     const previous = v.parse(v.object({ version: v.number(), methods: v.record(v.string(), v.unknown()) }), JSON.parse(readFileSync(PREVIOUS_PROTOCOL, 'utf8')));
 
@@ -382,7 +382,7 @@ describe('the Devices read model carries the version and the served build', () =
     expect(harness.deviceFrames.slice(sent)).toEqual([]);
   });
 
-  test('a protocol-4 daemon whose owner turned updates off is refused outright', async () => {
+  test('a protocol-3 daemon whose owner turned updates off is refused outright', async () => {
     const harness = await connected();
     const previous = v.parse(v.object({ version: v.number() }), JSON.parse(readFileSync(PREVIOUS_PROTOCOL, 'utf8')));
 

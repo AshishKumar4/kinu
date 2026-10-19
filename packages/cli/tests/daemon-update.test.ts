@@ -29,12 +29,12 @@ const NEW_DAEMON = `${DAEMON_FILES['pc-agent.js']}\n// build ${NEW}\n`;
 
 const NEW_FILES = { ...DAEMON_FILES, 'pc-agent.js': NEW_DAEMON };
 
-/** The daemon of device protocol 4, as it installs (packages/pc-agent/tests/fixtures/protocol-4). */
-const PROTOCOL_4 = join(repoRoot, 'packages/pc-agent/tests/fixtures/protocol-4');
+/** The daemon production runs on device protocol 3, as it installs (packages/pc-agent/tests/fixtures/protocol-3). */
+const PROTOCOL_3 = join(repoRoot, 'packages/pc-agent/tests/fixtures/protocol-3');
 
-const PROTOCOL_4_FILES: Record<string, string> = Object.fromEntries(
+const PROTOCOL_3_FILES: Record<string, string> = Object.fromEntries(
   ['pc-agent.js', 'sandbox.js', 'pty.js', 'update.js', 'chatgpt.js', 'device-protocol.json']
-    .map((name) => [name, readFileSync(join(PROTOCOL_4, `${name}.txt`), 'utf8')]),
+    .map((name) => [name, readFileSync(join(PROTOCOL_3, `${name}.txt`), 'utf8')]),
 );
 
 const AnnouncedSchema = v.looseObject({ protocolVersion: v.number(), features: v.array(v.string()) });
@@ -241,22 +241,22 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
 
-  test('a protocol-4 daemon from the previous release takes the pushed build, comes back on this protocol and serves', async () => {
+  test('a protocol-3 daemon from the previous release takes the pushed build, comes back on this protocol and serves', async () => {
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
-    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_4_FILES);
+    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_3_FILES);
     startPipedDaemon(home, await releaseSigningEnv());
 
     await served.sockets.until((hellos) => hellos[1] !== undefined);
-    const [previous, successor] = [present(served.sockets.items[0], 'the protocol-4 HELLO'), present(served.sockets.items[1], 'the successor HELLO')];
+    const [previous, successor] = [present(served.sockets.items[0], 'the protocol-3 HELLO'), present(served.sockets.items[1], 'the successor HELLO')];
     const before = v.parse(AnnouncedSchema, previous.hello);
     const after = v.parse(AnnouncedSchema, successor.hello);
 
-    expect({ protocol: before.protocolVersion, sessions: before.features.includes('ptyList') }).toEqual({ protocol: 4, sessions: false });
+    expect({ protocol: before.protocolVersion, sessions: before.features.includes('ptyList') }).toEqual({ protocol: 3, sessions: false });
     expect({ protocol: after.protocolVersion, sessions: after.features.includes('ptyList'), version: successor.hello.version })
-      .toEqual({ protocol: 5, sessions: true, version: NEW });
+      .toEqual({ protocol: 4, sessions: true, version: NEW });
 
     // It serves on the new protocol: a digest-checked write lands, outside the Kinu home the tunnel never serves.
-    const file = join(scratchDir('protocol-4-updated'), 'landed.txt');
+    const file = join(scratchDir('protocol-3-updated'), 'landed.txt');
 
     successor.send({ id: 'checked', method: 'writeFileIfDigest', params: [file, 'after the update', null, {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
     expect(v.parse(ReplySchema, await successor.waitForReply('checked'))).toMatchObject({ result: { ok: true } });

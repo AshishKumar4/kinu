@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 3,
   "versionRefusalClose": 4406,
   "ptyMaxAxis": 1000,
   "methods": {
@@ -8,7 +8,6 @@
     "execAck": {},
     "exec": { "deviceView": true },
     "ptyOpen": { "deviceView": true },
-    "screenOpen": {},
     "readRange": { "deviceView": true },
     "writeFile": { "deviceView": true },
     "writeFileIfDigest": { "deviceView": true },
@@ -39,10 +38,8 @@
     "ptyInput": "PTY_IN",
     "ptyResize": "PTY_RESIZE",
     "ptyOutput": "PTY_OUT",
-    "ptyExit": "PTY_EXIT",
-    "screenClose": "SCREEN_CLOSE"
+    "ptyExit": "PTY_EXIT"
   },
-  "screenData": { "kind": 1, "headerBytes": 5, "maxBytes": 65536 },
   "errors": {
     "disconnected": "device_disconnected",
     "noOwner": "device_no_owner",

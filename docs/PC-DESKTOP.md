@@ -86,7 +86,7 @@ Where the daemon's screen comes from depends on the system:
 ## The shell
 
 - The daemon keeps named sessions per workspace (`packages/pc-agent/src/daemon/terminals.js`), in `terminals.json`
-  beside `device.json`: each one's id, name and the folder its shell opened in. Device protocol 5 adds `ptyList`,
+  beside `device.json`: each one's id, name and the folder its shell opened in. Device protocol 4 also adds `ptyList`,
   `ptyCreate`, `ptyRename` and `ptyClose`, which mirror the computer's session calls. The hub turns them into the same
   `TerminalSession` rows the strip reads (`listDeviceSessions` and its siblings on the workspace). The daemon reports
   `open` (a shell runs now) and, on Linux, `running` (the foreground program, from `/proc`). It reads no last command,
@@ -126,7 +126,7 @@ Each has a recommendation, which is the default unless the owner says otherwise.
 1. Protocol and relay: the device reports `desktop` in `hello`; `screenOpen`, `screenClose` and the binary data frame;
    the screen hub; the route; the daemon's RFB server. Tested against a fixed screen, through the hub and through the
    vendored client in Chrome. No system's source ships in it, so every PC reports none.
-2. Named PC sessions in the daemon, and the strip reading them (device protocol 5).
+2. Named PC sessions in the daemon, and the strip reading them (device protocol 4, with the screen: one step from 3).
 3. Linux portal source in the daemon, and `kinu desktop share`.
 4. The macOS helper, and its build and a measured run in the Mac proof.
 
