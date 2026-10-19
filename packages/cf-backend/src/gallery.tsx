@@ -2012,10 +2012,13 @@ const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "pan
 /** `board=full`: Main's own tasks too, so the overview's board has a card in every lane, some with steps. */
 const BOARD_FULL = new URLSearchParams(location.search).get("board") === "full";
 
-function galleryTask(id: string, title: string, status: AgentTaskTree["status"], steps: readonly AgentTaskTree["status"][] = []): AgentTaskTree {
+/** A task and its steps as the store numbers them: `t` and the agent's next seq, steps taking the seqs after it. */
+function galleryTask(seq: number, title: string, status: AgentTaskTree["status"], steps: readonly AgentTaskTree["status"][] = []): AgentTaskTree {
+  const id = `t${String(seq)}`;
+
   return {
     id, parentId: null, title, status, updatedAt: 1, note: null,
-    subtasks: steps.map((step, at) => ({ id: `${id}-${String(at)}`, parentId: id, title: `Step ${String(at + 1)}`, status: step, updatedAt: 1, note: null })),
+    subtasks: steps.map((step, at) => ({ id: `t${String(seq + 1 + at)}`, parentId: id, title: `Step ${String(at + 1)}`, status: step, updatedAt: 1, note: null })),
   };
 }
 
@@ -2614,23 +2617,23 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     tasks: [
       ...document.documentElement.dataset.workMoved === "1" ? [{
         owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
-        tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+        tasks: [{ id: "t14", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
       }] : [],
       ...BOARD_FULL ? [{
         owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] }, plan: null,
         tasks: [
-          galleryTask("t-guard", "Read the database by its new binding in openDb", "active", ["done", "done", "active", "open"]),
-          galleryTask("t-notes", "Write the release note for the binding fix", "open", ["open", "open"]),
-          galleryTask("t-alert", "Alert when /api 5xx passes 1%", "open"),
-          galleryTask("t-repro", "Reproduce the /api/health 500", "done", ["done", "done", "done"]),
+          galleryTask(1, "Read the database by its new binding in openDb", "active", ["done", "done", "active", "open"]),
+          galleryTask(6, "Write the release note for the binding fix", "open", ["open", "open"]),
+          galleryTask(9, "Alert when /api 5xx passes 1%", "open"),
+          galleryTask(10, "Reproduce the /api/health 500", "done", ["done", "done", "done"]),
         ],
       }] : [],
       ...AGENTS_PANEL ? [{
         owner: { actorId: galleryActorId("binding-auditor"), name: "binding-auditor", title: "Binding auditor", retired: false, path: ["binding-auditor"] }, plan: null,
-        tasks: [{ id: "t-audit", parentId: null, title: "Audit every route for env.DB", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+        tasks: [{ id: "t1", parentId: null, title: "Audit every route for env.DB", status: "active", updatedAt: 1, note: null, subtasks: [] }],
       }, {
         owner: { actorId: "swarm-actor-h1", name: "root-merge-1-h1", title: "workers/api/src/routes/webhooks.ts", retired: false, path: null }, plan: null,
-        tasks: [{ id: "t-serialize", parentId: null, title: "Move the webhook route onto openDb", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+        tasks: [{ id: "t1", parentId: null, title: "Move the webhook route onto openDb", status: "active", updatedAt: 1, note: null, subtasks: [] }],
       }] : [],
     ],
   }),

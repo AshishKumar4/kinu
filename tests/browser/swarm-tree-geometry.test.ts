@@ -956,7 +956,7 @@ test('a running head paints its arriving step, only its own, until the step land
     await page.waitForSelector('[data-run-node="lv003"]');
     // The node list may sit in a panel this layout keeps folded; the row is what opens the head, not its geometry.
     await page.$eval('[data-run-node="lv003"]', (row) => { if (row instanceof HTMLElement) row.click(); });
-    await page.waitForFunction(() => document.body.textContent?.includes('the guard may have moved rather than gone') === true);
+    await page.waitForFunction(() => document.body.textContent?.includes('the fallback may have moved rather than gone') === true);
     expect(await arrivingStep(page)).toBe('');
 
     await headFrames(page, [{ type: 'head_stream', headId: 'lv003', kind: 'reasoning', delta: 'Weighing the two readers.' }]);
@@ -994,7 +994,7 @@ test("a node's older steps load above its newer ones, each once, and again for a
 
     // The tree is drawn in SVG, panned and zoomed: a node is pressed as the element it is, never at a point on screen.
     const choose = (id: string) => page.$eval(node(id), (drawn) => { drawn.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    const steps = ['Reading the handler', 'Three readers, one shape', 'Guarding at the reader'];
+    const steps = ['Reading the handler', 'Three readers, one shape', 'Fixing at the reader'];
 
     // Where each step reads in the page, once all of them have: a walk that has read its last page draws no edge.
     const walked = async (): Promise<number[][]> => {

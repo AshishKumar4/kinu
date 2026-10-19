@@ -157,13 +157,13 @@ const CONFIG_AFTER = lines(
 );
 
 const MIGRATION_BEFORE = lines(
-  "-- 0007: sessions move from KV to D1.",
-  "CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL);",
+  "-- 0007: a session expires.",
+  "ALTER TABLE sessions ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
 );
 
 const MIGRATION_AFTER = lines(
-  "-- 0007: sessions move from KV to D1.",
-  "CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL);",
+  "-- 0007: a session expires.",
+  "ALTER TABLE sessions ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0;",
   "",
   "-- The session reads and the expiry sweep both look sessions up by expiry.",
   "CREATE INDEX sessions_expires_at ON sessions (expires_at);",

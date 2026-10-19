@@ -1928,7 +1928,7 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
       expect(await revertAttributes(page, 'data-revert-turn')).toEqual(['rv-u1']);
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).toContain('Add the missing-binding regression test');
-      expect(body).not.toContain('read its rules from the campaign table');
+      expect(body).not.toContain('so none reads the binding itself');
       expect(body).not.toContain('File history is unavailable');
       await page.close();
     });

@@ -578,10 +578,10 @@ describe('the control plane in a browser', () => {
       await browserPage.waitForSelector('input');
 
       expect(await removeDisabled(browserPage)).toBe(true);
-      await browserPage.type('input', 'checkout-fix');
+      await browserPage.type('input', 'api-work');
       // A prefix is not the name. The gate is equality, not "looks close".
       expect(await removeDisabled(browserPage)).toBe(true);
-      await browserPage.type('input', 'es');
+      await browserPage.type('input', 'er');
       expect(await removeDisabled(browserPage)).toBe(false);
       await browserPage.close();
     });

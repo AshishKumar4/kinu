@@ -12,7 +12,7 @@ const AUDITOR_PANE = '[data-agent-pane="api-worker/agents/binding-auditor"]';
 const REFINER_PANE = '[data-agent-pane="api-worker/agents/refiner"]';
 
 /** A message only the binding auditor's own transcript holds. */
-const AUDITOR_SAID = 'Two rules skip the expiry check';
+const AUDITOR_SAID = 'Two routes still read env.DB themselves';
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, phone: { width: 390, height: 844 } } as const;
 
