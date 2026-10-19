@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 
 // Text matched on the SQLite a Durable Object runs in production: a LIKE or GLOB pattern there is at most 50 bytes, so
 // a search worded longer than that was refused as a whole, not answered (staging rc20, 2026-10-19: 48 bytes answered,
-// 49 refused). Each search here is matched as `textContains` matches it (core state/text-match.ts).
+// 49 refused). Each search here is matched as `textContains` matches it (core utils/text-match.ts).
 const probe = () => env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('text-search'));
 
 // Past the 48 bytes a LIKE pattern's two wildcards left room for.

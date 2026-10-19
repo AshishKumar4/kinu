@@ -8,7 +8,7 @@
  */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
-import { textContains } from '../state/text-match';
+import { textContains } from '../utils/text-match';
 import { GALLERY_CATEGORIES, GALLERY_PAGE_SIZE, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort } from './gallery-api';
 import type { GalleryListingSync } from './share-modes';
 

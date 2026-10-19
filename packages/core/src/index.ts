@@ -82,7 +82,7 @@ export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorSt
 
 export { REGENERABLE, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
 
-export { textContains } from './state/text-match';
+export { textContains } from './utils/text-match';
 
 export {
   censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,

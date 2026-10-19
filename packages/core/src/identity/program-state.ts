@@ -44,7 +44,7 @@ export function createProgramStateStore(sql: SqlExecutor, actorId: string, autho
     list(prefix) {
       authorize();
 
-      // Begins with it, matched as `textContains` matches text (state/text-match.ts), never by a LIKE pattern.
+      // Begins with it, matched as `textContains` matches text (utils/text-match.ts), never by a LIKE pattern.
       return sql<{ key: string }>`SELECT key FROM actor_program_state
         WHERE actor_id = ${actorId} AND instr(lower(key), lower(${prefix ?? ''})) = 1 ORDER BY updated_at ASC, key ASC`
         .map((row) => row.key);

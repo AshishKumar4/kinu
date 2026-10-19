@@ -1003,7 +1003,7 @@ export const PLATFORM_CATALOG = {
     notes:
       'The documented D1 limit (https://developers.cloudflare.com/d1/platform/limits/) holds for Durable Object SQLite too, '
       + 'and workerd applies it locally, unlike bun:sqlite (50,000). Kinu matches text by instr over lower() '
-      + '(packages/core/src/state/text-match.ts), never a pattern; what still takes a pattern is the database tool\'s '
+      + '(packages/core/src/utils/text-match.ts), never a pattern; what still takes a pattern is the database tool\'s '
       + '`like` operator, whose caller writes the pattern and is answered this refusal.',
   },
 
