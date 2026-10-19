@@ -324,7 +324,10 @@ export class Processes {
 
       const record = { id: options.processId, command, cwd: options.cwd ?? '/workspace' };
       yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
-      const variables = Object.entries(options.env ?? {}).map(([name, value]) => `export ${name}='${value.replaceAll("'", "'\\''")}'\n`).join('');
+
+      // A name it reads the value of is left out: the pane sources this file after the session's own values are set.
+      const variables = Object.entries(options.env ?? {}).filter(([name]) => options.revealed?.[name] === undefined)
+        .map(([name, value]) => `export ${name}='${value.replaceAll("'", "'\\''")}'\n`).join('');
 
       if (variables !== '') yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/env`, variables)));
 

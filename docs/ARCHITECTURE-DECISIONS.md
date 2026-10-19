@@ -2028,6 +2028,13 @@ parameter (`user_secrets.position`, parsed at the store, no default). A
 placeholder anywhere else in the URL or headers is refused before the vault
 opens anything, so an allowed host cannot be made to store or echo it.
 
+S7. No share's viewer, shared slate's server or other non-owner principal
+acts on the owner's computer (Main, 2026-10-19): its files and processes can
+hold the owner's credentials, and its egress cannot tell a viewer's request
+from the owner's. The computer's provider refuses a viewer's every member and
+its file plane (also mounted at `/computer`), at call time and when a share is
+granted; a share cannot grant a computer member.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

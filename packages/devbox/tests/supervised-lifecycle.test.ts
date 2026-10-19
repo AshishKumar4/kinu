@@ -416,6 +416,17 @@ describe("a job its owner started reads the values its agents may read at each l
     expect(kept(made)).not.toContain(VALUE);
   });
 
+  test("the job's own variables file leaves out what it reads the value of, so the pane cannot set the placeholder back", async () => {
+    const made = harness(RevealingBox);
+
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}` }, true);
+    const files = [...made.container.files].filter(([path]) => path.endsWith('/env')).map(([, content]) => content);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toContain('CLOUDFLARE_API_TOKEN');
+    expect(files[0]).not.toContain('DATABASE_PASSWORD');
+  });
+
   test('a restore after a recycle asks again, so the job holds the value as the owner left it', async () => {
     const made = harness(RevealingBox);
 

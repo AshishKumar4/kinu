@@ -194,14 +194,17 @@ describe('a secret goes only in its credential position, whatever the allowed ho
     } finally { upstream.restore(); }
   });
 
-  /** A value URL syntax reads: a separator, a plus, a slash, an equals, a percent, a fragment mark and spaces. */
-  const SYNTAX_VALUE = ['s&k', '+v/w=x%2', '#y token with space'].join('');
+  /** A value URL syntax reads (a separator, a plus, a slash, an equals, a percent, a fragment mark, spaces), and the two
+   *  characters its serializers disagree on: an apostrophe the URL parser encodes and a tilde a form encodes. */
+  const SYNTAX_VALUE = ['s&k', '+v/w=x%2', "#y token with space'~z"].join('');
 
   /** Every spelling of `value` a host could echo: as written, percent-encoded in either case of hex, and form-encoded. */
   function spellings(value: string): string[] {
     const encoded = encodeURIComponent(value);
 
-    return [value, encoded, encoded.replace(/%[0-9A-F]{2}/g, (hex) => hex.toLowerCase()), new URLSearchParams([['k', value]]).toString().slice(2)];
+    const sent = new URL(`https://echo.invalid/?k=${encoded}`).search.slice(3);
+
+    return [value, encoded, sent, sent.toLowerCase(), new URLSearchParams([['k', value]]).toString().slice(2)];
   }
 
   test('a value full of URL syntax is one parameter\'s value at the host, and no spelling of it comes back', async () => {

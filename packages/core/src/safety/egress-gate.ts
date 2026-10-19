@@ -158,6 +158,19 @@ export interface RevealedUrl {
   readonly scrub: readonly ScrubReplacement[];
 }
 
+/**
+ * How `value` is spelled once sent as a query value, and again as an answer may echo it: as the URL parser itself
+ * serializes the request (which encodes an apostrophe that `encodeURIComponent` leaves), as a form serializes it
+ * (which encodes `~` and writes `+` for a space), as `encodeURIComponent` does, and each with its hex in lower case.
+ * Derived from the serializers, never listed by hand.
+ */
+function urlSpellings(value: string): string[] {
+  const sent = new URL(`https://spelling.invalid/?k=${encodeURIComponent(value)}`).search.slice('?k='.length);
+  const form = new URLSearchParams([['k', value]]).toString().slice('k='.length);
+
+  return [...new Set([sent, form, encodeURIComponent(value)].flatMap((spelling) => [spelling, spelling.replace(/%[0-9A-F]{2}/g, (hex) => hex.toLowerCase())]))];
+}
+
 /** A query value as a form decodes it: `+` is a space. */
 function decodeQueryValue(raw: string): string {
   return decodeURIComponent(raw.replaceAll('+', ' '));
@@ -186,9 +199,8 @@ export function revealUrl(url: string, reveal: readonly ScrubReplacement[]): Rev
 
     for (const { find: placeholder, replaceWith: secret } of reveal) {
       if (!decoded.includes(placeholder)) continue;
-      const encoded = encodeURIComponent(secret);
 
-      for (const spelling of [encoded, encoded.replace(/%[0-9A-F]{2}/g, (hex) => hex.toLowerCase()), encoded.replaceAll('%20', '+')]) {
+      for (const spelling of urlSpellings(secret)) {
         if (spelling !== secret) scrub.set(spelling, placeholder);
       }
     }
