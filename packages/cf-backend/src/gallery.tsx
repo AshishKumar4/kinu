@@ -3179,8 +3179,10 @@ async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
   return {};
 }
 
-/** Every send the gallery took landed: a turn read it. */
+/** Where a send landed: a turn read it, or none did while `data-gallery-handed-back` is set, as when a Stop came first. */
 async function galleryAwaitSend(): Promise<JsonValue> {
+  if (document.documentElement.dataset.galleryHandedBack === "1") return { status: "none" };
+
   return { status: "settled", turnId: "gallery-turn", landed: "turn", outcome: "completed" };
 }
 

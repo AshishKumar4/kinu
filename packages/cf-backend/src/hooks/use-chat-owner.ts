@@ -49,8 +49,8 @@ const KinuActorAddressSchema = v.object({
   subordinate: v.optional(v.string()),
 });
 
-/** Where the message ended, read from the workspace's record once its turn has; it rejects `cancelled` when no turn
- *  took it, as when a Stop handed it back. Null: the press was not taken. */
+/** Where the message landed, once its request has ended; it rejects `cancelled` when no turn took it, as when a Stop
+ *  handed it back. Null: the press was not taken. */
 export type SendAdmission = Promise<SendLanding> | null;
 
 /** The snapshot and the lists the first screen draws, in the one read a workspace tab opens with: as the server answers it. */
@@ -271,6 +271,11 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     }
   }, [clearProviderWait]);
 
+  /** Openings a Stop was pressed during, until it is known where each landed. The SDK sends the whole thread with each
+   *  request and the room sends the agent every message in it the agent does not hold, so words a Stop handed back
+   *  ran on the next request: none carries these. */
+  const stoppedOpenings = useRef(new Set<string>());
+
   const {
     messages,
     sendMessage,
@@ -289,6 +294,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     ...(lastShown !== undefined && { messages: lastShown }),
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
+    prepareSendMessagesRequest: ({ messages: thread }) => ({ body: { messages: thread.filter((message) => !stoppedOpenings.current.has(message.id)) } }),
   });
 
   useEffect(() => {
@@ -310,11 +316,8 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    *  held. `isStreaming` only mirrors it for rendering. */
   const sendLatch = useRef(newSendLatch());
 
-  /** Where the newest turn-opening send landed, and the one a Stop pressed since may have handed back. An opening after
-   *  a Stop waits for that one: the hook sends its whole window, and words handed back must have left the thread
-   *  first, or the next request sends them again and they run. */
-  const lastOpening = useRef<Promise<SendLanding>>(Promise.resolve("turn"));
-  const stoppedOpening = useRef<Promise<SendLanding>>(Promise.resolve("turn"));
+  /** The opening whose request is open: its message's id, and whether a Stop was pressed during it. */
+  const openingInFlight = useRef<{ readonly id: string; stopped: boolean } | null>(null);
 
   /** Every send that starts a turn, the opening's, the composers' and Retry's, begins once the socket's probe is
    *  answered: no caller can send into the probe's answer, and none checks for itself. A Stop pressed meanwhile
@@ -504,8 +507,12 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const abortChat = useCallback(async (): Promise<void> => {
     // Snapshot before the awaits: a Send admitted meanwhile owns the latch and must keep it.
     const aborting = sendLatch.current.owner;
+    const opening = openingInFlight.current;
 
-    stoppedOpening.current = lastOpening.current;
+    if (opening !== null) {
+      opening.stopped = true;
+      stoppedOpenings.current.add(opening.id);
+    }
 
     try {
       await Promise.all([
@@ -657,10 +664,11 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [workspace, subordinate]);
 
   /**
-   * Idle: starts a turn under the send latch via the SDK chat path. Otherwise the actor's `send` RPC splices it into
-   * the running turn or runs it as the next turn. Either way the answer says where it landed, from the workspace's
-   * record of the message under the id minted here; nothing here re-sends. `null`: nothing was sent. The decision reads
-   * the latch, not `isStreaming`: two presses in one tick both see stale reactive state.
+   * Idle: starts a turn under the send latch via the SDK chat path; it opened its turn unless a Stop pressed during it
+   * handed it back. Otherwise the actor's `send` RPC splices it into the running turn or runs it as the next turn.
+   * Where it landed is read from the workspace's record of the message under the id minted here; nothing here
+   * re-sends. `null`: nothing was sent. The decision reads the latch, not `isStreaming`: two presses in one tick both
+   * see stale reactive state.
    */
   const sendChat = useCallback((
     content: string,
@@ -683,22 +691,32 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     };
 
     if (sendLatch.current.owner === null && !isStreaming) {
-      const before = stoppedOpening.current;
-
-      const ended = startTurn(async () => {
-        await Promise.allSettled([before]);
+      const ended = startTurn(() => {
         setFrameError(null);
-        await sendMessage({ id, role: "user", parts, metadata: { kinuMode: mode } });
+
+        return sendMessage({ id, role: "user", parts, metadata: { kinuMode: mode } });
       });
 
       if (ended !== null) {
-        const landing = settle(Effect.tapError(attemptInItsWords("io", () => sendLanding(record, ended, id)), (refused) => Effect.sync(() => {
-          if (refused.code === "cancelled") setMessages((shown) => shown.filter((message) => message.id !== id));
-        })));
+        const opening = { id, stopped: false };
 
-        lastOpening.current = landing;
+        openingInFlight.current = opening;
 
-        return landing;
+        // Only a Stop pressed during it can have handed its words back: the agent's record of them says, once it ended.
+        const landing = attemptInItsWords("io", async (): Promise<SendLanding> => {
+          await ended;
+
+          if (openingInFlight.current === opening) openingInFlight.current = null;
+
+          return opening.stopped ? await sendLanding(record, ended, id) : "turn";
+        });
+
+        return settle(Effect.ensuring(
+          Effect.tapError(landing, (refused) => Effect.sync(() => {
+            if (refused.code === "cancelled") setMessages((shown) => shown.filter((message) => message.id !== id));
+          })),
+          Effect.sync(() => { stoppedOpenings.current.delete(id); }),
+        ));
       }
     }
 
