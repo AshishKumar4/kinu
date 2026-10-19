@@ -93,6 +93,7 @@ export const CAPABILITY_ROWS = {
   'a slate listed in the Gallery and taken off it': ['gallery-listing'],
   'a first share started as an empty copy': ['start-empty'],
   'a personal part drawn sealed in its slate\'s page, run again and shown to everyone': ['slate-parts'],
+  'a second account\'s personal part drawn sealed inside an owner\'s live share': ['slate-parts-viewer'],
   'a live share\'s editor changing its slate from their own workspace, the owner\'s access held until they approve it again': ['slate-edit'],
   'a live share forked into its named account\'s own workspace, starting from empty state': ['slate-fork'],
 } as const satisfies Record<string, Rows>;

@@ -179,6 +179,7 @@ The shared page learns nothing from a part's size, because it fixes the size.
 
 - **Deployed rows** (`tests/first-run/`, run by `gate:first-run` on every staging publish): `users-share`, `owner-effects`,
   `share-capability-cut`, `start-empty`, `gallery-listing`, `blueprint-fork`, `slate-parts` (the owner's own preview),
+  `slate-parts-viewer` (a second account's own part, drawn sealed in the owner's live share in its signed-in browser),
   `slate-edit` (a second account edits from its own workspace; the owner's access is held until they approve it again)
   and `slate-fork` (a second account forks a live share into its own workspace, from empty state). `public-share` runs
   only on the CLI operator plan (`KINU_FIRST_RUN_OPERATOR=1`).
