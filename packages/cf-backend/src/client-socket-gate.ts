@@ -76,6 +76,20 @@ function mediaResponse(image: StoredImage): Response {
   });
 }
 
+/**
+ * Every frame the gate answers with: a socket no longer open, closed by its tab or by a refusal of a frame beside this
+ * one, is sent nothing (staging rc20, 2026-10-19: two frames of a deleted workspace's tab were refused together, and the
+ * second's answer threw out of `webSocketMessage`).
+ */
+function answer(connection: Pick<Connection, 'id' | 'readyState' | 'send'>, frame: string): void {
+  if (connection.readyState === WebSocket.OPEN) sendIfOpen(connection, frame);
+}
+
+/** A socket the gate refuses for good, closed once, by policy: a refusal beside it may have closed it already. */
+function shut(connection: Pick<Connection, 'readyState' | 'close'>, reason: string): void {
+  if (connection.readyState === WebSocket.OPEN) connection.close(WEBSOCKET_POLICY_CLOSE, reason);
+}
+
 /** The base's handlers behind the gate. */
 export function gatedClientHandlers(host: ClientSocketGateHost, base: ClientHandlers): ClientHandlers {
   const gate = new ClientSocketGate(host);
@@ -138,7 +152,7 @@ class ClientSocketGate {
     const rejection = rejectOutOfScopeRpc(connection.tags, message);
 
     if (rejection) {
-      connection.send(rejection);
+      answer(connection, rejection);
 
       return;
     }
@@ -147,7 +161,7 @@ class ClientSocketGate {
     const refusal = rpc === null ? null : this.rpcRefusal(connection, rpc);
 
     if (rpc && refusal !== null) {
-      connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: refusal }));
+      answer(connection, JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: refusal }));
 
       return;
     }
@@ -160,7 +174,7 @@ class ClientSocketGate {
       const room = this.host.chatRoomFor(connection);
 
       if (room === null) {
-        connection.send(JSON.stringify({ type: 'error', error: 'The actor this connection addressed is no longer hosted here.' }));
+        answer(connection, JSON.stringify({ type: 'error', error: 'The actor this connection addressed is no longer hosted here.' }));
 
         return;
       }
@@ -181,10 +195,10 @@ class ClientSocketGate {
     if (!unavailable || inspection) return false;
     const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
 
-    if (rpc) connection.send(JSON.stringify({ ...unavailable, type: 'rpc', id: rpc.id, success: false }));
+    if (rpc) answer(connection, JSON.stringify({ ...unavailable, type: 'rpc', id: rpc.id, success: false }));
     else if (event?.type === 'chat-request' || event?.type === 'stream-resume-ack') {
-      connection.send(JSON.stringify({ reason: unavailable.reason, type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: unavailable.error, done: true, error: true }));
-    } else connection.send(JSON.stringify({ ...unavailable, type: 'error' }));
+      answer(connection, JSON.stringify({ reason: unavailable.reason, type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: unavailable.error, done: true, error: true }));
+    } else answer(connection, JSON.stringify({ ...unavailable, type: 'error' }));
 
     return true;
   }
@@ -199,7 +213,7 @@ class ClientSocketGate {
 
     // Before anything reads the store.
     if (storage !== undefined) {
-      connection.send(JSON.stringify({
+      answer(connection, JSON.stringify({
         type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: 'storage-refused', reason: storage.code, body: storage.message, done: true, error: true,
       }));
 
@@ -313,8 +327,8 @@ class ClientSocketGate {
 
       // The rpc reply carries the authority's reason so a pending call fails instead of hanging;
       // the close reason is the user-facing instruction for the token kind.
-      if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial.why }));
-      connection.close(WEBSOCKET_POLICY_CLOSE, denial.close);
+      if (rpc) answer(connection, JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial.why }));
+      shut(connection, denial.close);
       diagnostics.event('auth.socket_frame_denied', { outcome: 'denied', reason: 'authority_not_live' });
 
       return true;
@@ -389,13 +403,13 @@ const UNCONFIRMED = {
 } as const;
 
 /** Validates the frame at the client boundary; a socket sending any other shape is closed with the reason. */
-async function forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Pick<Connection, 'send' | 'close'>, message: WSMessage): Promise<void> {
+async function forwardTerminalFrame(terminal: WorkspaceTerminal, connection: Pick<Connection, 'readyState' | 'send' | 'close'>, message: WSMessage): Promise<void> {
   const frame = v.is(v.string(), message)
     ? v.safeParse(WorkspaceTerminalInputSchema, tolerate(() => JSON.parse(message), 'malformed-input'))
     : null;
 
   if (frame === null || !frame.success) {
-    connection.close(WEBSOCKET_POLICY_CLOSE, 'terminal frame refused: not an input or resize frame');
+    shut(connection, 'terminal frame refused: not an input or resize frame');
 
     return;
   }
