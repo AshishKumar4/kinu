@@ -46,7 +46,7 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
-import { ACTIVITY_SURFACE, type SurfaceKind } from "@kinu.run/core";
+import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
@@ -5923,6 +5923,14 @@ function WorkFrame() {
   const jobs = streaming ? [building, ...lane.jobs] : lane.jobs;
   // Work opens a plan on its own page and the Work tab returns, as the workspace's column does.
   const [surface, setSurface] = useState<SurfaceKind>("Work");
+  // `&presence=late`: the tabs' presence comes only once `__presenceArrives` is called, from a timer as a socket's
+  // answer comes, not from a press.
+  const late = params.get("presence") === "late";
+  const [presence, setPresence] = useState<TabPresence | undefined>(late ? undefined : { explorations: true, work: true });
+
+  useEffect(() => {
+    Object.assign(window, { __presenceArrives: (arrived: TabPresence) => { setTimeout(() => { setPresence(arrived); }, 0); } });
+  }, []);
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -5933,7 +5941,7 @@ function WorkFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={jobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={lane.queue}
-          tabPresence={{ explorations: true, work: true }}
+          tabPresence={presence} presencePending={presence === undefined}
           rpc={workspaceRpc(lane.rpc)}
         />
       </div>
