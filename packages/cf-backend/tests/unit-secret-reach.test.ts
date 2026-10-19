@@ -157,8 +157,9 @@ describe("the owner's own calls hold the workspace's secrets", () => {
 });
 
 describe("a call that is not the owner's holds none of them", () => {
-  test("a viewer's command on the workspace's own box holds neither, beside the owner's which holds both", async () => {
-    const { environment, placeholder } = await shop();
+  test("a viewer's command on the workspace's own box holds neither, beside the owner's which holds both as placeholders", async () => {
+    const { environment, placeholder, reads } = await shop();
+    const kept = await reads.commandEnvironment('keep', 'owner');
     const seen: (Readonly<Record<string, string>> | undefined)[] = [];
 
     const box = withCommandEnvironment({
@@ -174,7 +175,10 @@ describe("a call that is not the owner's holds none of them", () => {
 
     await withholdingOwnerSecrets(() => box.exec('env', {}));
 
-    expect(seen).toEqual([{ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: DB_VALUE }, {}]);
+    // The one its agents may read too: the box writes a serving program's environment where every process reads it.
+    expect(seen).toEqual([{ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: kept.DATABASE_PASSWORD }, {}]);
+    expect(kept.DATABASE_PASSWORD).toStartWith('pxs1_');
+    expect(JSON.stringify(seen)).not.toContain(DB_VALUE);
   });
 
   test("a viewer's eval program is handed no bindings, the owner's both", async () => {

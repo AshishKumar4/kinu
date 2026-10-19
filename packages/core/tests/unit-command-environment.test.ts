@@ -118,7 +118,7 @@ test('a job the computer restarts by itself is kept with placeholders, never a v
   expect(started).toEqual([{ command: 'bun run dev', env: { STRIPE_SECRET_KEY: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}` }, reveal: true }]);
 });
 
-test("on the workspace's box a command, and a process the box keeps in memory, get the secrets beneath their own variables, and a facet keeps its home", async () => {
+test("on the workspace's box a command and a process get placeholders beneath their own variables, never a value, and a facet keeps its home", async () => {
   const seen: { method: string; env: Readonly<Record<string, string>> | undefined }[] = [];
 
   const box: NimbusSandboxHandle = {
@@ -145,8 +145,9 @@ test("on the workspace's box a command, and a process the box keeps in memory, g
   await execution.startProcess?.('serve', {});
 
   expect(seen).toEqual([
-    { method: 'exec', env: { STRIPE_SECRET_KEY: CALLS_OWN, DATABASE_PASSWORD: DB_PASSWORD, HOME: '/home/alpha', TMPDIR: '/tmp/alpha' } },
-    // The box neither writes nor restarts it, so it holds the value as a command does.
-    { method: 'startProcess', env: { STRIPE_SECRET_KEY: PLACEHOLDER, DATABASE_PASSWORD: DB_PASSWORD, HOME: '/home/alpha', TMPDIR: '/tmp/alpha' } },
+    // Even one the owner let agents read: the box writes a serving program's environment where every process reads it.
+    { method: 'exec', env: { STRIPE_SECRET_KEY: CALLS_OWN, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}`, HOME: '/home/alpha', TMPDIR: '/tmp/alpha' } },
+    { method: 'startProcess', env: { STRIPE_SECRET_KEY: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}`, HOME: '/home/alpha', TMPDIR: '/tmp/alpha' } },
   ]);
+  expect(JSON.stringify(seen)).not.toContain(DB_PASSWORD);
 });

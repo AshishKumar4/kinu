@@ -485,7 +485,7 @@ function secretsSection(secrets: SecretsInContext | undefined): RenderedSection 
   return { text: [
     DYNAMIC_SECTION_TITLES.secrets,
     ...secrets.granted.map((secret) => `- $${secret.name}: to ${secret.hosts.join(', ')}, in ${positionWords(secret.position)}`
-      + (secret.reveal ? '; readable, it holds the value itself' : '')),
+      + (secret.reveal ? '; readable: the value itself on the computer and in eval, a placeholder in the workspace shell' : '')),
     ...withheld,
   ].join('\n') };
 }

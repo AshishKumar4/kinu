@@ -1993,10 +1993,12 @@ in the secret's credential position (S6), only toward its hosts and only over
 https or wss, with the response scrubbed. Bodies are never substituted: an
 allowed host can publish a body. Raw TCP, request signing and form logins
 cannot use a placeholder; for those the owner turns on "Agents may read the
-value" per workspace and secret. A value then lives only in memory: read from
-the account object for each command, held by a process the box keeps but never
-writes or restarts, and asked again at every launch of a supervised job the
-owner started, whose spec and directory hold placeholders alone: the job's
+value" per workspace and secret, which reaches the computer and eval only: the
+workspace's own (Nimbus) box always gets placeholders, since it writes a
+serving or watching Node/Bun program's environment into a generated image that
+every process on the box reads and its storage keeps. A value then lives only
+in memory: read from the account object for each computer command and eval
+run, and asked again at every launch of a supervised job the owner started, whose spec and directory hold placeholders alone: the job's
 tmux session takes the values as its environment at its start (`new-session
 -e`, tmux 3.2+). An owner's command, eval program or job whose account does
 not answer (or whose box is not yet configured) fails with that reason rather

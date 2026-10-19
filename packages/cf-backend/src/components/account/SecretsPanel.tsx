@@ -25,9 +25,10 @@ import {
 
 
 /** What turning reading on lets an agent do; said where the switch is turned, and again as it is asked. */
-const REVEAL_WARNING = "The value can then enter that workspace's agent context, files, logs and transcripts, and be "
-  + "sent to any host. Turn it on only where the stand-in cannot work: a request body, a database password, or a request "
-  + "the program signs itself. If it leaks, rotate the key.";
+const REVEAL_WARNING = "On that workspace's computer and in its eval programs, the value can then enter its agent context, "
+  + "files, logs and transcripts, and be sent to any host; its own shell keeps the stand-in. Turn it on only where the "
+  + "stand-in cannot work: a request body, a database password, or a request the program signs itself. If it leaks, "
+  + "rotate the key.";
 
 export function SecretsPanel() {
   const loadSecrets = useCallback(() => listSecrets(), []);
@@ -125,7 +126,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
         </form>
       </Field>
 
-      <Field label="Workspaces" hint="Only these workspaces' agents can use it. Reading the value is off unless you turn it on for one.">
+      <Field label="Workspaces" hint="Only these workspaces' agents can use it. Reading the value is off unless you turn it on for one, and then only on its computer and in eval.">
         <div className="space-y-2">
           {secret.grants.map((grant) => (
             <div key={grant.workspace} className="flex flex-wrap items-center gap-x-3 gap-y-1.5" data-secret-grant={grant.workspace}>
