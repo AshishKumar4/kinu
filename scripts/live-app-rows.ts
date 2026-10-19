@@ -1565,7 +1565,7 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Prom
   const told = await frame.evaluate(() => Math.ceil(document.documentElement.getBoundingClientRect().height));
   const frameHeight = `document.querySelector('[data-slate-ui="first"] iframe')?.getBoundingClientRect().height ?? 0`;
 
-  await until(page, 'the first frame as tall as its page', `${frameHeight} >= ${String(told)}`);
+  await until(page, 'the first frame as tall as its page', `(${frameHeight}) >= ${String(told)}`);
   await settled(page, frameHeight, { box: `document.querySelector('[data-slate-ui="first"] iframe')` });
   await frame.click('#send');
   const request = await waitOn(page, 'the click reaching the agent', heard);
@@ -1751,7 +1751,7 @@ const COMPOSER_NOTICE_TONES = `[...document.querySelectorAll('#chat [data-compos
  * handed back before the agent took them ended their request as a failure and stayed in the chat, so the next request
  * sent them again and the stopped ask ran.
  */
-async function measureStopThenSend(newPage: LiveApp['newPage'], origin: string): Promise<StopThenSendVerdict> {
+async function measureStopThenSend(newPage: LiveApp['newPage'], origin: string, stopped: HeldCall): Promise<StopThenSendVerdict> {
   const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-stop-send-${RUN_ID}`, purpose: 'stop then send probe', model: SCRIPTED_MODEL_SPEC });
   const page = await openRecorded(newPage, origin, workspace);
   const attempts: StopAttempt[] = [];
@@ -1774,6 +1774,7 @@ async function measureStopThenSend(newPage: LiveApp['newPage'], origin: string):
 
     return { attempts, stoppedAnswered: v.parse(v.boolean(), await page.evaluate(`(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(STOPPED_ANSWER)})`)) };
   } finally {
+    stopped.release();
     await page.close();
   }
 }
@@ -2040,6 +2041,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const unsentHeld = heldCall();
     const clearedHeld = heldCall();
     const probeWaitHeld = heldCall();
+    const stoppedHeld = heldCall();
     const openingHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
@@ -2053,7 +2055,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stoppedHeld, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -2086,7 +2088,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'dropped-file': async () => { observed.droppedFile = await attempt('dropped-file', () => measureDroppedFile(newPage, origin)); },
         'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
         'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
-        'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin)); },
+        'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stoppedHeld)); },
         'new-chat-stop': async () => { observed.newChatStop = await attempt('new-chat-stop', () => measureNewChatStop(newPage, origin, openingHeld)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },

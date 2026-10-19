@@ -322,7 +322,7 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
 
 /* ── Stop, then a send ─────────────────────────────────────────────────── */
 
-/** The stop-then-send row's asks, numbered per attempt: one stopped as it opens, whose turn never answers on its own,
+/** The stop-then-send row's asks, numbered per attempt: one stopped as it opens, its call held until the row is done,
  *  then a follow-up sent as the Stop leaves, answered at once. */
 export const STOPPED_ASK = 'Stop probe: wait before the first word';
 
@@ -339,16 +339,18 @@ export const OPENING_ASK = 'New chat probe: wait before the first word.';
 export const OPENING_ANSWER = 'Opened after the wait.';
 
 /** The stop-then-send and new-chat rows' turns, or null for any other request. */
-export function stopProbeTurn(request: ScriptedRequest, opening: HeldCall): ScriptedAnswer | null {
+export function stopProbeTurn(request: ScriptedRequest, stopped: HeldCall, opening: HeldCall): ScriptedAnswer | null {
   const last = request.userTexts.at(-1) ?? '';
 
   if (request.available.length === 0) return null;
 
   if (last.includes(FOLLOW_UP_ASK)) return { text: `${FOLLOW_UP_ANSWER}${last.slice(last.indexOf(FOLLOW_UP_ASK) + FOLLOW_UP_ASK.length)}.` };
 
-  if (last.includes(STOPPED_ASK)) return { text: STOPPED_ANSWER, pace: { firstTokenMs: 60_000, lead: '\n\n', leadMs: 0 } };
+  const held = (text: string, call: HeldCall): ScriptedAnswer => ({ text, pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: call.hold() } });
 
-  return last.includes(OPENING_ASK) ? { text: OPENING_ANSWER, pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: opening.hold() } } : null;
+  if (last.includes(STOPPED_ASK)) return held(STOPPED_ANSWER, stopped);
+
+  return last.includes(OPENING_ASK) ? held(OPENING_ANSWER, opening) : null;
 }
 
 /* ── The plan's own tasks ──────────────────────────────────────────────── */
