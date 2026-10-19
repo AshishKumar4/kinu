@@ -394,6 +394,10 @@ export class FakeSandbox {
   readonly stampFaults: (Error | undefined)[] = [];
   /** Thrown by the next reads of the kernel's boot id, as an exec the container drops. */
   readonly bootReadFaults: Error[] = [];
+  /** Parks the next read of the kernel's boot id in the container; a container stopped meanwhile never answers it. */
+  bootReadGate: Gate | undefined;
+  /** Thrown by the next commands that trust the intercept's CA, as a configuration the container refuses. */
+  readonly trustFaults: Error[] = [];
   /** How many times the box recorded a container of record. */
   stamps = 0;
   startGate: Gate | undefined;
@@ -998,6 +1002,20 @@ export class FakeSandbox {
       this.execs.push(KERNEL_READ);
 
       if (fault !== undefined) throw fault;
+      const held = this.bootReadGate;
+
+      if (held !== undefined) {
+        this.bootReadGate = undefined;
+
+        return processResult((async () => {
+          held.enter();
+          await held.promise;
+
+          if (!this.running.running) throw new Error('the container stopped before it answered');
+
+          return { stdout: `${this.kernel()}\n`, stderr: '', exitCode: 0 };
+        })(), this.#pid++);
+      }
 
       return processResult(Promise.resolve({ stdout: `${this.kernel()}\n`, stderr: '', exitCode: 0 }), this.#pid++);
     }
@@ -1090,6 +1108,9 @@ export class FakeSandbox {
 
     if (args[3] === 'devbox-trust') {
       this.sequence.push('trust');
+      const fault = this.trustFaults.shift();
+
+      if (fault !== undefined) throw fault;
 
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }

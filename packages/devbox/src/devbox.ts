@@ -280,6 +280,19 @@ const AWAITING_GOLDEN_KEY = 'devbox:awaiting-golden';
 /** A snapshot a box starts from, and the namespace that gave it, which a failed wake asks for the next one. */
 type StartSource = { readonly kind: 'own' | 'golden'; readonly id: string; readonly boxes: Siblings };
 
+/** What the one adoption found (D102); `Devbox.#adopt` names each. */
+type Adoption = 'adopted' | 'refused' | 'replaced' | 'unclaimed' | 'unread' | 'unconfigured';
+
+/** The outcomes that answer for the container; the others leave the next start to ask again. */
+const ANSWERED: ReadonlySet<Adoption> = new Set(['adopted', 'refused', 'replaced', 'unclaimed']);
+
+/** A boot id read against the claimed one: a read that never answered adopts nothing. */
+function adoptionOf(answered: string | undefined, expected: string): Adoption {
+  if (answered === undefined) return 'unread';
+
+  return answered === expected ? 'adopted' : 'replaced';
+}
+
 /** What a box reaches on the boxes of its own namespace: the golden builder, and a box it tells (D65). */
 interface Siblings {
   idFromString(id: string): DurableObjectId;
@@ -426,8 +439,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  Memory only: a witness needing stamps past a reset keeps them via `onRestorePhase`. */
   #phaseClock: RestoreClock | undefined;
   #restoration: Restoration = { phase: 'unstarted' };
-  /** Activation defers identity comparison until the control listener is reachable. */
-  #adoptionPending = false;
+  /** This incarnation's one adoption of the container it woke beside (D102); memory, so a reset adopts again. */
+  #adoption: Promise<Adoption> | undefined;
+  /** The adoption settled with no answer, so the next start asks again. */
+  #unanswered = false;
   #lastInteraction: number | undefined;
   #lastInteractionPersisted = 0;
   /** One checkpoint at a time on this instance. */
@@ -468,15 +483,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#activate();
   }
 
-  /** Constructor work is synchronous storage, so no event waits on it; it does not yet
-   *  have control-port proof. */
+  /** Constructor work is synchronous storage, so no event waits on it (`gate:do-init`); the container the object woke
+   *  beside is adopted by the first member that touches it (D102). */
   #activate(): void {
     if (this.ctx.container?.running !== true) return;
     const parked = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
 
     // A park made under another deploy is lifted: that deploy may be the change its refusal waits on (D94).
     if (parked?.phase === 'unattached' && !parked.retry && parked.version !== this.#version()) this.ctx.storage.kv.delete(SETTLED_KEY);
-    this.#adoptionPending = this.#durableClaim() !== undefined;
     const settled = this.ctx.storage.kv.get<SettledRestoration>(SETTLED_KEY);
 
     if (settled?.phase === 'unattached' && isSettledRestoration(settled)) {
@@ -494,39 +508,68 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return { expected, settled };
   }
 
-  /** Memory can name `attached` for a replaced container, so every reader settles adoption first. Adoption admits the
-   *  running container on the startup flight and starts none; recovery, which may stop or replace one, stays with the
-   *  startup row, so maintenance that meets a stopped box leaves it stopped (D34). */
-  async #resolveAdoption(): Promise<void> {
-    if (this.ctx.container?.running !== true || this.#flights.hook !== undefined || !this.#adoptionPending) return;
-    await this.#fly('startup', this.#generation, () => this.#admitExecution());
-  }
-
-  /** Turnover needs a container answer that refutes the stamped boot id; absent rows prove nothing. */
-  async #adoptOrTurnOver(): Promise<void> {
-    const generation = this.#generation;
-    this.#adoptionPending = false;
-    const claim = this.#durableClaim();
-
-    if (claim === undefined || !this.#owns(generation)) return;
-    const actual = await this.#readBootId();
-
-    if (!this.#owns(generation)) return;
-
-    if (actual === claim.expected) {
-      this.#restoration = claim.settled;
-
-      return;
+  /**
+   * The one adoption of this incarnation (D102): read by the first member that touches the container, and awaited by
+   * every member that touches it, before anything else. It holds no block, so a stop, or a restart under the disk's
+   * stall, still reaches the object while the read waits. An outcome with no answer stands for members that only read,
+   * which find the box unready, and a start's hook (`asking`), with the control listener proven, asks again; so retries
+   * keep the startup row's pace.
+   */
+  async #adopted(asking = false): Promise<Adoption> {
+    if (asking && this.#unanswered) {
+      this.#adoption = undefined;
+      this.#unanswered = false;
     }
 
-    const held = this.#restoration;
+    const adoption = this.#adoption ??= this.#adopt();
+    const [outcome] = await Promise.allSettled([adoption]);
 
-    if (held.phase === 'unstarted' || held.phase === 'restoring') return;
-    console.error(
-      '[devbox] the box claims a restoration the container does not carry; restoring it '
-      + 'rather than serving callers a world that is gone',
-    );
-    this.#invalidateGeneration();
+    if (this.#adoption === adoption) {
+      // A step that failed is no outcome to keep: the next member adopts again.
+      if (outcome.status === 'rejected') this.#adoption = undefined;
+      this.#unanswered = outcome.status === 'fulfilled' && !ANSWERED.has(outcome.value);
+    }
+
+    return await adoption;
+  }
+
+  /**
+   * The running container against the restoration the box claims (BOOT_ID_KEY with SETTLED_KEY), by the kernel's boot
+   * id. `adopted` takes the claim and configures the container as a start's admission would, and `refused` is that
+   * configuration refused for good (D94, D47); `replaced` turns over and arms the start that restores it; `unclaimed` is
+   * no running container, or a box that claims nothing. With no answer: `unread`, a read that never answered (a stopping
+   * container, or a stop or turnover meanwhile), and `unconfigured`, a configuration refused for now, whose retry adopts
+   * the claim again rather than restoring over it. Absent rows prove nothing, so only a container answer refutes a claim.
+   */
+  async #adopt(): Promise<Adoption> {
+    const claim = this.#durableClaim();
+
+    if (this.ctx.container?.running !== true || claim === undefined) return 'unclaimed';
+    const generation = this.#generation;
+    const since = Date.now();
+    const [read] = await Promise.allSettled([this.#readBootId()]);
+    const answered = this.#owns(generation) && read.status === 'fulfilled' ? read.value : undefined;
+    const adoption = adoptionOf(answered, claim.expected);
+    this.#trace('adoption', { adoption, ms: Date.now() - since, phase: this.#restoration.phase });
+
+    if (adoption === 'replaced') {
+      console.error('[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone');
+      this.#invalidateGeneration();
+      await this.#armStartup();
+    }
+
+    if (adoption !== 'adopted') return adoption;
+    this.#restoration = claim.settled;
+    const [configured] = await Promise.allSettled([this.configureContainer(true)]);
+
+    if (configured.status === 'fulfilled') return adoption;
+    // Refused as a start's configuration is (D94, D47): the container is the same either way.
+    const refused = { cause: configured.reason };
+
+    if (this.#owns(generation)) this.#restoration = { phase: 'unstarted' };
+    await this.#refuseAdmission({ generation, since, startsContainer: false, inputs: this.#startInputs() }, refused);
+
+    return waitingCanChange(refused) ? 'unconfigured' : 'refused';
   }
 
   /** The name of the R2 binding the box keeps its disk and the pinned tools in. The box reads `env[store]`, and the
@@ -826,7 +869,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (!await this.#admit(container, cancel.signal, inputs)) return;
 
       if (!this.#owns(generation) || this.#closed) return;
-      await this.configureContainer(wasRunning && (this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'));
+      await this.configureContainer(wasRunning && this.#reused());
 
       if (!this.#owns(generation) || this.#closed) return;
       await this.ctx.blockConcurrencyWhile(() => this.#restoreInStartGate(!wasRunning));
@@ -974,9 +1017,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const budget = openStartBudget(budgetMs, this.startClock);
     let generation = this.#generation;
 
-    const result = await runRestoreStep(
+    const stepped = await runRestoreStep(
       budget.remainingMs(),
-      async () => {
+      async (): Promise<'unanswered' | undefined> => {
         const previous = await this.ctx.storage.get<Restoration>(SETTLED_KEY);
 
         if (!this.#owns(generation)) return;
@@ -988,7 +1031,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return;
         }
 
-        await this.#adoptOrTurnOver();
+        const over = started ? 'restore' : await this.#overRunning(generation);
+
+        if (over !== 'restore') return over === 'unanswered' ? over : undefined;
 
         if (this.#restoration.phase !== 'unstarted') return;
         generation = this.#generation;
@@ -999,6 +1044,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       (failure) => console.error(`[devbox] abandoned start hook failed: ${describe(failure)}`),
       this.startClock,
     );
+
+    // No answer over a claim fails the hook into its recovery, as an unanswered identity read always did.
+    const result = stepped.kind === 'done' && stepped.value === 'unanswered'
+      ? { kind: 'failed', cause: new DevboxError('io', 'the running container did not answer the read of its boot id') } as const
+      : stepped;
 
     if (!this.#owns(generation)) return;
 
@@ -1032,6 +1082,27 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.#deleteSchedule(STARTUP_CALLBACK);
       await this.ctx.storage.put(STARTED_AT_KEY, Date.now());
     }
+  }
+
+  /**
+   * A start's hook over a container its admission did not start (D102). It asks the adoption again, the control listener
+   * now proven, and checks a live restoration's boot id as the heartbeat does (T9). `restore` goes on to restore what
+   * the box does not have; `kept` ends the hook over a restoration, a refusal, or a retry that already stands;
+   * `unanswered` is no answer over a claim, where restoring could attach over the live workspace.
+   */
+  async #overRunning(generation: number): Promise<'restore' | 'kept' | 'unanswered'> {
+    const adoption = await this.#adopted(true);
+
+    if (adoption === 'unread' && this.#durableClaim() !== undefined) return 'unanswered';
+
+    if (adoption === 'unconfigured') return 'kept';
+
+    if (this.#admission() !== undefined && await this.#containerWasReplaced() && this.#owns(generation)) {
+      console.error('[devbox] the restored container was replaced; restoring it rather than serving callers a world that is gone');
+      this.#invalidateGeneration();
+    }
+
+    return this.#restoration.phase === 'unstarted' ? 'restore' : 'kept';
   }
 
   /** Every settle writes the durable row a post-reset activation adopts, never memory alone.
@@ -1095,9 +1166,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return (observed === undefined ? await this.#readBootId() : observed.bootId) !== expected;
   }
 
-  /** A checkpoint must refuse a replaced workspace until the startup hook restores it. */
+  /** A checkpoint must refuse a workspace replaced under a live object until the startup hook restores it. */
   async #healReplacedContainer(): Promise<void> {
-    await this.#resolveAdoption();
     // A box in `repair` also serves callers over a work directory, so a replaced container
     // must refuse the commit there just as on an `attached` one.
     const held = this.#restoration;
@@ -1233,6 +1303,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       try {
         await this.#dispatch(STARTUP_CALLBACK, async () => {
           if (this.#closed || this.#quiescing !== undefined) return;
+          await this.#adopted();
 
           // A stale buffered startup row cannot reopen a settled running generation (D12).
           if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
@@ -1246,8 +1317,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** All delivered startup doors share admission and destructive recovery. */
+  /** All delivered startup doors share adoption, admission and destructive recovery. */
   async #startContainer(): Promise<void> {
+    await this.#adopted();
     const refused = this.#refusedStart();
 
     if (refused !== undefined) {
@@ -1370,7 +1442,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // named itself into a read-only /etc/hostname, an unclassified failure, and took 1,873 alarms in 30 minutes (D94).
     if (!waitingCanChange(failed)) {
       const refusal = `[${failure} -> refuse] ${reason}`;
-      this.#adoptionPending = false;
 
       if (startsContainer) this.ctx.storage.kv.put(START_REFUSED_KEY, { reason: refusal, ...inputs });
       await this.#settle({ phase: 'unattached', reason: refusal, retry: false });
@@ -1472,7 +1543,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       ? undefined
       : { generation: this.#generation, run: recoveryFlight.run, since: recoveryFlight.since };
     this.#restoration = { phase: 'unstarted' };
-    this.#adoptionPending = false;
     // A standing settled row would let the next activation adopt a restoration it never ran.
     // Not awaited: the next adoption reads only after awaits of its own.
     unawaited(this.ctx.storage.delete(SETTLED_KEY), 'settled phase was not cleared');
@@ -1883,7 +1953,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     // The step its base is at rides along: the caller holds while the build moves on (D79).
     if (base !== undefined && this.ctx.container?.running !== true) return base;
-    await this.#resolveAdoption();
+    await this.#adopted();
     this.#trace('readiness.adopted', { phase: this.#restoration.phase });
 
     // Native allocation can report running before restoration starts.
@@ -2061,9 +2131,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   portListeners(stamp: string, ports?: readonly number[]): Promise<readonly PortListener[] | null> {
     return settle(attempt('io', async () => {
-      const container = this.ctx.container;
+      await this.#adopted();
+      const container = this.#readyContainer();
 
-      if (container?.running !== true) return null;
+      if (container === undefined) return null;
 
       if (ports?.length === 0) return [];
       const read = await (await container.exec(['sh', '-c', PORT_LISTENERS, 'port-listeners', stamp, ...(ports ?? []).map(String)])).output();
@@ -2194,7 +2265,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return yield* attempt('not-ready', async (): Promise<AttachOutcome> => {
         this.#closed = false;
         this.stampInteraction();
-        await this.#resolveAdoption();
+        await this.#adopted();
 
         if (this.#restoration.phase === 'repair') {
           await this.#repairAttached(this.#generation);
@@ -2227,10 +2298,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`), and each adopts and
-   *  checks the container it is about to commit as it runs, not as it was asked. */
+  /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`), and each awaits the
+   *  adoption (D102) and checks the container it is about to commit as it runs, not as it was asked. */
   #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
+      await this.#adopted();
       await this.#healReplacedContainer();
       const pending = this.#flights.startup;
 
@@ -2305,6 +2377,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return { kind: 'skipped', reason: 'the container is not running: nothing is attached to commit', bytes: undefined, movedBytes: undefined };
     }
 
+    await this.#adopted();
     await this.#healReplacedContainer();
     const held = this.#restoration;
 
@@ -2534,11 +2607,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return unreadyOf(this.#restoration, this.#flights.hook !== undefined);
   }
 
-  /** A read: it starts, arms and wakes nothing. A running container an object reset left is adopted first,
-   *  so the report names the restoration it carries. */
+  /** A read: it starts and wakes nothing. A running container an object reset left is adopted first (D102), so the
+   *  report names the restoration it carries. */
   devboxState(): Promise<DevboxReport> {
     return settle(attempt('io', async () => {
-      await this.#resolveAdoption();
+      await this.#adopted();
 
       const [supervised, ports, incidents] = await Promise.all([
         this.#procSpecs(),
@@ -2769,6 +2842,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         if (this.ctx.container?.running !== true) return null;
         const outcome = await this.#checkpoint('tick');
 
+        // A box that is not ready has nothing restored to commit: its start restores it, and no checkpoint failed
+        // (#117 filed one every tick for an object that had restarted beside its container).
+        if (outcome.kind === 'failed' && this.#admission() === undefined) {
+          await this.#armStartup();
+
+          return period;
+        }
+
         if (outcome.kind === 'failed') {
           await this.#record('checkpoint', outcome.reason ?? 'unknown');
         }
@@ -2785,7 +2866,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const beat = this.policy.heartbeatSeconds;
       await this.#scheduled(HEARTBEAT_CALLBACK, beat, async () => {
         this.#renewContainer();
-        await this.#resolveAdoption();
+        await this.#adopted();
 
         if (this.ctx.container?.running !== true) {
           await this.#tick({ running: false, ping: 'skipped', armedNext: false });
@@ -3159,7 +3240,27 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** The mark at the centre of the desktop's wallpaper, an SVG document drawn in its own colour (D88); unset, none. */
   protected get desktopMark(): string | undefined { return undefined; }
 
-  protected async configureContainer(reused = this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'): Promise<void> {
+  /** Whether a running container is the one the box restored, as far as storage says: its routes and mounts are kept. */
+  #reused(): boolean {
+    return this.#durableClaim() !== undefined || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
+  }
+
+  /** The container while the box is ready for it, else undefined: reads that neither start nor wait take this (R1). */
+  #readyContainer(): Container | undefined {
+    const container = this.ctx.container;
+
+    return container?.running === true && this.#quiescing === undefined && this.#admission() !== undefined ? container : undefined;
+  }
+
+  /** Applies a changed outbound policy to the running container once it is adopted (D102); a stopped one takes it at its
+   *  start. */
+  protected async reconfigure(): Promise<void> {
+    await this.#adopted();
+
+    if (this.ctx.container?.running === true) await this.configureContainer();
+  }
+
+  protected async configureContainer(reused = this.#reused()): Promise<void> {
     await this.#routes().configure(await this.outboundPolicy(), this.store, reused);
     this.#renewContainer();
     await this.#forgetClosedSessions();
@@ -3557,9 +3658,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    */
   terminalSessions(): Promise<readonly TerminalSession[]> {
     return settle(attempt('io', async () => {
-      const container = this.ctx.container;
+      await this.#adopted();
+      const container = this.#readyContainer();
 
-      if (container?.running !== true) return mergeSessions(this.#sessionRecords(), null);
+      // An unready box's sessions are its records: its container's restoration is not confirmed, and the records must
+      // not move to it (R1).
+      if (container === undefined) return mergeSessions(this.#sessionRecords(), null);
       const read = parseSessionsRead(decoded(await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output()).stdout);
       const records = this.#sessionRecords();
       const moved = records.map((record) => ({ ...record, cwd: read.get(record.id)?.cwd ?? record.cwd }));
@@ -3619,6 +3723,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    * its next start does, before any attach (D97).
    */
   async #endSession(id: string): Promise<void> {
+    await this.#adopted();
     const container = this.ctx.container;
 
     if (container?.running === true) await resetTerminal(container, id);
