@@ -1141,6 +1141,7 @@
     "turn_ids TEXT NOT NULL",
     "debt_key TEXT",
     "proposal TEXT",
+    "review_json TEXT",
     "routes TEXT NOT NULL",
     "detail TEXT NOT NULL",
     "created_at INTEGER NOT NULL",

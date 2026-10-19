@@ -1834,7 +1834,7 @@ export {
   type ArtifactOverrides, type ArtifactStatus, type ArtifactVersion,
 } from './evolution/artifacts';
 
-export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
+export { runProposer, SCAFFOLD_ARTIFACT, scoreAuthoredEdit, type ProposerOutcome } from './evolution/proposer';
 
 export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 

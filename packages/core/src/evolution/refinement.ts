@@ -13,8 +13,10 @@ import { sqlCheckList } from '../identity/schema';
 import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import type { TemporaryAgentPort } from '../subordinates/temporary';
+import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
 import type { ScaffoldControl } from './control';
 import { JsonValueSchema, parseJsonValue } from '../utils/json';
+import { ArtifactEvidenceSchema } from './artifacts';
 import { fnv1a64 } from '../utils/fnv1a';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
@@ -163,6 +165,41 @@ const RefinementRouteSchema = v.object({
 
 export type RefinementRoute = Readonly<v.InferOutput<typeof RefinementRouteSchema>>;
 
+/** What the reviewer read about one drafted edit: the measured evidence, or the hard gate that refused it. */
+const EditEvidenceSchema = v.object({
+  /** The edit's index in the proposal this round reviewed. */
+  edit: v.number(),
+  note: v.string(),
+  /** A static gate refused it (the size caps, misevolution, a quote not in the turns): it routes nowhere. */
+  refused: v.optional(v.string()),
+  /** A section's judge-only numbers, staged with it when it is accepted. */
+  artifact: v.optional(ArtifactEvidenceSchema),
+});
+
+const VerdictSchema = v.strictObject({
+  edit: v.number(),
+  verdict: v.picklist(['accept', 'reject', 'revise']),
+  note: v.pipe(v.string(), v.nonEmpty()),
+});
+
+/** The reviewer's answer: one verdict per drafted edit, by index. */
+export const DreamVerdictsSchema = v.strictObject({ verdicts: v.array(VerdictSchema) });
+
+export type DreamVerdict = Readonly<v.InferOutput<typeof VerdictSchema>>;
+
+/** One review of the current proposal: its evidence, then the reviewer's verdicts once it answers. */
+const ReviewRoundSchema = v.object({
+  evidence: v.array(EditEvidenceSchema),
+  verdicts: v.nullable(v.array(VerdictSchema)),
+});
+
+/** A dream's review: the first round, and a second after one revision. */
+const DreamReviewSchema = v.object({ rounds: v.array(ReviewRoundSchema) });
+
+export type EditEvidence = Readonly<v.InferOutput<typeof EditEvidenceSchema>>;
+
+type DreamReview = Readonly<v.InferOutput<typeof DreamReviewSchema>>;
+
 export interface RefinementRequest {
   readonly id: string;
   readonly trigger: RefinementTrigger;
@@ -172,8 +209,10 @@ export interface RefinementRequest {
   readonly turnIds: readonly string[];
   /** The automatic trigger's idempotency key; null for an explicit request. */
   readonly debtKey: string | null;
-  /** The refiner's answer, exactly as it validated. Null until it answers. */
+  /** The dreamer's answer, exactly as it validated, revised once at most. Null until it answers. */
   readonly proposal: RefinementProposal | null;
+  /** The review of each proposal so far. */
+  readonly review: DreamReview;
   readonly routes: readonly RefinementRoute[];
   readonly detail: string;
   readonly createdAt: number;
@@ -242,6 +281,7 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
     turn_ids   TEXT NOT NULL,
     debt_key   TEXT,
     proposal   TEXT,
+    review_json TEXT,
     routes     TEXT NOT NULL,
     detail     TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -266,9 +306,15 @@ export function holdRefinementLane(sql: SqlExecutor, actorId: string): void {
     ON CONFLICT(actor_id) DO UPDATE SET answered = excluded.answered`;
 }
 
+/** A dream's helpers answer under its id: the dreamer on the id itself, its reviewer and reviser beneath it. */
+export function dreamLane(requestId: string, helper?: 'review' | 'revise', round = 0): EvolutionLaneRequest {
+  return { requestId: helper === undefined ? requestId : `${requestId}:${helper}:${String(round)}` };
+}
+
 export function refinementAnswerStored(sql: SqlExecutor, actorId: string, requestId: string): boolean {
   return sql<{ one: number }>`SELECT 1 AS one FROM evolution_helpers
-    WHERE actor_id = ${actorId} AND lane_request_id = ${requestId} AND answer_status IS NOT NULL
+    WHERE actor_id = ${actorId} AND answer_status IS NOT NULL
+      AND (lane_request_id = ${requestId} OR substr(lane_request_id, 1, ${requestId.length + 1}) = ${`${requestId}:`})
     LIMIT 1`.length > 0;
 }
 
@@ -287,7 +333,8 @@ export function nextEvolutionAnswerAt(sql: SqlExecutor, actorId: string): number
         AND (stage = 'requested' OR (stage = 'planning' AND (claim IS NULL OR claim NOT IN (SELECT value FROM json_each(${live})))))
       ORDER BY created_at ASC, id ASC LIMIT 1
     ) r
-    JOIN evolution_helpers h ON h.actor_id = ${actorId} AND h.lane_request_id = r.id
+    JOIN evolution_helpers h ON h.actor_id = ${actorId}
+      AND (h.lane_request_id = r.id OR substr(h.lane_request_id, 1, length(r.id) + 1) = r.id || ':')
     WHERE h.answer_status IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM refinement_lane_holds hd WHERE hd.actor_id = ${actorId}
         AND hd.answered >= (SELECT COUNT(*) FROM evolution_helpers e WHERE e.actor_id = ${actorId} AND e.answer_status IS NOT NULL))`;
@@ -306,6 +353,7 @@ interface OpenRefinementInput {
 
 export interface SettleRefinementPatch {
   readonly proposal?: RefinementProposal;
+  readonly review?: DreamReview;
   readonly routes?: readonly RefinementRoute[];
   readonly detail?: string;
   readonly now?: number;
@@ -351,6 +399,7 @@ interface Row {
   turn_ids: string;
   debt_key: string | null;
   proposal: string | null;
+  review_json: string | null;
   routes: string;
   detail: string;
   created_at: number;
@@ -392,6 +441,7 @@ function toRequest(row: Row): RefinementRequest {
     turnIds: decodeColumn<string[]>(TurnIdsSchema, row.turn_ids, [], row.id),
     debtKey: row.debt_key,
     proposal,
+    review: row.review_json === null ? { rounds: [] } : decodeColumn<DreamReview>(DreamReviewSchema, row.review_json, { rounds: [] }, row.id),
     routes: decodeColumn<RefinementRoute[]>(RoutesSchema, row.routes, [], row.id),
     detail: row.detail,
     createdAt: row.created_at,
@@ -414,7 +464,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     authorize();
 
     const rows = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-             proposal, routes, detail, created_at, updated_at
+             proposal, review_json, routes, detail, created_at, updated_at
       FROM refinement_requests WHERE actor_id = ${actorId} AND id = ${id} LIMIT 1`;
 
     return rows[0] ? toRequest(rows[0]) : null;
@@ -443,10 +493,12 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     if (current?.stage !== guard.stage || current.claim !== guard.claim) return false;
     const proposal = patch.proposal === undefined ? null : JSON.stringify(patch.proposal);
     const routes = patch.routes === undefined ? null : JSON.stringify([...patch.routes]);
+    const review = patch.review === undefined ? null : JSON.stringify(patch.review);
     void sql`UPDATE refinement_requests SET
         stage = COALESCE(${to}, stage),
         claim = CASE WHEN ${to} IS NULL THEN claim ELSE NULL END,
         proposal = COALESCE(${proposal}, proposal),
+        review_json = COALESCE(${review}, review_json),
         routes = COALESCE(${routes}, routes),
         detail = COALESCE(${patch.detail ?? null}, detail),
         updated_at = ${patch.now ?? nowMs()}
@@ -463,7 +515,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
 
       if (input.debtKey !== undefined) {
         const existing = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-                 proposal, routes, detail, created_at, updated_at
+                 proposal, review_json, routes, detail, created_at, updated_at
           FROM refinement_requests
           WHERE actor_id = ${actorId} AND debt_key = ${input.debtKey} LIMIT 1`;
 
@@ -498,7 +550,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       authorize();
 
       return sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-               proposal, routes, detail, created_at, updated_at
+               proposal, review_json, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId}
         ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toRequest);
     },
@@ -507,7 +559,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       authorize();
 
       const rows = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-               proposal, routes, detail, created_at, updated_at
+               proposal, review_json, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId} AND stage = 'requested'
         ORDER BY created_at ASC, id ASC LIMIT 1`;
 
@@ -518,7 +570,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       authorize();
 
       return sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-               proposal, routes, detail, created_at, updated_at
+               proposal, review_json, routes, detail, created_at, updated_at
         FROM refinement_requests
         WHERE actor_id = ${actorId} AND stage IN ('gated', 'evaluating')
         ORDER BY created_at ASC, id ASC`.map(toRequest);

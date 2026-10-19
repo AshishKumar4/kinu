@@ -15,15 +15,15 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
-import { judgeAuthoredEdit } from './proposer';
-import { listArtifactVersions, sectionArtifact, type ArtifactVersion } from './artifacts';
+import { scoreAuthoredEdit } from './proposer';
+import { artifactBody, listArtifactVersions, sectionArtifact, stageArtifact, type ArtifactEvidence, type ArtifactVersion } from './artifacts';
 import { listTurnRatings, renderRating, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
-  RefinementProposalSchema, createRefinementStore, evolutionDebt, holdRefinementLane, refinementAnswerStored,
-  refinementRequestView,
-  type RefinementClaim, type RefinementDeps, type RefinementStore,
+  RefinementProposalSchema, createRefinementStore, dreamLane, DreamVerdictsSchema, evolutionDebt, holdRefinementLane,
+  refinementAnswerStored, refinementRequestView,
+  type DreamVerdict, type EditEvidence, type RefinementClaim, type RefinementDeps, type RefinementStore,
   type RefinementEdit, type RefinementProposal, type RefinementRequest,
   type RefinementRequestView, type RefinementRoute, type RefinementScope, type RefinementStage,
   type RefinementTrigger, type SettleRefinementPatch,
@@ -35,6 +35,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/struc
 import { renderIssues } from '../utils/json';
 import { attempt, renderThrownChain, settle, toKinuError, tolerate, type ErrorCode, type KinuError } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
+import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { MEMORY_PATH } from '../memory/note';
@@ -300,6 +301,14 @@ function plan(
       && !claim.record({ proposal, detail: proposal.summary })) return null;
 
     const reviewed = reviewedTrajectory(deps.control.sql, deps.control.rt.actor, request);
+    const reviewing = yield* review(deps, claim, { request, proposal, reviewed });
+
+    // A helper is still working, or the claim was lost.
+    if (reviewing === null) return null;
+
+    if ('refused' in reviewing) return refuse(reviewing.refused, proposal);
+    ({ proposal } = reviewing);
+    const { round } = reviewing;
     const routes: RefinementRoute[] = [];
 
     for (const [index, edit] of proposal.edits.entries()) {
@@ -313,7 +322,13 @@ function plan(
       }
 
       if (!claim.held()) return null;
-      routes.push(yield* routeEdit(deps, { edit, request, reviewed }));
+      const evidence = round.evidence.find((measured) => measured.edit === index);
+      const verdict = round.verdicts.find((judged) => judged.edit === index);
+      const unrouted = evidence?.refused ?? (verdict?.verdict === 'accept' ? null : reviewerRefusal(verdict));
+
+      routes.push(unrouted === null
+        ? yield* routeEdit(deps, { edit, request, reviewed, ...(evidence?.artifact !== undefined && { artifact: evidence.artifact }) })
+        : { kind: edit.kind, owner: editOwnerAndTarget(edit)[0], target: editOwnerAndTarget(edit)[1], disposition: 'refused', reason: unrouted });
 
       // Persist after each route; a crash keeps them recorded.
       if (!claim.record({ routes })) return null;
@@ -329,6 +344,140 @@ function plan(
 }
 
 type RefinerAnswer = Result.Result<RefinementProposal, string>;
+
+function reviewerRefusal(verdict: DreamVerdict | undefined): string {
+  if (verdict === undefined) return 'the reviewer gave it no verdict';
+
+  return verdict.verdict === 'revise'
+    ? `the reviewer still asked for a revision after the one the dreamer made: ${verdict.note}`
+    : `the reviewer rejected it: ${verdict.note}`;
+}
+
+type ReviewOutcome = { readonly proposal: RefinementProposal; readonly round: { readonly evidence: readonly EditEvidence[]; readonly verdicts: readonly DreamVerdict[] } } | { readonly refused: string };
+
+/**
+ * The cross-judgement: each drafted edit measured (`scoreEdits`), the reviewer's verdict on all of them, and, if it
+ * asks for a revision, one revision by the dreamer, measured and judged again. Every answer is recorded before the
+ * next step, so a pass that resumes asks no helper twice. Null while a helper is working, or when the claim is lost.
+ */
+function review(
+  deps: RefinementDeps,
+  claim: RefinementClaim,
+  input: { readonly request: RefinementRequest; readonly proposal: RefinementProposal; readonly reviewed: readonly TurnRating[] },
+): Effect.Effect<ReviewOutcome | null, KinuError> {
+  return Effect.gen(function* () {
+    const { request, reviewed } = input;
+    let { proposal } = input;
+    const rounds = [...request.review.rounds];
+
+    for (;;) {
+      if (rounds.length === 0) {
+        rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
+
+        if (!claim.record(reviewRounds(rounds))) return null;
+      }
+
+      const latest = rounds[rounds.length - 1];
+
+      if (latest === undefined) return { refused: 'the review has no round' };
+      const round = rounds.length - 1;
+
+      if (latest.verdicts === null) {
+        const judged = yield* attempt({ doing: 'asking the dream\'s reviewer', otherwise: 'unavailable' },
+          () => askHelper(deps, {
+            lane: dreamLane(request.id, 'review', round), role: 'dream_reviewer', roleLabel: 'dream reviewer',
+            brief: async () => renderReviewerBrief(deps, request, { proposal, evidence: latest.evidence, reviewed }),
+          }, parseVerdicts));
+
+        if (judged === 'running') return null;
+
+        if (Result.isFailure(judged)) return { refused: judged.failure };
+        rounds[round] = { evidence: latest.evidence, verdicts: [...judged.success] };
+
+        if (!claim.record(reviewRounds(rounds))) return null;
+        continue;
+      }
+
+      // One revision at most: a second request for one is a rejection.
+      if (round > 0 || !latest.verdicts.some((verdict) => verdict.verdict === 'revise')) {
+        return { proposal, round: { evidence: latest.evidence, verdicts: latest.verdicts } };
+      }
+
+      const revised = yield* attempt({ doing: 'asking the dreamer to revise', otherwise: 'unavailable' },
+        () => askHelper(deps, {
+          lane: dreamLane(request.id, 'revise', 0), role: 'dreamer', roleLabel: 'dreamer',
+          brief: async () => renderReviseBrief(deps, request, { proposal, verdicts: latest.verdicts ?? [] }),
+        }, parseProposal(request.scope)));
+
+      if (revised === 'running') return null;
+
+      // A revision that does not parse leaves the first round's verdicts standing.
+      if (Result.isFailure(revised)) return { proposal, round: { evidence: latest.evidence, verdicts: latest.verdicts } };
+      proposal = revised.success;
+      rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
+
+      if (!claim.record({ ...reviewRounds(rounds), proposal, detail: proposal.summary })) return null;
+    }
+  });
+}
+
+/** The review so far, as the row records it. */
+function reviewRounds(rounds: RefinementRequest['review']['rounds']): SettleRefinementPatch {
+  return { review: { rounds } };
+}
+
+/** What the reviewer reads about each edit, measured before it is judged; a static gate's refusal routes it nowhere. */
+function scoreEdits(
+  deps: RefinementDeps, proposal: RefinementProposal, request: RefinementRequest, reviewed: readonly TurnRating[],
+): Effect.Effect<EditEvidence[], KinuError> {
+  return Effect.forEach(proposal.edits.entries(), ([edit, change]) => attempt(
+    { doing: `measuring the drafted ${change.kind} edit`, otherwise: 'unavailable' },
+    async (): Promise<EditEvidence> => {
+      switch (change.kind) {
+        case 'fact': {
+          const quoted = checkQuote(change.quote, reviewed);
+
+          return Result.isFailure(quoted) ? { edit, note: '', refused: quoted.failure } : { edit, note: `the user's own words: "${change.quote.trim()}"` };
+        }
+
+        case 'prompt_section': {
+          const decide = deps.control.rt.decide;
+
+          if (decide === undefined) return { edit, note: '', refused: 'no decision model is wired to measure the edit' };
+          const scored = await scoreAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId: sectionArtifact(change.sectionId), body: change.source, turns: request.turnIds });
+
+          return 'refused' in scored ? { edit, note: '', refused: scored.refused } : { edit, note: scored.detail, artifact: scored.evidence };
+        }
+
+        case 'skill':
+          return { edit, note: `a skill file of ${String(Buffer.byteLength(change.source, 'utf8'))} bytes` };
+        case 'subagent_spec':
+          return { edit, note: '', refused: SUBAGENT_SPEC_REFUSAL };
+      }
+    },
+  ));
+}
+
+function parseVerdicts(answer: string): Result.Result<readonly DreamVerdict[], string> {
+  const parsed = v.safeParse(DreamVerdictsSchema, tolerate(() => extractJsonObject(answer), 'malformed-input'));
+
+  return parsed.success
+    ? Result.succeed(parsed.output.verdicts)
+    : Result.fail(`the dream's reviewer did not answer with verdicts (${OFF_SCHEMA_ANSWER}): ${renderIssues(parsed.issues)}`);
+}
+
+function parseProposal(scope: RefinementScope) {
+  return (answer: string): RefinerAnswer => {
+    const parsed = v.safeParse(RefinementProposalSchema, tolerate(() => extractJsonObject(answer), 'malformed-input'));
+
+    if (!parsed.success) {
+      // `renderIssues` names each issue's path, so the refusal names keys to fix.
+      return Result.fail(`the dreamer's answer is not a valid proposal (${OFF_SCHEMA_ANSWER}): ${renderIssues(parsed.issues)}`);
+    }
+
+    return parsed.output.scope === scope ? Result.succeed(parsed.output) : Result.fail(`the dreamer proposed at ${parsed.output.scope} scope and this dream is ${scope} scope`);
+  };
+}
 
 /** One of the nine error codes, so owner-visible refusals use the shared vocabulary. */
 const OFF_SCHEMA_ANSWER: ErrorCode = 'bad_input';
@@ -349,58 +498,77 @@ async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {
   return present;
 }
 
-async function askRefiner(
+/** What a dream's helper is asked, and the workspace files it may read itself. */
+interface HelperBrief {
+  readonly task: string;
+  readonly contextRefs?: readonly string[];
+}
+
+/**
+ * Start a dream's helper on its lane, or take its answer: `'running'` until it answers, then its parsed answer. Its
+ * brief is built only when it starts.
+ */
+async function askHelper<T>(
   deps: RefinementDeps,
-  request: RefinementRequest,
-): Promise<RefinerAnswer | 'running'> {
+  helper: {
+    readonly lane: EvolutionLaneRequest;
+    readonly role: string;
+    readonly roleLabel: string;
+    readonly brief: () => Promise<HelperBrief>;
+  },
+  parse: (answer: string) => Result.Result<T, string>,
+): Promise<Result.Result<T, string> | 'running'> {
   const refiner = deps.refiner;
 
-  if (!refiner) return Result.fail('this host wires no refiner');
-  const lane = { requestId: request.id } as const;
-  const held = refiner.reclaim(lane);
+  if (!refiner) return Result.fail('this host wires no dreamer');
+  const held = refiner.reclaim(helper.lane);
 
   if (held?.state === 'running') return 'running';
 
   if (!held) {
-    const contextRefs = await presentContextRefs(deps);
+    const { task, contextRefs = [] } = await helper.brief();
 
-    // Annotated, not inlined: this is the only production site supplying
-    // `contextRefs`, and `gate:wired` cannot see a literal passed to a method.
+    // Annotated, not inlined: `gate:wired` cannot see a literal passed to a method.
     const brief: TemporaryRunRequest = {
-      role: 'task',
-      roleLabel: 'refiner',
-      task: await renderRefinerBrief(deps, request, contextRefs),
+      role: helper.role,
+      roleLabel: helper.roleLabel,
+      task,
       contextRefs,
-      // Plan mode: a refiner that could write would be a second authority.
+      // Plan mode: a helper that could write would be a second authority.
       mode: 'plan',
-      lane,
+      lane: helper.lane,
     };
 
     const outcome = await refiner.start(brief);
 
     if (outcome.status === 'failed') {
-      return Result.fail(`the refiner could not start (${outcome.reason ?? 'unknown'}): ${outcome.answer}`);
+      return Result.fail(`the ${helper.roleLabel} could not start (${outcome.reason ?? 'unknown'}): ${outcome.answer}`);
     }
 
     // A later pass reclaims its answer.
     return 'running';
   }
 
-  if (held.status !== 'completed') return Result.fail(`the refiner did not answer (unavailable): ${held.answer}`);
-  const answer = held.answer;
+  if (held.status !== 'completed') return Result.fail(`the ${helper.roleLabel} did not answer (unavailable): ${held.answer}`);
 
-  const parsed = v.safeParse(
-    RefinementProposalSchema,
-    tolerate(() => extractJsonObject(answer), 'malformed-input'),
-  );
+  return parse(held.answer);
+}
 
-  if (!parsed.success) {
-    // `renderIssues` names each issue's path, so the refusal names keys to fix.
-    return Result.fail(`the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}): `
-      + renderIssues(parsed.issues));
-  }
+function askRefiner(deps: RefinementDeps, request: RefinementRequest): Promise<RefinerAnswer | 'running'> {
+  return askHelper(deps, {
+    lane: dreamLane(request.id), role: 'dreamer', roleLabel: 'dreamer',
+    brief: async () => {
+      const contextRefs = await presentContextRefs(deps);
 
-  return Result.succeed(parsed.output);
+      return { task: await renderRefinerBrief(deps, request, contextRefs), contextRefs };
+    },
+  }, (answer) => {
+    const parsed = v.safeParse(RefinementProposalSchema, tolerate(() => extractJsonObject(answer), 'malformed-input'));
+
+    return parsed.success
+      ? Result.succeed(parsed.output)
+      : Result.fail(`the refiner's answer is not a valid refinement proposal (${OFF_SCHEMA_ANSWER}): ${renderIssues(parsed.issues)}`);
+  });
 }
 
 /**
@@ -426,11 +594,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     ? '  (none recorded)'
     : facts.map((fact) => `  - ${fact.key}`).join('\n');
 
-  const history = createRefinementStore(sql, actor).list(5)
-    .filter((prior) => prior.id !== request.id)
-    .map((prior) => `  - ${prior.id} (${prior.trigger}, ${prior.stage}): ${prior.detail || '(no detail)'}`
-      + prior.routes.map((r) => `\n      ${r.kind} -> ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
-    .join('\n');
+  const history = dreamHistory(sql, actor, request);
 
   // Printed from a schema-valid value at this request's scope, which `plan` enforces.
   const answer: RefinementProposal = { ...REFINEMENT_PROPOSAL_EXAMPLE, scope: request.scope };
@@ -494,6 +658,113 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   ].join('\n');
 }
 
+/** What earlier dreams did, each edit with where it went: the context both of a dream's agents read. */
+function dreamHistory(sql: SqlExecutor, actor: ActorHandle, request: RefinementRequest): string {
+  return createRefinementStore(sql, actor).list(5)
+    .filter((prior) => prior.id !== request.id)
+    .map((prior) => `  - ${prior.id} (${prior.trigger}, ${prior.stage}): ${prior.detail || '(no detail)'}`
+      + prior.routes.map((r) => `\n      ${r.kind} -> ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
+    .join('\n');
+}
+
+function draftedText(edit: RefinementEdit): string {
+  switch (edit.kind) {
+    case 'fact': return JSON.stringify(edit.value);
+    case 'subagent_spec': return edit.spec;
+    case 'prompt_section':
+    case 'skill': return edit.source;
+  }
+}
+
+/** One drafted edit as the reviewer reads it: what it changes, why, the whole new text, and what it was measured at. */
+function renderDraftedEdit(edit: RefinementEdit, index: number, evidence: EditEvidence | undefined): string {
+  const [owner, target] = editOwnerAndTarget(edit);
+  const body = draftedText(edit);
+
+  return [
+    `### Edit ${String(index)}: ${edit.kind} ${target} (${owner || 'no owner'})`,
+    `Why: ${edit.rationale}`,
+    `New text:\n${body}`,
+    evidence?.refused === undefined ? `Measured: ${evidence?.note ?? '(not measured)'}` : `Refused by a fixed gate, whatever you say: ${evidence.refused}`,
+  ].join('\n');
+}
+
+/**
+ * The reviewer's brief: the turns, earlier dreams, every drafted edit with its measured evidence, the size budget, and
+ * the answer shape. Its answer decides which edits are routed.
+ */
+function renderReviewerBrief(
+  deps: RefinementDeps,
+  request: RefinementRequest,
+  input: { readonly proposal: RefinementProposal; readonly evidence: readonly EditEvidence[]; readonly reviewed: readonly TurnRating[] },
+): HelperBrief {
+  const { sql, rt } = deps.control;
+  const bundled = PROMPT_SECTIONS.reduce((total, section) => total + Buffer.byteLength(section.source, 'utf8'), 0);
+  const current = PROMPT_SECTIONS.reduce((total, section) => total + Buffer.byteLength(artifactBody(sql, rt.actor, sectionArtifact(section.id)) ?? section.source, 'utf8'), 0);
+  const example: v.InferInput<typeof DreamVerdictsSchema> = { verdicts: [{ edit: 0, verdict: 'accept', note: '<one sentence: why>' }] };
+
+  return {
+    task: [
+      'Another agent read this agent\'s recent turns and drafted the edits below to how it works. You judge them for',
+      'quality (is it right, and in the right place), effectiveness (would it have changed the turns that went wrong,',
+      'without harming the ones that went well) and size (does it earn every byte it adds to every future turn).',
+      '',
+      `## The turns it read (${String(input.reviewed.length)})`,
+      '',
+      input.reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n') || '(none)',
+      '',
+      '## What earlier dreams did',
+      '',
+      dreamHistory(sql, rt.actor, request) || '  (this is the first dream)',
+      '',
+      '## The drafted edits',
+      '',
+      input.proposal.edits.map((edit, index) => renderDraftedEdit(edit, index, input.evidence.find((measured) => measured.edit === index))).join('\n\n'),
+      '',
+      '## Size',
+      '',
+      `The prompt sections are ${String(current)} bytes, against ${String(bundled)} as bundled. Their budget is 10% over the`,
+      'bundled size, a placeholder until a measurement of prompt sizes against the cache\'s cost sets it: an edit that',
+      'grows them past it must shrink something else.',
+      '',
+      '## Your answer',
+      '',
+      'One JSON object with one verdict per edit, by its number: `accept` routes it, `reject` drops it, and `revise`',
+      'sends it back to its author once with your note, after which you judge it again. Every verdict carries a note.',
+      '',
+      JSON.stringify(example),
+      '',
+      jsonObjectOnlyInstruction(),
+    ].join('\n'),
+  };
+}
+
+/** The dreamer's one revision: its own brief again, its proposal, and the reviewer's verdicts on it. */
+async function renderReviseBrief(
+  deps: RefinementDeps,
+  request: RefinementRequest,
+  input: { readonly proposal: RefinementProposal; readonly verdicts: readonly DreamVerdict[] },
+): Promise<HelperBrief> {
+  const contextRefs = await presentContextRefs(deps);
+  const brief = await renderRefinerBrief(deps, request, contextRefs);
+
+  return {
+    contextRefs,
+    task: [
+      brief,
+      '',
+      '## Your earlier proposal, and the reviewer\'s verdicts on it',
+      '',
+      JSON.stringify(input.proposal),
+      '',
+      ...input.verdicts.map((verdict) => `- Edit ${String(verdict.edit)}: ${verdict.verdict}: ${verdict.note}`),
+      '',
+      'Answer with the whole proposal again, in the same shape: keep the edits it accepted as they are, revise those it',
+      'asked you to revise, and drop those it rejected. This is your one revision.',
+    ].join('\n'),
+  };
+}
+
 function renderReviewedTurn(row: TurnRating, index: number): string {
   return [
     `### Turn ${String(index + 1)}: rated ${row.score.toFixed(1)}/5 (${row.source})`
@@ -514,6 +785,8 @@ function routeEdit(
     edit: RefinementEdit;
     request: RefinementRequest;
     reviewed: readonly TurnRating[];
+    /** A section's judge-only numbers, measured before the reviewer accepted it. */
+    artifact?: ArtifactEvidence;
   },
 ): Effect.Effect<RefinementRoute> {
   const { edit } = input;
@@ -546,21 +819,17 @@ async function routeEditOnce(
     case 'fact':
       return routeFact(deps, edit, input.request, input.reviewed);
     case 'prompt_section':
-      return routePromptSection(deps, edit, input.request.turnIds);
+      return routePromptSection(deps, edit, input.artifact);
     case 'skill':
       return routeSkill(deps, edit, input.request);
     case 'subagent_spec':
-      return {
-        kind: 'subagent_spec',
-        owner: '',
-        target: edit.role,
-        disposition: 'refused',
-        reason: 'no writable proposal authority exists for a subordinate\'s role or spec: those '
-          + 'belong to that agent\'s own config, which this workspace reads and never writes. '
-          + 'Recorded as a finding rather than mirrored into a second agent store.',
-      };
+      return { kind: 'subagent_spec', owner: '', target: edit.role, disposition: 'refused', reason: SUBAGENT_SPEC_REFUSAL };
   }
 }
+
+const SUBAGENT_SPEC_REFUSAL = 'no writable proposal authority exists for a subordinate\'s role or spec: those '
+  + 'belong to that agent\'s own config, which this workspace reads and never writes. '
+  + 'Recorded as a finding rather than mirrored into a second agent store.';
 
 /** A quote must be a real fragment, not a common token: "keep it short please"
  *  is the floor. */
@@ -634,37 +903,31 @@ function routeFact(
 }
 
 /**
- * A section edit takes the pre-live tests and is staged for the next turn whose prompt cache is cold. A resumed pass
- * adopts a staged version with the same words instead of writing a second one.
+ * A section edit the reviewer accepted is staged for the next turn whose prompt cache is cold, with the numbers it was
+ * measured by. A resumed pass adopts a staged version with the same words instead of writing a second one.
  */
-async function routePromptSection(
+function routePromptSection(
   deps: RefinementDeps,
   edit: Extract<RefinementEdit, { kind: 'prompt_section' }>,
-  turns: readonly string[],
-): Promise<RefinementRoute> {
+  artifact: ArtifactEvidence | undefined,
+): RefinementRoute {
   const owner = 'artifact_versions';
   const artifactId = sectionArtifact(edit.sectionId);
+  const { sql, rt } = deps.control;
 
-  const waiting = (version: number, note: string): RefinementRoute => ({
+  const staged = (version: number, note: string): RefinementRoute => ({
     kind: 'prompt_section', owner, target: `${artifactId}@${String(version)}`, disposition: 'staged',
     reason: `${note}; the live prompt moves at the next turn whose prompt cache is cold`,
   });
 
-  const already = listArtifactVersions(deps.control.sql, deps.control.rt.actor, artifactId)
+  const already = listArtifactVersions(sql, rt.actor, artifactId)
     .find((version) => version.status === 'staged' && version.body === edit.source);
 
-  if (already !== undefined) return waiting(already.version, 'staged (adopted from an earlier pass)');
-  const decide = deps.control.rt.decide;
+  if (already !== undefined) return staged(already.version, 'staged (adopted from an earlier pass)');
 
-  if (decide === undefined) {
-    return { kind: 'prompt_section', owner, target: artifactId, disposition: 'refused', reason: 'no decision model is wired to judge the edit' };
-  }
+  if (artifact === undefined) return { kind: 'prompt_section', owner, target: artifactId, disposition: 'refused', reason: 'it was never measured' };
 
-  const judged = await judgeAuthoredEdit({ rt: deps.control.rt, decide }, { artifactId, body: edit.source, rationale: edit.rationale, turns });
-
-  if ('refused' in judged) return { kind: 'prompt_section', owner, target: artifactId, disposition: 'refused', reason: judged.refused };
-
-  return waiting(judged.version, 'passed the pre-live tests');
+  return staged(stageArtifact(sql, rt.actor, { artifactId, body: edit.source, rationale: edit.rationale, evidence: artifact }), 'accepted by the dream\'s reviewer');
 }
 
 /** Applied when any artifact is in effect: a live fact plus a reverted section

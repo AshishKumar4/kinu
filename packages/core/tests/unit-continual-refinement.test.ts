@@ -34,6 +34,7 @@ import { gatherApprovableInstructions } from '../src/read-models/instruction-app
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { DecisionResult } from '../src/providers/decision-model';
+import { SYSTEM_ROLE_DEFINITIONS } from '../src/profiles/catalog';
 import type { AgentStores } from '../src/state/agent-stores';
 import type {
   TemporaryAgentPort, TemporaryRunOutcome, TemporaryRunRequest,
@@ -53,7 +54,7 @@ const DREAM_CADENCE = 5;
 import {
   advanceRefinementLane as advanceLane, dreamRequest, requestRefinement, type RefinementLaneStep,
 } from '../src/evolution/refinement-lane';
-import type { EvolutionHelperAnswer } from '../src/identity/evolution-helpers';
+import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../src/identity/evolution-helpers';
 import {
   decideRefinementRoute, showRefinementRoute,
 } from '../src/evolution/refinement-skill';
@@ -117,13 +118,42 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
         return outcome;
       },
       release: () => {},
-      reclaim: (): EvolutionHelperAnswer | null => {
-        const asked = requests.at(-1);
+      // A lane's own helper answers it: the dreamer's draft, or its revision.
+      reclaim: (lane: EvolutionLaneRequest): EvolutionHelperAnswer | null => {
+        const asked = requests.filter((request) => request.lane?.requestId === lane.requestId).at(-1);
 
         return asked === undefined ? null : { state: 'answered', name: 'refiner-1', status: 'completed', answer: answerOf(asked) };
       },
       answered: () => [],
       forget: () => {},
+    },
+  };
+}
+
+/** The dream's reviewer: the verdict on each drafted edit, from the brief it was given. */
+type Reviewer = (brief: string, edits: number) => readonly { readonly edit: number; readonly verdict: 'accept' | 'reject' | 'revise'; readonly note: string }[];
+
+const acceptEvery: Reviewer = (_brief, edits) => Array.from({ length: edits }, (_, edit) => ({ edit, verdict: 'accept' as const, note: 'it fits the turns' }));
+
+/** `port` with the dream's reviewer in front of it: a reviewer's lane answers from `reviewer`, every other from `port`. */
+function withReviewer(port: TemporaryAgentPort | null | undefined, reviewer: Reviewer, reviews: Map<string, string>): TemporaryAgentPort | null | undefined {
+  if (port === null || port === undefined) return port;
+
+  return {
+    ...port,
+    start: async (request) => {
+      if (request.role !== 'dream_reviewer') return port.start(request);
+      const edits = request.task.match(/^### Edit \d+:/gmu)?.length ?? 0;
+      reviews.set(request.lane?.requestId ?? '', JSON.stringify({ verdicts: reviewer(request.task, edits) }));
+
+      return { status: 'working', agent: 'reviewer-1', lifetime: 'task', role: 'dream_reviewer', answer: 'working', transcript: 'kept' };
+    },
+    reclaim: (lane) => {
+      const answer = reviews.get(lane.requestId);
+
+      if (answer !== undefined) return { state: 'answered', name: 'reviewer-1', status: 'completed', answer };
+
+      return lane.requestId.includes(':review:') ? null : port.reclaim(lane);
     },
   };
 }
@@ -186,11 +216,18 @@ function answeringPort(answer: () => string): TemporaryAgentPort {
   };
 }
 
-/** One pass that starts the refiner, then the pass that takes its answer. */
+/**
+ * Passes until one moves the dream: the first starts the dreamer, the next takes its draft and starts the reviewer, the
+ * third takes the verdicts and routes.
+ */
 async function advanceRefinementLane(deps: RefinementDeps): Promise<RefinementLaneStep> {
-  const first = await advanceLane(deps);
+  for (let pass = 0; pass < 2; pass += 1) {
+    const step = await advanceLane(deps);
 
-  return first.step === 'idle' ? await advanceLane(deps) : first;
+    if (step.step !== 'idle') return step;
+  }
+
+  return advanceLane(deps);
 }
 
 interface Fixture {
@@ -199,7 +236,8 @@ interface Fixture {
   stores: AgentStores;
   facts: FactsStore;
   approvals: InstructionApprovalStore;
-  deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number, worth?: number): RefinementDeps;
+  /** `refiner` drafts; the dream's reviewer accepts every edit unless `reviewer` says otherwise. */
+  deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number, worth?: number, reviewer?: Reviewer): RefinementDeps;
   /** The triage questions the decision model was asked, in order. */
   triaged: string[];
 }
@@ -215,6 +253,8 @@ function fixture(): Fixture {
   initRefinementTables(rt.storage.execRaw);
   const facts = createFactsStore(rt.storage.sql, rt.actor);
   const triaged: string[] = [];
+  // The reviewer's answers by lane, across every `deps` of this fixture, as its helper rows would hold them.
+  const reviews = new Map<string, string>();
 
   const approvals = new InstructionApprovalStore(
     rt.storage.sql, rt.actor, 'test-workspace',
@@ -227,7 +267,7 @@ function fixture(): Fixture {
     facts,
     approvals,
     triaged,
-    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4), worth = 0.9) => {
+    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4), worth = 0.9, reviewer = acceptEvery) => {
       // The judge-only comparison: a candidate scoring above the incumbent fixes every bad turn and harms no good one.
       // A dream's triage answers `worth`.
       rt.decide = async (request): Promise<DecisionResult> => {
@@ -242,7 +282,7 @@ function fixture(): Fixture {
         return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
       };
 
-      return { control: scriptedControl(rt), facts, refiner, approvals };
+      return { control: scriptedControl(rt), facts, refiner: withReviewer(refiner, reviewer, reviews), approvals };
     },
   };
 }
@@ -1012,7 +1052,7 @@ describe('routing — every typed edit lands in the store that already owns it',
       SELECT name FROM pragma_table_info('refinement_requests')`.map((row) => row.name))
       .toEqual([
         'actor_id', 'id', 'trigger', 'scope', 'stage', 'claim', 'turn_ids',
-        'debt_key', 'proposal', 'routes', 'detail', 'created_at', 'updated_at',
+        'debt_key', 'proposal', 'review_json', 'routes', 'detail', 'created_at', 'updated_at',
       ]);
     bare.close();
   });
@@ -1557,6 +1597,115 @@ describe('a dream — every five new turns, or when the agent is idle, triaged f
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.key).not.toBe(remaining.key);
+  });
+});
+
+describe('a dream is cross-judged: the dreamer drafts, the decision model measures, the reviewer decides', () => {
+  const SECTION_EDIT: Extract<RefinementEdit, { kind: 'prompt_section' }> = {
+    kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE,
+    rationale: 'four corrected turns all asked for a shorter answer than the section invites',
+  };
+
+  const REVISED = `${INCUMBENT.slice(0, -6)}TERSE.`;
+
+  test('the reviewer reads every drafted edit with what it was measured at; a rejected edit routes nowhere and says why', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+    const { port } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'a preference and a section', edits: [FACT_EDIT, SECTION_EDIT] }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief) => {
+      briefs.push(brief);
+
+      return [{ edit: 0, verdict: 'reject', note: 'one exchange is not a standing preference' }, { edit: 1, verdict: 'accept', note: 'the turns asked for it' }];
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]).toContain('### Edit 0: fact user.answer_length');
+    expect(briefs[0]).toContain('### Edit 1: prompt_section');
+    expect(briefs[0]).toContain('Measured: the decision model judged it to fix 1.00');
+    expect(briefs[0]).toContain('no, shorter please');
+    expect(briefs[0]).toMatch(/The prompt sections are \d+ bytes, against \d+ as bundled/u);
+    expect(routeFor(row.routes, 'fact')).toMatchObject({ disposition: 'refused', reason: 'the reviewer rejected it: one exchange is not a standing preference' });
+    expect(routeFor(row.routes, 'prompt_section').disposition).toBe('staged');
+    expect(fx.facts.all()).toEqual([]);
+    expect(sectionVersions(fx.rt).map((version) => [version.body, version.status])).toEqual([[CANDIDATE, 'staged']]);
+  });
+
+  test('asked to revise, the dreamer revises once with the reviewer\'s notes, and the revision is measured and judged again', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    let rounds = 0;
+
+    const { port, requests } = scriptedRefiner((request) => proposalText({
+      scope: 'workspace', summary: 'a section',
+      edits: [{ ...SECTION_EDIT, source: request.lane?.requestId.endsWith(':revise:0') === true ? REVISED : CANDIDATE }],
+    }));
+
+    // The judge passes both texts, so the reviewer decides between them.
+    const deps = fx.deps(port, undefined, undefined, () => {
+      rounds += 1;
+
+      return [rounds === 1 ? { edit: 0, verdict: 'revise', note: 'say terse, not asked' } : { edit: 0, verdict: 'accept', note: 'better' }];
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+
+    for (let pass = 0; pass < 5; pass += 1) await advanceLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+    const revise = present(requests.find((request) => request.lane?.requestId.endsWith(':revise:0') === true), 'the revision brief');
+
+    expect(revise.task).toContain('Edit 0: revise: say terse, not asked');
+    expect(revise.task).toContain(JSON.stringify(CANDIDATE).slice(1, 40));
+    expect(rounds).toBe(2);
+    expect(row.review.rounds).toHaveLength(2);
+    expect(row.proposal?.edits[0]).toMatchObject({ source: REVISED });
+    expect(sectionVersions(fx.rt).map((version) => version.body)).toEqual([REVISED]);
+  });
+
+  test('a second request to revise is a rejection: there is one revision', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const { port } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'a section', edits: [SECTION_EDIT] }));
+    const deps = fx.deps(port, undefined, undefined, () => [{ edit: 0, verdict: 'revise', note: 'still too loose' }]);
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+
+    for (let pass = 0; pass < 5; pass += 1) await advanceLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(routeFor(row.routes, 'prompt_section')).toMatchObject({
+      disposition: 'refused', reason: 'the reviewer still asked for a revision after the one the dreamer made: still too loose',
+    });
+    expect(sectionVersions(fx.rt)).toEqual([]);
+  });
+
+  test('the dreamer drafts on the deep tier and the reviewer judges on the fast one, each read-only on its own lane', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const { port, requests } = scriptedRefiner(proposalText(FACT_PROPOSAL));
+    const started: TemporaryRunRequest[] = [];
+
+    const watching: TemporaryAgentPort = {
+      ...port,
+      start: async (request) => {
+        started.push(request);
+
+        return port.start(request);
+      },
+    };
+
+    const opened = await requestRefinement(fx.deps(watching), { trigger: 'explicit', scope: 'workspace' });
+
+    await advanceRefinementLane(fx.deps(watching));
+
+    expect(requests.map((request) => [request.role, request.mode, request.lane?.requestId])).toEqual([['dreamer', 'plan', opened.id]]);
+    expect(SYSTEM_ROLE_DEFINITIONS.dreamer.tier).toBe('deep');
+    expect(SYSTEM_ROLE_DEFINITIONS.dream_reviewer).toMatchObject({ tier: 'fast', allowedTools: [] });
+    expect(started.map((request) => request.role)).toEqual(['dreamer']);
   });
 });
 
@@ -2236,13 +2385,13 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     log,
     port,
     assigned: assigned.promise,
-    helper: 'ask-refiner-a1b2c3',
+    helper: 'ask-dreamer-a1b2c3',
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
       log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
       announce: () => undefined, onAdmitted: () => undefined, evolutionAnswerStored: () => undefined, onEvolutionAnswer: () => undefined, temporary,
     }, {
-      fromSubordinate: 'ask-refiner-a1b2c3', status: 'completed', content, origin: 'turn_end',
+      fromSubordinate: 'ask-dreamer-a1b2c3', status: 'completed', content, origin: 'turn_end',
       sequenceId: 'refiner:turn-1', mode: 'plan',
     }, SEED_EPOCH),
   };
@@ -2363,6 +2512,8 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     expect(owed()).toBeNull();
 
     fx.db.run('DROP TRIGGER refuse_claim');
+    // The draft goes to the reviewer, whose verdicts the next pass routes.
+    expect((await refinementPass(fx.deps(resumed))).step).toBe('idle');
     expect((await refinementPass(fx.deps(resumed))).step).toBe('planned');
   });
 
@@ -2387,6 +2538,7 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     expect(store.get(answered.id)?.stage).not.toBe('applied');
 
     void fx.rt.storage.sql`ALTER TABLE artifact_versions_away RENAME TO artifact_versions`;
+    await refinementPass(fx.deps(resumed));
     await refinementPass(fx.deps(resumed));
     await refinementPass(fx.deps(resumed));
     expect(store.get(answered.id)?.stage).toBe('applied');

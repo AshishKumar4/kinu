@@ -346,15 +346,15 @@ async function writeEdit(input: {
 }
 
 /**
- * An edit authored elsewhere (the continual-refinement lane) takes the same pre-live tests: the static checks, then
- * the judge-only comparison over the low-rated turns it answers and the regression set. It is staged like the proposer's.
+ * A dream's drafted edit takes the same pre-live tests: the static checks, then the judge-only comparison over the
+ * low-rated turns it answers and the regression set, whose bar it must clear. Nothing is written: the dream's reviewer
+ * reads the numbers of an edit that passed, and only an edit it accepts is staged (`stageArtifact`).
  */
-export async function judgeAuthoredEdit(deps: Omit<ProposerDeps, 'reflect' | 'now'>, input: {
+export async function scoreAuthoredEdit(deps: Omit<ProposerDeps, 'reflect' | 'now'>, input: {
   readonly artifactId: string;
   readonly body: string;
-  readonly rationale: string;
   readonly turns: readonly string[];
-}): Promise<{ readonly version: number } | { readonly refused: string }> {
+}): Promise<{ readonly evidence: ArtifactEvidence; readonly detail: string } | { readonly refused: string }> {
   const { rt } = deps;
   const before = artifactBody(rt.storage.sql, rt.actor, input.artifactId);
 
@@ -371,14 +371,12 @@ export async function judgeAuthoredEdit(deps: Omit<ProposerDeps, 'reflect' | 'no
   const scores = new Map<string, number>();
 
   for (const turn of set) scores.set(turn.id, (await metric(input.body, { id: turn.id, input: turn })).score);
-  const verdict = judgeOnlyVerdict(scores, set);
-  const detail = `fixes ${(verdict.fixes ?? 0).toFixed(2)} of ${String(verdict.bad)} bad turns, harms ${String(verdict.harms)} of ${String(verdict.regression)}`;
+  const { passes, ...verdict } = judgeOnlyVerdict(scores, set);
+  const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
 
-  if (!verdict.passes) return { refused: `the judge-only comparison refused it: ${detail}` };
+  const detail = `the decision model judged it to fix ${(verdict.fixes ?? 0).toFixed(2)} of ${String(verdict.bad)} low-rated turns and `
+    + `harm ${String(verdict.harms)} of ${String(verdict.regression)} well-rated ones, against a bar of fixing ${String(FIXES_SHARE)} and `
+    + `harming at most ${String(MAX_HARMED)}; ${String(bytes(before))} bytes before and ${String(bytes(input.body))} after`;
 
-  return {
-    version: stageArtifact(rt.storage.sql, rt.actor, {
-      artifactId: input.artifactId, body: input.body, rationale: input.rationale, evidence: { ...verdict, reason: 'continual refinement' },
-    }),
-  };
+  return passes ? { evidence: { ...verdict, reason: 'dream' }, detail } : { refused: `the judge-only comparison refused it: ${detail}` };
 }
