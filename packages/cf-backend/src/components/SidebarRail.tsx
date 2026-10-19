@@ -2,7 +2,8 @@
  * The desktop rail lane: the roster, or the icon rail it folds to. Only the `aside`'s width
  * animates; each state's column has its own width behind `overflow-hidden`, so nothing reflows.
  */
-import { useEffect, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { Link, useLocation } from "react-router-dom";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
 
@@ -12,6 +13,8 @@ import { lastValue } from "@/hooks/use-async-resource";
 import { KinuMark } from "./ui/KinuLogo";
 import { NewWorkspaceIconButton } from "./workspaces/NewWorkspaceButton";
 import Sidebar from "./Sidebar";
+import { AccountMenu, FooterIcons } from "./SidebarFooter";
+import { Avatar } from "./ui/Avatar";
 import { navActive, NAV_HOVER, navRowCls, PRIMARY_NAV } from "./nav";
 
 const RAIL_KEY = "kinu:rail-open";
@@ -84,11 +87,31 @@ export function SidebarRail({ folded }: { folded: boolean }) {
               );
             })}
           </nav>
-          <Link to="/user/settings" aria-label="Account settings" title="Account settings" className="mt-auto flex size-[26px] items-center justify-center rounded-full p-accent-subtle text-[12px] font-semibold p-accent-mark">
-            {profile?.email?.[0]?.toUpperCase() ?? "?"}
-          </Link>
+          <div className="mt-auto flex flex-col items-center gap-1 border-t p-border pt-2">
+            <FooterIcons vertical />
+            <RailAccount name={profile?.displayName ?? profile?.email ?? "?"} />
+          </div>
         </div>
       )}
     </aside>
+  );
+}
+
+/** The folded rail's account: your initial, opening the same menu as the footer's, beside the rail. */
+function RailAccount({ name }: { name: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+
+  useCloseOnOutsideClick(open, ref, close);
+
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" title="Account" data-account-menu
+        className="flex size-9 items-center justify-center rounded-lg transition-colors hover:bg-[var(--c-neutral-tint)]">
+        <Avatar name={name} size={24} />
+      </button>
+      {open && <AccountMenu onClose={close} className="fixed bottom-3 left-[60px] w-60" />}
+    </div>
   );
 }

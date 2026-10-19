@@ -205,6 +205,8 @@ const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
+  // The assistant's Important picks, as the shell's Mail icon and Home's Today read them (lib/mail-api.ts).
+  "/api/user/mail/important": { unread: 2, items: [] },
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
@@ -1278,7 +1280,8 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return rosterRead(roster.searchParams);
   }
 
-  const response = STUB.get(path);
+  // A read with a query (`?limit=3`) is answered as its path is.
+  const response = STUB.get(path) ?? STUB.get(path.split("?")[0] ?? path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
