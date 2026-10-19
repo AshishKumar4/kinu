@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
-  "files": 3468,
-  "functions": 91031,
+  "files": 3475,
+  "functions": 91287,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -218,10 +218,6 @@
       "complexity": 27
     },
     {
-      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
-      "complexity": 27
-    },
-    {
       "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.writePart",
       "complexity": 27
     },
@@ -319,6 +315,10 @@
     },
     {
       "key": "packages/compaction/src/extension.ts#compactionExtension>transformContext",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
       "complexity": 26
     },
     {
