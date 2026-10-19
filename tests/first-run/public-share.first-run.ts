@@ -56,8 +56,8 @@ END
 cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.workspace.exists("/slates") }; }
-  async mutate() { return await this.env.workspace.writeFile("/slates/${SLATE}/mark", "x"); }
+  async probe() { return { exists: (await this.env.workspace.fs.stat("/slates")).isDir === true }; }
+  async mutate() { return await this.env.workspace.fs.write("/slates/${SLATE}/mark", "x"); }
   async fetch() { return new Response("public-share-probe-ok"); }
 }
 END`]));

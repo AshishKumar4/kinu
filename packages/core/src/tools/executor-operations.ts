@@ -7,9 +7,9 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { ExecutorProviderSurface, ExecutorTool } from '../execution/types';
 import { answeredRefusal } from '../execution/exec-result';
-import { attempt, KinuError, settleSync } from '../obs/index';
+import { attempt, attemptInItsWords, KinuError, settleSync } from '../obs/index';
 import { serve, type Operation, type Served } from '../operations/operation';
-import { COMPUTER, computerDesktop, computerResize, DEVICE, MACHINE_CAPABILITIES, machineOperations, PARENT, WORKSPACE } from '../operations/executors';
+import { COMPUTER, computerDesktop, computerResize, DEVICE, MACHINE_CAPABILITIES, MACHINE_FILES, machineFileOperations, machineOperations, PARENT, WORKSPACE } from '../operations/executors';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { DESKTOP_MEMBERS } from '../execution/desktop';
 import type { ExecCallContext } from '../execution/signal';
@@ -123,8 +123,64 @@ const SLATES_DECLARATION = {
   call: 'slates.<id>.<member>(...)',
 };
 
-/** An executor's members as programs call them; a computer with sizes adds `resize` over them. */
-export function executorNamespace(provider: ExecutorProviderSurface): CodemodeProvider {
+const MachineFileCallSchema = v.looseObject({ path: v.string(), device: v.optional(v.string()) });
+
+/**
+ * `path` on a machine whose files sit at `root` in the plane: a relative one from `home` (else as the plane resolves
+ * it), and a `..` that would climb above the machine's root held there, as at `/` on any machine. Every other component
+ * is left as written, for the plane to walk.
+ */
+export function onMachine(root: string, home: string | undefined, path: string): string {
+  const written = path.startsWith('/') || home === undefined ? path : `${home.replace(/\/+$/u, '')}/${path}`;
+
+  if (!written.startsWith('/')) return written;
+  const kept: string[] = [];
+  let depth = 0;
+
+  for (const part of written.split('/').filter((name) => name !== '')) {
+    if (part === '..') {
+      if (depth === 0) continue;
+      depth -= 1;
+    } else if (part !== '.') depth += 1;
+
+    kept.push(part);
+  }
+
+  return `${root}/${kept.join('/')}${written.endsWith('/') && kept.length > 0 ? '/' : ''}`;
+}
+
+/**
+ * `<machine>.fs`: each `file` operation on this machine's root in the plane, run by the one served `file` operation, so
+ * a read through either spelling lets an edit through the other and every write meets the same gates.
+ */
+function machineFiles(provider: ExecutorProviderSurface, files: Readonly<Record<string, Served>>): Served[] {
+  const fileRoot = provider.fileRoot?.bind(provider);
+
+  if (fileRoot === undefined) return [];
+
+  return Object.values(machineFileOperations(provider.name)).flatMap((op) => {
+    const file = files[op.name.slice(MACHINE_FILES.length + 1)];
+
+    if (file === undefined) return [];
+
+    return [serve(op, (input, call) => {
+      const { path, device, ...rest } = v.parse(MachineFileCallSchema, input);
+
+      // The file operation's refusal is the call's, in its own words: what to read first, what is missing.
+      return Effect.map(attemptInItsWords('io', async () => {
+        const { root, home } = await fileRoot(device);
+
+        return await file.run(projectJsonValue({ value: { ...rest, path: onMachine(root, home, path) } }), call);
+      }), (answered) => answered.value);
+    })];
+  });
+}
+
+/**
+ * An executor's members as programs call them; a computer with sizes adds `resize` over them. `files`, the actor's
+ * served `file` operations, gives a machine with a root in the plane its `fs`.
+ */
+export function executorNamespace(provider: ExecutorProviderSurface, files?: Readonly<Record<string, Served>>): CodemodeProvider {
   const declared = DECLARED.get(provider.name);
 
   if (declared === undefined) return settleSync(Effect.die(new Error(`executor ${provider.name} has no declared members`)));
@@ -138,7 +194,10 @@ export function executorNamespace(provider: ExecutorProviderSurface): CodemodePr
     ...status?.screen === undefined ? [] : Object.values(computerDesktop(status.screen)),
   ];
 
-  const namespace = codemodeNamespace(provider.name, declared.summary, [...machineServed(provider), ...forwarded(provider, ops)]);
+  const namespace = codemodeNamespace(provider.name, declared.summary, [
+    ...machineServed(provider), ...files === undefined ? [] : machineFiles(provider, files), ...forwarded(provider, ops),
+  ]);
+
   const slates = provider.tools.slates;
 
   if (slates === undefined) return namespace;

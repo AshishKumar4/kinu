@@ -137,7 +137,7 @@ export interface ExecutorStatus {
 /** What a program reaches of an executor: its members, the capabilities that admit its machine members, its port
  *  contract, and the status that sizes `computer.resize`. */
 export type ExecutorProviderSurface = Pick<ExecutorProvider,
-  'name' | 'tools' | 'positionalArgs' | 'getStatus' | 'capabilities' | 'exposePort' | 'unexposePort' | 'listExposedPorts'>;
+  'name' | 'tools' | 'positionalArgs' | 'getStatus' | 'capabilities' | 'exposePort' | 'unexposePort' | 'listExposedPorts' | 'fileRoot'>;
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
 export interface ExecutorProvider {
@@ -156,6 +156,12 @@ export interface ExecutorProvider {
    * (`/pc/<name>`) opens on its roster with no segment, else on that machine's home.
    */
   homeDir(segment?: string): Promise<string>;
+
+  /**
+   * Where this machine's own files sit in the actor's file plane, and the home its relative paths start at; absent for
+   * a machine with no root there. `device` picks one of several machines, by name, as every device member does.
+   */
+  fileRoot?(device?: string): Promise<{ readonly root: string; readonly home?: string }>;
 
   readonly capabilities: ReadonlySet<ExecutorCapability>;
 

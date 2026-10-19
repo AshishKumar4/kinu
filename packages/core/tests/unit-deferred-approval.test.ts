@@ -11,7 +11,7 @@ import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
-import { commandResult, formatExecResult, type CommandResult } from '../src/execution/exec-result';
+import { commandResultAt, formatExecResult, type CommandResult } from '../src/execution/exec-result';
 import { setDiagnosticsSink, KinuError, refusalOf } from '../src/obs/index';
 import type { ExecutorProvider } from '../src/execution/types';
 import { createTestRuntime, createTestWorkspace, createWorkspaceBundle, conversationsFor } from './helpers';
@@ -1035,7 +1035,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     await exec(GATED);
     await queue.decide(['defer-1'], 'approved');
 
-    answerWith(() => commandResult({ stdout: '', stderr: 'rejected', exitCode: 1 }));
+    answerWith(() => commandResultAt({ stdout: '', stderr: 'rejected', exitCode: 1 }, false));
     expect(await exec(GATED)).toMatchObject({ reason: 'io' });
 
     expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
@@ -1141,7 +1141,7 @@ test('an executed exit-one command remains a command failure even if stdout look
   const rendered = formatExecResult(result);
   expect(result.exitCode).toBe(1);
   expect(result.refusal).toBeUndefined();
-  expect(commandResult(result)).toMatchObject({ reason: 'io', execution: { exitCode: 1 } });
+  expect(commandResultAt(result, false)).toMatchObject({ reason: 'io', execution: { exitCode: 1 } });
   expect(rendered).toContain(stdout);
   expect(rendered).toContain('process failure');
 });

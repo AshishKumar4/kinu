@@ -9,6 +9,7 @@ import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
+import { MACHINE_FILES } from '../operations/executors';
 import { slateReaches } from '../slates/surface';
 import { KinuError, settle, settleSync } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
@@ -237,9 +238,6 @@ export function nativeToolFunctions(tools: ToolSet, signal: AbortSignal | undefi
   return toolsNamespace(tools, signal).tools;
 }
 
-/** Failures of these members are accounted to `file`, not the exposing namespace. */
-const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'];
-
 function accountedTool(namespace: string, member: string, owner: string | undefined): string {
   if (namespace === CRAFTED_TOOL_NAMESPACE) return member;
 
@@ -247,7 +245,8 @@ function accountedTool(namespace: string, member: string, owner: string | undefi
 
   if (member === 'exec') return 'shell';
 
-  return FILE_MEMBERS.includes(member) ? 'file' : `${namespace}.${member}`;
+  // A machine's own files are the `file` operations, so their failures are `file`'s, not the machine's.
+  return member.startsWith(`${MACHINE_FILES}.`) ? 'file' : `${namespace}.${member}`;
 }
 
 export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>) {

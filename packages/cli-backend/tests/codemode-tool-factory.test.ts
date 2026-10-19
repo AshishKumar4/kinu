@@ -11,6 +11,8 @@ import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { inWorkMode, successfulToolOutcome, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { fileNamespaceFor, createTestRuntime as createWorkspaceRuntime } from '../../core/tests/helpers';
 
 interface ExecuteToolResult {
   result: JsonValue | undefined;
@@ -25,6 +27,46 @@ function makeTool(): ExecuteTool {
 
   return toolExecute(factory({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }));
 }
+
+function machineProgram(rt: ReturnType<typeof createTestRuntime>['rt']): ExecuteTool {
+  const workspace = createInlineExecutor({
+    filesOwner: 'agent', vfs: rt.toolFiles, craftStore: rt.craftStore,
+    shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+  });
+
+  return toolExecute(createNodeCodemodeToolFactory({
+    reach: narrowToolSurface(undefined), namespaces: [fileNamespaceFor(rt, workspace)],
+  })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }));
+}
+
+test('a program calls workspace.fs.text on the served workspace file plane', async () => {
+  const { rt } = createWorkspaceRuntime();
+  await writeText(rt.toolFiles, 'nested.md', 'nested workspace bytes');
+  expect(await machineProgram(rt)({ code: 'return await workspace.fs.text("nested.md");' }))
+    .toEqual({ result: 'nested workspace bytes' });
+});
+
+test('a retired workspace.readFile program refuses naming workspace.fs.text(path)', async () => {
+  const { rt } = createWorkspaceRuntime();
+
+  const answer = await machineProgram(rt)({
+    code: 'const refused = await workspace.readFile("nested.md"); return { reason: refused.reason, error: refused.error };',
+  });
+
+  expect(answer.result).toEqual({ reason: 'bad_input', error: expect.stringContaining('workspace.fs.text(path)') });
+});
+
+test('fs.promises.readdir returns every entry beyond the file-list page cap', async () => {
+  const { rt } = createWorkspaceRuntime();
+  await rt.toolFiles.mkdir('many');
+  const names = Array.from({ length: 1_007 }, (_, at) => `entry-${String(at).padStart(4, '0')}`);
+
+  for (const name of names) await writeText(rt.toolFiles, `many/${name}`, name);
+  const execute = machineProgram(rt);
+  const first = await execute({ code: 'return await workspace.fs.list("many");' });
+  expect(first.result).toMatchObject({ entries: names.slice(0, 1_000), truncated: { total: names.length, next: 1_000 } });
+  expect(await execute({ code: 'return await require("fs").promises.readdir("many");' })).toEqual({ result: names });
+});
 
 // An MCP or extension tool is no native definition: `eval` reaches it, read per call, its input checked as a native call's is.
 describe('createNodeCodemodeToolFactory — external tools', () => {
@@ -164,7 +206,7 @@ function makeToolWithFailingProvider(error: Error) {
   const provider: CodemodeProvider = {
     name: 'workspace',
     tools: {
-      readdir: {
+      'fs.list': {
         description: 'list',
         execute: async (path) => { calls.push(String(path)); throw error; },
       },
@@ -190,7 +232,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
       new Error("ENOENT: no such file or directory, scandir '/app'"),
     );
 
-    const out = await execute({ code: 'workspace.readdir("/app");\n"kept going"' });
+    const out = await execute({ code: 'workspace.fs.list("/app");\n"kept going"' });
 
     expect(calls).toEqual(['/app']);
     expect(out.result).toBe('kept going');
@@ -202,7 +244,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
       new Error("ENOENT: no such file or directory, scandir '/app' — workspace.* is the agent's own virtual filesystem"),
     );
 
-    const pending = execute({ code: 'const e = await workspace.readdir("/app");\ne' });
+    const pending = execute({ code: 'const e = await workspace.fs.list("/app");\ne' });
     await expect(pending).rejects.toThrow('ENOENT');
     await expect(pending).rejects.toThrow("workspace.* is the agent's own virtual filesystem");
   });
@@ -211,7 +253,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     const { execute } = makeToolWithFailingProvider(new Error('ENOENT: nope'));
 
     const out = await execute({
-      code: 'const failure = await workspace.readdir("/app"); if (failure.success === false) return "caught:" + failure.error; throw new Error("missing failure discriminant");',
+      code: 'const failure = await workspace.fs.list("/app"); if (failure.success === false) return "caught:" + failure.error; throw new Error("missing failure discriminant");',
     });
 
     expect(out.result).toBe('caught:ENOENT: nope');
@@ -230,8 +272,8 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
         tools: { save: { description: 'save a note', execute: async () => 'ok' } },
       }, {
         name: 'workspace',
-        types: 'export declare const workspace: {\n  readdir(path: string): Promise<string[]>;\n};\n',
-        tools: { readdir: { description: 'list a directory', execute: async () => [] } },
+        types: 'export declare const workspace: {\n  fs: { list(path: string): Promise<{ entries: string[] }>; };\n};\n',
+        tools: { 'fs.list': { description: 'list a directory', execute: async () => ({ entries: [] }) } },
       }],
     });
 
@@ -244,7 +286,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
       described: described.result,
     }).toEqual({
       listed: [true, true],
-      described: ['export declare const memory: {\n  save(content: string): Promise<unknown>;\n};', 'export declare const workspace: {\n  readdir(path: string): Promise<string[]>;\n};'],
+      described: ['export declare const memory: {\n  save(content: string): Promise<unknown>;\n};', 'export declare const workspace: {\n  fs: { list(path: string): Promise<{ entries: string[] }>; };\n};'],
     });
   });
 });
@@ -368,12 +410,12 @@ function mapWorkspace(files: Map<string, string>, commands: string[]): CodemodeP
   return {
     name: 'workspace',
     tools: {
-      readFile: {
+      'fs.text': {
         description: 'read',
         execute: async (path) => files.get(String(path))
           ?? { success: false, reason: 'missing', error: `ENOENT: no such file or directory, open '${String(path)}'` },
       },
-      writeFile: {
+      'fs.write': {
         description: 'write',
         execute: async (path, content) => {
           files.set(String(path), String(content));
@@ -381,7 +423,9 @@ function mapWorkspace(files: Map<string, string>, commands: string[]): CodemodeP
           return 'ok';
         },
       },
-      exists: { description: 'exists', execute: async (path) => files.has(String(path)) },
+      'fs.stat': { description: 'stat', execute: async (path) => files.has(String(path))
+        ? { size: files.get(String(path))?.length ?? 0, mtimeMs: 0, isDir: false }
+        : { success: false, reason: 'missing', error: `ENOENT: no such file or directory, stat '${String(path)}'` } },
       exec: {
         description: 'run',
         // As the workspace's own exec answers a program that asks for the command's parts.
@@ -432,7 +476,7 @@ test('child_process hands a program exactly what the command wrote, whatever it 
   const said = { stdout: '(no output)', stderr: '' };
 
   const workspace = createInlineExecutor({
-    vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+    vfs: rt.storage.vfs, craftStore: rt.craftStore, sql: rt.storage.sql,
     shell: { exec: async () => ({ ...said, exitCode: 0 }) }, filesOwner: 'agent',
   });
 
@@ -456,7 +500,7 @@ test('a failed fs call keeps the code and path the workspace names, once', async
   const workspace: CodemodeProvider = {
     name: 'workspace',
     tools: {
-      readdir: {
+      'fs.list': {
         description: 'list',
         execute: async (path) => ({ success: false, reason: 'io', error: `ENOTDIR: not a directory, scandir '${String(path)}'` }),
       },
@@ -506,7 +550,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
   const operations: SlateOperation[] = [];
 
   const workspace = createInlineExecutor({
-    vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+    vfs: rt.storage.vfs, craftStore: rt.craftStore, sql: rt.storage.sql,
     shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) }, filesOwner: 'agent',
     slate: async (operation) => {
       operations.push(operation);

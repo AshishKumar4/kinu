@@ -282,7 +282,7 @@ function slateUiPage(name: string, words: string): string {
   const reach = name !== 'first' ? '' : [
     '<p id="read"></p><button id="send">Send</button><script type="module">',
     'import { workspace } from "kinu:slate";',
-    `document.getElementById("read").textContent = await workspace.readFile(${JSON.stringify(SLATE_UI_FILE.path)});`,
+    `document.getElementById("read").textContent = await workspace.fs.text(${JSON.stringify(SLATE_UI_FILE.path)});`,
     `document.getElementById("send").onclick = () => workspace.agent.send({ text: ${JSON.stringify(SLATE_UI_SENT)} });`,
     '</script>',
   ].join('');

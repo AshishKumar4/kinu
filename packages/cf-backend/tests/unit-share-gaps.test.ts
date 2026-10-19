@@ -53,7 +53,7 @@ async function exerciseIssuesSlate(owner: HarnessOrchestratorAgent): Promise<voi
   const source = '/slates/issues/src/server.ts';
 
   for (const [path, args] of [
-    [['mcp', 'github', 'read_issue'], [{}]], [['mcp', 'github', 'create_issue'], [{}]], [['readFile'], [source]], [['writeFile'], [source, 'export default {};']],
+    [['mcp', 'github', 'read_issue'], [{}]], [['mcp', 'github', 'create_issue'], [{}]], [['fs', 'text'], [source]], [['fs', 'write'], [source, 'export default {};']],
   ] as const) {
     await owner.slateCallAs(ROOT_SLATE_CALLER, 'issues', 'workspace', { path: [...path], args: [...args], invocation: null });
   }

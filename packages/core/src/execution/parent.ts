@@ -1,4 +1,3 @@
-import { type VFS, type VfsDirent, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `parent` executor: a fork's window onto the workspace it forked, in the parent's own paths.
  * An executor rather than a mount, like the sandbox and device: `parent.exec` runs the parent's real shell.
@@ -8,16 +7,15 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import { commandTool, type ExecutorProvider, type ExecutorCapability, type ExecutorStatus } from './types';
 
-import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { vfsErrorFromText } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { commandAnswer, ExecPartsSchema, existsTool } from './exec-result';
+import { commandAnswer, ExecPartsSchema } from './exec-result';
 import { shellExecOptions } from './shell-session';
 import { shellQuote } from '../utils/shell';
-import { Effect } from 'effect';
-import { attempt, KinuError, refusalOf, renderThrownChain, settle } from '../obs/index';
+import { attempt, KinuError, refusalOf, settle } from '../obs/index';
 import { parseInput } from '../utils/json';
+
+const StringSchema = v.string();
 
 /** `write` is a closed command union covering file write and mkdir. */
 export type ParentRpcWrite =
@@ -30,13 +28,9 @@ export interface ParentExecResult {
   exitCode: number;
 }
 
-/** The parent workspace as a fork reaches it (DO RPC, or in-process in the CLI). */
+/** The parent workspace as a fork reaches it (DO RPC, or in-process in the CLI): its shell; its files are the folder
+ *  the fork shares with it. */
 export interface ParentWorkspaceHandle {
-  read(path: string): Promise<Uint8Array>;
-  write(input: ParentRpcWrite): Promise<null>;
-  list(path: string): Promise<VfsDirent[]>;
-  stat(path: string, options?: { follow?: boolean }): Promise<VfsStat | null>;
-  delete(path: string): Promise<null>;
   /** The parent's real workspace shell. */
   exec(command: string): Promise<ParentExecResult>;
 }
@@ -45,44 +39,12 @@ export function answerParentRpc<T>(path: string, operate: () => Promise<T>): Pro
   return settle(attempt({ doing: `answering a fork's call on ${path}`, otherwise: 'io' }, operate));
 }
 
-/** The RPC error's cause keeps the parent's errno; reconstruct the local VFS contract. */
-function parentCall<T>(path: string, operate: () => Promise<T>): Effect.Effect<T, VfsError> {
-  return Effect.tryPromise({
-    try: operate,
-    catch: (error) => {
-      const cause = error instanceof Error && 'cause' in error ? error.cause : error;
-
-      return (cause instanceof Error ? vfsErrorFromText({ message: cause.message, path, cause: error }) : null)
-        ?? new VfsError('EIO', renderThrownChain({ cause }), path, { cause: error });
-    },
-  });
-}
-
-const StringSchema = v.string();
-
-/** A `VFS` over the parent workspace in the parent's own paths; never merged into this agent's `Storage.vfs`. */
-export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {
-  return {
-    readFile(path) { return settle(parentCall(path, () => handle.read(path))); },
-    writeFile(path, data) { return settle(Effect.asVoid(parentCall(path, () => handle.write({ kind: 'file', path, data })))); },
-    readdir(path) { return settle(parentCall(path, () => handle.list(path))); },
-    stat(path, options) { return settle(parentCall(path, () => handle.stat(path, options))); },
-    unlink(path) { return settle(Effect.asVoid(parentCall(path, () => handle.delete(path)))); },
-    mkdir(path, opts) {
-      return settle(Effect.asVoid(parentCall(path, () => handle.write({ kind: 'directory', path, recursive: opts?.recursive ?? false }))));
-    },
-  };
-}
-
-/** Register the parent workspace as an executor. `vfs` may be pre-wrapped (e.g. `observeWrites`) for attribution. */
+/** Register the parent workspace as an executor. */
 export function createParentExecutor(deps: {
   handle: ParentWorkspaceHandle;
-  /** The file view the tools address. Defaults to an unobserved one. */
-  vfs?: VFS;
   /** The workspace this fork is a fork OF, for status/UI. */
   workspaceName?: string;
 }): ExecutorProvider {
-  const vfs = deps.vfs ?? createParentWorkspaceVfs(deps.handle);
 
   const status: ExecutorStatus = {
     configured: true,
@@ -106,20 +68,6 @@ export function createParentExecutor(deps: {
     disconnect: async () => {},
     positionalArgs: true,
     tools: {
-      readdir: {
-        planAllowed: true,
-        description: 'List a directory of the parent workspace.',
-        execute: async (...args: unknown[]) => {
-          const path = args[0] === undefined ? '.' : parseInput(StringSchema, { value: args[0] });
-
-          if (path === undefined) {
-            return refusalOf(new KinuError('bad_input', 'parent readdir: path must be a string'));
-          }
-
-          return Promise.resolve(vfs.readdir(path)).then(entries => entries.map(({ name }) => name));
-        },
-      },
-      exists: existsTool(vfs, { description: 'Check whether a path exists in the parent workspace.', operation: 'parent exists' }),
 
       exec: commandTool(
         "Run one command in the parent workspace's real shell: the full coreutils set, pipes, "

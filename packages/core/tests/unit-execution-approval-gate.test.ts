@@ -56,7 +56,7 @@ function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'devic
 
         return `started: ${command}`;
       }),
-      readFile: {
+      'fs.text': {
         description: 'Read a file — not a shell command, never gated',
         execute: async (...args: unknown[]) => `contents of ${String(args[0])}`,
       },
@@ -112,10 +112,10 @@ describe('gateProviderExec — the executor-seam gate', () => {
     expect(executed).toEqual([]);
   });
 
-  test('a VFS-shaped tool (readFile) is left completely untouched — not every tool is a shell command', async () => {
+  test('a file member (fs.text) is left completely untouched — not every tool is a shell command', async () => {
     const { provider } = fakeShellProvider('remote');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
-    expect(gated.tools.readFile.execute).toBe(provider.tools.readFile.execute);
+    expect(gated.tools['fs.text'].execute).toBe(provider.tools['fs.text'].execute);
   });
 
   test('workspace exec is left unwrapped because its Shell is gated at the source', async () => {

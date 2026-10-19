@@ -15,9 +15,17 @@ import { retiredMember } from '../operations/retired';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
+import { MACHINE_FILES } from '../operations/executors';
 
-/** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.readFile` is in a program. */
+/** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.listTools` is in a program. */
 const WORKSPACE_EXECUTOR = 'workspace';
+
+/** A path as it names a member: a machine's files group joins its member, as `fs.read` is one member of a machine. */
+function memberPath(path: readonly string[]): readonly string[] {
+  const at = path.length - 2;
+
+  return at >= 0 && path[at] === MACHINE_FILES ? [...path.slice(0, at), `${MACHINE_FILES}.${path[at + 1] ?? ''}`] : path;
+}
 
 /**
  * What only the agent does, never a page it shows: delegating, steering itself, reporting, making tools and changing
@@ -197,14 +205,16 @@ function rest(namespace: string, names: readonly string[], count: number): Effec
 
 /** What a path names: its last name is the member, the rest its namespace. */
 export function slateCallAddress(path: readonly string[]): SlateAddress {
-  const named = path.length === 1 ? [WORKSPACE_EXECUTOR, ...path] : path;
+  const member = memberPath(path);
+  const named = member.length === 1 ? [WORKSPACE_EXECUTOR, ...member] : member;
 
   return { namespace: named.slice(0, -1).join('.'), member: named.at(-1) ?? '' };
 }
 
 /** The route a path names, before what it reaches is checked. */
 function route(id: string, request: SlateCallRequest, chain: readonly string[]): Effect.Effect<SlateRoute, KinuError> {
-  const [namespace, ...names] = request.path.length === 1 ? [WORKSPACE_EXECUTOR, ...request.path] : request.path;
+  const member = memberPath(request.path);
+  const [namespace, ...names] = member.length === 1 ? [WORKSPACE_EXECUTOR, ...member] : member;
   const { args } = request;
 
   return Effect.flatMap(rest(namespace, names, namespace === 'mcp' || namespace === 'slates' ? 2 : 1), ([first, second]): Effect.Effect<SlateRoute, KinuError> => {

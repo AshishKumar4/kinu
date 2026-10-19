@@ -1,6 +1,6 @@
 /**
  * FIRST RUN: a file written through the `/computer` mount is a file in the
- * container's working directory, and an empty path lists it.
+ * container's working directory, and its namespace lists that directory.
  *
  * THE DEFECT. In the trajectory run public-failure-recovery (kinu.run at
  * 96c3fa2b0, run-6k2kglxfvqag1l0hwg8o8, 2026-09-14) the agent listed
@@ -22,7 +22,7 @@
  *
  * THE ASSERTIONS, all hard: the file tool's write to a path it just listed as
  * absent answers `created`, a read returns the bytes byte-for-byte, and a
- * `computer.readdir({ path: '' })` inside one program names the file — not a refusal. The historical
+ * `computer.fs.list('.')` inside one program names the file — not a refusal. The historical
  * `listFiles` name above is gone; the native platform listing remains an internal transport method.
  */
 import { afterAll, describe, test } from 'vitest';
@@ -116,11 +116,10 @@ describe(SUITE, () => {
         const readBack = read !== undefined && answered(read)
           && v.is(v.string(), read.result) && read.result.includes(BYTES.trim());
 
-        // The namespace listing of the working directory through an EMPTY
-        // path — the second half of the defect — inside an eval call.
+        // The namespace listing of the working directory inside an eval call.
         const program = calls.find((call) =>
           call.name === 'eval' && answered(call)
-          && JSON.stringify(call.args ?? {}).includes("computer.readdir({ path: '' })")
+          && JSON.stringify(call.args ?? {}).includes("computer.fs.list('.')")
           && JSON.stringify(call.result ?? '').includes('first-run-mount.mjs'));
 
         return [
@@ -139,11 +138,11 @@ describe(SUITE, () => {
               : `file read returned ${JSON.stringify(read.result ?? read.error)}`,
           },
           {
-            what: 'empty-path-listing',
+            what: 'home-listing',
             reached: program !== undefined,
             detail: program === undefined
-              ? 'no eval call ran computer.readdir({ path: \'\' }) and returned the file\'s name'
-              : `computer.readdir({ path: '' }) inside eval named the written file`,
+              ? 'no eval call ran computer.fs.list(\'.\') and returned the file\'s name'
+              : `computer.fs.list('.') inside eval named the written file`,
           },
         ] satisfies EvalSubgoal[];
       },

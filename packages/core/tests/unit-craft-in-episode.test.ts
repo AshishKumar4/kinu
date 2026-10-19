@@ -76,7 +76,7 @@ describe('a call is credited with creating a tool only when it asked for one', (
 
   test('a real call counts; a mention in a stored body does not', () => {
     expect(created('await workspace.createTool("a","b","c")')).toEqual(['w']);
-    expect(created('return workspace.readFile("/a")')).toEqual([]);
+    expect(created('return workspace.fs.text("/a")')).toEqual([]);
     expect(created('// workspace.createTool("a","b","c")')).toEqual([]);
     expect(created('await workspace.createTool("w","d","async()=>workspace.createTool(1)")')).toEqual(['w']);
     expect(created('const s = "workspace.createTool("')).toEqual([]);

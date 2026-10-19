@@ -4,15 +4,26 @@
  */
 
 /** `namespace.member` → what replaced it, as a program calls it. */
-export const RETIRED_MEMBERS = {
+const RETIRED_MEMBERS = {
   'workspace.killProcess': 'workspace.stopProcess(processId)',
-  'workspace.runCode': "workspace.exec(command): `node -e '…'`, `python3 -c '…'`, `ruby -e '…'`; for TypeScript, write a .ts file and run `node file.ts`",
+  'workspace.runCode': "workspace.exec(command): `node -e '...'`, `python3 -c '...'`, `ruby -e '...'`; for TypeScript, write a .ts file and run `node file.ts`",
   'workspace.installRuntime': 'workspace.exec: a runtime installs the first time a command needs it',
   'workspace.listRuntimes': 'the Execution status in your context, which lists what each machine runs',
+  'workspace.readFile': 'workspace.fs.text(path)',
+  'workspace.writeFile': 'workspace.fs.write(path, content)',
+  'workspace.readdir': 'workspace.fs.list(path)',
+  'workspace.exists': 'workspace.fs.stat(path), which refuses a path that is not there',
+  'computer.readdir': 'computer.fs.list(path)',
+  'computer.exists': 'computer.fs.stat(path), which refuses a path that is not there',
+  'computer.deleteFile': "computer.exec('rm -- <path>')",
+  'device.readdir': 'device.fs.list(path)',
+  'device.exists': 'device.fs.stat(path), which refuses a path that is not there',
+  'parent.readdir': 'file.list(path): the folder you share with your parent is among your own files',
+  'parent.exists': 'file.stat(path), which refuses a path that is not there',
 } as const satisfies Readonly<Record<string, string>>;
 
 /** `namespace.operation` → each retired field and what to use instead. */
-export const RETIRED_FIELDS = {
+const RETIRED_FIELDS = {
   'agents.hire': { mission: '"message"' },
   'workspace.startProcess': {
     env: 'the variables at the head of the command, as `PORT=4100 node server.js`',

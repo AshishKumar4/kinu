@@ -1882,7 +1882,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
   test('a live session refuses a durable hire it has no host for, without writing the program\'s next file', async () => {
     const { rt, session, events } = setup('done', codemodeModel(`
       await agents.hire({ role: 'researcher', message: 'must not start' });
-      await workspace.writeFile('probe/agents.json', 'hire ran');
+      await workspace.fs.write('probe/agents.json', 'hire ran');
     `));
 
     await session.send('what can you delegate to?', { id: crypto.randomUUID() });
@@ -1893,7 +1893,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
   test('a standalone local Plan turn is admitted and its codemode sandbox is closed', async () => {
     const probeCode = (path: string) => `
-      await workspace.writeFile('${path}', 'written by build');
+      await workspace.fs.write('${path}', 'written by build');
       return 'probed';
     `;
 
@@ -2041,7 +2041,7 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
 
     const next = new LocalAgentSession({
       rt, db, onEvent: (e) => events.push(e),
-      model: codemodeModel('await workspace.writeFile("role-escape.txt", "must not land");'),
+      model: codemodeModel('await workspace.fs.write("role-escape.txt", "must not land");'),
       profileAuthority: authority,
     });
 

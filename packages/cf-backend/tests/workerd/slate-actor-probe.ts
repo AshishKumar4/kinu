@@ -28,19 +28,25 @@ import { jsonSchema, tool as defineTool } from 'ai';
 import type { JsonObject, UserCaller } from '@kinu.run/core';
 import { callUserMcpTool } from '../../src/user-mcp-call';
 import type { McpToolCall } from '../../src/user/mcp-servers';
+import { storeFiles, workspacePath } from '@kinu.run/core/workspace';
+import { sqliteFiles } from '@nimbus-sh/core/vfs/sqlite-files.js';
+import { cloudPlanes, TurnContextBudget, type FileDeps } from '@kinu.run/core';
+import { TurnFileLedger } from '../../../core/src/vfs/file-ledger';
 
 const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
 
 const NO_BROWSERS: BrowserSessions = { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} };
 
 /** A probe's actor: its programs run as a confined copy's do, over its state, tables, web and `executors` alone. */
-function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: ActorHandle, executors: ExecutorProviderSurface[] = []): SurfaceActor {
+function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: ActorHandle, scope: { executors?: ExecutorProviderSurface[]; files?: FileDeps } = {}): SurfaceActor {
   const unreached = (): never => { throw new Error('a probe actor holds no memory, files or tasks'); };
 
+  const { files } = scope;
+
   return {
-    executors: () => executors,
+    executors: () => scope.executors ?? [],
     web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
-    memory: unreached, files: unreached, tasks: unreached,
+    memory: unreached, files: files === undefined ? unreached : () => files, tasks: unreached,
     db: createAppDataStore({ sql, actor: handle, transactionSync: (write) => storage.transactionSync(write), events: unreached, runId: () => 'probe' }),
     programState: handle.programState, agents: null, self: null, ownerWaits: null,
   };
@@ -210,19 +216,23 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       name: 'mode-probe', storageKey: 'mode-probe',
     }, () => Effect.void);
 
+    const native = sqliteFiles(vfs, CRED_SESSION_USER);
+
+    const fileScope: FileDeps = {
+      vfs: {
+        ...storeFiles(async () => vfs, { home: WORKSPACE_ROOT }),
+        writeFileIfRevision: (path, data, revision) => native.writeFileIfRevision(workspacePath(path, WORKSPACE_ROOT), data, revision),
+      },
+      home: WORKSPACE_ROOT,
+      planes: cloudPlanes(WORKSPACE_ROOT), ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
+    };
+
     const scope: CodemodeScope = {
       reach: narrowToolSurface(undefined),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor, [{
-          name: 'workspace', positionalArgs: true, capabilities: new Set(),
-          tools: {
-            readFile: { planAllowed: true, description: 'Read the fixture file', execute: async () => files.readFileString('/home/main/plan-data.txt') },
-            writeFile: { description: 'Modify the fixture file', execute: async () => {
-              files.writeFile('/home/main/plan-data.txt', 'changed');
-
-              return 'written';
-            } },
-          },
-        }]), SURFACE_POLICY.confined, { executor }),
+      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor, { executors: [{
+        name: 'workspace', positionalArgs: true, capabilities: new Set(), tools: {},
+        fileRoot: async () => ({ root: '' }),
+      }], files: fileScope }), SURFACE_POLICY.confined, { executor }),
     };
 
     const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }, scope) }).eval;

@@ -8,12 +8,14 @@ import { sha256Hex } from '../src/safety/argument-digest';
 
 import { describe, test, expect } from 'bun:test';
 import { present, toolExecute } from '@kinu.run/test-utils';
-import { executorNamespace } from '../src/tools/executor-operations';
+import { executorNamespace, onMachine } from '../src/tools/executor-operations';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+import { renderCodemodeDescription } from '../src/index';
 import { TurnContextBudget } from '../src/context-budget';
 import { createSandboxExecutor, sandboxFiles, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
 import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
-import { createFileTool } from '../src/tools/file-operations';
+import { createFileTool, serveFile } from '../src/tools/file-operations';
 
 type FileToolInput = JsonObject & { readonly op: string };
 
@@ -200,12 +202,15 @@ function rig(fs: ContainerFs) {
 	const mounted = withMountTable(basePlane(), standardMounts((name) =>
 		name === 'computer' ? executor : undefined));
 
-	const file = toolExecute<FileToolInput, JsonValue>(createFileTool({
+	const deps = {
 		home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT),
 		vfs: mounted, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
-	}));
+	};
 
-	return { executor, mounted, file };
+	const file = toolExecute<FileToolInput, JsonValue>(createFileTool(deps));
+	const namespace = executorNamespace(executor, serveFile(() => deps));
+
+	return { executor, mounted, file, namespace };
 }
 
 describe('the file tool across the /computer mount', () => {
@@ -296,35 +301,33 @@ describe('a digest-checked write to the sandbox', () => {
 
 describe('the codemode sandbox namespace', () => {
   test('the listing has one name on the declared and runtime surfaces', () => {
-    const { executor } = rig(new ContainerFs());
-    const namespace = executorNamespace(executor);
+    const { executor, namespace } = rig(new ContainerFs());
 
     expect(executor.tools['listFiles']).toBeUndefined();
     expect(namespace.tools['listFiles']).toBeUndefined();
-    expect(namespace.tools['readdir']).toBeDefined();
-    expect(namespace.declarations).toHaveProperty('readdir');
+    expect(namespace.tools['fs.list']).toBeDefined();
+    expect(namespace.declarations).toHaveProperty(['fs.list']);
     expect(namespace.declarations).not.toHaveProperty('listFiles');
   });
 
-	test("a program's readdir({ path: '' }), readdir({ path: '.' }) and readdir() list the working directory — the mount's /workspace view", async () => {
+	test("computer.fs.list('.') and computer.fs.list('./') list the machine's home", async () => {
 		const fs = new ContainerFs();
-		const { executor, file } = rig(fs);
+		const { namespace, file } = rig(fs);
 
 		await file({ op: 'write', path: '/computer/workspace/a.mjs', content: 'a\n' });
 
-		const readDirectory = present(executorNamespace(executor).tools.readdir, 'computer.readdir');
+		const readDirectory = present(namespace.tools['fs.list'], 'computer.fs.list');
 
-		const [empty, dot, absent] = await Promise.all([
-			readDirectory.execute({ path: '' }), readDirectory.execute({ path: '.' }), readDirectory.execute(),
+		const [trailing, dot] = await Promise.all([
+			readDirectory.execute('./'), readDirectory.execute('.'),
 		]);
 
-		for (const listing of [empty, dot, absent]) {
-			expect(listing).toContain('- a.mjs');
+		for (const listing of [trailing, dot]) {
+			expect(listing).toMatchObject({ entries: ['a.mjs'] });
 		}
 
-		expect(empty).toBe(dot);
 		expect(fs.calls).toEqual([
-			`listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`,
+			`listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`,
 		]);
 
 		const root = await file({ op: 'list', path: '/computer/workspace' });
@@ -332,14 +335,78 @@ describe('the codemode sandbox namespace', () => {
 		expect(root).toMatchObject({ path: '/computer/workspace', entries: ['a.mjs'] });
 	});
 
-	test("a program's readdir({ path: '' }) lists the working directory, as listFiles does", async () => {
+	test('computer.fs.list refuses a missing path before touching the machine', async () => {
 		const fs = new ContainerFs();
-		const { executor, file } = rig(fs);
-
-		await file({ op: 'write', path: '/computer/workspace/a.mjs', content: 'a\n' });
-
-		const readdir = present(executorNamespace(executor).tools.readdir, 'computer.readdir');
-
-		expect(await readdir.execute({ path: '' })).toContain('- a.mjs');
+		const { namespace } = rig(fs);
+		expect(await present(namespace.tools['fs.list'], 'computer.fs.list').execute()).toMatchObject({ success: false, reason: 'bad_input' });
+		expect(fs.calls).toEqual([]);
 	});
+
+	test('computer.fs reads its root and home, clamping a climb above its root', async () => {
+		const fs = new ContainerFs();
+
+		for (const [path, body] of [['/x', 'root bytes'], ['/workspace/relative.md', 'home bytes'], ['/etc/hosts', 'machine hosts']]) {
+			fs.files.set(path, new TextEncoder().encode(body));
+		}
+
+		fs.dirs.add('/etc');
+		const { namespace } = rig(fs);
+
+		expect(await present(namespace.tools['fs.read'], 'computer.fs.read').execute('/x')).toContain('root bytes');
+		expect(await present(namespace.tools['fs.text'], 'computer.fs.text').execute('relative.md')).toBe('home bytes');
+		expect(await present(namespace.tools['fs.text'], 'computer.fs.text').execute('/../etc/hosts')).toBe('machine hosts');
+	});
+
+	test('computer.fs and file share reads, writes and edits in both directions', async () => {
+		const fs = new ContainerFs();
+
+		for (const path of ['/x', '/edit', '/write-back', '/edit-back']) {
+			fs.files.set(path, new TextEncoder().encode('original bytes'));
+		}
+
+		const { namespace, file } = rig(fs);
+		const read = present(namespace.tools['fs.read'], 'computer.fs.read');
+		const write = present(namespace.tools['fs.write'], 'computer.fs.write');
+		const edit = present(namespace.tools['fs.edit'], 'computer.fs.edit');
+
+		await expect(file({ op: 'write', path: '/computer/x', content: 'blind' })).rejects.toMatchObject({ verdict: 'unread' });
+		await read.execute('/x');
+		expect(await file({ op: 'write', path: '/computer/x', content: 'changed bytes' })).toMatchObject({ action: 'replaced' });
+		await read.execute('/edit');
+		expect(await file({ op: 'edit', path: '/computer/edit', edits: [{ old_text: 'original', new_text: 'edited' }] })).toMatchObject({ path: '/computer/edit' });
+		await file({ op: 'read', path: '/computer/write-back' });
+		expect(await write.execute('/write-back', 'back through fs')).toMatchObject({ action: 'replaced' });
+		await file({ op: 'read', path: '/computer/edit-back' });
+		expect(await edit.execute('/edit-back', [{ old_text: 'original', new_text: 'again' }])).toMatchObject({ path: '/computer/edit-back' });
+		expect(new TextDecoder().decode(fs.files.get('/x'))).toBe('changed bytes');
+		expect(new TextDecoder().decode(fs.files.get('/edit'))).toBe('edited bytes');
+		expect(new TextDecoder().decode(fs.files.get('/write-back'))).toBe('back through fs');
+		expect(new TextDecoder().decode(fs.files.get('/edit-back'))).toBe('again bytes');
+	});
+
+	test('machine declarations group fs while the description shows fs.read call forms', () => {
+		const { namespace } = rig(new ContainerFs());
+		const declaration = namespaceDeclaration(namespace.name, namespace.declarations ?? {});
+		expect(declaration).toContain('fs: {');
+		expect(declaration).toContain('read(');
+		expect(declaration).not.toContain('fs.read(');
+		expect(renderCodemodeDescription([namespace])).toContain('fs.read(');
+	});
+});
+
+describe('onMachine preserves the plane walk', () => {
+	const cases = [
+		{ name: 'relative with home', home: '/workspace', path: 'x', expected: '/computer/workspace/x' },
+		{ name: 'relative without home', home: undefined, path: 'x', expected: 'x' },
+		{ name: 'trailing slash', home: '/workspace/', path: 'dir/', expected: '/computer/workspace/dir/' },
+		{ name: 'absolute trailing slash', home: undefined, path: '/dir/', expected: '/computer/dir/' },
+		{ name: 'clamp without collapsing an interior parent', home: undefined, path: '/a/../../x', expected: '/computer/a/../x' },
+		{ name: 'dot component', home: undefined, path: '/a/./x', expected: '/computer/a/./x' },
+		{ name: 'dot relative to home', home: '/workspace', path: '.', expected: '/computer/workspace/.' },
+		{ name: 'dot without home', home: undefined, path: '.', expected: '.' },
+	];
+
+	for (const each of cases) {
+		test(each.name, () => { expect(onMachine('/computer', each.home, each.path)).toBe(each.expected); });
+	}
 });

@@ -149,7 +149,7 @@ test('a native tool a program calls runs only on input its own schema admits', a
 
 test('every member of every namespace refuses with the one declared Refusal, and the program records it', async () => {
   const { rt } = createTestRuntime();
-  const inline: InlineExecutorDeps = { filesOwner: 'agent', vfs: refusingDouble(), memory: refusingDouble(), craftStore: refusingDouble(), shell: refusingDouble() };
+  const inline: InlineExecutorDeps = { filesOwner: 'agent', vfs: refusingDouble(), craftStore: refusingDouble(), shell: refusingDouble() };
 
   const namespaces = [
     executorNamespace(createInlineExecutor({ ...inline, slate: refusingDouble() })),

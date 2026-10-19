@@ -34,7 +34,7 @@ const created: string[] = [];
 const workspace = {
   name: 'workspace',
   fns: {
-    readFile: async (...args: unknown[]) => {
+    'fs.text': async (...args: unknown[]) => {
       const path = text(args, 0);
       const stored = files.get(path);
 
@@ -42,13 +42,21 @@ const workspace = {
 
       return stored;
     },
-    writeFile: async (...args: unknown[]) => {
+    'fs.write': async (...args: unknown[]) => {
       files.set(text(args, 0), text(args, 1));
 
       return 'ok';
     },
-    readdir: async (...args: unknown[]) => children(text(args, 0)),
-    exists: async (...args: unknown[]) => files.has(text(args, 0)),
+    'fs.list': async (...args: unknown[]) => ({ path: text(args, 0), entries: children(text(args, 0)) }),
+    'fs.stat': async (...args: unknown[]) => {
+      const path = text(args, 0);
+      const stored = files.get(path);
+      const isDir = [...files.keys()].some((name) => name.startsWith(`${path.replace(/\/+$/, '')}/`));
+
+      return stored !== undefined || isDir
+        ? { path, size: stored?.length ?? 0, mtimeMs: 0, isDir }
+        : { success: false, reason: 'missing', error: `ENOENT: no such file: ${path}` };
+    },
     exec: async (...args: unknown[]) => `ran: ${text(args, 0)}`,
     createTool: async (...args: unknown[]) => {
       created.push(text(args, 2));
@@ -266,7 +274,7 @@ describe('the eval sandbox under workerd', () => {
     expect(second.result).toBe(42);
 
     const failed = await executor.execute(
-      "// read a file that is not there\nreturn await workspace.readFile('absent.md')",
+      "// read a file that is not there\nreturn await workspace.fs.text('absent.md')",
       [toolsProvider([]), stateProvider, workspace],
     );
 
@@ -358,7 +366,7 @@ describe('the eval sandbox under workerd', () => {
 
     const crafted = [{
       name: 'copy_notes',
-      code: 'async (args) => { await workspace.writeFile(args.to, (await workspace.readFile(args.from)).toUpperCase()); return await workspace.readFile(args.to); }',
+      code: 'async (args) => { await workspace.fs.write(args.to, (await workspace.fs.text(args.from)).toUpperCase()); return await workspace.fs.text(args.to); }',
       description: '',
     }];
 
@@ -388,7 +396,7 @@ describe('the eval sandbox under workerd', () => {
             ? { stdout: 'Error (exit 3)\n--- stderr ---\nprinted, not failed', stderr: '', exitCode: 0 }
             : { stdout: `ran: ${command}`, stderr: '', exitCode: 0 };
         },
-        readFile: async (...args: unknown[]) => {
+        'fs.text': async (...args: unknown[]) => {
           read.push(text(args, 0));
 
           return '{"reason":"io","error":"a saved API error"}';

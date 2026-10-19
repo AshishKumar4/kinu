@@ -28,7 +28,7 @@ const evalRuntime = createCLIRuntime(workspaceDatabase(join(scratchDir('cli-shel
 
 // Its executors alone: these cases call `workspace.exec` and nothing else.
 const { execute } = createNodeCodemodeToolFactory({
-  reach: narrowToolSurface(undefined), namespaces: (evalRuntime.executionRouter?.getProviders() ?? []).map(executorNamespace),
+  reach: narrowToolSurface(undefined), namespaces: (evalRuntime.executionRouter?.getProviders() ?? []).map((provider) => executorNamespace(provider)),
 })({ ...codemodeSurface(evalRuntime, {}), craftedTools: () => [] });
 
 /** `eval` over the directory's runtime, called with the tool options a turn hands it. */

@@ -6,7 +6,7 @@
 import { DynamicWorkerExecutor, sanitizeToolName } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
-  explainSandboxError, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
+  explainSandboxError, nestedMembers, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
   NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
@@ -80,10 +80,18 @@ type ProgramResult = Awaited<ReturnType<DynamicWorkerExecutor['execute']>>;
  */
 function reachableAsWritten(provider: ResolvedProvider): ResolvedProvider {
   const ns = provider.name;
+  const registered = (name: string): string => `${ns}[${JSON.stringify(sanitizeToolName(name))}]`;
 
-  const lines = [`    ${ns}.then = undefined;`, ...Object.keys(provider.fns)
-    .filter((name) => sanitizeToolName(name) !== name)
-    .map((name) => `    ${ns}[${JSON.stringify(name)}] = ${ns}[${JSON.stringify(sanitizeToolName(name))}];`)];
+  // A member group (`fs.read`) is an object of its members, each the member the vendor registered.
+  const held = Object.entries(nestedMembers(Object.fromEntries(Object.keys(provider.fns).map((name) => [name, name]))));
+
+  const lines = [`    ${ns}.then = undefined;`];
+
+  for (const [name, member] of held) {
+    if (typeof member !== 'string') {
+      lines.push(`    ${ns}[${JSON.stringify(name)}] = Object.freeze({ ${Object.entries(member).map(([inner, full]) => `${JSON.stringify(inner)}: ${registered(full)}`).join(', ')} });`);
+    } else if (sanitizeToolName(name) !== name) lines.push(`    ${ns}[${JSON.stringify(name)}] = ${registered(name)};`);
+  }
 
   if (ns === 'workspace' && Object.hasOwn(provider.fns, 'createTool')) lines.push(`    ${SANDBOX_CREATE_TOOL_PRELUDE}`);
 

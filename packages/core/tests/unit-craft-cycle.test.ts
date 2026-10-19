@@ -86,7 +86,7 @@ describe('craft observation — the trigger', () => {
     const ledger = fakeLedger();
     const turn = recording();
 
-    await block(turn, ledger, 'return workspace.readFile("/a")', { creates: 'extracted' });
+    await block(turn, ledger, 'return workspace.fs.text("/a")', { creates: 'extracted' });
     expect(turn.snapshot()).toBeNull();
   });
 
@@ -112,7 +112,7 @@ describe('craft observation — the trigger', () => {
   test('a turn that neither crafts nor calls a crafted tool writes no row', async () => {
     const turn = recording();
 
-    await block(turn, fakeLedger(['sum']), 'return workspace.readFile("/a")');
+    await block(turn, fakeLedger(['sum']), 'return workspace.fs.text("/a")');
     expect(turn.snapshot()).toBeNull();
   });
 

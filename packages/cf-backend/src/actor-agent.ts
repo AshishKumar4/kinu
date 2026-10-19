@@ -76,7 +76,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
-  EvolutionLanes, drainPendingEvents, ActorAdvisor, turnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
+  EvolutionLanes, drainPendingEvents, ActorAdvisor, standingFileLedger, turnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -376,8 +376,10 @@ function hostedActorSurface(
 ) {
   const { account } = reach;
   const webSearch = web.search;
-  // A slate's call is no turn of the actor's: it accounts into ledgers of its own.
-  const ledgers = scopedTurnSurface()?.ledgers ?? turnLedgers();
+  // A slate's call is no turn of the actor's: it accounts into ledgers of its own, but for its files, whose reads stand
+  // across its calls as the actor's own programs' do.
+  const scoped = scopedTurnSurface()?.ledgers;
+  const ledgers = scoped ?? turnLedgers();
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
 
@@ -385,16 +387,18 @@ function hostedActorSurface(
     throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
   }
 
+  const files = scoped?.files ?? standingFileLedger(runtime);
+
   const surface = hostedSurfaceActor(actor, {
     web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    conversations, vectorStore: runtime.vectorStore, ...(account !== undefined && { account }), ledgers: () => ledgers,
+    conversations, vectorStore: runtime.vectorStore, ...(account !== undefined && { account }), ledgers: () => ({ files, context: ledgers.context }),
     ownerWaits: reach.ownerWaits,
   });
 
   const native = buildBuiltinTools({
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
     conversations, ...(account !== undefined && { account }),
-    fileLedger: ledgers.files, contextBudget: ledgers.context,
+    fileLedger: files, contextBudget: ledgers.context,
   });
 
   return { actor: surface, native };
@@ -2297,7 +2301,6 @@ export abstract class ActorAgent extends Agent<Env> {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
-        slateBuild: (slate) => this.slateBuild(slate),
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -2778,11 +2781,12 @@ export abstract class ActorAgent extends Agent<Env> {
       }),
       files: () => {
         // The turn the program runs in, else ledgers of the program's own.
-        const ledgers = this.mainTurn()?.ledgers ?? turnLedgers();
+        const turn = this.mainTurn()?.ledgers;
+        const ledgers = turn ?? turnLedgers();
 
         return {
           vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
-          ledger: ledgers.files, budget: ledgers.context, slateBuild: (slate) => this.slateBuild(slate),
+          ledger: turn?.files ?? standingFileLedger(this.rt), budget: ledgers.context, slateBuild: (slate) => this.slateBuild(slate),
         };
       },
       // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.

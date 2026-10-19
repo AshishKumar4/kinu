@@ -220,7 +220,7 @@ function fileOps(deps: FileDeps) {
   const { vfs, ledger, budget } = deps;
 
   /** A Plan-safe inspection: the VFS answer, bounded like a read. */
-  const inspect = async <A>(action: 'list' | 'stat' | 'search', path: string, read: () => Promise<A | null>): Promise<A> => {
+  const inspect = async <A>(action: 'read' | 'list' | 'stat' | 'search', path: string, read: () => Promise<A | null>): Promise<A> => {
     let output: A | null;
 
     try { output = await read(); }
@@ -363,20 +363,13 @@ function fileOps(deps: FileDeps) {
   };
 
   /** The whole file for a program, which holds the value: a later write or edit through either surface is not blind. */
-  const text = async (path: string): Promise<string> => {
-    let whole: string;
-
-    try { whole = await readText(vfs, path); }
-    catch (err) {
-      const refused = vfsFailure(deps.planes, { error: err }, 'read', path);
-
-      return failure(refused.reason, refused.error);
-    }
+  const text = (path: string): Promise<string> => inspect('read', path, async () => {
+    const whole = await readText(vfs, path);
 
     ledger.observeWhole(path, whole);
 
     return whole;
-  };
+  });
 
   return {
     read,

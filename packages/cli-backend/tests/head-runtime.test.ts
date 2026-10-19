@@ -544,14 +544,11 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
   });
 
-  test("a parent file error reaches the head with the errno the parent's VFS threw", async () => {
+  test("a shared workspace file error reaches the head with the original errno", async () => {
     const parent = makeParent();
     await writeText(parent.storage.vfs, 'notes', 'a file, not a directory');
     const rt = await createHeadRuntime(parent, 'errno');
-    const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
-
-    // The DO producer and this in-process one answer the same wire through `answerParentRpc`.
-    await expect(parentExec.tools.readdir.execute('notes')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    await expect(Promise.resolve(rt.toolFiles.readdir('notes'))).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
   test('a head of a parent bound to a directory runs its shell there: the machine is the workspace', async () => {
@@ -724,7 +721,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       const write = (content: string) => envelope([{
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'eval',
         input: JSON.stringify({
-          code: `await workspace.readFile(${JSON.stringify(`${marker}.ts`)}).catch(() => null); await workspace.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
+          code: `await workspace.fs.text(${JSON.stringify(`${marker}.ts`)}).catch(() => null); await workspace.fs.write(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
         }),
       }], 'tool-calls');
 

@@ -9,6 +9,7 @@ import { TurnContextBudget, citesSpillAddress } from '../context-budget';
 import type { ContextComposition } from '../context-meter';
 import { FAILURE_WITHOUT_ERROR, type RunEventInput } from '../events/types';
 import { TurnFileLedger } from '../vfs/file-ledger';
+import type { AgentRuntime } from '../types/agent-runtime';
 import { TurnEscalationLedger } from '../execution/escalation';
 import { TurnCraftLedger } from '../craft/turn-ledger';
 import { renderToolResult } from '../utils/evidence-window';
@@ -66,6 +67,18 @@ export interface TurnLedgers {
 }
 
 /** Empty ledgers: a turn's own, which observes its crafted tools while `recordsCraft`, or a call's outside any turn. */
+/** The file ledger of an actor's programs outside any turn (a slate's calls), one per runtime it is asked for: a
+ *  read in one call lets a write in the next, as within a turn. */
+const standing = new WeakMap<AgentRuntime, TurnFileLedger>();
+
+export function standingFileLedger(runtime: AgentRuntime): TurnFileLedger {
+  const held = standing.get(runtime) ?? new TurnFileLedger();
+
+  standing.set(runtime, held);
+
+  return held;
+}
+
 export function turnLedgers(recordsCraft: () => boolean = () => false): TurnLedgers {
   return {
     files: new TurnFileLedger(), context: new TurnContextBudget(), escalations: new TurnEscalationLedger(), craft: new TurnCraftLedger(recordsCraft),

@@ -10,6 +10,7 @@ import { present, toolExecute } from '@kinu.run/test-utils';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
 import { chatSessionTurns, hostedMainActor, orchestratorHarness } from './helpers/actor-harness';
+import { fileNamespaceFor } from '../../core/tests/helpers';
 
 // Dynamic: the helpers above install the agents-SDK mock at load, and `agents` imports workerd-only modules.
 const { accountIdFor } = await import('../src/auth/store');
@@ -97,7 +98,7 @@ async function workspaceWithMachine() {
   await present(runtime.deviceTransport, 'the device transport').refreshStatus();
   const file = toolExecute(present(buildBuiltinTools({ rt: runtime, workMode: 'build', conversations: main.actor.stores.conversationSearch }).file, 'the file tool'));
   // A program reaches the machine's files as the file tool does, through the workspace's own, under /pc.
-  const workspaceFiles = present(runtime.executionRouter?.getProvider('workspace'), 'the workspace executor').tools;
+  const workspaceFiles = fileNamespaceFor(runtime, present(runtime.executionRouter?.getProvider('workspace'), 'the workspace executor')).tools;
 
   const parked = async () => {
     const rows = await workspace.agent.listDeferredApprovals();
@@ -128,7 +129,7 @@ test('a new file on the user\u2019s machine needs no approval', async () => {
   const { machine, file, workspaceFiles, parked } = await workspaceWithMachine();
 
   expect(await file({ op: 'write', path: `${PC}${DEVICE_HOME}/new.md`, content: 'from the file tool\n' })).toMatchObject({ action: 'created' });
-  expect(await workspaceFiles.writeFile?.execute(`${PC}${DEVICE_HOME}/other.md`, 'from codemode\n')).toContain('Written 14 bytes');
+  expect(await workspaceFiles['fs.write']?.execute(`${PC}${DEVICE_HOME}/other.md`, 'from codemode\n')).toMatchObject({ action: 'created', bytes: 14 });
 
   expect(machine.get(`${DEVICE_HOME}/new.md`)).toBe('from the file tool\n');
   expect(machine.get(`${DEVICE_HOME}/other.md`)).toBe('from codemode\n');
@@ -176,12 +177,12 @@ test('"always" writes the parked bytes and lets the next overwrite run unasked',
   expect(await parked()).toEqual([]);
 });
 
-test('codemode\u2019s writeFile over the user\u2019s file is refused unread, then parks as the file tool\u2019s write does', async () => {
+test('codemode\u2019s fs.write over the user\u2019s file is refused unread, then parks as the file tool\u2019s write does', async () => {
   const { machine, workspaceFiles, parked, decide } = await workspaceWithMachine();
-  const write = async () => await workspaceFiles.writeFile?.execute(`${PC}${NOTES}`, 'from codemode\n');
+  const write = async () => await workspaceFiles['fs.write']?.execute(`${PC}${NOTES}`, 'from codemode\n');
 
   expect(JSON.stringify(await write())).toContain('has not been read here yet');
-  await workspaceFiles.readFile?.execute(`${PC}${NOTES}`);
+  await workspaceFiles['fs.text']?.execute(`${PC}${NOTES}`);
   expect(JSON.stringify(await write())).toContain('queued for owner approval');
   expect(await parked()).toEqual([`file write ${PC}${NOTES} sha256:${digest('from codemode\n')} over sha256:${digest(OWNERS)}`]);
   expect(machine.get(NOTES)).toBe(OWNERS);

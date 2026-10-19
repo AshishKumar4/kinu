@@ -22,7 +22,7 @@ import {
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_EXECUTED, HIRE_PARKED_COMMAND, HIRE_RAN, HOME_ASK, HOME_BRIEF, HOME_REPORTED, JOB_ASK, JOB_COMMAND,
   JOB_STARTED, PARKED_COMMANDS,
 } from '../../scripts/flows-script';
-import { COMPUTER } from '../../packages/core/src/operations/executors';
+import { machineOperations } from '../../packages/core/src/operations/executors';
 import { wakeText } from '../../packages/core/src/jobs/runner';
 import type { BackgroundJob } from '../../packages/core/src/types/jobs';
 import { generateText, streamText } from 'ai';
@@ -407,10 +407,10 @@ describe("the agent-job row's job", () => {
   test("is started by a program the computer's own surface takes, and is called started only once it is", async () => {
     const started: JsonValue[] = [];
 
-    const computer = codemodeNamespace('computer', 'the computer', [{ op: COMPUTER.startProcess, run: async (input) => {
+    const computer = codemodeNamespace('computer', 'the computer', [{ op: machineOperations('computer').process_long.startProcess, run: async (input) => {
       started.push(input);
 
-      return { value: JSON.stringify({ processId: 'job-1', restartable: true }) };
+      return { value: { processId: 'job-1' } };
     } }]);
 
     const call = present((await reply([{ role: 'user', content: JOB_ASK }], ['eval'])).tool_calls?.[0], 'the job call');
@@ -424,9 +424,9 @@ describe("the agent-job row's job", () => {
       { role: 'tool', tool_call_id: 'call_job', content: result },
     ], ['eval'])).content;
 
-    expect({ started, ran }).toEqual({ started: [{ command: JOB_COMMAND }], ran: JSON.stringify({ processId: 'job-1', restartable: true }) });
-    // As the eval tool answers it: the program's value, a JSON string, inside the tool's own JSON.
-    expect(await answered(JSON.stringify({ result: JSON.stringify({ processId: 'job-1', restartable: true }) }))).toBe(JOB_STARTED);
+    expect({ started, ran }).toEqual({ started: [{ command: JOB_COMMAND }], ran: { processId: 'job-1' } });
+    // As the eval tool answers it: the program's value inside the tool's own JSON.
+    expect(await answered(JSON.stringify({ result: { processId: 'job-1' } }))).toBe(JOB_STARTED);
     expect(await answered(JSON.stringify({ success: false, reason: 'bad_input', error: 'refused' }))).not.toBe(JOB_STARTED);
   });
 

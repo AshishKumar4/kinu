@@ -34,6 +34,21 @@ import { initCodemodeStateTable } from '../src/identity/program-state';
 import { WORKSPACE_ROOT, workspacePath } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { workspaceShell } from '@kinu.run/test-utils';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { TurnContextBudget } from '../src/context-budget';
+import { serveFile, type FileDeps } from '../src/tools/file-operations';
+import { executorNamespace } from '../src/tools/executor-operations';
+import type { ExecutorProviderSurface } from '../src/execution/types';
+
+/** A machine namespace over the actor's served file operations, as actorNamespaces binds it in production. */
+export function fileNamespaceFor(rt: AgentRuntime, provider: ExecutorProviderSurface, overrides: Partial<FileDeps> = {}) {
+  const files: FileDeps = {
+    vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes,
+    memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), ...overrides,
+  };
+
+  return executorNamespace(provider, serveFile(() => files));
+}
 
 export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
   if (tableExists(sql, 'workspace_identity') && sql`SELECT id FROM workspace_identity LIMIT 1`.length > 0) return openWorkspaceMainActor(sql);

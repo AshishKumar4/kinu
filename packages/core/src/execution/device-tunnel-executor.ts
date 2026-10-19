@@ -1,4 +1,4 @@
-import { exists as nimbusExists, type Awaitable, type VFS, type VfsDirent, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import type { Awaitable, VFS, VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { direntType, listedStat, type DirectoryPages } from '../vfs/dirent';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
@@ -16,7 +16,7 @@ import { commandAnswer, ExecPartsSchema } from './exec-result';
 import { causeCodes, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
 import { DEVICE_METHOD } from './device-protocol';
-import { commandTool, type CommandTool, type ExecutorProvider, type ExecutorCapability, type ExecutorStatus, type ExecutorTool } from './types';
+import { commandTool, type CommandTool, type ExecutorProvider, type ExecutorCapability, type ExecutorStatus } from './types';
 import { shellCall } from './command-call';
 import {
   connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain, soleLiveDevice,
@@ -34,6 +34,7 @@ import { readDeviceOwnershipContext } from './signal';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells } from './shell-session';
 import { namedShellCall } from '../safety/approval-gate';
 import { isPrefixName, RESERVED_ROOTS } from '../vfs/resolve';
+import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import { isJsonObject, JsonValueSchema, parseInput, type JsonValue } from '../utils/json';
 
 const NOT_CONNECTED =
@@ -54,13 +55,6 @@ const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
 
 /** No machine attached. The prose names where the user connects from; keep it verbatim in the refusal, built per call. */
 const notConnected = (): Refusal => refusalOf(new KinuError('unavailable', NOT_CONNECTED));
-
-/** Fallback code for an unrecognised failure; a classified cause keeps its more precise code. */
-function deviceCall<A>(doing: string, run: () => Promise<A>): Effect.Effect<A | Refusal> {
-  return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(Effect.catch((failed) => Effect.succeed(isDeviceNotConnectedError(failed)
-    ? notConnected()
-    : refusalOf(toKinuError({ doing, cause: failed.cause, otherwise: 'io' })))));
-}
 
 /** Abort before the frame went out: nothing was sent, so nothing is running. */
 const EXEC_NOT_STARTED =
@@ -126,8 +120,6 @@ export interface DeviceTransport {
 }
 
 const StringSchema = v.string();
-
-const OptionalStringSchema = v.optional(v.string());
 
 const DeviceExecResultSchema = v.object({
   stdout: v.string(),
@@ -412,51 +404,21 @@ class DevicePlane {
     });
   }
 
-  readdir(): ExecutorTool {
-    return {
-      planAllowed: true,
-      description: 'List directory contents on the user\'s local machine.',
-      execute: async (...args: unknown[]): Promise<string[] | Refusal> => {
-        const path = parseInput(OptionalStringSchema, { value: args[0] });
+  /** Where the named machine's files sit in the fleet plane (`/pc/<segment>`), and its home; a sole live machine needs
+   *  no name, and none connected is the plane itself, which says so. */
+  fileRoot(named: string | undefined): Promise<{ readonly root: string; readonly home?: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const target = resolveForCall(this.transport, named);
 
-        if (args[0] !== undefined && path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'device readdir: path must be a string'));
-        }
+      if (target.kind === 'refusal') return yield* Effect.fail(new KinuError(target.refusal.reason ?? 'bad_input', target.refusal.error));
+      const fleet = this.transport.status().devices;
+      const entry = connectedDevices(fleet).find((device) => device.id === target.deviceId);
 
-        return settle(deviceCall(`device readdir ${path ?? '/'}`, async () => {
-        const target = filesForCall(this.transport, this.consent, readDeviceSelection({ context: args[1] }));
+      if (entry === undefined) return { root: EXECUTOR_MOUNTS.device };
+      const home = yield* Effect.promise(() => deviceFiles(this.transport, this.consent, entry.id).homeDir());
 
-        if (target.kind === 'refusal') return target.refusal;
-        const view = target.view;
-
-        return (await view.readdir(path ?? await view.homeDir())).map(({ name }) => name);
-        }));
-      },
-    };
-  }
-
-  exists(): ExecutorTool {
-    return {
-      planAllowed: true,
-      description: 'Check if a path exists on the user\'s local machine.',
-      execute: async (...args: unknown[]): Promise<boolean | Refusal> => {
-        const path = parseInput(StringSchema, { value: args[0] });
-
-        // Never `false` here: that would claim the path is absent on the machine.
-        if (path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'device exists: path must be a string'));
-        }
-
-        return settle(deviceCall(`device exists ${path}`, async () => {
-        const target = filesForCall(this.transport, this.consent, readDeviceSelection({ context: args[1] }));
-
-        if (target.kind === 'refusal') return target.refusal;
-        const view = target.view;
-
-        return await nimbusExists(view, path);
-        }));
-      },
-    };
+      return { root: `${EXECUTOR_MOUNTS.device}/${deviceMountSegment(entry, fleet)}`, home };
+    }));
   }
 
   /** The fleet plane opens at the roster; a named machine opens at its own dir. */
@@ -500,10 +462,6 @@ type CallTarget =
   | { readonly kind: 'target'; readonly deviceId: string | undefined; readonly name?: string }
   | { readonly kind: 'refusal'; readonly refusal: Refusal };
 
-type CallView =
-  | { readonly kind: 'view'; readonly view: DeviceVFS }
-  | { readonly kind: 'refusal'; readonly refusal: Refusal };
-
 export function createDeviceTunnelExecutor(
   transport: DeviceTransport,
   /** Path-scope for the file view; omit only where the transport is already scoped. */
@@ -517,6 +475,7 @@ export function createDeviceTunnelExecutor(
     name: 'device',
     files: plane.files,
     homeDir: (segment?: string) => plane.homeDir(segment),
+    fileRoot: (named?: string) => plane.fileRoot(named),
     kind: 'device',
     filesOwner: 'user',
     // Rendered into the execution block (prompting/volatile-context.ts), which routes work. Structural: shell,
@@ -531,7 +490,7 @@ export function createDeviceTunnelExecutor(
     getStatus: () => plane.status(),
     connect: () => plane.connect(),
     disconnect: async () => { /* the hub owns the socket lifecycle */ },
-    tools: { exec: plane.exec(), readdir: plane.readdir(), exists: plane.exists() },
+    tools: { exec: plane.exec() },
     positionalArgs: true,
     // The PC is behind the user's NAT; no inbound ports. Use `computer` for previewable URLs.
     async exposePort(port: number) {
@@ -577,19 +536,6 @@ function resolveForCall(
 
   return refuse(new KinuError('unavailable',
     `no connected machine is named "${named}": connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
-}
-
-/** Per-machine file view for one call, or the refusal naming why there is none. */
-function filesForCall(
-  transport: DeviceTransport,
-  consent: DeviceFileConsent,
-  named: string | undefined,
-): CallView {
-  const resolved = resolveForCall(transport, named);
-
-  if (resolved.kind === 'refusal') return resolved;
-
-  return { kind: 'view', view: deviceFiles(transport, consent, resolved.deviceId) };
 }
 
 /** A device file view's reach: `unconfined` (Sandbox off), `sandboxed` (the consented directory and the agent's own

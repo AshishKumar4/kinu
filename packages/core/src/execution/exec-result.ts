@@ -1,4 +1,3 @@
-import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Command result projection and display formatting. Invocation status never comes from text. */
 
 import * as v from 'valibot';
@@ -6,7 +5,6 @@ import { KinuError, refusalOf, RefusalSchema, type Refusal } from '../obs/index'
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
 import type { Uncheckpointed } from '../types/primitives';
-import type { ExecutorTool, PreviewRouteCheck } from './types';
 
 /** A file-plane verdict (`tools/file-tool.ts` `failure()`): unmet precondition, not an error class. */
 const FileVerdictSchema = v.object({ ...RefusalSchema.entries, reason: v.picklist(FILE_REFUSAL_REASONS) });
@@ -49,7 +47,7 @@ export const CommandResultSchema = v.union([v.string(), RefusalSchema]);
 
 export type CommandResult = v.InferOutput<typeof CommandResultSchema>;
 
-export function commandResult(result: ExecOutcome): CommandResult {
+function commandResult(result: ExecOutcome): CommandResult {
   if (result.refusal !== undefined) return result.refusal;
   const output = formatExecResult(result);
 
@@ -77,12 +75,6 @@ export function commandAnswer(outcome: ExecOutcome, parts: boolean, reportCwd: b
   return parts && outcome.refusal === undefined
     ? { stdout: outcome.stdout ?? '', stderr: outcome.stderr ?? '', exitCode: outcome.exitCode ?? 0 }
     : commandResultAt(outcome, reportCwd);
-}
-
-export function exposedPortText(url: string, port: number, route: PreviewRouteCheck): string {
-  return route.reached
-    ? `${url}\nverified: a request to this URL reaches the server on port ${String(port)}`
-    : `${url}\nnot reached: the preview route's ${route.gate} gate refused: ${route.detail}`;
 }
 
 export function formatExecResult(result: ExecOutcome): string {
@@ -120,18 +112,4 @@ function formatOutput(result: ExecOutcome): string {
   if (sections.length === 1) sections.push(NO_OUTPUT);
 
   return sections.join('\n');
-}
-
-export function existsTool(vfs: Pick<VFS, 'stat'>, input: { readonly description: string; readonly operation: string }): ExecutorTool {
-  return {
-    planAllowed: true,
-    description: input.description,
-    execute: async (...args: unknown[]) => {
-      const path = v.safeParse(v.string(), args[0]);
-
-      if (!path.success) return refusalOf(new KinuError('bad_input', `${input.operation}: path must be a string`));
-
-      return exists(vfs, path.output);
-    },
-  };
 }

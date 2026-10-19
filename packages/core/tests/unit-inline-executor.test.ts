@@ -4,11 +4,11 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, fileNamespaceFor } from './helpers';
 import { createInlineExecutor, type InlineExecutorDeps } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
-import { createFileCodemodeProvider, createFileTool } from '../src/tools/file-operations';
+import { createFileCodemodeProvider, createFileTool, type FileDeps } from '../src/tools/file-operations';
 import { FILE_READ_LINE_CHARS } from '../src/types/file-edits';
 
 type FileToolInput = JsonObject & { readonly op: string };
@@ -21,11 +21,8 @@ import type { CraftedTool } from '../src/types/craft';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
-import { executorNamespace } from '../src/tools/executor-operations';
-import { namespaceDeclaration } from '../src/tools/operation-surfaces';
-
-/** An executor's namespace as the model reads it. */
-const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {});
+import { namespaceDeclaration, nestedMembers } from '../src/tools/operation-surfaces';
+import { KINU_NODE_MODULE_SOURCE } from '../src/execution/codemode-node-shim';
 
 
 const ToolSummarySchema = v.object({
@@ -42,13 +39,14 @@ const ToolActionSchema = v.object({ ok: v.boolean(), action: v.string() });
 
 const ToolOkSchema = v.object({ ok: v.boolean() });
 
-const VfsMessageSchema = v.object({ message: v.string(), code: v.string() });
+function withFileTools(rt: ReturnType<typeof createTestRuntime>['rt'], exec: ReturnType<typeof createInlineExecutor>, files: Partial<FileDeps> = {}) {
+  return { ...exec, tools: { ...fileNamespaceFor(rt, exec, files).tools, ...exec.tools } };
+}
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: InlineExecutorDeps['slate']) {
   const deps: InlineExecutorDeps = {
     filesOwner: 'agent',
     vfs: rt.storage.vfs,
-    memory: rt.memory,
     craftStore: rt.craftStore,
     shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
     sql: rt.storage.sql,
@@ -56,15 +54,38 @@ function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: Inlin
 
   if (slate !== undefined) deps.slate = slate;
 
-  return createInlineExecutor(deps);
+  return withFileTools(rt, createInlineExecutor(deps));
 }
 
 describe('workspace provider (InlineExecutor)', () => {
+  test('a retired member called from a program names workspace.fs.text(path)', async () => {
+    const workspace = buildExec(createTestRuntime().rt);
+    const run = new Function('workspace', 'return (async () => await workspace.readFile("notes.md"))();');
+    expect(await run(nestedMembers(Object.fromEntries(Object.entries(workspace.tools).map(([name, entry]) => [name, entry.execute])))))
+      .toMatchObject({ success: false, reason: 'bad_input', error: expect.stringContaining('workspace.fs.text(path)') });
+  });
+
+  test('the Node fs adapter readdir returns entries past one file.list page', async () => {
+    const { rt } = createTestRuntime();
+    await rt.toolFiles.mkdir('many');
+    const names = Array.from({ length: 1_007 }, (_, at) => `entry-${String(at).padStart(4, '0')}`);
+
+    for (const name of names) await writeText(rt.toolFiles, `many/${name}`, name);
+    const workspace = buildExec(rt);
+    expect(await workspace.tools['fs.list'].execute('many')).toMatchObject({
+      entries: names.slice(0, 1_000), truncated: { total: names.length, next: 1_000 },
+    });
+    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+    const run = new Function('__kinu', 'workspace', 'cwd', 'const require = __kinu.createRequire({ workspace, builtins: {}, cwd }); return require("fs").promises.readdir("many");');
+
+    expect(await run(kinu, nestedMembers(Object.fromEntries(Object.entries(workspace.tools).map(([name, entry]) => [name, entry.execute]))), WORKSPACE_ROOT)).toEqual(names);
+  });
+
   test('invalid file arguments are classified binding values, never refusal-shaped text', async () => {
     const { rt } = createTestRuntime();
     const provider = buildExec(rt);
 
-    for (const name of ['readFile', 'writeFile', 'readdir']) {
+    for (const name of ['fs.text', 'fs.write', 'fs.list']) {
       expect(await callCodemodeMember([provider], 'workspace', name, [null])).toMatchObject({ success: false, reason: 'bad_input' });
     }
   });
@@ -105,7 +126,7 @@ describe('workspace provider (InlineExecutor)', () => {
 
     const exec = createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: { ...rt.craftStore, list: () => [ghost] },
+      vfs: rt.storage.vfs, craftStore: { ...rt.craftStore, list: () => [ghost] },
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
     });
@@ -239,34 +260,28 @@ describe('workspace provider (InlineExecutor)', () => {
   // Same-turn `tools.<name>()` is unsupported by design: createTool, then `tools.<name>` next turn.
 });
 
-/** workspace.writeFile over the real file plane: every path shape must survive the parent mkdir. */
-describe('workspace.writeFile over the workspace filesystem — what both backends register', () => {
+/** workspace.fs.write over the real file plane: every path shape must survive the parent mkdir. */
+describe('workspace.fs.write over the workspace filesystem — what both backends register', () => {
   function buildPlane() {
     const { rt, workspace } = createTestRuntime();
-    const dirs: string[] = [];
 
-    const sandbox = {
-      files: new Map<string, string>(),
-      dirs,
-    };
-
-    // The container is reached only through `computer.*`, never from here.
+    // No machines are mounted in this fixture: absolute paths stay in its own workspace plane.
     const vfs = rt.storage.vfs;
 
     const exec = createInlineExecutor({
       filesOwner: 'agent',
-      vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
     });
 
-    return { rt, vfs, exec, sandbox, workspace };
+    return { rt, vfs, exec: withFileTools(rt, exec), workspace };
   }
 
   test('a deep path creates its parents and round-trips', async () => {
     const { vfs, exec } = buildPlane();
-    const result = await exec.tools.writeFile.execute('notes/deep/todo.md', 'from codemode');
-    expect(result).toContain('Written');
+    const result = await exec.tools["fs.write"].execute('notes/deep/todo.md', 'from codemode');
+    expect(result).toMatchObject({ action: 'created' });
     expect(await readText(vfs, 'notes/deep/todo.md')).toBe('from codemode');
   });
 
@@ -304,54 +319,53 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     expect(await readText(vfs, 'plan.md')).toBe('the owner saved this\n');
   });
 
-  test('an existing file cannot be overwritten before workspace.readFile shows it', async () => {
+  test('an existing file cannot be overwritten before workspace.fs.text shows it', async () => {
     const { vfs, exec } = buildPlane();
     await writeText(vfs, 'victim.txt', 'keep me');
 
     // Callers branch on `reason`, and the declared codemode type promises it.
-    expect(await exec.tools.writeFile.execute('victim.txt', 'destroyed blind')).toEqual({
+    expect(await exec.tools["fs.write"].execute('victim.txt', 'destroyed blind')).toEqual({
       success: false,
       error: expect.stringContaining('has not been read here yet'),
       reason: 'unread',
     });
     expect(await readText(vfs, 'victim.txt')).toBe('keep me');
 
-    await exec.tools.readFile.execute('victim.txt');
-    expect(await exec.tools.writeFile.execute('victim.txt', 'replacement')).toContain('Written');
+    await exec.tools["fs.text"].execute('victim.txt');
+    expect(await exec.tools["fs.write"].execute('victim.txt', 'replacement')).toMatchObject({ action: 'replaced' });
     expect(await readText(vfs, 'victim.txt')).toBe('replacement');
   });
 
   test('relative and absolute name the same file — one namespace, no prefixes', async () => {
     const { vfs, exec } = buildPlane();
-    await exec.tools.writeFile.execute('src/main.ts', 'a');
+    await exec.tools["fs.write"].execute('src/main.ts', 'a');
     expect(await readText(vfs, 'src/main.ts')).toBe('a');
     expect(await readText(vfs, '/home/main/src/main.ts')).toBe('a');
   });
 
-  test('another environment is not addressable from here at all', async () => {
-    const { exec, sandbox, workspace } = buildPlane();
+  test('an unmounted /computer path remains an ordinary workspace path', async () => {
+    const { exec, workspace } = buildPlane();
     // `/` is root's: a top-level directory is the kernel's to make and hand over, as a boot does.
     const { root } = await workspace.privileged();
     root.mkdir('computer');
     root.chown('computer', CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
     // "/computer/app.ts" is an ordinary local file: no path silently means two places.
-    expect(await exec.tools.writeFile.execute('/computer/app.ts', 'top')).toContain('Written');
-    expect(sandbox.files.size).toBe(0);
+    expect(await exec.tools["fs.write"].execute('/computer/app.ts', 'top')).toMatchObject({ action: 'created' });
+    expect(await exec.tools['fs.text'].execute('/computer/app.ts')).toBe('top');
   });
 });
 
-/** workspace.* and file.* share one read-before-write ledger when the turn hands both the same thunk. */
+/** workspace.fs and file share the actor's one served read-before-write ledger. */
 describe('workspace.* and file.* share the read-before-write gate', () => {
   function sharedScope(rt: ReturnType<typeof createTestRuntime>['rt']) {
     const ledger = new TurnFileLedger();
 
-    const exec = createInlineExecutor({
+    const exec = withFileTools(rt, createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
-      ledger: () => ledger,
-    });
+    }), { ledger });
 
     const file = createFileCodemodeProvider(() => ({
       home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory,
@@ -365,17 +379,17 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     };
   }
 
-  test('workspace.readFile then file.edit: the read counts, the edit lands', async () => {
+  test('workspace.fs.text then file.edit: the read counts, the edit lands', async () => {
     const { rt } = createTestRuntime();
     await writeText(rt.storage.vfs, 'notes.md', 'Hello world');
     const { exec, edit } = sharedScope(rt);
-    await exec.tools.readFile.execute('notes.md');
+    await exec.tools["fs.text"].execute('notes.md');
 
     expect(await edit('notes.md', [{ old_text: 'world', new_text: 'kinu' }])).toMatchObject({ path: 'notes.md' });
     expect(await readText(rt.storage.vfs, 'notes.md')).toBe('Hello kinu');
   });
 
-  test('a line the file tool cut is covered once workspace.readFile hands the program the whole file', async () => {
+  test('a line the file tool cut is covered once workspace.fs.text hands the program the whole file', async () => {
     const { rt } = createTestRuntime();
     await writeText(rt.storage.vfs, 'wide.md', `head\n${'w'.repeat(FILE_READ_LINE_CHARS + 500)}\ntail\n`);
     const { exec, read, write } = sharedScope(rt);
@@ -383,12 +397,12 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     await read('wide.md');
     expect(await write('wide.md', 'replacement')).toMatchObject({ success: false, reason: 'unread' });
 
-    await exec.tools.readFile.execute('wide.md');
+    await exec.tools["fs.text"].execute('wide.md');
     expect(await write('wide.md', 'replacement')).toMatchObject({ action: 'replaced' });
     expect(await readText(rt.storage.vfs, 'wide.md')).toBe('replacement');
   });
 
-  test('workspace.readFile and the file gate agree on a BOM file for writes and edits', async () => {
+  test('workspace.fs.text and the file gate agree on a BOM file for writes and edits', async () => {
     const { rt } = createTestRuntime();
     const body = `head\n${'w'.repeat(FILE_READ_LINE_CHARS + 500)}\ntail\n`;
     await writeText(rt.storage.vfs, 'bom.md', `\uFEFF${body}`);
@@ -396,39 +410,38 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
 
     await read('bom.md');
     expect(await write('bom.md', 'wiped')).toMatchObject({ success: false, reason: 'unread' });
-    expect(await exec.tools.readFile.execute('bom.md')).toBe(body);
+    expect(await exec.tools["fs.text"].execute('bom.md')).toBe(body);
     expect(await write('bom.md', 'replacement')).toMatchObject({ action: 'replaced' });
     expect(await readText(rt.storage.vfs, 'bom.md')).toBe('replacement');
 
     await writeText(rt.storage.vfs, 'bom-edit.md', '\uFEFFHello world\n');
-    expect(await exec.tools.readFile.execute('bom-edit.md')).toBe('Hello world\n');
+    expect(await exec.tools["fs.text"].execute('bom-edit.md')).toBe('Hello world\n');
     expect(await edit('bom-edit.md', [{ old_text: 'world', new_text: 'kinu' }])).toMatchObject({ path: 'bom-edit.md' });
     expect(new TextDecoder('utf-8', { ignoreBOM: true }).decode(await rt.storage.vfs.readFile('bom-edit.md'))).toBe('\uFEFFHello kinu\n');
   });
 
-  test('workspace.writeFile then file.edit in the same program: the write counts as having read it', async () => {
+  test('workspace.fs.write then file.edit in the same program: the write counts as having read it', async () => {
     const { rt } = createTestRuntime();
     const { exec, edit } = sharedScope(rt);
-    await exec.tools.writeFile.execute('fresh.md', 'v1 content');
+    await exec.tools["fs.write"].execute('fresh.md', 'v1 content');
 
     expect(await edit('fresh.md', [{ old_text: 'v1', new_text: 'v2' }])).toMatchObject({ path: 'fresh.md' });
     expect(await readText(rt.storage.vfs, 'fresh.md')).toBe('v2 content');
   });
 
-  test('a shared ledger thunk makes workspace.readFile and the native `file` tool see the SAME read state', async () => {
+  test('the actor\'s served workspace.fs and native file tool see the same read state', async () => {
     const { rt } = createTestRuntime();
     await writeText(rt.storage.vfs, 'shared.md', 'shared content');
     const ledger = new TurnFileLedger();
 
-    const exec = createInlineExecutor({
+    const exec = withFileTools(rt, createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
-      ledger: () => ledger,
-    });
+    }), { ledger });
 
-    await exec.tools.readFile.execute('shared.md');
+    await exec.tools["fs.text"].execute('shared.md');
     const fileTool = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
 
@@ -436,12 +449,12 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     expect(await readText(rt.storage.vfs, 'shared.md')).toBe('REPLACED content');
   });
 
-  test('without a shared ledger, workspace.* and the native `file` tool have INDEPENDENT read state', async () => {
-    // Without `ledger`, workspace.* has a private ledger that does not satisfy the native gate.
+  test('independently served actors do not share read-before-write state', async () => {
+    // These fixtures serve different actors' file operations and must not borrow each other's reads.
     const { rt } = createTestRuntime();
     await writeText(rt.storage.vfs, 'unshared.md', 'content');
     const exec = buildExec(rt);
-    await exec.tools.readFile.execute('unshared.md');
+    await exec.tools["fs.text"].execute('unshared.md');
     const fileTool = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
     await expect(execute({ op: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
@@ -456,14 +469,14 @@ describe('declared resource limits', () => {
     const router = new DefaultExecutionRouter();
     router.register(createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 },
     }));
     expect(router.listExecutors()[0]?.resourceLimits).toEqual({ cpus: 1, memBytes: 2 * 1024 ** 3 });
 
     const unbounded = new DefaultExecutionRouter();
-    unbounded.register(buildExec(rt));
+    unbounded.register(createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell') }));
     expect(unbounded.listExecutors()[0]).not.toHaveProperty('resourceLimits');
   });
 });
@@ -474,34 +487,31 @@ describe('workspace.* VFS errors carry how paths are read here', () => {
     const { rt } = createTestRuntime();
     const vfs = rt.storage.vfs;
 
-    return createInlineExecutor({
+    const exec = createInlineExecutor({
       filesOwner: 'agent',
-      vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
     });
+
+    return withFileTools(rt, exec);
   }
 
   test('a missing path keeps its errno and names where a relative path starts', async () => {
     const exec = buildPlane();
-    const raised: unknown[] = [];
 
-    for (const call of [() => exec.tools.readdir.execute('/app'), () => exec.tools.readFile.execute('app/gblock.txt')]) {
-      try { await call(); } catch (err) { raised.push(err); }
+    for (const name of ['fs.list', 'fs.text']) {
+      expect(await exec.tools[name].execute('app/gblock.txt')).toMatchObject({
+        success: false, reason: 'missing', error: expect.stringContaining(cloudPlanes(WORKSPACE_ROOT).cwd),
+      });
     }
-
-    expect(raised.map((err) => {
-      const { code, message } = v.parse(VfsMessageSchema, err);
-
-      return { code, names: message.includes(cloudPlanes(WORKSPACE_ROOT).cwd) };
-    })).toEqual([{ code: 'ENOENT', names: true }, { code: 'ENOENT', names: true }]);
   });
 
   test('a successful call is untouched by the guidance wrapper', async () => {
     const exec = buildPlane();
-    await exec.tools.writeFile.execute('notes/a.md', 'hello');
-    expect(await exec.tools.readFile.execute('notes/a.md')).toBe('hello');
-    expect(await exec.tools.exists.execute('notes/a.md')).toBe(true);
+    await exec.tools["fs.write"].execute('notes/a.md', 'hello');
+    expect(await exec.tools["fs.text"].execute('notes/a.md')).toBe('hello');
+    expect(await exec.tools["fs.stat"].execute('notes/a.md')).toMatchObject({ isDir: false, size: 5 });
   });
 
   test('a non-VFS failure is not dressed up as an addressing problem', async () => {
@@ -509,7 +519,7 @@ describe('workspace.* VFS errors carry how paths are read here', () => {
 
     const exec = createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async () => { throw new Error('shell is not available'); } },
       sql: rt.storage.sql,
     });
@@ -571,9 +581,10 @@ describe('workspace.createTool — the tool is born scorable', () => {
 
 describe('workspace.slates', () => {
   test('an absent host is omitted from callable and declared capabilities', () => {
-    const exec = buildExec(createTestRuntime().rt);
+    const rt = createTestRuntime().rt;
+    const exec = createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell') });
     expect(exec.tools.slates).toBeUndefined();
-    expect(declared(exec)).not.toContain('slates');
+    expect(namespaceDeclaration(exec.name, fileNamespaceFor(rt, exec).declarations ?? {})).not.toContain('  slates: {');
   });
 
   test('invalid operation fields are refused before the available host is called', async () => {

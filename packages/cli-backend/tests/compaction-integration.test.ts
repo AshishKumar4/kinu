@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { fileNamespaceFor } from '../../core/tests/helpers';
 import { isStepCount, type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
@@ -283,7 +284,7 @@ describe('default compaction over the real storage plane', () => {
     const workspace = rt.executionRouter?.getProvider('workspace');
 
     if (!workspace) throw new Error('expected the workspace executor');
-    const readBack = v.parse(v.string(), await workspace.tools.readFile.execute(snapshot.transcriptRelativePath));
+    const readBack = v.parse(v.string(), await fileNamespaceFor(rt, workspace).tools['fs.text']?.execute(snapshot.transcriptRelativePath));
 
     expect(readBack).toContain('output-0 ');
     expect(readBack).toContain('Task 0: please run step 0');

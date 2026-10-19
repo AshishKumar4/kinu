@@ -60,10 +60,10 @@ it("a share's viewer runs the owner's approved crafted tool only as far as the g
 
   expect(owner).toMatchObject({ result: { browsers: [], read: 'owner' } });
   expect(owner).not.toMatchObject({ result: { wrote: { error: expect.anything() } } });
-  expect(ran.reached).toEqual(expect.arrayContaining(['tools.helper:execute', 'workspace.writeFile:mutate', 'web.browsers:observe']));
+  expect(ran.reached).toEqual(expect.arrayContaining(['tools.helper:execute', 'workspace.fs.write:mutate', 'web.browsers:observe']));
 
   // Shared granting the tool alone: its write is refused and the owner's stands, and it holds none of the owner's browsers.
   expect(JSON.parse(ran.viewer)).toMatchObject({
-    browsers: null, wrote: { error: expect.stringContaining('does not grant workspace.writeFile to viewers') }, read: 'owner',
+    browsers: null, wrote: { error: expect.stringContaining('does not grant workspace.fs.write to viewers') }, read: 'owner',
   });
 });

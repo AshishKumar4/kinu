@@ -304,7 +304,7 @@ function declarationOf(op: Operation): string {
 
   const doc = docs.length === 0 ? `/** ${op.help} */` : ['/**', ` * ${op.help}`, ...docs, ' */'].join('\n');
 
-  return `${doc}\n${op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
+  return `${doc}\n${op.name.split('.').at(-1) ?? op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
 }
 
 /** Each retired member of `ns` no served operation took back, as a call that refuses naming its successor. */
@@ -348,9 +348,42 @@ export function codemodeNamespace(ns: string, summary: string, members: readonly
   };
 }
 
-/** A namespace's full declaration, as `describe(ns)` answers it in a program. */
+/** A namespace's members as a program holds them: each by its own name, a group's (`fs.read`) in the group's object. */
+export interface NestedMembers<T> {
+  readonly [name: string]: T | Readonly<Record<string, T>>;
+}
+
+/** A namespace's members as a program holds them: `fs.read` under `fs`, every other member by its own name. */
+export function nestedMembers<T>(members: Readonly<Record<string, T>>): NestedMembers<T> {
+  const flat: Record<string, T> = {};
+  const groups = new Map<string, Record<string, T>>();
+
+  for (const [name, member] of Object.entries(members)) {
+    const [group = name, inner] = name.split('.');
+
+    if (inner === undefined) flat[name] = member;
+    else groups.set(group, Object.assign(groups.get(group) ?? {}, { [inner]: member }));
+  }
+
+  return { ...flat, ...Object.fromEntries(groups) };
+}
+
+/** A namespace's full declaration, as `describe(ns)` answers it in a program; a member group is its own object. */
 export function namespaceDeclaration(ns: string, declarations: Readonly<Record<string, MemberDeclaration>>): string {
-  return [`declare const ${ns}: {`, ...Object.values(declarations).map((declared) => declared.full.replace(/^/gmu, '  ')), '};'].join('\n');
+  const indented = (text: string, by: string): string => text.replace(/^/gmu, by);
+  const members: string[] = [];
+  const groups = new Map<string, string[]>();
+
+  for (const [name, declared] of Object.entries(declarations)) {
+    const [group = name, inner] = name.split('.');
+
+    if (inner === undefined) members.push(indented(declared.full, '  '));
+    else groups.set(group, [...groups.get(group) ?? [], indented(declared.full, '    ')]);
+  }
+
+  for (const [group, inner] of groups) members.push([`  ${group}: {`, ...inner, '  };'].join('\n'));
+
+  return [`declare const ${ns}: {`, ...members, '};'].join('\n');
 }
 
 /** Who calls an operation from outside eval: an actor, in the work mode it asks for, in a turn when one is open. */

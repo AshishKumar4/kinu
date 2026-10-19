@@ -137,7 +137,7 @@ function nimbusWorkspace(box: SessionBox) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
-    box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+    box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
   });
 }
 
@@ -252,24 +252,6 @@ describe("executor lifecycle state", () => {
     expect(handle.execOptions).toEqual([{ cwd: "/workspace" }]);
   });
 
-  test("sandbox exists shell-quotes command substitutions in paths", async () => {
-    const handle = sandboxHandle();
-    const executor = createSandboxExecutor(handle);
-    const path = "/tmp/$(touch /tmp/pwned)";
-
-    expect(await executor.tools.exists.execute(path)).toBe("false");
-    expect(handle.calls).toContain(`exec:test -e '${path}' && echo true || echo false`);
-  });
-
-  test("sandbox exists maps a transport failure to a refusal, not a rejection", async () => {
-    const handle = sandboxHandle();
-    handle.exec = async () => { throw new Error("transport down"); };
-
-    const executor = createSandboxExecutor(handle);
-
-    expect(await executor.tools.exists.execute("/workspace/a.md"))
-      .toMatchObject({ reason: "io", error: expect.stringContaining("transport down") });
-  });
 
   test("sandbox port discovery preserves a real SDK failure", async () => {
     const handle = sandboxHandle();

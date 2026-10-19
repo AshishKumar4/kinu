@@ -112,7 +112,7 @@ describe('the surfaces the model reads', () => {
 
     const provider = createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, shell,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore, shell,
     });
 
     expect(await provider.tools.exec?.execute('cat incident.json')).toBe(stdout);
@@ -128,7 +128,7 @@ describe('the surfaces the model reads', () => {
 
     const provider = createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async () => PYTEST },
     });
 
@@ -146,7 +146,7 @@ describe('the surfaces the model reads', () => {
     };
 
     const workspace = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     });
 
     const out = await workspace.tools.exec?.execute('pytest');

@@ -460,7 +460,7 @@ function namesRoot(command: string, root: string): boolean {
 }
 
 /** The user's when the command names or reaches under one of their roots, or its session may be there. */
-export function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): FilesOwner {
+function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): FilesOwner {
   const roots = executor.shellSession?.userRoots() ?? [];
 
   if (executor.filesOwner === 'user' || roots.length === 0) return executor.filesOwner;

@@ -53,8 +53,8 @@ it('a public share serves the slate, admits the granted member, refuses the rest
     ['source:vitest', '/', 'ok'],
   ]);
   expect(rows[0]?.calls).toEqual([
-    { slate: 'board', namespace: 'workspace', member: 'readFile', impact: 'observe', ok: true },
-    { slate: 'board', namespace: 'workspace', member: 'writeFile', impact: 'mutate', ok: false },
+    { slate: 'board', namespace: 'workspace', member: 'fs.text', impact: 'observe', ok: true },
+    { slate: 'board', namespace: 'workspace', member: 'fs.write', impact: 'mutate', ok: false },
   ]);
   expect(rows[1]?.calls).toEqual(rows[0]?.calls);
   expect(rows[2]?.calls).toEqual([]);
@@ -86,7 +86,7 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   expect(graph.slates).toEqual(['issues', 'triage-digest']);
   expect(impacts('triage-digest:slates.issues')).toEqual([['refresh', 'observe']]);
   expect(impacts('issues:mcp.github')).toEqual([['create_issue', 'externalSend'], ['read_issue', 'observe']]);
-  expect(impacts('issues:workspace')).toEqual([['readFile', 'observe'], ['writeFile', 'mutate']]);
+  expect(impacts('issues:workspace')).toEqual([['fs.text', 'observe'], ['fs.write', 'mutate']]);
 
   const ShareSchema = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
 
@@ -95,8 +95,8 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   ).share.grant.members.map((member) => `${member.slate}:${member.namespace}.${member.member}`).sort();
 
   expect(await granted('public', [])).toEqual([
-    'issues:mcp.github.read_issue', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.readFile',
-    'triage-digest:slates.issues.refresh', 'triage-digest:workspace.readFile',
+    'issues:mcp.github.read_issue', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.fs.text',
+    'triage-digest:slates.issues.refresh', 'triage-digest:workspace.fs.text',
   ]);
   expect(await granted('users', [{ slate: 'issues', namespace: 'agent', member: 'send' }])).toContain('issues:agent.send');
 
@@ -167,7 +167,7 @@ it('a mutating member is granted by approval only', async () => {
   await probe.start();
 
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
-    await probe.share([{ namespace: 'workspace', member: 'writeFile' }])).value);
+    await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   // The unapproved share above refuses the same call: the approval is the grant.
   expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: 'mutate answered' });

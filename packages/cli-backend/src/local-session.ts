@@ -573,7 +573,6 @@ export class LocalAgentSession {
       spend: { report: (report) => this.modelCallSink(report) },
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
-    this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.ledgers.files);
     // The runtime's judge/fast/reflection seams predate this session; a runtime holds one sink.
     this.rt.setModelCallSink?.(this.modelCallSink);
     this.rt.setModelOperations?.(this.modelOperations);

@@ -4,31 +4,6 @@ import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
-    read: async (path: string) => {
-      calls.push(`read:${path}`);
-
-      return new TextEncoder().encode('hi');
-    },
-    write: async (input) => {
-      calls.push(`write:${input.kind}:${input.path}`);
-
-      return null;
-    },
-    list: async (path: string) => {
-      calls.push(`list:${path}`);
-
-      return [];
-    },
-    stat: async (path: string) => {
-      calls.push(`stat:${path}`);
-
-      return null;
-    },
-    delete: async (path: string) => {
-      calls.push(`delete:${path}`);
-
-      return null;
-    },
     exec: async (command: string) => {
       calls.push(`exec:${command}`);
 
@@ -38,13 +13,6 @@ function parentHandle(calls: string[]): ParentWorkspaceHandle {
 }
 
 describe('parent executor input validation', () => {
-  test('exists with no path refuses instead of stating "undefined" is absent', async () => {
-    const calls: string[] = [];
-    const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(await parent.tools.exists.execute(undefined)).toMatchObject({ reason: 'bad_input' });
-    expect(calls).toEqual([]);
-  });
-
   test('exec with no command refuses instead of running "undefined"', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
@@ -53,13 +21,11 @@ describe('parent executor input validation', () => {
     expect(calls).toEqual([]);
   });
 
-  test('readdir with a non-string path refuses, while no path still lists the root', async () => {
+  test('exec forwards a shell search to the parent workspace', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(await parent.tools.readdir.execute(123)).toMatchObject({ reason: 'bad_input' });
-    expect(calls).toEqual([]);
-    await parent.tools.readdir.execute(undefined);
-    expect(calls).toEqual(['list:.']);
+    expect(await parent.tools.exec.execute('find . -name notes.md')).toBe('ok');
+    expect(calls).toEqual(['exec:find . -name notes.md']);
   });
 });
 

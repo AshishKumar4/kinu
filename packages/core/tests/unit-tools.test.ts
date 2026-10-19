@@ -8,6 +8,7 @@ import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
 import { programCodemode } from './helpers-program';
 import {
   narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
+  nestedMembers,
   buildActorTools,
   buildBuiltinTools,
   BUILTIN_TOOLS,
@@ -578,9 +579,9 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   function sandboxOver(providers: readonly CodemodeProvider[]): (code: string) => Promise<string> {
     const names = providers.map((p) => p.name);
 
-    const values = providers.map((p) => Object.fromEntries(
+    const values = providers.map((p) => nestedMembers(Object.fromEntries(
       Object.entries(p.tools).map(([member, entry]) => [member, entry.execute]),
-    ));
+    )));
 
     return async (code) => {
       const fn = new Function(...names, `return (async () => { ${code} })()`);
@@ -595,7 +596,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
       provider('agents', 'swarm', 'delegated'),
       provider('memory', 'save', 'remembered'),
       provider('tasks', 'add', 'listed'),
-      provider('workspace', 'readFile', 'bytes'),
+      provider('workspace', 'fs.text', 'bytes'),
     ];
 
     const narrowed = narrowToolSurface(RESTRICTED).narrowProviders(providers);
@@ -604,7 +605,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     expect(await run('return typeof agents;')).toBe('undefined');
     expect(await run('return typeof memory;')).toBe('undefined');
     expect(await run('return typeof tasks;')).toBe('undefined');
-    expect(await run('return await workspace.readFile();')).toBe('bytes');
+    expect(await run('return await workspace.fs.text();')).toBe('bytes');
   });
 
   test('an unnarrowed actor reaches every namespace it was given', async () => {

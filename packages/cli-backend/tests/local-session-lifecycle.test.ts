@@ -1311,7 +1311,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test("eval binds only the namespaces the role admits: a role without shell, file or slate reaches no workspace", async () => {
     const analyst = { description: 'Reads memory.', instructions: 'Answer from memory.', tier: 'default', preset: 'audit', allowedTools: ['eval', 'memory'] } as const;
 
-    const { rt, session, events } = setup('unused', codemodeModel('await workspace.writeFile("revoked-workspace.txt", "must not land")'), {
+    const { rt, session, events } = setup('unused', codemodeModel('await workspace.fs.write("revoked-workspace.txt", "must not land")'), {
       profileAuthority: async () => {
         const { catalog } = present(await swarmsOn(rt, staticModelPlane())(), "the workspace's own catalog");
         const withAnalyst = { ...catalog, roles: { ...catalog.roles, analyst } };
@@ -1370,12 +1370,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(text).toContain('never detached');
   });
 
-  test('a native file read authorizes workspace.writeFile in the same CLI turn', async () => {
+  test('a native file read authorizes workspace.fs.write in the same CLI turn', async () => {
     const model = toolSequenceModel([
       { name: 'file', input: { op: 'read', path: 'shared.txt' } },
       {
         name: 'eval',
-        input: { code: 'return await workspace.writeFile("shared.txt", "changed by codemode");' },
+        input: { code: 'return await workspace.fs.write("shared.txt", "changed by codemode");' },
       },
     ]);
 
@@ -1388,11 +1388,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       .toBe('changed by codemode');
   });
 
-  test('a workspace.readFile authorizes native file write in the same CLI turn', async () => {
+  test('a workspace.fs.text authorizes native file write in the same CLI turn', async () => {
     const model = toolSequenceModel([
       {
         name: 'eval',
-        input: { code: 'return await workspace.readFile("shared.txt");' },
+        input: { code: 'return await workspace.fs.text("shared.txt");' },
       },
       {
         name: 'file',

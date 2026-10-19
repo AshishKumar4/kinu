@@ -8,7 +8,7 @@ import type { Operation } from '../operations/operation';
 import { AGENT } from '../operations/agent';
 import { AGENTS_IMPACTS, AGENTS_SLATE } from '../operations/agents';
 import { DB } from '../operations/db';
-import { COMPUTER, DEVICE, machineOperations, PARENT, WORKSPACE } from '../operations/executors';
+import { COMPUTER, DEVICE, machineFileOperations, machineOperations, PARENT, WORKSPACE } from '../operations/executors';
 import { FILE } from '../operations/file';
 import { MEMORY } from '../operations/memory';
 import { STATE } from '../operations/state';
@@ -27,9 +27,10 @@ export const AGENT_ASK_MEMBER = 'ask';
 /** A tool call's chip: whether it only looked. */
 export type ActionEffect = 'read' | 'mutate';
 
-/** A machine's own members, with every member a machine may share (`machineOperations`): what any machine declares. */
+/** A machine's own members, with every member a machine may share (`machineOperations`, `machineFileOperations`):
+ *  what any machine declares. */
 const machine = (ns: string, own: Readonly<Record<string, Operation>>): Readonly<Record<string, Operation>> => Object.assign(
-  {}, ...Object.values<Readonly<Record<string, Operation>>>(machineOperations(ns)), own,
+  {}, ...Object.values<Readonly<Record<string, Operation>>>(machineOperations(ns)), machineFileOperations(ns), own,
 );
 
 /** Every eval namespace the catalog declares, each operation by its name. */

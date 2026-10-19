@@ -547,7 +547,7 @@ export function scaffoldProviders(
 ): Array<{ name: string; fns: SandboxFunctions; types?: string }> {
   const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [];
 
-  const routerProviders = (rt.executionRouter?.getProviders() ?? []).map(executorNamespace);
+  const routerProviders = (rt.executionRouter?.getProviders() ?? []).map((provider) => executorNamespace(provider));
 
   for (const p of routerProviders) {
     const fns: SandboxFunctions = {};

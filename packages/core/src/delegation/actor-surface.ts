@@ -18,7 +18,7 @@ import type { BrowserSessions, WebSearchProvider } from '../web/provider';
 import { createAgentSelfProvider, createHireOwnerWaitsProvider, type AgentSelfHost, type OwnerWaitsHost } from '../tools/agent-self';
 import { createDbCodemodeProvider, type AppDataStore } from '../tools/db-codemode';
 import { executorNamespace } from '../tools/executor-operations';
-import { createFileCodemodeProvider, type FileDeps } from '../tools/file-operations';
+import { createFileCodemodeProvider, serveFile, type FileDeps } from '../tools/file-operations';
 import { createMemoryCodemodeProvider, type MemoryDeps } from '../tools/memory-operations';
 import { createReportCodemodeProvider, type ReportDeps } from '../tools/report-operations';
 import { createStateCodemodeProvider } from '../tools/state-operations';
@@ -133,6 +133,8 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
   const { agents, self } = actor;
   const executor = call.executor ?? ((provider) => provider);
   const tasks = policy.stores ? actor.tasks() : null;
+  // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane.
+  const files = serveFile(actor.files);
 
   return [
     ...(policy.state ? [createStateCodemodeProvider(actor.programState)] : []),
@@ -146,7 +148,7 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
     ...agentNamespace(self, actor.ownerWaits),
     ...(call.report === undefined ? [] : [createReportCodemodeProvider(call.report)]),
     webFor(actor.web, policy),
-    ...actor.executors().map((provider) => executorNamespace(executor(provider))),
+    ...actor.executors().map((provider) => executorNamespace(executor(provider), files)),
   ];
 }
 
@@ -159,6 +161,8 @@ export function hostedSurfaceActor(
     readonly ownerWaits: OwnerWaitsHost | null;
     /** The turn a program's files account into: read as its namespaces are built. */
     readonly ledgers: () => Pick<TurnLedgers, 'files' | 'context'>;
+    /** Whether a slate still builds, for a write its programs make into one; absent where no slate host builds it. */
+    readonly slateBuild?: FileDeps['slateBuild'];
   },
 ): SurfaceActor {
   const { runtime, stores } = actor;
@@ -174,7 +178,10 @@ export function hostedSurfaceActor(
     files: () => {
       const ledgers = inputs.ledgers();
 
-      return { vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory, ledger: ledgers.files, budget: ledgers.context };
+      return {
+        vfs: runtime.toolFiles, home: runtime.storage.home, planes: runtime.planes, memory: runtime.memory, ledger: ledgers.files, budget: ledgers.context,
+        ...(inputs.slateBuild !== undefined && { slateBuild: inputs.slateBuild }),
+      };
     },
     tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
     db: stores.appData,

@@ -119,7 +119,7 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
     router.register(createNimbusWorkspaceExecutor({
       box,
       shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/shared'] }),
-      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     }));
 
     return { start: present(router.getProvider('workspace'), 'the workspace').tools.startProcess, started };

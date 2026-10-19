@@ -1,4 +1,4 @@
-import { RETIRED_FIELDS, RETIRED_MEMBERS } from '../src/operations/retired';
+import { retiredField, retiredMember } from '../src/operations/retired';
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -78,7 +78,6 @@ describe('hosted Nimbus workspace provider', () => {
       inline: {
         vfs,
         shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory,
         craftStore: rt.craftStore,
         sql: rt.storage.sql,
       },
@@ -123,7 +122,6 @@ describe('hosted Nimbus workspace provider', () => {
     const inline = {
       vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }),
       shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-      memory: rt.memory,
       craftStore: rt.craftStore,
       sql: rt.storage.sql,
     };
@@ -158,7 +156,7 @@ describe('hosted Nimbus workspace provider', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
 
@@ -223,7 +221,7 @@ describe('hosted Nimbus workspace provider', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
 
@@ -250,7 +248,7 @@ describe('hosted Nimbus workspace provider', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
 
@@ -269,7 +267,7 @@ describe('the workspace process and port surface', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
   }
@@ -306,7 +304,7 @@ describe('the workspace process and port surface', () => {
     const workspace = executorNamespace(blockedProvider(fakeBox())).tools;
 
     expect(await present(workspace.killProcess, 'workspace.killProcess').execute('41')).toMatchObject({
-      success: false, reason: 'bad_input', error: expect.stringContaining(RETIRED_MEMBERS['workspace.killProcess']),
+      success: false, reason: 'bad_input', error: expect.stringContaining(retiredMember('workspace', 'killProcess') ?? 'a retired member'),
     });
   });
 
@@ -323,7 +321,7 @@ describe('the workspace process and port surface', () => {
     const workspace = executorNamespace(blockedProvider(box)).tools;
 
     expect(await present(workspace.startProcess, 'workspace.startProcess').execute('node server.js', { env: { PORT: '4100' } })).toMatchObject({
-      success: false, reason: 'bad_input', error: expect.stringContaining(RETIRED_FIELDS['workspace.startProcess'].env),
+      success: false, reason: 'bad_input', error: expect.stringContaining(retiredField('workspace.startProcess', 'env') ?? 'a retired field'),
     });
     expect(started).toBe(0);
   });

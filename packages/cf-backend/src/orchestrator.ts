@@ -1388,7 +1388,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       slate: (actor, operation) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
       ),
-      slateBuild: (actor, slate) => this.slateBuildAs({ path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
       deferrals: (actorId) => this.deferralChannel(actorId),
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
@@ -1526,6 +1525,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private confinedActor(actor: SeatedActor, runtime: CFRuntime, search: WebSearchProvider, ledgers: TurnLedgers): SurfaceActor {
     return hostedSurfaceActor(actor, {
       ownerWaits: this.hireOwnerWaits(actor),
+      slateBuild: this.slateBuildFor(actor.record.name),
       web: { search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
       conversations: this.agentStores(actor.handle.actorId).conversations(), vectorStore: runtime.vectorStore, ledgers: () => ledgers,
     });
@@ -1726,9 +1726,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ...(account !== undefined && { account }),
       webSearch,
       jobs: reach.actor.kind === 'workspace' ? { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.turnWorkMode() } : this.hireJobs(actor, mode),
-      slateBuild: reach.actor.kind === 'workspace'
-        ? (slate) => this.slateBuild(slate)
-        : (slate) => this.slateBuildAs({ path: [{ name: actor.record.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate),
+      slateBuild: reach.actor.kind === 'workspace' ? (slate) => this.slateBuild(slate) : this.slateBuildFor(actor.record.name),
       ...(reach.actor.kind === 'workspace' && { external: scope.external }),
       ...(reach.actor.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => scope.profile()?.inputs?.envelope ?? null) }),
       ...(report !== undefined && { report }),
@@ -5803,6 +5801,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Whether a slate still builds, for an actor of this workspace acting as itself; DO-only, like `slateAs`. */
+  /** Whether a slate still builds, asked as the named actor builds it. */
+  private slateBuildFor(name: string): (slate: string) => Promise<SlateCallResult> {
+    return (slate) => this.slateBuildAs({ path: [{ name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, slate);
+  }
+
   async slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult> {
     return (await this.slates()).controller.build(caller, slate);
   }

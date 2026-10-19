@@ -18,6 +18,7 @@ import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { parseInput, projectJsonValue, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
+import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import { desktopTools, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
@@ -198,13 +199,7 @@ const TRANSIENT_MARKERS = [
 
 const StringSchema = v.string();
 
-/** The SDK refuses `''` with a defect-worded error, so the empty path is resolved in core. */
-const PathSchema = v.pipe(v.string(), v.minLength(1));
-
 const OptionalStringSchema = v.optional(v.string());
-
-/** `readdir({ path? })`: the working directory when `path` is absent or empty. */
-const ListOptionsSchema = v.optional(v.object({ path: v.optional(v.string()) }), {});
 
 
 export function isSandboxTransientError(error: Error | string): boolean {
@@ -360,87 +355,6 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
       } };
     },
   );
-}
-
-/** `computer.readdir`. */
-function readdirMember({ handle, touch }: Computer): ExecutorTool {
-  return {
-    planAllowed: true,
-    description: 'List files in a directory: the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      if (!handle) return notConfigured();
-      const listing = parseInput(ListOptionsSchema, { value: args[0] });
-
-      if (listing === undefined) {
-        return refusalOf(new KinuError('bad_input', 'computer.readdir: takes its options as one object, `{ path? }`'));
-      }
-
-      const dir = listing.path === undefined || listing.path === '' ? WORKSPACE_BACKUP_DIR : listing.path;
-
-      try {
-        const r = await withSandboxRetry(() => touch(() => handle.listFiles(dir, { recursive: false })));
-
-        if (!r?.files?.length) return '';
-
-        return r.files
-          .map(f => {
-            return `${f.type === 'directory' ? 'd' : '-'} ${f.name}`;
-          })
-          .join('\n');
-      } catch (err) {
-        return refusalOf(sandboxFailure({ doing: `computer.readdir ${dir}`, cause: err }));
-      }
-    },
-  };
-}
-
-/** `computer.deleteFile`. */
-function deleteFileMember({ handle, touch }: Computer): ExecutorTool {
-  return {
-    description: 'Delete a file or directory.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      if (!handle) return notConfigured();
-      const path = parseInput(PathSchema, { value: args[0] });
-
-      if (path === undefined) {
-        return refusalOf(new KinuError('bad_input', 'computer.deleteFile: path must be a non-empty string'));
-      }
-
-      try {
-        await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(path))));
-
-        return `deleted ${path}`;
-      } catch (err) {
-        return refusalOf(sandboxFailure({ doing: `computer.deleteFile ${path}`, cause: err }));
-      }
-    },
-  };
-}
-
-/** `computer.exists`. */
-function existsMember({ handle, touch }: Computer): ExecutorTool {
-  return {
-    planAllowed: true,
-    description: 'Check if a path exists: uses shell test.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
-      if (!handle) return notConfigured();
-      const path = parseInput(PathSchema, { value: args[0] });
-
-      // Answering 'false' would claim absence when the container could not be asked.
-      if (path === undefined) {
-        return refusalOf(new KinuError('bad_input', 'computer.exists: path must be a non-empty string'));
-      }
-
-      try {
-        const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`)));
-        const out = res.stdout.trim();
-
-        return out.includes('true') ? 'true' : 'false';
-      } catch (err) {
-        return refusalOf(sandboxFailure({ doing: `computer.exists ${path}`, cause: err }));
-      }
-    },
-  };
 }
 
 /** `computer.startProcess`. */
@@ -611,9 +525,6 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
 
   const tools: ExecutorProvider['tools'] = {
     exec: execMember(computer),
-    readdir: readdirMember(computer),
-    deleteFile: deleteFileMember(computer),
-    exists: existsMember(computer),
     startProcess: startProcessMember(computer),
     stopProcess: stopProcessMember(computer),
     // Inline, as resize is: the effect its answer runs is run at this exported factory, its bridge.
@@ -681,6 +592,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     kind: 'computer',
     files: handle ? sandboxFiles(handle, (call) => withSandboxRetry(() => touch(call))) : undefined,
     homeDir: async () => WORKSPACE_BACKUP_DIR,
+    fileRoot: async () => ({ root: EXECUTOR_MOUNTS.computer, home: WORKSPACE_BACKUP_DIR }),
     capabilities: new Set(capabilities),
     filesOwner: 'agent',
     isAvailable: () => connected,

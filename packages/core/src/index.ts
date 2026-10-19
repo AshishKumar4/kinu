@@ -64,7 +64,7 @@ export type {
 
 export { inTurnSurface, scopedTurnSurface, TurnSurface } from './orchestrator/main-turn-surface';
 
-export { turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
+export { standingFileLedger, turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -689,7 +689,7 @@ export { createMemoryCodemodeProvider, serveMemory, type MemoryDeps } from './to
 export { MEMORY } from './operations/memory';
 
 export {
-  nativeTool, nativeToolSchema, codemodeNamespace, callOperation, listOperations, type OperationCaller, type OperationListing,
+  nativeTool, nativeToolSchema, codemodeNamespace, nestedMembers, callOperation, listOperations, type OperationCaller, type OperationListing,
 } from './tools/operation-surfaces';
 
 export {
@@ -1062,7 +1062,7 @@ export {
 } from './execution/command-call';
 
 export {
-  commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './execution/exec-result';
 
 export {
@@ -1074,7 +1074,7 @@ export {
 } from './execution/escalation';
 
 export {
-  answerParentRpc, createParentExecutor, createParentWorkspaceVfs, type ParentWorkspaceHandle, type ParentExecResult,
+  answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcWrite,
 } from './execution/parent';
 

@@ -249,8 +249,8 @@ const HELPER = [
   'async (input) => {',
   '  let browsers = null;',
   '  try { browsers = await web.browsers({}); } catch {}',
-  '  const wrote = await workspace.writeFile("ran-by.txt", input.who);',
-  '  return { browsers, wrote, read: await workspace.readFile("ran-by.txt") };',
+  '  const wrote = await workspace.fs.write("ran-by.txt", input.who);',
+  '  return { browsers, wrote, read: await workspace.fs.text("ran-by.txt") };',
   '}',
 ].join('\n');
 
@@ -437,7 +437,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * The agent writes the `lilt` slate through its own `workspace.writeFile`, reading each file first as an agent must:
+   * The agent writes the `lilt` slate through its own `workspace.fs.write`, reading each file first as an agent must:
    * `client.tsx` that builds, then one that does not. `phase` names which: `good`, `broken`, then `fixed`; each answers
    * the write's own answer, what the preview says, what its client bundle serves, and what the next step is told.
    */
@@ -446,15 +446,15 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     if (input.phase === 'good') {
       await this.claimWorkspace(target, input.workspace, input.owner);
-      await target.runProgram(`return await workspace.writeFile("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
+      await target.runProgram(`return await workspace.fs.write("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
     }
 
     const source = { good: LILT_GOOD, broken: LILT_BROKEN, fixed: LILT_FIXED, served: null }[input.phase];
 
     const wrote = source === null ? null : await target.runProgram([
       'const path = "/slates/lilt/client.tsx";',
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(source)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(source)});`,
     ].join('\n'));
 
     const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'lilt' });
@@ -489,8 +489,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     await target.runProgram([
       'const path = "/home/main/word.ts";',
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
     ].join('\n'));
 
     const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'imports', method: 'word' });
@@ -508,8 +508,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     const write = (path: string, text: string) => target.runProgram([
       `const path = ${JSON.stringify(path)};`,
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(text)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(text)});`,
     ].join('\n'));
 
     if (input.first) {
