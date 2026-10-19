@@ -227,7 +227,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 - **Mail bodies never reach a prompt's system sections.**
 - **The wake's event text carries metadata only:** the verified flag, the sender and the subject. It is escaped (as now) and fenced as untrusted mail. Bodies come only through `mail.read`, whose result says `untrusted: true`. The owner's verified mail is the one exception: its text is the task, as a chat message's is.
 - **Every turn a mail starts holds its effects for the owner.** Reading, planning and drafting run; sending, creating and changing each wait for an approval card in the app. For the owner's own verified mail this is because mail is a weaker channel than the signed-in app; for anyone else's, because it is untrusted input.
-- **Today's "reply with the turn's answer" stays for the verified owner only.** That is the Mission Inbox feature. Open for the owner: whether that reply, which goes only to the owner's own address, also waits for a card.
+- **Today's "reply with the turn's answer" stays for the verified owner only.** That is the Mission Inbox feature. It goes only to the owner's registered address, so it needs no card; mail to anyone else always waits for one (Main, 2026-10-19).
 
 **HTML and images:**
 

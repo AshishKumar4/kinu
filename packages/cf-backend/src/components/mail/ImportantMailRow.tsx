@@ -3,19 +3,7 @@
  * matters. The Mail page's Important view and Home's Today strip draw the same row (docs/MAIL.md §7).
  */
 import { SparkleIcon } from "@phosphor-icons/react";
-
-export interface ImportantMail {
-  /** Opens `/mail?thread=<id>`. */
-  readonly thread: string;
-  readonly from: { readonly name: string; readonly address: string };
-  /** The address it reached. */
-  readonly to: string;
-  readonly subject: string;
-  /** The assistant's one line on why it is here. */
-  readonly reason: string;
-  readonly at: number;
-  readonly unread: boolean;
-}
+import type { ImportantMail } from "@/lib/mail-api";
 
 const MINUTE = 60_000;
 

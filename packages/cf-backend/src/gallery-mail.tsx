@@ -5,21 +5,19 @@
  *   Trash, filtered by address. `&view=`, `&address=` and `&thread=` open a view, an address or a thread.
  * - `/workspace/api-worker`, a workspace with its Inbox tool open: mail to and from the workspace's address and its
  *   agents'. Arrivals and drafts are pills in the chat; an agent's outgoing mail is an approval card on the composer.
- * The sidebar's footer, with the Mail icon, stands in for the one the Home lane draws (`SidebarFooter`).
+ * The sidebar's footer is the shell's own (`SidebarFooter`); its Mail badge reads this frame's Important mail.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { Button, Tooltip } from "@cloudflare/kumo";
 import {
-  ArrowSquareOutIcon, ArrowUpRightIcon, CaretLeftIcon, CheckCircleIcon, DesktopTowerIcon, EnvelopeSimpleIcon, FolderSimpleIcon, GaugeIcon,
+  ArrowSquareOutIcon, ArrowUpRightIcon, CaretLeftIcon, CheckCircleIcon, EnvelopeSimpleIcon, FolderSimpleIcon, GaugeIcon,
   GitDiffIcon, ImageBrokenIcon, ListChecksIcon, MagnifyingGlassIcon, NotePencilIcon, PaperclipIcon, PaperPlaneTiltIcon, PencilSimpleIcon,
   SealCheckIcon, ShieldWarningIcon, SparkleIcon, TerminalWindowIcon, TrashIcon, TrayIcon, XIcon, type Icon,
 } from "@phosphor-icons/react";
-import { APP_ROUTES, mainPanelAgent, sandboxedHtml, type PanelAgent, type TurnLiveness, type WorkMode } from "@kinu.run/core";
+import { mainPanelAgent, sandboxedHtml, type PanelAgent, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import Layout from "@/components/layout";
-import { navRowCls } from "@/components/nav";
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MessageView } from "@/components/MessageView";
 import { Composer } from "@/components/Composer";
@@ -30,9 +28,10 @@ import { Avatar } from "@/components/ui/Avatar";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
-import { inputCls } from "@/components/ui/form";
+import { Choice, inputCls } from "@/components/ui/form";
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
-import { ImportantMailRow, mailTime, type ImportantMail } from "@/components/mail/ImportantMailRow";
+import { ImportantMailRow, mailTime } from "@/components/mail/ImportantMailRow";
+import type { ImportantMail } from "@/lib/mail-api";
 import { MailSendBody, type MailSend } from "@/components/mail/MailSendBody";
 
 const NOW = Date.now();
@@ -116,7 +115,7 @@ interface Thread {
 const pass = (domain: string): string => `dmarc=pass header.from=${domain}`;
 
 const GITHUB_HTML = `<div style="font:14px/1.5 -apple-system,Segoe UI,sans-serif;color:#1f2328;max-width:560px">
-<p style="margin:0 0 12px"><img src="https://avatars.githubusercontent.com/u/1" width="20" height="20" alt="" style="vertical-align:middle;border-radius:50%"> <b>@suddengrouse</b> requested your review on <a href="https://github.com/AshishKumar4/kinu/pull/812">#812</a>.</p>
+<p style="margin:0 0 12px"><img src="https://avatars.githubusercontent.com/u/1" width="20" height="20" alt="" style="vertical-align:middle;border-radius:50%"> <b>@lferreira</b> requested your review on <a href="https://github.com/AshishKumar4/kinu/pull/812">#812</a>.</p>
 <h3 style="margin:0 0 8px;font-size:16px">feat(sharing): count who opens a share, and show viewers on Gallery cards</h3>
 <p style="margin:0 0 12px;color:#59636e">Each open through a share's link is counted in the owner's workspace: one row per viewer (a per-share keyed hash) or the signed-out bucket. Cards show viewers beside stars.</p>
 <table style="border-collapse:collapse;font-size:13px"><tr><td style="padding:2px 12px 2px 0;color:#59636e">Files changed</td><td>19</td></tr><tr><td style="padding:2px 12px 2px 0;color:#59636e">Checks</td><td>105 of 105 passed</td></tr></table>
@@ -163,11 +162,11 @@ const THREADS: readonly Thread[] = [
   },
   {
     id: "t-github", box: "ashish", subject: "[AshishKumar4/kinu] Review requested on #812: feat(sharing): count who opens a share", unread: true,
-    important: "Your review is the last thing before the next release: 105 of 105 checks pass, and suddengrouse is waiting on you.",
+    important: "Your review is the last thing before the next release: 105 of 105 checks pass, and Lucía Ferreira is waiting on you.",
     mail: [{
-      id: "m-github-1", from: { name: "suddengrouse", address: "notifications@github.com" }, to: ["ashish@kinu.run"], at: NOW - 2 * HOUR, verified: true,
+      id: "m-github-1", from: { name: "Lucía Ferreira", address: "notifications@github.com" }, to: ["ashish@kinu.run"], at: NOW - 2 * HOUR, verified: true,
       auth: pass("github.com"), html: GITHUB_HTML,
-      text: "@suddengrouse requested your review on #812: feat(sharing): count who opens a share, and show viewers on Gallery cards.",
+      text: "@lferreira requested your review on #812: feat(sharing): count who opens a share, and show viewers on Gallery cards.",
     }],
   },
   {
@@ -554,11 +553,9 @@ function Compose({ onClose }: { onClose: () => void }) {
     <Modal title="New message" icon={<NotePencilIcon size={18} />} onClose={onClose} maxWidthClass="max-w-xl"
       footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Discard</Button><FilledButton onClick={onClose}><PaperPlaneTiltIcon size={14} />Send</FilledButton></div>}>
       <div data-mail-compose-form className="space-y-2">
-        <label className="flex items-center gap-2 p-meta p-text-3">From
-          <select value={from} onChange={(event) => setFrom(event.target.value)} data-mail-from className={inputCls}>
-            {ADDRESSES.map((each) => <option key={each.id} value={each.address}>{each.address}</option>)}
-          </select>
-        </label>
+        <div className="flex items-center gap-2 p-meta p-text-3" data-mail-from>From
+          <div className="min-w-0 flex-1"><Choice label="From" value={from} onChange={setFrom} options={ADDRESSES.map((each) => ({ value: each.address, label: each.address }))} /></div>
+        </div>
         <input placeholder="To" aria-label="To" className={inputCls} />
         <input placeholder="Subject" aria-label="Subject" className={inputCls} />
         <textarea rows={8} placeholder="Message" aria-label="Message" className={`${inputCls} font-[inherit]`} />
@@ -622,13 +619,12 @@ function MailPage() {
             <label className="relative min-w-0 flex-1">
               <MagnifyingGlassIcon size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search mail" aria-label="Search mail" data-mail-search
-                className={`${inputCls} h-9 py-0 pl-8`} />
+                className={`${inputCls} h-[34px] py-0 pl-8`} />
             </label>
-            <select value={address} onChange={(event) => setAddress(event.target.value)} aria-label="Address" data-mail-address
-              className={`${inputCls} h-9 w-auto max-w-[9.5rem] shrink-0 truncate py-0 pr-7`}>
-              <option value="all">All addresses</option>
-              {ADDRESSES.map((each) => <option key={each.id} value={each.id}>{each.label}</option>)}
-            </select>
+            <div className="w-[9.5rem] shrink-0" data-mail-address>
+              <Choice label="Address" value={address} onChange={setAddress}
+                options={[{ value: "all", label: "All addresses" }, ...ADDRESSES.map((each) => ({ value: each.id, label: each.label }))]} />
+            </div>
           </div>
           {view === "important" && (
             <p className="flex items-center gap-1.5 px-4 pb-1 p-meta p-text-3">
@@ -912,69 +908,24 @@ function WorkspaceScene() {
   );
 }
 
-/* ——— The sidebar's footer, standing in for the Home lane's `SidebarFooter` ——— */
+/** The assistant's Important picks as `GET /api/user/mail/important` answers them, for the shell's Mail badge. */
+function installMailFixture(): void {
+  const next = window.fetch.bind(window);
+  const opened = new URLSearchParams(location.search).get("thread");
+  const picked = THREADS.filter((each) => inView(each, "important")).sort((a, b) => latest(b) - latest(a));
 
-const IMPORTANT_UNREAD = THREADS.filter((each) => inView(each, "important") && each.unread
-  && each.id !== new URLSearchParams(location.search).get("thread")).length;
+  window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(new Request(input, init).url);
 
-function FooterStandIn() {
-  const [host, setHost] = useState<Element | null>(null);
-  const { pathname } = useLocation();
+    if (url.pathname !== "/api/user/mail/important") return next(input, init);
 
-  useEffect(() => {
-    const found = (): Element | null => document.querySelector(".group\\/side");
-    const now = found();
+    const limit = Number(url.searchParams.get("limit") ?? picked.length);
 
-    if (now !== null) {
-      setHost(now);
-
-      return undefined;
-    }
-
-    const watch = new MutationObserver(() => {
-      const later = found();
-
-      if (later !== null) {
-        setHost(later);
-        watch.disconnect();
-      }
-    });
-
-    watch.observe(document.body, { childList: true, subtree: true });
-
-    return () => watch.disconnect();
-  }, []);
-
-  if (host === null) return null;
-
-  const onMail = pathname.startsWith("/mail");
-  const icon = "relative flex size-8 items-center justify-center rounded-lg";
-
-  return createPortal(
-    <div data-sidebar-footer className="mt-auto flex items-center gap-1 border-t p-border px-2 py-2">
-      <button type="button" className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 p-t-control ${navRowCls(false)}`}>
-        <Avatar name="Ashish" size={22} /><span className="truncate">Ashish Kumar Singh</span>
-      </button>
-      <Link to="/mail" aria-label={`Mail, ${String(IMPORTANT_UNREAD)} important unread`} title="Mail"
-        aria-current={onMail ? "page" : undefined} data-sidebar-mail className={`${icon} ${navRowCls(onMail)}`}>
-        <EnvelopeSimpleIcon size={17} weight={onMail ? "fill" : "regular"} />
-        {IMPORTANT_UNREAD > 0 && <span className="p-tool-count absolute -right-1 -top-1" data-accent="">{IMPORTANT_UNREAD > 9 ? "9+" : IMPORTANT_UNREAD}</span>}
-      </Link>
-      <Link to={APP_ROUTES.devices} aria-label="Devices" title="Devices" className={`${icon} ${navRowCls(false)}`}>
-        <DesktopTowerIcon size={17} />
-      </Link>
-    </div>,
-    host,
-  );
-}
-
-function Shell() {
-  return (
-    <>
-      <Layout />
-      <FooterStandIn />
-    </>
-  );
+    return Promise.resolve(Response.json({
+      unread: picked.filter((each) => each.unread && each.id !== opened).length,
+      items: picked.slice(0, limit).map(importantOf),
+    }));
+  }, { preconnect: next.preconnect });
 }
 
 /** The frame: `/mail` by default; `&at=workspace` opens the workspace, `&agent=scout` its scout chat. */
@@ -983,11 +934,13 @@ export default function mailFrame() {
   const agent = params.get("agent") === "scout" ? "/agents/scout" : "";
   const entry = params.get("at") === "workspace" ? `/workspace/${WORKSPACE}${agent}${location.search}` : `/mail${location.search}`;
 
+  installMailFixture();
+
   return {
     entries: [entry],
     node: (
       <Routes>
-        <Route element={<Shell />}>
+        <Route element={<Layout />}>
           <Route path="/mail" element={<MailPage />} />
           <Route path="/workspace/:agentId" element={<WorkspaceScene />} />
           <Route path="/workspace/:agentId/agents/:subName" element={<WorkspaceScene />} />
