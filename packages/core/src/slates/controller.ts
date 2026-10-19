@@ -528,7 +528,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
           case 'shares': return answered({ value: blueprints.list() });
           case 'share': return await this.shareSlateLive(operation, operation.id);
 
-          case 'liveShares': return answered({ value: this.live.list().map((row) => ({ ...row, paused: this.viewers.paused(row), stale: this.stale(row) })) });
+          case 'liveShares': return answered({ value: this.live.list().map((row) => ({ ...row, paused: this.viewers.paused(row), stale: this.stale(row), views: this.live.views(row.id) })) });
           case 'viewerRequests': return answered({ value: this.live.requests(operation.share) });
         }
       });

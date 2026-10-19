@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 
 test('every workspace method the share and Gallery routes call is on the sealed surface', () => {
-  const routed = ['slateAs', 'readLiveShare', 'shareLiveWith', 'liveShareBundle', 'setLiveShareMode', 'setLiveShareListing', 'slatePreapprovals', 'withdrawSlatePreapproval', 'galleryNeeds'];
+  const routed = ['slateAs', 'openLiveShare', 'shareLiveWith', 'liveShareBundle', 'setLiveShareMode', 'setLiveShareListing', 'slatePreapprovals', 'withdrawSlatePreapproval', 'galleryNeeds'];
 
   expect(routed.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
 });

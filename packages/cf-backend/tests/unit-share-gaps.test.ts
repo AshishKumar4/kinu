@@ -274,6 +274,66 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   expect(requests).toHaveLength(1);
 });
 
+test("share views. who opens a share through its link is counted in its owner's workspace, by a key no one can trace", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const made = await sharePublic(world, 'public');
+  const other = await sharePublic(world, 'public');
+  const open = async (share: string, email?: string) => (await openShare(world, { workspace: 'issues-owner', share }, email))?.status;
+
+  // Pat twice, Lee once, two visits signed out, and the owner, who is never counted.
+  for (const email of ['pat@example.test', 'pat@example.test', 'lee@example.test', undefined, undefined, 'owner@example.test']) {
+    expect(await open(made.share.id, email)).toBe(200);
+  }
+
+  expect(await open(other.share.id, 'pat@example.test')).toBe(200);
+  const views = Object.fromEntries((await openShares(world)).map((row) => [row.id, row.views]));
+
+  expect(views).toEqual({ [made.share.id]: { viewers: 2, opens: 5, signedOutOpens: 2 }, [other.share.id]: { viewers: 1, opens: 1, signedOutOpens: 0 } });
+  // Pat's key on each share: no id or email of theirs, and not the same key on two shares.
+  const keys = v.parse(v.array(v.object({ share: v.string(), viewer: v.string() })), world.owner.db.query("SELECT share, viewer FROM slate_share_views WHERE viewer <> '' ORDER BY share").all());
+  const pats = new Set(keys.map((row) => row.viewer));
+
+  expect(keys).toHaveLength(3);
+  expect(pats.size).toBe(3);
+  expect(keys.some((row) => row.viewer.includes(VIEWER_ID) || row.viewer.includes('example.test'))).toBe(false);
+
+  // A share that names people opens for no one else: a stranger's refused open is not counted.
+  const named = await sharePublic(world, 'users');
+
+  expect(await open(named.share.id, 'lee@example.test')).toBe(404);
+  expect((await openShares(world)).find((row) => row.id === named.share.id)?.views).toEqual({ viewers: 0, opens: 0, signedOutOpens: 0 });
+});
+
+test("share views. a listed share's card is told its viewers by its listing sync, at most once an hour, never per open", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+
+  tellGalleryInto(world, synced);
+  const made = await sharePublic(world, 'public');
+  const viewersTold = () => synced.splice(0).map((sync) => (sync.listed ? sync.card.viewers : 'unlisted'));
+  const open = async (email: string) => { await openShare(world, { workspace: 'issues-owner', share: made.share.id }, email); };
+
+  setSystemTime(new Date(1_800_000_000_000));
+  await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: true, line: 'Triage', category: 'work' }));
+  await until(() => synced.length > 0, 'the Gallery told of the listing');
+  expect(viewersTold()).toEqual([0]);
+
+  // Within the hour of its last word: counted, not told.
+  await open('pat@example.test');
+  await open('lee@example.test');
+  expect(synced).toEqual([]);
+
+  // An hour on, the next open tells it once, with every viewer since.
+  setSystemTime(new Date(1_800_000_000_000 + 60 * 60 * 1000));
+  await open('kim@example.test');
+  await until(() => synced.length > 0, 'the Gallery told of the viewers');
+  await open('pat@example.test');
+  expect(viewersTold()).toEqual([3]);
+});
+
 test("live host context. a share's host keeps the context its slate's page was framed with across its ticket and its consent", async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
@@ -747,14 +807,14 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
     .toMatchObject({ id: made.share.id, mode: 'own', gallery: card });
   expect(await told()).toEqual([{
     share: made.share.id, workspace: 'issues-owner', slate: 'issues', handle: made.share.handle, listed: true, url: present(made.url, 'the share URL'),
-    card: { title: 'Issue triage', ...card, ownerName: expect.any(String), picture: null },
+    card: { title: 'Issue triage', ...card, ownerName: expect.any(String), picture: null, viewers: 0 },
   }]);
 
   // Its Gallery page names, from the share its index lists, the connections a visitor's own parts will ask them for.
   const page = async () => {
     const listed = {
       workspace: 'issues-owner', slate: 'issues', share: made.share.id, title: 'Issue triage', ...card, owner: { name: 'Owner' },
-      stars: 0, starred: false, listedAt: 1, featured: false, url: present(made.url, 'the share URL'),
+      stars: 0, starred: false, viewers: 0, listedAt: 1, featured: false, url: present(made.url, 'the share URL'),
     };
 
     const ControlPlaneDO = { idFromName: (name: string) => name, get: () => ({ gallerySlate: async (): Promise<GallerySlate | null> => ({ listing: listed }) }) };

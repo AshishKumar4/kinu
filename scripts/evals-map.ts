@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 // Opt-in evaluations: native armada CLI map tasks and its artifact extractor; light post-steps read those outputs.
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
+import { claimLabel, type SlotClaim } from '../evals/src/slot';
 import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalTask } from '../evals/src/task';
 import { ARMS, deployedBuild } from '../evals/src/target';
@@ -14,6 +14,7 @@ import { deploymentOf } from './infra-manifest';
 import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
+import { KINU_ARMADA, keysWindows, kinuArmada, leaseBlock, outranked } from './evals-lease';
 import { NETWORK_SCOPE, processEvals } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
 import { REPO_ROOT as ROOT } from './repo-root';
@@ -29,7 +30,7 @@ export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, orig
 
     return models.flatMap((model) => arms.flatMap((arm) =>
       Array.from({ length: matrix.trials }, (_, index) => origins.map(({ leg, origin }) => ({
-        leg, origin, task, model, arm, trial: index + 1, trials: matrix.trials, models, arms, pass,
+        leg, origin, task, model, arm, trial: index + 1, trials: matrix.trials, models, arms, pass, firstSlot: matrix.firstSlot,
       }))).flat()));
   });
 }
@@ -61,13 +62,15 @@ export function evalQueue(items: readonly TrialItem[], tasks: readonly EvalTask[
 /** Only armada's supported CLI: one map of `trials` items under the shared budget, as many containers as the budget
  *  can run trials at once, no elapsed limit on the job or a trial (each ends on its own; the job ends once this
  *  command stops following it), the commit's checkout and per-task artifact extraction. */
-export function evalMapArgv(sha: string, out: string, identities: readonly string[], trials: number): string[] {
+export function evalMapArgv({ sha, out, identities, trials, claim }: {
+  readonly sha: string; readonly out: string; readonly identities: readonly string[]; readonly trials: number; readonly claim: SlotClaim;
+}): string[] {
   return [join(ROOT, 'node_modules', '.bin', 'armada'), 'map',
-    `--connection=${join(homedir(), '.config', 'armada', 'armada-kinu.json')}`, `--commit=${sha}`,
+    `--connection=${KINU_ARMADA}`, `--commit=${sha}`,
     '--items=-', `--pool=${String(Math.min(trials, MUSE_CALLS_AT_ONCE))}`, `--budget=${String(MUSE_CALLS_AT_ONCE)}`,
     '--deadline=none', '--timeout=none',
     `--artifacts=${join(out, 'trials')}`, `--secrets=${identities.join(',')}`, '--json',
-    `--label=evals ${sha.slice(0, 12)}`, '--', 'bun', 'evals/scripts/trial.ts'];
+    `--label=${claimLabel(sha, claim)}`, '--', 'bun', 'evals/scripts/trial.ts'];
 }
 
 /** The explicitly selected matrix, from the one tracked task enumeration; unknown or repeated tasks never run. */
@@ -181,6 +184,65 @@ async function legsOf(pass: boolean, stagingOnly: boolean, asked: string | undef
   return { origins, candidateBuild, baselineBuild };
 }
 
+/** What one run maps: its definitions, where its artifacts go, its legs, matrix and tasks, and the trial accounts its
+ *  matrix numbers over (`slots` task files: a trial's account counts every task, run or not). */
+type MapPlan = {
+  readonly sha: string; readonly out: string; readonly origins: readonly { leg: 'candidate' | 'baseline'; origin: string }[];
+  readonly matrix: EvalMatrix; readonly taskFiles: readonly string[]; readonly slots: number; readonly pass: boolean;
+};
+
+/**
+ * The run's trials on a block of trial accounts no open run holds (scripts/evals-lease.ts), each origin's keys stored on
+ * that block first. A run that took a block at the same moment as an earlier one gives it up and leases again.
+ */
+async function leasedMap(plan: MapPlan, started: (job: string) => void) {
+  const armada = kinuArmada();
+  const hosts = plan.origins.map(({ origin }) => new URL(origin).host);
+  const size = plan.slots * plan.matrix.models.length * plan.matrix.arms.length * plan.matrix.trials;
+  const tasks = await collectEvalTasks();
+
+  await keysWindows(console.log);
+
+  for (;;) {
+    const first = await leaseBlock(armada, { size, pass: plan.pass, hosts }, console.log);
+    const claim = { first, last: first - 1 + size, hosts };
+    const matrix = { ...plan.matrix, firstSlot: first };
+    const items = evalQueue(evalItems(plan.taskFiles, matrix, plan.origins, plan.pass), tasks);
+
+    // Standalone runs need the same actual credentials/catalog as deploy --evals, on exactly the block leased. Only the
+    // operator's provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
+    for (const { origin } of plan.origins) {
+      const provision = Bun.spawn([...NETWORK_SCOPE, process.execPath, 'scripts/eval-provider-keys.ts', origin, `--accounts=${String(first)}-${String(claim.last)}`], {
+        cwd: ROOT, env: { ...process.env, KINU_EVAL_MODELS: matrix.models.join(',') },
+        stdout: 'inherit', stderr: 'inherit',
+      });
+
+      if (await provision.exited !== 0) throw new Error(`actual eval keys/catalog were not provisioned at ${origin}; no trials started`);
+    }
+
+    const identities = [...new Set(plan.origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
+    const argv = evalMapArgv({ sha: plan.sha, out: plan.out, identities, trials: items.length, claim });
+    let lost = false;
+    let checked: Promise<void> = Promise.resolve();
+
+    console.log(`evals: ${String(items.length)} trials on trial-${String(first)} to trial-${String(claim.last)}, in one queue under ${String(MUSE_CALLS_AT_ONCE)} calls at once, each spending its task's peak`);
+
+    const mapped = await mapTrials(argv, items, (named) => {
+      started(named);
+      checked = (async () => {
+        if (!await outranked(armada, named, claim)) return;
+        lost = true;
+        console.log(`evals: an earlier run took trial-${String(first)} to trial-${String(claim.last)} at the same moment; giving them up`);
+        await armada.cancel(named);
+      })();
+    });
+
+    await checked;
+
+    if (!lost) return { items, ...mapped };
+  }
+}
+
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
@@ -203,26 +265,10 @@ async function main(): Promise<number> {
 
   const taskFiles = evalTaskFiles(allTasks, values.tasks);
 
-  const items = evalQueue(evalItems(taskFiles, matrix, origins, values.pass), await collectEvalTasks());
-
-  // Standalone runs need the same actual credentials/catalog as deploy --evals. Only the operator's
-  // provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
-  for (const { origin } of origins) {
-    const provision = Bun.spawn([...NETWORK_SCOPE, process.execPath, 'scripts/eval-provider-keys.ts', origin], {
-      cwd: ROOT, env: { ...process.env, KINU_EVAL_MODELS: matrix.models.join(',') },
-      stdout: 'inherit', stderr: 'inherit',
-    });
-
-    if (await provision.exited !== 0) throw new Error(`actual eval keys/catalog were not provisioned at ${origin}; no trials started`);
-  }
-
   const out = resolve(values.out ?? process.env['BENCH_ARTIFACTS'] ?? join(ROOT, 'bench-artifacts', 'evals-armada', `${String(Date.now())}-${sha.slice(0, 12)}`));
 
   mkdirSync(out, { recursive: true });
   const startedAt = Date.now();
-  const argv = evalMapArgv(sha, out, [...new Set(origins.map(({ origin }) => evalWebIdentityEnv(origin)))], items.length);
-
-  console.log(`evals: ${String(items.length)} trials in one queue under ${String(MUSE_CALLS_AT_ONCE)} calls at once, each spending its task's peak`);
 
   const run: EvalRun = {
     definitions: sha, candidateBuild, baselineBuild, taskFiles, models: [...matrix.models], arms: [...matrix.arms],
@@ -230,7 +276,7 @@ async function main(): Promise<number> {
   };
 
   // Kept as soon as armada names the job, so a run cut short still says which job holds its trials.
-  const { job, outcomes } = await mapTrials(argv, items, (named) => {
+  const { items, job, outcomes } = await leasedMap({ sha, out, origins, matrix, taskFiles, slots: allTasks.length, pass: values.pass }, (named) => {
     run.jobs = [named];
     writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
   });

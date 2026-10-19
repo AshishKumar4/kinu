@@ -5021,6 +5021,45 @@ container destroyed and started again from the same snapshot while the object wa
 sessions read touched the new container while `unstarted` on bc78a94bd and next-rc, while this change read nothing from
 it and armed the restore; all three restored it from backup within 45 s.
 
+D103. A screenshot a turn's step moved out is retired from the turn's context for good, and every later request carries it
+as the link it left (2026-10-19, #103; the owner: "the latest 3 screenshots kept"). Reverses D89's in-turn move, which
+moved the turn's older screenshots for each request alone and left earlier turns' images the ladder's to move
+(`packages/compaction/src/step-images.ts`, 78f6d2a83).
+
+What failed. Moved per request, every screenshot a turn took stayed in the context its agent's isolate held, and each
+step decoded and walked them all. A long computer-use turn died a step at a time past a few hundred steps and was
+re-driven by the minute's backstop: production bc78a94bd, `eval-seed-probe-c87o3p`, 114 re-drives in 2 h, one step a
+minute where a step took 17 s; staging 667f96316, `eval-minecraft-1-idumki`, the agent isolate out of memory at step 154
+and of CPU time at 268, 337 and 400, then re-driven 30 times between steps 411 and 484. On the heap gate's 450-step
+screenshot turn (armada, one run each), the agent's isolate held 46.7 MB live at step 50 and 170.4 MB at 450, where the
+platform allows 128 MB, and its CPU per 50 steps went 4.2 to 8.3 s.
+
+The design. A step's `prepareStep` is handed `retire` where its host keeps the turn's context: compaction's step pass hands
+it each message its move rewrote, and the actor session writes them as one `context_transform` revision of the
+canonical context, each entry keeping its place. The turn's store forgets what it retired. Under the ladder, a stripped
+call's stub keeps the links its result left (`movedLinks` in the codec), so a model whose window strips old tool output
+can still open what moved. The computer's prompt line says an older screenshot leaves as `[image/png WxH -> path]` and
+`file` `read` of that path shows it again. With the room holding only its running step (0b19fa823) and the codec telling
+its own handles by shape (e3e22e455), the same turn holds 35.4 to 45.0 MB live, its CPU 3.0 to 4.2 s per 50 steps with no
+trend, the workspace's isolate 43.2 to 46.2 MB, and it is never re-driven; the gate keeps that shape
+(`SCREENSHOT_TURN`, bounded on live growth, CPU growth and re-drives).
+
+D89's measurement under both shapes, two turns: 24 screenshot steps, then a follow-up of 6, the latest 3 kept, moved in
+fours, priced by Kinu's own rule for a 1280x768 PNG (1,288 tokens on Claude Haiku, 1,152 on GPT), image tokens only
+(the text is the same in both), cost as D89 counted it (Claude writes 1.25, reads 0.1; GPT reads 0.1). Within the first
+turn the shapes are the same request for request. Moved per request, the second turn's first request carries all 25
+screenshots inline and no links, and none of it extends the first turn's last request; retired, it carries 5 inline and
+20 links, and all but the new screenshot extends it. The second turn's image-token cost over its six steps is 65,688
+against 14,983 on Claude and 50,112 against 11,705 on GPT, and its largest request 38,640 against 13,380 image tokens. Reach is the same: every screenshot is
+inline or a link the file tool opens, which the cf tests check by opening each link through the workspace's own tool, on
+the request Claude refused and on the one gpt-4o-mini served after the ladder stripped. Live cache numbers pending: the
+provider key is spent until the release evals have run on it (measure: `/mnt/local/kinu/tmp/stall/d89/turns.py`, D89's
+`cache.py` over two turns).
+
+Rejected: retiring for the turn's life only, an overlay that leaves the stored context raw, which keeps D89's cross-turn
+rule and every later turn re-holding every past screenshot (production's seed turn started with 105, about 28 MB live);
+and moving at each turn's start only, which is D89's own reason for an in-turn move.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

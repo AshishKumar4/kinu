@@ -2,8 +2,9 @@
 // is proved by a run that hangs: killed, named, and reported with the exit
 // code the deploy wrapper reports — and a run that ends is left alone.
 import { describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
-import { createReadStream, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createReadStream, readFileSync, writeFileSync } from 'node:fs';
+import { AGENT_MODE_ENV } from '../packages/test-utils/src/ambient-env';
 import { tolerate } from '@kinu.run/core/obs';
 import { spawnTest, scratchPath } from '@kinu.run/test-utils'
 import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
@@ -20,6 +21,20 @@ function holdsMemory(pid: number, read = (path: string) => readFileSync(path, 'u
 }
 
 describe('a run under a deadline', () => {
+  // A gate's `bun test` reports every pass whoever runs the ladder: the hammer counts them (`measuredFiles`).
+  test('a gate that runs bun test reports its passes though the ladder was started by a coding agent', async () => {
+    const suite = scratchPath('deadline-agent-mode', 'one.test.ts');
+
+    writeFileSync(suite, 'import { test } from "bun:test";\ntest("one passes", () => {});\n');
+    const env: Record<string, string> = Object.fromEntries(AGENT_MODE_ENV.map((name) => [name, '1']));
+
+    for (const [name, value] of Object.entries(process.env)) if (value !== undefined && !(name in env)) env[name] = value;
+
+    const outcome = await runUnderDeadline({ argv: [process.execPath, 'test', suite], cwd: dirname(suite), seconds: 30, label: 'agent-mode fixture', stdio: 'pipe', env });
+
+    expect((outcome.stdout + outcome.stderr).match(/^\(pass\) one passes/gmu)?.length ?? 0).toBe(1);
+  });
+
   test('a run that hangs is killed at the deadline and named, with the wrapper exit code', async () => {
     const outcome = await runUnderDeadline({ argv: ['bun', HANG], seconds: 1, label: 'Hang fixture', stdio: 'pipe' });
 

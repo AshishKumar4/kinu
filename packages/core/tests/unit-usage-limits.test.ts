@@ -17,11 +17,12 @@ function providers(overrides: Readonly<Record<string, () => Response>> = {}) {
       secondary_window: { used_percent: 7, limit_window_seconds: 604_800, reset_at: Date.parse('2026-10-01T00:00:00Z') / 1000 },
     } }),
     'https://openrouter.ai/api/v1/key': () => Response.json({ data: { limit: 10, limit_remaining: 4.12, limit_reset: 'monthly' } }),
-    'https://opencode.ai/zen/go/v1/usage': () => Response.json({
+    // As OpenCode Go answered on 2026-10-19: the windows under `usage`.
+    'https://opencode.ai/zen/go/v1/usage': () => Response.json({ usage: {
       rolling: { percent: 12, status: 'ok', resetsAt: '2026-09-25T13:00:00Z' },
       weekly: { percent: 55, status: 'ok', resetsAt: '2026-09-28T00:00:00Z' },
       monthly: { percent: 100, status: 'rate-limited', resetsAt: '2026-10-03T14:56:00Z' },
-    }),
+    } }),
     ...overrides,
   }));
 

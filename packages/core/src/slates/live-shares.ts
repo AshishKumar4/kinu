@@ -12,7 +12,7 @@ import { canonicalRoot, type LiveShareAuthority } from './share-policy';
 import { GalleryCategorySchema, type GalleryCategory } from './gallery-api';
 import {
   ShareGrantSchema, ViewerCallSchema, ViewerRequestRecordSchema,
-  type LiveShareRecord, type ShareGrant, type SharePreapproval, type ViewerCall, type ViewerRequestRecord,
+  type LiveShareRecord, type ShareGrant, type SharePreapproval, type ShareViews, type ViewerCall, type ViewerRequestRecord,
 } from './sharing';
 
 /** One standing approval's shape of call, whatever revision it was given at. */
@@ -51,7 +51,20 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
     editor TEXT NOT NULL,
     revision_before TEXT
   )`);
+  // Who opened a share through its link (`openLiveShare`): one row per viewer, keyed by a per-share keyed hash of their
+  // account that no one can link to them or across shares, or '' for every open by someone signed out. What a share's
+  // numbers are is a query over these rows, never a count kept beside them.
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_share_views (
+    share TEXT NOT NULL,
+    viewer TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,
+    opens INTEGER NOT NULL,
+    PRIMARY KEY (share, viewer)
+  )`);
 }
+
+/** The key of every open by someone signed out: one bucket, which never counts as a viewer. */
+export const SIGNED_OUT_VIEWER = '';
 
 const EditMarkRow = v.object({ editor: v.string(), revision_before: v.nullable(v.string()) });
 
@@ -338,6 +351,29 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   }
 
   /** The returned row id is the request number later calls record against. */
+  /** `viewer` ({@link SIGNED_OUT_VIEWER} for someone signed out) opened `share` through its link. */
+  opened(share: string, viewer: string): void {
+    this.db.exec(
+      `INSERT INTO slate_share_views (share, viewer, first_seen, opens) VALUES (?, ?, ?, 1)
+       ON CONFLICT (share, viewer) DO UPDATE SET opens = opens + 1`,
+      share, viewer, this.now(),
+    );
+  }
+
+  /** How many people opened `share`, and how often: signed-out opens counted, never as viewers. */
+  views(share: string): ShareViews {
+    const row = this.db.exec(
+      `SELECT COUNT(*) FILTER (WHERE viewer <> ?) AS viewers, COALESCE(SUM(opens), 0) AS opens,
+              COALESCE(SUM(opens) FILTER (WHERE viewer = ?), 0) AS signed_out
+         FROM slate_share_views WHERE share = ?`,
+      SIGNED_OUT_VIEWER, SIGNED_OUT_VIEWER, share,
+    ).toArray()[0];
+
+    const counted = v.parse(v.object({ viewers: v.number(), opens: v.number(), signed_out: v.number() }), row);
+
+    return { viewers: counted.viewers, opens: counted.opens, signedOutOpens: counted.signed_out };
+  }
+
   openRequest(input: { share: string; viewer: string; path: string }): number {
     const createdAt = this.now();
 

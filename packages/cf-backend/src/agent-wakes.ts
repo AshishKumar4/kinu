@@ -21,9 +21,13 @@ function jobId(actorId: string): string {
 export class AgentWakes extends LifecycleCapability {
   readonly #wake: (actorId: string) => Promise<void>;
 
-  constructor(wake: (actorId: string) => Promise<void>) {
+  /** Told each time an agent's wake begins or ends: that it stands is what its workspace reads it working by. */
+  readonly #moved: (actorId: string) => void;
+
+  constructor(wake: (actorId: string) => Promise<void>, moved: (actorId: string) => void) {
     super('kinu-agent-wakes');
     this.#wake = wake;
+    this.#moved = moved;
   }
 
   /**
@@ -58,7 +62,11 @@ export class AgentWakes extends LifecycleCapability {
       return await this.#push(actorId, next);
     }
 
+    const stood = this.armed(actorId);
+
     await this.lifecycle.jobs.cancel(jobId(actorId));
+
+    if (stood) this.#moved(actorId);
   }
 
   /** Whether the agent may still owe work: an agent at rest has told its workspace it owes none. */
@@ -78,7 +86,13 @@ export class AgentWakes extends LifecycleCapability {
 
   readonly onJobError = retriedLater("waking an agent's own isolate for what it owes");
 
+  /** The row is written before the push answers (`arm`): a wake that begins here stands from this call. */
   #push(actorId: string, atMs: number): Promise<void> {
-    return this.lifecycle.jobs.push({ id: jobId(actorId), fn: AGENT_WAKE_JOB, time: atMs, payload: { actorId } }).then(() => undefined);
+    const begins = !this.armed(actorId);
+    const pushed = this.lifecycle.jobs.push({ id: jobId(actorId), fn: AGENT_WAKE_JOB, time: atMs, payload: { actorId } }).then(() => undefined);
+
+    if (begins) this.#moved(actorId);
+
+    return pushed;
   }
 }

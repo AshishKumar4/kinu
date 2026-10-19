@@ -13,7 +13,7 @@ import type { BlueprintView } from "@kinu.run/core";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
-import { reachConnection } from "@/components/slates/ForkReachPanel";
+import { personReaches, reachConnection } from "@/components/slates/ForkReachPanel";
 import { registerWorkspace } from "@/lib/user-api";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 
@@ -44,11 +44,11 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
     <>
       <section className="space-y-2" aria-label="What it reaches">
         <h2 className="p-eyebrow">What a fork calls, as you</h2>
-        {view.reaches.length === 0 ? (
+        {personReaches(view.reaches).length === 0 ? (
           <p className="text-xs p-text-3">It was published calling nothing of its publisher&apos;s. A fork runs on its own.</p>
         ) : (
           <ul className="p-card space-y-1 px-4 py-3">
-            {view.reaches.map((namespace) => (
+            {personReaches(view.reaches).map((namespace) => (
               <li key={namespace} className="flex flex-wrap items-baseline gap-x-2 text-sm">
                 <span className="font-mono p-text">{namespace}</span>
                 <span className="p-text-2 text-xs">{reachConnection(namespace).text}</span>

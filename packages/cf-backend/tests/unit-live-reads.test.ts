@@ -6,13 +6,15 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  appendMemoryNote, LIVE_READS, READS_CHANGED_EVENT, ROSTER_READS, type LiveRead,
+  actorConnectionTag, appendMemoryNote, LIVE_READS, READS_CHANGED_EVENT, ROSTER_READS, WORKSPACE_TITLE_SYSTEM_PROMPT, type LiveRead,
 } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 import {
-  chatSessionTurns, hostedSubordinateHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
+  chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
+import { chatCompletion, requestOf, stubAiBinding } from './helpers/platform-gateway';
 
 const ReadsFrame = v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) });
 
@@ -295,4 +297,47 @@ test('an agent handed a message reads working from the handoff, before its drain
   expect(named()).toContain('listWorkspaceAgents');
   expect((await activities(agent)).Scribe).toBe('working');
   await turns.settle({ messageId: 'a-msg', text: 'asked' });
+});
+
+// Production bc78a94bd and staging 667f96316 (titled-chat, 1008-d): a new chat's tab stayed working after its turn
+// ended, Stop or not, until a reload. The turn's close named the Agents panel while the agent's wake still stood, and
+// the rest that ended the wake, crossing from the agent's own isolate after, named nothing: the page's last read said
+// working.
+test("an agent's tab reads idle on an open page once its turn ends and it rests, re-read only on frames", async () => {
+  const gateway = stubAiBinding((run) => chatCompletion(run, JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT)
+    ? JSON.stringify({ title: 'Lamp log' })
+    : 'Logged.'));
+
+  const workspace = gatewayWorkspace(gateway);
+  const { agent } = workspace;
+
+  await agent.setSoul('# Purpose\n\nKeep the lamp log.');
+  const { subordinate, name } = await agent.createSubordinateAgent();
+  const actorId = v.parse(v.string(), subordinate.actorId);
+
+  await agent.renameSubordinateAgent(name, 'Scribe');
+  endTick(agent);
+
+  // The page reads the Agents panel again the moment a frame names it, as soon as the workspace sends it.
+  const reads: Promise<Record<string, string>>[] = [activities(agent)];
+
+  Reflect.set(agent.harnessOwedLiveReads, 'push', (flush: () => void) => {
+    queueMicrotask(flush);
+
+    return 0;
+  });
+  Reflect.set(agent, 'broadcast', (payload: string) => {
+    const frame = v.safeParse(ReadsFrame, JSON.parse(payload));
+
+    if (frame.success && frame.output.reads.includes('listWorkspaceAgents')) reads.push(activities(agent));
+  });
+
+  await asPane([actorConnectionTag(actorId)], () => agent.send('Log every lamp tonight.', crypto.randomUUID()));
+  await joinHarnessFibers();
+  await agent.harnessAgentsIdle();
+
+  const shown = await Promise.all(reads);
+
+  expect(shown.map((row) => row.Scribe)).toContain('working');
+  expect(shown.at(-1)?.Scribe).toBe('idle');
 });

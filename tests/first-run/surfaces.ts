@@ -29,7 +29,7 @@ export const PAGE_ROWS = {
   plugins: ['blueprint-fork'],
   devices: ['device-link', 'two-machines'],
   userSettings: ['account-settings'],
-  userMcp: ['blueprint-fork'],
+  userMcp: ['blueprint-fork', 'mcp-reconnect'],
   workspace: ['snapshot-after-turn', 'approve-clears', 'enter-sends'],
   workspaceAgent: ['agent-tab', 'agent-chats-persist', 'agent-dismissed-chat'],
   workspaceAgentPath: ['agent-nested-chat'],

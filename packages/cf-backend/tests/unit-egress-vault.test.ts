@@ -32,7 +32,8 @@ describe('the vault stores a secret without ever handing it back', () => {
     const deps = await vault();
     const binding = await putEgressSecret(deps, STRIPE);
     expect(isEgressPlaceholder(binding.placeholder)).toBe(true);
-    expect(binding.placeholder.startsWith(EGRESS_PLACEHOLDER_PREFIX)).toBe(true);
+    // The mint draws lowercase letters and digits (`nanoid`), a subset of the base64url grammar the scanner reads.
+    expect(binding.placeholder).toMatch(new RegExp(`^${EGRESS_PLACEHOLDER_PREFIX}[0-9a-z]{43}$`));
     // The placeholder is fresh randomness, not a transform of the secret.
     expect(binding.placeholder).not.toContain(SECRET);
     expect(binding.placeholder).not.toContain(SECRET.slice(0, 8));

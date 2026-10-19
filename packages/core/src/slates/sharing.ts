@@ -93,6 +93,18 @@ export const SlateReachSchema = v.object({ ...SlateCapabilityGraphSchema.entries
 
 export type SlateReach = v.InferOutput<typeof SlateReachSchema>;
 
+/** A share's numbers, from who opened it through its link (`slate_share_views`): its owner's to see, never who. */
+const ShareViewsSchema = v.object({
+  /** Distinct people signed in. */
+  viewers: v.number(),
+  /** Every open, signed out included. */
+  opens: v.number(),
+  /** Of `opens`, those by someone signed out, who are never counted as viewers. */
+  signedOutOpens: v.number(),
+});
+
+export type ShareViews = v.InferOutput<typeof ShareViewsSchema>;
+
 export const LiveShareRecordSchema = v.object({
   id: v.string(),
   slate: v.string(),
@@ -117,6 +129,8 @@ export const LiveShareRecordSchema = v.object({
   /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
    *  approves again. Computed where the row is answered. */
   stale: v.optional(v.boolean()),
+  /** Who opened it, counted where the row is answered. */
+  views: v.optional(ShareViewsSchema),
 });
 
 export type LiveShareRecord = v.InferOutput<typeof LiveShareRecordSchema>;
@@ -443,3 +457,11 @@ export const SlateShareCardSchema = v.object({
 });
 
 export type SlateShareCard = v.InferOutput<typeof SlateShareCardSchema>;
+
+/**
+ * Why a shared slate does not run, as its owner and the people it is shared with read it: a shared slate runs only what
+ * its own folder builds alone (`scope: 'tree'`), and this one's does not.
+ */
+export function sharedBuildRefusal(slate: string): string {
+  return `${slate} can't run while it's shared: its files in /slates/${slate} don't build on their own. Fix them, or ask the agent to, then open it again.`;
+}

@@ -39,7 +39,7 @@ it("a shared slate runs only as its own tree builds: the image built before it w
   // The owner's own slate may read their other slate's file while it is theirs alone.
   expect(seen.unshared).toContain("the owner's secret");
   // Shared, it does not build from its own tree, and the image built before is not run.
-  expect(seen.shared).toContain('runs only as its own files build');
+  expect(seen.shared).toContain("can't run while it's shared");
   expect(seen.shared).not.toContain("the owner's secret");
   // Theirs alone again: it runs as it did.
   expect(seen.afterUnshare).toContain("the owner's secret");
@@ -88,7 +88,7 @@ it('a shared HTML browser entry cannot read an outside file through an in-tree s
 
   expect(seen.before).toContain('private-html-from-another-slate');
   expect(seen.shared).not.toContain('private-html-from-another-slate');
-  expect(seen.shared).toMatch(/linked.html|own files build/);
+  expect(seen.shared).toMatch(/linked.html|can't run while it's shared/);
 });
 
 it('a shared build cannot read a package manifest linked outside the tree', async () => {

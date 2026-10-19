@@ -314,7 +314,7 @@ function compactionExtension(deps: CompactionExtensionDeps): KinuExtension {
       turnImages = { links: new Map() };
     },
 
-    prepareStep: (ctx) => moveStepImages(ctx.messages, stepStore, turnImages),
+    prepareStep: (ctx) => moveStepImages(ctx.messages, stepStore, turnImages, ctx.retire),
 
     async transformContext(unsized: TransformContext): Promise<ModelMessage[] | undefined> {
       unsized.abortSignal?.throwIfAborted();

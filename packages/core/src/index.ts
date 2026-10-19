@@ -295,7 +295,7 @@ export {
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
   ShareGrantSchema, ShareCardSchema,
-  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
+  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema, sharedBuildRefusal,
   type ShareKind, type LiveShareVisibility, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
   type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,
@@ -408,6 +408,7 @@ export {
   type ToolCallContext,
   type ToolResultContext,
   type PrepareStepContext,
+  type MessageSwap,
   type TransformContext,
   type CompactionTrigger,
 } from './extension';
@@ -1130,7 +1131,7 @@ export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  isHiddenEntry, workspacePath, SHARED_ROOTS, SLATES_ROOT, UPLOADS_ROOT, WORKSPACE_ROOT,
+  isHiddenEntry, workspacePath, SCRATCH_ROOT, SHARED_ROOTS, SLATES_ROOT, UPLOADS_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {

@@ -1,8 +1,9 @@
 /**
  * Every compaction path on the CLI moves older screenshots out to links the file tool opens again, keeps the newest
- * two, and prices images for the model serving the request. The turn runs on Claude, which prices a 1280x800
- * screenshot at 1,334 tokens; its fallback, gpt-4o-mini, at 36,835 (tile pricing). Twenty fit Claude's window, so
- * only a request the fallback serves, or a search node on gpt-4o-mini, compacts them.
+ * few, and prices images for the model serving the request. The turn runs on Claude, which prices a 1280x800
+ * screenshot at 1,334 tokens; its fallback, gpt-4o-mini, at 36,835 (tile pricing). The turn that took the twenty moved
+ * all but its last few out for good (D103): every later request carries those as links, whichever model serves it, and
+ * only a request the fallback serves, or a search node on gpt-4o-mini, prices the rest.
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -42,7 +43,7 @@ const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
 type Prompt = LanguageModelV2CallOptions['prompt'];
 
-const LINK = /→ (vfs:\/\/[^\]\s"\\]+)\]/gu;
+const LINK = /(?:→|->) (vfs:\/\/[^\]\s"\\]+)\]/gu;
 
 /** What a request carried: the screenshots still inline, by number, and the links left for the others. */
 function carried(prompt: Prompt) {
@@ -65,6 +66,20 @@ async function reopened(rt: CLIRuntime, links: readonly string[]): Promise<numbe
 
     return Array.from({ length: SHOTS }, (_, n) => n).find((n) => output.includes(screenshot(n))) ?? -1;
   }));
+}
+
+/**
+ * What a later turn's request carries of the screenshots an earlier turn took, on a model they all fit: the turn retired
+ * all but its last few as it went (D103), so the newest stay inline, a tail holding at least the kept few, and every one
+ * before them is a link the workspace's file tool opens to that screenshot.
+ */
+async function retiredAsLinks(rt: CLIRuntime, request: ReturnType<typeof carried>): Promise<void> {
+  const firstInline = request.inline[0] ?? SHOTS;
+
+  expect(request.inline).toEqual(Array.from({ length: SHOTS - firstInline }, (_, n) => firstInline + n));
+  expect(request.inline.length).toBeGreaterThanOrEqual(KEEP_RECENT_IMAGES);
+  expect(firstInline).toBeGreaterThan(0);
+  expect((await reopened(rt, request.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: firstInline }, (_, n) => n));
 }
 
 /** Twenty file reads in one step, as a model checking every screen asks for them. */
@@ -162,7 +177,7 @@ describe('older screenshots leave as links, priced for the model serving the req
     const refused = carried(present(asked.primary[0], 'the request Claude refused'));
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
-    expect(refused).toEqual({ inline: Array.from({ length: SHOTS }, (_, n) => n), links: [] });
+    await retiredAsLinks(rt, refused);
     expect(served.inline).toEqual(NEWEST);
     expect((await reopened(rt, served.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n));
   });
@@ -251,7 +266,7 @@ describe('older screenshots leave as links, priced for the model serving the req
     const refused = carried(present(asked.primary[0], 'the node request Claude refused'));
     const served = carried(present(asked.fallback[0], 'the node request gpt-4o-mini served'));
 
-    expect(refused).toEqual({ inline: Array.from({ length: SHOTS }, (_, n) => n), links: [] });
+    await retiredAsLinks(rt, refused);
     expect(served.inline).toEqual(NEWEST);
     expect((await reopened(rt, served.links)).sort((a, b) => a - b)).toEqual(Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n));
   });

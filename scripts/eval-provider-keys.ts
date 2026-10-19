@@ -6,7 +6,7 @@
  * eval-service holds, stores through the product's own route each key it does not hold, and asks which models it
  * can run: every model the eval pass runs must then be listed.
  *
- *   bun scripts/eval-provider-keys.ts <origin>
+ *   bun scripts/eval-provider-keys.ts <origin> [--accounts=<first>-<last>]
  *
  * The keys are {@link EVAL_PROVIDER_KEYS}, `{"<provider>.bearer": "<key>"}`, each named as the product stores it
  * (`catalogCredKey`, packages/core/src/providers/catalog.ts) and posted under that very name:
@@ -17,16 +17,15 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import * as v from 'valibot';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS, type EvalAccount } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS, parseEvalAccount, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { DEFAULT_MODELS, DEFAULT_TRIALS, evalMatrix, PASS_FIRST_SLOT } from '../evals/src/config';
+import { DEFAULT_MODELS, evalMatrix } from '../evals/src/config';
 import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
-import { trialAccounts, trialInheritedRows } from '../evals/src/slot';
+import { trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
-import { isEvalTask, trackedFiles } from './sources';
 
 /** Where the operator keeps eval-service's provider keys: outside every checkout, mode 600. */
 export const EVAL_PROVIDER_KEYS = join(homedir(), '.config', 'kinu', 'eval-provider-keys.json');
@@ -80,7 +79,8 @@ async function heldKeys(input: Provisioning, headers: Record<string, string>, wh
 }
 
 /** The keys in the operator's file, or why there are none to store. */
-function keysIn(path: string): { readonly keys: Readonly<Record<string, string>> } | { readonly why: string } {
+/** The eval provider keys at `path`, or why there are none. */
+export function keysIn(path: string): { readonly keys: Readonly<Record<string, string>> } | { readonly why: string } {
   if (!existsSync(path)) return { why: `${path} does not exist` };
   const keys = v.safeParse(KeysSchema, JSON.parse(readFileSync(path, 'utf8')));
 
@@ -246,7 +246,7 @@ if (import.meta.main) {
   const asked = process.argv[2] ?? '';
 
   if (!URL.canParse(asked)) {
-    console.error('usage: bun scripts/eval-provider-keys.ts <origin>');
+    console.error('usage: bun scripts/eval-provider-keys.ts <origin> [--accounts=<first>-<last>]');
     process.exit(2);
   }
 
@@ -254,14 +254,17 @@ if (import.meta.main) {
   const identityEnv = evalWebIdentityEnv(origin);
   const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
   const identity = process.env[identityEnv]?.trim();
-  const taskFiles = trackedFiles().filter(isEvalTask).map((file) => basename(file));
+
+  // `--accounts=<first>-<last>`: the block of trial accounts one eval run leased (scripts/evals-map.ts,
+  // scripts/evals-lease.ts), and no other: the run that holds a block is the one that keys it, so no deploy's keys reset
+  // the rows another run's trial is making. Without it, eval-service alone.
+  const leased = /^--accounts=(\d+)-(\d+)$/u.exec(process.argv[3] ?? '');
+
+  const accounts = leased === null ? [] : Array.from({ length: Number(leased[2]) - Number(leased[1]) + 1 },
+    (_, at) => parseEvalAccount(`trial-${String(Number(leased[1]) + at)}`)).filter((account) => account !== null);
 
   const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
-    origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models,
-    trialAccounts: [
-      ...trialAccounts(taskFiles, { ...matrix, trials: Math.max(matrix.trials, DEFAULT_TRIALS) }),
-      ...trialAccounts(taskFiles, { ...matrix, trials: 1, firstSlot: PASS_FIRST_SLOT }),
-    ],
+    origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models, trialAccounts: accounts,
   });
 
   for (const note of notes ?? []) console.log(`eval-provider-keys: ${note}`);

@@ -651,10 +651,11 @@ describe('executor file plane', () => {
     const project = await getExecutorFiles(router(files), 'workspace', '/home/main/proj');
     const projectShown = await getExecutorFiles(router(files), 'workspace', '/home/main/proj', { hidden: true });
 
-    // The namespace's `/` holds the machine's own (`usr`, `tmp`, `proc`…) beside the workspace's places.
-    expect(names(root)).toEqual(['computer', 'home', 'pc', 'slates', 'uploads']);
+    // The namespace's `/` holds the machine's own (`usr`, `tmp`, `proc`…) beside the workspace's places, the shared
+    // `scratch` among them.
+    expect(names(root)).toEqual(['computer', 'home', 'pc', 'scratch', 'slates', 'uploads']);
     expect(shown.entries?.filter((entry) => entry.hidden === true).map((entry) => entry.name)).toEqual(expect.arrayContaining(['usr', 'tmp', 'etc']));
-    expect(shown.entries?.filter((entry) => entry.hidden !== true).map((entry) => entry.name).sort()).toEqual(['computer', 'home', 'pc', 'slates', 'uploads']);
+    expect(shown.entries?.filter((entry) => entry.hidden !== true).map((entry) => entry.name).sort()).toEqual(['computer', 'home', 'pc', 'scratch', 'slates', 'uploads']);
     // Below a root a project's `tmp` is its own; its dotfile waits to be asked for.
     expect(names(project)).toEqual(['tmp']);
     expect(projectShown.entries?.find((entry) => entry.name === '.env')).toEqual(expect.objectContaining({ hidden: true }));
@@ -891,8 +892,8 @@ describe('config plane', () => {
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
     const { db, sql, actor, config } = workspace();
-    void sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
-      VALUES ('summarize', 'sum', 'x', ${Date.now()}, ${Date.now()})`;
+    void sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${actor.actorId}, 1, ${Date.now()}, 'an earlier way of working', 'historical')`;
 
     expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
     expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);

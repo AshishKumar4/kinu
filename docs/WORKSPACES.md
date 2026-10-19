@@ -152,7 +152,10 @@ A workspace holds the state. Agents are the actors that work inside it.
 
     Actor isolation has one contract and one applier. `agentHomeLayout` in
     `packages/core/src/vfs/agent-home.ts` gives an actor its home at `0o755`
-    and its tmp at `0o700`. A subordinate lives under its own name
+    and its tmp at `0o700`. Each agent writes its own home; what they share
+    goes in `/scratch`, which every agent of the workspace reads and writes
+    (a shared root beside `/slates` and `/uploads`, kept like any other file;
+    `docs/STORAGE.md`). A subordinate lives under its own name
     (`/home/fix-coupon-expiry`), drawn from what it was first asked and new to
     the workspace; one hired before that, or under a cousin's name, lives at
     `/home/sub-<id>`. A head or swarm node lives at `/home/head-<id>`. Both backends

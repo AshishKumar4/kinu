@@ -492,7 +492,12 @@ is an *Accepted and ignored* measurement.
 ## Isolation
 
 A host-provisioned actor owns its home, mode `0o755`, and its tmp, mode
-`0o700`, in one global view. Both belong to the actor's own uid. A head or a
+`0o700`, in one global view. Both belong to the actor's own uid. What agents
+share goes in `/scratch`, the workspace's shared directory, which every actor
+of every kind reads and writes, swarm nodes included, because every
+credential carries the workspace group (`SHARED_ROOTS`, `docs/STORAGE.md`).
+It is a place to leave work for each other, not a merge path: a swarm node's
+candidate still reaches the origin through settle. A head or a
 swarm node (a swarm node's actor is a head) lives at `/home/head-<id>`. A
 subordinate lives under its own name, one no actor of the workspace had before
 (`/home/fix-coupon-expiry`), or at `/home/sub-<id>` when its name was had or is

@@ -311,7 +311,18 @@ Three properties follow:
   `/home/main`), and `..` resolves as POSIX resolves it, by Nimbus's namespace
   rule (`workspacePath`). Ownership is
   uid/gid/mode on inodes, so agent homes and private tmp trees remain enforced
-  boundaries (`core/src/vfs/agent-home.ts`).
+  boundaries (`core/src/vfs/agent-home.ts`). Beside the homes, the shared
+  roots (`SHARED_ROOTS` in `core/src/vfs/workspace-path.ts`: `/slates`,
+  `/uploads` and `/scratch`) are every agent's. On the cloud each is
+  root-owned, the workspace group's (gid 1000, which every agent's
+  credential carries), setgid and with a group-rwx default ACL, registered
+  with Nimbus as a shared directory (`settleSharedRoots`), so whatever one
+  agent makes there any other writes; on the CLI each is a directory of the
+  own space, which every local agent writes as the machine's one user. `/scratch` is the one kept for work agents share: a
+  workspace root that keeps its files like any other, archived and
+  reviewed with the rest, not a temporary area (each agent's `/tmp` is).
+  Every boot settles them, so a workspace made before one existed has it
+  once this build first opens it.
 - Chunked blobs: `SqliteVFS` cuts file content into `vfs_chunks` rows of at
   most `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it (one
   chunk up to that size, content-defined cuts above it). Merge-back

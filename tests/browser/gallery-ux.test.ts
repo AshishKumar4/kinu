@@ -81,6 +81,10 @@ describe('the Gallery', () => {
 
           // Each card shows its slate's picture through the Gallery's read.
           expect(await page.$eval('[data-gallery-listing="pr-board"] img[data-slate-picture]', (img) => new URL(img.getAttribute('src') ?? '', location.origin).pathname)).toMatch(PICTURE);
+          // And how many people signed in have opened it, beside its stars.
+          expect(await page.$eval('[data-gallery-featured="pr-board"] [data-gallery-viewers]', (count) => [count.getAttribute('data-gallery-viewers'), count.getAttribute('aria-label')]))
+            .toEqual(['1840', '1,840 people have opened it']);
+          expect(await page.$eval('[data-gallery-listing="habits"] [data-gallery-viewers]', (count) => count.textContent)).toBe('705');
           expect(await page.$('[data-gallery-featured="trip"] img[data-slate-picture]')).not.toBeNull();
 
           // A page at a time: the next one joins it.
@@ -143,6 +147,7 @@ describe('the Gallery', () => {
           expect(await listed(page, '[data-gallery-like]')).not.toContain('pr-board');
 
           // Star, then take it back: each is asked of the Gallery, and the count follows.
+          expect(await page.$eval('[data-gallery-viewers]', (line) => line.textContent ?? '')).toMatch(/^Opened by [\d,]+ people$/);
           const stars = await page.$eval('[data-gallery-star]', (button) => Number(button.getAttribute('data-gallery-stars')));
           const star = await askedAfter(page, '/api/gallery/star', () => page.click('[data-gallery-star]'));
 

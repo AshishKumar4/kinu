@@ -15,6 +15,7 @@ import {
   RELAY_MISSION, STANDBY_MISSION, TREE_ASK, TREE_DEEP_WORD, delegationDismissAsk, sayWordMission,
 } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
+import { SCRIPTED_MCP_PATH, SCRIPTED_MCP_TOOL, SessionAnswerSchema } from '../../scripts/scripted-mcp';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
@@ -122,6 +123,48 @@ describe('the deployed tiers\' Worker answers a Tavily search', () => {
     expect(body.results.every((result) => result.url.startsWith('https://'))).toBe(true);
     expect((await worker.fetch(asked(search, '{}'), ENV)).status).toBe(400);
     expect((await worker.fetch(new Request(search, { method: 'POST', body: '{}' }), ENV)).status).toBe(401);
+  });
+});
+
+// The MCP server the mcp-reconnect case connects, through the Worker behind its key: a session opens, a call that
+// ends the session carrying it is answered 404 and runs nothing, and the same call on a new session is served.
+describe('the deployed tiers\' Worker serves an MCP server whose sessions end on cue', () => {
+  const MCP = `https://scripted-model.kinu.run${SCRIPTED_MCP_PATH}`;
+
+  const rpc = async (body: JsonObject, session?: string) => await worker.fetch(new Request(MCP, {
+    method: 'POST', body: JSON.stringify(body),
+    headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', ...(session !== undefined && { 'mcp-session-id': session }) },
+  }), ENV);
+
+  const opened = async (): Promise<string> => (await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })).headers.get('mcp-session-id') ?? '';
+
+  const call = async (session: string, args: JsonObject) => await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: SCRIPTED_MCP_TOOL, arguments: args } }, session);
+
+  const served = async (response: Response): Promise<string> => {
+    const text = v.parse(v.object({ result: v.object({ content: v.tuple([v.object({ type: v.literal('text'), text: v.string() })]) }) }), await response.json()).result.content[0].text;
+
+    return v.parse(v.pipe(v.string(), v.parseJson(), SessionAnswerSchema), text).session;
+  };
+
+  test('a session is served until a call ends it; that call is answered 404 and is served on the next session', async () => {
+    const first = await opened();
+    const listed = v.parse(v.object({ result: v.object({ tools: v.array(v.object({ name: v.string() })) }) }), await (await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, first)).json());
+    const again = await served(await call(first, {}));
+    const ended = await call(first, { end: first });
+    const next = await opened();
+    const retried = await served(await call(next, { end: first }));
+
+    expect({ tools: listed.result.tools.map((tool) => tool.name), again, ended: [ended.status, await ended.text()], fresh: next !== first, retried })
+      .toEqual({ tools: [SCRIPTED_MCP_TOOL], again: first, ended: [404, ''], fresh: true, retried: next });
+  });
+
+  test('a request naming no session it issued is refused, a stream is not offered, and nothing answers without the key', async () => {
+    const unnamed = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: SCRIPTED_MCP_TOOL, arguments: {} } });
+    const forged = await call('not-issued-here', {});
+    const streamed = await worker.fetch(new Request(MCP, { headers: { authorization: `Bearer ${KEY}` } }), ENV);
+    const keyless = await worker.fetch(new Request(MCP, { method: 'POST', body: '{}' }), ENV);
+
+    expect([unnamed.status, forged.status, streamed.status, keyless.status]).toEqual([400, 400, 405, 401]);
   });
 });
 

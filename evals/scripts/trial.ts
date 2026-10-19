@@ -23,7 +23,7 @@ async function main(): Promise<number> {
   const env = {
     ...process.env, KINU_EVAL_ORIGIN: item.origin, KINU_EVAL_TRIALS: String(item.trials),
     KINU_EVAL_MODELS: item.models.join(','), KINU_EVAL_ARMS: item.arms.join(','),
-    KINU_EVAL_PASS: item.pass ? '1' : '0', KINU_EVAL_CONCURRENCY: '1', KINU_EVAL_FILES: '1',
+    KINU_EVAL_PASS: item.pass ? '1' : '0', KINU_EVAL_FIRST_SLOT: String(item.firstSlot), KINU_EVAL_CONCURRENCY: '1', KINU_EVAL_FILES: '1',
     BENCH_ARTIFACTS: dir,
   };
 
