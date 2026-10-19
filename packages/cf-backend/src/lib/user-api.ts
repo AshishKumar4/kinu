@@ -177,7 +177,8 @@ const UserDeviceSchema = v.object({
   wholeMachine: v.boolean(),
   /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: DeviceSandboxSchema,
-  desktop: DeviceDesktopSchema,
+  // Absent from a server that predates the PC desktop (1014-t): no screen to show.
+  desktop: v.optional(DeviceDesktopSchema, { state: "none" }),
   version: v.nullable(v.string()),
   servedVersion: v.nullable(v.string()),
   update: v.picklist(DEVICE_UPDATE_STATES),
