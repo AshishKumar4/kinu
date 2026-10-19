@@ -76,6 +76,31 @@ describe('Settings › Secrets', () => {
   });
 });
 
+describe("a computer's preview", () => {
+  test('opens for its owner alone until they confirm making it a public link, and turns back off at once', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 800 });
+      await page.goto(`${origin}/gallery.html?frame=computerpreview`, { waitUntil: 'networkidle0' });
+      const toggle = '[data-preview-public-switch]';
+      await page.waitForSelector(toggle);
+      expect(await page.$eval(toggle, (button) => button.getAttribute('aria-checked'))).toBe('false');
+
+      await page.click(toggle);
+      await page.waitForSelector('[role="dialog"]');
+      expect(await page.$eval('html', (root) => root.dataset.galleryPreviewPublic ?? null)).toBeNull();
+      await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent === 'Make it public')?.click());
+      await page.waitForFunction((selector) => document.querySelector(selector)?.getAttribute('aria-checked') === 'true', {}, toggle);
+      expect(await page.$eval('html', (root) => root.dataset.galleryPreviewPublic)).toBe('true');
+
+      await page.click(toggle);
+      await page.waitForFunction((selector) => document.querySelector(selector)?.getAttribute('aria-checked') === 'false', {}, toggle);
+      expect(await page.$eval('html', (root) => root.dataset.galleryPreviewPublic)).toBe('false');
+      await page.close();
+    });
+  });
+});
+
 describe('a secret pasted into the chat', () => {
   test('is not sent: moved to Secrets, the workspace gets it and the draft says $GITHUB_TOKEN, which then sends', async () => {
     await withGallery(async ({ newPage, origin }) => {

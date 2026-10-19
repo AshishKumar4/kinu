@@ -2205,7 +2205,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposed, sandboxPreviewExposures,
+  sandboxPreviewExposed, sandboxPreviewExposure, sandboxPreviewExposures,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 
@@ -2480,6 +2480,7 @@ export {
 export {
   sandboxIdForWorkspace,
   isKinuSandboxId,
+  workspaceOfSandbox,
 } from './preview/sandbox-id';
 
 export {

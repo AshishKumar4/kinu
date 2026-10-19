@@ -59,7 +59,7 @@ import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { Modal } from "@/components/ui/Modal";
-import { SecretPasteFrame, secretsFixture } from "@/gallery-secrets";
+import { ComputerPreviewFrame, SecretPasteFrame, secretsFixture } from "@/gallery-secrets";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { admitReviewAnnotations, FEEDBACK_ENDPOINT, reviewFeedbackText } from "@kinu.run/core";
@@ -7953,6 +7953,7 @@ async function mount() {
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "composer") node = <ComposerFrame />;
   else if (frame === "secretpaste") node = <SecretPasteFrame />;
+  else if (frame === "computerpreview") node = <ComputerPreviewFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "historyauthority") node = <HistoryAuthorityFrame />;
   else if (frame === "rosterauthority") node = <RosterAuthorityFrame />;

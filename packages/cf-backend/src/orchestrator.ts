@@ -6813,6 +6813,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return await this.executors.exposedPorts(executorId);
   }
 
+  /** Whether the computer's published preview of `port` is a public link; null when none is published. */
+  @callable() async getComputerPreviewPublic(port: number): Promise<{ readonly public: boolean | null }> {
+    return { public: this.env.AUTH_KV === undefined ? null : await sandboxPreviewExposures(this.env.AUTH_KV, sandboxIdForWorkspace(this.name)).isPublic(port) };
+  }
+
+  /**
+   * The owner makes the computer's published preview of `port` a public link, opened by anyone holding its URL, or
+   * theirs alone again. A port exposed again opens for the owner alone, whatever its last publication was.
+   */
+  @callable() async setComputerPreviewPublic(port: number, open: boolean): Promise<{ readonly public: boolean }> {
+    const set = this.env.AUTH_KV !== undefined && await sandboxPreviewExposures(this.env.AUTH_KV, sandboxIdForWorkspace(this.name)).setPublic(port, open);
+
+    if (!set) throw new KinuError('missing', `The computer has no published preview of port ${String(port)}: expose the port first.`);
+
+    return { public: open };
+  }
+
   /** `actor` names a child of this workspace: the read is its own config. */
   private actorConfig(actor: string | undefined) {
     return actor === undefined ? Effect.succeed(this.config) : Effect.map(this.hostedChild(actor), ({ child }) => child.stores.config);

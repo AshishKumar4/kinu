@@ -6,7 +6,10 @@
  * Imports nothing of the Worker's routing, so the workspace's own fetches (`codemode-egress.ts`) can mint a pass.
  */
 
-import { labelSigner, parseWorkspacePreviewLabel, previewHostSuffix, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
+import {
+  labelSigner, parseWorkspacePreviewLabel, previewHostSuffix, sandboxPreviewLabelOf, sha256Hex, workspaceOfSandbox,
+  type LabelSignerEnv, type PreviewSuffixEnv,
+} from '@kinu.run/core';
 
 export const previewSigner = labelSigner('kinu.workspace-preview.salt', 'kinu.workspace-preview.v4');
 
@@ -135,18 +138,44 @@ export function previewViewerKey(port: number, handle: string): string {
   return `p${String(port)}-${handle}`;
 }
 
-/** A hostname's preview, its signature verified: null for any other host or a forged one. */
-export async function verifiedPreview(
-  env: PreviewSuffixEnv & LabelSignerEnv, hostname: string,
-): Promise<{ readonly port: number; readonly workspace: string; readonly handle: string } | null> {
+/** A preview host, as its tickets and cookies are keyed: the workspace's own box, or its computer. */
+export interface VerifiedPreview {
+  readonly kind: 'workspace' | 'computer';
+  readonly port: number;
+  readonly workspace: string;
+  readonly handle: string;
+}
+
+/**
+ * The handle a computer preview's passes are keyed by: its URL token's digest, so a pass for one publication opens no
+ * later one of the same port, and holding a `:`, which no workspace preview's handle (a hostname label's) can.
+ */
+export async function computerPreviewHandle(token: string): Promise<string> {
+  return `computer:${(await sha256Hex(token)).slice(0, 32)}`;
+}
+
+/**
+ * A hostname's preview: a workspace preview's with its signature verified, or a workspace computer's by its shape; null
+ * for any other host or a forged one. A computer preview's publication is its own host's to check (`preview-proxy.ts`).
+ */
+export async function verifiedPreview(env: PreviewSuffixEnv & LabelSignerEnv, hostname: string): Promise<VerifiedPreview | null> {
   const suffix = previewHostSuffix(env);
 
   if (!suffix || !hostname.endsWith(`.${suffix}`)) return null;
   const preview = parseWorkspacePreviewLabel(hostname.slice(0, -suffix.length - 1));
 
-  if (preview === null || !await previewSigner.verify(env, previewMessage(preview.workspace, preview.port, preview.handle), preview.token)) return null;
+  if (preview !== null) {
+    if (!await previewSigner.verify(env, previewMessage(preview.workspace, preview.port, preview.handle), preview.token)) return null;
 
-  return { port: preview.port, workspace: preview.workspace, handle: preview.handle };
+    return { kind: 'workspace', port: preview.port, workspace: preview.workspace, handle: preview.handle };
+  }
+
+  const computer = sandboxPreviewLabelOf(new URL(`https://${hostname}/`), env);
+  const workspace = computer === null ? null : workspaceOfSandbox(computer.sandboxId);
+
+  if (computer === null || workspace === null) return null;
+
+  return { kind: 'computer', port: computer.port, workspace, handle: await computerPreviewHandle(computer.token) };
 }
 
 /**

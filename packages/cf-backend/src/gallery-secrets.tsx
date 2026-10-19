@@ -1,12 +1,14 @@
 /**
  * Gallery secrets: the `/api/user/secrets` routes as the account object answers them, kept in this page (Settings ›
- * Secrets is `usersettingsstate&section=secrets`, `&secrets=empty` an account with none), and `secretpaste`, the real
- * composer with the chat's paste check in front of its send. What the page saved and sent is on the root's dataset.
+ * Secrets is `usersettingsstate&section=secrets`, `&secrets=empty` an account with none), `secretpaste`, the real
+ * composer with the chat's paste check in front of its send, and `computerpreview`, a computer's preview with its
+ * public-link switch. What the page saved, sent and made public is on the root's dataset.
  */
 import { useState } from "react";
 import * as v from "valibot";
 import type { SecretSummary } from "@/lib/user-api";
 import { Composer } from "@/components/Composer";
+import { PreviewFrame, type PublicLink } from "@/components/PreviewFrame";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 import type { TurnLiveness } from "@kinu.run/core";
 
@@ -128,6 +130,27 @@ export function SecretPasteFrame() {
       </div>
       <Composer value={draft} onValueChange={setDraft} onSend={guard.guarded(send)} onStop={() => {}} placeholder="Send a message..."
         disabled={false} liveness={IDLE} attention={guard.offer} />
+    </div>
+  );
+}
+
+let computerPreviewPublic = false;
+
+/** The computer's preview as the owner's server answers it: owner-only until they make it public. */
+const COMPUTER_LINK: PublicLink = {
+  read: async () => computerPreviewPublic,
+  set: async (open) => {
+    computerPreviewPublic = open;
+    document.documentElement.dataset.galleryPreviewPublic = String(open);
+  },
+};
+
+export function ComputerPreviewFrame() {
+  return (
+    <div className="p-bg p-text h-screen p-3">
+      <div className="h-full overflow-hidden rounded-lg border p-border">
+        <PreviewFrame url="https://3000-kinu-checkout-fixes-p3000_a1b2c3d4.preview.example.test/" label="Computer :3000" publicLink={COMPUTER_LINK} />
+      </div>
     </div>
   );
 }

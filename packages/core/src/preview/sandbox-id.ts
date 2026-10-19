@@ -9,7 +9,12 @@ export function sandboxIdForWorkspace(workspaceName: string): string {
 
 /** Only registered workspace names address Kinu containers. */
 export function isKinuSandboxId(sandboxId: string): boolean {
-  if (!sandboxId.startsWith(SANDBOX_ID_PREFIX)) return false;
+  return workspaceOfSandbox(sandboxId) !== null;
+}
 
-  return isWorkspaceName(sandboxId.slice(SANDBOX_ID_PREFIX.length));
+/** The workspace whose computer `sandboxId` is, or null for an id no workspace's computer has. */
+export function workspaceOfSandbox(sandboxId: string): string | null {
+  const workspace = sandboxId.slice(SANDBOX_ID_PREFIX.length);
+
+  return sandboxId.startsWith(SANDBOX_ID_PREFIX) && isWorkspaceName(workspace) ? workspace : null;
 }

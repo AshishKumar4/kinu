@@ -102,7 +102,8 @@ export async function previewEntry<Id>(
   const access = await stub.previewAccess(userId, preview.port);
 
   if (!access.owned) {
-    const text = previewRefusalText(access.slate);
+    // A computer's port is no slate's, whatever the workspace's own box serves at the same number.
+    const text = previewRefusalText(access.slate && preview.kind === 'workspace');
     const html = publicPage({ title: text, body: `<main><section class="section"><h1>${escapeHtml(text)}</h1></section></main>` });
 
     return new Response(html, { status: 403, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
@@ -140,7 +141,7 @@ function sameHostTarget(next: string | null, origin: string): string {
  * a form post must come from the preview itself, by its metadata or else its exact `Origin`. Only the workspace's own
  * server-side fetch (`self`) may send neither.
  */
-function ownRequest(request: Request, origin: string, self: boolean): boolean {
+export function ownRequest(request: Request, origin: string, self: boolean): boolean {
   const mode = request.headers.get('sec-fetch-mode');
   const site = request.headers.get('sec-fetch-site');
   const stated = request.headers.get('origin');
@@ -166,8 +167,8 @@ function localDevPreview(suffix: string): boolean {
 }
 
 /** The preview host's ticket exchange: the owner's ticket becomes the host's viewer cookie, then their page. */
-async function exchangePreviewTicket(
-  request: Request, env: NimbusPreviewEnv<unknown>, workspace: string, key: string,
+export async function exchangePreviewTicket(
+  request: Request, env: LabelSignerEnv & { readonly AUTH_KV?: KvStore }, workspace: string, key: string,
 ): Promise<Response> {
   const url = new URL(request.url);
   const ticket = await ticketUser(env, workspace, key, url.searchParams.get('ticket') ?? '');

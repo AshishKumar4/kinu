@@ -76,7 +76,10 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
         <span className="flex min-w-0 flex-wrap gap-1">
           {secret.hosts.map((host) => <span key={host} className="rounded-sm p-recessed px-1.5 py-0.5 font-mono p-meta p-text-2">{host}</span>)}
         </span>
-        <span className="ml-auto p-meta p-text-3">{grantedWhere(secret)}</span>
+        <span className="ml-auto p-meta p-text-3">
+          {grantedWhere(secret)}
+          {secret.grants.some((grant) => grant.reveal) && <span className="p-warning"> · value readable</span>}
+        </span>
       </button>
       {open && <SecretDetails secret={secret} onChanged={onChanged} />}
     </li>
