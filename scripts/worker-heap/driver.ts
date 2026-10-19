@@ -27,6 +27,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   failedToolCalls(): Promise<number>;
   /** `worker-heap/product.ts`'s probe RPC. */
   mainIdle(): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  seedScreenshots(count: number, bytes: number): Promise<void>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -93,13 +95,24 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     return await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).failedToolCalls();
   }
 
+  async seedScreenshots(workspace: string, count: number, bytes: number): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).seedScreenshots(count, bytes);
+  }
+
+  /** The chat seed a pane reads as it opens, as the eval harness reads it while a turn runs: its size. */
+  async seed(workspace: string): Promise<number> {
+    const read = await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).fetch(`https://heap.invalid/agents/orchestrator-agent/${workspace}/get-messages`);
+
+    return (await read.text()).length;
+  }
+
   async quiesce(workspace: string): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).quiesce();
   }
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 } };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 } };
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
 function noteWide(request: string): void {
@@ -247,9 +260,12 @@ async function compatAnswer(body: string): Promise<Response> {
     model.parked -= 1;
     const page = 'word '.repeat(Math.ceil(model.stepBytes / 5)).slice(0, model.stepBytes);
 
-    answer = model.toolSteps > 0
-      ? { toolCall: { name: 'file', arguments: { op: 'write', path: `notes/step-${String(seq)}.md`, content: page } } }
-      : { text: 'done' };
+    // A screenshot turn reads one of its seeded screenshots a step, as a desktop turn takes one.
+    const step = model.screenshots > 0
+      ? { name: 'file', arguments: { op: 'read', path: `shots/step-${String(seq % model.screenshots)}.png` } }
+      : { name: 'file', arguments: { op: 'write', path: `notes/step-${String(seq)}.md`, content: page } };
+
+    answer = model.toolSteps > 0 ? { toolCall: step } : { text: 'done' };
 
     if (model.toolSteps > 0) model.toolSteps -= 1;
     // Failing: each step reads a file no workspace has, so the workspace's tool call rejects back across the port.
@@ -277,6 +293,7 @@ function scriptModel(asked: URLSearchParams): Response {
   if (asked.has('toolSteps')) {
     model.toolSteps = Number(asked.get('toolSteps'));
     model.stepBytes = Number(asked.get('stepBytes') ?? 0);
+    model.screenshots = Number(asked.get('screenshots') ?? 0);
     model.stepping = model.toolSteps > 0;
     model.arrived = 0;
     model.released = 0;
@@ -332,6 +349,8 @@ export default {
     else if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
+    else if (url.pathname === '/seed-screenshots') await driver.seedScreenshots(workspace, Number(url.searchParams.get('count')), Number(url.searchParams.get('bytes')));
+    else if (url.pathname === '/seed') return Response.json(await driver.seed(workspace));
     else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), v.parse(v.string(), url.searchParams.get('marker')), Number(url.searchParams.get('bytes')));
     else return new Response(await driver.setUp(workspace, url.searchParams.get('compat') === '1'));
 
