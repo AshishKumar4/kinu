@@ -7,6 +7,9 @@ export const DEVICE_CONNECT_PATH = '/pc/connect';
 // Browser terminal socket for a device, forwarded into the same UserDO as the device socket.
 export const DEVICE_TERMINAL_PATH = '/pc/terminal';
 
+// Browser desktop socket for a device's screen, forwarded into the same UserDO as the device socket.
+export const DEVICE_SCREEN_PATH = '/pc/screen';
+
 // Workers Logs stores a header's value unless its name holds one of these (Tail Handler docs, header redaction).
 type PlatformRedactedHeader = `${string}${'auth' | 'key' | 'secret' | 'token' | 'jwt'}${string}`;
 

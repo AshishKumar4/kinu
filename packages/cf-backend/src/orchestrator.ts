@@ -6800,6 +6800,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     broadcast: (frame) => { this.broadcast(frame); },
     ownerUserId: () => this.getOwnerUserId(),
     openOwnerTerminal: async (window, device) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, device),
+    openOwnerScreen: async (device) => await this.requireOwnerUserDO().openDeviceScreen(await this.userCaller(), this.workspaceName(), device),
   });
 
   @callable() executeInExecutor(executorId: string, command: string, device?: string) {
@@ -6854,6 +6855,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
     return this.executors.openDeviceTerminal(window, device);
+  }
+
+  /** As {@link openDeviceTerminal}, for the screen of the PC `device` (1014-t). */
+  openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
+    return this.executors.openDeviceScreen(device);
   }
 
   @callable() async getExposedPorts(executorId: string): Promise<ExposedPortList> {

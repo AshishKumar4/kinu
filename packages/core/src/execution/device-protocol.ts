@@ -12,6 +12,10 @@ export const DEVICE_PTY_MAX_AXIS = protocol.ptyMaxAxis;
 
 export const DEVICE_FRAMES = protocol.frames;
 
+/** A screen's bytes on the device socket (1014-t): binary messages, each `kind`, the stream as a big-endian u32, then at
+ *  most `maxBytes` of RFB; `headerBytes` is the first two. */
+export const DEVICE_SCREEN_DATA = protocol.screenData;
+
 export const DEVICE_ERRORS = protocol.errors;
 
 export const DEVICE_UPDATE_REQUIRED = protocol.updateRequired;
@@ -61,6 +65,8 @@ export const DeviceHelloSchema = v.object({
   agentRoot: v.string(),
   /** The daemon's runtime (`Bun 1.4.2`); a refusal holds until it changes. */
   runtime: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  /** Its screen (`DeviceDesktopSchema`), narrowed where it is recorded: one unknown word must not refuse the HELLO. */
+  desktop: v.looseObject({ state: v.string() }),
 });
 
 const methodFlags: Readonly<Record<string, { consentFree?: boolean; checkpointStore?: boolean; deviceView?: boolean }>> = protocol.methods;

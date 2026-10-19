@@ -1,0 +1,250 @@
+// @bun @bun-cjs
+(function(exports, require, module, __filename, __dirname) {"use strict";
+
+// packages/pc-agent/src/pty.js
+var FRAMES = require("./device-protocol.json").frames;
+var TERMINAL_NAME = "xterm-256color";
+var MAX_SESSIONS = 8;
+var MAX_AXIS = require("./device-protocol.json").ptyMaxAxis;
+var SESSION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+function parseAxis(value, name) {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_AXIS) {
+    throw new Error(`terminal ${name} must be a whole number from 1 to ${MAX_AXIS}`);
+  }
+  return value;
+}
+function parseText(value, expectation) {
+  let text;
+  try {
+    text = String.prototype.valueOf.call(value);
+  } catch (err) {
+    if (err instanceof TypeError)
+      throw new Error(expectation, { cause: err });
+    throw err;
+  }
+  if (text !== value)
+    throw new Error(expectation);
+  return text;
+}
+var SESSION_NAME_RULE = "terminal session names are up to 64 letters, digits, dashes or underscores";
+function parseSessionName(value) {
+  const name = parseText(value, SESSION_NAME_RULE);
+  if (!SESSION_NAME.test(name))
+    throw new Error(SESSION_NAME_RULE);
+  return name;
+}
+function createProcReader(fs) {
+  function procEntryGone(error) {
+    return "code" in error && (error.code === "ENOENT" || error.code === "ESRCH");
+  }
+  function procFile(pid, name, required = false) {
+    try {
+      return fs.readFileSync(`/proc/${pid}/${name}`, "utf8");
+    } catch (error) {
+      if (!required && error instanceof Error && procEntryGone(error))
+        return;
+      throw error;
+    }
+  }
+  function parseProcStat(text) {
+    const end = text.lastIndexOf(")");
+    const fields = text.slice(end + 2).trim().split(/\s+/);
+    return {
+      comm: text.slice(text.indexOf("(") + 1, end),
+      state: fields[0] ?? "",
+      ppid: Number(fields[1]),
+      group: Number(fields[2]),
+      session: Number(fields[3]),
+      cpuTicks: Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]),
+      tasks: Number(fields[17]),
+      startTicks: fields[19] ?? ""
+    };
+  }
+  function procStat(pid, name = "stat", required = false) {
+    const text = procFile(pid, name, required);
+    return text === undefined ? undefined : parseProcStat(text);
+  }
+  async function groupHasLiveProcess(group, listProcesses) {
+    if (process.platform === "linux") {
+      for (const entry of fs.readdirSync("/proc", { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^\d+$/.test(entry.name))
+          continue;
+        const stat = procStat(entry.name);
+        if (stat !== undefined && stat.group === group && stat.state !== "Z")
+          return true;
+      }
+      return false;
+    }
+    const rows = (await listProcesses(["-ax", "-o", "pid=,pgid=,stat="])).trim().split(`
+`);
+    return rows.some((row) => {
+      const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
+      return Number(pid) > 0 && Number(pgid) === group && stat !== undefined && !stat.startsWith("Z");
+    });
+  }
+  return { procEntryGone, procFile, procStat, parseProcStat, groupHasLiveProcess };
+}
+var { procEntryGone, procFile, procStat, parseProcStat, groupHasLiveProcess } = createProcReader(require("fs"));
+function sessionGroups(leader, platform = process.platform) {
+  const groups = [leader];
+  if (platform !== "linux")
+    return groups;
+  const fs = require("fs");
+  for (const entry of fs.readdirSync("/proc", { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name))
+      continue;
+    const stat = procStat(entry.name);
+    if (stat === undefined || stat.session !== leader)
+      continue;
+    const group = stat.group;
+    if (group > 0 && !groups.includes(group))
+      groups.push(group);
+  }
+  return groups;
+}
+function createSessions(options = {}) {
+  const {
+    spawn = (argv, spawnOptions) => Bun.spawn(argv, spawnOptions),
+    log = () => {},
+    maxSessions = MAX_SESSIONS
+  } = options;
+  const sessions = new Map;
+  function open(request) {
+    const name = parseSessionName(request.session);
+    if (sessions.has(name))
+      throw new Error(`terminal ${name} is already open on this machine`);
+    if (sessions.size >= maxSessions) {
+      throw new Error(`this machine holds ${maxSessions} terminals already; close one before opening another`);
+    }
+    const cols = parseAxis(request.cols, "width");
+    const rows = parseAxis(request.rows, "height");
+    if (!Array.isArray(request.argv) || request.argv.length === 0)
+      throw new Error("a terminal needs a program to run");
+    const send = request.send;
+    if (!(send instanceof Function))
+      throw new Error("a terminal needs a socket to report to");
+    const record = { name, pid: 0, discardedBytes: 0, exited: false, terminal: undefined, ended: null };
+    let child;
+    try {
+      child = spawn(request.argv, {
+        terminal: {
+          cols,
+          rows,
+          name: TERMINAL_NAME,
+          data(_terminal, bytes) {
+            if (!send({ type: FRAMES.ptyOutput, session: name, data: Buffer.from(bytes).toString("base64") })) {
+              record.discardedBytes += bytes.length;
+            }
+          },
+          exit(_terminal, code) {
+            log("device.terminal_stream_closed", name, code);
+          }
+        },
+        env: request.env,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore"
+      });
+    } catch (err) {
+      throw new Error("could not open a terminal on this machine", { cause: err });
+    }
+    const terminal = child.terminal;
+    if (!terminal) {
+      child.kill("SIGKILL");
+      throw new Error("this runtime spawned no terminal for the session; Kinu needs a newer Bun");
+    }
+    record.terminal = terminal;
+    record.pid = child.pid;
+    record.ended = child.exited;
+    sessions.set(name, record);
+    function reportExit(status) {
+      if (record.exited)
+        return;
+      record.exited = true;
+      sessions.delete(name);
+      terminal.close();
+      if (record.discardedBytes > 0)
+        log("device.terminal_output_discarded", name, record.discardedBytes);
+      send({ type: FRAMES.ptyExit, session: name, exitCode: status });
+    }
+    function reportExitFailure(error) {
+      log("device.terminal_exit_unreadable", name, error);
+    }
+    child.exited.then(reportExit, reportExitFailure);
+    return { pid: child.pid, cols, rows };
+  }
+  function held(name) {
+    const record = sessions.get(parseSessionName(name));
+    if (!record)
+      throw new Error(`this machine holds no terminal called ${name}`);
+    return record;
+  }
+  function write(name, data) {
+    const record = held(name);
+    const bytes = Buffer.from(parseText(data, "terminal input must be base64 text"), "base64");
+    record.terminal.write(bytes);
+    return bytes.length;
+  }
+  function resize(name, cols, rows) {
+    const record = held(name);
+    const width = parseAxis(cols, "width");
+    const height = parseAxis(rows, "height");
+    record.terminal.resize(width, height);
+    return { cols: width, rows: height };
+  }
+  function close(name) {
+    const record = held(name);
+    record.terminal.close();
+    for (const group of sessionGroups(record.pid)) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch (err) {
+        if (!err || err.code !== "ESRCH")
+          throw new Error(`could not close terminal ${name}`, { cause: err });
+      }
+    }
+    return { session: record.name, ended: record.ended };
+  }
+  function closeAll() {
+    const closed = [];
+    for (const name of sessions.keys()) {
+      closed.push(name);
+      try {
+        close(name);
+      } catch (err) {
+        log("device.terminal_close_failed", name, err);
+      }
+    }
+    return closed;
+  }
+  return {
+    open,
+    write,
+    resize,
+    close,
+    closeAll,
+    has(name) {
+      return sessions.has(name);
+    },
+    pidOf(name) {
+      return sessions.get(name)?.pid ?? 0;
+    },
+    size() {
+      return sessions.size;
+    }
+  };
+}
+module.exports = {
+  createSessions,
+  MAX_SESSIONS,
+  TERMINAL_NAME,
+  parseSessionName,
+  parseAxis,
+  createProcReader,
+  procEntryGone,
+  procFile,
+  procStat,
+  parseProcStat,
+  groupHasLiveProcess
+};
+})

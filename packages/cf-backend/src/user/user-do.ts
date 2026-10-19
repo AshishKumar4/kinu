@@ -11,7 +11,7 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, DEVICE_SCREEN_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, screenFromSocket, readScreenData, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import type { AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
@@ -40,6 +40,7 @@ import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
 import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
+import { UserScreens } from './screens';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, USER_MCP_CLIENT_NAME, type McpToolCall, type McpToolSurface } from './mcp-servers';
 import { UserAccountMemory } from './account-memory';
@@ -194,6 +195,8 @@ export class UserDO extends Agent<Env> {
   private readonly chatgpt = new UserChatGptSignIn({ ...this.host, devices: this.devices, vault: this.credentials });
 
   private readonly terminals = new UserTerminals({ ...this.host, devices: this.devices });
+
+  private readonly screens = new UserScreens({ ...this.host, devices: this.devices });
 
   private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
 
@@ -787,6 +790,10 @@ export class UserDO extends Agent<Env> {
     return this.terminals.openDeviceTerminal(caller, agentName, window, deviceId);
   }
 
+  openDeviceScreen(caller: UserCaller, agentName: string, deviceId?: string): ReturnType<UserScreens['openDeviceScreen']> {
+    return this.screens.openDeviceScreen(caller, agentName, deviceId);
+  }
+
   issueDeviceJoin(caller: UserCaller, workspace: string | null): ReturnType<UserDevices['issueDeviceJoin']> {
     return this.devices.issueDeviceJoin(caller, workspace);
   }
@@ -1034,6 +1041,7 @@ export class UserDO extends Agent<Env> {
   private readonly _sockets = new Hono({ getPath: rawPath })
     .all(DEVICE_CONNECT_PATH, async (c) => this.devices.acceptDeviceSocket(c.req.raw, new URL(c.req.url)))
     .all(DEVICE_TERMINAL_PATH, async (c) => this.terminals.acceptTerminalSocket(c.req.raw, new URL(c.req.url)))
+    .all(DEVICE_SCREEN_PATH, async (c) => this.screens.acceptScreenSocket(c.req.raw, new URL(c.req.url)))
     // Frames a socket missed while it was down are not replayed, so a new one starts from what waits on the owner now.
     .all(ROSTER_SOCKET_PATH, async (c) => acceptRosterSocket(this.ctx, c.req.raw, (socket) => {
       this.accountMemory.pendingMoved([socket]);
@@ -1062,9 +1070,27 @@ export class UserDO extends Agent<Env> {
       return;
     }
 
+    // A viewer's bytes are RFB, relayed unread.
+    const viewer = screenFromSocket(ws);
+
+    if (viewer) {
+      this.screens._screens.fromViewer(viewer, message);
+
+      return;
+    }
+
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
+    // A screen's bytes are the one binary frame a daemon sends; every other frame is JSON text.
+    const screen = isTextWebSocketMessage(message) ? null : readScreenData(message);
+
+    if (screen) {
+      this.screens._screens.toViewer(deviceId, screen.stream, screen.bytes);
+
+      return;
+    }
+
     let data: string;
 
     if (isTextWebSocketMessage(message)) {
@@ -1112,6 +1138,7 @@ export class UserDO extends Agent<Env> {
       }
 
       this.devices.recordDeviceHello(deviceId, hello.output);
+      this.screens.deviceConnected(deviceId);
       // Sent before the first wait, in the turn the HELLO arrived on its socket.
       const frame = this.devices.deviceUpdateFrame(deviceId, hello.output);
 
@@ -1145,6 +1172,8 @@ export class UserDO extends Agent<Env> {
 
     // Terminal frames have no request id; the RPC correlator would silently drop them.
     if (this.terminals.handleTerminalFrame(data)) return;
+
+    if (this.screens.handleScreenFrame(deviceId, data)) return;
     this.devices._devices.handleMessage(deviceId, data);
   }
 
@@ -1157,6 +1186,10 @@ export class UserDO extends Agent<Env> {
       return settle(this.terminals.closeDeviceTerminal(terminal.session, terminal.device));
     }
 
+    const viewer = screenFromSocket(ws);
+
+    if (viewer) return this.screens._screens.closeStream(viewer.device, viewer.stream);
+
     const deviceId = deviceIdFromSocket(ws);
 
     if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
@@ -1166,6 +1199,8 @@ export class UserDO extends Agent<Env> {
     for (const session of this.terminals._terminals.panesForDevice(deviceId)) {
       this.terminals._terminals.endPane(session, NO_DEVICE_CONNECTED);
     }
+
+    this.screens.deviceClosed(deviceId);
 
     await this.devices.devicesMoved();
   }

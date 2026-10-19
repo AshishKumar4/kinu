@@ -1,7 +1,7 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import { Cause, Effect } from 'effect';
 import {
-  AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
+  AccountMemoryProposalSchema, DeviceDesktopSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
@@ -170,6 +170,8 @@ const UserDeviceSchema = v.object({
   wholeMachine: v.boolean(),
   /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: DeviceSandboxSchema,
+  /** The PC's screen as its daemon last reported it (1014-t). */
+  desktop: DeviceDesktopSchema,
   version: v.nullable(v.string()),
   servedVersion: v.nullable(v.string()),
   update: v.picklist(DEVICE_UPDATE_STATES),

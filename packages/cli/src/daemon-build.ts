@@ -4,7 +4,7 @@
  * nothing beside it but them. The release builds them once; a source-tree `kinu connect` builds them the same way.
  *
  * A module under the daemon's `daemon/` directory is part of the daemon file, bundled into it: the previous release's
- * updater lands only the siblings it knew (pc-agent/tests/fixtures/protocol-2), so a new module never ships beside it.
+ * updater lands only the siblings it knew (pc-agent/tests/fixtures/protocol-3), so a new module never ships beside it.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';

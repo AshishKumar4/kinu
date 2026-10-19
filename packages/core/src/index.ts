@@ -1085,6 +1085,10 @@ export {
 } from './execution/device-terminal';
 
 export {
+  DeviceScreenHub, screenFromSocket, readScreenData,
+} from './execution/device-screen';
+
+export {
   nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
   type NimbusExecResult, type NimbusPortInfo, nimbusSessionFiles,
 } from './execution/nimbus';
@@ -1454,6 +1458,7 @@ export {
   type EvalAccount,
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
+  DEVICE_SCREEN_PATH,
   ORCHESTRATOR_AGENT_SLUG,
 } from './cloud-wire';
 
@@ -2243,6 +2248,8 @@ export {
   DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';
+
+export { DeviceDesktopSchema, NO_DESKTOP, type DeviceDesktop } from './execution/device-desktop';
 
 export {
   COPY_SCRIPT, GITHUB_ICON, REPO_URL,

@@ -78,6 +78,7 @@ function harness(opts: {
       return new Response('workspace-socket', { status: 200 });
     },
     openDeviceTerminal: () => { throw new Error('openDeviceTerminal: the device lane is not driven by this suite'); },
+    openDeviceScreen: () => { throw new Error('openDeviceScreen: the device lane is not driven by this suite'); },
   });
 
   // Fakes cannot satisfy `DurableObjectId`/`DurableObjectStub`, so the route takes the two resolutions instead.
@@ -265,6 +266,79 @@ describe('attaching a terminal', () => {
 });
 
 /** Terminal failures, preflight included, must carry the workspace and executor tags; control flow is unchanged. */
+/** A PC's screen (1014-t) opens through its workspace, as its shell does, and the account object holding the PC's socket
+ *  gets the viewer's upgrade. */
+describe("opening a PC's desktop (1014-t)", () => {
+  function deviceLane(open: (device: string) => Promise<{ session: string; user: string } | { error: string }>) {
+    const calls: string[] = [];
+    const forwarded: Request[] = [];
+    const trace = { calls, forwarded };
+
+    const agent = jsrpcStub<TerminalWorkspace>({
+      prepareTerminal: async (executorId: string) => {
+        trace.calls.push(`prepareTerminal:${executorId}`);
+
+        return { ok: true as const };
+      },
+      openDeviceScreen: async (device: string) => {
+        trace.calls.push(`openDeviceScreen:${device}`);
+
+        return await open(device);
+      },
+      openDeviceTerminal: () => { throw new Error('openDeviceTerminal: a desktop opens no terminal'); },
+      fetch: () => { throw new Error('fetch: a desktop is not the workspace\'s terminal'); },
+    });
+
+    const deps: TerminalRouteDeps = {
+      resolveWorkspace: async () => agent,
+      resolveSandbox: () => { throw new Error('resolveSandbox: a PC\'s desktop mints no container stub'); },
+      UserDO: {
+        idFromName: (name) => ({ name, toString: () => name, equals: () => false }),
+        get: (id) => ({
+          fetch: async (request) => {
+            trace.calls.push(`UserDO:${id.toString()}`);
+            trace.forwarded.push(request);
+
+            return new Response('viewer-socket', { status: 200 });
+          },
+        }),
+      },
+    };
+
+    return { deps, trace };
+  }
+
+  function desktopRequest(headers: Record<string, string> = { upgrade: 'websocket', 'sec-websocket-protocol': 'binary' }): Request {
+    return new Request(`https://app.example/api/workspaces/${WORKSPACE}/devices/dev-mac/desktop`, { headers });
+  }
+
+  test("the PC the path names is opened through the workspace, and its account object gets the viewer's upgrade", async () => {
+    const { deps, trace } = deviceLane(async () => ({ session: 'scr-0123456789abcdef', user: 'user-1' }));
+    const response = await terminalRequest(desktopRequest(), deps);
+    const forwarded = new URL(trace.forwarded[0]?.url ?? 'https://unforwarded.invalid/');
+
+    expect(response?.status).toBe(200);
+    expect(trace.calls).toEqual(['prepareTerminal:device', 'openDeviceScreen:dev-mac', 'UserDO:user-1']);
+    expect({ path: `${forwarded.pathname}${forwarded.search}`, protocol: trace.forwarded[0]?.headers.get('sec-websocket-protocol') })
+      .toEqual({ path: '/pc/screen?session=scr-0123456789abcdef', protocol: 'binary' });
+  });
+
+  test("the account's refusal reaches the viewer as written, under the desktop's name, and nothing is forwarded", async () => {
+    const { deps, trace } = deviceLane(async () => ({ error: 'this PC shares no screen' }));
+    const { value, logs } = await recorded(() => terminalRequest(desktopRequest(), deps));
+
+    expect({ status: value?.status, error: (await body(value)).error }).toEqual({ status: 503, error: 'this PC shares no screen' });
+    expect({ forwarded: trace.forwarded.length, events: logs.map((log) => log.event) }).toEqual({ forwarded: 0, events: ['desktop.device_refused'] });
+  });
+
+  test('a desktop request that is not an upgrade opens nothing', async () => {
+    const { deps, trace } = deviceLane(async () => ({ session: 'scr-0123456789abcdef', user: 'user-1' }));
+
+    expect((await terminalRequest(desktopRequest({}), deps))?.status).toBe(400);
+    expect(trace.calls).toEqual([]);
+  });
+});
+
 describe('opening the desktop (D70)', () => {
   test('the container is prepared, then the box\'s desktop gets the upgrade without the caller\'s credentials', async () => {
     const { deps, trace } = harness();
