@@ -295,7 +295,7 @@ export {
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
   ShareGrantSchema, ShareCardSchema,
-  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
+  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema, sharedBuildRefusal,
   type ShareKind, type LiveShareVisibility, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
   type PublishedBlueprint, type SharedLibrary, type SharedRow, type OwnedSlate, type SlateShareRecord, type BlueprintEntry,

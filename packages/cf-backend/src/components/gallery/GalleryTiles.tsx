@@ -1,6 +1,6 @@
-/** A Gallery listing as a card: its picture, whose it is, its stars, and what a fork asks of you. */
+/** A Gallery listing as a card: its picture, whose it is, its viewers and stars, and what a fork asks of you. */
 import { Link } from "react-router-dom";
-import { StarIcon } from "@phosphor-icons/react";
+import { EyeIcon, StarIcon } from "@phosphor-icons/react";
 import { galleryPicturePath, type GalleryListing } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { Cover, Tile } from "@/components/drive/DriveTiles";
@@ -18,17 +18,33 @@ export function ListingPicture({ listing }: { listing: GalleryListing }) {
 
 function Stars({ count, on = false }: { count: number; on?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1 tabular-nums">
+    <span className="inline-flex items-center gap-1">
       <StarIcon size={13} weight={on ? "fill" : "regular"} className={on ? "p-accent" : "p-text-3"} />{count.toLocaleString("en-US")}
     </span>
   );
+}
+
+/** How many people signed in have opened it, as its workspace last said. */
+function Viewers({ count }: { count: number }) {
+  const words = `${count.toLocaleString("en-US")} ${count === 1 ? "person has" : "people have"} opened it`;
+
+  return (
+    <span className="inline-flex items-center gap-1" data-gallery-viewers={count} title={words} aria-label={words}>
+      <EyeIcon size={13} className="p-text-3" aria-hidden />{count.toLocaleString("en-US")}
+    </span>
+  );
+}
+
+/** A card's counts, viewers beside stars. */
+function Counts({ listing }: { listing: GalleryListing }) {
+  return <span className="inline-flex shrink-0 items-center gap-2"><Viewers count={listing.viewers} /><Stars count={listing.stars} on={listing.starred} /></span>;
 }
 
 export function ListingTile({ listing }: { listing: GalleryListing }) {
   return (
     <Tile title={listing.title} icon={<Avatar name={listing.owner.name} size={18} />} picture={<ListingPicture listing={listing} />}
       href={gallerySlateHref(listing.workspace, listing.slate)} attributes={{ "data-gallery-listing": listing.slate }}
-      meta={<span className="flex min-w-0 items-center gap-2"><span className="truncate">{listing.owner.name}</span><Stars count={listing.stars} on={listing.starred} /></span>}
+      meta={<span className="flex min-w-0 items-center gap-2"><span className="truncate">{listing.owner.name}</span><Counts listing={listing} /></span>}
       menu={[]} />
   );
 }
@@ -44,7 +60,7 @@ export function FeaturedListing({ listing }: { listing: GalleryListing }) {
         <span className="p-heading text-[17px] p-text">{listing.title}</span>
         <span className="line-clamp-2 p-meta p-text-3">{listing.line}</span>
         <span className="mt-auto flex flex-wrap items-center gap-2 p-meta p-text-3">
-          <Avatar name={listing.owner.name} size={18} />{listing.owner.name}<span className="ml-1"><Stars count={listing.stars} on={listing.starred} /></span>
+          <Avatar name={listing.owner.name} size={18} />{listing.owner.name}<span className="ml-1"><Counts listing={listing} /></span>
         </span>
       </span>
     </Link>

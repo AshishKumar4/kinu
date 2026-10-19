@@ -15,12 +15,13 @@ import {
   type LiveShareRecord, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
+import { shareViewerKey } from '../viewer-pass';
 import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { OrchestratorAgent } from '../orchestrator';
 import { workspaceOwner } from '../workspace-owner-rpc';
-import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, SIGNED_OUT_VIEWER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
 /** The owner's workspace, once the app host proved it is theirs. */
@@ -373,7 +374,10 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
   const body = await safeJson(request, LiveIdBody);
 
   if (!body) return err(400, 'Body must be { workspace, share }');
-  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share, identity?.userId ?? null);
+  const viewer = identity === null ? SIGNED_OUT_VIEWER : await shareViewerKey(env, body.share, identity.userId);
+
+  if (viewer === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
+  const reading = await workspaceOwner(env, body.workspace).openLiveShare(body.share, identity?.userId ?? null, viewer);
 
   if (reading.ok && !reading.value.admits && identity === null) return err(401, 'Sign in to open this share');
 

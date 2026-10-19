@@ -32,31 +32,31 @@ const PICTURES = {
 const LISTINGS: readonly GalleryListing[] = [
   listing("ravi", "pr-board", "p8x2", {
     title: "PR review board", line: "Every pull request waiting on you, across your repositories, sorted by how long it has waited.",
-    category: "developer", owner: { name: "Ravi Menon" }, stars: 412, listedAt: NOW - 20 * DAY, featured: true, picture: PICTURES["pr-board"],
+    category: "developer", owner: { name: "Ravi Menon" }, stars: 412, viewers: 1840, listedAt: NOW - 20 * DAY, featured: true, picture: PICTURES["pr-board"],
   }),
   listing("ana", "trip", "t5c1", {
     title: "Trip budget splitter", line: "Log what each person paid; it says who owes whom, in as few payments as possible.",
-    category: "money", owner: { name: "Ana Souza" }, stars: 287, listedAt: NOW - 3 * DAY, featured: true, picture: PICTURES.trip,
+    category: "money", owner: { name: "Ana Souza" }, stars: 287, viewers: 962, listedAt: NOW - 3 * DAY, featured: true, picture: PICTURES.trip,
   }),
   listing("alice", "habits", "h2b6", {
-    title: "Habit tracker", line: "A week of habits on one screen. Tap a day to mark it.", category: "home", owner: { name: "Alice Chen" }, stars: 233,
+    title: "Habit tracker", line: "A week of habits on one screen. Tap a day to mark it.", category: "home", owner: { name: "Alice Chen" }, stars: 233, viewers: 705,
     listedAt: NOW - 12 * DAY, picture: PICTURES.habits,
   }),
   listing("jules", "digest", "d9e4", {
     title: "Morning reading", line: "Five things worth reading today on the topics you choose, summarised by your model.", category: "work",
-    owner: { name: "Jules Martin" }, stars: 198, listedAt: NOW - DAY, picture: PICTURES.digest,
+    owner: { name: "Jules Martin" }, stars: 198, viewers: 688, listedAt: NOW - DAY, picture: PICTURES.digest,
   }),
   listing("priya", "standup", "s3f7", {
     title: "Standup notes", line: "Turns yesterday's commits and calendar into a three-line standup.", category: "work", owner: { name: "Priya Shah" },
-    stars: 164, listedAt: NOW - 6 * DAY, picture: PICTURES.standup,
+    stars: 164, viewers: 391, listedAt: NOW - 6 * DAY, picture: PICTURES.standup,
   }),
   listing("tom", "recipe", "r1a8", {
     title: "Recipe scaler", line: "Paste a recipe and scale it to any number of people, in grams.", category: "home", owner: { name: "Tom Okafor" },
-    stars: 121, listedAt: NOW - 9 * DAY, picture: PICTURES.recipe,
+    stars: 121, viewers: 352, listedAt: NOW - 9 * DAY, picture: PICTURES.recipe,
   }),
   listing("mei", "poll", "l6q0", {
     title: "Team lunch poll", line: "One question, a few options, results live for everyone voting.", category: "fun", owner: { name: "Mei Lin" },
-    stars: 96, listedAt: NOW - 2 * DAY,
+    stars: 96, viewers: 203, listedAt: NOW - 2 * DAY,
   }),
 ];
 

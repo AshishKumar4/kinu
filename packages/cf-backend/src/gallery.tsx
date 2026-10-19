@@ -8,7 +8,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { mainPanelAgent, restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
@@ -5750,12 +5750,13 @@ const LIVE_SHARE: LiveShareRecord = {
   ] },
   // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
   createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, gallery: null,
+  views: { viewers: 12, opens: 40, signedOutOpens: 9 },
 };
 
 /** Its team's share: Pat edits it, Sam uses it, and Pat's last change stopped it on the owner's access. */
 const TEAM_SHARE: LiveShareRecord = {
   ...LIVE_SHARE, id: "live-team-2", visibility: "users", handle: "8b2e5d1f40", users: ["pat@example.com", "sam@example.com"], editors: ["pat@example.com"],
-  createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com",
+  createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com", views: { viewers: 2, opens: 7, signedOutOpens: 0 },
 };
 
 /** The owner's "Always for this slate" answers at the slate's revision now: a GitHub change on one org, and a file write. */
@@ -5765,7 +5766,7 @@ const STANDING: SharePreapproval[] = [
 ];
 
 /** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
-const SHARED_REFUSAL = "Slate issue-triage is shared, so it runs only as its own files build; they do not build alone yet";
+const SHARED_REFUSAL = sharedBuildRefusal("issue-triage");
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
 /** `first`: the slate's first share, before anyone has it, which asks what they start with. */

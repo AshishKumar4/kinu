@@ -160,6 +160,7 @@ export default function GallerySlatePage() {
             </div>
             {starFailure !== null && <p role="alert" className="p-meta p-danger">{starFailure}</p>}
             <p className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
+              <span data-gallery-viewers={listing.viewers}>{listing.viewers === 1 ? "Opened by 1 person" : `Opened by ${listing.viewers.toLocaleString("en-US")} people`}</span>
               {read.people !== undefined && <span data-gallery-people>Used by about {read.people.toLocaleString("en-US")} people this week</span>}
               {read.forks !== undefined && <span data-gallery-forks>{read.forks === 1 ? "1 fork" : `${read.forks.toLocaleString("en-US")} forks`}</span>}
               {reported
