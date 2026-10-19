@@ -219,27 +219,20 @@ function trimPath(value) {
 /** The kernel's own bound on links followed in one lookup (Linux MAXSYMLINKS). */
 const MAX_LINK_HOPS = 40;
 
+/** Gone, unreadable, or a loop: a path with nothing there yet, composed on rather than refused. */
+function missingPath(err) {
+  return err && (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'ELOOP');
+}
+
 /**
- * The path a syscall will actually REACH: every symlink followed, a DANGLING
- * one included, since a write through a link whose target is absent creates
- * that target; the part of the path that does not exist yet is composed on.
- *
- * Decided on the destination rather than the spelling, because a symlink in a
- * writable directory pointing into Kinu's own is a read of Kinu's own, and
- * every file method here follows links.
+ * The requested path walked as the kernel walks it, one name at a time, each
+ * link read where it is met: `reached` is the deepest directory or file that
+ * exists, no link in it, and `rest` the names past it that do not exist yet.
+ * A component that stops being a link between its lstat and its read is walked
+ * again, within the kernel's own hop bound.
  */
-function realTarget(requested, hops = 0) {
-  const resolved = trimPath(requested);
-  const missing = (err) => err && (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'ELOOP');
-
-  try {
-    return fs.realpathSync(resolved);
-  } catch (err) {
-    if (!missing(err)) throw err;
-  }
-
-  // Something on the path is absent: walk it as the kernel does, following each link to where it points.
-  const parts = resolved.split('/').filter(Boolean);
+function walkTarget(requested, hops = 0) {
+  const parts = trimPath(requested).split('/').filter(Boolean);
   let reached = '/';
 
   for (const [at, part] of parts.entries()) {
@@ -249,9 +242,9 @@ function realTarget(requested, hops = 0) {
     try {
       stat = fs.lstatSync(entry);
     } catch (err) {
-      if (!missing(err)) throw err;
+      if (!missingPath(err)) throw err;
 
-      return path.join(entry, ...parts.slice(at + 1));
+      return { reached, rest: parts.slice(at) };
     }
 
     if (!stat.isSymbolicLink()) {
@@ -263,10 +256,63 @@ function realTarget(requested, hops = 0) {
       throw Object.assign(new Error(`device path '${requested}' crosses too many symbolic links`), { code: 'ELOOP' });
     }
 
-    return realTarget(path.resolve(reached, fs.readlinkSync(entry), ...parts.slice(at + 1)), hops + 1);
+    let target;
+
+    try {
+      target = fs.readlinkSync(entry);
+    } catch (err) {
+      // Gone, or no longer a link, since its lstat: the path changed under this walk, so it starts over.
+      if (err && (err.code === 'ENOENT' || err.code === 'EINVAL')) return walkTarget(requested, hops + 1);
+      throw err;
+    }
+
+    return walkTarget(path.resolve(reached, target, ...parts.slice(at + 1)), hops + 1);
   }
 
-  return reached;
+  return { reached, rest: [] };
+}
+
+/** How many times a macOS path is walked again when realpath named something else meanwhile. */
+const REALPATH_AGREEMENT_ATTEMPTS = 8;
+
+/** The same path on a case- and normalization-insensitive volume, as macOS's are by default. */
+function sameOnVolume(left, right) {
+  const fold = (spelled) => spelled.normalize('NFD').toLowerCase();
+
+  return fold(left) === fold(right);
+}
+
+/**
+ * The path a syscall will actually REACH: every symlink followed, a DANGLING
+ * one included, since a write through a link whose target is absent creates
+ * that target; the part of the path that does not exist yet is composed on.
+ *
+ * Decided on the destination rather than the spelling, because a symlink in a
+ * writable directory pointing into Kinu's own is a read of Kinu's own, and
+ * every file method here follows links.
+ *
+ * Composed from the names asked for (`walkTarget`), never from realpath's word
+ * alone: Bun 1.4.3's realpathSync answered mid-rename with a directory's new
+ * name or its parent's, so a frame naming `project/inner` was judged, and
+ * acted, at `project` (LEDGER-L111, 2026-10-19; daemon.test.js, "acts on the
+ * path it named"). On macOS the volume ignores case, and the roots and Kinu's
+ * own directory are compared in its own: there the existing part is named as
+ * realpath names it, taken only where that is the walked path in another case,
+ * so `/USERS/me/.KINU` is Kinu's own directory and a renamed sibling is never.
+ */
+function realTarget(requested) {
+  let walked = walkTarget(requested);
+
+  if (process.platform !== 'darwin') return path.join(walked.reached, ...walked.rest);
+
+  for (let attempt = 0; attempt < REALPATH_AGREEMENT_ATTEMPTS; attempt += 1) {
+    const real = realPathOrNull(walked.reached);
+
+    if (real !== null && sameOnVolume(real, walked.reached)) return path.join(real, ...walked.rest);
+    walked = walkTarget(requested);
+  }
+
+  throw Object.assign(new Error(`device path '${requested}' kept changing while it was checked; try again`), { code: 'EAGAIN' });
 }
 
 /** Whether `target` is `root` itself or below it, decided on resolved paths so
@@ -277,12 +323,12 @@ function within(root, target) {
   return target.startsWith(root === '/' ? '/' : `${root}/`);
 }
 
-/** The path a syscall reaches, or null when nothing is there to mount. */
+/** The path a syscall reaches, or null when nothing is there. */
 function realPathOrNull(candidate) {
   try {
     return fs.realpathSync(candidate);
   } catch (err) {
-    if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES' && err.code !== 'ELOOP')) throw err;
+    if (!missingPath(err)) throw err;
 
     return null;
   }
