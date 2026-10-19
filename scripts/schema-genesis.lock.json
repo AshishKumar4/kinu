@@ -1644,6 +1644,7 @@
   "user_secrets@packages/core/src/safety/egress-vault.ts": [
     "name TEXT PRIMARY KEY",
     "hosts TEXT NOT NULL",
+    "position TEXT NOT NULL",
     "placeholder TEXT NOT NULL UNIQUE",
     "secret TEXT NOT NULL",
     "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"

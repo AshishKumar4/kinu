@@ -7,7 +7,7 @@ import {
 import type { KinuDevbox } from '../src/kinu-devbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
-import type { EgressInjectionResult, EgressRequestFacts, UserCaller } from '@kinu.run/core';
+import type { EgressInjectionResult, EgressRequestFacts, SecretPosition, UserCaller } from '@kinu.run/core';
 import type { ContainerEventResolver, KinuEgressParams } from '../src/egress/outbound';
 import type { ContainerEgressEnv } from '../src/egress/send-out';
 import type { TestUserDO } from './helpers/user-do';
@@ -60,7 +60,7 @@ interface FetchCapture {
   readonly restore: () => void;
 }
 
-function captureFetch(response: () => Response): FetchCapture {
+function captureFetch(response: (request: Request) => Response): FetchCapture {
   const seen: Request[] = [];
   const original = globalThis.fetch;
 
@@ -69,7 +69,7 @@ function captureFetch(response: () => Response): FetchCapture {
       const request = input instanceof Request ? input : new Request(String(input), init);
       seen.push(request);
 
-      return response();
+      return response(request);
     },
     { preconnect: original.preconnect },
   );
@@ -89,11 +89,12 @@ function execOnlyBox(): KinuDevbox {
 }
 
 /** The real owner object behind the stub, holding Stripe's secret for `kinu-main`, so the gate that decides is the one that ships. */
-async function realVault(options: { readonly granted: boolean }): Promise<{ readonly env: ContainerEgressEnv<string>; readonly harness: TestUserDO; readonly placeholder: string }> {
+async function realVault(options: { readonly granted: boolean; readonly position?: SecretPosition }): Promise<{ readonly env: ContainerEgressEnv<string>; readonly harness: TestUserDO; readonly placeholder: string }> {
   const harness = createTestUserDO();
   const owner = await testOwner();
   const workspace = { workspaceToken: await provisionTestWorkspace(harness, PARAMS.workspaceName) };
-  await harness.userDO.putSecrets(owner, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], value: SECRET }], [PARAMS.workspaceName]);
+  const position = options.position ?? { kind: 'authorization' };
+  await harness.userDO.putSecrets(owner, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position, value: SECRET }], [PARAMS.workspaceName]);
   const placeholder = (await harness.userDO.grantedSecrets(workspace)).granted[0]?.placeholder ?? '';
 
   if (!options.granted) await harness.userDO.revokeSecretGrant(owner, { name: 'STRIPE_SECRET_KEY', workspace: PARAMS.workspaceName });
@@ -112,6 +113,87 @@ async function realVault(options: { readonly granted: boolean }): Promise<{ read
     },
   };
 }
+
+/** An allowed host that answers with everything it received, as a store or an echo would. */
+function reflecting(): FetchCapture {
+  return captureFetch((request) => new Response(JSON.stringify({ url: request.url, headers: [...request.headers] })));
+}
+
+/** Where in what the host received the secret appears. */
+function placesOf(received: Request | undefined): string[] {
+  if (received === undefined) return [];
+  const headers = [...received.headers].filter(([, value]) => value.includes(SECRET)).map(([name]) => `header ${name}`);
+
+  return [...(received.url.includes(SECRET) ? ['url'] : []), ...headers];
+}
+
+describe('a secret goes only in its credential position, whatever the allowed host does with the rest', () => {
+  test('a host reflecting everything it receives sees the value in the Authorization header alone, and the program never sees it', async () => {
+    const { env, placeholder } = await realVault({ granted: true });
+    const upstream = reflecting();
+
+    try {
+      const response = await handleContainerEgress(new Request('https://api.stripe.com/v1/charges?expand=customer', {
+        headers: { authorization: `Bearer ${placeholder}`, 'x-trace': 'build-42' },
+      }), env, PARAMS, undefined);
+
+      expect(placesOf(upstream.seen[0])).toEqual(['header authorization']);
+      expect(await response.text()).not.toContain(SECRET);
+    } finally { upstream.restore(); }
+  });
+
+  test('THE STORAGE CASE: a URL naming the secret as a key to store is refused, and nothing reaches the host', async () => {
+    const { env, placeholder } = await realVault({ granted: true });
+    const upstream = reflecting();
+
+    try {
+      const refused = await handleContainerEgress(new Request(`https://api.stripe.com/v1/kv/values/${placeholder}`, {
+        method: 'PUT', headers: { authorization: `Bearer ${placeholder}` }, body: 'value',
+      }), env, PARAMS, undefined);
+
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).toContain('only in the Authorization header');
+      expect(upstream.seen).toHaveLength(0);
+    } finally { upstream.restore(); }
+  });
+
+  test('a header that is not its position is refused, even beside a correct one', async () => {
+    const { env, placeholder } = await realVault({ granted: true });
+    const upstream = reflecting();
+
+    try {
+      const refused = await handleContainerEgress(new Request('https://api.stripe.com/v1/charges', {
+        headers: { authorization: `Bearer ${placeholder}`, 'x-echo': placeholder },
+      }), env, PARAMS, undefined);
+
+      expect([refused.status, upstream.seen.length]).toEqual([403, 0]);
+    } finally { upstream.restore(); }
+  });
+
+  test('declared to ride in a named header, it reaches the host there alone', async () => {
+    const { env, placeholder } = await realVault({ granted: true, position: { kind: 'header', name: 'X-API-Key' } });
+    const upstream = reflecting();
+
+    try {
+      const response = await handleContainerEgress(new Request('https://api.stripe.com/v1/charges', { headers: { 'x-api-key': placeholder } }), env, PARAMS, undefined);
+
+      expect(placesOf(upstream.seen[0])).toEqual(['header x-api-key']);
+      expect(await response.text()).not.toContain(SECRET);
+    } finally { upstream.restore(); }
+  });
+
+  test('declared to ride in a query parameter, it reaches the host there alone', async () => {
+    const { env, placeholder } = await realVault({ granted: true, position: { kind: 'query', name: 'key' } });
+    const upstream = reflecting();
+
+    try {
+      await handleContainerEgress(new Request(`https://api.stripe.com/v1/geocode?address=x&key=${placeholder}`), env, PARAMS, undefined);
+
+      expect(placesOf(upstream.seen[0])).toEqual(['url']);
+      expect(new URL(upstream.seen[0]?.url ?? 'https://x.invalid/').searchParams.get('key')).toBe(SECRET);
+    } finally { upstream.restore(); }
+  });
+});
 
 describe('the secret reaches the upstream and comes back scrubbed', () => {
   test('the placeholder becomes the secret on the wire to the bound host', async () => {

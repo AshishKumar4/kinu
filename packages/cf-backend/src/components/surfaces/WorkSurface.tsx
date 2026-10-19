@@ -1,5 +1,5 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { GlobeIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview, OwedOwnerIntent } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-workspace-reads";
@@ -15,7 +15,7 @@ import type { MemoryEntry, ForkNode, ExecutorCommandResult, TabPresence } from "
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
 import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
-import { PreviewFrame, type PublicLink } from "@/components/PreviewFrame";
+import { PreviewFrame, useComputerPreviewLink } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { StatusDot } from "@/components/ui/Status";
 import type { AgentSurfaceProps } from "./AgentSurface";
@@ -215,14 +215,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
   }, [settled, props.tabPresence, workspaceKey]);
 
   const openPort = surface === null ? undefined : openPortOf(surface, ports);
-  const computerPort = openPort?.executor === "computer" ? openPort.port : null;
-  const { rpc } = props;
-
-  // A computer's preview opens for its owner alone unless they make it a public link; a workspace preview always does.
-  const publicLink = useMemo<PublicLink | undefined>(() => (computerPort === null ? undefined : {
-    read: async () => (await rpc("getComputerPreviewPublic", [computerPort])).public,
-    set: async (open) => { await rpc("setComputerPreviewPublic", [computerPort, open]); },
-  }), [computerPort, rpc]);
+  const publicLink = useComputerPreviewLink(openPort, props.rpc);
 
   const previewSelected = surface?.startsWith(SLATE_PREFIX) === true || surface?.startsWith("preview:") === true;
   // One-shot intent: an Environment card's Files action opens that environment's root.
@@ -357,7 +350,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onConnectDevice={openConnect}
               />
             )}
-            {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} {...(publicLink !== undefined && { publicLink })} /></div></div>}
+            {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} publicLink={publicLink} /></div></div>}
             <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>

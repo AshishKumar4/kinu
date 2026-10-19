@@ -16,60 +16,11 @@ type SealedMember = 'get' | 'put' | 'list';
  * values between keys over the raw storage, and a value it moved must still open.
  */
 export function mcpOAuthStorage(ctx: { readonly storage: DurableObjectStorage; readonly id: DurableObjectId }, env: CredentialEncryptionEnv): DurableObjectStorage {
-  const { storage } = ctx;
-  const aad = `${ctx.id.toString()}:mcp-oauth`;
+  const sealed = new SealedValues(ctx.storage, env, `${ctx.id.toString()}:mcp-oauth`);
 
-  const seal = async (value: JsonValue): Promise<string> => (await createCredentialCipher(env)).seal(aad, JSON.stringify(value));
-
-  /**
-   * A value that does not open (stored before logins were sealed, or under another key) reads as no value: to the SDK
-   * that is a server with no login, which it shows as needing sign-in, with the link to sign in again.
-   */
-  const open = (key: string, stored: JsonValue): Promise<JsonValue | undefined> => settle(Effect.catch(
-    attempt({ doing: `opening the stored MCP sign-in at ${key}`, otherwise: 'bad_input' }, async () => {
-      if (typeof stored !== 'string') throw new KinuError('bad_input', 'the stored value is not a sealed envelope');
-      const plaintext = await (await createCredentialCipher(env)).open(aad, stored);
-
-      return tolerate(() => parseJsonValue(plaintext), 'malformed-input');
-    }),
-    (failure) => Effect.sync(() => {
-      diagnostics.failure('mcp.oauth_unopened', failure, { server: key.split('/')[2] ?? '' });
-
-      return undefined;
-    }),
-  ));
-
-  const openAll = async (stored: Map<string, JsonValue>): Promise<Map<string, JsonValue>> => {
-    const opened = new Map<string, JsonValue>();
-
-    for (const [key, value] of stored) {
-      const read = await open(key, value);
-
-      if (read !== undefined) opened.set(key, read);
-    }
-
-    return opened;
-  };
-
-  // Untyped as the platform's members: their `<T>` overloads promise any type a caller names, which no sealed read can.
-  const sealed: Record<SealedMember, (...args: never[]) => Promise<JsonValue | Map<string, JsonValue> | undefined | void>> = {
-    get: async (keys: string | string[]) => {
-      if (typeof keys !== 'string') return openAll(await storage.get<JsonValue>(keys));
-      const stored = await storage.get<JsonValue>(keys);
-
-      return stored === undefined ? undefined : open(keys, stored);
-    },
-    put: async (entries: string | Record<string, JsonValue>, value?: JsonValue) => {
-      if (typeof entries === 'string') return storage.put(entries, await seal(value ?? null));
-
-      return storage.put(Object.fromEntries(await Promise.all(Object.entries(entries).map(async ([key, entry]) => [key, await seal(entry)]))));
-    },
-    list: async (options?: DurableObjectListOptions) => openAll(await storage.list<JsonValue>(options)),
-  };
-
-  return new Proxy(storage, {
+  return new Proxy(ctx.storage, {
     get(target, property) {
-      if (property === 'get' || property === 'put' || property === 'list') return sealed[property];
+      if (property === 'get' || property === 'put' || property === 'list') return sealed[property].bind(sealed);
 
       if (!isMember(target, property)) return undefined;
       const member = target[property];
@@ -77,6 +28,64 @@ export function mcpOAuthStorage(ctx: { readonly storage: DurableObjectStorage; r
       return typeof member === 'function' ? member.bind(target) : member;
     },
   });
+}
+
+/** The value reads and writes the SDK's provider makes, sealed; typed loosely, as no sealed read can be any `<T>` asked. */
+class SealedValues implements Record<SealedMember, (...args: never[]) => Promise<JsonValue | Map<string, JsonValue> | undefined | void>> {
+  constructor(private readonly storage: DurableObjectStorage, private readonly env: CredentialEncryptionEnv, private readonly aad: string) {}
+
+  get(keys: string | string[]): Promise<JsonValue | Map<string, JsonValue> | undefined> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (typeof keys !== 'string') return yield* this.openAll(yield* Effect.promise(() => this.storage.get<JsonValue>(keys)));
+      const stored = yield* Effect.promise(() => this.storage.get<JsonValue>(keys));
+
+      return stored === undefined ? undefined : yield* this.open(keys, stored);
+    }));
+  }
+
+  async put(entries: string | Record<string, JsonValue>, value?: JsonValue): Promise<void> {
+    if (typeof entries === 'string') return this.storage.put(entries, await this.seal(value ?? null));
+
+    return this.storage.put(Object.fromEntries(await Promise.all(Object.entries(entries).map(async ([key, entry]) => [key, await this.seal(entry)]))));
+  }
+
+  list(options?: DurableObjectListOptions): Promise<Map<string, JsonValue>> {
+    return settle(Effect.flatMap(Effect.promise(() => this.storage.list<JsonValue>(options)), (stored) => this.openAll(stored)));
+  }
+
+  private async seal(value: JsonValue): Promise<string> {
+    return (await createCredentialCipher(this.env)).seal(this.aad, JSON.stringify(value));
+  }
+
+  /**
+   * A value that does not open (stored before logins were sealed, or under another key) reads as no value: to the SDK
+   * that is a server with no login, which it shows as needing sign-in, with the link to sign in again.
+   */
+  private open(key: string, stored: JsonValue): Effect.Effect<JsonValue | undefined> {
+    const { env, aad } = this;
+
+    return Effect.catch(
+      Effect.gen(function* () {
+        if (typeof stored !== 'string') return yield* new KinuError('bad_input', `the stored MCP sign-in at ${key} is not a sealed envelope`);
+        const plaintext = yield* attempt({ doing: `opening the stored MCP sign-in at ${key}`, otherwise: 'bad_input' }, async () => (await createCredentialCipher(env)).open(aad, stored));
+
+        return tolerate(() => parseJsonValue(plaintext), 'malformed-input');
+      }),
+      (failure) => Effect.sync(() => {
+        diagnostics.failure('mcp.oauth_unopened', failure, { server: key.split('/')[2] ?? '' });
+
+        return undefined;
+      }),
+    );
+  }
+
+  private openAll(stored: Map<string, JsonValue>): Effect.Effect<Map<string, JsonValue>> {
+    return Effect.reduce(stored, () => new Map<string, JsonValue>(), (opened, [key, value]) => Effect.map(this.open(key, value), (read) => {
+      if (read !== undefined) opened.set(key, read);
+
+      return opened;
+    }));
+  }
 }
 
 function isMember(storage: DurableObjectStorage, property: string | symbol): property is keyof DurableObjectStorage {

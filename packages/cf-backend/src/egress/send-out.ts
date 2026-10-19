@@ -11,7 +11,7 @@ import {
   type EgressInjection, type EgressInjectionResult, type EgressRequestFacts, type GitHubRecorder, type ObjectNamespace,
   type OwnerCapabilityEnv, type ScrubReplacement, type UserCaller,
 } from '@kinu.run/core';
-import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 
 /** Narrow on purpose, like `runtime.ts`'s `RuntimeUserDOClient`. */
 interface EgressVaultClient {
@@ -33,6 +33,11 @@ export interface ContainerEgressEnv<Id> extends OwnerCapabilityEnv {
  * secret as they stand. A request naming none costs no round trip; with no `vault` (a program run for a share's viewer)
  * one naming a placeholder is refused. Every egress that carries a program's requests out sends them here.
  */
+/** {@link sendOut} as a promise, for an egress whose own entry awaits it (`codemode-egress.ts`). */
+export function sendOutRequest<Id>(request: Request, env: ContainerEgressEnv<Id>, vault: SecretVault | null): Promise<Response> {
+  return settle(sendOut(request, env, vault, undefined));
+}
+
 export function sendOut<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,

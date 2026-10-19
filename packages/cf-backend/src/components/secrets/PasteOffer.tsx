@@ -3,14 +3,13 @@
  * workspace's agents get it as `$NAME` without ever seeing it, and the draft keeps `$NAME` in its place; or to send it
  * anyway. Nothing leaves the browser until they choose.
  */
-import { useState, type ReactNode } from "react";
-import { Effect } from "effect";
+import { useRef, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import { KeyIcon, ShieldWarningIcon } from "@phosphor-icons/react";
-import { detach, showing } from "@kinu.run/core/obs";
 import { pastedSecrets, type PastedSecret } from "@kinu.run/core";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
+import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { Switch } from "@/components/ui/Switch";
 import { putSecrets } from "@/lib/user-api";
 import { rowsReady, secretEntries, SecretRows, type SecretDraft } from "@/components/secrets/SecretRows";
@@ -26,8 +25,11 @@ function described(found: readonly PastedSecret[]): string {
 
 /** The composer's ways to send the draft, each with the check in front of it, and the card to show while one waits. */
 export interface PastedSecretGuard {
-  /** `act` (a send, a branch) runs when the draft holds no secret, or when the owner chose to send this draft as it is. */
-  readonly guarded: (act: () => void) => () => void;
+  /**
+   * `act` (a send, a branch, by `key`) runs when the draft holds no secret, or when the owner chose to send this draft as
+   * it is; then the `act` of the render they chose in, so what is sent is what they saw.
+   */
+  readonly guarded: (key: string, act: () => void) => () => void;
   readonly offer: ReactNode;
 }
 
@@ -38,17 +40,22 @@ export function usePastedSecretGuard(input: {
   readonly workspace: string | undefined;
 }): PastedSecretGuard {
   const { draft, setDraft, workspace } = input;
-  const [held, setHeld] = useState<{ readonly found: readonly PastedSecret[]; readonly act: () => void } | null>(null);
+  const [held, setHeld] = useState<{ readonly found: readonly PastedSecret[]; readonly draft: string; readonly key: string } | null>(null);
   const [sendAsIs, setSendAsIs] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
-  // Edited out of the draft by hand, a secret no longer waits on the owner.
-  const waiting = held?.found.filter((secret) => draft.includes(secret.value)) ?? [];
+  const acts = useRef(new Map<string, () => void>());
+  // A draft edited since it was held is checked again at its next send: the offer answers only for what it found.
+  const waiting = held !== null && held.draft === draft ? held.found : [];
 
-  const guarded = (act: () => void) => () => {
-    const found = sendAsIs === draft ? [] : pastedSecrets(draft);
+  const guarded = (key: string, act: () => void) => {
+    acts.current.set(key, act);
 
-    if (found.length === 0) act();
-    else setHeld({ found, act });
+    return () => {
+      const found = sendAsIs === draft ? [] : pastedSecrets(draft);
+
+      if (found.length === 0) act();
+      else setHeld({ found, draft, key });
+    };
   };
 
   const moved = (names: ReadonlyMap<string, string>) => {
@@ -67,7 +74,12 @@ export function usePastedSecretGuard(input: {
         This looks like {described(waiting)}. Keep it out of the chat: move it to Secrets and your agents use it without seeing it.
       </p>
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        <Button size="sm" variant="ghost" data-secret-offer-send onClick={() => { setSendAsIs(draft); setHeld(null); held?.act(); }}>Send anyway</Button>
+        <Button size="sm" variant="ghost" data-secret-offer-send onClick={() => {
+          setSendAsIs(draft);
+          setHeld(null);
+
+          if (held !== null) acts.current.get(held.key)?.();
+        }}>Send anyway</Button>
         <FilledButton data-secret-offer-move onClick={() => setMoving(true)}><KeyIcon size={12} /> Move to Secrets</FilledButton>
       </div>
       {moving && <MoveToSecrets found={waiting} workspace={workspace} onClose={() => setMoving(false)} onMoved={moved} />}
@@ -77,6 +89,9 @@ export function usePastedSecretGuard(input: {
   return { guarded, offer };
 }
 
+/** A move closes its dialog itself, by handing the draft its names. */
+const NOTHING_AFTER = (): void => {};
+
 /** The found secrets as rows to name and host, saved together; each value in the draft becomes its `$NAME`. */
 function MoveToSecrets({ found, workspace, onClose, onMoved }: {
   found: readonly PastedSecret[];
@@ -84,30 +99,23 @@ function MoveToSecrets({ found, workspace, onClose, onMoved }: {
   onClose: () => void;
   onMoved: (names: ReadonlyMap<string, string>) => void;
 }) {
-  const [rows, setRows] = useState<SecretDraft[]>(found.map((secret) => ({ name: secret.name, value: secret.value, hosts: secret.hosts.join(", ") })));
+  const [rows, setRows] = useState<SecretDraft[]>(found.map((secret) => ({ name: secret.name, value: secret.value, hosts: secret.hosts.join(", "), position: secret.position })));
   const [allowHere, setAllowHere] = useState(workspace !== undefined);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep(NOTHING_AFTER);
+  const saving = busy !== null;
   // What the draft will say instead, in the names the rows hold now.
   const said = secretEntries(rows).map(({ name }) => `$${name}`).join(", ") || "$NAME";
-
-  const save = () => detach(Effect.gen(function* () {
-    setSaving(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const entries = secretEntries(rows);
-
-      yield* Effect.promise(() => putSecrets(entries, allowHere && workspace !== undefined ? [workspace] : []));
-      onMoved(new Map(entries.map((entry) => [entry.value, entry.name])));
-    }), showing(setError)), Effect.sync(() => setSaving(false)));
-  }));
 
   return (
     <Modal title="Move to Secrets" icon={<KeyIcon size={16} className="p-text-3" />} onClose={onClose} busy={saving} maxWidthClass="max-w-2xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-        <FilledButton data-secret-move-save disabled={!rowsReady(rows) || saving} onClick={save}>{saving ? "Saving…" : `Save and use ${said}`}</FilledButton>
+        <FilledButton data-secret-move-save disabled={!rowsReady(rows) || saving} onClick={() => run("save", async () => {
+          const entries = secretEntries(rows);
+
+          await putSecrets(entries, allowHere && workspace !== undefined ? [workspace] : []);
+          onMoved(new Map(entries.map((entry) => [entry.value, entry.name])));
+        })}>{saving ? "Saving…" : `Save and use ${said}`}</FilledButton>
       </>}>
       <p className="p-row-text p-text-2">
         Stored sealed in your account. Your message will say <code>{said}</code> instead, and agents use the stand-in it holds, which becomes the value only when sent over https to these hosts.

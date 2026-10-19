@@ -4,7 +4,8 @@
  * unit-egress-destination.test.ts): the entrypoint asks, refusals never reach the network, and redirects do not bypass it.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, sandboxPreviewExposures } from '@kinu.run/core';
+import { makeKv } from './helpers/kv';
 import {
   setDiagnosticsSink,
 } from '@kinu.run/core/obs';
@@ -188,6 +189,9 @@ function previewEgress(suffix: string, asOwner = true) {
   Object.assign(view, {
     PREVIEW_HOST_SUFFIX: suffix,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    AUTH_KV: COMPUTER_PREVIEWS,
+    // The computer's box answers a request that reached it; the edge decides whether one does.
+    KinuDevbox: { getByName: (sandbox: string) => ({ fetch: async () => new Response(`computer ${sandbox}`) }) },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (workspace: string) => ({
@@ -209,8 +213,27 @@ function previewEgress(suffix: string, asOwner = true) {
   };
 }
 
+/** The computer of `hello` published port 8080 under this token: the edge admits nothing it did not publish. */
+const COMPUTER_PREVIEWS = makeKv();
+
+await sandboxPreviewExposures(COMPUTER_PREVIEWS, 'kinu-hello').publish(8080, 'p8080_ab12cd34');
+
 describe("a program reaches its own workspace's previews, and no other's", () => {
   afterEach(() => { Reflect.deleteProperty(workersExports, 'default'); });
+
+  test("its computer's preview opens for the owner's program, which carries the workspace's own pass, and not a viewer's", async () => {
+    const url = 'https://8080-kinu-hello-p8080_ab12cd34.previews.example/status';
+    const owner = previewEgress('previews.example');
+    Object.assign(workersExports, { default: owner.self });
+    const owned = await owner.fetch(url);
+
+    expect([owned.status, await owned.text()]).toEqual([200, 'computer kinu-hello']);
+
+    const viewer = previewEgress('previews.example', false);
+    Object.assign(workersExports, { default: viewer.self });
+    expect((await viewer.fetch(url)).status).toBe(403);
+    expect(attempted).toEqual([]);
+  });
 
   test('its own preview is served by this Worker, never the network', async () => {
     const egress = previewEgress('previews.example');
@@ -259,7 +282,7 @@ describe("a program spends its workspace's secrets as a command does, and a view
   async function egressFor(props: { readonly ownerUserId: string | null; readonly asOwner: boolean }) {
     const harness = createTestUserDO();
     const workspace: UserCaller = { workspaceToken: await provisionTestWorkspace(harness, 'hello') };
-    await harness.userDO.putSecrets(await testOwner(), [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], value: SECRET }], ['hello']);
+    await harness.userDO.putSecrets(await testOwner(), [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position: { kind: 'authorization' }, value: SECRET }], ['hello']);
     const placeholder = (await harness.userDO.grantedSecrets(workspace)).granted[0]?.placeholder ?? '';
 
     const env = {

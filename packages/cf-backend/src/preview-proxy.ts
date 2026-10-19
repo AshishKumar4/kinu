@@ -96,7 +96,7 @@ async function unadmitted(
   const cookie = await viewerCookie(env, preview.workspace, preview.key, request.headers.get('cookie'));
 
   if (cookie !== null && !cookie.consented && ownRequest(request, origin, cookie.subject === PREVIEW_SELF)) return null;
-  diagnostics.event('preview.route.refused', { port: preview.port, handle: 'computer', reason: cookie === null ? 'no-viewer' : 'not-owner', owner: '', detail: '' });
+  diagnostics.event('preview.computer.refused', { port: preview.port, reason: cookie === null ? 'no-viewer' : 'not-owner' });
   const entry = cookie === null && isNavigation(request) ? previewEntryUrl(env, request.url) : null;
   const headers = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
 

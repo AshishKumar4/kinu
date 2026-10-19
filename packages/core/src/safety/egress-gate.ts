@@ -5,6 +5,7 @@
  */
 
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { settleSync } from '../obs/effect';
 
 /** Marks a placeholder, so a scan finds one inside any URL or header value and never mistakes a secret for one. */
@@ -38,7 +39,55 @@ export interface EgressSecretBinding {
   readonly name: string;
   /** Hostnames or `*` globs ({@link egressHostMatches}) it may be sent to. */
   readonly hosts: readonly string[];
+  readonly position: SecretPosition;
   readonly placeholder: string;
+}
+
+/**
+ * Where in a request a secret may be sent: the one place its API reads a credential from, and nowhere an allowed host
+ * could store or echo it (a URL path names a stored key; a custom header gets logged). The `Authorization` header by
+ * default, a Basic credential in it included; else one named header (`X-API-Key`), or one named query parameter
+ * (Google's `?key=`).
+ */
+export const SecretPositionSchema = v.variant('kind', [
+  v.object({ kind: v.literal('authorization') }),
+  v.object({ kind: v.literal('header'), name: v.string() }),
+  v.object({ kind: v.literal('query'), name: v.string() }),
+]);
+
+export type SecretPosition = v.InferOutput<typeof SecretPositionSchema>;
+
+/** Where it goes, in a sentence's words: "the Authorization header", "the X-API-Key header", "the key query parameter". */
+export function positionWords(position: SecretPosition): string {
+  if (position.kind === 'authorization') return 'the Authorization header';
+
+  return position.kind === 'header' ? `the ${position.name} header` : `the ${position.name} query parameter`;
+}
+
+/** The header a position names, lower-cased as a request's header names are compared; null for a query parameter. */
+function positionHeader(position: SecretPosition): string | null {
+  if (position.kind === 'query') return null;
+
+  return position.kind === 'authorization' ? 'authorization' : position.name.toLowerCase();
+}
+
+/** Where `placeholder` appears outside `position`, in words, or null when it is only there. */
+function strayPosition(facts: EgressRequestFacts, placeholder: string, position: SecretPosition): string | null {
+  const url = URL.parse(facts.url);
+
+  if (url === null) return 'an unparsed URL';
+
+  if (position.kind === 'query') url.searchParams.delete(position.name);
+
+  if (url.href.includes(placeholder)) return position.kind === 'query' ? 'the URL outside that parameter' : 'the URL';
+
+  for (const [name, value] of facts.headers) {
+    if (name.toLowerCase() === positionHeader(position)) continue;
+
+    if ((basicCredential(value)?.decoded ?? value).includes(placeholder)) return `the ${name} header`;
+  }
+
+  return null;
 }
 
 /** Case-insensitive host match; `*` spans any run, pattern anchored at both ends to block suffix tricks. */
@@ -161,7 +210,7 @@ export function planEgress(
         status: 403,
         // Names the placeholder (the container has it), never the secret.
         reason: 'This request carries a secret placeholder that is not granted to this workspace. The secret was '
-          + 'deleted, or the owner has not allowed it here (Settings › Secrets).',
+          + 'deleted, or the owner has not allowed it here (Settings > Secrets).',
       };
     }
 
@@ -171,6 +220,17 @@ export function planEgress(
         status: 403,
         reason: `The secret ${binding.name} may be sent to ${binding.hosts.join(', ')}, and this request goes to `
           + `${facts.host}. A placeholder is only substituted at the hosts the owner set for its secret.`,
+      };
+    }
+
+    const stray = strayPosition(facts, placeholder, binding.position);
+
+    if (stray !== null) {
+      return {
+        kind: 'refuse',
+        status: 403,
+        reason: `The secret ${binding.name} may be sent only in ${positionWords(binding.position)}, and this request also `
+          + `has it in ${stray}. A secret goes only where its API reads a credential, never where a host could store or echo it.`,
       };
     }
 

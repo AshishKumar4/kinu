@@ -10,7 +10,9 @@ import type { SecretSummary } from "@/lib/user-api";
 import { Composer } from "@/components/Composer";
 import { PreviewFrame, type PublicLink } from "@/components/PreviewFrame";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
-import type { TurnLiveness } from "@kinu.run/core";
+import { SecretPositionSchema, type TurnLiveness } from "@kinu.run/core";
+
+const AUTHORIZATION = { kind: "authorization" } as const;
 
 const DAY = 864e5;
 
@@ -21,14 +23,16 @@ const TITLES = new Map([["perf-audit", "Dew"], ["email-triage", "Support inbox"]
 
 const STOCK: SecretSummary[] = [
   // Deploying the site with wrangler: a token the egress spends at Cloudflare's API.
-  { name: "CLOUDFLARE_API_TOKEN", hosts: ["api.cloudflare.com"], updatedAt: NOW - DAY, grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }] },
+  { name: "CLOUDFLARE_API_TOKEN", hosts: ["api.cloudflare.com"], position: AUTHORIZATION, updatedAt: NOW - DAY, grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }] },
   // Reading production logs over Postgres: raw TCP, where a stand-in cannot work, so this workspace's agents read it.
-  { name: "DATABASE_PASSWORD", hosts: ["logs-db.dew.dev"], updatedAt: NOW - 12 * DAY, grants: [{ workspace: "perf-audit", title: "Dew", reveal: true }] },
+  { name: "DATABASE_PASSWORD", hosts: ["logs-db.dew.dev"], position: AUTHORIZATION, updatedAt: NOW - 12 * DAY, grants: [{ workspace: "perf-audit", title: "Dew", reveal: true }] },
   {
-    name: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], updatedAt: NOW - 3 * DAY,
+    name: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], position: AUTHORIZATION, updatedAt: NOW - 3 * DAY,
     grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }, { workspace: "email-triage", title: "Support inbox", reveal: false }],
   },
-  { name: "OPENAI_API_KEY", hosts: ["api.openai.com"], updatedAt: NOW - 40 * DAY, grants: [] },
+  { name: "OPENAI_API_KEY", hosts: ["api.openai.com"], position: AUTHORIZATION, updatedAt: NOW - 40 * DAY, grants: [] },
+  // Google reads a Maps key from `?key=`: the one place it may go.
+  { name: "GOOGLE_MAPS_KEY", hosts: ["maps.googleapis.com"], position: { kind: "query", name: "key" }, updatedAt: NOW - 6 * DAY, grants: [{ workspace: "design-sys", title: "Kinu website", reveal: false }] },
 ];
 
 let held: SecretSummary[] = new URLSearchParams(location.search).get("secrets") === "empty" ? [] : STOCK;
@@ -37,12 +41,15 @@ let held: SecretSummary[] = new URLSearchParams(location.search).get("secrets") 
 const saved: { readonly names: readonly string[]; readonly grantTo: readonly string[] }[] = [];
 
 const PutSchema = v.object({
-  entries: v.array(v.object({ name: v.string(), hosts: v.array(v.string()), value: v.string() })),
+  entries: v.array(v.object({ name: v.string(), hosts: v.array(v.string()), position: SecretPositionSchema, value: v.string() })),
   grantTo: v.array(v.string()),
 });
 
-function answer(body: SecretSummary[] | { readonly ok: boolean } | { readonly error: string }, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+/** The routes' answer to a write, as the wire carries it. */
+const DONE = '{"ok":true}';
+
+function answer(body: SecretSummary[] | { readonly error: string } | typeof DONE, status = 200): Response {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
 function withGrant(secret: SecretSummary, workspace: string, reveal: boolean): SecretSummary {
@@ -63,7 +70,7 @@ export function secretsFixture(path: string, method: string, body: BodyInit | nu
 
     for (const entry of put.entries) {
       const before = held.find((secret) => secret.name === entry.name);
-      let next: SecretSummary = { name: entry.name, hosts: entry.hosts, updatedAt: Date.now(), grants: before?.grants ?? [] };
+      let next: SecretSummary = { name: entry.name, hosts: entry.hosts, position: entry.position, updatedAt: Date.now(), grants: before?.grants ?? [] };
 
       for (const workspace of put.grantTo) next = next.grants.some((grant) => grant.workspace === workspace) ? next : withGrant(next, workspace, false);
       held = [...held.filter((secret) => secret.name !== entry.name), next].sort((a, b) => a.name.localeCompare(b.name));
@@ -72,18 +79,18 @@ export function secretsFixture(path: string, method: string, body: BodyInit | nu
     saved.push({ names: put.entries.map((entry) => entry.name), grantTo: put.grantTo });
     document.documentElement.dataset.gallerySecretsSaved = JSON.stringify(saved);
 
-    return answer({ ok: true });
+    return answer(DONE);
   }
 
-  const [, name = "", rest = "", workspace = ""] = /^\/api\/user\/secrets\/([^/]+)(?:\/(hosts|grants)(?:\/([^/]+))?)?$/.exec(path) ?? [];
+  const [, name = "", rest = "", workspace = ""] = /^\/api\/user\/secrets\/([^/]+)(?:\/(destination|grants)(?:\/([^/]+))?)?$/.exec(path) ?? [];
   const secretName = decodeURIComponent(name);
 
-  if (rest === "hosts" && method === "PUT") {
-    const { hosts } = v.parse(v.object({ hosts: v.array(v.string()) }), JSON.parse(v.parse(v.string(), body)));
+  if (rest === "destination" && method === "PUT") {
+    const { hosts, position } = v.parse(v.object({ hosts: v.array(v.string()), position: SecretPositionSchema }), JSON.parse(v.parse(v.string(), body)));
 
-    held = held.map((secret) => (secret.name === secretName ? { ...secret, hosts } : secret));
+    held = held.map((secret) => (secret.name === secretName ? { ...secret, hosts, position } : secret));
 
-    return answer({ ok: true });
+    return answer(DONE);
   }
 
   if (rest === "grants" && method === "PUT") {
@@ -91,19 +98,19 @@ export function secretsFixture(path: string, method: string, body: BodyInit | nu
 
     held = held.map((secret) => (secret.name === secretName ? withGrant(secret, decodeURIComponent(workspace), reveal) : secret));
 
-    return answer({ ok: true });
+    return answer(DONE);
   }
 
   if (rest === "grants" && method === "DELETE") {
     held = held.map((secret) => (secret.name === secretName ? { ...secret, grants: secret.grants.filter((grant) => grant.workspace !== decodeURIComponent(workspace)) } : secret));
 
-    return answer({ ok: true });
+    return answer(DONE);
   }
 
   if (rest === "" && method === "DELETE") {
     held = held.filter((secret) => secret.name !== secretName);
 
-    return answer({ ok: true });
+    return answer(DONE);
   }
 
   return null;
@@ -130,7 +137,7 @@ export function SecretPasteFrame() {
       <div className="mx-auto w-full max-w-[820px] flex-1 space-y-2 px-5 py-8">
         {sent.map((text, index) => <div key={index} className="ml-auto max-w-[80%] rounded-lg p-recessed px-3 py-2 p-row-text">{text}</div>)}
       </div>
-      <Composer value={draft} onValueChange={setDraft} onSend={guard.guarded(send)} onStop={() => {}} placeholder="Send a message..."
+      <Composer value={draft} onValueChange={setDraft} onSend={guard.guarded("send", send)} onStop={() => {}} placeholder="Send a message..."
         disabled={false} liveness={IDLE} attention={guard.offer} />
     </div>
   );

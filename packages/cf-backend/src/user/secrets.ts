@@ -4,11 +4,12 @@
  */
 import {
   createCredentialCipher, deleteSecret, grantedSecrets, grantSecret, listSecrets, objectNamed, putSecrets, resolveEgressInjection,
-  revealedSecrets, revokeSecretGrant, setSecretHosts,
+  revealedSecrets, revokeSecretGrant, setSecretDestination,
   type EgressInjectionResult, type EgressRequestFacts, type EgressVaultDeps, type GrantedSecrets, type SecretInput,
-  type SecretSummary, type UserCaller,
+  type ResolvedCaller, type SecretDestination, type SecretSummary, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import type { UserObjectHost } from './user-host';
 
 export class UserSecrets {
@@ -24,72 +25,101 @@ export class UserSecrets {
   }
 
   /** Never a value or a placeholder. */
-  async listSecrets(caller: UserCaller): Promise<SecretSummary[]> {
-    await this.host.requireTier(caller, 'secrets.manage');
+  listSecrets(caller: UserCaller): Promise<SecretSummary[]> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.manage');
 
-    return listSecrets(this.host.ctx.storage.sql);
+      return listSecrets(this.host.ctx.storage.sql);
+    }));
   }
 
-  async putSecrets(caller: UserCaller, entries: readonly SecretInput[], grantTo: readonly string[]): Promise<void> {
-    await this.host.requireTier(caller, 'secrets.manage');
-    await this.moved(await putSecrets(await this.deps(), entries, grantTo));
+  putSecrets(caller: UserCaller, entries: readonly SecretInput[], grantTo: readonly string[]): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.manage');
+      const deps = yield* Effect.promise(() => this.deps());
+
+      yield* this.moved(yield* Effect.promise(() => putSecrets(deps, entries, grantTo)));
+    }));
   }
 
-  async setSecretHosts(caller: UserCaller, name: string, hosts: readonly string[]): Promise<void> {
-    await this.host.requireTier(caller, 'secrets.manage');
-    await this.moved(await setSecretHosts(this.host.ctx.storage.sql, name, hosts));
+  setSecretDestination(caller: UserCaller, name: string, destination: SecretDestination): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.manage');
+      yield* this.moved(yield* Effect.promise(() => setSecretDestination(this.host.ctx.storage.sql, name, destination)));
+    }));
   }
 
-  async deleteSecret(caller: UserCaller, name: string): Promise<void> {
-    await this.host.requireTier(caller, 'secrets.manage');
-    await this.moved(await deleteSecret(this.host.ctx.storage.sql, name));
+  deleteSecret(caller: UserCaller, name: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.manage');
+      yield* this.moved(yield* Effect.promise(() => deleteSecret(this.host.ctx.storage.sql, name)));
+    }));
   }
 
-  async grantSecret(caller: UserCaller, input: { readonly name: string; readonly workspace: string; readonly reveal: boolean }): Promise<void> {
-    await this.host.requireTier(caller, 'secrets.manage');
-    await grantSecret(this.host.ctx.storage.sql, input);
-    await this.moved([input.workspace]);
+  grantSecret(caller: UserCaller, input: { readonly name: string; readonly workspace: string; readonly reveal: boolean }): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.manage');
+      yield* Effect.promise(() => grantSecret(this.host.ctx.storage.sql, input));
+      yield* this.moved([input.workspace]);
+    }));
   }
 
-  async revokeSecretGrant(caller: UserCaller, input: { readonly name: string; readonly workspace: string }): Promise<void> {
-    await this.host.requireTier(caller, 'secrets.manage');
+  revokeSecretGrant(caller: UserCaller, input: { readonly name: string; readonly workspace: string }): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.manage');
 
-    if (revokeSecretGrant(this.host.ctx.storage.sql, input)) await this.moved([input.workspace]);
+      if (revokeSecretGrant(this.host.ctx.storage.sql, input)) yield* this.moved([input.workspace]);
+    }));
   }
 
   /** The calling workspace's own grants; the owner capability names no workspace, so it has none to read. */
-  async grantedSecrets(caller: UserCaller): Promise<GrantedSecrets> {
-    return grantedSecrets(this.host.ctx.storage.sql, await this.callingWorkspace(caller));
+  grantedSecrets(caller: UserCaller): Promise<GrantedSecrets> {
+    return settle(Effect.map(this.callingWorkspace(caller), (workspace) => grantedSecrets(this.host.ctx.storage.sql, workspace)));
   }
 
   /** The values the calling workspace's agents may read; asked for each command and never kept there. */
-  async revealedSecrets(caller: UserCaller): Promise<Record<string, string>> {
-    return revealedSecrets(await this.deps(), await this.callingWorkspace(caller));
+  revealedSecrets(caller: UserCaller): Promise<Record<string, string>> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const workspace = yield* this.callingWorkspace(caller);
+      const deps = yield* Effect.promise(() => this.deps());
+
+      return yield* Effect.promise(() => revealedSecrets(deps, workspace));
+    }));
   }
 
   /** `workspace` comes from the egress's own sealed props, never from the program whose request this is. */
-  async resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
-    await this.host.requireTier(caller, 'secrets.inject');
+  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.inject');
+      const deps = yield* Effect.promise(() => this.deps());
 
-    return resolveEgressInjection(await this.deps(), facts, workspace);
-  }
-
-  private async callingWorkspace(caller: UserCaller): Promise<string> {
-    const resolved = await this.host.requireTier(caller, 'secrets.read_self');
-
-    if (resolved.kind !== 'workspace') throw new KinuError('denied', 'Only a workspace reads its own secrets; this call named none.');
-
-    return resolved.workspace;
-  }
-
-  /** Each workspace whose secrets changed drops what it holds of them, so its next command reads them as they stand. */
-  private async moved(workspaces: readonly string[]): Promise<void> {
-    await Promise.all(workspaces.map(async (workspace) => {
-      try {
-        await objectNamed(this.host.env.OrchestratorAgent, workspace).secretsMoved();
-      } catch (cause) {
-        diagnostics.event('secrets.workspace_unreachable', { workspace, error: renderThrownChain({ cause }) });
-      }
+      return yield* Effect.promise(() => resolveEgressInjection(deps, facts, workspace));
     }));
+  }
+
+  /** The caller's tier, refused as the owner's object refuses any call: its refusal is the caller's answer. */
+  private require(caller: UserCaller, capability: 'secrets.manage' | 'secrets.inject' | 'secrets.read_self'): Effect.Effect<ResolvedCaller> {
+    return Effect.promise(() => this.host.requireTier(caller, capability));
+  }
+
+  private callingWorkspace(caller: UserCaller): Effect.Effect<string, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const resolved = yield* this.require(caller, 'secrets.read_self');
+
+      if (resolved.kind !== 'workspace') return yield* new KinuError('denied', 'Only a workspace reads its own secrets; this call named none.');
+
+      return resolved.workspace;
+    });
+  }
+
+  /**
+   * Each workspace whose secrets changed drops what it holds of them, so its next command reads them as they stand. One
+   * that does not answer keeps its placeholders until its next restart; the egress still judges each request afresh.
+   */
+  private moved(workspaces: readonly string[]): Effect.Effect<void> {
+    return Effect.asVoid(Effect.forEach(workspaces, (workspace) => Effect.catch(
+      attempt({ doing: `telling ${workspace} its secrets moved`, otherwise: 'unavailable' }, () => objectNamed(this.host.env.OrchestratorAgent, workspace).secretsMoved()),
+      (failure) => Effect.sync(() => { diagnostics.failure('secrets.workspace_unreachable', failure, { workspace }); }),
+    ), { concurrency: 'unbounded' }));
   }
 }

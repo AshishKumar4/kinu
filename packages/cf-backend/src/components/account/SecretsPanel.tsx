@@ -4,30 +4,28 @@
  * only when it is sent over https to the hosts listed.
  */
 import { useCallback, useState } from "react";
-import { Effect } from "effect";
 import { Button } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretRightIcon, KeyIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
-import { detach, showing } from "@kinu.run/core/obs";
-import { parseDotenv } from "@kinu.run/core";
+import { parseDotenv, positionWords } from "@kinu.run/core";
 import { Card, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Segmented } from "@/components/ui/Segmented";
 import { Switch } from "@/components/ui/Switch";
-import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { useConfirmation, useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import {
-  deleteSecret, grantSecret, listSecrets, putSecrets, revokeSecretGrant, setSecretHosts, type SecretSummary,
+  deleteSecret, grantSecret, listSecrets, putSecrets, revokeSecretGrant, setSecretDestination, type SecretSummary,
 } from "@/lib/user-api";
 import {
-  hostList, rowsReady, secretEntries, SecretRows, withProvider, WorkspaceAdder, WorkspaceChooser, type ChosenWorkspace, type SecretDraft,
+  AUTHORIZATION, BLANK, hostList, PositionField, rowsReady, secretEntries, SecretRows, withProvider, WorkspaceAdder, WorkspaceChooser,
+  type ChosenWorkspace, type SecretDraft,
 } from "@/components/secrets/SecretRows";
 
-const BLANK: SecretDraft = { name: "", value: "", hosts: "" };
 
 /** What turning reading on lets an agent do; said where the switch is turned, and again as it is asked. */
-export const REVEAL_WARNING = "The value can then enter that workspace's agent context, files, logs and transcripts, and be "
+const REVEAL_WARNING = "The value can then enter that workspace's agent context, files, logs and transcripts, and be "
   + "sent to any host. Turn it on only where the stand-in cannot work: a request body, a database password, or a request "
   + "the program signs itself. If it leaks, rotate the key.";
 
@@ -75,6 +73,7 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
         <span className="font-mono p-row-text font-medium p-text">{secret.name}</span>
         <span className="flex min-w-0 flex-wrap gap-1">
           {secret.hosts.map((host) => <span key={host} className="rounded-sm p-recessed px-1.5 py-0.5 font-mono p-meta p-text-2">{host}</span>)}
+          {secret.position.kind !== "authorization" && <span className="self-center p-meta p-text-3">in {positionWords(secret.position)}</span>}
         </span>
         <span className="ml-auto p-meta p-text-3">
           {grantedWhere(secret)}
@@ -88,39 +87,35 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
 
 function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged: () => void }) {
   const [hosts, setHosts] = useState(secret.hosts.join(", "));
+  const [position, setPosition] = useState(secret.position);
   const [value, setValue] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep(onChanged);
   const { ask, dialog } = useConfirmation();
 
-  const run = (label: string, step: () => Promise<void>) => detach(Effect.gen(function* () {
-    setBusy(label);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(step);
-      onChanged();
-    }), showing(setError)), Effect.sync(() => setBusy(null)));
-  }));
-
-  const hostsMoved = hostList(hosts).join(" ") !== secret.hosts.join(" ");
+  const destinationMoved = hostList(hosts).join(" ") !== secret.hosts.join(" ") || JSON.stringify(position) !== JSON.stringify(secret.position);
 
   return (
     <div className="space-y-5 border-t border-[var(--c-border)] px-5 py-4" data-secret-details={secret.name}>
-      <Field label="Hosts" hint="Where the value may be sent, over https only. *.example.com covers every host under a domain.">
-        <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); run("hosts", async () => { await setSecretHosts(secret.name, hostList(hosts)); }); }}>
-          <input value={hosts} onChange={(e) => setHosts(e.target.value)} spellCheck={false} aria-label={`Hosts ${secret.name} may be sent to`}
-            className={`${inputCls} h-9 min-w-0 flex-1 font-mono`} />
-          <button type="submit" disabled={!hostsMoved || busy !== null} className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">
-            {busy === "hosts" ? "Saving…" : "Save"}
-          </button>
+      <Field label="Where it may go" hint="The hosts it may be sent to, over https only (*.example.com covers a domain), and the one place in a request its API reads it from.">
+        <form className="space-y-2" onSubmit={(event) => {
+          event.preventDefault();
+          run("destination", async () => { await setSecretDestination(secret.name, hostList(hosts), position); });
+        }}>
+          <div className="flex gap-2">
+            <input value={hosts} onChange={(e) => setHosts(e.target.value)} spellCheck={false} aria-label={`Hosts ${secret.name} may be sent to`}
+              className={`${inputCls} h-9 min-w-0 flex-1 font-mono`} />
+            <button type="submit" disabled={!destinationMoved || busy !== null} className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">
+              {busy === "destination" ? "Saving…" : "Save"}
+            </button>
+          </div>
+          <PositionField position={position} onChange={setPosition} label={secret.name} />
         </form>
       </Field>
 
       <Field label="Value" hint="Stored sealed and never shown again. A new value reaches every workspace at its next request.">
         <form className="flex gap-2" onSubmit={(event) => {
           event.preventDefault();
-          run("value", async () => { await putSecrets([{ name: secret.name, hosts: secret.hosts, value }], []); setValue(""); });
+          run("value", async () => { await putSecrets([{ name: secret.name, hosts: secret.hosts, position: secret.position, value }], []); setValue(""); });
         }}>
           <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" placeholder="Paste a new value"
             aria-label={`New value of ${secret.name}`} className={`${inputCls} h-9 min-w-0 flex-1`} />
@@ -177,28 +172,23 @@ function AddSecrets({ onSaved }: { onSaved: () => void }) {
   const [rows, setRows] = useState<SecretDraft[]>([BLANK]);
   const [pasted, setPasted] = useState("");
   const [workspaces, setWorkspaces] = useState<ChosenWorkspace[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep(onSaved);
+  const saving = busy !== null;
   const ready = rowsReady(rows);
   const count = secretEntries(rows).length;
   let action = count > 1 ? `Save ${String(count)} secrets` : "Save secret";
 
   if (saving) action = "Saving…";
 
-  const save = () => detach(Effect.gen(function* () {
-    setSaving(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(() => putSecrets(secretEntries(rows), workspaces.map(({ workspace }) => workspace)));
-      setRows([BLANK]);
-      setPasted("");
-      onSaved();
-    }), showing(setError)), Effect.sync(() => setSaving(false)));
-  }));
-
   return (
-    <form className="space-y-4" data-add-secrets onSubmit={(event) => { event.preventDefault(); save(); }}>
+    <form className="space-y-4" data-add-secrets onSubmit={(event) => {
+      event.preventDefault();
+      run("save", async () => {
+        await putSecrets(secretEntries(rows), workspaces.map(({ workspace }) => workspace));
+        setRows([BLANK]);
+        setPasted("");
+      });
+    }}>
       <Segmented<AddMode> label="How to add" value={mode}
         segments={[{ id: "one", label: "One secret" }, { id: "env", label: "Paste .env" }]}
         onChange={(next) => { setMode(next); setRows([BLANK]); setPasted(""); }} />
@@ -208,7 +198,7 @@ function AddSecrets({ onSaved }: { onSaved: () => void }) {
           placeholder={"OPENAI_API_KEY=sk-…\nDATABASE_PASSWORD=…"}
           onChange={(e) => {
             setPasted(e.target.value);
-            setRows(parseDotenv(e.target.value).map((entry) => withProvider({ name: entry.name, value: entry.value, hosts: "" })));
+            setRows(parseDotenv(e.target.value).map((entry) => withProvider({ name: entry.name, value: entry.value, hosts: "", position: AUTHORIZATION })));
           }}
           className={`${inputCls} font-mono`} />
       )}

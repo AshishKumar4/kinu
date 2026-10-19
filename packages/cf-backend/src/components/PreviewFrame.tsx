@@ -1,10 +1,11 @@
 /** Fills its parent: render inside a sized container. */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Effect } from "effect";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Switch } from "@/components/ui/Switch";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
-import { PREVIEW_SANDBOX, isPreviewUrl } from "@kinu.run/core";
+import { PREVIEW_SANDBOX, isPreviewUrl, type PinnedPreviewPort } from "@kinu.run/core";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { detach, showing } from "@kinu.run/core/obs";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 
@@ -14,7 +15,17 @@ export interface PublicLink {
   set: (open: boolean) => Promise<void>;
 }
 
-export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: PublicLink }) {
+/** A computer's preview opens for its owner alone unless they make it a public link; a workspace preview always does. */
+export function useComputerPreviewLink(port: PinnedPreviewPort | undefined, rpc: WorkspaceRpc): PublicLink | undefined {
+  const computerPort = port?.executor === "computer" ? port.port : null;
+
+  return useMemo(() => (computerPort === null ? undefined : {
+    read: async () => (await rpc("getComputerPreviewPublic", [computerPort])).public,
+    set: async (open: boolean) => { await rpc("setComputerPreviewPublic", [computerPort, open]); },
+  }), [computerPort, rpc]);
+}
+
+export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: PublicLink | undefined }) {
   return (
     <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
       <code className="p-annotation p-text-3 truncate flex-1">{url}</code>
@@ -41,11 +52,11 @@ function PublicLinkSwitch({ link }: { link: PublicLink }) {
     return () => { current = false; };
   }, [link]);
 
-  const change = (next: boolean) => detach(Effect.catchCause(Effect.gen(function* () {
+  const change = useCallback((next: boolean) => detach(Effect.catchCause(Effect.gen(function* () {
     setError(null);
     yield* Effect.promise(() => link.set(next));
     setOpen(next);
-  }), showing(setError)));
+  }), showing(setError))), [link]);
 
   if (open === null) return null;
 
@@ -71,7 +82,7 @@ function PublicLinkSwitch({ link }: { link: PublicLink }) {
 export function PreviewFrame({ url, label, publicLink }: {
   url: string;
   label?: string;
-  publicLink?: PublicLink;
+  publicLink?: PublicLink | undefined;
 }) {
   // The only gate on framed URLs: they come from raw tool output.
   if (!isPreviewUrl(url)) {
@@ -86,7 +97,7 @@ export function PreviewFrame({ url, label, publicLink }: {
 
   return (
     <div className="h-full flex flex-col">
-      <PreviewChrome url={url} {...(publicLink !== undefined && { publicLink })} />
+      <PreviewChrome url={url} publicLink={publicLink} />
       <iframe
         src={url}
         title={label ?? url}

@@ -217,8 +217,8 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { name: 'raiseCredentialFloor', run: (u, c) => u.raiseCredentialFloor(c, 1) },
   // A workspace that could add or grant a secret would grant itself the owner's keys; only the egress opens one.
   { capability: 'secrets.manage', name: 'listSecrets', run: (u, c) => u.listSecrets(c) },
-  { name: 'putSecrets', run: (u, c) => u.putSecrets(c, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], value: 'sk_live_probe_value' }], []) },
-  { name: 'setSecretHosts', run: (u, c) => u.setSecretHosts(c, 'STRIPE_SECRET_KEY', ['api.stripe.com']) },
+  { name: 'putSecrets', run: (u, c) => u.putSecrets(c, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position: { kind: 'authorization' }, value: 'sk_live_probe_value' }], []) },
+  { name: 'setSecretDestination', run: (u, c) => u.setSecretDestination(c, 'STRIPE_SECRET_KEY', { hosts: ['api.stripe.com'], position: { kind: 'authorization' } }) },
   { name: 'deleteSecret', run: (u, c) => u.deleteSecret(c, 'STRIPE_SECRET_KEY') },
   { name: 'grantSecret', run: (u, c) => u.grantSecret(c, { name: 'STRIPE_SECRET_KEY', workspace: 'w', reveal: true }) },
   { name: 'revokeSecretGrant', run: (u, c) => u.revokeSecretGrant(c, { name: 'STRIPE_SECRET_KEY', workspace: 'w' }) },

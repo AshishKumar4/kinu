@@ -29,6 +29,7 @@ import {
 } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
+import { positionWords, type SecretPosition } from '../safety/egress-gate';
 import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
 import { compareCodeUnits, oneLineClip } from '../utils/text';
@@ -108,7 +109,7 @@ export interface DynamicContext {
 }
 
 export interface SecretsInContext {
-  readonly granted: readonly { readonly name: string; readonly hosts: readonly string[]; readonly reveal: boolean }[];
+  readonly granted: readonly { readonly name: string; readonly hosts: readonly string[]; readonly position: SecretPosition; readonly reveal: boolean }[];
   readonly withheld: number;
 }
 
@@ -478,12 +479,13 @@ function secretsSection(secrets: SecretsInContext | undefined): RenderedSection 
   if (secrets === undefined) return null;
 
   const withheld = secrets.withheld === 0 ? [] : [
-    `${String(secrets.withheld)} more ${secrets.withheld === 1 ? 'is' : 'are'} not allowed here: name the one you need and ask the owner to allow it in Settings › Secrets.`,
+    `${String(secrets.withheld)} more ${secrets.withheld === 1 ? 'is' : 'are'} not allowed here: name the one you need and ask the owner to allow it in Settings > Secrets.`,
   ];
 
   return { text: [
     DYNAMIC_SECTION_TITLES.secrets,
-    ...secrets.granted.map((secret) => `- $${secret.name} → ${secret.hosts.join(', ')}${secret.reveal ? ' (readable: holds the value itself)' : ''}`),
+    ...secrets.granted.map((secret) => `- $${secret.name}: to ${secret.hosts.join(', ')}, in ${positionWords(secret.position)}`
+      + (secret.reveal ? '; readable, it holds the value itself' : '')),
     ...withheld,
   ].join('\n') };
 }

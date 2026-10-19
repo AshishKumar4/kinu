@@ -5,6 +5,7 @@
  */
 
 import { CREDENTIALED_URL, credentialValueScanners, secretProvider } from './secret-patterns';
+import type { SecretPosition } from './egress-gate';
 
 export interface DotenvEntry {
   readonly name: string;
@@ -20,11 +21,16 @@ export interface PastedSecret {
   readonly hosts: readonly string[];
   /** Whose credential it looks like, where a shape says: "GitHub". */
   readonly provider: string | null;
+  /** Where its provider's API reads it; the Authorization header where no shape says. */
+  readonly position: SecretPosition;
 }
 
 const DOTENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/;
 
-/** `NAME=value` lines as dotenv reads them: `export` and surrounding quotes dropped, a `#` comment line skipped. */
+/**
+ * `NAME=value` lines as dotenv reads them: `export` dropped, a `#` line skipped. A value opening with a quote runs to
+ * its closing quote, `#` included, and what follows it is a comment; an unquoted one ends at ` #`.
+ */
 export function parseDotenv(text: string): DotenvEntry[] {
   const entries: DotenvEntry[] = [];
 
@@ -33,8 +39,9 @@ export function parseDotenv(text: string): DotenvEntry[] {
 
     if (match === null || line.trimStart().startsWith('#')) continue;
     const [, name = '', raw = ''] = match;
-    const quoted = /^(["'])(.*)\1$/.exec(raw);
-    const value = quoted === null ? raw.replace(/\s+#.*$/, '') : (quoted[2] ?? '');
+    const quote = raw.startsWith('"') || raw.startsWith("'") ? raw.charAt(0) : null;
+    const closing = quote === null ? -1 : raw.indexOf(quote, 1);
+    const value = quote === null ? raw.replace(/\s+#.*$/, '') : raw.slice(1, closing === -1 ? undefined : closing);
 
     if (value !== '') entries.push({ name, value });
   }
@@ -83,6 +90,6 @@ export function pastedSecrets(text: string): PastedSecret[] {
     for (let n = 2; names.has(unique); n++) unique = `${base}_${String(n)}`;
     names.add(unique);
 
-    return { value, name: unique, hosts: provider?.hosts ?? [], provider: provider?.name ?? null };
+    return { value, name: unique, hosts: provider?.hosts ?? [], provider: provider?.name ?? null, position: provider?.position ?? { kind: 'authorization' } };
   });
 }

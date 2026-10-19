@@ -29,6 +29,7 @@ function placeholder(seed: string): string {
 const STRIPE: EgressSecretBinding = {
   name: 'STRIPE_SECRET_KEY',
   hosts: ['api.stripe.com'],
+  position: { kind: 'authorization' },
   placeholder: placeholder('a'),
 };
 
@@ -107,15 +108,44 @@ describe('planEgress', () => {
     });
   });
 
-  test('a placeholder in the URL is substituted too — some APIs want it there', () => {
+  test('a secret read from a query parameter is substituted there, and only there', () => {
+    const google: EgressSecretBinding = { name: 'GOOGLE_API_KEY', hosts: ['*.googleapis.com'], position: { kind: 'query', name: 'key' }, placeholder: placeholder('q') };
+    const at = (url: string) => planEgress({ host: new URL(url).hostname, url, headers: [] }, [google]);
+
+    expect(at(`https://maps.googleapis.com/maps/api/geocode/json?address=x&key=${google.placeholder}`).kind).toBe('forward');
+    expect(at(`https://maps.googleapis.com/maps/api/geocode/json?key=${google.placeholder}&echo=${google.placeholder}`).kind).toBe('refuse');
+    expect(at(`https://maps.googleapis.com/${google.placeholder}?key=${google.placeholder}`).kind).toBe('refuse');
+  });
+
+  test("THE STORAGE CASE: an allowed host's URL naming the secret is refused, so it cannot be stored as a key name", () => {
+    const cloudflare: EgressSecretBinding = { name: 'CLOUDFLARE_API_TOKEN', hosts: ['api.cloudflare.com'], position: { kind: 'authorization' }, placeholder: placeholder('c') };
+
+    const plan = planEgress({
+      host: 'api.cloudflare.com',
+      url: `https://api.cloudflare.com/client/v4/accounts/a1/storage/kv/namespaces/n1/values/${cloudflare.placeholder}`,
+      headers: [['authorization', `Bearer ${cloudflare.placeholder}`]],
+    }, [cloudflare]);
+
+    expect(plan.kind).toBe('refuse');
+    expect(plan.kind === 'refuse' && plan.reason).toContain('only in the Authorization header');
+    expect(plan.kind === 'refuse' && plan.reason).toContain('the URL');
+  });
+
+  test('a secret in a header its API does not read it from is refused, naming the header', () => {
     const plan = planEgress({
       host: 'api.stripe.com',
-      url: `https://api.stripe.com/v1/charges?key=${STRIPE.placeholder}`,
-      headers: [],
+      url: 'https://api.stripe.com/v1/charges',
+      headers: [['authorization', `Bearer ${STRIPE.placeholder}`], ['x-echo', STRIPE.placeholder]],
     }, [STRIPE]);
 
-    expect(plan.kind).toBe('forward');
-    expect(plan.kind === 'forward' && plan.substitutions).toHaveLength(1);
+    expect(plan.kind === 'refuse' && plan.reason).toContain('the x-echo header');
+  });
+
+  test('a secret read from a named header rides in that header whatever its case, and not in Authorization', () => {
+    const anthropic: EgressSecretBinding = { name: 'ANTHROPIC_API_KEY', hosts: ['api.anthropic.com'], position: { kind: 'header', name: 'x-api-key' }, placeholder: placeholder('h') };
+    const sent = (name: string) => planEgress({ host: 'api.anthropic.com', url: 'https://api.anthropic.com/v1/messages', headers: [[name, anthropic.placeholder]] }, [anthropic]).kind;
+
+    expect([sent('X-Api-Key'), sent('authorization')]).toEqual(['forward', 'refuse']);
   });
 
   test('THE EXFILTRATION CASE: a placeholder sent to another host is refused', () => {
@@ -143,7 +173,7 @@ describe('planEgress', () => {
   });
 
   test('a secret with several hosts is substituted at each of them, and refused at any other', () => {
-    const github: EgressSecretBinding = { name: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], placeholder: placeholder('g') };
+    const github: EgressSecretBinding = { name: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], position: { kind: 'authorization' }, placeholder: placeholder('g') };
     const at = (host: string) => planEgress({ host, url: `https://${host}/`, headers: [['authorization', `token ${github.placeholder}`]] }, [github]).kind;
 
     expect([at('api.github.com'), at('github.com'), at('gist.github.com')]).toEqual(['forward', 'forward', 'refuse']);

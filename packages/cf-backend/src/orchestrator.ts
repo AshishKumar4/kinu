@@ -1390,7 +1390,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       capabilityToken: () => this.workspaceCapabilityToken(),
       workspaceBox: (shellId) => this.workspaceBox(shellId),
       workspaceServing: () => this.workspaceServing(),
-      commandEnvironment: this.account.commandEnvironment,
+      commandEnvironment: (use) => this.account.commandEnvironment(use),
       homeHost: () => this.facetHomeHost(),
       homes: this.actorHomes,
       // The root's durable program is always readable because the root is this runtime;
@@ -6822,12 +6822,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * The owner makes the computer's published preview of `port` a public link, opened by anyone holding its URL, or
    * theirs alone again. A port exposed again opens for the owner alone, whatever its last publication was.
    */
-  @callable() async setComputerPreviewPublic(port: number, open: boolean): Promise<{ readonly public: boolean }> {
-    const set = this.env.AUTH_KV !== undefined && await sandboxPreviewExposures(this.env.AUTH_KV, sandboxIdForWorkspace(this.name)).setPublic(port, open);
+  @callable() setComputerPreviewPublic(port: number, open: boolean): Promise<{ readonly public: boolean }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const kv = this.env.AUTH_KV;
+      const set = kv !== undefined && (yield* Effect.promise(() => sandboxPreviewExposures(kv, sandboxIdForWorkspace(this.name)).setPublic(port, open)));
 
-    if (!set) throw new KinuError('missing', `The computer has no published preview of port ${String(port)}: expose the port first.`);
+      if (!set) return yield* new KinuError('missing', `The computer has no published preview of port ${String(port)}: expose the port first.`);
 
-    return { public: open };
+      return { public: open };
+    }));
   }
 
   /** `actor` names a child of this workspace: the read is its own config. */

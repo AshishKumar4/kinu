@@ -125,11 +125,13 @@ export class AccountReads {
    * version moved; the credentials' revision is the answer itself. A turn opens on what the account says now, though a
    * change made while this workspace rested never reached it.
    */
-  async settingsAtOpen(): Promise<void> {
-    const [now] = await Promise.all([this.ask((stub, caller) => stub.getSettingsRevision(caller)), this.secretsAtOpen()]);
+  settingsAtOpen(): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const [now] = yield* Effect.all([Effect.promise(() => this.ask((stub, caller) => stub.getSettingsRevision(caller))), this.secretsAtOpen()], { concurrency: 'unbounded' });
 
-    if (this.heldCatalog.current?.version !== now.catalog) this.heldCatalog.drop();
-    this.heldRevision.hold(now.credentials);
+      if (this.heldCatalog.current?.version !== now.catalog) this.heldCatalog.drop();
+      this.heldRevision.hold(now.credentials);
+    }));
   }
 
   /** The account's credentials revision a turn's open last read; null before one opened in this activation. */
@@ -146,8 +148,8 @@ export class AccountReads {
    * The secrets as a command's variables; a workspace with no owner has none. An account that does not answer costs the
    * command its secrets, never the command: one that needs none runs as it would (8c56762c6), and the next asks again.
    */
-  readonly commandEnvironment: CommandEnvironment = (use) => settle(Effect.catch(
-    attempt({ doing: "reading this workspace's secrets for a command", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
+  commandEnvironment(use: Parameters<CommandEnvironment>[0]): ReturnType<CommandEnvironment> {
+    return settle(Effect.catch(attempt({ doing: "reading this workspace's secrets for a command", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
       if (!this.host.owned()) return {};
       const { granted } = await this.grantedSecrets();
       const placeholders = Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder]));
@@ -155,26 +157,25 @@ export class AccountReads {
       if (use === 'keep' || !granted.some((secret) => secret.reveal)) return placeholders;
 
       return { ...placeholders, ...await this.ask((stub, caller) => stub.revealedSecrets(caller)) };
-    }),
-    (failure) => Effect.sync(() => {
+    }), (failure) => Effect.sync(() => {
       diagnostics.failure('secrets.environment_unread', failure, { workspace: this.host.workspace() });
 
       return {};
-    }),
-  ));
+    })));
+  }
 
   /**
    * Read as a turn opens, so its context names the secrets granted here before any command ran (`secretsHeld`); an
    * account that does not answer costs the turn that section, never the turn.
    */
-  private secretsAtOpen(): Promise<void> {
-    if (!this.host.owned()) return Promise.resolve();
+  private secretsAtOpen(): Effect.Effect<void> {
+    if (!this.host.owned()) return Effect.void;
 
-    return settle(Effect.catch(attempt({ doing: "reading this workspace's secrets as a turn opens", otherwise: 'unavailable' }, async () => {
+    return Effect.catch(attempt({ doing: "reading this workspace's secrets as a turn opens", otherwise: 'unavailable' }, async () => {
       await this.grantedSecrets();
     }), (failure) => Effect.sync(() => {
       diagnostics.failure('secrets.grants_unread', failure, { workspace: this.host.workspace() });
-    })));
+    }));
   }
 
   /** The grants as this workspace last read them, for a step's context; none before a first read answered. */

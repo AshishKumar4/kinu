@@ -853,7 +853,7 @@ export { toolDescription } from './utils/tool-description';
 export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
-  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability,
+  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability, type SecretsInContext,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';
@@ -1485,9 +1485,9 @@ export {
 } from './safety/approval-gate';
 
 export {
-  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, revealHeader,
+  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, revealHeader, positionWords,
   findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
-  createScrubStream, type EgressSecretBinding, type EgressRequestFacts,
+  createScrubStream, SecretPositionSchema, type EgressSecretBinding, type EgressRequestFacts, type SecretPosition,
   type ScrubReplacement,
 } from './safety/egress-gate';
 
@@ -1499,9 +1499,9 @@ export {
 } from './safety/deferred-approval';
 
 export {
-  initEgressVaultTables, listSecrets, putSecrets, setSecretHosts, deleteSecret, grantSecret, revokeSecretGrant,
+  initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
   grantedSecrets, revealedSecrets, resolveEgressInjection,
-  type SecretSummary, type SecretGrant, type SecretInput, type GrantedSecrets, type EgressInjection,
+  type SecretSummary, type SecretGrant, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
   type EgressInjectionResult, type EgressVaultDeps,
 } from './safety/egress-vault';
 
@@ -2205,7 +2205,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposed, sandboxPreviewExposure, sandboxPreviewExposures,
+  sandboxPreviewExposure, sandboxPreviewExposures,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 
@@ -2479,7 +2479,6 @@ export {
 
 export {
   sandboxIdForWorkspace,
-  isKinuSandboxId,
   workspaceOfSandbox,
 } from './preview/sandbox-id';
 

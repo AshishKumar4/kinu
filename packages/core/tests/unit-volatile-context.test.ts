@@ -7,7 +7,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import { z } from 'zod';
-import { runChat, currentDateForPrompt, DynamicContextLedger, renderDynamicContextBlock, fnv1a64, agentDynamicContext, observeSystemPromptHash, renderActiveSkillsSection, type DynamicContext, type PromptExecutorInfo } from '../src/index';
+import { runChat, currentDateForPrompt, DynamicContextLedger, renderDynamicContextBlock, fnv1a64, agentDynamicContext, observeSystemPromptHash, renderActiveSkillsSection, type DynamicContext, type PromptExecutorInfo, type SecretsInContext } from '../src/index';
 import { Fnv1a64 } from '../src/utils/fnv1a';
 import { admitActiveSkills } from '../src/skills/loader';
 import { skillViewPath, WORKSPACE_SKILLS_DIR } from '../src/skills/types';
@@ -482,9 +482,10 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
   });
 
   test("the owner's secrets granted here are named with their hosts; the rest are counted, so forty cost a line", () => {
-    const granted = [
-      { name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], reveal: false },
-      { name: 'DATABASE_PASSWORD', hosts: ['db.example.com'], reveal: true },
+    const granted: SecretsInContext['granted'] = [
+      { name: 'CLOUDFLARE_API_TOKEN', hosts: ['api.cloudflare.com'], position: { kind: 'authorization' }, reveal: false },
+      { name: 'GOOGLE_API_KEY', hosts: ['*.googleapis.com'], position: { kind: 'query', name: 'key' }, reveal: false },
+      { name: 'DATABASE_PASSWORD', hosts: ['logs-db.dew.dev'], position: { kind: 'authorization' }, reveal: true },
     ];
 
     const block = present(renderDynamicContextBlock(agentDynamicContext({ ...sources, secrets: { granted, withheld: 38 } })), 'dynamic context block');
@@ -493,12 +494,15 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     const lines = all.slice(from, all.findIndex((line, at) => at > from && (line === '' || line.startsWith('</'))));
     const section = lines.join('\n');
 
-    expect(lines).toHaveLength(4);
-    expect(section).toContain('$STRIPE_SECRET_KEY → api.stripe.com');
-    expect(section).toContain('$DATABASE_PASSWORD → db.example.com (readable');
+    expect(lines).toHaveLength(5);
+    expect(section).toContain('$CLOUDFLARE_API_TOKEN: to api.cloudflare.com, in the Authorization header');
+    expect(section).toContain('$GOOGLE_API_KEY: to *.googleapis.com, in the key query parameter');
+    expect(section).toContain('$DATABASE_PASSWORD: to logs-db.dew.dev, in the Authorization header; readable');
     expect(section).toContain('38 more are not allowed here');
-    expect(section).toContain('Settings › Secrets');
+    expect(section).toContain('Settings > Secrets');
     expect(block).not.toContain('pxs1_');
+    // Model text stays Latin-1: one character above U+00FF makes the whole prompt two bytes a character.
+    expect(Array.from(section, (char) => char.codePointAt(0) ?? 0).every((point) => point <= 0xff)).toBe(true);
 
     expect('secrets' in agentDynamicContext({ ...sources, secrets: { granted: [], withheld: 0 } })).toBe(false);
   });

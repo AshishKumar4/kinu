@@ -19,6 +19,7 @@ import {
   planEgress,
   type EgressRequestFacts,
   type EgressSecretBinding,
+  type SecretPosition,
 } from './egress-gate';
 
 /** A variable name in every shell and a property in every program; the same shape `parseDotenv` reads. */
@@ -28,10 +29,40 @@ const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
  *  program name a host of its own choosing and have the secret sent there. */
 const HOST_RE = /^(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
+/** A header a secret may ride in: a field name, and none whose meaning is not a credential's to carry. */
+const HEADER_NAME_RE = /^[A-Za-z0-9-]{1,64}$/;
+
+const QUERY_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** Headers a secret never rides in: the request's own routing and framing, and Authorization, which is its own position. */
+const NOT_A_CREDENTIAL_HEADER: ReadonlySet<string> = new Set(['host', 'authorization', 'content-length', 'content-type', 'transfer-encoding', 'connection']);
+
+/**
+ * The stored form of a position, `authorization`, `header:<name>` or `query:<name>`, read and written only here. One
+ * column, so no stored state means nothing (Authorization with a name).
+ */
+const PositionSchema = v.pipe(v.string(), v.rawTransform(({ dataset, addIssue, NEVER }): SecretPosition => {
+  const [kind, name = ''] = dataset.value.split(/:(.*)/s, 2);
+
+  if (kind === 'authorization' && name === '') return { kind: 'authorization' };
+
+  if (kind === 'header' && HEADER_NAME_RE.test(name)) return { kind: 'header', name };
+
+  if (kind === 'query' && QUERY_NAME_RE.test(name)) return { kind: 'query', name };
+  addIssue({ message: `"${dataset.value}" is no secret position` });
+
+  return NEVER;
+}));
+
+function storedPosition(position: SecretPosition): string {
+  return position.kind === 'authorization' ? 'authorization' : `${position.kind}:${position.kind === 'header' ? position.name.toLowerCase() : position.name}`;
+}
+
 /** A secret as the owner's Settings lists it: never its value or placeholder. */
 export interface SecretSummary {
   readonly name: string;
   readonly hosts: readonly string[];
+  readonly position: SecretPosition;
   readonly updatedAt: number;
   readonly grants: readonly SecretGrant[];
 }
@@ -47,7 +78,14 @@ export interface SecretGrant {
 export interface SecretInput {
   readonly name: string;
   readonly hosts: readonly string[];
+  readonly position: SecretPosition;
   readonly value: string;
+}
+
+/** Where a secret may go: its hosts, and its one position in a request to them. */
+export interface SecretDestination {
+  readonly hosts: readonly string[];
+  readonly position: SecretPosition;
 }
 
 /** A workspace's own view: what it may use, with placeholders, and how many of the owner's secrets it may not. */
@@ -79,6 +117,7 @@ export function initEgressVaultTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_secrets (
       name        TEXT PRIMARY KEY,
       hosts       TEXT NOT NULL,
+      position    TEXT NOT NULL,
       placeholder TEXT NOT NULL UNIQUE,
       secret      TEXT NOT NULL,
       updated_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
@@ -99,11 +138,11 @@ function mintEgressPlaceholder(): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
 }
 
-const SecretRowSchema = v.object({ name: v.string(), hosts: v.string(), updated_at: v.number() });
+const SecretRowSchema = v.object({ name: v.string(), hosts: v.string(), position: PositionSchema, updated_at: v.number() });
 
 const GrantRowSchema = v.object({ workspace: v.string(), title: v.string(), name: v.string(), reveal: v.number() });
 
-const BindingRowSchema = v.object({ name: v.string(), hosts: v.string(), placeholder: v.string(), reveal: v.number() });
+const BindingRowSchema = v.object({ name: v.string(), hosts: v.string(), position: PositionSchema, placeholder: v.string(), reveal: v.number() });
 
 /** Every secret and where it is granted, no secret material. */
 export function listSecrets(sql: SqlExec): SecretSummary[] {
@@ -113,12 +152,13 @@ export function listSecrets(sql: SqlExec): SecretSummary[] {
        JOIN user_workspaces w ON w.name = g.workspace ORDER BY w.display_name`,
   ).toArray().map((row) => v.parse(GrantRowSchema, row));
 
-  return sql.exec(`SELECT name, hosts, updated_at FROM user_secrets ORDER BY name`).toArray().map((row) => {
+  return sql.exec(`SELECT name, hosts, position, updated_at FROM user_secrets ORDER BY name`).toArray().map((row) => {
     const secret = v.parse(SecretRowSchema, row);
 
     return {
       name: secret.name,
       hosts: secret.hosts.split(' '),
+      position: secret.position,
       updatedAt: secret.updated_at,
       grants: grants.filter((grant) => grant.name === secret.name).map((grant) => ({ workspace: grant.workspace, title: grant.title, reveal: grant.reveal === 1 })),
     };
@@ -141,6 +181,20 @@ function validHosts(name: string, hosts: readonly string[]): Effect.Effect<strin
   });
 }
 
+/** `position` as stored, once it names a place a credential can ride; refused in the owner's words otherwise. */
+function validPosition(name: string, position: SecretPosition): Effect.Effect<string, KinuError> {
+  if (position.kind === 'header' && (!HEADER_NAME_RE.test(position.name) || NOT_A_CREDENTIAL_HEADER.has(position.name.toLowerCase()))) {
+    return Effect.fail(new KinuError('bad_input', `"${position.name}" is not a header ${name} can be sent in: name the header its API `
+      + 'reads a key from, such as X-API-Key, or choose the Authorization header.'));
+  }
+
+  if (position.kind === 'query' && !QUERY_NAME_RE.test(position.name)) {
+    return Effect.fail(new KinuError('bad_input', `"${position.name}" is not a query parameter ${name} can be sent in: name it as its API does, such as key.`));
+  }
+
+  return Effect.succeed(storedPosition(position));
+}
+
 function registered(sql: SqlExec, workspaces: readonly string[]): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     for (const workspace of workspaces) {
@@ -160,7 +214,7 @@ export function putSecrets(deps: EgressVaultDeps, entries: readonly SecretInput[
   return settle(Effect.gen(function* () {
     if (entries.length === 0) return yield* new KinuError('bad_input', 'Add at least one secret.');
     const names = new Set<string>();
-    const rows: { name: string; hosts: string }[] = [];
+    const rows: { name: string; hosts: string; position: string }[] = [];
 
     for (const entry of entries) {
       if (!SECRET_NAME_RE.test(entry.name)) {
@@ -174,7 +228,7 @@ export function putSecrets(deps: EgressVaultDeps, entries: readonly SecretInput[
       if (entry.value.length === 0) return yield* new KinuError('bad_input', `${entry.name} has no value.`);
 
       if (isEgressPlaceholder(entry.value)) return yield* new KinuError('bad_input', `${entry.name}'s value is a placeholder, not a secret.`);
-      rows.push({ name: entry.name, hosts: yield* validHosts(entry.name, entry.hosts) });
+      rows.push({ name: entry.name, hosts: yield* validHosts(entry.name, entry.hosts), position: yield* validPosition(entry.name, entry.position) });
     }
 
     yield* registered(deps.sql, grantTo);
@@ -183,9 +237,10 @@ export function putSecrets(deps: EgressVaultDeps, entries: readonly SecretInput[
     // No await from here: every row lands in one turn of the object, or none does.
     for (const [index, row] of rows.entries()) {
       deps.sql.exec(
-        `INSERT INTO user_secrets (name, hosts, placeholder, secret) VALUES (?, ?, ?, ?)
-         ON CONFLICT(name) DO UPDATE SET hosts = excluded.hosts, secret = excluded.secret, updated_at = unixepoch() * 1000`,
-        row.name, row.hosts, mintEgressPlaceholder(), sealed[index],
+        `INSERT INTO user_secrets (name, hosts, position, placeholder, secret) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET hosts = excluded.hosts, position = excluded.position, secret = excluded.secret,
+           updated_at = unixepoch() * 1000`,
+        row.name, row.hosts, row.position, mintEgressPlaceholder(), sealed[index],
       );
 
       for (const workspace of grantTo) {
@@ -216,11 +271,13 @@ function known(sql: SqlExec, name: string): Effect.Effect<void, KinuError> {
     : Effect.fail(new KinuError('missing', `There is no secret named ${name}.`));
 }
 
-/** The hosts `name` may be sent to, replaced; returns the workspaces whose secrets moved. */
-export function setSecretHosts(sql: SqlExec, name: string, hosts: readonly string[]): Promise<string[]> {
+/** Where `name` may go, replaced: its hosts and its position; returns the workspaces whose secrets moved. */
+export function setSecretDestination(sql: SqlExec, name: string, destination: SecretDestination): Promise<string[]> {
   return settle(Effect.gen(function* () {
     yield* known(sql, name);
-    sql.exec(`UPDATE user_secrets SET hosts = ?, updated_at = unixepoch() * 1000 WHERE name = ?`, yield* validHosts(name, hosts), name);
+    const hosts = yield* validHosts(name, destination.hosts);
+    const position = yield* validPosition(name, destination.position);
+    sql.exec(`UPDATE user_secrets SET hosts = ?, position = ?, updated_at = unixepoch() * 1000 WHERE name = ?`, hosts, position, name);
 
     return grantedWorkspaces(sql, [name]);
   }));
@@ -258,13 +315,13 @@ export function revokeSecretGrant(sql: SqlExec, input: { readonly name: string; 
 
 function bindings(sql: SqlExec, workspace: string): (EgressSecretBinding & { readonly reveal: boolean })[] {
   return sql.exec(
-    `SELECT s.name, s.hosts, s.placeholder, g.reveal FROM user_secret_grants g JOIN user_secrets s ON s.name = g.name
+    `SELECT s.name, s.hosts, s.position, s.placeholder, g.reveal FROM user_secret_grants g JOIN user_secrets s ON s.name = g.name
       WHERE g.workspace = ? ORDER BY s.name`,
     workspace,
   ).toArray().map((row) => {
     const binding = v.parse(BindingRowSchema, row);
 
-    return { name: binding.name, hosts: binding.hosts.split(' '), placeholder: binding.placeholder, reveal: binding.reveal === 1 };
+    return { name: binding.name, hosts: binding.hosts.split(' '), position: binding.position, placeholder: binding.placeholder, reveal: binding.reveal === 1 };
   });
 }
 

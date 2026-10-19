@@ -2343,7 +2343,7 @@ export abstract class ActorAgent extends Agent<Env> {
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
         turnSurface: () => this.turnSurface(),
-        commandEnvironment: this.account.commandEnvironment,
+        commandEnvironment: (use) => this.account.commandEnvironment(use),
       }, {
         actor: this.actorHandle(),
         rootActor: true,
@@ -3612,7 +3612,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(activeSkills !== null && activeSkills !== undefined && { activeSkills }),
       memoryTail,
       ...(accountFacts !== undefined && { accountFacts }),
-      ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, reveal }) => ({ name, hosts, reveal })), withheld: secrets.withheld } }),
+      ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, position, reveal }) => ({ name, hosts, position, reveal })), withheld: secrets.withheld } }),
       ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,

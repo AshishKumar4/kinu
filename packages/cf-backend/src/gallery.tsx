@@ -7840,6 +7840,8 @@ async function mount() {
   // Frames fully fixed by name; `entries` is the MemoryRouter location for frames that read a route param.
   const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
     ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
+    ["secretpaste", { node: <SecretPasteFrame />, entries: ["/"] }],
+    ["computerpreview", { node: <ComputerPreviewFrame />, entries: ["/"] }],
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_SHOWN} /></div>, entries: ["/"] }],
@@ -7952,8 +7954,6 @@ async function mount() {
   else if (frame === "chatempty") node = <ChatEmptyFrame />;
   else if (frame === "chatloading") node = <ChatLoadingFrame />;
   else if (frame === "composer") node = <ComposerFrame />;
-  else if (frame === "secretpaste") node = <SecretPasteFrame />;
-  else if (frame === "computerpreview") node = <ComputerPreviewFrame />;
   else if (frame === "chathistory") node = <ChatHistoryFrame />;
   else if (frame === "historyauthority") node = <HistoryAuthorityFrame />;
   else if (frame === "rosterauthority") node = <RosterAuthorityFrame />;

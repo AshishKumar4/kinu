@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { authoredRefusal, settle } from '@kinu.run/core/obs';
-import { err, json, JsonValueSchema, safeJson, type ProviderEnv, type UserCaller } from '@kinu.run/core';
+import { err, json, JsonValueSchema, safeJson, SecretPositionSchema, type ProviderEnv, type UserCaller } from '@kinu.run/core';
 import type { UserDO } from './user-do';
 import { listAvailableModels, testAvailableModel, type AvailableModelsEnv } from './available-models';
 import { readUserAccountUsage } from './account-usage';
@@ -19,7 +19,7 @@ import { rawParam, type FamilyEnv } from '../api/context';
 type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
-  | 'listSecrets' | 'putSecrets' | 'setSecretHosts' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
+  | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
 >;
 
@@ -81,7 +81,7 @@ accountApi.delete('/credentials/:key', (c) => settle(Effect.gen(function* () {
 accountApi.get('/secrets', async (c) => json({ body: await c.get('account').stub.listSecrets(c.get('owner')) }));
 
 const PutSecretsSchema = v.object({
-  entries: v.array(v.object({ name: v.string(), hosts: v.array(v.string()), value: v.string() })),
+  entries: v.array(v.object({ name: v.string(), hosts: v.array(v.string()), position: SecretPositionSchema, value: v.string() })),
   grantTo: v.array(v.string()),
 });
 
@@ -89,7 +89,7 @@ const PutSecretsSchema = v.object({
 accountApi.post('/secrets', (c) => settle(Effect.gen(function* () {
   const body = yield* Effect.promise(async () => safeJson(c.req.raw, PutSecretsSchema));
 
-  if (body === null) return err(400, 'Body must be JSON: { entries: [{ name, hosts, value }], grantTo: [workspace] }');
+  if (body === null) return err(400, 'Body must be JSON: { entries: [{ name, hosts, position, value }], grantTo: [workspace] }');
 
   yield* Effect.tryPromise({
     try: async () => { await c.get('account').stub.putSecrets(c.get('owner'), body.entries, body.grantTo); },
@@ -99,14 +99,15 @@ accountApi.post('/secrets', (c) => settle(Effect.gen(function* () {
   return json({ body: { ok: true } });
 })));
 
-accountApi.put('/secrets/:name/hosts', (c) => settle(Effect.gen(function* () {
-  const body = yield* Effect.promise(async () => safeJson(c.req.raw, v.object({ hosts: v.array(v.string()) })));
+/** Where a secret may go: its hosts, and its one position in a request to them. */
+accountApi.put('/secrets/:name/destination', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, v.object({ hosts: v.array(v.string()), position: SecretPositionSchema })));
 
-  if (body === null) return err(400, 'Body must be JSON: { hosts: [host] }');
+  if (body === null) return err(400, 'Body must be JSON: { hosts: [host], position }');
 
   yield* Effect.tryPromise({
-    try: async () => { await c.get('account').stub.setSecretHosts(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), body.hosts); },
-    catch: (cause) => authoredRefusal({ doing: "changing this secret's hosts", cause }),
+    try: async () => { await c.get('account').stub.setSecretDestination(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), body); },
+    catch: (cause) => authoredRefusal({ doing: "changing where this secret may go", cause }),
   });
 
   return json({ body: { ok: true } });

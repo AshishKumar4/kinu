@@ -130,6 +130,50 @@ describe('a secret pasted into the chat', () => {
     });
   });
 
+  test('a draft edited while the offer waits is checked again, and sending anyway sends what it says now', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=secretpaste`, { waitUntil: 'networkidle0' });
+
+      await page.click('[data-composer-root] textarea');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[data-secret-offer]');
+
+      // At the end of the draft: a word typed against the token would hide it from the check, as any word joined to it does.
+      await page.keyboard.press('End');
+      await page.keyboard.type(' now');
+      await page.waitForFunction(() => document.querySelector('[data-secret-offer]') === null);
+
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[data-secret-offer-send]');
+      await page.click('[data-secret-offer-send]');
+      await page.waitForFunction(() => document.documentElement.dataset.gallerySent !== undefined);
+
+      expect(JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySent ?? '[]'))).toEqual([`label the new issues on kinu-run/kinu with this token ${GITHUB} now`]);
+      await page.close();
+    });
+  });
+
+  test("a new workspace's mission is held the same way before the workspace is made with it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
+
+      await page.type('textarea', `triage the open issues with ${GITHUB}`);
+      // The landing's card submits on Ctrl+Enter.
+      await page.keyboard.down('Control');
+      await page.keyboard.press('Enter');
+      await page.keyboard.up('Control');
+      await page.waitForSelector('[data-secret-offer]');
+
+      expect(await page.$eval('[data-secret-offer]', (offer) => offer.textContent ?? '')).toContain('GitHub credential');
+      expect(page.url()).toContain('frame=home');
+      await page.close();
+    });
+  });
+
   test('sent anyway, it is sent as written, once, on the owner\'s word', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

@@ -7,12 +7,8 @@ export function sandboxIdForWorkspace(workspaceName: string): string {
 }
 
 
-/** Only registered workspace names address Kinu containers. */
-export function isKinuSandboxId(sandboxId: string): boolean {
-  return workspaceOfSandbox(sandboxId) !== null;
-}
-
-/** The workspace whose computer `sandboxId` is, or null for an id no workspace's computer has. */
+/** The workspace whose computer `sandboxId` is, or null for an id no workspace's computer has: only registered
+ *  workspace names address Kinu containers. */
 export function workspaceOfSandbox(sandboxId: string): string | null {
   const workspace = sandboxId.slice(SANDBOX_ID_PREFIX.length);
 

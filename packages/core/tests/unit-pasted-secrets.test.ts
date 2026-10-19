@@ -9,6 +9,12 @@ const OPENAI = ['sk-', 'proj-', 'abcdefghijklmnopqrstuvwxyz012345'].join('');
 
 const DATABASE_URL = ['postgres', '://app:', 'hunter22secret', '@db.example.net/app'].join('');
 
+/** A JWT whole, signature included: three base64url segments. */
+const JWT = ['eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkYSJ9', 'c2lnbmF0dXJlLXBhcnQtb2YtdGhlLXRva2Vu'].join('.');
+
+/** A Kinu CLI token: its user's id, then a base64url secret that is not hex. */
+const KINU_TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef', '_', 'Zq-9_mXvL2pRtYw8NbKcHd4FgJs7UeA1oIiE3rTyUwQ'].join('');
+
 describe('a pasted .env', () => {
   test('reads as dotenv does: export, quotes and comments', () => {
     expect(parseDotenv([
@@ -16,12 +22,16 @@ describe('a pasted .env', () => {
       `export GITHUB_TOKEN="${GITHUB}"`,
       "DATABASE_PASSWORD='p@ss word'",
       'PORT=8080 # the server',
+      `API_KEY="${OPENAI}" # staging`,
+      "HASHED='a#b' # a comment after a quoted value with a # in it",
       'EMPTY=',
       'not a line',
     ].join('\n'))).toEqual([
       { name: 'GITHUB_TOKEN', value: GITHUB },
       { name: 'DATABASE_PASSWORD', value: 'p@ss word' },
       { name: 'PORT', value: '8080' },
+      { name: 'API_KEY', value: OPENAI },
+      { name: 'HASHED', value: 'a#b' },
     ]);
   });
 });
@@ -29,7 +39,7 @@ describe('a pasted .env', () => {
 describe('a secret in a chat draft', () => {
   test("a provider's token in prose is offered under its SDKs' own variable, with the hosts its API answers on", () => {
     expect(pastedSecrets(`here is my token ${GITHUB} please push the branch`)).toEqual([
-      { value: GITHUB, name: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], provider: 'GitHub' },
+      { value: GITHUB, name: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], provider: 'GitHub', position: { kind: 'authorization' } },
     ]);
   });
 
@@ -39,6 +49,18 @@ describe('a secret in a chat draft', () => {
     expect(found.map(({ name, provider }) => [name, provider])).toEqual([
       ['OPENAI_API_KEY', 'OpenAI'], ['STRIPE_WEBHOOK_SECRET', null], ['DATABASE_URL', null],
     ]);
+  });
+
+  test('a JWT and a Kinu token in prose are lifted whole, so moving one leaves none of it in the message', () => {
+    const found = pastedSecrets(`use ${JWT} and ${KINU_TOKEN} for the call`);
+
+    expect(found.map(({ value }) => value).sort()).toEqual([JWT, KINU_TOKEN].sort());
+  });
+
+  test("a provider whose API reads its key elsewhere is offered with that position", () => {
+    const google = ['AIza', 'SyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q'].join('');
+
+    expect(pastedSecrets(`the maps key is ${google}`)[0]?.position).toEqual({ kind: 'query', name: 'key' });
   });
 
   test('two of one kind get distinct names, and a private key block is one secret', () => {

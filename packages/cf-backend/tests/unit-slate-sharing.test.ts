@@ -63,7 +63,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
     await user.userDO.setCredential(caller, 'anthropic', { kind: 'bearer', token: providerKey });
     const vaultSecret = 'owner-vault-secret-' + '9f8e7d6c';
-    await user.userDO.putSecrets(caller, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], value: vaultSecret }], ['issues-owner']);
+    await user.userDO.putSecrets(caller, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position: { kind: 'authorization' }, value: vaultSecret }], ['issues-owner']);
     const vault = { placeholder: (await user.userDO.grantedSecrets({ workspaceToken: capability })).granted[0]?.placeholder ?? '' };
     expect(vault.placeholder).not.toBe('');
 

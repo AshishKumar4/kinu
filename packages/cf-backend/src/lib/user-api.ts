@@ -20,7 +20,9 @@ import {
   UserProfileSchema,
   WorkspaceEntrySchema,
   CredentialSummarySchema,
+  SecretPositionSchema,
   type McpTransport,
+  type SecretPosition,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -216,6 +218,7 @@ export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
 const SecretSummarySchema = v.object({
   name: v.string(),
   hosts: v.array(v.string()),
+  position: SecretPositionSchema,
   updatedAt: v.number(),
   grants: v.array(v.object({ workspace: v.string(), title: v.string(), reveal: v.boolean() })),
 });
@@ -226,6 +229,7 @@ export type SecretSummary = v.InferOutput<typeof SecretSummarySchema>;
 export interface SecretEntry {
   readonly name: string;
   readonly hosts: readonly string[];
+  readonly position: SecretPosition;
   readonly value: string;
 }
 
@@ -235,8 +239,8 @@ export const listSecrets = () => settle(api(v.array(SecretSummarySchema), 'GET',
 export const putSecrets = (entries: readonly SecretEntry[], grantTo: readonly string[]) =>
   settle(api(OkSchema, 'POST', '/secrets', { entries: entries.map((entry) => ({ ...entry, hosts: [...entry.hosts] })), grantTo: [...grantTo] }));
 
-export const setSecretHosts = (name: string, hosts: readonly string[]) =>
-  settle(api(OkSchema, 'PUT', `/secrets/${encodeURIComponent(name)}/hosts`, { hosts: [...hosts] }));
+export const setSecretDestination = (name: string, hosts: readonly string[], position: SecretPosition) =>
+  settle(api(OkSchema, 'PUT', `/secrets/${encodeURIComponent(name)}/destination`, { hosts: [...hosts], position }));
 
 export const deleteSecret = (name: string) => settle(api(OkSchema, 'DELETE', `/secrets/${encodeURIComponent(name)}`));
 

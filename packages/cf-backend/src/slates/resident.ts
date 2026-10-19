@@ -107,7 +107,7 @@ const CLASS_BOOT: readonly string[] = [
   '      storage: this.ctx.storage,',
   '      kv: storageProxy(this.env.__storage),',
   '      waitUntil: (work) => this.ctx.waitUntil(work),',
-  "    }, Object.freeze({ ...Object.fromEntries(Object.entries(this.env).filter(([, value]) => typeof value === 'string')), workspace: workspaceSurface(this.env.workspace) }));",
+  "    }, Object.freeze({ ...this.env.__secrets, workspace: workspaceSurface(this.env.workspace) }));",
   '    // The callable surface: prototype methods between the instance and',
   '    // SlateObject (exclusive) whose name passes the host\'s own method rule.',
   '    // Own properties never appear: a closure assigned in the constructor',
@@ -735,8 +735,8 @@ export class ResidentSlateProcesses {
         mainModule: MAIN_MODULE,
         ...workerCompatibility,
         vfsTextModules: textModules,
-        // Secrets first: no secret's name displaces a host binding.
-        env: { ...input.secrets, ...input.bindings },
+        // Reserved like `__storage`: the authored class gets each secret by its own name, beside `workspace`.
+        env: { ...input.bindings, __secrets: input.secrets },
         globalOutbound: input.globalOutbound,
       };
 

@@ -262,13 +262,13 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           textareaRef={inputRef}
           value={ui.draft}
           onValueChange={ui.setDraft}
-          onSend={secretGuard.guarded(send)}
+          onSend={secretGuard.guarded("send", send)}
           placeholder={placeholder}
           disabled={state.connectionStatus !== "connected"}
           liveness={state.liveness}
           onRecover={state.recoverTurn}
           onStop={stop}
-          {...(extras.onBranch !== undefined && { onBranch: secretGuard.guarded(extras.onBranch) })}
+          {...(extras.onBranch !== undefined && { onBranch: secretGuard.guarded("branch", extras.onBranch) })}
           attention={<>{secretGuard.offer}{attention}</>}
           mode={{ value: ui.mode, onChange: ui.setMode }}
           {...(attachments !== undefined && { attachments: { parts: [...attachments.parts], onAdd: attachments.add, onRemove: attachments.remove } })}

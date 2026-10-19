@@ -285,7 +285,8 @@ interface Computer {
   readonly names: ShellSession;
   readonly shells: MachineShells | undefined;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
-  readonly environment: CommandEnvironment;
+  /** Absent where no account grants secrets: a command then waits on nothing before it is dispatched. */
+  readonly environment: CommandEnvironment | undefined;
 }
 
 /** `computer.exec`. */
@@ -329,13 +330,15 @@ function execMember({ handle, names, shells, touch, environment }: Computer): Ex
           // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
           // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
           return await names.hold(name, callJob(exec), () => named.run(pinned, async () => {
-            const env = { ...await environment('run'), ...(job !== undefined && { [JOB_STAMP_ENV]: job }) };
+            const env: Record<string, string> = environment === undefined ? {} : { ...await environment('run') };
+
+            if (job !== undefined) env[JOB_STAMP_ENV] = job;
             const call = machineShellCall(command, exec, place, Object.keys(env));
 
             const res = await touch(() => {
               if (signal?.aborted) throw notDispatched();
               // The signal is added only when given, so an adapter can tell "none" from "already fired".
-              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR, env };
+              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR, ...(Object.keys(env).length > 0 && { env }) };
 
               if (signal !== undefined) opts.signal = signal;
 
@@ -388,12 +391,12 @@ function startProcessMember({ handle, touch, environment }: Computer): ExecutorT
       return { call: { text: command, cwd, context: {} }, run: async () => {
         try {
           // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
-          const env = await environment('keep');
+          const env = environment === undefined ? undefined : await environment('keep');
 
           const started = await touch(async () => {
             await withSandboxRetry(() => handle.ensureReady());
 
-            return handle.startSupervisedProcess(command, { cwd, env });
+            return handle.startSupervisedProcess(command, { cwd, ...(env !== undefined && { env }) });
           });
 
           return { processId: started.processId };
@@ -528,7 +531,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return { supported: true, url: exposed.url, port, name, route: exposed.route };
   };
 
-  const computer: Computer = { handle, names, shells, touch, environment: options.environment ?? (async () => ({})) };
+  const computer: Computer = { handle, names, shells, touch, environment: options.environment };
 
   const tools: ExecutorProvider['tools'] = {
     exec: execMember(computer),

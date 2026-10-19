@@ -10,10 +10,10 @@
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { objectNamed, KITESURF_SESSION_ID, parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
-import { selfPreviewPass } from './viewer-pass';
-import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
-import { EGRESS_FAILURE_HEADER, sendOut, type ContainerEgressEnv } from './egress/send-out';
+import { objectNamed, KITESURF_SESSION_ID, refusedHostname, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
+import { selfPreviewPass, verifiedPreview } from './viewer-pass';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
+import { EGRESS_FAILURE_HEADER, sendOutRequest, type ContainerEgressEnv } from './egress/send-out';
 
 export interface CodemodeEgressProps {
   readonly workspace: string | null;
@@ -69,12 +69,9 @@ async function browserGate(request: Request, env: EgressEnv, props: CodemodeEgre
   return await (await env.BROWSER.connectSession(id)).webSocket.fetch('https://browser-run.invalid/', upgrade);
 }
 
-function ownPreviewHost(url: URL, env: PreviewSuffixEnv, workspace: string): boolean {
-  const suffix = previewHostSuffix(env);
-
-  if (suffix === null || !url.hostname.endsWith(`.${suffix}`)) return false;
-
-  return parseWorkspacePreviewLabel(url.hostname.slice(0, -suffix.length - 1))?.workspace === workspace;
+/** One of `workspace`'s own previews, of its box or its computer. */
+async function ownPreviewHost(url: URL, env: PreviewSuffixEnv & LabelSignerEnv, workspace: string): Promise<boolean> {
+  return (await verifiedPreview(env, url.hostname))?.workspace === workspace;
 }
 
 /**
@@ -98,7 +95,7 @@ async function forwardCodemodeEgress(request: Request, env: EgressEnv, props: Co
 
   if (url.hostname === BROWSER_GATE_HOST) return await browserGate(request, env, props);
 
-  if (self !== undefined && workspace !== null && ownPreviewHost(url, env, workspace)) {
+  if (self !== undefined && workspace !== null && await ownPreviewHost(url, env, workspace)) {
     return await self.fetch(props.asOwner ? await withSelfPass(request, env, workspace, url) : request);
   }
 
@@ -119,7 +116,7 @@ async function forwardCodemodeEgress(request: Request, env: EgressEnv, props: Co
 
   const vault = workspace !== null && props.ownerUserId !== null ? { workspaceName: workspace, ownerUserId: props.ownerUserId } : null;
 
-  return await settle(sendOut(request, env, vault, undefined));
+  return await sendOutRequest(request, env, vault);
 }
 
 export class CodemodeEgress extends WorkerEntrypoint<EgressEnv, CodemodeEgressProps> {

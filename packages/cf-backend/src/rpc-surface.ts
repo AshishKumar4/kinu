@@ -165,7 +165,7 @@ const USER_DO_METHODS = [
   'grantDeviceConsent',
   'revokeDeviceConsent',
   'revokeSecretGrant',
-  'setSecretHosts',
+  'setSecretDestination',
   'deleteSecret',
   'grantSecret',
   'grantedSecrets',
