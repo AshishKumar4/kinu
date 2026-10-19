@@ -59,9 +59,9 @@ const FIXED_LANES = [
 
 const INVOCATION_LANES = ['agent', 'head', 'swarm'] as const;
 
-/** Producers no turn profile routes: a binding-bound platform call, a cache warm replaying a frozen spec, a model
- *  test, and a rating on the catalog's decision model. */
-const UNROUTED: readonly SpendSource[] = ['platform', 'warming', 'test', 'rating'];
+/** Producers no turn profile routes: a binding-bound platform call, a web search on the account's search chain, a cache
+ *  warm replaying a frozen spec, a model test, and a rating on the catalog's decision model. */
+const UNROUTED: readonly SpendSource[] = ['platform', 'search', 'warming', 'test', 'rating'];
 
 describe('exhaustive model routing', () => {
   test('every producer resolves, and only the unrouted pair refuses', () => {

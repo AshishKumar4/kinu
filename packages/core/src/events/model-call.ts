@@ -19,6 +19,7 @@ export const SPEND_SOURCES = [
   'head',
   'swarm',
   'platform',
+  'search',
   'advisor',
   'slate',
   'warming',
@@ -40,6 +41,7 @@ export const SPEND_SOURCE_LABEL = {
   head: 'Exploration heads',
   swarm: 'Swarm expansions',
   platform: 'Platform AI',
+  search: 'Web search',
   advisor: 'Advisor',
   slate: 'Slates',
   warming: 'Cache warming',
@@ -61,6 +63,9 @@ export const SPEND_SOURCE_DETAIL = {
   platform: 'Workers AI utility bindings: memory embeddings and HTML->markdown '
     + 'repair. Neither returns a usage field of any kind, so these are counted '
     + 'and never measured, which is what the coverage fraction below is made of',
+  search: 'the `web` tool\'s searches: one row per answered search, naming the provider and the account it billed. '
+    + 'No provider reports usage per search, so these are counted and never measured; each is billed at its provider\'s '
+    + 'list price per search',
   advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
   slate: 'an authored slate\'s `ai.run`: one call per run, at the tier the call named',
   warming: 'keeping an idle prompt-cache prefix alive: one zero-output replay of the last request, '

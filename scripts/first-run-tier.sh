@@ -98,23 +98,37 @@ if [[ -z "${!IDENTITY_ENV:-}" ]]; then
   exit 1
 fi
 
+# Each eval account the cases act as (`EVAL_ACCOUNTS` in core): the same DEV_IDENTITY_SECRET, another user, with a CLI
+# bearer minted for it at this deployment, printed for the caller.
+account_bearer() {
+  local account=$1 out
+  KINU_EVAL_ACCOUNT=$account bun scripts/eval-session-mint.ts >&2 || return 1
+  out="$(KINU_EVAL_ACCOUNT=$account bun scripts/eval-credentials.ts)" || return 1
+  local -a resolved
+  mapfile -t resolved <<< "$out"
+  if [[ ${#resolved[@]} -ne 2 || "${resolved[0]}" != "$KINU_ORIGIN" ]]; then
+    echo "first-run: no CLI bearer for the $account eval account at $KINU_ORIGIN." >&2
+    return 1
+  fi
+  echo "${resolved[1]}"
+}
+
+# An account on the scripted model, with its search chosen (scripted-tier.ts), its bearer printed for the caller.
+scripted_account() {
+  local account=$1 token
+  token="$(account_bearer "$account")" || return 1
+  KINU_TOKEN=$token bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$account" >&2 || return 1
+  echo "$token"
+}
+
 # THE FLEET PROJECT ACTS AS ANOTHER ACCOUNT. Its cases attach real machines, and
 # a machine sits in every workspace of the account it is on — so on 2026-09-24
 # the product-flows and trajectory tiers, running beside this one as the eval
 # service, found kinu-first-run-alpha and -beta in their agents' device runtime
 # and broke on its refusal to guess between them. The fleet runs as the
-# `devices` eval account (KINU_EVAL_ACCOUNT, `EVAL_ACCOUNTS` in core): the same
-# DEV_IDENTITY_SECRET, another user, with a CLI bearer minted for it.
+# `devices` eval account, so its machines never join the account every other tier drives.
 FLEET_ACCOUNT=devices
-KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
-FLEET_OUT="$(KINU_EVAL_ACCOUNT=$FLEET_ACCOUNT bun scripts/eval-credentials.ts)"
-mapfile -t FLEET_RESOLVED <<< "$FLEET_OUT"
-if [[ ${#FLEET_RESOLVED[@]} -ne 2 || "${FLEET_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
-  echo "first-run: no CLI bearer for the $FLEET_ACCOUNT eval account at $KINU_ORIGIN, so the fleet cases" >&2
-  echo "  would attach their machines to the account every other tier drives." >&2
-  exit 1
-fi
-FLEET_TOKEN="${FLEET_RESOLVED[1]}"
+FLEET_TOKEN="$(scripted_account "$FLEET_ACCOUNT")" || exit 1
 
 # THE CASES ACT AS THE `scripted` ACCOUNT, ON THE SCRIPTED MODEL. The tier
 # checks the product, not what a model chooses: every workspace of both
@@ -125,30 +139,19 @@ FLEET_TOKEN="${FLEET_RESOLVED[1]}"
 # keep a real model. Whether a model makes the calls a case names when asked
 # in plain words is an eval's question, with a pass rate per model (evals/).
 CASES_ACCOUNT=scripted
-KINU_EVAL_ACCOUNT=$CASES_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
-CASES_OUT="$(KINU_EVAL_ACCOUNT=$CASES_ACCOUNT bun scripts/eval-credentials.ts)"
-mapfile -t CASES_RESOLVED <<< "$CASES_OUT"
-if [[ ${#CASES_RESOLVED[@]} -ne 2 || "${CASES_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
-  echo "first-run: no CLI bearer for the $CASES_ACCOUNT eval account at $KINU_ORIGIN." >&2
-  exit 1
-fi
-CASES_TOKEN="${CASES_RESOLVED[1]}"
-KINU_TOKEN=$CASES_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$CASES_ACCOUNT" || exit 1
-KINU_TOKEN=$FLEET_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$FLEET_ACCOUNT" || exit 1
+CASES_TOKEN="$(scripted_account "$CASES_ACCOUNT")" || exit 1
+
+# THE SEARCH ACCOUNTS: `keyless` searches as a person who never chose, with no Cloudflare login, so on the
+# deployment's own gateway (the owner's 522, 2026-10-17); `gateway` signs in to Cloudflare, so its searches bill its
+# own account's gateway. Their cases run in first-run-cases and name their accounts themselves.
+scripted_account keyless > /dev/null || exit 1
+scripted_account gateway > /dev/null || exit 1
 
 # THE CASE THAT WRITES ACCOUNT SETTINGS ACTS AS ITS OWN ACCOUNT. workspace-settings
 # writes the account's default computer size, which every computer the account
 # starts reads: as `scripted` it sized the product flows' computers beside it, and
 # a run cut off before its restore left them there (staging rc20, 2026-10-19).
-SETTINGS_ACCOUNT=settings
-KINU_EVAL_ACCOUNT=$SETTINGS_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
-SETTINGS_OUT="$(KINU_EVAL_ACCOUNT=$SETTINGS_ACCOUNT bun scripts/eval-credentials.ts)"
-mapfile -t SETTINGS_RESOLVED <<< "$SETTINGS_OUT"
-if [[ ${#SETTINGS_RESOLVED[@]} -ne 2 || "${SETTINGS_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
-  echo "first-run: no CLI bearer for the $SETTINGS_ACCOUNT eval account at $KINU_ORIGIN." >&2
-  exit 1
-fi
-KINU_TOKEN="${SETTINGS_RESOLVED[1]}" bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$SETTINGS_ACCOUNT" || exit 1
+scripted_account settings > /dev/null || exit 1
 
 echo "── first-run tier ────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN"

@@ -1085,6 +1085,10 @@ export {
 } from './execution/device-terminal';
 
 export {
+  DeviceScreenHub, screenFromSocket, readScreenData,
+} from './execution/device-screen';
+
+export {
   nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
   type NimbusExecResult, type NimbusPortInfo, nimbusSessionFiles,
 } from './execution/nimbus';
@@ -1185,7 +1189,7 @@ export {
 
 export {
   withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
-  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
+  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps, removeWhole,
   type VfsMount, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
 } from './vfs/mounts';
@@ -1449,11 +1453,13 @@ export {
   EVAL_WORKSPACE_PREFIX,
   evalAccountEmail,
   inheritedRows,
+  type ProvisionedConfig,
   isEvalAccountEmail,
   parseEvalAccount,
   type EvalAccount,
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
+  DEVICE_SCREEN_PATH,
   ORCHESTRATOR_AGENT_SLUG,
 } from './cloud-wire';
 
@@ -2132,7 +2138,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING, webSearchChainOf,
 } from './profiles';
 
 export type {
@@ -2246,6 +2252,8 @@ export {
   DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';
+
+export { DeviceDesktopSchema, NO_DESKTOP, type DeviceDesktop } from './execution/device-desktop';
 
 export {
   COPY_SCRIPT, GITHUB_ICON, REPO_URL,

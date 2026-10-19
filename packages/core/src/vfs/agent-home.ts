@@ -10,6 +10,8 @@ import { settleSync } from '../obs/effect';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { VfsRemoval } from '@nimbus-sh/core/vfs/vfs.js';
+import { removeWhole } from './mounts';
 import * as v from 'valibot';
 import { SOUL_FILE, SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
@@ -171,7 +173,7 @@ export interface HomeRootVfs {
   chmod(path: string, mode: number): void;
   exists(path: string): boolean;
   stat(path: string): { readonly uid: number; readonly gid: number; readonly mode: number };
-  removeRecursive(path: string): number;
+  removeRecursive(path: string): VfsRemoval | void;
 }
 
 /** Registers a confined principal against its physical storage root. */
@@ -307,7 +309,8 @@ export function releaseAgentHome(
     if (agentName === MAIN_AGENT) return yield* Effect.die(new Error('the workspace agent has no home to release'));
 
     for (const path of [agentHome(agentName), agentTmpRoot(agentName)]) {
-      if (root.exists(path)) root.removeRecursive(path);
+      // Whole, or the release stops: a principal released over files it still owns hands them to its uid's next holder.
+      if (root.exists(path)) removeWhole(root, path);
     }
 
     const identity = allocatedAgentIdentity(sql, agentName);

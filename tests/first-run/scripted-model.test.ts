@@ -112,20 +112,6 @@ describe('the deployed tiers\' Worker answers only its key, and reads a bounded 
   });
 });
 
-// The first-run web-search case searches through the account's `tavily` credential, pointed here.
-describe('the deployed tiers\' Worker answers a Tavily search', () => {
-  test('with results whose URLs the provider keeps, and refuses a body with no query', async () => {
-    const search = 'https://scripted-model.kinu.run/search';
-    const answered = await worker.fetch(asked(search, JSON.stringify({ query: 'Cloudflare Durable Objects documentation', max_results: 2 })), ENV);
-    const body = v.parse(v.object({ results: v.array(v.object({ url: v.pipe(v.string(), v.url()) })) }), await answered.json());
-
-    expect([answered.status, body.results.length]).toEqual([200, 2]);
-    expect(body.results.every((result) => result.url.startsWith('https://'))).toBe(true);
-    expect((await worker.fetch(asked(search, '{}'), ENV)).status).toBe(400);
-    expect((await worker.fetch(new Request(search, { method: 'POST', body: '{}' }), ENV)).status).toBe(401);
-  });
-});
-
 // The MCP server the mcp-reconnect case connects, through the Worker behind its key: a session opens, a call that
 // ends the session carrying it is answered 404 and runs nothing, and the same call on a new session is served.
 describe('the deployed tiers\' Worker serves an MCP server whose sessions end on cue', () => {

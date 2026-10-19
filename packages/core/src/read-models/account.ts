@@ -16,6 +16,7 @@ export const ONBOARDING_STEPS = [
   { id: 'profile', title: 'Your name' },
   { id: 'providers', title: 'Connect a provider' },
   { id: 'model', title: 'Your default model' },
+  { id: 'search', title: 'Web search' },
   { id: 'tools', title: 'Connect your tools' },
   { id: 'showcase', title: 'What Kinu does' },
 ] as const;

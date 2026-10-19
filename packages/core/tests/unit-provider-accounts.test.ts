@@ -29,13 +29,11 @@ describe('account specs', () => {
   });
 });
 
-// Batch 6b P2: a model key with a baseURL was honoured by one reader and ignored by others; only search takes one.
-test('a bearer credential names an endpoint only as the search credential', () => {
+// Batch 6b P2: a model key with a baseURL was honoured by one reader and ignored by others.
+test('a bearer credential names no endpoint', () => {
   const routed = { kind: 'bearer', token: 't', baseURL: 'https://proxy.example.net/v1' } as const;
 
-  expect(validateCredential({ key: 'tavily', value: routed })).toEqual(routed);
-
-  for (const key of ['openai.bearer', 'anthropic.bearer', 'openrouter.bearer', 'anthropic.bearer@work']) {
+  for (const key of ['openai.bearer', 'anthropic.bearer', 'openrouter.bearer', 'anthropic.bearer@work', 'tavily', 'exa']) {
     expect(() => validateCredential({ key, value: routed })).toThrow(Error);
     expect(validateCredential({ key, value: { kind: 'bearer', token: 't' } })).toEqual({ kind: 'bearer', token: 't' });
   }

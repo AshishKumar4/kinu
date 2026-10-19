@@ -5,7 +5,7 @@ import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { pictureKey, PictureAddressSchema, readSlatePicture, type PictureBucket } from '../slates/pictures';
-import { FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed } from '@kinu.run/core';
+import { FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
@@ -22,6 +22,7 @@ import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import { accountApi, type AccountApiVariables } from './account-api';
+import { searchAsAccount, type WebSearchEnv } from './web-search-route';
 import * as v from 'valibot';
 
 const DeviceJoinRequestSchema = v.object({ label: v.optional(v.string()), workspace: v.optional(v.string()) });
@@ -35,7 +36,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'getConfig' | 'setConfig'
@@ -48,6 +49,8 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
 >;
 
 export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
+  /** The deployment's binding, whose `websearch` Settings' Test reaches for an account with no Cloudflare login. */
+  readonly AI?: CreateWorkspaceEnv<Id>['AI'] & WebSearchEnv['AI'];
   UserDO: ObjectNamespace<Id, UserRoutesAuthority>;
   SLATE_PICTURES?: PictureBucket;
   CLI_PUBLIC_ORIGIN?: string;
@@ -192,6 +195,13 @@ userRoutes.patch('/api/user/profile', async (c) => {
 });
 
 userRoutes.get('/api/user/profile-catalog', async (c) => json({ body: await c.get('stub').getProfileCatalog(c.get('owner')) }));
+
+userRoutes.post(USER_WEB_SEARCH_TEST_PATH, async (c) => {
+  const stub = c.get('stub');
+  const owner = c.get('owner');
+
+  return json({ body: await searchAsAccount(c.env, { getAuth: (key, opts) => stub.getAuth(owner, key, opts), catalog: () => stub.getProfileCatalog(owner) }, c.req.raw) });
+});
 
 userRoutes.put('/api/user/profile-catalog', async (c) => answerCatalogPut(c.req.raw,
   (catalog, expectedVersion) => c.get('stub').putProfileCatalog(c.get('owner'), catalog, expectedVersion),

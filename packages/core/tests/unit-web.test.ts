@@ -21,15 +21,19 @@ import {
   type CodemodeBuilder,
   type JsonValue,
   type WebSearchProvider,
-  type FirstPartySearch,
+  chainWebSearch,
+  DEFAULT_WEB_SEARCH_CHAIN,
   type QuickActionTransport,
   SPILL_DIRS,
 } from '../src/index';
 import { imageCarrier } from '../src/types/tool-images';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
-import { WEB_SEARCH_INDEX } from '../src/index';
+import { KinuError } from '../src/obs/index';
 
 const NO_BROWSER_RUN = { missing: 'this suite reaches no Browser Run' };
+
+/** A provider these fetch cases build never searches. */
+const NO_SEARCH = async (): Promise<never> => { throw new KinuError('unavailable', 'this case searches nothing'); };
 
 function createNodeCodemodeBuilder(codemodeProviders: CodemodeProvider[] = []): CodemodeBuilder {
   return (surface) => {
@@ -107,7 +111,7 @@ function stubFetch(handler: (url: string, init?: RequestInit) => StubResponse): 
   return { fetch: fn, calls };
 }
 
-/** Cloudflare's Web Search API at its edge (the binding or the CLI's route): what it was asked, and its answer. */
+/** The account's default chain on a deployment's Cloudflare Web Search API at its edge: what it was asked, and its answer. */
 function searchApi(answer: () => Response = () => Response.json({
   items: [
     { url: 'https://example.com/a', title: 'First & Best', description: 'Snippet one about the topic.' },
@@ -117,56 +121,37 @@ function searchApi(answer: () => Response = () => Response.json({
 })) {
   const asked: Array<{ query: string; limit: number }> = [];
 
-  const firstParty: FirstPartySearch = {
-    search: async ({ query, limit }) => {
+  const search = chainWebSearch({
+    fetch: stubFetch(() => ({ status: 599, body: 'only the deployment searches here' })).fetch,
+    getAuth: async () => null,
+    deployment: async ({ query, limit }) => {
       asked.push({ query, limit });
 
       return answer();
     },
-  };
+    report: () => undefined,
+    chain: async () => ({ routes: DEFAULT_WEB_SEARCH_CHAIN, retries: 0 }),
+  });
 
-  return { asked, firstParty };
+  return { asked, search };
 }
 
 describe('web provider — search', () => {
-  test("the deployment's own search answers ranked results, safe ones only, each snippet clipped", async () => {
-    const { asked, firstParty } = searchApi(() => Response.json({
-      items: [
-        { url: 'https://example.com/a', title: ' First ', description: 'x'.repeat(8_000) },
-        { url: 'http://169.254.169.254/latest/meta-data', title: 'Metadata', description: 'never surfaced' },
-        { url: 'https://example.org/b' },
-      ],
-    }));
+  test("search asks the account's search with the query trimmed and the tool's limit: 5 by default, at most 20", async () => {
+    const asked: Array<{ query: string; limit: number }> = [];
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '' })).fetch, firstParty });
+    const provider = createDefaultWebSearchProvider({
+      browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '' })).fetch,
+      search: async ({ query, limit }) => {
+        asked.push({ query, limit });
 
-    expect(await provider.search('  the topic ', { limit: 7 })).toEqual({
-      query: 'the topic', source: WEB_SEARCH_INDEX,
-      results: [
-        { title: 'First', url: 'https://example.com/a', snippet: 'x'.repeat(600), position: 1 },
-        { title: 'https://example.org/b', url: 'https://example.org/b', snippet: '', position: 2 },
-      ],
+        return { query, results: [], source: 'exa' };
+      },
     });
-    expect(asked).toEqual([{ query: 'the topic', limit: 7 }]);
-  });
 
-  test("the deployment's refusal says what is true: not available here when it cannot pay, else the API's own words", async () => {
-    const spent = searchApi(() => Response.json({ ok: false, error: { code: 'web_search_payment_required', status: 402, message: 'Your AI Gateway credit balance is zero' } }, { status: 402 }));
-    const failing = searchApi(() => Response.json({ ok: false, error: { code: 'upstream', message: 'provider unreachable' } }, { status: 502 }));
-    const garbled = searchApi(() => new Response('not json'));
-    const fetchNothing = stubFetch(() => ({ body: '' })).fetch;
-
-    await expect(createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: fetchNothing, firstParty: spent.firstParty }).search('x'))
-      .rejects.toMatchObject({ name: 'WebFetchError', message: 'Web search is not available on this deployment right now' });
-    await expect(createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: fetchNothing, firstParty: failing.firstParty }).search('x'))
-      .rejects.toMatchObject({ message: 'Web search failed (502): provider unreachable' });
-    await expect(createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: fetchNothing, firstParty: garbled.firstParty }).search('x'))
-      .rejects.toMatchObject({ message: 'Web search returned an unreadable response', cause: expect.anything() });
-  });
-
-  test('with no search of its own and no Tavily key, search says so instead of answering nothing', async () => {
-    await expect(createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '' })).fetch }).search('x'))
-      .rejects.toMatchObject({ name: 'WebFetchError', message: 'Web search is not available here: connect a Tavily key to search' });
+    await provider.search('  the topic ');
+    await provider.search('the topic', { limit: 50 });
+    expect(asked).toEqual([{ query: 'the topic', limit: 5 }, { query: 'the topic', limit: 20 }]);
   });
 
   test('workerd this-binding regression: fetch invokes the injected fetch unbound', async () => {
@@ -180,84 +165,27 @@ describe('web provider — search', () => {
       return new Response('# Plain page\n\nFetched safely.', { headers: { 'content-type': 'text/markdown' } });
     }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: thisSensitiveFetch });
+    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, search: NO_SEARCH, fetch: thisSensitiveFetch });
 
     const fetchResult = await provider.fetch('https://example.com/page');
 
     expect(fetchResult.markdown).toBe('# Plain page\n\nFetched safely.');
   });
 
-  test('Tavily path used when a credential resolves, with ranked results + answer', async () => {
-    const tavilyBody = JSON.stringify({
-      answer: 'A synthesized answer.',
-      results: [
-        { title: 'Doc', url: 'https://docs.example.com/x', content: 'Body text', published_date: '2026-01-02' },
-      ],
-    });
-
-    const { fetch, calls } = stubFetch((url) => {
-      if (url.includes('tavily.com')) return { body: tavilyBody, headers: { 'content-type': 'application/json' } };
-
-      return { status: 599, body: 'only Tavily answers here' };
-    });
-
-    // The person's own Tavily key wins over the deployment's search.
-    const own = searchApi();
-
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN,
-      fetch,
-      getAuth: async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-test' } } : null),
-      firstParty: own.firstParty,
-    });
-
-    const res = await provider.search('query', { limit: 3 });
-
-    expect(own.asked).toEqual([]);
-
-    expect(res.source).toBe('tavily');
-    expect(res.answer).toBe('A synthesized answer.');
-    expect(res.results[0]).toMatchObject({ position: 1, url: 'https://docs.example.com/x', date: '2026-01-02' });
-    expect(calls[0].url).toContain('tavily.com');
-    expect(new Headers(calls[0].init?.headers).get('authorization')).toContain('tvly-test');
-  });
-
-  // A self-hoster's proxy, or the tiers' scripted search: the credential's endpoint, never api.tavily.com.
-  test('a Tavily credential with a base URL searches there', async () => {
-    const { fetch, calls } = stubFetch(() => ({ body: JSON.stringify({ results: [{ title: 'Doc', url: 'https://docs.example.com/x' }] }) }));
-
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN,
-      fetch,
-      getAuth: async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-test' }, baseURL: 'https://search.example.net/v1' } : null),
-    });
-
-    expect((await provider.search('query')).results[0]?.url).toBe('https://docs.example.com/x');
-    expect(calls.map((call) => call.url)).toEqual(['https://search.example.net/v1/search']);
-  });
-  test('an unreadable Tavily response maps to a WebFetchError with cause', async () => {
-    const bodies = ['not-json-at-all', JSON.stringify({ results: [{ url: 123 }] })];
-
-    for (const body of bodies) {
-      const { fetch } = stubFetch((url) => {
-        if (url.includes('tavily.com')) return { body, headers: { 'content-type': 'application/json' } };
-
-        return { status: 599, body: 'only Tavily answers here' };
-      });
-
-      const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN,
-        fetch,
-        getAuth: async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-test' } } : null),
-      });
-
-      const attempt = provider.search('query');
-      await expect(attempt).rejects.toMatchObject({ name: 'WebFetchError' });
-        await expect(attempt).rejects.toMatchObject({ cause: expect.anything() });
-    }
-  });
-
   test('empty query is rejected', async () => {
-    const { fetch } = stubFetch(() => ({ body: '' }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const asked: string[] = [];
+
+    const provider = createDefaultWebSearchProvider({
+      browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '' })).fetch,
+      search: async ({ query }) => {
+        asked.push(query);
+
+        return { query, results: [], source: 'exa' };
+      },
+    });
+
     await expect(provider.search('   ')).rejects.toMatchObject({ name: 'WebFetchError' });
+    expect(asked).toEqual([]);
   });
 });
 
@@ -265,7 +193,7 @@ describe('web provider — fetch', () => {
   test('HTML page is converted to markdown', async () => {
     const html = '<html><head><title>Hello</title><script>bad()</script></head><body><h1>Heading</h1><p>Para <a href="https://x.com">link</a></p></body></html>';
     const { fetch } = stubFetch(() => ({ body: html, headers: { 'content-type': 'text/html' } }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
     const res = await provider.fetch('https://example.com/page');
 
     expect(res.title).toBe('Hello');
@@ -280,14 +208,14 @@ describe('web provider — fetch', () => {
   test('an HTML page\'s character references are decoded once; one past Unicode decodes to nothing', async () => {
     const html = '<html><body><p>a &amp;lt;b&amp;gt; c&#1114112;d &#x1F600; e&nbsp;f</p></body></html>';
     const { fetch } = stubFetch(() => ({ body: html, headers: { 'content-type': 'text/html' } }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
 
     expect((await provider.fetch('https://example.com/page')).markdown).toContain('a &lt;b&gt; cd \u{1F600} e f');
   });
 
   test('text/markdown content passes through without HTML conversion', async () => {
     const { fetch, calls } = stubFetch(() => ({ body: '# Already Markdown\n\nclean', headers: { 'content-type': 'text/markdown' } }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
     const res = await provider.fetch('https://example.com/md');
     expect(res.markdown).toBe('# Already Markdown\n\nclean');
     expect(res.title).toBe('Already Markdown');
@@ -297,7 +225,7 @@ describe('web provider — fetch', () => {
   test('markdown frontmatter title is extracted', async () => {
     const body = '---\ntitle: Durable Objects\ndescription: x\n---\n\n# Heading\n\nbody';
     const { fetch } = stubFetch(() => ({ body, headers: { 'content-type': 'text/markdown' } }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
     const res = await provider.fetch('https://example.com/md');
     expect(res.title).toBe('Durable Objects');
   });
@@ -306,7 +234,7 @@ describe('web provider — fetch', () => {
     const html = '<html><body>x</body></html>';
     const { fetch } = stubFetch(() => ({ body: html }));
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN,
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN,
       fetch,
       htmlToMarkdown: async () => 'converted ![](data:image/png;base64,AAAA) tail',
     });
@@ -320,7 +248,7 @@ describe('web provider — fetch', () => {
     const html = '<html><head><title>Hello</title></head><body><h1>Heading</h1><p>Para</p></body></html>';
     const { fetch } = stubFetch(() => ({ body: html, headers: { 'content-type': 'text/html' } }));
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN,
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN,
       fetch,
       htmlToMarkdown: async () => { throw new Error('cf AI.toMarkdown blew up'); },
     });
@@ -332,7 +260,7 @@ describe('web provider — fetch', () => {
 
   test('http error maps to a WebFetchError', async () => {
     const { fetch } = stubFetch(() => ({ status: 404, body: 'nope' }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
     await expect(provider.fetch('https://example.com/missing')).rejects.toMatchObject({ message: expect.stringContaining('404') });
   });
 
@@ -349,7 +277,7 @@ describe('web provider — fetch', () => {
       ? { status: 302, body: '', headers: { location: 'http://loop.example/next' } }
       : { body: 'ok', headers: { 'content-type': 'text/plain' } }));
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch, resolve: async (host) => answers.get(host) ?? [] });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch, resolve: async (host) => answers.get(host) ?? [] });
 
     for (const url of ['http://loop.example/', 'https://meta.example/latest/meta-data/', 'http://mapped.example/']) {
       await expect(provider.fetch(url)).rejects.toMatchObject({ name: 'WebFetchError' });
@@ -382,7 +310,7 @@ describe('web provider — fetch', () => {
       return new Response('unexpected hop', { headers: { 'content-type': 'text/plain' } });
     }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: fakeFetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch: fakeFetch });
     const attempt = provider.fetch('https://example.com/start');
     await expect(attempt).rejects.toMatchObject({ name: 'WebFetchError' });
     await expect(attempt).rejects.toThrow(/169\.254\.169\.254/);
@@ -398,7 +326,7 @@ describe('web provider — fetch', () => {
       return { body: '# Final page', headers: { 'content-type': 'text/markdown' } };
     });
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
     const res = await provider.fetch('https://example.com/start');
     expect(res.url).toBe('https://example.com/final');
     expect(res.markdown).toBe('# Final page');
@@ -407,7 +335,7 @@ describe('web provider — fetch', () => {
 
   test('a redirect loop stops at the fetch-standard bound instead of hanging', async () => {
     const { fetch, calls } = stubFetch(() => ({ status: 302, body: '', headers: { location: '/loop' } }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
     await expect(provider.fetch('https://example.com/loop')).rejects.toMatchObject({ name: 'WebFetchError' });
     expect(calls.length).toBe(21); // initial request + 20 follows
   });
@@ -436,7 +364,7 @@ describe('web provider — fetch', () => {
       { preconnect: fetch.preconnect },
     ) satisfies typeof fetch;
 
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: bigFetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch: bigFetch });
     await provider.fetch('https://example.com/big');
 
     expect(pulls).toBeLessThan(totalChunks);
@@ -445,7 +373,7 @@ describe('web provider — fetch', () => {
   test('a fetch without a caller signal carries no abort signal, so no timer can end it', async () => {
     // A default timeout would arm on every request, and its refusal reads as a failed origin.
     const { fetch, calls } = stubFetch(() => ({ body: '<html><body><p>slow but fine</p></body></html>' }));
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
     const res = await provider.fetch('https://example.com/page');
     expect(res.markdown).toContain('slow but fine');
     expect(calls[0].init?.signal).toBeUndefined();
@@ -506,7 +434,7 @@ describe('url safety (SSRF + exfil guards)', () => {
   for (const c of refusedUrls) {
     test(c.name, async () => {
       const { fetch, calls } = stubFetch(() => ({ body: 'x' }));
-      const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch });
+      const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch });
       await expect(provider.fetch(c.url)).rejects.toMatchObject({ name: 'WebFetchError' });
       expect(calls.length).toBe(0);
     });
@@ -516,7 +444,7 @@ describe('url safety (SSRF + exfil guards)', () => {
 type WebArgs = { op: 'search' | 'fetch'; query?: string; url?: string; limit?: number };
 
 function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?: WebSearchProvider) {
-  const provider = webSearch ?? createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '' })).fetch, firstParty: searchApi().firstParty });
+  const provider = webSearch ?? createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '' })).fetch, search: searchApi().search });
 
   return buildActorTools({
     rt,
@@ -556,7 +484,7 @@ describe('web builtin', () => {
   test('action=fetch clamps a big page to a head with a VFS restore path, header included in the budget', async () => {
     const { rt } = createTestRuntime();
     const big = '<html><body>' + 'word '.repeat(20000) + '</body></html>';
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: big, headers: { 'content-type': 'text/html' } })).fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: big, headers: { 'content-type': 'text/html' } })).fetch });
     const execute = toolExecute<WebArgs, string>(buildWithWeb(rt, provider).web);
     const out = await execute({ op: 'fetch', url: 'https://example.com/big' });
 
@@ -577,7 +505,7 @@ describe('web builtin', () => {
     const { rt } = createTestRuntime();
     const title = 'T'.repeat(30_000);
     const body = `<html><head><title>${title}</title></head><body>${'word '.repeat(5_000)}</body></html>`;
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body, headers: { 'content-type': 'text/html' } })).fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body, headers: { 'content-type': 'text/html' } })).fetch });
     const execute = toolExecute<WebArgs, string>(buildWithWeb(rt, provider).web);
     const out = await execute({ op: 'fetch', url: `https://example.com/${'u'.repeat(5_000)}` });
 
@@ -592,7 +520,7 @@ describe('web builtin', () => {
 
   test('an empty page still returns its provenance header, unclamped', async () => {
     const { rt } = createTestRuntime();
-    const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '', headers: { 'content-type': 'text/html' } })).fetch });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ body: '', headers: { 'content-type': 'text/html' } })).fetch });
     const execute = toolExecute<WebArgs, string>(buildWithWeb(rt, provider).web);
     const out = await execute({ op: 'fetch', url: 'https://example.com/empty' });
 
@@ -606,11 +534,11 @@ describe('web builtin', () => {
 
     const failing = createDefaultWebSearchProvider({
       browser: NO_BROWSER_RUN, fetch: stubFetch(() => ({ status: 404, body: 'upstream refused' })).fetch,
-      firstParty: searchApi(() => Response.json({ error: { code: 'web_search_payment_required' } }, { status: 402 })).firstParty,
+      search: searchApi(() => Response.json({ error: { code: 'web_search_payment_required' } }, { status: 402 })).search,
     });
 
     const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt, failing).web);
-    await expect(execute({ op: 'search', query: 'x' })).rejects.toMatchObject({ message: expect.stringContaining('not available on this deployment') });
+    await expect(execute({ op: 'search', query: 'x' })).rejects.toMatchObject({ message: expect.stringContaining('Cloudflare answered 402') });
     await expect(execute({ op: 'fetch', url: 'https://example.com' })).rejects.toMatchObject({ message: expect.stringContaining('404') });
   });
 
@@ -619,7 +547,7 @@ describe('web builtin', () => {
 
     const provider = createDefaultWebSearchProvider({ browser: NO_BROWSER_RUN,
       fetch: stubFetch(() => ({ body: '<html><body><p>page body</p></body></html>' })).fetch,
-      firstParty: searchApi().firstParty,
+      search: searchApi().search,
     });
 
     const execute = toolExecute<{ code: string }, { result: JsonValue | undefined }>(
@@ -677,7 +605,7 @@ function webWithBrowser(answer: (action: string) => Response) {
   const { rt } = createTestRuntime();
   const run = stubBrowserRun(answer);
   const plain = stubFetch(() => ({ body: SHELL }));
-  const provider = createDefaultWebSearchProvider({ fetch: plain.fetch, browser: run.browser });
+  const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, fetch: plain.fetch, browser: run.browser });
   const web = buildWithWeb(rt, provider).web;
 
   return { rt, run, plain, web, execute: toolExecute<BrowserArgs, JsonValue>(web) };
@@ -753,7 +681,7 @@ describe('web through Browser Run', () => {
 
   test('where Browser Run is unreachable, rendering and screenshots refuse naming what is missing', async () => {
     const { rt } = createTestRuntime();
-    const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: SHELL })).fetch, browser: { missing: 'Browser Run needs CLOUDFLARE_API_TOKEN' } });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, fetch: stubFetch(() => ({ body: SHELL })).fetch, browser: { missing: 'Browser Run needs CLOUDFLARE_API_TOKEN' } });
     const execute = toolExecute<BrowserArgs, JsonValue>(buildWithWeb(rt, provider).web);
 
     await expect(execute({ op: 'screenshot', url: 'https://example.com/' })).rejects.toMatchObject({ code: 'unavailable', message: 'Browser Run needs CLOUDFLARE_API_TOKEN' });
@@ -839,7 +767,7 @@ describe('web on a shared slate', () => {
     const page = `<html><body><p>${'a'.repeat(2_100_000)}</p></body></html>`;
     const pageBytes = new TextEncoder().encode(page).length;
     const run = stubBrowserRun((action) => (action === 'screenshot' ? new Response(PNG) : rendered(page)));
-    const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: SHELL })).fetch, browser: run.browser });
+    const provider = createDefaultWebSearchProvider({ search: NO_SEARCH, fetch: stubFetch(() => ({ body: SHELL })).fetch, browser: run.browser });
     // A slate's web writes nothing into the workspace.
     const slateWeb = createWebCodemodeProvider({ provider, files: null });
     const before = await tree(rt.storage.vfs);

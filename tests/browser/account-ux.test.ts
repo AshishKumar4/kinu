@@ -580,10 +580,13 @@ describe('account panels', () => {
       const page = await freshPage(gallery, 'welcome&step=1', 'light', 'mobile');
 
       try {
-        for (const id of ['providers', 'model', 'tools', 'showcase']) {
+        for (const id of ONBOARDING_STEP_IDS.slice(1)) {
           await page.waitForFunction((want) => document.querySelector(`[data-welcome-step="${want}"]`)?.getAttribute('aria-hidden') !== 'true', {}, id);
 
           if (id === 'tools') await page.waitForSelector('[data-welcome-step="tools"] [data-plugin-source]');
+
+          // Web search opens on the default already chosen, so Next passes it with nothing to pick.
+          if (id === 'search') await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"] input:checked');
 
           if (id !== 'showcase') await clickByText(page, 'button', 'Next');
         }

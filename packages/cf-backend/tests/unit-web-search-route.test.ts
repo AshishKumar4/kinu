@@ -1,8 +1,11 @@
-// A CLI signed in to the deployment searches the web through the deployment's own search: the same Cloudflare Web
-// Search API call a workspace makes through the AI binding, behind the inference proxy's bearer gate. The binding is
-// faked at its edge; the route and the gate are the product's.
+// A CLI signed in to the deployment searches the web as its account: the deployment runs the account's own chain where
+// its keys are sealed, behind the inference proxy's bearer gate, and hands back the search as the `web` tool reads it.
+// The AI binding is faked at its edge; the route, the gate, the chain and the CLI's client are the product's.
 import { expect, test } from 'bun:test';
-import { createDefaultWebSearchProvider, routeWebSearch, USER_WEB_SEARCH_PATH, WEB_SEARCH_INDEX, type UserCaller, type WorkersAiWebSearch } from '@kinu.run/core';
+import {
+  BUILTIN_PROFILE_CATALOG, createDefaultWebSearchProvider, profileCatalogDigest, routeWebSearch, USER_WEB_SEARCH_PATH,
+  type ProfileCatalog, type UserCaller, type WorkersAiWebSearch,
+} from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { cliAccount } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
@@ -21,8 +24,9 @@ const ORIGIN = 'https://kinu.test';
 const NO_BROWSER = { quickActions: async () => new Response('this suite renders no page', { status: 500 }) };
 
 /** The deployment's AI binding at its edge, answering as Cloudflare's Web Search API does; `answer` set per test. */
-function world(answer: () => Response, opts: { gateway?: string } = {}) {
+function world(answer: () => Response, opts: { gateway?: string; catalog?: ProfileCatalog } = {}) {
   const asked: Array<Parameters<WorkersAiWebSearch['websearch']>[0]> = [];
+  const catalog = opts.catalog ?? BUILTIN_PROFILE_CATALOG;
 
   const userDO = cliAccount({
     async verifyCliToken(_caller: UserCaller, bearer: string) {
@@ -33,6 +37,9 @@ function world(answer: () => Response, opts: { gateway?: string } = {}) {
         ? { ok: true, tokenHash: 'read-hash', scopes: ['workspace.read' as const], user: { id: USER_ID, email: 'ana@example.com', displayName: 'Ana' } }
         : { ok: false, error: 'invalid token' };
     },
+    // No Cloudflare login and no search key: its Cloudflare entries bill the deployment.
+    getAuth: async () => null,
+    getProfileCatalog: async () => ({ authority: { kind: 'account' as const, accountId: USER_ID }, version: 1, digest: profileCatalogDigest(catalog), catalog }),
   });
 
   const served = serveFamily(webSearchRoutes);
@@ -50,36 +57,50 @@ function world(answer: () => Response, opts: { gateway?: string } = {}) {
     },
   };
 
-
   // The CLI's own client of the route, its transport the route itself.
-  const viaCli = (token: string) => routeWebSearch({
-    origin: ORIGIN, token, fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const answered = await served(new Request(input, init), env);
+  const viaCli = (token: string) => createDefaultWebSearchProvider({
+    fetch,
+    browser: NO_BROWSER,
+    search: routeWebSearch({
+      origin: ORIGIN, token, fetch: Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const answered = await served(new Request(input, init), env);
 
-      return answered ?? new Response('no route', { status: 404 });
-    }, { preconnect: fetch.preconnect }),
+        return answered ?? new Response('no route', { status: 404 });
+      }, { preconnect: fetch.preconnect }),
+    }),
   });
 
   return { asked, viaCli, served, env };
 }
 
-const answers = () => Response.json({ items: [{ url: 'https://example.com/a', title: 'First', description: 'The first.' }], metadata: { query: 'q', requestId: 'r', latencyMs: 600 } });
-
-test("a signed-in CLI's search is the deployment's own: the API's answer, read as a workspace reads it", async () => {
-  const { asked, viaCli } = world(answers);
-  const provider = createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER, firstParty: viaCli(SESSION_TOKEN) });
-
-  expect(await provider.search('raleigh events', { limit: 3 })).toEqual({
-    query: 'raleigh events', source: WEB_SEARCH_INDEX, results: [{ title: 'First', url: 'https://example.com/a', snippet: 'The first.', position: 1 }],
-  });
-  expect(asked).toEqual([{ gatewayId: 'kinu-ai-gateway', query: 'raleigh events', limit: 3, provider: WEB_SEARCH_INDEX }]);
+const answers = () => Response.json({
+  items: [{ url: 'https://developers.cloudflare.com/workers/wrangler/', title: 'Wrangler', description: 'The CLI for Workers.' }],
+  metadata: { query: 'q', requestId: 'r', latencyMs: 600 },
 });
 
-test("the deployment's refusal reaches the CLI in the same words, and no one else's token reaches the search", async () => {
-  const spent = world(() => Response.json({ ok: false, error: { code: 'web_search_payment_required', status: 402, message: 'Your AI Gateway credit balance is zero' } }, { status: 402 }));
-  const provider = createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER, firstParty: spent.viaCli(SESSION_TOKEN) });
+test("a signed-in CLI's search is its account's chain, run by the deployment: with no Cloudflare login, on the deployment's gateway", async () => {
+  const { asked, viaCli } = world(answers);
 
-  await expect(provider.search('raleigh events')).rejects.toThrow('Web search is not available on this deployment right now');
+  expect(await viaCli(SESSION_TOKEN).search('wrangler deploy', { limit: 3 })).toEqual({
+    query: 'wrangler deploy', source: 'exa',
+    results: [{ title: 'Wrangler', url: 'https://developers.cloudflare.com/workers/wrangler/', snippet: 'The CLI for Workers.', position: 1 }],
+  });
+  expect(asked).toEqual([{ gatewayId: 'kinu-ai-gateway', query: 'wrangler deploy', limit: 3, provider: 'exa' }]);
+});
+
+test("the account's own choice is what the CLI searches with", async () => {
+  const { asked, viaCli } = world(answers, { catalog: { ...BUILTIN_PROFILE_CATALOG, webSearch: [{ provider: 'linkup', billing: 'cloudflare' }] } });
+
+  expect((await viaCli(SESSION_TOKEN).search('wrangler deploy')).source).toBe('linkup');
+  expect(asked.map((request) => request.provider)).toEqual(['linkup']);
+});
+
+test("a refusal reaches the CLI in Cloudflare's own words, and no one else's token reaches the search", async () => {
+  const spent = world(() => Response.json({ ok: false, error: { code: 'web_search_payment_required', status: 402, message: 'Your AI Gateway credit balance is zero' } }, { status: 402 }));
+
+  await expect(spent.viaCli(SESSION_TOKEN).search('wrangler deploy')).rejects.toMatchObject({
+    code: 'denied', message: "Exa on this deployment's AI Gateway: Cloudflare answered 402: Your AI Gateway credit balance is zero",
+  });
 
   // Signed out, or a token not minted for the deployment's services: refused at the gate, nothing searched.
   const gate = world(answers);
@@ -94,10 +115,9 @@ test("the deployment's refusal reaches the CLI in the same words, and no one els
   expect(gate.asked).toEqual([]);
 });
 
-test('a deployment with no gateway to search on says so', async () => {
+test('an account with no Cloudflare login on a deployment with no gateway to search on is told so', async () => {
   const { viaCli, asked } = world(answers, { gateway: 'not a url' });
-  const provider = createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER, firstParty: viaCli(SESSION_TOKEN) });
 
-  await expect(provider.search('q')).rejects.toThrow('Web search failed (503)');
+  await expect(viaCli(SESSION_TOKEN).search('q')).rejects.toThrow('Exa through Cloudflare: no Cloudflare account is connected');
   expect(asked).toEqual([]);
 });

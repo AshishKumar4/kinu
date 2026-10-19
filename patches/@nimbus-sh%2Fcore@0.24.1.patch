@@ -1,0 +1,218 @@
+diff --git a/dist/runtime/session-protocol.d.ts b/dist/runtime/session-protocol.d.ts
+index 4eaa12f44b56f4dafca514d27c21781b5988cf49..46ddceada12af463331f098da9b728c9c52173b5 100644
+--- a/dist/runtime/session-protocol.d.ts
++++ b/dist/runtime/session-protocol.d.ts
+@@ -1,5 +1,6 @@
+ import { z } from 'zod/v4';
+ import type { VfsCred } from './os-contracts.js';
++import type { VfsCasResult } from '../vfs/vfs.js';
+ import type { ProcessTerminalSize } from './process-io-protocol.js';
+ export declare const SessionProcessSchema: z.ZodObject<{
+     pid: z.ZodNumber;
+@@ -572,6 +573,8 @@ export interface SessionRpc {
+     _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
+     _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
+     _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
++    /** Kinu patch (NIMBUS-ASKS #55): writeFile only over `expected`, the revision read (0: no file); refused, naming the one there. */
++    _rpcWriteFileIfRevision(path: string, content: string | Uint8Array, expected: number, pid?: undefined, cred?: VfsCred): Promise<VfsCasResult>;
+     _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
+     _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
+     _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
+diff --git a/dist/shell/shell-entrypoints.d.ts b/dist/shell/shell-entrypoints.d.ts
+index d0295e6ff1926520c222babff875189fc9afad13..cf4199e1aef21df154e944058cc06a7e75eff072 100644
+--- a/dist/shell/shell-entrypoints.d.ts
++++ b/dist/shell/shell-entrypoints.d.ts
+@@ -13,6 +13,7 @@ type ShellCommandContext = {
+     cwd?: string;
+     env?: Record<string, string>;
+     stdin?: unknown;
++    signal?: AbortSignal;
+     terminalStdin?: TerminalInputStream;
+     isFdTerminal?: (fd: number) => boolean;
+     pid: number;
+@@ -28,6 +29,7 @@ export type ShellEntrypointExecutor = {
+         onStdout?: (data: Uint8Array) => void | Promise<void>;
+         onStderr?: (data: Uint8Array) => void | Promise<void>;
+         stdin?: string | CommandInputStream;
++        signal?: AbortSignal;
+         terminalStdin?: TerminalInputStream;
+         runExitTrap?: boolean;
+         isolateShellState?: boolean;
+diff --git a/dist/shell/shell-entrypoints.js b/dist/shell/shell-entrypoints.js
+index 3dbf2da43bdf0a981014f797f6024758288da99d..e3eb09c797cc11810db398a35097e6fcb46e5bf3 100644
+--- a/dist/shell/shell-entrypoints.js
++++ b/dist/shell/shell-entrypoints.js
+@@ -53,6 +53,8 @@ function makeShellEntrypoint(shellName, shell) {
+                 shellOptions: program.options,
+                 scriptMode: true,
+                 stdin: inheritedStdin.stdin,
++                // Kinu patch (NIMBUS-ASKS #42): a stopped `bash -c` loop stops.
++                signal: ctx.signal,
+                 terminalStdin: ctx.terminalStdin,
+                 onStdout: hooks.onStdout,
+                 onStderr: hooks.onStderr,
+diff --git a/dist/workspace/supervisor-op.js b/dist/workspace/supervisor-op.js
+index 179e56a2a05e21f4123ca4b50000bc67ed90d97f..5aeafc9c2aeb497a19f9252d8232c0bd07ddc81b 100644
+--- a/dist/workspace/supervisor-op.js
++++ b/dist/workspace/supervisor-op.js
+@@ -6,6 +6,7 @@ import { traced } from '@nimbus-sh/platform/tracing.js';
+ import { WAVE_EPOCH_TTL_MS } from '@nimbus-sh/platform/lost-call.js';
+ import { CRED_SESSION_USER, requireVfsCred } from '../runtime/os-contracts.js';
+ import { ProcessFiles } from '../runtime/process-files.js';
++import { syscallError } from '../vfs/vfs-error.js';
+ import { RuntimeFsPathSchema as FsPath } from '../runtime/filesystem-path.js';
+ import { readDirectoryBatch } from '../runtime/read-directory-batch.js';
+ import { sendRemoval } from '../runtime/filesystem-methods.js';
+@@ -293,6 +294,27 @@ const NATIVE_OPS = {
+     fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
+     fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
+     writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1)),
++    // Kinu patch (NIMBUS-ASKS #55): a whole-file write only over the revision
++    // the caller read (0: nothing there), answered as
++    // SqliteFiles.writeFileIfRevision answers. The stat and the write are one
++    // synchronous step, so nothing commits between them. A file with no
++    // revision of its own (a mount's) cannot be checked by one: ENOTSUP.
++    writeFileIfRevision: (e, t) => {
++        const fs = fsFor(e, t).synchronous;
++        const path = FsPath.parse(e.args?.[0]);
++        const named = typeof path === 'string' ? path : path.path;
++        if (fs === undefined)
++            throw syscallError('ENOTSUP', 'open', named);
++        const expected = numberArg(e, 2);
++        const held = fs.stat(path, { followSymlinks: true });
++        if (held !== null && held.revision === 0)
++            throw syscallError('ENOTSUP', 'open', named);
++        const current = held === null ? 0 : held.revision;
++        if (current !== expected)
++            return { ok: false, revision: current };
++        fs.writeFile(path, contentArg(e, 1));
++        return { ok: true, revision: fs.stat(path, { followSymlinks: true })?.revision ?? 0 };
++    },
+     // writeFile, answering with the path's own stat as the write left it: a
+     // process keeps that stat for its sync view, and asked for it in a second
+     // call before (node-shims _writeFileAsync). The write is committed before
+diff --git a/dist/workspace/supervisor-ops.d.ts b/dist/workspace/supervisor-ops.d.ts
+index 0126312967cab8e10d733db920ba2c4b4a046cbf..cc886222603e69013f52bb9eb38408be8e6ba2f6 100644
+--- a/dist/workspace/supervisor-ops.d.ts
++++ b/dist/workspace/supervisor-ops.d.ts
+@@ -22,6 +22,7 @@ export declare const SUPERVISOR_OP_TABLE: {
+     readonly readFileBytes: "joined";
+     readonly writeFile: "once";
+     readonly writeFileStat: "once";
++    readonly writeFileIfRevision: "once";
+     readonly stat: "joined";
+     readonly lstat: "joined";
+     readonly utimes: "once";
+diff --git a/dist/workspace/supervisor-ops.js b/dist/workspace/supervisor-ops.js
+index 22369b746b4d057e24ad793c15dddf46e0e81532..74c673f3bb3c3c47fcbab59feb118208515aad0c 100644
+--- a/dist/workspace/supervisor-ops.js
++++ b/dist/workspace/supervisor-ops.js
+@@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {
+     readFileBytes: 'joined',
+     writeFile: 'once',
+     writeFileStat: 'once',
++    // Kinu patch (NIMBUS-ASKS #55): writeFile only over the revision the caller read.
++    writeFileIfRevision: 'once',
+     stat: 'joined',
+     lstat: 'joined',
+     utimes: 'once',
+diff --git a/src/runtime/session-protocol.ts b/src/runtime/session-protocol.ts
+index 5348b43d2c47aa5806210cb1ec638d48e9e23f08..951774ebe9db214cf8df1d2baa9ca33189a9954e 100644
+--- a/src/runtime/session-protocol.ts
++++ b/src/runtime/session-protocol.ts
+@@ -1,5 +1,6 @@
+ import { z } from 'zod/v4';
+ import type { VfsCred } from './os-contracts.js';
++import type { VfsCasResult } from '../vfs/vfs.js';
+ import type { ProcessTerminalSize } from './process-io-protocol.js';
+ import { ExecOutputSchema } from './exec-stream.js';
+ 
+@@ -268,6 +269,8 @@ export interface SessionRpc {
+   _rpcReadFile(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFile'>>;
+   _rpcReadFileBytes(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readFileBytes'>>;
+   _rpcWriteFile(path: string, content: string | Uint8Array, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'writeFile'>>;
++  /** Kinu patch (NIMBUS-ASKS #55): writeFile only over `expected`, the revision read (0: no file); refused, naming the one there. */
++  _rpcWriteFileIfRevision(path: string, content: string | Uint8Array, expected: number, pid?: undefined, cred?: VfsCred): Promise<VfsCasResult>;
+   _rpcStat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'stat'>>;
+   _rpcLstat(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'lstat'>>;
+   _rpcReadlink(path: string, pid?: undefined, cred?: VfsCred): Promise<SessionResult<'readlink'>>;
+diff --git a/src/shell/shell-entrypoints.ts b/src/shell/shell-entrypoints.ts
+index c04a0b1a140e5ea01c9125f6e51517dbd23b8f09..3a590ad17a71840acc8e4059aadf23d6bb0d2fd4 100644
+--- a/src/shell/shell-entrypoints.ts
++++ b/src/shell/shell-entrypoints.ts
+@@ -15,6 +15,7 @@ type ShellCommandContext = {
+   cwd?: string;
+   env?: Record<string, string>;
+   stdin?: unknown;
++  signal?: AbortSignal;
+   terminalStdin?: TerminalInputStream;
+   isFdTerminal?: (fd: number) => boolean;
+   pid: number;
+@@ -31,6 +32,7 @@ export type ShellEntrypointExecutor = {
+     onStdout?: (data: Uint8Array) => void | Promise<void>;
+     onStderr?: (data: Uint8Array) => void | Promise<void>;
+     stdin?: string | CommandInputStream;
++    signal?: AbortSignal;
+     terminalStdin?: TerminalInputStream;
+     runExitTrap?: boolean;
+     isolateShellState?: boolean;
+@@ -117,6 +119,8 @@ function makeShellEntrypoint(
+         shellOptions: program.options,
+         scriptMode: true,
+         stdin: inheritedStdin.stdin,
++        // Kinu patch (NIMBUS-ASKS #42): a stopped `bash -c` loop stops.
++        signal: ctx.signal,
+         terminalStdin: ctx.terminalStdin,
+         onStdout: hooks.onStdout,
+         onStderr: hooks.onStderr,
+diff --git a/src/workspace/supervisor-op.ts b/src/workspace/supervisor-op.ts
+index 6096daff7343d36a581584012141da7039d93008..365bfa074def1f8f73c2eafa60cbfcc93b3a9776 100644
+--- a/src/workspace/supervisor-op.ts
++++ b/src/workspace/supervisor-op.ts
+@@ -9,6 +9,8 @@ import { traced, type SpanRecorder } from '@nimbus-sh/platform/tracing.js';
+ import { WAVE_EPOCH_TTL_MS } from '@nimbus-sh/platform/lost-call.js';
+ import { CRED_SESSION_USER, requireVfsCred, type VfsCred } from '../runtime/os-contracts.js';
+ import { ProcessFiles } from '../runtime/process-files.js';
++import { syscallError } from '../vfs/vfs-error.js';
++import type { VfsCasResult } from '../vfs/vfs.js';
+ import { RuntimeFsPathSchema as FsPath } from '../runtime/filesystem-path.js';
+ import { readDirectoryBatch } from '../runtime/read-directory-batch.js';
+ import { sendRemoval } from '../runtime/filesystem-methods.js';
+@@ -464,6 +466,24 @@ const NATIVE_OPS = {
+   fsReadRangeUncached: (e, t) => readRange(e, t, { cached: false }),
+   fsRevision: (e, t) => fsFor(e, t).revision(e.args?.[0] === undefined ? undefined : stringArg(e, 0)),
+   writeFile: (e, t) => fsFor(e, t).writeFile(FsPath.parse(e.args?.[0]), contentArg(e, 1)),
++  // Kinu patch (NIMBUS-ASKS #55): a whole-file write only over the revision
++  // the caller read (0: nothing there), answered as
++  // SqliteFiles.writeFileIfRevision answers. The stat and the write are one
++  // synchronous step, so nothing commits between them. A file with no
++  // revision of its own (a mount's) cannot be checked by one: ENOTSUP.
++  writeFileIfRevision: (e, t): VfsCasResult => {
++    const fs = fsFor(e, t).synchronous;
++    const path = FsPath.parse(e.args?.[0]);
++    const named = typeof path === 'string' ? path : path.path;
++    if (fs === undefined) throw syscallError('ENOTSUP', 'open', named);
++    const expected = numberArg(e, 2);
++    const held = fs.stat(path, { followSymlinks: true });
++    if (held !== null && held.revision === 0) throw syscallError('ENOTSUP', 'open', named);
++    const current = held === null ? 0 : held.revision;
++    if (current !== expected) return { ok: false, revision: current };
++    fs.writeFile(path, contentArg(e, 1));
++    return { ok: true, revision: fs.stat(path, { followSymlinks: true })?.revision ?? 0 };
++  },
+   // writeFile, answering with the path's own stat as the write left it: a
+   // process keeps that stat for its sync view, and asked for it in a second
+   // call before (node-shims _writeFileAsync). The write is committed before
+diff --git a/src/workspace/supervisor-ops.ts b/src/workspace/supervisor-ops.ts
+index aa5a9af58abcfdf9dc7dee36bf81cf66eb66cde2..f110098f03ac609a613cf18b2b35ba1df6e4a6c4 100644
+--- a/src/workspace/supervisor-ops.ts
++++ b/src/workspace/supervisor-ops.ts
+@@ -22,6 +22,8 @@ export const SUPERVISOR_OP_TABLE = {
+   readFileBytes: 'joined',
+   writeFile: 'once',
+   writeFileStat: 'once',
++  // Kinu patch (NIMBUS-ASKS #55): writeFile only over the revision the caller read.
++  writeFileIfRevision: 'once',
+   stat: 'joined',
+   lstat: 'joined',
+   utimes: 'once',

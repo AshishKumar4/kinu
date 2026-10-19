@@ -34,6 +34,7 @@ export function withCommandOptions(
     ...(box.mountTable !== undefined && { mountTable: box.mountTable.bind(box) }),
     ...(box.namespace !== undefined && { namespace: box.namespace.bind(box) }),
     ...(box.shellCwd !== undefined && { shellCwd: box.shellCwd.bind(box) }),
+    ...(box.shellState !== undefined && { shellState: box.shellState.bind(box) }),
     exec: async (command, options) => box.exec(command, await optionsFor(options)),
   };
 

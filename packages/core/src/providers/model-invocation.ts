@@ -160,25 +160,12 @@ export interface WorkersAiWebSearch {
   websearch(request: { gatewayId: string; query: string; limit?: number; provider: string }): Promise<Response>;
 }
 
-/**
- * Each search files one unmeasured `platform` row, as an HTML conversion does, named for the index it asked; its price is
- * the gateway's to log (developers.cloudflare.com/web-search/providers).
- */
-export function workersAiWebSearch(
-  env: { readonly AI?: Partial<WorkersAiWebSearch> },
-  report: ModelCallSink,
-): WorkersAiWebSearch['websearch'] | undefined {
+/** The binding's search, bound; each answered search is filed as `search` spend by the chain that asked it
+ *  (web/search-chain.ts), which alone knows the provider and who paid. */
+export function workersAiWebSearch(env: { readonly AI?: Partial<WorkersAiWebSearch> }): WorkersAiWebSearch['websearch'] | undefined {
   const ai = env.AI;
-  const websearch = ai?.websearch?.bind(ai);
 
-  if (websearch === undefined) return undefined;
-
-  return async (request) => {
-    const answered = await websearch(request);
-    report({ source: 'platform', usage: {}, modelId: `websearch/${request.provider}` });
-
-    return answered;
-  };
+  return ai?.websearch?.bind(ai);
 }
 
 /** Each conversion files one unmeasured `platform` row. */

@@ -5,7 +5,7 @@ import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
-import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+import { PortRegistry, responseScope } from '@nimbus-sh/core/runtime/port-registry.js';
 import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
@@ -123,7 +123,9 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
 
     try {
       await unmediated.started;
-      const warm = await (await unmediated.handleHttpRequest(new Request('https://slate.invalid/'))).text();
+      // A response's work is the process's until its body is read (Nimbus 0.19's ResponseScope).
+      const { scope } = responseScope(new AbortController().signal);
+      const warm = await (await unmediated.handleHttpRequest(new Request('https://slate.invalid/'), scope)).text();
       v.parse(v.object({ unmediated: v.literal(true), status: v.literal(200), body: v.literal('public control') }), JSON.parse(warm));
       const mediated = await this.request('build', 'http://169.254.169.254/forbidden');
       const reused = await this.request('build', 'https://example.com/control');

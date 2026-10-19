@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary,
+  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -69,8 +69,6 @@ function credentialEndpoint(storedKey: string, cred: Credential): CredentialEndp
 function credentialBaseURL(storedKey: string, cred: Credential): string | null {
   if (cred.kind === 'openai-compat') return cred.baseURL;
 
-  if (cred.kind === 'bearer' && cred.baseURL !== undefined) return cred.baseURL;
-
   if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
     if (!isCloudflareCredentialUsable(cred)) return null;
     const accountId = accountIdFromCloudflareCredential(cred);
@@ -110,8 +108,8 @@ export class UserCredentials {
     await this.host.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
 
-    if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
-      throw new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
+    if (storedCredentialKey(key) !== key) {
+      throw new KinuError('bad_input', `${key} is derived from your Cloudflare login and cannot be stored directly.`);
     }
 
     const cred = validateCredential({ key, value: credentialJson });
@@ -367,9 +365,9 @@ export class UserCredentials {
   async getCredentialEndpoint(caller: UserCaller, key: string): Promise<CredentialEndpoint | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
-    // The my-gateway view uses the same account-scoped /ai/v1 endpoint as Workers AI;
+    // The my-gateway and web search views use the same account-scoped /ai/v1 endpoint as Workers AI;
     // only the cf-aig-gateway-id header differs.
-    const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
+    const storedKey = storedCredentialKey(key);
     const cred = await this.readCredential(storedKey);
 
     return cred === null ? null : credentialEndpoint(storedKey, cred);
@@ -383,12 +381,14 @@ export class UserCredentials {
   async getAuth(caller: UserCaller, key: string, opts?: AuthRequest): Promise<AuthResolution | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
-    // `cloudflare.ai-gateway` is a derived view of the Cloudflare login: same bearer and refresh,
-    // but cf-aig-gateway-id names the user's selected gateway (null until selected).
-    const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
+    // `cloudflare.ai-gateway` and `cloudflare.web-search` are derived views of the Cloudflare login: same bearer and
+    // refresh, but cf-aig-gateway-id names the user's selected gateway (null until selected for my-gateway).
+    const storedKey = storedCredentialKey(key);
     const stored = await this.readCredentialAt(storedKey);
 
     if (!stored) return null;
+
+    if (key === CLOUDFLARE_WEB_SEARCH_CRED_KEY && (stored.cred.kind !== 'oauth' || !grantsWebSearch(stored.cred))) return null;
     // Explicitly non-null so the refresh reassignment below doesn't re-widen to `Credential | null`.
     let cred: Credential = stored.cred;
 
@@ -426,7 +426,7 @@ export class UserCredentials {
 
       if (!gatewayId) return null;
       headers['cf-aig-gateway-id'] = gatewayId;
-    } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
+    } else if (key === CLOUDFLARE_OAUTH_CRED_KEY || key === CLOUDFLARE_WEB_SEARCH_CRED_KEY) {
       // Use the user's selected gateway if any, otherwise the platform's configured default.
       headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.host.env);
     }
@@ -515,16 +515,19 @@ export class UserCredentials {
     connected: boolean;
     selectedId: string | null;
     accounts: CloudflareAccount[];
+    /** The login grants web search, so searches through Cloudflare bill this account (`cloudflare.web-search`). */
+    webSearch: boolean;
   }> {
     await this.host.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
 
-    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [] };
+    if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [], webSearch: false };
 
     return {
       connected: true,
       selectedId: accountIdFromCloudflareCredential(cred),
       accounts: cloudflareAccountsFromCredential(cred),
+      webSearch: grantsWebSearch(cred),
     };
   }
 

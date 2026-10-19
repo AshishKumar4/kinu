@@ -26,6 +26,7 @@ import { ComputerSizeSettings } from "@/components/ComputerSize";
 import { BetaSettings } from "@/components/BetaSettings";
 import { AccountMemoryCard } from "@/components/account/AccountMemoryCard";
 import { AppearanceCard } from "@/components/account/AppearanceCard";
+import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -156,6 +157,8 @@ export default function UserSettingsPage() {
         {section === "secrets" && <SecretsPanel />}
 
         {section === "models" && <ProfileCatalogSettings />}
+
+        {section === "search" && <WebSearchSettings place="settings" returnTo="/user/settings#search" />}
 
         {section === "computer" && <ComputerSizeSettings />}
 

@@ -32,7 +32,6 @@ import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
-import { WEB_SEARCH_INDEX } from '../src/index';
 
 test('codemodeSurface carries the store operations and report its native tools hold', () => {
   const { rt } = createTestRuntime();
@@ -122,7 +121,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     };
 
     const stubWebSearch = {
-      search: async (query: string) => ({ query, results: [], source: WEB_SEARCH_INDEX }),
+      search: async (query: string) => ({ query, results: [], source: 'exa' as const }),
       fetch: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
       render: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
       screenshot: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), bytes: new Uint8Array() }),

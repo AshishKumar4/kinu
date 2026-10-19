@@ -46,6 +46,7 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
+import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
@@ -134,6 +135,20 @@ const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 /** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
 const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
 
+/**
+ * `&pcdesktop=ready|setup|permission`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
+ * `setup` poses a Mac with no compiler for its capture helper, as the daemon names the step.
+ */
+const SHELL_PC_DESKTOP: UserDevice["desktop"] = (() => {
+  const state = SHELL_PC === null ? null : new URLSearchParams(location.search).get("pcdesktop");
+
+  if (state === "ready") return { state, width: 1512, height: 982 };
+
+  if (state === "setup") return { state, detail: "Install the Command Line Tools (xcode-select --install), then open this tab again." };
+
+  return state === "permission" ? { state } : { state: "none" };
+})();
+
 /** The shell's machines under `&env=computer` or `&pc=`, as `listMounts` and the snapshot's executors answer them. */
 const SHELL_MACHINES = {
   mounts: [
@@ -205,6 +220,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+      desktop: { state: "none" },
       version: null, servedVersion: null, update: "unreported", updateRefusal: null,
     },
   ],
@@ -436,8 +452,10 @@ function galleryChatGptStatus() {
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
 
-/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read. */
-const settingsSavedCredentials = new Map<string, JsonValue>();
+/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read.
+ *  `&keys=` names keys the account already holds (`tavily,exa`). */
+const settingsSavedCredentials = new Map<string, JsonValue>((new URLSearchParams(location.search).get("keys")?.split(",") ?? [])
+  .map((key) => [key, { kind: "bearer", token: "gallery" }]));
 
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
 function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -586,11 +604,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     ]);
   }
 
-  if (path === "/api/user/cloudflare/accounts") {
-    return fixtureJson({
-      connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
-    });
-  }
+  if (path === "/api/user/cloudflare/accounts") return Response.json(galleryCloudflareAccounts());
 
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;
@@ -737,17 +751,20 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
           capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0"],
         },
+        desktop: { state: "none" },
       },
       // `&devices=history`: a refused update and a machine that has never connected.
       ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
         id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
       }, {
         id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "files_only", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
       ...(frame === "devices" ? [{
@@ -756,6 +773,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
     ]);
@@ -764,8 +782,12 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** A saved catalog reads back. */
-let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
+/** A saved catalog reads back; `&chain=` starts it on a chosen web search. */
+let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = (() => {
+  const webSearch = galleryWebSearchChain();
+
+  return { catalog: webSearch === undefined ? BUILTIN_PROFILE_CATALOG : { ...BUILTIN_PROFILE_CATALOG, webSearch }, version: 0 };
+})();
 
 /** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused. */
 async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
@@ -832,6 +854,7 @@ function builtinAuthFixture(path: string): Response | null {
 
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
   secretsFixture,
+  galleryWebSearchTest,
   builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,
@@ -891,6 +914,7 @@ function galleryConnectDevice(id: string, label: string, connected: boolean) {
     replacedAt: null,
     revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+    desktop: id === GALLERY_PC.id ? SHELL_PC_DESKTOP : { state: "none" },
     version: null, servedVersion: null, update: "unreported", updateRefusal: null,
   };
 }
@@ -7330,6 +7354,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
     replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
+    desktop: { state: "none" },
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current", updateRefusal: null,
   };
 }

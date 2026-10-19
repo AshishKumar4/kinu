@@ -24,6 +24,9 @@ export class AgentWakes extends LifecycleCapability {
   /** Told each time an agent's wake begins or ends: that it stands is what its workspace reads it working by. */
   readonly #moved: (actorId: string) => void;
 
+  /** Set once its workspace's deletion began: no wake stands after, and none is armed or run. */
+  #ended = false;
+
   constructor(wake: (actorId: string) => Promise<void>, moved: (actorId: string) => void) {
     super('kinu-agent-wakes');
     this.#wake = wake;
@@ -46,6 +49,20 @@ export class AgentWakes extends LifecycleCapability {
   /** The alarm projected again from every intent the queue holds: a start sets the one a death kept from being set. */
   async project(): Promise<void> {
     await this.lifecycle.jobs.rearm();
+  }
+
+  /** Its workspace's deletion began: every agent's wake ends, and an answer told while its turns close arms none. */
+  async end(): Promise<void> {
+    this.#ended = true;
+    const standing = this.lifecycle.jobs.list();
+
+    await Promise.all(standing.map(async (job) => await this.lifecycle.jobs.cancel(job.id)));
+
+    for (const job of standing) {
+      const parsed = v.safeParse(AgentWakePayloadSchema, job.payload);
+
+      if (parsed.success) this.#moved(parsed.output.actorId);
+    }
   }
 
   /**
@@ -75,7 +92,7 @@ export class AgentWakes extends LifecycleCapability {
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
-    if (job.fn !== AGENT_WAKE_JOB) return undefined;
+    if (job.fn !== AGENT_WAKE_JOB || this.#ended) return undefined;
     const { actorId } = v.parse(AgentWakePayloadSchema, job.payload);
 
     await this.#push(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
@@ -88,6 +105,7 @@ export class AgentWakes extends LifecycleCapability {
 
   /** The row is written before the push answers (`arm`): a wake that begins here stands from this call. */
   #push(actorId: string, atMs: number): Promise<void> {
+    if (this.#ended) return Promise.resolve();
     const begins = !this.armed(actorId);
     const pushed = this.lifecycle.jobs.push({ id: jobId(actorId), fn: AGENT_WAKE_JOB, time: atMs, payload: { actorId } }).then(() => undefined);
 

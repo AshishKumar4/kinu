@@ -1,7 +1,7 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import { Cause, Effect } from 'effect';
 import {
-  AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
+  AccountMemoryProposalSchema, DeviceDesktopSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
@@ -23,6 +23,9 @@ import {
   SecretPositionSchema,
   type McpTransport,
   type SecretPosition,
+  USER_WEB_SEARCH_TEST_PATH,
+  WEB,
+  type WebSearchRoute,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -169,6 +172,8 @@ const UserDeviceSchema = v.object({
   wholeMachine: v.boolean(),
   /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: DeviceSandboxSchema,
+  /** The PC's screen as its daemon last reported it (1014-t). */
+  desktop: DeviceDesktopSchema,
   version: v.nullable(v.string()),
   servedVersion: v.nullable(v.string()),
   update: v.picklist(DEVICE_UPDATE_STATES),
@@ -382,6 +387,13 @@ export function testModel(spec: string, signal: AbortSignal): Promise<ModelTestR
   }));
 }
 
+/** One search through one entry of the chain, as the `web` tool would make it; a refusal rejects in the provider's words. */
+export function testWebSearch(route: WebSearchRoute, query: string, signal: AbortSignal): Promise<WebSearchAnswer> {
+  return settle(request(WEB.search.output, USER_WEB_SEARCH_TEST_PATH, { method: 'POST', json: { query, limit: 3, route }, signal }));
+}
+
+export type WebSearchAnswer = v.InferOutput<typeof WEB.search.output>;
+
 
 export const listProviderCatalog = () =>
   settle(api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog'));
@@ -391,6 +403,7 @@ export type CloudflareAccountStatus = v.InferOutput<typeof CloudflareAccountStat
 const CloudflareAccountStatusSchema = v.object({
   connected: v.boolean(), selectedId: v.nullable(v.string()),
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
+  webSearch: v.boolean(),
 });
 
 export const listCloudflareAccounts = () =>

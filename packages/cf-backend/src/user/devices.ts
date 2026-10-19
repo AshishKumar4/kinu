@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { objectNamed, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
+import { objectNamed, DeviceDesktopSchema, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES, NO_DESKTOP, type DeviceDesktop } from '@kinu.run/core';
 import {
   type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
@@ -143,6 +143,16 @@ function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & P
     detail: row?.sandbox_detail ?? null,
     gpu: v.parse(v.array(v.string()), JSON.parse(row?.sandbox_gpu ?? '[]')),
   };
+}
+
+/** A HELLO's screen as the roster shows it; one this hub cannot read is none, and recorded. */
+function desktopFromHello(deviceId: string, reported: v.InferOutput<typeof DeviceHelloSchema>['desktop']): DeviceDesktop {
+  const desktop = v.safeParse(DeviceDesktopSchema, reported);
+
+  if (desktop.success) return desktop.output;
+  diagnostics.event('device.desktop_unreadable', { device: deviceId });
+
+  return NO_DESKTOP;
 }
 
 /** Past PATH_MAX a path names no directory. */
@@ -333,6 +343,7 @@ export class UserDevices {
       hello.updateCheck ? 1 : 0,
       deviceId,
     );
+    this._devices.holdDesktop(deviceId, desktopFromHello(deviceId, hello.desktop));
     this.host.sqlx(`DELETE FROM user_device_update_refusals WHERE device_id = ? AND runtime <> ?`, deviceId, hello.runtime);
 
     this.host.sqlx(`DELETE FROM user_device_protocol_refusals WHERE device_id = ?`, deviceId);
@@ -1203,6 +1214,7 @@ export class UserDevices {
     wholeMachine: boolean;
     /** No home or roots here: those are per workspace, and this is the account's device registry. */
     sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
+    desktop: DeviceDesktop;
     version: string | null;
     servedVersion: string | null;
     update: DeviceUpdateState;
@@ -1245,6 +1257,7 @@ export class UserDevices {
           revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at, reuseDetectedAt: r.reuse_detected_at,
           wholeMachine: r.consented_root === '/',
           sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
+          desktop: r.revoked_at === null ? this._devices.desktop(r.id) : NO_DESKTOP,
           version: r.version,
           servedVersion: served,
           update,
