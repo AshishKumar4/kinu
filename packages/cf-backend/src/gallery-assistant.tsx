@@ -251,7 +251,7 @@ function AssistantHome() {
   return (
     <WorkspacePage workspace={ASSISTANT_WORKSPACE} identity={{ label: "Kinu", line: <AssistantLine /> }}
       above={(
-        <Today now={NOW} greeting={MOMENT === "firstrun" ? "Welcome, Ashish" : `${greetingOf(NOW)}, Ashish`} opened={opened}
+        <Today now={NOW} assistant="Kinu" greeting={MOMENT === "firstrun" ? "Welcome, Ashish" : `${greetingOf(NOW)}, Ashish`} opened={opened}
           own={ASKS.map((ask) => ({ title: ask.title, detail: ask.detail, glance: ask.proposal === undefined ? ask.title : `New: ${ask.proposal.name}` }))}
           roster={MOMENT === "firstrun" ? [] : ASSISTANT_ROSTER} goals={GOALS}
           mail={MOMENT === "firstrun" ? { unread: 0, items: [] } : { unread: MAIL.filter((mail) => mail.unread).length, items: MAIL }}
