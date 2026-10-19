@@ -9,12 +9,14 @@
  * Domain (Workers fetch docs; anything else answers error 1042), and the first two would put a test fixture into
  * production's own configuration.
  *
- * It also answers Tavily's `/search` (scripted-search.ts). Its route is public, so it answers only a request bearing
+ * It also answers Tavily's `/search` (scripted-search.ts) and serves an MCP server whose sessions end on cue
+ * (scripted-mcp.ts). Its route is public, so it answers only a request bearing
  * `SCRIPTED_MODEL_KEY`, the secret deploy.sh uploads with it and the tiers store as the scripted account's model and
  * search keys (scripted-tier.ts), and it reads a body only up to MAX_BODY_BYTES.
  */
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { timingSafeEqual } from '../packages/core/src/utils/crypto';
+import { SCRIPTED_MCP_PATH, scriptedMcp } from './scripted-mcp';
 import { scriptedSearch } from './scripted-search';
 import { tierModel } from './tier-model';
 import { SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody } from './scripted-protocol';
@@ -80,6 +82,15 @@ export default {
       const answer = scriptedSearch(text);
 
       return new Response(answer.body, { status: answer.status, headers: { 'content-type': 'application/json' } });
+    }
+
+    if (pathname === SCRIPTED_MCP_PATH) {
+      const body = request.method === 'POST' ? await boundedText(request, MAX_BODY_BYTES) : '';
+
+      if (body === null) return refused(413, `the body is over ${String(MAX_BODY_BYTES)} bytes`);
+      const answer = scriptedMcp({ method: request.method, session: request.headers.get('mcp-session-id'), body }, Date.now(), crypto.randomUUID().slice(0, 8));
+
+      return new Response(answer.body, { status: answer.status, headers: answer.headers });
     }
 
     if (pathname === '/chat/completions' && request.method === 'POST') {
