@@ -415,11 +415,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly nimbusTasks = new NimbusTasks((task) => this.hostedWorkspace().onScheduled(task));
 
-  /** Detached, so the wake's job never waits on the agent: what it owes comes back as its own answer. */
+  /** Detached, so the wake's job never waits on the agent: what it owes comes back as its own answer. A wake that begins
+   *  or ends moves the Agents panel, which reads an agent working while its wake stands: the rest that ends it crosses
+   *  from the agent's isolate after its turn's close, and a page that read the close read the wake still standing. */
   private readonly agentWakes = new AgentWakes(async (actorId) => {
     this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "waking an agent's own isolate for what it owes", otherwise: 'io' },
       () => this.wakeAgent(actorId, { recover: true }), { workspace: this.name, actor: actorId }));
-  });
+  }, () => { this.liveReadsMoved(['listWorkspaceAgents']); });
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);

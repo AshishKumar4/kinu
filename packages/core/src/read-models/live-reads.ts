@@ -63,8 +63,9 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['actor_turn_claims', [...AGENTS, ...OWED]],
   ['terminal_effects', OWED],
   ['agent_open_turns', OWED],
-  // An agent's report says whether its isolate holds owed work.
-  ['agent_reports', OWED],
+  // An agent's report says whether its isolate holds owed work, and its standing (a plan pending, its last run failed)
+  // is what the Agents panel shows it waiting or failed by.
+  ['agent_reports', [...AGENTS, ...OWED]],
   ['agent_log', AGENTS],
   ['head_journal', AGENTS],
   ['head_runs', AGENTS],
