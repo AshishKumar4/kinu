@@ -278,21 +278,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
         if (route.namespace === 'web') return await callCodemodeMember([PROBE_WEB], 'web', route.member, route.args) ?? null;
 
-        const running = route.member === 'readFile' && route.args[0] === this.#heldRead?.path ? this.#heldRead : null;
-
-        if (running !== null) {
-          running.reached.resolve();
-          await running.release.promise;
-        }
-
-        // A crafted tool, as codemode-tool.ts runs one: each member it reaches inside itself is weighed just before it runs.
-        if (route.member === 'readFile' && route.args[0] === '/crafted') this.#reachedInside.push(reachedInside(context));
-
-        if (route.member === 'readFile') {
-          const path = v.is(v.string(), route.args[0]) ? route.args[0] : '/x';
-
-          return this.vfs.as(CRED_KERNEL).readFileString(path);
-        }
+        if (route.member === 'readFile') return await this.#read(route.args[0], context);
 
         if (route.member === 'writeFile') this.#writes += 1;
 
@@ -613,6 +599,22 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const answered = await this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hopRaw', args: [] });
 
     return { answered: answered.ok ? JSON.stringify(answered.value) : answered.error, written: this.#writes > before };
+  }
+
+  /** A read the probe's dispatch answers once admitted: held where a test holds it, and a crafted tool's inner reach kept. */
+  async #read(arg: JsonValue | undefined, context: SlateDispatchContext): Promise<string> {
+    const path = v.is(v.string(), arg) ? arg : '/x';
+    const running = path === this.#heldRead?.path ? this.#heldRead : null;
+
+    if (running !== null) {
+      running.reached.resolve();
+      await running.release.promise;
+    }
+
+    // A crafted tool, as codemode-tool.ts runs one: each member it reaches inside itself is weighed just before it runs.
+    if (path === '/crafted') this.#reachedInside.push(reachedInside(context));
+
+    return this.vfs.as(CRED_KERNEL).readFileString(path);
   }
 
   /**
