@@ -1448,6 +1448,7 @@ export {
   EVAL_WORKSPACE_PREFIX,
   evalAccountEmail,
   inheritedRows,
+  type ProvisionedConfig,
   isEvalAccountEmail,
   parseEvalAccount,
   type EvalAccount,

@@ -76,11 +76,19 @@ const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
   'user_profile', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
 ]);
 
-/** A positive catalog CAS version proves its sole stored configuration row. It routes the trial's models; every
- *  other configuration row, and every runtime row from earlier work, still belongs to the isolation check. */
-export function inheritedRows(held: Readonly<Record<string, number>>, catalogVersion = 0): Record<string, number> {
+/**
+ * The configuration rows a trial account's provisioning writes, each of which routes the trial's models: its stored
+ * model catalog (a positive catalog CAS version proves it) and the AI Gateway selected for a gateway model (a selected
+ * id proves it). Each is one `user_config` row; every other configuration row, and every runtime row from earlier work,
+ * still belongs to the isolation check.
+ */
+export interface ProvisionedConfig { readonly catalog: boolean; readonly gateway: boolean }
+
+export function inheritedRows(held: Readonly<Record<string, number>>, provisioned: ProvisionedConfig = { catalog: false, gateway: false }): Record<string, number> {
+  const written = Number(provisioned.catalog) + Number(provisioned.gateway);
+
   return Object.fromEntries(Object.entries(held)
-    .map(([table, rows]) => [table, rows - Number(table === 'user_config' && catalogVersion > 0)] satisfies [string, number])
+    .map(([table, rows]) => [table, rows - (table === 'user_config' ? written : 0)] satisfies [string, number])
     .filter(([table, rows]) => rows > 0 && !TRIAL_ACCOUNT_KEEPS.has(table)));
 }
 

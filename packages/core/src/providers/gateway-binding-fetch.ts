@@ -12,6 +12,8 @@ import { copyHeaders } from './fetch-shim';
 export interface GatewayTarget {
   /** Gateway name, resolved in the Worker's own account; a foreign account's gateway fails at request time. */
   id: string;
+  /** The Cloudflare account the gateway belongs to, and its usage is billed to. */
+  account: string;
   /** Origin the SDK's requests must sit on. */
   origin: string;
   /** Pathname through `{gateway}/`. Everything after it is `{provider}/{endpoint}`. */
@@ -41,7 +43,7 @@ function targetAt(url: URL, raw: string): GatewayTargetResult {
     };
   }
 
-  return { id, origin: url.origin, prefix: `/v1/${account}/${id}/` };
+  return { id, account, origin: url.origin, prefix: `/v1/${account}/${id}/` };
 }
 
 // Hop-by-hop headers plus gateway auth: a supplied credential is a BYOK override and answers 401.
