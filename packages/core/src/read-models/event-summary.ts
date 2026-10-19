@@ -9,11 +9,11 @@ import * as v from 'valibot';
 export interface EventSummary {
   /** What happened, short: "Task reminder". */
   readonly label: string;
-  /** Who or what it is about, when that is not in the line. */
+  /** Who or what it came from, when that is not in the line. */
   readonly about?: string;
-  /** One line a person reads. */
-  readonly line: string;
-  /** Words a person wrote that came with it (the owner's feedback), shown when the event is opened. */
+  /** The event's fields in one line: "1 open task: Store the export". Absent when the event carries none. */
+  readonly line?: string;
+  /** Words a person or the computer wrote that came with it, shown once the event is opened. */
   readonly detail?: string;
 }
 
@@ -52,76 +52,68 @@ type SummaryFields = v.InferOutput<typeof SummaryFieldsSchema>;
 
 const plural = (count: number, one: string, many = `${one}s`): string => `${String(count)} ${count === 1 ? one : many}`;
 
+/** The parts there are, joined: "2 approved · 1 denied". */
+const joined = (parts: readonly (string | false | undefined)[]): string | undefined => {
+  const present = parts.filter((part): part is string => typeof part === 'string' && part !== '');
+
+  return present.length === 0 ? undefined : present.join(' · ');
+};
+
+const withLine = (label: string, line: string | undefined, rest: Omit<EventSummary, 'label' | 'line'> = {}): EventSummary =>
+  ({ label, ...rest, ...(line !== undefined && { line }) });
+
+/** A reminder recorded before its titles were kept names none. */
 function taskReminder(fields: SummaryFields): EventSummary {
   const titles = fields[TASK_REMINDER_OPEN_KEY] ?? [];
 
-  // A reminder recorded before its titles were kept names none.
-  if (titles.length === 0) return { label: 'Task reminder', line: 'Asked the agent to finish its open tasks or close them' };
-
-  return { label: 'Task reminder', line: `${plural(titles.length, 'open task')}: ${titles.join(' · ')}` };
+  return withLine('Task reminder', titles.length === 0 ? undefined : `${plural(titles.length, 'open task')}: ${titles.join(' · ')}`);
 }
 
-function deviceConsent(fields: SummaryFields): EventSummary {
-  const approved = fields.approved ?? 0;
-  const denied = fields.denied ?? 0;
+const PROPOSAL_DECISIONS = new Map([['created', 'created'], ['declined', 'declined'], ['failed', 'creation failed']]);
 
-  if (approved > 0 && denied > 0) return { label: 'Device use', line: `You approved ${plural(approved, 'command')} and denied ${plural(denied, 'command')}` };
-
-  if (denied > 0) return { label: 'Device use', line: `You denied ${plural(denied, 'command')} on your computer` };
-
-  if (approved > 0) return { label: 'Device use', line: `You approved ${plural(approved, 'command')} on your computer` };
-
-  return { label: 'Device use', line: "You answered the agent's request to use your computer" };
-}
-
-function workspaceProposal(fields: SummaryFields): EventSummary {
-  const named = fields.name === undefined ? 'the proposed workspace' : `"${fields.name}"`;
-
-  if (fields.decision === 'declined') return { label: 'Workspace proposal', line: `You declined ${named}` };
-
-  if (fields.decision === 'failed') return { label: 'Workspace proposal', line: `You approved ${named}, but creating it failed` };
-
-  return { label: 'Workspace proposal', line: `You approved ${named}, and it was created` };
-}
-
-/** What each of the container's incident stages means to the person, by devbox's `IncidentStage`. */
-const SANDBOX_STAGE_LINES = new Map([
-  ['attach', 'The computer started without all of its files'],
-  ['checkpoint', 'Recent work on the computer is not saved yet'],
-  ['process', 'A process on the computer ended without a result'],
-  ['port', 'A preview on the computer stopped answering'],
-  ['quiesce', 'The computer could not read what it was running'],
-  ['rest', 'The computer asks to rest'],
-  ['recovered', 'The computer recovered'],
+/** What each of the container's incident stages was, by devbox's `IncidentStage`. */
+const SANDBOX_STAGES = new Map([
+  ['attach', 'Attach failed'],
+  ['checkpoint', 'Checkpoint failed'],
+  ['process', 'Process lost'],
+  ['port', 'Port closed'],
+  ['quiesce', 'Process list unreadable'],
+  ['rest', 'Rest requested'],
+  ['recovered', 'Recovered'],
 ]);
 
-/** The container's own words for what happened go below the line, read once the event is opened. */
-function sandboxLifecycle(fields: SummaryFields): EventSummary {
-  const line = SANDBOX_STAGE_LINES.get(fields.stage ?? '') ?? 'Something went wrong on the computer';
+const planDecision = (approved: boolean) => (fields: SummaryFields): EventSummary =>
+  withLine(approved ? 'Plan approved' : 'Plan changes requested', fields.planTitle === '' ? undefined : fields.planTitle, {
+    ...(fields.feedback !== undefined && fields.feedback !== '' && { detail: fields.feedback }),
+  });
 
-  return { label: 'Computer', line, ...(fields.reason !== undefined && { detail: fields.reason }) };
-}
+const counted = (count: number | undefined, said: (count: number) => string): string | false => (count ?? 0) > 0 && said(count ?? 0);
 
-function planDecision(fields: SummaryFields, approved: boolean): EventSummary {
-  const plan = fields.planTitle === undefined || fields.planTitle === '' ? 'the plan' : `"${fields.planTitle}"`;
-  const detail = fields.feedback === undefined || fields.feedback === '' ? {} : { detail: fields.feedback };
+/** The events with fields to say, each by its own summary. */
+const SUMMARIES = new Map<string, (fields: SummaryFields) => EventSummary>([
+  ['task_reminder', taskReminder],
+  ['device_consent', (fields) => withLine('Device use', joined([
+    counted(fields.approved, (count) => `${String(count)} approved`), counted(fields.denied, (count) => `${String(count)} denied`),
+  ]))],
+  ['workspace_proposal', (fields) => withLine('Workspace proposal', joined([fields.name, PROPOSAL_DECISIONS.get(fields.decision ?? '')]))],
+  ['sandbox_lifecycle_failure', (fields) => withLine('Computer', SANDBOX_STAGES.get(fields.stage ?? ''), {
+    ...(fields.reason !== undefined && { detail: fields.reason }),
+  })],
+  ['plan_approved', planDecision(true)],
+  ['plan_feedback', planDecision(false)],
+  ['slate', (fields) => withLine(fields.ask === true ? 'Slate ask' : 'Slate', fields.said, { ...(fields.slate !== undefined && { about: fields.slate }) })],
+  ['fork_interrupted', (fields) => withLine('Swarm interrupted', joined([
+    counted(fields.heads, (count) => plural(count, 'branch', 'branches')), counted(fields.runs?.length, (count) => plural(count, 'run')),
+  ]))],
+  ['owner_waits_cleared', (fields) => withLine('Waits cleared', fields.what ?? undefined)],
+]);
 
-  return { label: 'Plan', line: approved ? `You approved ${plan}: the agent builds it` : `You asked for changes to ${plan}`, ...detail };
-}
-
-function slate(fields: SummaryFields): EventSummary {
-  const about = fields.slate === undefined ? {} : { about: fields.slate };
-  const said = fields.said ?? 'A message from a slate';
-
-  return { label: fields.ask === true ? 'Slate asks' : 'Slate', ...about, line: said };
-}
-
-/** The other events a turn can open on, each said in a fixed line: they carry nothing more a person needs. */
+/** The other events a turn can open on, each the same every time: they carry no fields. */
 const FIXED = new Map<string, EventSummary>([
-  ['output_continuation', { label: 'Continued', line: "The answer reached the model's length limit, so the agent carried on" }],
-  ['overflow_retry', { label: 'Retried', line: "The conversation outgrew the model's window: it was compacted and the turn run again" }],
-  ['completion_gate', { label: 'Runtime check', line: 'Asked the agent to check its task is finished' }],
-  ['take_pick', { label: 'Take picked', line: 'You picked a take: the agent continues from it' }],
+  ['output_continuation', { label: 'Continued', line: 'Output limit reached' }],
+  ['overflow_retry', { label: 'Retried', line: 'Context window exceeded, compacted' }],
+  ['completion_gate', { label: 'Runtime check' }],
+  ['take_pick', { label: 'Take picked' }],
 ]);
 
 /**
@@ -132,33 +124,9 @@ export function summarizeSystemEvent(event: string, row: { metadata: unknown }):
   const parsed = v.safeParse(SummaryFieldsSchema, row.metadata);
   const fields: SummaryFields = parsed.success ? parsed.output : {};
 
-  switch (event) {
-    case 'task_reminder': return taskReminder(fields);
-    case 'device_consent': return deviceConsent(fields);
-    case 'workspace_proposal': return workspaceProposal(fields);
-    case 'sandbox_lifecycle_failure': return sandboxLifecycle(fields);
-    case 'plan_approved': return planDecision(fields, true);
-    case 'plan_feedback': return planDecision(fields, false);
-    case 'slate': return slate(fields);
-    case 'fork_interrupted': {
-      const heads = fields.heads ?? 0;
-      const runs = fields.runs?.length ?? 0;
+  const summarize = SUMMARIES.get(event);
 
-      return { label: 'Swarm interrupted', line: heads > 0 && runs > 0
-        ? `${plural(heads, 'branch', 'branches')} in ${plural(runs, 'swarm')} stopped when the agent restarted: none will report`
-        : 'A swarm stopped when the agent restarted: none will report' };
-    }
+  if (summarize !== undefined) return summarize(fields);
 
-    case 'owner_waits_cleared':
-      return { label: 'Waits cleared', line: fields.what === undefined || fields.what === null
-        ? 'You handled everything that waited on you'
-        : `You handled: ${fields.what}` };
-    default: {
-      const fixed = FIXED.get(event);
-
-      if (fixed !== undefined) return fixed;
-
-      return { label: 'System', line: event === 'system' ? 'A note from Kinu to the agent' : event.replace(/_/g, ' ') };
-    }
-  }
+  return FIXED.get(event) ?? withLine('System', event === 'system' ? undefined : event.replace(/_/g, ' '));
 }

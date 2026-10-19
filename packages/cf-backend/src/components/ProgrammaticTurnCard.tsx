@@ -36,8 +36,8 @@ interface EventRowProps {
   readonly label: ReactNode;
   /** Who or what it came from. */
   readonly source?: ReactNode;
-  /** The event's words: one line until opened. */
-  readonly body: string;
+  /** The event's words: one line until opened. Absent when it has none beyond its label. */
+  readonly body?: string | undefined;
   /** More words, shown only once opened: what a person wrote that came with it. */
   readonly detail?: string | undefined;
   readonly state?: CardState;
@@ -82,7 +82,7 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
               <CaretUpIcon size={12} weight="bold" />
             </button>
           </div>
-          <p data-event-brief className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-2">{body}</p>
+          {body !== undefined && <p data-event-brief className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-2">{body}</p>}
           {detail !== undefined && <p className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-3">{detail}</p>}
           {action !== undefined && <div className="mt-2 ml-6">{action}</div>}
         </div>
@@ -93,7 +93,7 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
             <span className="p-pill-body">
               {who}
               {badge}
-              <span data-event-brief className="p-pill-text truncate">{body}</span>
+              {body !== undefined && <span data-event-brief className="p-pill-text truncate">{body}</span>}
             </span>
             {tail}
           </button>
@@ -135,7 +135,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
 
   // Format drift: what the agent was given is its own to read, so the person is told only that events came.
   if (events.length === 0) {
-    return <EventRow icon={LightningIcon} tone="p-accent" label="Events" body="Events delivered to the agent" state={state} count={count} />;
+    return <EventRow icon={LightningIcon} tone="p-accent" label="Events" state={state} count={count} />;
   }
 
   return foldRepeats(events, drainedKey).map(({ item: event, count: repeats }, index) => (
@@ -180,7 +180,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
     const meta = backgroundEventMeta(turn.status);
 
     // A job of no named kind is classified as kind `task`: said once, not "task task".
-    const what = turn.jobKind === "task" ? "The task" : `The ${turn.jobKind} task`;
+    const what = turn.jobKind === "task" ? "task" : `${turn.jobKind} task`;
 
     return <EventRow icon={meta.icon} tone={meta.tone} label="Background job" body={`${what} ${meta.verb}`} state={state} count={count} />;
   }
@@ -214,7 +214,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
         tone={tone.icon}
         label="Advisor"
         badge={<span className={`shrink-0 px-1.5 p-meta ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
-        body={turn.note ?? keptAdvisorNote(text, turn.severity) ?? "A second model reviewed the turn"}
+        body={turn.note ?? keptAdvisorNote(text, turn.severity) ?? undefined}
         state={state}
         count={count}
         open={turn.severity !== "nit"}
