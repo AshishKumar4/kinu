@@ -2519,6 +2519,8 @@ export const LADDER: readonly Gate[] = [
       + "this pull request's name. It also creates workspaces, links real machines and spends "
       + 'model calls on a shared account, none of which belongs on a pull request.',
     evidence: 'first-run',
+    // sign-in-advertised signs in through the login page as the upgrade fixture's built-in account (m1922a).
+    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD'],
     phase: 'post-publish',
     deadline: {
       seconds: 720,
