@@ -110,10 +110,6 @@ export interface DeadlineOutcome {
   readonly seconds: number;
   /** The longest the run wrote nothing, in seconds: what its bound is measured against. */
   readonly longestSilence: number;
-  /** How many times the run was told its silence neared the bound: once per silent stretch that reached the notice. */
-  readonly notices: number;
-  /** For a killed run, the seconds from the notice of the stretch the kill ended to the kill: its time to answer. */
-  readonly noticeToKill: number | null;
   readonly stdout: string;
   readonly stderr: string;
 }
@@ -435,9 +431,6 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
 
   // Until the pipes close, not only until the child exits: a process holding one keeps the run open.
   let noticed = -1;
-  let noticedAt = 0;
-  let notices = 0;
-  let noticeToKill: number | null = null;
   let waiting: string[] = [];
 
   const watchdog = setInterval(() => {
@@ -446,16 +439,11 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
 
     if (!killed && !searching && noticed !== silentFrom && silent >= run.seconds * 1000 * NOTICE_AT) {
       noticed = silentFrom;
-      noticedAt = performance.now();
-      notices += 1;
       appendFileSync(notice, `silent ${(silent / 1000).toFixed(1)}s of ${String(run.seconds)}s\n`);
     }
 
-    // A tick held late finds the silence past the notice and the bound at once: the run is told, and killed only once
-    // it has had the rest of the bound to answer, as an on-time tick gives it.
-    if (killed || searching || silent < run.seconds * 1000 || performance.now() - noticedAt < run.seconds * 1000 * (1 - NOTICE_AT)) return;
+    if (killed || searching || silent < run.seconds * 1000) return;
     killed = true;
-    noticeToKill = (performance.now() - noticedAt) / 1000;
     waiting = waitingIn(child.pid);
     signalGroup('SIGTERM');
     setTimeout(() => {
@@ -483,7 +471,7 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
   done.resolve();
   longestSilence = Math.max(longestSilence, performance.now() - lastOutput);
   const seconds = (performance.now() - started) / 1000;
-  const measured = { leftovers, seconds, longestSilence: longestSilence / 1000, notices, noticeToKill, stdout };
+  const measured = { leftovers, seconds, longestSilence: longestSilence / 1000, stdout };
 
   if (killed) {
     const line = [deadlineLine(run, seconds), ...waiting.length === 0 ? [] : ['it was waiting in:', ...waiting.map((each) => `  ${each}`)]].join('\n');
