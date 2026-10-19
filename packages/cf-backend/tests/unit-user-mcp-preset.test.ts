@@ -1,14 +1,15 @@
 // Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
-import { createCredentialCipher } from '@kinu.run/core';
+import { createCredentialCipher, type JsonValue } from '@kinu.run/core';
 import {
   createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedSdkMcpServer,
+  lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedSdkMcpServer,
 } from './helpers/agents-sdk';
+import { kvOf } from './helpers/platform-context';
 import { auth } from '@modelcontextprotocol/client';
 
 import { durableObjectStorage } from './helpers/programmatic-host';
@@ -28,6 +29,25 @@ function harness(options?: TestUserDOOptions): TestUserDO {
 
   return createTestUserDO(options);
 }
+
+describe("an MCP server's login is kept sealed in the account's storage", () => {
+  test('the storage an added server\'s provider and the SDK\'s restored provider are handed seals every value', async () => {
+    const h = harness();
+    const token = { access_token: ['gho_', 'sealed0123456789abcdefghijklmnopq'].join(''), token_type: 'bearer' };
+    queueMcpAuthUrl('https://mcp.cloudflare.com/authorize?test');
+
+    await h.userDO.userMcp_add(await testOwner(), { presetId: 'cloudflare' }, 'https://kinu.example');
+    await lastOAuthStorage().put('/kinu-user-mcp/server-1/client-1/token', token);
+
+    const stored = kvOf(h.db).get('/kinu-user-mcp/server-1/client-1/token');
+    expect(typeof stored === 'string' && stored.startsWith('pce1.')).toBe(true);
+    expect(JSON.stringify(stored)).not.toContain(token.access_token);
+
+    h.userDO.createMcpOAuthProvider('https://kinu.example/api/user/mcp/callback');
+    expect(await lastOAuthStorage().get<JsonValue>('/kinu-user-mcp/server-1/client-1/token')).toEqual(token);
+    h.close();
+  });
+});
 
 describe('an MCP preset add', () => {
   test('an oauth preset stores preset_id and returns the authorize URL', async () => {

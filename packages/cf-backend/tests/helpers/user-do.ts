@@ -542,6 +542,11 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         delete: (key: string): boolean => kv.delete(key),
       },
       transactionSync: <T,>(closure: () => T): T => db.transaction(closure)(),
+      // The asynchronous face of the same pairs, where the SDK's OAuth provider keeps an MCP server's login.
+      get: async (key: string): Promise<JsonValue | undefined> => kv.get(key),
+      put: async (key: string, value: JsonValue): Promise<void> => { kv.set(key, value); },
+      delete: async (key: string): Promise<boolean> => kv.delete(key),
+      list: async (listing: { prefix: string }): Promise<Map<string, JsonValue>> => new Map([...kv].filter(([key]) => key.startsWith(listing.prefix))),
       // The SDK's `destroy()` runs these before the abort; dropping every table matches `deleteAll`.
       deleteAlarm: async (): Promise<void> => {},
       // The SDK's Lifecycle arms its job queue's alarm; `UserDO.alarm()` runs the due jobs, as the platform's would.

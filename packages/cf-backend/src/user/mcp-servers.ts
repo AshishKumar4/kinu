@@ -8,6 +8,7 @@ import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-pro
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
+import { mcpOAuthStorage } from './mcp-oauth-storage';
 import type { UserCredentials } from './credentials';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -440,12 +441,14 @@ export class UserMcpServers {
   }): RegisteredAppOAuthClientProvider | DurableObjectOAuthClientProvider {
     const { appCredentials } = input;
 
+    const storage = mcpOAuthStorage(this.host.ctx, this.host.env);
+
     const provider = appCredentials
       ? new RegisteredAppOAuthClientProvider({
-          storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
+          storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
           clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
         })
-      : new DurableObjectOAuthClientProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
+      : new DurableObjectOAuthClientProvider(storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
 
     provider.serverId = input.serverId;
 

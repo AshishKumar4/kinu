@@ -49,6 +49,7 @@ import {
 
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserSecrets } from './secrets';
+import { mcpOAuthStorage } from './mcp-oauth-storage';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
@@ -955,9 +956,9 @@ export class UserDO extends Agent<Env> {
     return this.userDrive.drive_abortDownload(caller, transferId);
   }
 
-  /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key. */
+  /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
-    return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
+    return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
   /** The deploy's walk (`scripts/reset.ts tables`): this account's tables and their rows, what its repair did, and the

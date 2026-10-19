@@ -1368,6 +1368,7 @@ export type { Credential, OAuthCredential, OpenAICompatCredential } from './cred
 export {
   createCredentialCipher,
   type CredentialCipher,
+  type CredentialEncryptionEnv,
 } from './credentials/envelope';
 
 export {
