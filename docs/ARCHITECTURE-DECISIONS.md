@@ -1998,8 +1998,9 @@ the account object for each command, held by a process the box keeps but never
 writes or restarts, and asked again at every launch of a supervised job the
 owner started, whose spec and directory hold placeholders alone: the job's
 tmux session takes the values as its environment at its start (`new-session
--e`, tmux 3.2+), and a launch whose account does not answer, or whose box is
-not yet configured, fails with that reason rather than running without them.
+-e`, tmux 3.2+). An owner's command, eval program or job whose account does
+not answer (or whose box is not yet configured) fails with that reason rather
+than running without its secrets; a viewer's never asks.
 A query-position value is encoded as one parameter's value, and every URL
 spelling of it is scrubbed from the answer. A named shell sets a call's
 variables after restoring its saved state and never saves them.

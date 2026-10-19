@@ -146,11 +146,11 @@ export class AccountReads {
 
   /**
    * The secrets as a command's variables, for the owner's own calls only: a viewer's, or a shared slate's, gets none, and
-   * a workspace with no owner has none. An account that does not answer costs the command its secrets, never the
-   * command: one that needs none runs as it would (8c56762c6), and the next asks again.
+   * a workspace with no owner has none. An account that does not answer fails the command before it runs, naming
+   * that, rather than run it short of a secret it was granted; the next command asks again.
    */
   commandEnvironment(...[use, caller]: Parameters<CommandEnvironment>): ReturnType<CommandEnvironment> {
-    return settle(Effect.catch(attempt({ doing: "reading this workspace's secrets for a command", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
+    return settle(attempt({ doing: "asking the account for this workspace's secrets, without which the command was not run", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
       if (caller !== 'owner' || !this.host.owned()) return {};
       const { granted } = await this.grantedSecrets();
       const placeholders = Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder]));
@@ -158,11 +158,7 @@ export class AccountReads {
       if (use === 'keep' || !granted.some((secret) => secret.reveal)) return placeholders;
 
       return { ...placeholders, ...await this.ask((stub, workspace) => stub.revealedSecrets(workspace)) };
-    }), (failure) => Effect.sync(() => {
-      diagnostics.failure('secrets.environment_unread', failure, { workspace: this.host.workspace() });
-
-      return {};
-    })));
+    }));
   }
 
   /**

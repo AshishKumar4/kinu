@@ -174,3 +174,44 @@ describe("a job's values are read for it, or its launch fails", () => {
     await expect(revealedForJob(answering, undefined)).rejects.toThrow('not yet configured');
   });
 });
+
+describe("an owner's call whose account does not answer does not run short of its secrets", () => {
+  /** The workspace's reads over an account object that answers nothing. */
+  function unanswered(): CommandEnvironment {
+    const reads = new AccountReads({ hub: async () => { throw new Error('account object unreachable'); }, owned: () => true, workspace: () => 'shop' });
+
+    return (use, caller) => reads.commandEnvironment(use, caller);
+  }
+
+  test('an owner command on the computer is not run, and says the account did not answer', async () => {
+    const box = computer(unanswered());
+    const [settled] = await Promise.allSettled([box.provider.tools.exec.execute('env')]);
+    const answer = settled?.status === 'fulfilled' ? JSON.stringify(settled.value) : String(settled?.reason);
+
+    expect(box.execs).toEqual([]);
+    expect(answer).toContain('asking the account');
+  });
+
+  test("an owner command on the workspace's box, an owner job and an owner's eval program are refused the same way", async () => {
+    const environment = unanswered();
+    const seen: string[] = [];
+
+    const box = withCommandEnvironment({
+      ready: async () => {},
+      exec: async (command) => {
+        seen.push(command);
+
+        return { command, exitCode: 0, success: true, duration: 0, timestamp: 0, stdout: '', stderr: '' };
+      },
+    }, environment);
+
+    await expect(box.exec('env', {})).rejects.toThrow('asking the account');
+    await expect(environment('keep', 'owner')).rejects.toThrow('asking the account');
+    await expect(environment('run', 'owner')).rejects.toThrow('asking the account');
+    expect(seen).toEqual([]);
+  });
+
+  test("a viewer's call never asks the account, so it runs as it would, holding nothing", async () => {
+    expect(await unanswered()('run', 'viewer')).toEqual({});
+  });
+});
