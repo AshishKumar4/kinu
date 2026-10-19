@@ -102,7 +102,7 @@ Each is a change to something that exists; none lands without approval.
 6. **The account menu at the top left** (the Kinu mark and caret) moves to the footer; the mark becomes a link Home. Its items are unchanged.
 7. **The folded rail's account initial** opens the account menu instead of going to Settings, and Mail and Devices join it.
 8. **The swarm explorer's route key** is renamed `explore` → `swarm` in `APP_ROUTES`, so `explore` can name Explore. Its path `/swarm/:agentId` is unchanged.
-9. **The Gallery's tables** (`gallery_listings`, `gallery_stars`, `gallery_reports`) take a `kind` and become Explore's one store for apps and workspaces; `gallery_listings` gains `maker`, `needs` and `installs`, and `gallery_installs` is new (§9.1). Whether `slate` is renamed `item` is a choice between a clearer name and keeping today's stars and reports.
+9. **The Gallery's tables** (`gallery_listings`, `gallery_stars`, `gallery_reports`) take a `kind` and become Explore's one store for apps and workspaces; `slate` is renamed `item`, which drops today's Gallery stars and reports on repair; `gallery_listings` gains `maker`, `needs` and `installs`, and `gallery_installs` is new (§9.1).
 10. **The workspace bar** shows the focus bar in a focus-layout workspace; workbench workspaces are unchanged.
 11. **`triggers`** gains `last_finding`, the line Today shows under each watch (§9.3).
 
@@ -116,7 +116,7 @@ One listings store for both kinds: the Gallery's three control-plane tables take
 CREATE TABLE gallery_listings (
   kind TEXT NOT NULL DEFAULT 'app' CHECK (kind IN ('app', 'workspace')),
   workspace TEXT NOT NULL,
-  slate TEXT NOT NULL,
+  item TEXT NOT NULL,
   share TEXT NOT NULL,
   title TEXT NOT NULL,
   line TEXT NOT NULL,
@@ -129,31 +129,31 @@ CREATE TABLE gallery_listings (
   listed_at INTEGER NOT NULL,
   viewers INTEGER NOT NULL DEFAULT 0,
   installs INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (kind, workspace, slate)
+  PRIMARY KEY (kind, workspace, item)
 );
 
 CREATE TABLE gallery_stars (
   kind TEXT NOT NULL DEFAULT 'app' CHECK (kind IN ('app', 'workspace')),
-  workspace TEXT NOT NULL, slate TEXT NOT NULL, email TEXT NOT NULL, at INTEGER NOT NULL,
-  PRIMARY KEY (kind, workspace, slate, email)
+  workspace TEXT NOT NULL, item TEXT NOT NULL, email TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (kind, workspace, item, email)
 );
 
 CREATE TABLE gallery_reports (
   kind TEXT NOT NULL DEFAULT 'app' CHECK (kind IN ('app', 'workspace')),
-  workspace TEXT NOT NULL, slate TEXT NOT NULL, email TEXT NOT NULL, reason TEXT NOT NULL, at INTEGER NOT NULL,
-  PRIMARY KEY (kind, workspace, slate, email)
+  workspace TEXT NOT NULL, item TEXT NOT NULL, email TEXT NOT NULL, reason TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (kind, workspace, item, email)
 );
 
 CREATE TABLE gallery_installs (
   kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace')),
-  workspace TEXT NOT NULL, slate TEXT NOT NULL, user_id TEXT NOT NULL, at INTEGER NOT NULL,
-  PRIMARY KEY (kind, workspace, slate, user_id)
+  workspace TEXT NOT NULL, item TEXT NOT NULL, user_id TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (kind, workspace, item, user_id)
 );
 ```
 
-Unchanged indexes: `gallery_stars_email(email)`, `gallery_stars_at(at)`, `gallery_reports_email(email)`.
+Indexes as today: `gallery_stars_email(email)`, `gallery_stars_at(at)`, `gallery_reports_email(email)`.
 
-- `slate` keeps its name and now holds the listed item: a slate's id for an app, a blueprint share's id for a workspace. Keeping the name lets schema repair carry every star, report and listing across: each existing row gets `kind = 'app'` from its default. Renaming it to `item` would read better and would lose the stars and reports on repair, which keeps only matching columns; it is the owner's call (§8).
+- `item` replaces `slate`: a slate's id for an app, a blueprint share's id for a workspace. Schema repair keeps only matching columns, so today's listings rebuild from their listing sync and today's stars and reports are dropped; decided for clarity (2026-10-19), as the deployment has almost no users.
 - `maker = 'kinu'` marks Kinu's own blueprints. They are code, and the control plane writes their rows when it starts, under workspace `kinu`, so they rank, star and count installs like any other.
 - `installs` is the count of `gallery_installs`, as `viewers` is of the opens a workspace reports; an app's install is a fork.
 - `needs` is what an item reaches of its opener's, JSON, written by its listing sync.
