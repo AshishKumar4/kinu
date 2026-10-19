@@ -109,6 +109,9 @@ const TERMINAL_EFFECT_NAMES = [
   // Detached: the fleet's row for a turn handed over, owed once as its sequence is first recorded however often the
   // handoff repeats. An analytics write: a crash between it and its claim can write it twice, never lose it.
   'fleet_turn',
+  // Detached: each finished phase of the answer named by the fast tier once it committed; a failed call is not retried,
+  // and the chat keeps the calls' own line for that phase.
+  'phase_lines',
 ] as const;
 
 export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];

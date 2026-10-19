@@ -1,12 +1,14 @@
 // The one table routing every SpendSource to a model; `satisfies` makes a missing row a compile error.
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../providers/effort';
+import { declaredReasoningEffort } from '../providers/reasoning-effort';
 import type { TierId } from './catalog';
 import type { ResolvedTurnProfile, TierFallback, TierRoute } from './resolve';
 
 export type ModelRoutePolicy =
   | { readonly kind: 'invocation' }
-  | { readonly kind: 'fixed'; readonly tier: TierId }
+  /** `effort`: the level the call wants, which each model of the tier's chain is asked at as near as it declares. */
+  | { readonly kind: 'fixed'; readonly tier: TierId; readonly effort?: ReasoningEffort }
   | { readonly kind: 'platform' };
 
 export const MODEL_ROUTE_POLICY = {
@@ -20,6 +22,8 @@ export const MODEL_ROUTE_POLICY = {
   advisor: { kind: 'fixed', tier: 'deep' },
   compaction: { kind: 'fixed', tier: 'fast' },
   fast: { kind: 'fixed', tier: 'fast' },
+  // The few words naming each finished phase of a turn's tool calls; its own label, so its spend reads apart.
+  phase_line: { kind: 'fixed', tier: 'fast', effort: 'low' },
   reflection: { kind: 'fixed', tier: 'fast' },
   platform: { kind: 'platform' },
   // Replays the frozen spec that wrote the entry (providers/cache-warming.ts); no turn exists.
@@ -51,6 +55,17 @@ export interface ModelRouteResolution {
   readonly reasoningEffort: ReasoningEffort | null;
   readonly fallbacks: readonly TierFallback[];
   readonly retries: number;
+}
+
+/** The tier's chain asked at `wanted`, each model at the level it declares nearest; a model declaring none is asked at none. */
+function atEffort(slot: TierRoute, wanted: ReasoningEffort): TierRoute {
+  const efforts = slot.efforts ?? {};
+
+  return {
+    model: slot.model,
+    reasoningEffort: declaredReasoningEffort(wanted, efforts[slot.model]),
+    fallbacks: slot.fallbacks.map((fallback) => ({ ...fallback, reasoningEffort: declaredReasoningEffort(wanted, efforts[fallback.model]) })),
+  };
 }
 
 function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
@@ -91,12 +106,10 @@ export function resolveModelRoute(
     });
   }
 
-  return Object.freeze({
-    source,
-    tier: policy.tier,
-    ...tierResolution(profile, policy.tier),
-    retries: profile.retries,
-  });
+  const slot = tierResolution(profile, policy.tier);
+  const { model, reasoningEffort, fallbacks } = 'effort' in policy ? atEffort(slot, policy.effort) : slot;
+
+  return Object.freeze({ source, tier: policy.tier, model, reasoningEffort, fallbacks, retries: profile.retries });
 }
 
 export { SPEND_SOURCES };

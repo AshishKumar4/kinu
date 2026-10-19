@@ -25,6 +25,7 @@ export const SPEND_SOURCES = [
   'test',
   'rating',
   'logo',
+  'phase_line',
 ] as const;
 
 export type SpendSource = (typeof SPEND_SOURCES)[number];
@@ -46,6 +47,7 @@ export const SPEND_SOURCE_LABEL = {
   test: 'Model tests',
   rating: 'Turn ratings',
   logo: 'Workspace logos',
+  phase_line: 'Phase lines',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 export const SPEND_SOURCE_DETAIL = {
@@ -68,6 +70,7 @@ export const SPEND_SOURCE_DETAIL = {
   test: 'a model\'s Test button: one request asking for one word through the path a turn takes',
   rating: 'the decision model reading the user\'s reply to a turn: one call per answered turn',
   logo: 'the workspace\'s own model drawing its logo: once at creation, and on each regenerate',
+  phase_line: 'naming each finished phase of a turn\'s tool calls in a few words: one call per phase, on the fast tier',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 /**

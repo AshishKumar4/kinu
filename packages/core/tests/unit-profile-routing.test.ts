@@ -54,7 +54,7 @@ function memoryConfig(): RoleStateStore & { dump: () => Map<string, string> } {
 /** Lanes whose tier the account fixes, so a turn cannot move them. */
 const FIXED_LANES = [
   ['scaffold', 'deep'], ['judge', 'deep'], ['advisor', 'deep'],
-  ['compaction', 'fast'], ['fast', 'fast'], ['reflection', 'fast'],
+  ['compaction', 'fast'], ['fast', 'fast'], ['reflection', 'fast'], ['phase_line', 'fast'],
 ] as const;
 
 const INVOCATION_LANES = ['agent', 'head', 'swarm'] as const;
@@ -122,6 +122,22 @@ describe('exhaustive model routing', () => {
     expect(resolveModelRoute('judge', profile)?.model).toBe(profile.tiers.deep.model);
     expect(profile.tiers.deep.model).not.toBe('@cf/a/model-a');
   });
+});
+
+test('a phase line asks the fast tier at low, as near as its model declares; the fast lane keeps its own', () => {
+  const model = resolveModelRoute('fast', resolveTurnProfile(baseInput())).model;
+
+  const at = (declared: readonly ('low' | 'medium' | 'high')[]) => {
+    const profile = resolveTurnProfile(baseInput({ provider: { ...PROVIDER, reasoningEfforts: { [model]: [...declared] } } }));
+
+    return [resolveModelRoute('phase_line', profile).reasoningEffort, resolveModelRoute('fast', profile).reasoningEffort];
+  };
+
+  expect(at(['low', 'medium', 'high'])).toEqual(['low', 'medium']);
+  // No lower level declared: the lowest it has.
+  expect(at(['medium', 'high'])).toEqual(['medium', 'medium']);
+  // A model that declares no levels is asked at none.
+  expect(at([])).toEqual([null, null]);
 });
 
 // Review P2 (d35c1060fe): the advisor, hired as an agent, took the workspace's chat pin (or the parent's, copied into

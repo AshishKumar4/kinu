@@ -5,7 +5,7 @@ import {
   PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane, answerDrawsPages,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
-  bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
+  bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, phaseLinesEffect, phaseLinesOwed,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
@@ -365,7 +365,7 @@ export class FacetChat {
     const slates = answerSlatesEffect({ turnId, runId, epoch }, input.messageId);
 
     if (this.policy.workspaceAgent) {
-      return [...slates, ...declareHandoffRoster(chatTurnParts(input), {
+      return [...slates, ...phaseLinesOwed(input.messageId), ...declareHandoffRoster(chatTurnParts(input), {
         turnId, runId, epoch, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
         turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
@@ -401,6 +401,7 @@ export class FacetChat {
     // Its tools' receipts were kept in the workspace, which drops them once the run settled.
     return [
       ...slates,
+      ...phaseLinesOwed(input.messageId),
       ...declareTerminalRoster(facts, { role: { kind: 'agent', opensConversation: input.opensConversation }, advisor, turn: scoped, reachableTools: input.reachableTools }, { ...chatTurnParts(input), ...turnReport }),
       runSettleEffect(input.messageId, { turnId, runId, epoch }),
     ];
@@ -441,6 +442,11 @@ export class FacetChat {
 
             return { status: 'completed' };
           },
+        }),
+        phase_lines: phaseLinesEffect({
+          answer: async (messageId) => await this.drawnAnswer(messageId),
+          completer: async () => await this.oneShotOn('phase_line', 'phase-lines'),
+          amend: async (messageId, patch) => { await this.amendAnswer(messageId, patch); },
         }),
         workspace_settle: terminalEffect({
           input: HandedOffTurnSchema,
@@ -606,7 +612,7 @@ export class FacetChat {
    * an answer rewound meanwhile is stamped with nothing. Its room is shown the answer again, unless a turn is live.
    */
   private async amendAnswerSlates({ messageId, ...close }: AnswerSlates): Promise<void> {
-    const { actor, database, workspace } = this.deps;
+    const { actor, workspace } = this.deps;
     const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
     const answer = transcript.read(messageId);
 
@@ -614,8 +620,28 @@ export class FacetChat {
     const metadata = await answerMetadataOf(workspace, close, async () => await transcript.narration(answer.parts));
 
     if (metadata === null) return;
-    await transcript.amendMetadata(messageId, metadata);
+    await this.amendAnswer(messageId, metadata);
+  }
+
+  /** What a committed answer learns after it, stamped on it; its room is shown the answer again, unless a turn is live. */
+  private async amendAnswer(messageId: string, metadata: JsonObject): Promise<void> {
+    const { actor, database, workspace } = this.deps;
+
+    await actor.stores.history.transcript(CHAT_SESSION_ID).amendMetadata(messageId, metadata);
     await workspace.answerAmended(await database.seed());
+  }
+
+  /** An answer as its chat draws it, and the words that asked for it; null once it was rewound. */
+  private async drawnAnswer(messageId: string) {
+    const { messages } = await this.deps.database.seed();
+    const at = messages.findIndex((message) => message.id === messageId);
+    const answer = messages[at];
+
+    if (answer === undefined) return null;
+    const opener = messages.slice(0, at).reverse().find((message) => message.role !== 'assistant');
+    const ask = opener?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n') ?? '';
+
+    return { parts: answer.parts, metadata: answer.metadata, ask };
   }
 
   /** The stand-in lands first, as every actor's does: the model's name may be refused. The workspace plans the title. */
@@ -629,25 +655,30 @@ export class FacetChat {
 
   /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */
   private async suggestTitle(mission: string): Promise<string | null> {
+    return await suggestWorkspaceTitle(await this.oneShotOn('fast', 'title'), mission);
+  }
+
+  /** One completion at a time down `source`'s tier chain, on the agent's own models. */
+  private async oneShotOn(source: 'fast' | 'phase_line', turnId: string): Promise<(system: string, prompt: string) => Promise<string>> {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
     const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
 
-    // The title is no run of this agent's: its provider's words are the workspace's, as every actor's turnless call's are.
+    // No run of this agent's: its provider's words are the workspace's, as every actor's turnless call's are.
     const { sources } = facetTurnSources({
-      actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId: 'title', epoch: null, pacer,
+      actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId, epoch: null, pacer,
       recordsIn: WORKSPACE_RUN_ID,
     });
 
     const inputs = await sources.profileInputs();
     const profile = resolveTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
-    const route = resolveModelRoute('fast', profile);
+    const route = resolveModelRoute(source, profile);
     const { routed } = sources.models;
 
-    return await suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
+    return (system, prompt) => completeOnRoute(route, {
       llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: modelOperations(actor, WORKSPACE_RUN_ID) }, system),
       ...(routed !== undefined && { attemptOf: (spec: string) => routed.attemptFor(spec) }),
-    }, prompt), mission);
+    }, prompt);
   }
 
   /** The workspace's model settings changed: the next request is measured on them, and a refusal they fix may answer. */

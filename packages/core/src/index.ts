@@ -2377,6 +2377,8 @@ export {
   PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY, phaseTitle, writtenTitles,
 } from './read-models/tool-phase-title';
 
+export { phaseLinesEffect, phaseLinesOwed } from './orchestrator/phase-lines';
+
 export {
   type PlanPageRef,
   type PlanSurfaceKind,
