@@ -39,6 +39,9 @@ export const ADVISOR_SIGNAL_KIND = 'advisor';
 
 export const ADVISOR_SEVERITY_METADATA_KEY = 'advisorSeverity';
 
+/** The review alone, as its card shows it; the turn's text adds the header the agent reads it under. */
+export const ADVISOR_NOTE_METADATA_KEY = 'advisorNote';
+
 /** Written and read back ({@link recentAdvisorNotes}) under one string. */
 export const ADVISOR_EVENT_TYPE = 'advisor_note';
 
@@ -283,8 +286,22 @@ export const ADVISOR_HEADER =
   '[Advisor: a second model reviewed the turn you just finished. This is the Kinu '
   + 'runtime, not the user. Weigh it against what you know; it may be wrong.]';
 
+const advisorPrefix = (severity: AdvisorSeverity): string => `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[severity]}: `;
+
 function advisorSignalText(note: AdvisorNote): string {
-  return `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[note.severity]}: ${note.note}`;
+  return `${advisorPrefix(note.severity)}${note.note}`;
+}
+
+/** The actor line a blocker said to the reviewed actor's parent opens with. */
+const FORWARDED_ACTOR_LINE = /^\[Actor [^\]\n]*\]\n/u;
+
+/** The note alone, from a row written before it was kept beside its text: the text less the header the agent reads it
+ *  under, and less the actor line a parent's copy opens with; null when the text is not in that shape. */
+export function keptAdvisorNote(text: string, severity: AdvisorSeverity): string | null {
+  const prefix = advisorPrefix(severity);
+  const said = text.replace(FORWARDED_ACTOR_LINE, '');
+
+  return said.startsWith(prefix) ? said.slice(prefix.length) : null;
 }
 
 /** What the advisor is hired on; recorded at the turn's end, so a replay reads the tool surface that turn had.
@@ -336,7 +353,7 @@ export async function sayAdvisorNote(note: AdvisorNote, deps: {
     kind: ADVISOR_SIGNAL_KIND,
     text: advisorSignalText(note),
     severity: note.severity,
-    metadata: { [ADVISOR_SEVERITY_METADATA_KEY]: note.severity },
+    metadata: { [ADVISOR_SEVERITY_METADATA_KEY]: note.severity, [ADVISOR_NOTE_METADATA_KEY]: note.note },
   };
 
   const keyed: AgentSignal = deps.turnId === undefined || deps.turnId === ''

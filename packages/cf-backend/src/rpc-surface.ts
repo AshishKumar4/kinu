@@ -55,6 +55,15 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
+  'slateAi',
+  'slatePartConsented',
+  'slateAiSpend',
+  'slateConsents',
+  'consentSlate',
+  'withdrawSlateConsent',
+  'slatePartTool',
+  'slatePartAi',
+  'decideSlateEffect',
   'accountMemory_decide',
   'accountMemory_facts',
   'accountMemory_forget',
@@ -309,6 +318,14 @@ const ORCHESTRATOR_METHODS = [
   'slateAs',
   'slateBuildAs',
   'slateCallAs',
+  // A personal part's run, its process's calls, and what its viewer showed: DO-to-DO only, from the app's routes and PartBinding.
+  // A slate shared to edit: its files read, and changed, for the editor another workspace names (its owner).
+  'slateFilesFor',
+  'editSlateAs',
+  'runSlatePart',
+  'slatePartCall',
+  'showSlatePart',
+  'releaseSlatePart',
   // An isolate running an actor's turn, or a slate, calls the actor's operations here.
   'callOperation',
   'listOperations',
@@ -318,6 +335,13 @@ const ORCHESTRATOR_METHODS = [
   'readLiveShare',
   'shareLiveWith',
   'liveShareBundle',
+  // The owner's share sheet's mode, Gallery listing and standing approvals, and a listed share's needs for the Gallery's
+  // public page.
+  'setLiveShareMode',
+  'setLiveShareListing',
+  'slatePreapprovals',
+  'withdrawSlatePreapproval',
+  'galleryNeeds',
   'liveShareUrl',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.

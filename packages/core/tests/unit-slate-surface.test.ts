@@ -79,8 +79,8 @@ test('a slate or MCP server named fs keeps its three-part address', () => {
 
 test('a lineage comes from the host record, never from the caller', () => {
   const invocations = new Map<string, SlateInvocation>([
-    ['live', { id: 'notes', chain: ['root'] }],
-    ['other-slate', { id: 'shelf', chain: [] }],
+    ['live', { id: 'notes', chain: ['root'], incarnation: 'p1', generations: {} }],
+    ['other-slate', { id: 'shelf', chain: [], incarnation: 'p1', generations: {} }],
   ]);
 
   const resolve = (invocation: string | null) => issuedSlateInvocation({ invocations, id: 'notes', invocation })?.chain ?? [];
@@ -179,13 +179,13 @@ test('a call into another slate admits only slates the grant walks', () => {
 
 test('issuedSlateInvocation returns the viewer the host recorded', () => {
   const invocations = new Map<string, SlateInvocation>([
-    ['shared', { id: 'issues', chain: ['root'], viewer }],
-    ['plain', { id: 'issues', chain: ['root'] }],
+    ['shared', { id: 'issues', chain: ['root'], viewer, incarnation: 'p1', generations: {} }],
+    ['plain', { id: 'issues', chain: ['root'], incarnation: 'p1', generations: {} }],
   ]);
 
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'shared' }))
-    .toEqual({ id: 'issues', chain: ['root'], viewer });
-  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'plain' })).toEqual({ id: 'issues', chain: ['root'] });
+    .toEqual({ id: 'issues', chain: ['root'], viewer, incarnation: 'p1', generations: {} });
+  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'plain' })).toEqual({ id: 'issues', chain: ['root'], incarnation: 'p1', generations: {} });
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: null })).toBeNull();
 });
 

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
-  "files": 3389,
-  "functions": 88895,
+  "files": 3461,
+  "functions": 90817,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -275,10 +275,6 @@
     },
     {
       "key": "evals/src/sight.ts#look",
-      "complexity": 26
-    },
-    {
-      "key": "packages/cf-backend/src/components/Sidebar.tsx#Sidebar",
       "complexity": 26
     },
     {

@@ -602,7 +602,7 @@ describe('history mode refuses a clone that has no history, and says how to get 
     const refusal = truncatedHistoryRefusal(clone);
     expect(refusal).toBeDefined();
     expect(refusal?.fix).toContain('git fetch --unshallow');
-    expect(refusal?.fix).toContain('fetch-depth: 0');
+    expect(refusal?.fix).toContain('a full clone on the runner');
     expect(refusal?.silently).toContain('zero commits');
   });
 

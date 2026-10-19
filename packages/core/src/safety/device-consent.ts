@@ -370,7 +370,13 @@ export class DeviceConsentRegistry {
       return Effect.result(this.deps.wake(actorId, {
         kind: DEVICE_CONSENT_SIGNAL,
         text: answerWakeMessage(own),
-        metadata: { ids: own.map((ask) => ask.consentId), ...(surface !== null && { [RESUMED_SURFACE]: surface }) },
+        // How many were approved and denied, for the person's card: the text is the agent's.
+        metadata: {
+          ids: own.map((ask) => ask.consentId),
+          approved: own.filter((ask) => ask.status !== 'deny').length,
+          denied: own.filter((ask) => ask.status === 'deny').length,
+          ...(surface !== null && { [RESUMED_SURFACE]: surface }),
+        },
       }));
     });
   }

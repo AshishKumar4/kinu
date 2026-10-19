@@ -445,8 +445,8 @@ describe('renderActiveSkillsSection + tool gating', () => {
   });
 
   test('toolAllowedBySkills: glob-suffix `workspace.*` matches namespace', () => {
-    expect(toolAllowedBySkills('workspace.readFile', ['workspace.*'])).toBe(true);
-    expect(toolAllowedBySkills('workspace.readFile', ['workspace'])).toBe(true);
+    expect(toolAllowedBySkills('workspace.fs.text', ['workspace.*'])).toBe(true);
+    expect(toolAllowedBySkills('workspace.fs.text', ['workspace'])).toBe(true);
     expect(toolAllowedBySkills('computer.exec', ['workspace.*'])).toBe(false);
   });
 

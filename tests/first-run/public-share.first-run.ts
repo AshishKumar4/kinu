@@ -1,8 +1,10 @@
 /**
  * A public live share, opened signed out. The owner shares a slate whose one
  * binding has a read member and a mutating member, approves nothing, and a
- * visitor with no account opens the share URL, calls the read member over
- * Cap'n Web and is refused the mutating one. No model; the CLI operator plan.
+ * visitor with no account opens the share URL and calls both over Cap'n Web.
+ * A share starts on each viewer's own access (docs/SLATE-SHARING-NIMBUS.md §2),
+ * so neither reads or writes anything of the owner's, and each refusal says who
+ * can turn on "my access". No model; the CLI operator plan.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -10,6 +12,7 @@ import { callSharedSlate, consentToShare, type EvalObservation, type SlateViewer
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
+import { shareHost } from './share-entry';
 
 const CASE = firstRunCaseId(import.meta.url);
 
@@ -18,7 +21,7 @@ const DEFECT: FirstRunDefect = {
   found: 'The owner asked for a live share a stranger can open without an account and call one read-only member of, with every mutating member refused unless approved by name.',
   missedBecause: 'No deployed route served a share origin: the share label parser, the grant cut and the viewer path existed in no build, so every unit and workerd proof ran against code production never had.',
   provedRedAt: '0415e0f93',
-  redDirection: 'RED against the deployed 0415e0f93 on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, `probe()` to answer over a Cap\'n Web batch, and `mutate()` to be refused with the share\'s own "does not grant" reason.',
+  redDirection: 'RED against the deployed 0415e0f93 on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, and, the share being on each viewer\'s own access, `probe()` and `mutate()` each refused over a Cap\'n Web batch with the words naming who can turn on My access: a build before share modes answers the probe with the owner\'s own workspace.',
 };
 
 const SUITE = 'First-run · public-share (CLI operator, no model, signed-out visitor)';
@@ -72,7 +75,8 @@ END`]));
         const shared = await session.rpcAt(session.workspace, 'slate', [{ op: 'share', id: SLATE, visibility: 'public', approved: [] }]);
         const answered = v.safeParse(Answered, shared);
         const created = answered.success ? v.safeParse(LiveShareCreatedSchema, answered.output.value) : null;
-        const url = created?.success === true ? created.output.url : null;
+        // Its link is the app's page for it; the visitor here drives the host that page frames.
+        const url = await shareHost(session.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
         const refusal = v.safeParse(Refused, shared);
         let served: { status: number; body: string } | null = null;
         let probe: SlateViewerAnswer<JsonValue> | null = null;
@@ -93,9 +97,9 @@ END`]));
             detail: JSON.stringify({ deployedSha: session.deployedSha, refused: refusal.success ? refusal.output : null, url: url !== null }) },
           { what: 'public-share-serves-signed-out', reached: served?.status === 200 && served.body === 'public-share-probe-ok',
             detail: JSON.stringify(served) },
-          { what: 'read-only-member-answers', reached: probe !== null && 'value' in probe && v.is(v.object({ exists: v.literal(true) }), probe.value),
+          { what: 'own-access-reads-nothing-of-the-owner', reached: probe !== null && 'error' in probe && probe.error.includes('can turn on My access'),
             detail: JSON.stringify(probe) },
-          { what: 'mutating-member-refused', reached: mutate !== null && 'error' in mutate && mutate.error.includes('does not grant'),
+          { what: 'own-access-writes-nothing-of-the-owner', reached: mutate !== null && 'error' in mutate && mutate.error.includes('can turn on My access'),
             detail: JSON.stringify(mutate) },
         ];
       },

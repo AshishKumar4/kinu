@@ -53,14 +53,13 @@ test('a checkpoint alarm on an unused computer starts nothing and reports no dur
 
 // D34: maintenance starts no container. A wake whose adoption meets a stop leaves the box stopped, files nothing, and
 // leaves no row that would wake the object to start it again. The stop lands as the wake is delivered, or while one
-// step of the adoption is held.
+// step of the adoption is held: the adoption holds no block, so the box's own stop reaches it there (D102).
 const races: readonly (readonly [string, string, ((arm: ChainBox, held: Gate) => void) | undefined])[] = [
   ['before the checkpoint enters its lane', 'devboxCheckpoint', undefined],
-  ['during the admission a checkpoint opens', 'devboxCheckpoint', ({ container }, held) => { container.containerHookGate = held; }],
-  ['during the admission a heartbeat opens', 'devboxHeartbeat', ({ container }, held) => { container.containerHookGate = held; }],
-  ['during the start hook a checkpoint opens', 'devboxCheckpoint', ({ storage }, held) => { storage.gateOn('devbox:restoration', held); }],
-  // The platform replaced the container: the adoption turns over and restores it, and the stop lands in that restore.
-  ['during the restore a checkpoint opens', 'devboxCheckpoint', ({ container }, held) => { container.bootId = undefined; container.stampGate = held; }],
+  ['while a checkpoint\'s adoption reads the boot id', 'devboxCheckpoint', ({ container }, held) => { container.bootReadGate = held; }],
+  ['while a heartbeat\'s adoption reads the boot id', 'devboxHeartbeat', ({ container }, held) => { container.bootReadGate = held; }],
+  // The platform replaced the container: the adoption turns over and arms the restore, and the stop lands in it.
+  ['during the restore a checkpoint arms', 'devboxCheckpoint', ({ container }, held) => { container.bootId = undefined; container.stampGate = held; }],
 ];
 
 for (const [race, callback, hold] of races) {
@@ -130,15 +129,15 @@ test('a superseded restore whose container stopped leaves the start that replace
   await box.checkpointNow('tick');
   const committed = chainHead(rows);
   const starts = container.containerStarts;
-  // The platform replaced the container: the tick's adoption turns over, and its restore parks at the boot-id stamp.
+  // The platform replaced the container: the tick's adoption turns over and arms the restore, which parks at the stamp.
   container.bootId = undefined;
   const successor = evict();
   const stamp = gate();
   container.stampGate = stamp;
   await container.seedSchedule('devboxCheckpoint', Date.now() / 1000 - 1);
-  const ticked = container.alarm();
-  // A tick that never adopts settles instead, here and below.
-  await Promise.race([stamp.reached, ticked]);
+  await container.alarm();
+  const restoring = successor.devboxStartup();
+  await stamp.reached;
   // The platform reclaims the container, and a start supersedes the parked restore while its source is held.
   await container.stop();
   holding = true;
@@ -146,13 +145,16 @@ test('a superseded restore whose container stopped leaves the start that replace
   await source.reached;
   const settled = new Promise<void>((resolve) => { restoreSettled = resolve; });
   stamp.release();
-  await Promise.race([settled, ticked]);
+  await Promise.race([settled, restoring]);
   const startupHeld = (await successor.devboxState()).flights.startupMs !== null;
 
   source.release();
-  await Promise.all([ticked, restarted]);
+  await Promise.all([restoring, restarted]);
+  // The start that replaced it restored the box, which the next tick commits (D26).
+  container.clearSchedules();
+  await container.seedSchedule('devboxCheckpoint', Date.now() / 1000 - 1);
+  await container.alarm();
 
-  // The checkpoint waits for the live start and saves what it restored (D26).
   expect({
     startupHeld,
     committed: chainHead(rows),
@@ -182,7 +184,8 @@ test('attaching after eviction adopts the restoration the running container carr
   }).toEqual({ again: first, asked: [], bootId, starts, ready: true });
 });
 
-// Its final checkpoint adopts too, but a stop reads the adopted restoration before it lists processes or saves sessions.
+// Its final checkpoint awaits the adoption, so a stop reads the refused restoration before it lists processes or saves
+// sessions.
 test('a stop of an evicted box whose adoption is refused stops it with nothing to commit', async () => {
   const { box, evict, rows, container } = chainBox();
   await box.start();
@@ -202,7 +205,8 @@ test('a stop of an evicted box whose adoption is refused stops it with nothing t
   }).toEqual({ outcome: 'skipped', committed, incidents: ['attach'], running: false });
 });
 
-test('a scheduled checkpoint on a replaced container commits nothing and arms the restore', async () => {
+// #117: a tick on a box that is not ready re-arms its start and files no incident.
+test('a scheduled checkpoint on a replaced container commits nothing, files nothing and arms the restore', async () => {
   const { box, rows, container } = chainBox(ScheduledChainBox);
   await box.start();
   await box.checkpointNow('tick');
@@ -213,6 +217,29 @@ test('a scheduled checkpoint on a replaced container commits nothing and arms th
 
   await container.alarm();
 
-  expect({ committed: chainHead(rows), startup: container.scheduleRows.some((row) => row.callback === 'devboxStartup') })
-    .toEqual({ committed, startup: true });
+  expect({
+    committed: chainHead(rows),
+    incidents: [...rows.keys()].filter((key) => key.startsWith(INCIDENT_PREFIX)),
+    startup: container.scheduleRows.some((row) => row.callback === 'devboxStartup'),
+  }).toEqual({ committed, incidents: [], startup: true });
+});
+
+// #117: the tick's adoption gets no answer, so the box is not ready; the start it arms reads again, and no card is filed.
+test('a tick whose adoption gets no answer files nothing and re-arms the start', async () => {
+  const { box, evict, rows, container } = chainBox(ScheduledChainBox);
+  await box.start();
+  await box.checkpointNow('tick');
+  const committed = chainHead(rows);
+  const successor = evict();
+  container.clearSchedules();
+  container.bootReadFaults.push(new Error('the container dropped the exec'));
+  await container.seedSchedule('devboxCheckpoint', Date.now() / 1000 - 1);
+
+  await container.alarm();
+
+  expect({
+    committed: chainHead(rows),
+    incidents: (await successor.devboxIncidentReasons()).map((row) => row.stage),
+    armed: container.scheduleRows.some((row) => row.callback === 'devboxStartup'),
+  }).toEqual({ committed, incidents: [], armed: true });
 });

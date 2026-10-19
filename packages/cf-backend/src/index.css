@@ -796,6 +796,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-radius: 16px;
 }
 .p-pill[data-open] :is(.p-pill-text, .p-pill-dim) { overflow: visible; white-space: normal; }
+/* Opened, a long label or source wraps, rather than running under the controls beside it. */
+.p-pill[data-open] .p-pill-source { min-width: 0; flex-shrink: 1; white-space: normal; overflow-wrap: anywhere; }
 .p-pill[data-open] .p-pill-body { flex-wrap: wrap; row-gap: 2px; }
 /* The title row: the mark and both controls sit on its first line, however its words wrap. */
 .p-pill-head { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
@@ -857,9 +859,11 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: border-color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
 .p-pill[data-history]:hover { border-color: var(--c-border-strong); }
-.p-pill[data-history]:not([data-open]) { max-width: min(100%, 600px); }
+/* The closed pill and its one action, capped together: capping the pill alone left it off-centre in a wider row. */
+.p-pill-line { display: flex; min-width: 0; max-width: min(100%, 600px); align-items: center; gap: 4px; }
 .p-pill[data-history] .p-pill-source { color: var(--c-text-2); font-weight: 500; }
-.p-pill[data-history][data-open] { width: auto; max-width: min(100%, 560px); padding: 9px 14px 11px; cursor: default; }
+/* Opened, it is as wide as the thread's column, so it never narrows as its words wrap. */
+.p-pill[data-history][data-open] { padding: 9px 14px 11px; cursor: default; }
 .p-pill-said { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; font-size: 11.5px; white-space: nowrap; }
 .p-pill-count {
   flex-shrink: 0;
@@ -880,9 +884,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-turn-mark > svg { flex-shrink: 0; align-self: center; }
 .p-turn-mark-link { flex-shrink: 0; color: var(--c-text-3); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
 .p-turn-mark-link:hover { color: var(--c-text); }
-@media (max-width: 640px) {
-  .p-pill[data-history] { width: auto; }
-}
 
 /* ── Images in the thread ──────────────────────────────────────────
    A picture the agent made or named, shown where it was named: at its own size up to the column, on the recessed

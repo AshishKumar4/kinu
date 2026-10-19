@@ -799,6 +799,34 @@
     "want_files INTEGER NOT NULL DEFAULT 0",
     "published INTEGER NOT NULL DEFAULT 0"
   ],
+  "gallery_listings@packages/core/src/slates/gallery.ts": [
+    "workspace TEXT NOT NULL",
+    "slate TEXT NOT NULL",
+    "share TEXT NOT NULL",
+    "title TEXT NOT NULL",
+    "line TEXT NOT NULL",
+    "category TEXT NOT NULL",
+    "owner_name TEXT NOT NULL",
+    "url TEXT NOT NULL",
+    "picture TEXT",
+    "listed_at INTEGER NOT NULL",
+    "PRIMARY KEY (workspace, slate)"
+  ],
+  "gallery_reports@packages/core/src/slates/gallery.ts": [
+    "workspace TEXT NOT NULL",
+    "slate TEXT NOT NULL",
+    "email TEXT NOT NULL",
+    "reason TEXT NOT NULL",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (workspace, slate, email)"
+  ],
+  "gallery_stars@packages/core/src/slates/gallery.ts": [
+    "workspace TEXT NOT NULL",
+    "slate TEXT NOT NULL",
+    "email TEXT NOT NULL",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (workspace, slate, email)"
+  ],
   "gepa_candidates@packages/core/src/evolution/gepa/persistence.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -1208,12 +1236,43 @@
     "card TEXT NOT NULL",
     "PRIMARY KEY (workspace, share_id, recipient_user_id)"
   ],
+  "slate_ai_spend@packages/core/src/state/user-schema.ts": [
+    "provider TEXT NOT NULL",
+    "account TEXT NOT NULL",
+    "calls INTEGER NOT NULL",
+    "calls_without_usage INTEGER NOT NULL",
+    "unpriced_calls INTEGER NOT NULL",
+    "usd REAL",
+    "input INTEGER",
+    "output INTEGER",
+    "cache_read INTEGER",
+    "cache_write INTEGER",
+    "cache_write_1h INTEGER",
+    "reasoning INTEGER",
+    "neurons REAL",
+    "PRIMARY KEY (provider, account)"
+  ],
   "slate_build_inputs@packages/core/src/slates/builds.ts": [
     "slate TEXT NOT NULL",
     "authority TEXT NOT NULL",
     "path TEXT NOT NULL",
     "missing INTEGER NOT NULL",
     "PRIMARY KEY (slate, authority, path)"
+  ],
+  "slate_consents@packages/core/src/state/user-schema.ts": [
+    "workspace TEXT NOT NULL",
+    "slate TEXT NOT NULL",
+    "server TEXT NOT NULL",
+    "root TEXT NOT NULL",
+    "tools TEXT NOT NULL",
+    "effects INTEGER NOT NULL CHECK (effects IN (0, 1))",
+    "revision TEXT NOT NULL",
+    "PRIMARY KEY (workspace, slate, server, root)"
+  ],
+  "slate_edit_marks@packages/core/src/slates/live-shares.ts": [
+    "slate_id TEXT PRIMARY KEY",
+    "editor TEXT NOT NULL",
+    "revision_before TEXT"
   ],
   "slate_file_manifest@packages/core/src/state/workspace-schema.ts": [
     "slate_id TEXT NOT NULL",
@@ -1240,6 +1299,7 @@
     "user_id TEXT NOT NULL",
     "email TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
+    "role TEXT NOT NULL DEFAULT 'use' CHECK (role IN ('use', 'edit'))",
     "PRIMARY KEY (share_id, user_id)"
   ],
   "slate_live_shares@packages/core/src/slates/live-shares.ts": [
@@ -1249,17 +1309,28 @@
     "handle TEXT NOT NULL UNIQUE",
     "grant_json TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
-    "revoked_at INTEGER"
+    "revoked_at INTEGER",
+    "mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner'))",
+    "grant_revision TEXT",
+    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
+    "listing_line TEXT",
+    "listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun'))",
+    "CHECK ((listing_line IS NULL) = (listing_category IS NULL))",
+    "CHECK (listing_line IS NULL OR mode = 'own')"
   ],
   "slate_pictures@packages/cf-backend/src/slates/pictures.ts": [
-    "slate TEXT PRIMARY KEY",
-    "port INTEGER NOT NULL",
+    "slate TEXT NOT NULL",
+    "view TEXT NOT NULL DEFAULT 'preview'",
+    "listing TEXT",
+    "port INTEGER",
     "digest TEXT",
+    "taken TEXT",
     "due_at INTEGER",
     "due_since INTEGER",
     "attempts INTEGER NOT NULL DEFAULT 0",
     "capture_handle TEXT",
-    "capture_until INTEGER"
+    "capture_until INTEGER",
+    "PRIMARY KEY (slate, view)"
   ],
   "slate_publications@packages/core/src/state/workspace-schema.ts": [
     "id TEXT PRIMARY KEY",

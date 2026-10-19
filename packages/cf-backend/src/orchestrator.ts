@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { objectNamed, PLATFORM_CATALOG, GitHubFactSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
-import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
+import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
+import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateAnswer, slateRevision as builtRevision, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -70,13 +70,18 @@ import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
+import { controlPlaneStub, hasControlPlane } from './control-plane/stub';
+import { serialQueue } from '@kinu.run/agent-utils';
+import { internalCaller } from '@kinu.run/core/control-plane';
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
 import { PREVIEW_SELF } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
+import type { UserDO } from "./user/user-do";
+import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
-import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { browserCamera, initSlatePictureTable, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
@@ -123,8 +128,8 @@ import {
   ForkNotices, forkNoticeDeliveries, initForkNoticeTable,
   appendMemoryNote,
   parseMemoryNotes,
-  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type LiveShareRecord,
+  type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
+  type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -220,7 +225,7 @@ import { Hono } from 'hono';
 import { beneath, rawPath, rethrow } from './api/context';
 import { experienceLibraryOver } from './user/experience-library';
 import { ownedByAnotherAccount } from './user/workspace-ownership';
-import type { WorkspaceOwnerRpc } from './workspace-owner-rpc';
+import { workspaceOwner, type LiveShareReading, type SlateEditor, type WorkspaceOwnerRpc } from './workspace-owner-rpc';
 import {
   ActorAgent,
   EVOLUTION_LANE_FIBER,
@@ -631,6 +636,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const listing = await (await this.slates()).controller.list(ROOT_SLATE_CALLER);
 
         return new Set([...listing.slates, ...listing.problems].map((slate) => slate.id));
+      },
+      // A listed public share's view: entered as a visitor with no account enters its host, at its publication now.
+      share: async (id) => {
+        const { controller } = await this.slates();
+        const entry = controller.live.galleryCapture(id);
+
+        if (entry === null) return null;
+        const publication = builtRevision(controller.builds, entry.slate) ?? '';
+        const host = await slateShareUrl(this.env, this.name, entry.handle);
+
+        return host === null ? null : { url: shareCaptureUrl(host), publication, held: entry.held };
       },
       camera: () => browserCamera(browser),
     };
@@ -4195,6 +4211,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       wake: this.ownerAnswerWake('decision'),
       // Same actor_config as the approval mode, read live by the gate on the next command.
       remember: (grants) => { this.config.grantShellApproval(grants); },
+      // "Always for this slate" on a shared slate's effect stands on that slate's owner shares, its sheet's to take back.
+      preapprove: async (effect) => { preapproveSlateEffect((await this.slates()).controller.live, effect); },
       // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
       // was. A hire's, or the root's outside any turn, falls back to the workspace run: the root's turn is not theirs.
       audit: (record) => {
@@ -4649,7 +4667,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const changed = yield* Effect.promise(() => this.pictures.captureDue(capture, now));
         span.setAttribute('kinu.pictures_changed', changed);
 
-        if (changed) this.overviewChanged();
+        if (changed) {
+          this.overviewChanged();
+          // A listed share's card shows its view's picture: the Gallery is told the new one.
+          (yield* Effect.promise(async () => this.slates())).controller.relist();
+        }
       }), phaseFailed(span, { doing: 'photographing the slates due a picture', otherwise: 'unavailable' }, (failure) => {
         diagnostics.failure('slate.pictures_failed', failure);
       }))));
@@ -5407,6 +5429,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const ownerUserId = this.storageRefusal === undefined ? this.getOwnerUserId() : null;
 
       if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to quiet for deletion.');
+
+      // Its shares end while it still holds its authority, each listed one taken off the Gallery: a deleted workspace
+      // sends nothing after, and the control plane forgets it only when it learns of it.
+      if (ownerUserId !== null) {
+        yield* logged('workspace.shares_end_failed', { doing: "ending a deleted workspace's live shares", otherwise: 'unavailable' },
+          async () => { await (await this.slates()).controller.endLiveShares(); }, { workspace: this.name });
+      }
+
       yield* Effect.promise(async () => this.quietAgents());
     }));
   }
@@ -5850,12 +5880,42 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         owners: async () => new Map([...await listPortReservations(this.ctx)].flatMap(([port, held]) => (held.owner === null ? [] : [[port, held.owner] as const]))),
       },
       ownerMcpSurface: async () => await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
-      shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
+      // A shared slate's approvals name a call's resource only as its tool's contract does: the preset its connection is.
+      toolContract: async (namespace, member) => {
+        if (!namespace.startsWith('mcp.')) return null;
+        const surface = v.parse(McpToolSurfaceSchema, await this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()));
+        const descriptor = surface.descriptors.find((each) => `mcp.${each.serverName}` === namespace && each.name === member);
+
+        return descriptor === undefined ? null : { preset: descriptor.presetId ?? null, tool: member };
+      },
       shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
       ownerUserId: () => this.getOwnerUserId(),
+      // `owner` shares' effects wait on the owner in the workspace's one queue, as every parked action does.
+      ownerEffects: {
+        ask: (id, effect) => this.deferrals.slateEffect(id, effect),
+        take: (id) => this.deferrals.takeSlateEffect(id),
+        settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
+        retire: (slate, only) => { this.deferrals.retireSlateEffects(slate, only); },
+      },
+      // The Gallery's index is a copy of the shares listed here: told as the owner lists, unlists or revokes, and again in
+      // the background at each start of the slates, which mends one it missed.
+      listingChanged: async (share) => settleLogged('gallery.listing_sync_failed', { doing: "telling the Gallery a share's listing", otherwise: 'unavailable' },
+        async () => this.syncListing(share), { workspace: this.name, share: share.id }),
+      relisted: (shares) => {
+        this.detachOwned(logged('gallery.listing_sync_failed', { doing: "telling the Gallery this workspace's listings again", otherwise: 'unavailable' },
+          async () => { await Promise.all(shares.map(async (share) => this.syncListing(share))); }, { workspace: this.name }));
+      },
+      shared: (operation) => this.editShared(operation),
+      // Each viewer's own account answers their parts' calls, with their consents and connections: never this workspace.
+      partConnections: {
+        // Prepared first, then the run's word read again with nothing awaited before the viewer's account is called.
+        tool: async (viewer, call, admit) => this.viewerAccount(viewer.userId, admit, async (account, caller) => account.slatePartTool(caller, call)),
+        ai: async (viewer, call, admit) => this.viewerAccount(viewer.userId, admit, async (account, caller) => account.slatePartAi(caller, call)),
+        consented: async (viewer, calls) => objectNamed(this.env.UserDO, viewer.userId).slatePartConsented(await ownerCaller(this.env), calls),
+      },
       forgetPicture: async (slate) => {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
         this.armDurableWake();
@@ -5895,8 +5955,66 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { html: addressedBlock(answer?.texts ?? [], address).html, author: { ...ROOT_SLATE_CALLER, workMode: await this.preparedWorkMode() } };
   }
 
-  async slateCallAs(caller: SlateCaller, id: string, name: string, request: SlateCallRequest): Promise<SlateSurfaceResult> {
-    return (await this.slates()).surfaceCall(caller, id, name, request);
+  async slateCallAs(from: SlateCallFrom, request: SlateCallRequest): Promise<SlateSurfaceResult> {
+    return (await this.slates()).surfaceCall(from, request);
+  }
+
+  /**
+   * This workspace's owner reading or changing a slate another workspace shared with them to edit: its owner's workspace
+   * decides whether they may, by who they are, which this object names and never the program that asked.
+   */
+  editShared(operation: Extract<SlateOperation, { op: 'sharedFiles' | 'sharedEdit' }>): Promise<SlateCallResult> {
+    return settle(slateAnswer(`editing ${operation.workspace}/${operation.slate}`, Effect.gen({ self: this }, function* () {
+      const userId = this.getOwnerUserId();
+      const email = yield* attempt({ doing: 'reading the workspace owner', otherwise: 'unavailable' }, async () => this.email.ownerEmail());
+
+      if (userId === null || email === null) return yield* new KinuError('denied', 'This workspace has no owner to edit as');
+      const editor = { userId, email: email.trim().toLowerCase() };
+      const owner = workspaceOwner(this.env, operation.workspace);
+
+      const answered = yield* attempt({ doing: `asking ${operation.workspace}`, otherwise: 'unavailable' },
+        async () => (operation.op === 'sharedFiles' ? owner.slateFilesFor(operation.slate, editor) : owner.editSlateAs(operation.slate, editor, operation.files)));
+
+      if (!answered.ok) return yield* new KinuError(answered.reason, answered.error);
+
+      // Its files cross from another workspace's object: held to their shape as every reader of them holds them.
+      return operation.op === 'sharedFiles' ? v.parse(SharedSlateFilesSchema, answered.value) : v.parse(v.array(v.string()), answered.value);
+    })));
+  }
+
+  /** DO-only: one of this workspace's slates' files, for someone one of its live shares adds to edit it now. */
+  async slateFilesFor(slate: string, editor: SlateEditor): Promise<SlateCallResult> {
+    return (await this.slates()).filesFor(slate, editor);
+  }
+
+  /** DO-only: a change to one of this workspace's slates by someone one of its live shares adds to edit it now. */
+  async editSlateAs(slate: string, editor: SlateEditor, files: SlateFileChange): Promise<SlateCallResult> {
+    return (await this.slates()).editAs(slate, editor, files);
+  }
+
+  async runSlatePart(viewer: PartViewer | null, slate: string, part: string, request: PartRunRequest): Promise<PartRunAnswer | null> {
+    return (await this.slates()).parts.run(viewer, slate, part, request);
+  }
+
+  async slatePartCall(slate: string, run: string, name: string, call: { readonly path: readonly string[]; readonly args: readonly JsonValue[] }): Promise<SlateSurfaceResult> {
+    return (await this.slates()).parts.call(slate, run, name, call);
+  }
+
+  /** A viewer's own account, called once its caller is prepared and `admit` holds, with nothing awaited between. */
+  private async viewerAccount<T>(userId: string, admit: () => void, send: (account: DurableObjectStub<UserDO>, caller: Awaited<ReturnType<typeof ownerCaller>>) => Promise<T>): Promise<T> {
+    const caller = await ownerCaller(this.env);
+
+    admit();
+
+    return send(objectNamed(this.env.UserDO, userId), caller);
+  }
+
+  async releaseSlatePart(viewer: PartViewer, continuation: string): Promise<boolean> {
+    return (await this.slates()).parts.release(viewer, continuation);
+  }
+
+  async showSlatePart(viewer: PartViewer, slate: string, part: string, request: PartShowRequest): Promise<SlateCallResult> {
+    return (await this.slates()).parts.show(viewer, slate, part, request);
   }
 
   async callOperation(caller: OperationCaller, id: string, input: JsonValue, call: { readonly callId: string }): Promise<OperationResult> {
@@ -5952,9 +6070,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return viewerEntryUrl(this.env, this.name, handle, userId);
   }
 
-  /** The share row re-read through the S6 gate, plus title and description from the slate's package.json. */
-  async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
-    return (await this.slates()).controller.readLiveShareRecord(share);
+  /** The share row re-read through the S6 gate, plus title and description from the slate's package.json, and whether
+   *  its address admits `reader`: anyone to a public share, else its owner and the people it names, as the host does.
+   *  No one signed in (`null`) is admitted to a public share alone. */
+  async readLiveShare(share: string, reader: string | null): Promise<SlateAnswer<LiveShareReading>> {
+    const { controller } = await this.slates();
+    const read = await controller.readLiveShareRecord(share);
+
+    if (!read.ok) return read;
+    const admits = read.value.record.visibility === 'public' || (reader !== null && (reader === this.getOwnerUserId() || controller.live.hasUser(share, reader)));
+
+    return { ...read, value: { ...read.value, admits } };
   }
 
   /** A live share's tree, for a user forking it, held to the share's admission and grant. */
@@ -5966,6 +6092,78 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
     return (await this.slates()).controller.shareLiveWith(share, users);
+  }
+
+  /** DO-only: a live share's mode, set by its owner's own share sheet, which the app host proves is theirs. No agent
+   *  turns on `owner` mode, so no slate op or callable reaches this. */
+  async setLiveShareMode(body: LiveShareModeBody): Promise<SlateAnswer<LiveShareRecord>> {
+    return (await this.slates()).controller.setLiveShareMode(body);
+  }
+
+  /** DO-only: what a visitor's own parts will ask them for, of a share listed in the Gallery. The Gallery's public page
+   *  asks it of the share its index names, so nothing of an unlisted share is answered. */
+  async galleryNeeds(share: string): Promise<SlateAnswer<RoomService[]>> {
+    return (await this.slates()).controller.galleryNeeds(share);
+  }
+
+  /** DO-only, for the same reason: a slate's standing approvals, as its owner's share sheet lists them. */
+  async slatePreapprovals(slate: string): Promise<SlateAnswer<SlatePreapprovals>> {
+    return (await this.slates()).controller.slatePreapprovals(slate);
+  }
+
+  /** DO-only, for the same reason: one standing approval taken back by its owner's share sheet. Nothing grants one here:
+   *  only the owner's answer to an effect's ask does. */
+  async withdrawSlatePreapproval(body: SlatePreapprovalWithdraw): Promise<SlateAnswer<SlatePreapprovals>> {
+    return (await this.slates()).controller.withdrawSlatePreapproval(body);
+  }
+
+  /** DO-only, for the same reason: a live share listed in the Gallery, or taken off it, by its owner's share sheet. */
+  async setLiveShareListing(body: LiveShareListingBody): Promise<SlateAnswer<LiveShareRecord>> {
+    return (await this.slates()).controller.setLiveShareListing(body);
+  }
+
+  /** The Gallery told what one live share's listing is now: its card, read fresh, while listed; else that it is off. */
+  /** The Gallery is told one share at a time, in order: a refill read before an unlist or a revoke is sent before it. */
+  private readonly gallerySends = serialQueue();
+
+  /**
+   * The Gallery told what one live share's listing is now, read from its row when it is sent, not when it was asked: its
+   * card, read fresh, while listed; else that it is off. A send queued before the owner's unlist or revoke cannot undo it.
+   */
+  private syncListing(asked: LiveShareRecord): Promise<void> {
+    return this.gallerySends(async () => {
+      if (!hasControlPlane(this.env)) return;
+      const share = (await this.slates()).controller.live.get(asked.id) ?? asked;
+      const shared = { share: share.id, workspace: this.name, slate: share.slate, handle: share.handle };
+      const listing = share.gallery;
+      // Its link is the app's page for the share, which hosts the parts a bare share host never could.
+      const url = listing === null ? null : liveShareEntryPage(this.env, this.name, share.id);
+
+      // A deployment that gives shares no address has nothing to list.
+      if (listing === null || url === null) {
+        await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), { ...shared, listed: false });
+        // Off the Gallery first: its share's pictures go after, and their going never holds that back.
+        await this.pictures.unlisted(this.name, share.slate, share.id, this.env.SLATE_PICTURES);
+
+        return;
+      }
+
+      const { controller } = await this.slates();
+      const read = await controller.readLiveShareRecord(share.id);
+      const title = read.ok ? read.value.title : share.slate;
+
+      // Its picture is one taken through the share itself, at this revision or until one is: never the camera's shot
+      // of the owner's private preview, which draws with the owner's own reads.
+      if (share.visibility === 'public' && this.pictureCapture() !== null) {
+        this.pictures.listed(share.slate, share.id, builtRevision(controller.builds, share.slate) ?? '', Date.now());
+        this.armDurableWake();
+      }
+
+      await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), {
+        ...shared, listed: true, url,
+        card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: this.pictures.shareDigest(share.slate, share.id) },
+      });
+    });
   }
 
   @callable() async listSlates() {

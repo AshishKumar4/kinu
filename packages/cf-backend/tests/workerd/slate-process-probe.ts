@@ -225,7 +225,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
    *  unbounded recursion (TS2589). */
   private async appCall(method: string, args: JsonValue[], chain: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }> {
     const invocation = crypto.randomUUID();
-    SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain });
+    SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain, incarnation: 'probe', generations: {} });
 
     try {
       const process = this.started();
@@ -264,7 +264,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   async socket(method: string, args: JsonValue[] = [], surface?: string[]): Promise<{ ok?: boolean; value?: string; error?: string }> {
     const process = this.started();
     const invocation = crypto.randomUUID();
-    SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain: [] });
+    SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain: [], incarnation: 'probe', generations: {} });
 
     try {
       const request = new Request('https://slate.invalid/__rpc', { headers: { Upgrade: 'websocket', 'x-slate-call': invocation } });
@@ -296,7 +296,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   async route(path = '/', chain: string[] = []) {
     const process = this.started();
     const invocation = crypto.randomUUID();
-    SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain });
+    SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain, incarnation: 'probe', generations: {} });
 
     try {
       if (process.port === null) throw new KinuError('unavailable', 'a private slate process has no port');

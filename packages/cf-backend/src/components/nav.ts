@@ -1,6 +1,6 @@
 /** A leaf module so tests can read the nav without mounting the sidebar. */
 import {
-  HouseIcon, SquaresFourIcon, HardDrivesIcon, PuzzlePieceIcon, DesktopTowerIcon,
+  HouseIcon, SquaresFourIcon, HardDrivesIcon, PuzzlePieceIcon, DesktopTowerIcon, CompassIcon,
 } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 
@@ -15,6 +15,7 @@ export const PRIMARY_NAV: readonly {
   { to: APP_ROUTES.home, label: "Home", Icon: HouseIcon, end: true },
   { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
   { to: APP_ROUTES.drive, label: "Drive", Icon: HardDrivesIcon, end: false, also: [APP_ROUTES.slates, APP_ROUTES.shared] },
+  { to: APP_ROUTES.gallery, label: "Gallery", Icon: CompassIcon, end: false },
   { to: APP_ROUTES.devices, label: "Devices", Icon: DesktopTowerIcon, end: false },
   { to: APP_ROUTES.plugins, label: "Plugins", Icon: PuzzlePieceIcon, end: false },
 ];

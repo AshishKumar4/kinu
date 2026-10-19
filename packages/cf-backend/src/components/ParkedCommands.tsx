@@ -1,6 +1,8 @@
 /**
  * Parked commands, decided in the attention stack: one at a time on its card, or several together, chosen by their
- * boxes. Nothing here has run; approving wakes the agent, which issues the command again.
+ * boxes. Nothing here has run; approving wakes the agent, which issues the command again. A shared slate's change on its
+ * owner's access parks here too: "always" on it stands for that slate's shares, not for the environment, and each row
+ * says which before it is pressed.
  */
 import { Cause, Effect } from "effect";
 import { useCallback, useState, useSyncExternalStore } from "react";
@@ -93,9 +95,57 @@ export class ParkedDecisionFlow {
 /** Permission is not an effect: the command still has not run, so never say "done". */
 const DECIDED_LINE: Record<ParkedDecision, string> = {
   denied: "Denied. The agent will be told, and nothing runs.",
-  always: "Approved. Kinu will stop asking about these checks in this environment.",
+  always: "Approved. Kinu won't ask about these again, as each one said.",
   approved: "Approved. It runs when the agent picks the decision up.",
 };
+
+/** A root as a person reads it beside its tool: "org acme"; none when the call holds to no one root. */
+const rootWords = (root: Readonly<Record<string, string>>) => Object.entries(root).map(([key, value]) => `${key} ${value}`).join(", ");
+
+/** Where "always" on these rows stands: each shared slate's own shares, the environment, or both. */
+export function alwaysLabel(actions: readonly PendingAction[], count: string): string {
+  const slates = new Set(actions.flatMap((action) => (action.effect === undefined ? [] : [action.effect.slate])));
+
+  if (slates.size === 0 || actions.some((action) => action.effect === undefined)) return `Always allow ${count}`.trim();
+
+  return slates.size === 1 ? `Always for this slate ${count}`.trim() : `Always for their slates ${count}`.trim();
+}
+
+/**
+ * What "always" stands for on one row, said before it is pressed: a shared slate's tool on its root, allowed on that
+ * slate's shares until its code changes; or a command's checks, a standing approval of this environment's.
+ */
+export function AlwaysLine({ action }: { action: PendingAction }) {
+  const { effect } = action;
+
+  if (effect === undefined) {
+    return <span data-parked-always="environment" className="block p-meta p-text-3">Always records a standing approval for this environment; revoke it under Settings → Standing approvals.</span>;
+  }
+
+  const on = rootWords(effect.root);
+
+  return (
+    <span data-parked-always="slate" className="block p-meta p-text-3">
+      Always lets <span className="font-mono">{effect.tool}</span> on {effect.server}{on === "" ? "" : ` (${on})`} go ahead without asking on {effect.slate}'s shares,
+      until its code changes; revoke it in its share sheet.
+    </span>
+  );
+}
+
+/** What the rows ask, by kind: commands an agent queued, changes a shared slate asked, or both. */
+const ASKED = {
+  commands: { noun: "command", lead: "These checks are queued. Approve them so the agent can run them when it resumes." },
+  changes: { noun: "change", lead: "A shared slate asked to make these with your access. Nothing happens until you approve it." },
+  both: { noun: "request", lead: "Approve each so it can go ahead: a command when the agent resumes, a slate's change at once." },
+} as const;
+
+function askedOf(actions: readonly PendingAction[]): keyof typeof ASKED {
+  const effects = actions.filter((action) => action.effect !== undefined).length;
+
+  if (effects === 0) return "commands";
+
+  return effects === actions.length ? "changes" : "both";
+}
 
 /** Several parked commands, as the attention stack decides them: some or all, approved, always allowed or denied. */
 export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
@@ -112,16 +162,18 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
   const chosen = flow.chosen(allIds);
 
   const decidedLine = state.decided === null ? null : DECIDED_LINE[state.decided];
+  const { noun, lead } = ASKED[askedOf(actions)];
+  // A row says where its "always" stands when a slate's change is among them; commands alone keep the button's word.
+  const saysAlways = actions.some((action) => action.effect !== undefined);
+  const picked = actions.filter((action) => chosen.has(action.id));
 
   return (
     <div className="space-y-2" data-parked-commands>
       <div className="min-w-0">
         <div className="p-row-text p-text">
-          {actions.length} command{actions.length === 1 ? "" : "s"} waiting on your approval
+          {actions.length} {noun}{actions.length === 1 ? "" : "s"} waiting on your approval
         </div>
-        <div className="p-meta p-text-3 mt-0.5">
-          These checks are queued. Approve them so the agent can run them when it resumes.
-        </div>
+        <div className="p-meta p-text-3 mt-0.5">{lead}</div>
       </div>
 
       <div className="space-y-1">
@@ -134,6 +186,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
               <code className="block p-t-code p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>
               {action.where !== undefined && <span className="block p-meta p-text-2 mt-0.5 break-all">Runs {revealMisrepresenting(action.where)}</span>}
               <span className="block p-meta p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
+              {saysAlways && <AlwaysLine action={action} />}
             </span>
           </label>
         ))}
@@ -152,8 +205,8 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
         </FilledButton>
         <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
           onClick={() => detach(Effect.promise(async () => flow.decide("always", [...chosen])))}
-          title="Approve these checks for this environment. Revoke under Settings → Standing approvals.">
-          Always allow {countLabel(chosen.size, actions.length)}
+          title={saysAlways ? "Approve these, and allow each from now on as its row says." : "Approve these checks for this environment. Revoke under Settings → Standing approvals."}>
+          {alwaysLabel(picked.length === 0 ? actions : picked, countLabel(chosen.size, actions.length))}
         </Button>
         <Button size="sm" variant="ghost" disabled={state.busy || chosen.size === 0}
           onClick={() => detach(Effect.promise(async () => flow.decide("denied", [...chosen])))}>

@@ -30,6 +30,7 @@ import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { CodemodeLauncher } from '../../src/codemode-sandbox';
 import type { SlateBinding } from '../../src/slates/bindings';
+import type { PartBinding } from '../../src/slates/part-binding';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
@@ -308,7 +309,20 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   slateImport(input: { workspace: string; owner: string; word: string; first: boolean }): Promise<string>;
   slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string>;
   slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
-  craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }>;
+  craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; waited: string; approved: string[]; viewer: string }>;
+  sharedRunsOwnTree(input: { owner: string; workspace: string }): Promise<{ unshared: string; shared: string; afterUnshare: string }>;
+  editorBatch(input: { owner: string; workspace: string; kind: 'atomic' | 'links' | 'stale' }): Promise<{
+    answers: string[]; files: { path: string; text: string; sha256: string }[]; marks: (string | null)[]; outside: string;
+  }>;
+  sharedHtmlScope(input: { owner: string; workspace: string; manifestLink?: boolean }): Promise<{ before: string; shared: string }>;
+  editorFence(latest?: boolean): Promise<{
+    pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+  }>;
+  editorsEdit(input: { owner: string; workspace: string; editor: string; user: string }): Promise<{
+    files: string; edited: string; runs: string; afterEdit: string | null; afterOwnBuild: string | null; reapproved: string | null;
+    reached: string; runsAfter: string; filesAfter: string; afterRefused: string | null; used: string; revoked: string;
+  }>;
   forgetActivation(workspace: string): Promise<void>;
   pendingNimbusTasks(workspace: string): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }>;
   drivePreview(url: string): Promise<PreviewAnswer>;
@@ -351,7 +365,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   operationAs(as: 'root' | 'plan' | 'hire', input: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
   unnamedShareCall(share: string): Promise<ProbeAnswer>;
   previewAsHire(): Promise<{ preview: ProbeAnswer; removed: ProbeAnswer; left: boolean }>;
-  share(approved?: readonly { namespace: string; member: string }[]): Promise<ProbeAnswer>;
+  share(approved?: readonly { namespace: string; member: string }[], mode?: 'own' | 'owner'): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
   importBlueprint(): Promise<{ fork: string; running: number }>;
   viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;
@@ -360,6 +374,20 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   ): Promise<{ before: string | null; after: string; late: string }>;
   viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
   viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerRefusals(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string; mutate: string }>;
+  viewerCall(handle: string, claim: { userId: string | null; source: string; consented: boolean }, method: string): Promise<string>;
+  ownersOwnWrite(): Promise<{ first: string; asked: string[]; second: string; after: number }>;
+  exerciseHop(member?: string): Promise<void>;
+  inheritedRaw(): Promise<{ answered: string; written: boolean }>;
+  inheritedAfterRevoke(share: string): Promise<{ inheriting: number; retained: string; written: boolean }>;
+  craftedAcrossRevoke(share: string): Promise<string[]>;
+  inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; started: string; inheriting: number; leftRunning: number }>;
+  ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
+  environments(): Promise<string[]>;
+  ownerCall(method: string): Promise<string>;
+  hopWrites(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ viewer: string; owner: string; asked: number }>;
+  viewerAfterLastRevoke(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string): Promise<ProbeAnswer>;
+  launchAcrossShare(): Promise<{ actors: number; afterShare: number; refused: string; running: number }>;
   viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
   replay(share: string): Promise<ProbeAnswer>;
   requests(share: string): Promise<ProbeAnswer>;
@@ -368,6 +396,36 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   drive(session: string): Promise<string>;
   typed(say: string, via?: 'stream' | 'ask'): Promise<string>;
   driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
+  setMode(share: string, revision: string): Promise<ProbeAnswer>;
+  ownerQueue(): Promise<{ tool: string; server: string; viewer: string; payload: import('@kinu.run/core').JsonValue; revision: string }[]>;
+  ownerDecides(approve: boolean): Promise<number>;
+  ownerAlways(): Promise<number>;
+  editBoard(): Promise<string>;
+  preapproveWrites(): Promise<string[]>;
+  withdrawWrites(): Promise<void>;
+  preapprovals(): Promise<{ revision: string | null; members: string[] }>;
+  heldWrite(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'own'): Promise<{ mutateError: string; written: boolean }>;
+  listShare(share: string): Promise<ProbeAnswer>;
+  told(): Promise<string[]>;
+  startParts(): Promise<string>;
+  revision(): Promise<string>;
+  editParts(): Promise<string>;
+  consent(viewer: string, consent: { server: string; root: Record<string, string>; tools: string[]; effects: boolean; revision: string }): Promise<void>;
+  decide(viewer: string, id: string, approve: boolean): Promise<boolean>;
+  dispatched(): Promise<string[]>;
+  runPart(viewer: string | null, part: string, args?: import('@kinu.run/core').JsonValue[], action?: { id: string; input: import('@kinu.run/core').JsonValue } | null): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
+  showPart(viewer: 'alice' | 'bob', revision: string, value: import('@kinu.run/core').JsonValue): Promise<ProbeAnswer>;
+  notesCall(method: string): Promise<ProbeAnswer>;
+  lateCall(): Promise<ProbeAnswer>;
+  workspaceHolds(text: string): Promise<string[]>;
+  notesOnOwnerAccess(): Promise<void>;
+  revokeDuringNextCall(): Promise<void>;
+  revokeBeforeNextSend(): Promise<void>;
+  holdModelForNextTool(): Promise<void>;
+  holdStreamOnce(): Promise<void>;
+  releaseStream(): Promise<void>;
+  resumePart(viewer: string, part: string, continuation: string, args?: import('@kinu.run/core').JsonValue[]): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
+  withdrawConsent(viewer: string, server: string, root: Record<string, string>): Promise<void>;
 }
 
 
@@ -496,6 +554,7 @@ declare global {
     interface GlobalProps {
       mainModule: {
         SlateBinding: typeof SlateBinding;
+        PartBinding: typeof PartBinding;
         CodemodeEgress: typeof CodemodeEgress;
         CodemodeLauncher: typeof CodemodeLauncher;
         SlateChainProbe: typeof SlateChainProbe;

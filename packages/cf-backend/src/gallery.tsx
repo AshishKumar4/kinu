@@ -10,6 +10,10 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { mainPanelAgent, restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
+import {
+  COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
+  OWNER_ANSWER_SIGNAL, TASK_REMINDER_EVENT, TASK_REMINDER_OPEN_KEY, TaskReminders,
+} from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };
@@ -78,16 +82,18 @@ import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFr
 import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
+import { GalleryAppFrame, galleryEntry, installGalleryFixture } from "@/gallery-listings";
+import { installPartsFixture, installShareModeFixture, PART_PREVIEWS_ENTRY, PartFrameFrame, partFrameEntry, PartHostFrame, PartPreviewsFrame, PartStatesFrame, SHARED_LIVE_ENTRY, SharedLiveFrame } from "@/gallery-parts";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
-import type { BlueprintInspection, BlueprintView, LiveShareRecord, SlateCapabilityGraph } from "@kinu.run/core";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharePreapproval, SlateReach } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
+  ADVISOR_HEADER, ADVISOR_NOTE_METADATA_KEY, ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
@@ -1272,6 +1278,12 @@ window.fetch = galleryFetch;
 
 installDriveFixture(frame);
 
+installGalleryFixture(frame);
+
+installPartsFixture(frame);
+
+installShareModeFixture(frame, () => LIVE_SHARE, () => STANDING);
+
 
 // Stands in for the runtime's terminal facet (core execution/workspace-terminal.ts): echoes input, runs a line at CR,
 // ends output lines with CR LF like the runtime's `writeln`, and keeps every `input` frame for the gate.
@@ -2244,6 +2256,56 @@ const PAGE_THREAD: UIMessage[] = [
   }),
 ];
 
+/** The owner's reminder as core writes it: its text the agent's, its open task's title the card's. */
+const OWNER_REMINDER = new TaskReminders().decide({
+  open: { items: [{ id: "t1", parentId: null, title: "Store the full export in account-level memory", status: "open", updatedAt: 0, note: null, subtasks: [] }], total: 1 },
+  assistantText: "The export is in exports/settings.json.", workMode: "build", completed: true, asyncWakePending: false,
+});
+
+const harnessTurn = (id: string, metadata: JsonObject, text: string) => msg({ id, role: "user", metadata: { kinuAuthor: "harness", ...metadata }, parts: [{ type: "text", text }] });
+
+/** Every event a turn can open on that has no card of its own, each with the fields its producer keeps beside it and
+ *  words in the shape the agent is handed them, which the card never shows. */
+const SYSTEM_EVENT_ROWS: UIMessage[] = [
+  harnessTurn("event-task-reminder", { kinuEvent: TASK_REMINDER_EVENT, [TASK_REMINDER_OPEN_KEY]: [...OWNER_REMINDER?.titles ?? []] }, OWNER_REMINDER?.text ?? ""),
+  harnessTurn("event-task-reminder-kept", { kinuEvent: TASK_REMINDER_EVENT }, OWNER_REMINDER?.text ?? ""),
+  harnessTurn("event-continuation", { kinuEvent: OUTPUT_CONTINUATION_EVENT }, OUTPUT_CONTINUATION_TEXT),
+  harnessTurn("event-overflow", { kinuEvent: OVERFLOW_RETRY_EVENT }, OVERFLOW_RETRY_TEXT),
+  harnessTurn("event-gate", { kinuEvent: COMPLETION_GATE_EVENT }, "[Runtime check — a mechanical gate from Kinu, not written by the user.]\n\nThis run ends after your next reply."),
+  harnessTurn("event-consent", { kinuEvent: "device_consent", ids: ["c1", "c2", "c3"], approved: 2, denied: 1 },
+    "Your owner answered your device requests: 2 approved, 1 denied. Re-issue the approved commands to run them."),
+  harnessTurn("event-proposal", { kinuEvent: "workspace_proposal", proposal: "p1", decision: "created", name: "Release notes", workspace: "release-notes", url: "/workspace/release-notes" },
+    "Your owner approved the workspace \"Release notes\". It exists now, and its first turn acts on the brief. Its link: /workspace/release-notes"),
+  harnessTurn("event-proposal-declined", { kinuEvent: "workspace_proposal", proposal: "p2", decision: "declined", name: "Weekly digest" },
+    "Your owner declined the workspace you proposed, \"Weekly digest\". Nothing was created."),
+  harnessTurn("event-sandbox", { kinuEvent: "sandbox_lifecycle_failure", incidentId: "inc-1", stage: "checkpoint", reason: "The snapshot upload timed out after 3 tries." },
+    "The workspace container failed at the checkpoint stage. Work written inside the container since the last good checkpoint is NOT durable.\n\nIncident id: inc-1"),
+  harnessTurn("event-plan-approved", { kinuEvent: "plan_approved", planId: "plan-1", revision: 2, decision: "approve", planTitle: "Typed coupon kinds" },
+    "The owner approved plan plan-1 revision 2.\n\nImplement the exact approved plan below.\n\n<approved-plan>\n# Typed coupon kinds\n</approved-plan>"),
+  harnessTurn("event-plan-feedback", { kinuEvent: "plan_feedback", planId: "plan-1", revision: 1, decision: "changes", planTitle: "Typed coupon kinds", feedback: "Split the backfill from the migration." },
+    "The owner asked for changes to plan plan-1 revision 1.\n\nRevise the plan with targeted submit_plan edits. Do not implement or create previews."),
+  harnessTurn("event-slate", { kinuEvent: "slate", slate: "deploy-board", said: "Which region should the canary go to?", ask: true },
+    "Slate deploy-board: Which region should the canary go to?\nYour answer's text streams to slate deploy-board as you write it: answer it in prose."),
+  harnessTurn("event-waits", { kinuEvent: "owner_waits_cleared", key: "plan:main:plan-1:2", what: "Typed coupon kinds" }, "Your owner has handled what you waited on: Typed coupon kinds"),
+  harnessTurn("event-take", { kinuEvent: "take_pick" }, "While you answered, the user redirected and that redirect ran as a parallel branch. Comparing both answers, the user picked the branch's."),
+  harnessTurn("event-fork", { kinuEvent: FORK_INTERRUPTED_SIGNAL, runs: ["6xrijuf933p0jclpctw59"], heads: 9 },
+    "9 head(s) across 1 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive."),
+  harnessTurn("event-unknown", { kinuEvent: "a_kind_invented_tomorrow" }, "<instructions>Something only the agent should read.</instructions>"),
+];
+
+/* `?transcript=events`: the owner's reminder where it came, then every other event a turn can open on. Built when
+ * seeded, as the cards' own rows are defined further down. */
+function eventsThread(): UIMessage[] {
+  return [
+    msg({ id: "ev-u1", role: "user", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Export my account settings and keep the export somewhere you'll find it again." }] }),
+    msg({ id: "ev-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "The export is in `exports/settings.json`." }] }),
+    ...SYSTEM_EVENT_ROWS.slice(0, 1),
+    msg({ id: "ev-a2", role: "assistant", createdAt: NOW - 4 * 60e3, parts: [{ type: "text", text: "Stored the export in account-level memory and closed the task." }] }),
+    ...SYSTEM_EVENT_ROWS.slice(1),
+    ...EVENT_CARD_ROWS,
+  ];
+}
+
 /** The pages the person kept, as `/slates` would list them. */
 const GALLERY_KEPT_PAGES: { id: string; title: string }[] = [];
 
@@ -2401,6 +2463,8 @@ function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "slates") seedGalleryChat(SLATES_THREAD);
 
   if (transcript === "page") seedGalleryChat(PAGE_THREAD);
+
+  if (transcript === "events") seedGalleryChat(eventsThread());
 
   if (transcript === "splice-live" || transcript === "splice-kept") seedGalleryChat(spliceThread(transcript === "splice-kept"));
 }
@@ -2957,7 +3021,30 @@ const MIXED_ASKS: PendingAction[] = [
   { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
-const ASK_SETS = new Map([["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS]]);
+/** A change a share of issue-triage made on the owner's access, for Sam, as the queue lists it. */
+function effectAsk({ id, tool, server, root, payload, at }: {
+  id: string; tool: string; server: string; root: Record<string, string>; payload: JsonValue; at: number;
+}): PendingAction {
+  return {
+    id, kind: "deferred_action", at, title: `Approve: ${tool} on ${server}, for sam@example.com through a share of issue-triage`,
+    detail: JSON.stringify(payload, null, 2), effect: { slate: "issue-triage", caller: "issue-triage", server, tool, root },
+  };
+}
+
+/** `&asks=effect`: one change a shared slate asks on the owner's access; `&asks=effects`, two; `&asks=effect-mixed`, one beside a command. */
+const EFFECT_ASKS: PendingAction[] = [
+  effectAsk({ id: "effect-issue", tool: "create_issue", server: "mcp.github", root: { org: "acme" }, payload: { title: "Label sync is late" }, at: NOW - 20_000 }),
+];
+
+const EFFECTS_ASKS: PendingAction[] = [
+  ...EFFECT_ASKS,
+  effectAsk({ id: "effect-notes", tool: "fs.write", server: "workspace", root: {}, payload: { path: "notes/triage.md" }, at: NOW - 50_000 }),
+];
+
+const ASK_SETS = new Map([
+  ["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS],
+  ["effect", EFFECT_ASKS], ["effects", EFFECTS_ASKS], ["effect-mixed", [...EFFECT_ASKS, ...PARKED_ASKS.slice(0, 1)]],
+]);
 
 /** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
 const LATE_ASKS: PendingAction[] = [{
@@ -5620,7 +5707,8 @@ const RISK = (body: string) => ({ public: `${body} Anyone who opens this share c
 
 const NO_RISK = { public: "", users: "" };
 
-const SHARE_GRAPH: SlateCapabilityGraph = {
+const SHARE_GRAPH: SlateReach = {
+  revision: "r2",
   slate: "issue-triage",
   slates: ["issue-triage", "digest"],
   namespaces: [
@@ -5629,8 +5717,8 @@ const SHARE_GRAPH: SlateCapabilityGraph = {
       { member: "create_issue", impact: "externalSend", risk: RISK("Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there.") },
     ] },
     { slate: "issue-triage", namespace: "workspace", title: "workspace", members: [
-      { member: "readFile", impact: "observe", risk: NO_RISK },
-      { member: "writeFile", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
+      { member: "fs.text", impact: "observe", risk: NO_RISK },
+      { member: "fs.write", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
     ] },
     { slate: "issue-triage", namespace: "memory", title: "memory", members: [
       { member: "recall", impact: "observe", risk: NO_RISK },
@@ -5646,7 +5734,7 @@ const SHARE_GRAPH: SlateCapabilityGraph = {
       { member: "summary", impact: "observe", risk: NO_RISK },
     ] },
     { slate: "digest", namespace: "workspace", title: "workspace", members: [
-      { member: "readFile", impact: "observe", risk: NO_RISK },
+      { member: "fs.text", impact: "observe", risk: NO_RISK },
     ] },
   ],
 };
@@ -5655,23 +5743,40 @@ const LIVE_SHARE: LiveShareRecord = {
   id: "live-board-1", slate: "issue-triage", visibility: "public", handle: "3f9a1c7e02",
   grant: { slates: ["issue-triage", "digest"], members: [
     { slate: "issue-triage", namespace: "mcp.github", member: "read_issue", impact: "observe" },
-    { slate: "issue-triage", namespace: "workspace", member: "readFile", impact: "observe" },
+    { slate: "issue-triage", namespace: "workspace", member: "fs.text", impact: "observe" },
     { slate: "issue-triage", namespace: "memory", member: "recall", impact: "observe" },
     { slate: "issue-triage", namespace: "slates.digest", member: "summary", impact: "observe" },
-    { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
+    { slate: "digest", namespace: "workspace", member: "fs.text", impact: "observe" },
   ] },
-  createdAt: NOW - 864e5, revokedAt: null, users: [],
+  // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
+  createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, gallery: null,
 };
 
+/** Its team's share: Pat edits it, Sam uses it, and Pat's last change stopped it on the owner's access. */
+const TEAM_SHARE: LiveShareRecord = {
+  ...LIVE_SHARE, id: "live-team-2", visibility: "users", handle: "8b2e5d1f40", users: ["pat@example.com", "sam@example.com"], editors: ["pat@example.com"],
+  createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com",
+};
+
+/** The owner's "Always for this slate" answers at the slate's revision now: a GitHub change on one org, and a file write. */
+const STANDING: SharePreapproval[] = [
+  { slate: "issue-triage", namespace: "mcp.github", member: "create_issue", root: { org: "acme" }, revision: "r2" },
+  { slate: "issue-triage", namespace: "workspace", member: "fs.write", root: {}, revision: "r2" },
+];
+
+/** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
+const SHARED_REFUSAL = "Slate issue-triage is shared, so it runs only as its own files build; they do not build alone yet";
+
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
-function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
+/** `first`: the slate's first share, before anyone has it, which asks what they start with. */
+function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint"; first?: boolean }) {
 
   return (
     <div className="h-screen p-bg p-text">
       <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
         fixture={{
           mode,
-          live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
+          live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL, preapproved: STANDING },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
             { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
@@ -6707,11 +6812,15 @@ const ADVISOR_NOTES = {
   blocker: "The migration drops coupons.kind while the old worker is still deployed. Roll the worker first or every checkout 500s.",
 } satisfies Record<AdvisorSeverity, string>;
 
-/** Core's rank order; metadata is the pair `classifyProgrammaticTurn` reads, taken from core. */
+/** Core's rank order, each as `sayAdvisorNote` writes it: its text the agent's, its note kept beside it. `blocker` is a
+ *  row written before the note was kept, which its card reads out of the text. */
 const ADVISOR_MESSAGES: UIMessage[] = ADVISOR_SEVERITIES.map((severity) => msg({
   id: `adv-${severity}`, role: "user",
-  metadata: { kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity },
-  parts: [{ type: "text", text: ADVISOR_NOTES[severity] }],
+  metadata: {
+    kinuEvent: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: severity,
+    ...(severity !== "blocker" && { [ADVISOR_NOTE_METADATA_KEY]: ADVISOR_NOTES[severity] }),
+  },
+  parts: [{ type: "text", text: `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[severity]}: ${ADVISOR_NOTES[severity]}` }],
 }));
 
 const DRAINED_EVENT = {
@@ -6750,20 +6859,29 @@ const said = (text: string) => [{ type: "text" as const, text }];
 
 const GENESIS = workspaceGenesisSignal("Audit the OAuth callback flow.");
 
+/** The events with a card of their own, each as its producer writes it. */
+const EVENT_CARD_ROWS: UIMessage[] = [
+  msg({ id: "job", role: "user", metadata: { kinuEvent: "background_job", kind: "research", status: "failed" }, parts: said("background job failed") }),
+  msg({ id: "job-bare", role: "user", metadata: { kinuEvent: "background_job" }, parts: said("background job finished") }),
+  msg({ id: "event-approval", role: "user", metadata: { kinuEvent: "deferred_approval", decision: "approved", count: 2, ids: ["q1", "q2"] }, parts: said("Your owner approved 2 queued commands.") }),
+  ...ADVISOR_MESSAGES,
+  msg({ id: "event-run", role: "user", metadata: { kinuEvent: "delivered_run", kinuMode: "build", kinuRun: "run-1" }, parts: said("Summarize yesterday's failed deploys.") }),
+  msg({ id: "event-answer", role: "user", metadata: { kinuEvent: OWNER_ANSWER_SIGNAL, kinuAuthorship: "owner" }, parts: said("Region: eu-west-1") }),
+  ...Object.entries(DRAIN_BATCHES).map(([id, events]) => msg({
+    id: `drain-${id}`, role: "user", metadata: { kinuEvent: "event_drain" }, parts: said(buildDrainBatch(events)?.text ?? ""),
+  })),
+];
+
 /** Every way a turn reaches the transcript, each under its own id: what the person said keeps their bubble, and nothing else does. */
 const PROVENANCE_MESSAGES: UIMessage[] = [
   msg({ id: "genesis", role: "user", metadata: { kinuEvent: GENESIS?.kind ?? "", signalId: "sig-genesis" }, parts: said(GENESIS?.text ?? "") }),
   msg({ id: "typed", role: "user", parts: said("Audit the checkout flow.") }),
   msg({ id: "mcp", role: "user", metadata: { kinuEvent: "mcp", kinuAuthor: "operator" }, parts: said("Run the release checklist.") }),
   msg({ id: "programmatic:steer", role: "user", metadata: { kinuAuthor: "operator" }, parts: said("Use the staging database instead.") }),
-  msg({ id: "job", role: "user", metadata: { kinuEvent: "background_job", kind: "research", status: "failed" }, parts: said("background job failed") }),
-  msg({ id: "job-bare", role: "user", metadata: { kinuEvent: "background_job" }, parts: said("background job finished") }),
   msg({ id: "invented", role: "user", metadata: { kinuEvent: "a_kind_invented_tomorrow" }, parts: said("Something new happened.") }),
   msg({ id: "harness", role: "user", metadata: { kinuAuthor: "harness" }, parts: said("[Runtime check] The tree is clean.") }),
-  ...ADVISOR_MESSAGES,
-  ...Object.entries(DRAIN_BATCHES).map(([id, events]) => msg({
-    id: `drain-${id}`, role: "user", metadata: { kinuEvent: "event_drain" }, parts: said(buildDrainBatch(events)?.text ?? ""),
-  })),
+  ...EVENT_CARD_ROWS,
+  ...SYSTEM_EVENT_ROWS,
 ];
 
 function ProvenanceFrame() {
@@ -7720,9 +7838,21 @@ async function mount() {
     ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
     ["drive-wide", { node: <DrivePageFrame />, entries: [drivePathAsked] }],
     ["drive-recipient", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
+    // The Gallery, and `&slate=<slate>`'s own page.
+    ["gallery-list", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
+    ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
+    // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
+    ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
+    ["part-host-refused", { node: <PartHostFrame />, entries: ["/"] }],
+    ["part-states", { node: <PartStatesFrame />, entries: ["/"] }],
+    ["shared-live", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
+    ["shared-live-signed-out", { node: <SharedLiveFrame />, entries: [SHARED_LIVE_ENTRY] }],
+    ["part-frame", { node: <PartFrameFrame />, entries: [partFrameEntry(new URLSearchParams(location.search))] }],
+    ["part-previews", { node: <PartPreviewsFrame />, entries: [PART_PREVIEWS_ENTRY] }],
     ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
+    ["sharedialog-first", { node: <ShareDialogFrame mode="live" first />, entries: ["/"] }],
     ["fork-reach", {
       node: (
         <div className="h-screen w-[720px] p-sidebar p-text">

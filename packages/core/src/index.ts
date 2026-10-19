@@ -289,7 +289,7 @@ export {
   formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
-  ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
+  ShareGrantSchema, ShareCardSchema,
   LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
   type ShareKind, type LiveShareVisibility, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
@@ -297,7 +297,35 @@ export {
   type ShareGrantMember, type ShareGrant, type ShareCard,
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
+  LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
+  LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, SlatePreapprovalsSchema,
+  type SharePreapproval, type SlatePreapprovals, type SlatePreapprovalWithdraw,
+  SlateReachSchema, LiveShareBodySchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema,
+  type SlateReach, type LiveShareBody, type LiveShareModeBody, type LiveShareListingBody,
 } from './slates/sharing';
+
+export { ShareModeSchema, type ShareMode } from './slates/share-modes';
+
+export { RoomServiceSchema } from './slates/room-api';
+
+export type {
+  RoomPerson, RoomRole, RoomAccess, RoomAudience, RoomService, RoomTool, RoomSource, RoomReach, ForkPreview,
+} from './slates/room-api';
+
+export {
+  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
+  type GalleryReport,
+} from './slates/gallery-api';
+
+// The part and consent contracts the client parses: `./slates` pulls the server's runtime, so the browser reads them here.
+export {
+  PartRunAnswerSchema, PartRunRequestSchema, SlateConsentsAnswerSchema,
+  slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartReleasePath, slatePartRunPath, slatePartShowPath,
+  type ConsentAsk, type EffectAsk, type PartAction, type PartRunAnswer, type PartRunRequest, type PartShowRequest,
+} from './slates/personal-parts';
+
+export { SlateConsentSchema, type SlateConsent } from './slates/share-modes';
 
 export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
@@ -316,7 +344,7 @@ export type { SlateProcess } from './slates/process';
 
 export {
   isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, isJsonAnswer,
-  type SlateSummary, type SlateProblem,
+  type SlateSummary, type SlateProblem, SharedSlateFilesSchema, SlateFileChangeSchema, type SharedSlateFiles, type SlateFileChange,
 } from './slates/rpc';
 
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateStorageCall } from './slates/state';
@@ -1082,7 +1110,7 @@ export {
 
 export { explainSandboxError } from './tools/sandbox-errors';
 
-export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 
@@ -1267,7 +1295,7 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  buildModelCallEvent,
+  buildModelCallEvent, pricedModelCallEvent,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -1453,7 +1481,7 @@ export {
   DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
   type DeferredApprovalAnswer,
-  type DeferredApprovalNotice, type ParkedWrites,
+  type DeferredApprovalNotice, type ParkedWrites, type SlateEffectVerdict,
 } from './safety/deferred-approval';
 
 export {
@@ -1500,8 +1528,10 @@ export {
 } from './safety/secret-scan';
 
 export {
-  boundWriteOf, performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
+  performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
+
+export { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,
@@ -1599,6 +1629,8 @@ export {
   TaskReminders, TASK_REMINDER_EVENT,
   taskReminderIdempotencyKey,
 } from './tasks/reminder';
+
+export { cardWords, TASK_REMINDER_OPEN_KEY } from './read-models/event-summary';
 
 export {
   TurnAccumulator,
@@ -1850,7 +1882,7 @@ export type { RunListEntry, RunSummary } from './read-models/runs';
 export { headStepSources, spendLedger, workspaceSpend } from './read-models/workspace-spend';
 
 export {
-  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountUsage,
+  AccountSpendSchema, AccountUsageSchema, accountSpendOfCall, mergeAccountSpend, readAccountUsage,
   type AccountUsage,
 } from './read-models/account-usage';
 
@@ -2044,7 +2076,9 @@ export {
   AdvisorRowDataSchema,
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
+  ADVISOR_NOTE_METADATA_KEY,
   ADVISOR_SIGNAL_KIND,
+  keptAdvisorNote,
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
@@ -2141,6 +2175,7 @@ export {
   buildSlateShareHost, parseSlateShareLabel,
 } from './preview/slate-share-host';
 
+
 export {
   PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
   isPreviewUrl, previewHostSuffix, previewPortSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
@@ -2221,7 +2256,7 @@ export {
 } from './read-models/alternate-takes';
 
 export {
-  classifyProgrammaticTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
+  classifyProgrammaticTurn, systemEventTurn, delegatedTaskMetadata, messageSignalId, isSteeredMessage, endedMidWork, TURN_END_METADATA_KEY, turnFailure, TURN_FAILURE_METADATA_KEY, slatesChanged, SLATES_CHANGED_METADATA_KEY, slatesToPreview, applySignalCard,
   splicesSeenOn, SIGNALS_SEEN_METADATA_KEY, type SeenSplice,
   parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
   metadataBroadcastEvent,

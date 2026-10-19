@@ -5,19 +5,21 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError, refusalOf } from '../obs/error';
-import { settle } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import { usageTotal, UsageSchema } from '../usage';
 import type { MissionGovernor } from '../mission-budget';
 import type { JsonValue } from '../utils/json';
 import { shareCaller, type SlateCaller } from './caller';
 import type { SlateLiveShareStore } from './live-shares';
+import type { ApprovalSpend } from '../safety/approval-gate';
+import type { OwnerEffects, ServerSend } from './shared-server';
 import { slateAddressImpact } from './members';
 import { isJsonAnswer, type SlateCallResult, type SlateSurfaceResult } from './rpc';
 import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
   type LiveShareRecord, type ShareViewerClaim, type ViewerCall,
 } from './sharing';
-import { admitNestedViewerCall, routeViewerCall, slateCallAddress, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
+import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
 
 export interface SlateShareViewersDeps {
   readonly live: SlateLiveShareStore;
@@ -28,6 +30,8 @@ export interface SlateShareViewersDeps {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerUserId?(): string | null;
+  /** Settles a spent approval once its call was handed on (shared-server.ts takes it at the send). */
+  readonly ownerEffects?: Pick<OwnerEffects, 'settle'>;
 }
 
 /** What a request to a share's page is answered, before anything of the owner's runs. */
@@ -40,8 +44,12 @@ export type ViewerAdmission =
   | { readonly kind: 'consent'; readonly share: LiveShareRecord; readonly namespaces: readonly string[] }
   | { readonly kind: 'admitted'; readonly caller: SlateCaller; readonly share: LiveShareRecord; readonly viewer: SlateViewer };
 
-/** How a viewer's admitted call runs, as the caller it was admitted as, with what it reaches inside itself held to the grant. */
-export type ViewerRun = (route: SlateRoute, nested: (namespace: string, member: string) => void) => Promise<SlateSurfaceResult>;
+/**
+ * How a viewer's admitted call runs, as the caller it was admitted as, with what it reaches inside itself held to the
+ * grant. `admit` is the share's and the server's word on the call read again where it acts: the dispatch calls it
+ * synchronously, with nothing awaited between it and the send, and it throws when either no longer lends the call.
+ */
+export type ViewerRun = (route: SlateRoute, nested: (namespace: string, member: string) => void, admit: () => void) => Promise<SlateSurfaceResult>;
 
 /** A viewer's answer is JSON: routing refuses a viewer every streamed member, so a stream here is a routing fault. */
 function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
@@ -103,6 +111,13 @@ export class SlateShareViewers {
     readonly chain: readonly string[];
     readonly issued: SlateInvocation | null;
     readonly run: ViewerRun;
+    /**
+     * The shared server's word on the routed call (shared-server.ts `SharedServers.gate`): refused where it lends nothing
+     * or does not reach it, or where its owner has not approved the effect; else the send, which weighs it again.
+     */
+    readonly gate: (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean }) => Effect.Effect<ServerSend, KinuError>;
+    /** The shared server's bound alone, met first (it asks no one): why it lends nothing or no reach here, or null. */
+    readonly bound: (address: { readonly namespace: string; readonly member: string }) => Effect.Effect<KinuError | null>;
   }): Promise<SlateCallResult> {
     return settle(Effect.gen({ self: this }, function* () {
       const { id, request, chain, issued } = input;
@@ -121,13 +136,36 @@ export class SlateShareViewers {
           return yield* new KinuError('budget', 'This share is paused for today');
         }
 
+        const beyond = yield* input.bound(named);
+
+        if (beyond !== null) return yield* beyond;
         const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
         row = { slate: id, ...call.address, impact: call.impact, ok: false };
+        // A browser member the class runs acts there once the host authorizes it, so that ask is what acts; its host
+        // member only ever reports the class's refusal (web-operations.ts), which acts on nothing.
+        const reportOnly = request.authorize !== true && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
+        const send = yield* input.gate({ address: call.address, effect: call.impact !== 'observe' && !reportOnly });
+        const taken: ApprovalSpend[] = [];
+
+        // The share's and the server's word read again where the call acts: a revoke, a mode change or an approval
+        // taken back while the dispatch prepared stops the call there, and nothing of the owner's is spent.
+        const admit = (): void => {
+          this.stillLends(share);
+          const spend = send.admit();
+
+          if (spend !== null) taken.push(spend);
+        };
 
         // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
         const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.deps.live.live(input.share).grant, id, { namespace, member }); };
 
-        const result = viewerAnswer(yield* Effect.promise(async () => input.run(call.route, nested)));
+        const ran = yield* Effect.exit(Effect.promise(async () => input.run(call.route, nested, admit)));
+        const [spend = null] = taken;
+
+        // The approval is used once the call was handed on: a failure after that may have acted, so it never runs twice
+        // on one word of the owner's. The same call made again asks again.
+        if (spend !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(spend, 'spent'));
+        const result = viewerAnswer(yield* ran);
         row = { ...row, ok: result.ok };
 
         if (result.ok) this.debit(share, result.value);
@@ -136,6 +174,17 @@ export class SlateShareViewers {
       });
 
       return yield* Effect.ensuring(answered, Effect.sync(() => { this.deps.live.recordCall(viewer.request, row); }));
+    }));
+  }
+
+  /** The viewer's share still as it lent the call: live, and in the mode it was in. Throws to refuse at the send. */
+  stillLends(lent: LiveShareRecord): void {
+    return settleSync(Effect.suspend(() => {
+      const now = this.deps.live.get(lent.id);
+
+      if (now === undefined || now.revokedAt !== null) return Effect.fail(new KinuError('denied', 'This slate is no longer shared'));
+
+      return now.mode === lent.mode ? Effect.void : Effect.fail(new KinuError('denied', 'This share changed how it lends before the call was made'));
     }));
   }
 

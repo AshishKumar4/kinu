@@ -9,6 +9,7 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { LiveShareCreatedSchema, liveSharePagePath } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { openShare } from './share-entry';
 
 const SUITE = 'First-run · users-share';
 
@@ -20,7 +21,7 @@ const DEFECT: FirstRunDefect = {
   missedBecause: 'The host 404s any users-share visitor without a viewer cookie, and the dialog copies that bare link; the unit proofs minted the ticket through /api/shared/live/open directly, as no recipient holding the link can.',
   provedRedAt: 'c9fee59a0',
   redDirection: 'RED on the deployed c9fee59a0 (2026-10-08 staging walk): the recipient following the share link got 404 "Not found", and the create answer\'s share.users was []. '
-    + 'Green requires the link to send a visitor with no cookie to the app\'s page for the share, the answer to name the recipient, and the named account to enter as itself through that page\'s ticket.',
+    + 'Green requires the share\'s link to be the app\'s page for it (its bare host sending a visitor with no cookie there too), the answer to name the recipient, and the named account to enter as itself through that page\'s ticket.',
 };
 
 const PLAN = firstRunCasePlan(SUITE, 'named');
@@ -35,11 +36,35 @@ const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.n
 
 const Profile = v.object({ email: v.string() });
 
-const Opened = v.object({ url: v.string() });
-
 const SLATE = 'usershare';
 
 const BODY = 'users-share-probe-ok';
+
+/**
+ * The named account on the app's page for the share: the page's open hands it a ticket the share exchanges for its
+ * cookie, and it comes back to the share as itself. A visitor reaching the bare host with no cookie is sent to the page.
+ */
+async function enteredAsNamed(input: { origin: string; workspace: string; share: string; page: string; recipient: Record<string, string> }): Promise<EvalSubgoal[]> {
+  const shown = await fetch(input.page, { headers: input.recipient });
+  const ticket = await openShare({ origin: input.origin, workspace: input.workspace, share: input.share, headers: input.recipient });
+  const host = ticket === null ? null : `${new URL(ticket.url).origin}/`;
+  const first = host === null ? null : await fetch(host, { redirect: 'manual' });
+  const exchanged = ticket === null ? null : await fetch(ticket.url, { redirect: 'manual' });
+  const cookie = exchanged?.headers.get('set-cookie')?.split(';')[0] ?? null;
+  const served = cookie === null || host === null ? null : await fetch(host, { headers: { cookie }, redirect: 'manual' });
+  const body = served === null ? null : await served.text();
+
+  return [
+    {
+      what: 'bare-host-sends-visitor-to-the-page', reached: first?.status === 303 && first.headers.get('location') === input.page,
+      detail: JSON.stringify({ status: first?.status ?? null, location: first?.headers.get('location') ?? null }),
+    },
+    {
+      what: 'named-account-enters-as-itself', reached: shown.status === 200 && served?.status === 200 && body === BODY,
+      detail: JSON.stringify({ page: shown.status, opened: ticket !== null, exchanged: exchanged?.status ?? null, served: served?.status ?? null, body: body?.slice(0, 200) ?? null }),
+    },
+  ];
+}
 
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
@@ -79,33 +104,12 @@ END`));
         try {
           goals.push({ what: 'answer-names-recipient', reached: share.users.includes(email), detail: JSON.stringify(share.users) });
 
-          // The link, followed with no viewer cookie, leads to the app's page for this share.
-          const first = await fetch(url, { redirect: 'manual' });
+          // The link is the app's page for this share, which signs its visitor in.
           const page = `${plan.origin}${liveSharePagePath(session.workspace, share.id)}`;
 
-          goals.push({
-            what: 'link-sends-visitor-to-sign-in', reached: first.status === 303 && first.headers.get('location') === page,
-            detail: JSON.stringify({ status: first.status, location: first.headers.get('location') }),
-          });
+          goals.push({ what: 'link-is-the-app-page', reached: url === page, detail: JSON.stringify({ url, page }) });
 
-          // Signed in there as the named account, the page's open hands it a ticket the share exchanges for its cookie.
-          const shown = await fetch(page, { headers: recipient });
-
-          const opened = await fetch(`${plan.origin}/api/shared/live/open`, {
-            method: 'POST', headers: { ...recipient, 'content-type': 'application/json' },
-            body: JSON.stringify({ workspace: session.workspace, share: share.id }),
-          });
-
-          const ticket = v.safeParse(Opened, await opened.json());
-          const exchanged = ticket.success ? await fetch(ticket.output.url, { redirect: 'manual' }) : null;
-          const cookie = exchanged?.headers.get('set-cookie')?.split(';')[0] ?? null;
-          const served = cookie === null ? null : await fetch(url, { headers: { cookie }, redirect: 'manual' });
-          const body = served === null ? null : await served.text();
-
-          goals.push({
-            what: 'named-account-enters-as-itself', reached: shown.status === 200 && served?.status === 200 && body === BODY,
-            detail: JSON.stringify({ page: shown.status, opened: opened.status, exchanged: exchanged?.status ?? null, served: served?.status ?? null, body: body?.slice(0, 200) ?? null }),
-          });
+          goals.push(...await enteredAsNamed({ origin: plan.origin, workspace: session.workspace, share: share.id, page, recipient }));
         } finally {
           await fetch(`${plan.origin}/api/shared/revoke`, {
             method: 'POST', headers: { ...owner, 'content-type': 'application/json' },

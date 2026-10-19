@@ -3,7 +3,7 @@ import type { AccountSpend, SpendTally } from '../events/model-call';
 import { QuotaSnapshotSchema, type QuotaSnapshot } from '../providers/quota';
 import { LimitReportSchema, LimitUnreadSchema, type LimitReport, type LimitUnread } from '../providers/usage-limits';
 import { diagnostics, toKinuError } from '../obs/index';
-import { addUsage, usageTotal, UsageSchema } from '../usage';
+import { addUsage, usageReported, usageTotal, UsageSchema, type Usage } from '../usage';
 
 export interface AccountUsage {
   readonly accounts: readonly AccountSpend[];
@@ -60,6 +60,25 @@ function addAccountSpend(a: AccountSpend, b: AccountSpend): AccountSpend {
   const quota = newer(a.quota, b.quota);
 
   return { provider: a.provider, account: a.account, ...addSpendTally(a, b), ...(quota !== undefined && { quota }) };
+}
+
+/**
+ * One model call's spend, as a workspace's ledger counts it (`RunEventRecorder.spendByAccount`): a call with no usage
+ * reported is counted without it; one with usage and no rate is unpriced, never free.
+ */
+export function accountSpendOfCall(call: {
+  readonly account?: { readonly provider: string; readonly name: string } | undefined;
+  readonly usage?: Usage | undefined;
+  readonly usd?: number | undefined;
+}): AccountSpend {
+  const usage = call.usage ?? {};
+  const reported = usageReported(usage);
+
+  return {
+    provider: call.account?.provider ?? null, account: call.account?.name ?? null, calls: 1, callsWithoutUsage: reported ? 0 : 1,
+    usage: reported ? usage : {}, unpricedCalls: reported && call.usd === undefined ? 1 : 0,
+    ...(reported && call.usd !== undefined && { usd: call.usd }),
+  };
 }
 
 export function mergeAccountSpend(ledgers: readonly (readonly AccountSpend[])[]): AccountSpend[] {

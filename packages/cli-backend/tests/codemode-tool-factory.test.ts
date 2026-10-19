@@ -571,10 +571,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     'const slates = workspace.slates;',
     "const answers = [await board.addStroke({ id: 'roof' }), await board.remove(3)];",
     'answers.push(await board.$preview(), await board.$methods(), await board.$commit(), await board.$history(), await board.$graph());',
-    "answers.push(await board.$restore('v1'), await board.$inspect('v1', ['client.tsx']), await board.$publish('v2', ['server.ts']));",
-    "answers.push(await board.$share({ visibility: 'public', approved: [], op: 'remove', id: 'other' }));",
-    "answers.push(await slates.$list(), await slates.$fork('v1'), await slates.$shares(), await slates.$liveShares());",
-    "answers.push(await slates.$unshare('s1'), await slates.$viewerRequests('s2'));",
+    "answers.push(await board.$restore('v1'), await slates.$list(), await slates.$fork('v1'));",
     'const refused = await board.$remove();',
     "const envelope = [typeof workspace.slate, await Promise.resolve().then(() => workspace.slates({ op: 'list' })).then(() => 'called', () => 'not callable')];",
     'return { answers, refused, envelope, awaited: (await board) === board };',
@@ -584,8 +581,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
 
   expect(out.result).toMatchObject({
     answers: [
-      'call', 'call', 'preview', 'methods', 'commit', 'history', 'graph', 'restore', 'inspect', 'publish', 'share',
-      'list', 'fork', 'shares', 'liveShares', 'unshare', 'viewerRequests',
+      'call', 'call', 'preview', 'methods', 'commit', 'history', 'graph', 'restore', 'list', 'fork',
     ],
     refused: { success: false, reason: 'denied', error: 'not yours' },
     envelope: ['undefined', 'not callable'],
@@ -601,15 +597,8 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     { op: 'history', id: 'whiteboard' },
     { op: 'graph', id: 'whiteboard' },
     { op: 'restore', id: 'whiteboard', version: 'v1' },
-    { op: 'inspect', id: 'whiteboard', version: 'v1', include: ['client.tsx'] },
-    { op: 'publish', id: 'whiteboard', version: 'v2', include: ['server.ts'] },
-    { op: 'share', id: 'whiteboard', visibility: 'public', approved: [] },
     { op: 'list' },
     { op: 'fork', version: 'v1' },
-    { op: 'shares' },
-    { op: 'liveShares' },
-    { op: 'unshare', share: 's1' },
-    { op: 'viewerRequests', share: 's2' },
     { op: 'remove', id: 'whiteboard' },
   ]);
 

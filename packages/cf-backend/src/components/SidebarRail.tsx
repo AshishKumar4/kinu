@@ -2,16 +2,15 @@
  * The desktop rail lane: the roster, or the icon rail it folds to. Only the `aside`'s width
  * animates; each state's column has its own width behind `overflow-hidden`, so nothing reflows.
  */
-import { detach } from "@kinu.run/core/obs";
-import { Effect } from "effect";
 import { useEffect, useState, type MouseEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
-import { PlusIcon, SidebarSimpleIcon } from "@phosphor-icons/react";
+import { Link, useLocation } from "react-router-dom";
+import { SidebarSimpleIcon } from "@phosphor-icons/react";
 
 import { useAccount } from "@/hooks/use-account";
 import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { lastValue } from "@/hooks/use-async-resource";
 import { KinuMark } from "./ui/KinuLogo";
+import { NewWorkspaceIconButton } from "./workspaces/NewWorkspaceButton";
 import Sidebar from "./Sidebar";
 import { navActive, NAV_HOVER, navRowCls, PRIMARY_NAV } from "./nav";
 
@@ -27,7 +26,6 @@ const LANE_ENTER_CLS = "motion-safe:animate-[fade-in_180ms_ease-out]";
 /** `folded` while a view fills the workspace area: the rail folds for it, and is as the reader keeps it after. */
 export function SidebarRail({ folded }: { folded: boolean }) {
   const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== "0");
-  const navigate = useNavigate();
   const { pathname } = useLocation();
   const profile = lastValue(useAccount().profile);
 
@@ -73,9 +71,7 @@ export function SidebarRail({ folded }: { folded: boolean }) {
             <SidebarSimpleIcon size={18} />
           </button>
           <Link to="/" aria-label="Kinu home" className={`${RAIL_BUTTON_CLS} mt-1`}><KinuMark size={20} /></Link>
-          <button type="button" onClick={() => detach(Effect.promise(async () => navigate("/")))} aria-label="New workspace" title="New workspace" className={RAIL_BUTTON_CLS}>
-            <PlusIcon size={17} weight="bold" />
-          </button>
+          <NewWorkspaceIconButton className="size-9 rounded-lg" />
           <nav aria-label="Primary" className="flex flex-col items-center gap-1 pt-1">
             {PRIMARY_NAV.map((item) => {
               const open = navActive(item, pathname);

@@ -22,7 +22,7 @@ export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import { diagnostics, KinuError, refusalOf, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  censusOf, durableStamps, ERROR_STATUS, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
+  censusOf, durableStamps, ERROR_STATUS, mcpPresetById, readStamp, repairSchema, SCHEMA_TABLES, requireOps, StoragePredatesReleaseError, writeStamp,
   type OpsCaller, type Repair, type TablesAnswer,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
@@ -50,6 +50,15 @@ import {
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
+import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
+import {
+  EffectApprovals, SlateConsentSchema, SlateConsentStore, containedTool, partCallRoot, partCallVerdict,
+  type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
+} from '@kinu.run/core/slates';
+import { McpToolSurfaceSchema } from '@kinu.run/core';
+import { isJsonObject, parseJsonValue } from '../../../core/src/utils/json';
+import { Effect } from 'effect';
+import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { EvalLeaseJobs } from './eval-leases';
 import { accountIdFor } from '../auth/store';
@@ -136,6 +145,11 @@ export class UserDO extends Agent<Env> {
 
   private readonly mcpServers = new UserMcpServers({ ...this.host, mcp: this.mcp, vault: this.credentials });
 
+  private readonly slateConsentStore = new SlateConsentStore(this.ctx.storage.sql);
+
+  /** One approval admits one exact effect; these disappear with the transient runs on eviction. */
+  private readonly effectApprovals = new EffectApprovals();
+
   private readonly accountMemory = new UserAccountMemory({
     ...this.host,
     sql: <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => this.ctx.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray(),
@@ -210,6 +224,127 @@ export class UserDO extends Agent<Env> {
 
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     return this.profile.getProfileCatalog(caller);
+  }
+
+  /**
+   * A slate's `workspace.ai` call for this account's own personal part: run with this account's
+   * own catalog, credentials and spend (`slate-ai-account.ts`), never the slate owner's.
+   */
+  async slateAi(caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
+    await this.requireTier(caller, 'credentials.model');
+
+    return accountSlateAi({
+      env: this.env, accountId: this.name, catalog: (asker) => this.profile.getProfileCatalog(asker), credentialsRevision: (asker) => this.credentials.getCredentialsRevision(asker),
+      spent: (spend) => { addSlateAiSpend(this.ctx.storage.sql, spend); },
+    }, caller, request);
+  }
+
+  /** This account's model calls in other people's slates, per provider account: read with its workspaces' in its usage. */
+  async slateAiSpend(caller: UserCaller): Promise<AccountSpend[]> {
+    await this.requireTier(caller, 'account');
+
+    return slateAiSpendOf(this.ctx.storage.sql);
+  }
+
+  async slateConsents(caller: UserCaller, request: { readonly workspace: string; readonly slate: string }): Promise<SlateConsent[]> {
+    await this.requireTier(caller, 'account');
+
+    return this.slateConsentStore.forSlate(request.workspace, request.slate);
+  }
+
+  async consentSlate(caller: UserCaller, consent: SlateConsent): Promise<SlateConsent> {
+    await this.requireTier(caller, 'account');
+
+    return settle(Effect.gen({ self: this }, function* () {
+      const parsed = v.safeParse(SlateConsentSchema, consent);
+
+      if (!parsed.success) return yield* new KinuError('bad_input', 'A slate consent must name its workspace, slate, connection, root, tools, effects and revision.');
+      this.slateConsentStore.put(parsed.output);
+
+      return parsed.output;
+    }));
+  }
+
+  async withdrawSlateConsent(caller: UserCaller, request: { readonly workspace: string; readonly slate: string; readonly server: string; readonly root: Readonly<Record<string, string>> }): Promise<boolean> {
+    await this.requireTier(caller, 'account');
+
+    return this.slateConsentStore.withdraw(request.workspace, request.slate, request.server, request.root);
+  }
+
+  /** `mcp.tools` is the same floor as userMcp_callTool: the account's connection, with this slate's consent checked too. */
+  async slatePartTool(caller: UserCaller, request: {
+    readonly workspace: string; readonly slate: string; readonly revision: string; readonly server: string; readonly tool: string; readonly args: JsonValue[];
+  }): Promise<PartConnectionAnswer<JsonValue>> {
+    await this.requireTier(caller, 'mcp.tools');
+
+    return settle(Effect.gen({ self: this }, function* () {
+      const { workspace, slate, revision, server, tool, args } = request;
+      const surface = v.parse(McpToolSurfaceSchema, yield* Effect.promise(() => this.userMcp_toolDescriptors(caller)));
+      const descriptor = server.startsWith('mcp.') ? surface.descriptors.find((item) => item.serverName === server.slice(4) && item.name === tool) : undefined;
+
+      if (descriptor === undefined) return { kind: 'missing' as const, message: `Your connections do not offer ${server}.${tool}.` };
+      const payload = args.length === 1 ? args[0] : args;
+
+      if (args.length !== 1 || payload === undefined || !isJsonObject(payload)) {
+        return yield* new KinuError('bad_input', `${server}.${tool} takes one JSON object argument.`);
+      }
+
+      const root = partCallRoot({ preset: descriptor.presetId ?? null, tool }, payload);
+      const verdict = partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, false);
+      // What its asks call the connection and the tool: the catalog's own name for a preset server, else the person's.
+      const titles = { serverTitle: mcpPresetById(descriptor.presetId ?? '')?.title ?? descriptor.serverName, toolTitle: descriptor.title ?? descriptor.name };
+
+      if (verdict.kind === 'needs-consent') return { ...verdict, ask: { ...verdict.ask, ...titles } };
+
+      if (verdict.kind === 'needs-approval') {
+        const call = { workspace, slate, revision, server, tool, root, payload };
+
+        if (!this.effectApprovals.take(call)) return { kind: 'needs-approval' as const, ask: { ...this.effectApprovals.ask(call), ...titles } };
+      }
+
+      const text = yield* Effect.promise(() => this.userMcp_callTool(caller, { serverId: descriptor.serverId, name: tool, args: payload, id: crypto.randomUUID() }));
+
+      return { kind: 'ran' as const, value: parseJsonValue(text) };
+    }));
+  }
+
+  /**
+   * Whether each call a personal part's paused run already made is still within this account's consent at the revision
+   * (nothing is run): what a resumed run may be answered from. A connection no longer offered is no longer consented.
+   */
+  async slatePartConsented(caller: UserCaller, calls: readonly {
+    readonly workspace: string; readonly slate: string; readonly revision: string; readonly server: string; readonly tool: string; readonly args: JsonValue[];
+  }[]): Promise<boolean[]> {
+    await this.requireTier(caller, 'mcp.tools');
+
+    const mcp = calls.some((call) => call.server !== 'ai')
+      ? v.parse(McpToolSurfaceSchema, await this.userMcp_toolDescriptors(caller)).descriptors : [];
+
+    return calls.map(({ workspace, slate, revision, server, tool, args }) => {
+      if (server === 'ai') return partCallVerdict(this.slateConsentStore.find(workspace, slate, 'ai', {}), { server, root: {}, tool, contained: true }, revision, true).kind === 'run';
+      const descriptor = mcp.find((item) => `mcp.${item.serverName}` === server && item.name === tool);
+      const root = partCallRoot(descriptor === undefined ? null : { preset: descriptor.presetId ?? null, tool }, args.length === 1 ? args[0] ?? null : args);
+
+      return descriptor !== undefined
+        && partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, true).kind === 'run';
+    });
+  }
+
+  /** Same `credentials.model` floor as slateAi; consent adds the viewer's revision-bound permission, not a new credential path. */
+  async slatePartAi(caller: UserCaller, request: { readonly workspace: string; readonly slate: string; readonly revision: string; readonly route: SlateAiRoute }): Promise<PartAiAnswer> {
+    await this.requireTier(caller, 'credentials.model');
+    const tool = request.route.stream === true ? 'stream' : 'run';
+    const verdict = partCallVerdict(this.slateConsentStore.find(request.workspace, request.slate, 'ai', {}), { server: 'ai', root: {}, tool, contained: true }, request.revision, false);
+
+    if (verdict.kind === 'needs-consent') return verdict;
+
+    return { kind: 'ran', value: await this.slateAi(caller, request) };
+  }
+
+  async decideSlateEffect(caller: UserCaller, request: { readonly id: string; readonly decision: 'approve' | 'decline' }): Promise<boolean> {
+    await this.requireTier(caller, 'account');
+
+    return this.effectApprovals.decide(request.id, request.decision === 'approve');
   }
 
   getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {

@@ -93,6 +93,11 @@ export const DECLARED = byFile([
     within: ['useTuiProduct'],
     reason: OUTSIDE_PROVIDER,
   }],
+  ['packages/cf-backend/src/gallery-parts.tsx', {
+    mechanisms: ['throw'],
+    within: ['previewRpc'],
+    reason: 'a design-system gallery fixture: its stub RPC refuses a method it does not stand in for, as an unknown RPC is refused',
+  }],
   ['packages/cf-backend/src/gallery.tsx', {
     mechanisms: ['throw', 'catch', 'promise-rejection'],
     reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
@@ -270,6 +275,8 @@ export const DECLARED = byFile([
       'gallery fixtures that mirror workspace RPC answers'],
     ['packages/cf-backend/src/gallery-slate-fallback.tsx', ['frameRpc'],
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
+    ['packages/cf-backend/src/gallery-parts.tsx', ['previewRpc'],
+      'a gallery fixture that mirrors the previewSlate RPC answer'],
     ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'storedConfigFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
       'gallery fixtures that mirror RPC, HTTP and model-test answers'],
     ['packages/cf-backend/src/hooks/use-workspace-reads.ts', ['dismissSubordinate'],

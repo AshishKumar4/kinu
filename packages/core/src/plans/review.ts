@@ -21,6 +21,7 @@ import { admitReviewAnnotations, MAX_PLAN_ANNOTATIONS_BYTES } from './annotation
 import type { TaskPlan } from '../tools/task-plan-scope';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { utf8Bytes } from '../utils/text';
+import { cardWords } from '../read-models/event-summary';
 
 export type {
   PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
@@ -375,6 +376,9 @@ function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHa
       planId: plan.id,
       revision: plan.revision,
       decision,
+      // For the person's card: the text is the agent's, its instructions and the plan whole.
+      planTitle: cardWords(planTitle(plan.content)),
+      ...(plan.feedback && { feedback: cardWords(plan.feedback) }),
     },
   };
 }

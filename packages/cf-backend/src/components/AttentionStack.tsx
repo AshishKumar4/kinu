@@ -10,7 +10,7 @@ import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilI
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
+import { AlwaysLine, alwaysLabel, ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -101,15 +101,20 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
   const [soul, setSoul] = useState(false);
 
   if (action.kind === "deferred_action") {
+    let asks = action.effect === undefined ? "Run this command?" : "Make this change with your access?";
+
+    if (action.write) asks = action.title;
+
     return (
       <>
-        <div className="p-row-text p-text">{action.write ? action.title : "Run this command?"}</div>
+        <div className="p-row-text p-text">{asks}</div>
         {action.detail !== null && <code className="mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-t-code p-text-2 break-all whitespace-pre-wrap p-fill">{revealMisrepresenting(action.detail)}</code>}
         {action.where !== undefined && <div className="mt-1 p-meta p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
         {action.write && <div className="mt-1.5"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
         <div className="mt-1 p-meta p-text-3">
           {action.write ? "Approving writes exactly these bytes." : action.title.replace(/^Approve: /u, "")} · asked {timeAgo(action.at)}
         </div>
+        {action.effect !== undefined && <div className="mt-1"><AlwaysLine action={action} /></div>}
       </>
     );
   }
@@ -193,9 +198,14 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
   const deferred = (decision: "approved" | "always" | "denied") => async () => { await props.rpc("decideDeferredApprovals", [[action.id], decision]); };
 
   if (action.kind === "deferred_action") {
+    // A shared slate's change is always allowed on that slate's shares, as its card says; a command's checks, here.
+    const always = action.effect === undefined
+      ? { title: "Approve these checks for this environment. Revoke under Settings → Standing approvals." }
+      : { title: "Approve it, and allow it from now on as the card says." };
+
     return [
       { label: "Approve", icon: CheckIcon, weight: "primary", run: deferred("approved") },
-      { label: "Always allow", weight: "secondary", title: "Approve these checks for this environment. Revoke under Settings → Standing approvals.", run: deferred("always") },
+      { label: alwaysLabel([action], ""), weight: "secondary", ...always, run: deferred("always") },
       { label: "Deny", icon: XIcon, weight: "quiet", run: deferred("denied") },
     ];
   }

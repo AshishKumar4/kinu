@@ -17,6 +17,8 @@ import {
   type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
+import { internalCaller, type PresentedCaller } from '@kinu.run/core/control-plane';
+import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
 
 const DeleteConfirm = v.object({ confirm: v.string() });
 
@@ -31,6 +33,8 @@ type AccountAuthority = Pick<
 
 export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id>, OwnerCapabilityEnv {
   UserDO: ObjectNamespace<Id, ShareRosterAuthority & AccountAuthority>;
+  /** The control plane, whose Gallery forgets a deleted account's stars and reports. */
+  ControlPlaneDO?: ObjectNamespace<Id, { galleryForget(caller: PresentedCaller, email: string): Promise<void> }>;
 }
 
 interface AccountVariables extends ApiVariables {
@@ -82,6 +86,12 @@ accountRoutes.delete('/api/user/account', ownerGate(), (c) => {
 
     // The account's record of share recipients goes with it; each is told to forget its cards first.
     yield* Effect.promise(async () => forgetSharesGiven(c.env, identity.userId, owner));
+    // Its stars and reports in the Gallery name it by email; its listings go with its workspaces' shares.
+    const { ControlPlaneDO } = c.env;
+
+    if (ControlPlaneDO !== undefined && hasControlPlane({ ControlPlaneDO })) {
+      yield* Effect.promise(async () => { await controlPlaneStub({ ControlPlaneDO }).galleryForget(await internalCaller(c.env), identity.email.trim().toLowerCase()); });
+    }
 
     yield* Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => account(c).deleteAccount(owner, identity.userId));

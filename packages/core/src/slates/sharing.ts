@@ -5,6 +5,8 @@
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
+import { ShareModeSchema, ShareStartSchema } from './share-modes';
+import { GalleryCategorySchema } from './gallery-api';
 
 
 const SHARE_KINDS = ['blueprint', 'live'] as const;
@@ -27,11 +29,31 @@ const ShareGrantMemberSchema = v.object({
 
 export type ShareGrantMember = v.InferOutput<typeof ShareGrantMemberSchema>;
 
+/**
+ * An "Always for this slate" decision: its owner's standing approval of one shape of call the shared server makes on
+ * their access (a member, on one root, as `partCallRoot` reads it) at one revision of the shared slate. Held on the
+ * shared slate's `owner` shares; written only by the owner's answer to an effect's ask; void once the shared slate is at
+ * another revision (share-policy.ts `preapprovedEffect`).
+ */
+const SharePreapprovalSchema = v.object({
+  /** The slate that makes the call, as grant members name it: the shared slate, or one it hops to. */
+  slate: v.string(),
+  namespace: v.string(),
+  member: v.string(),
+  root: v.record(v.string(), v.string()),
+  /** The shared slate's revision it was given at. */
+  revision: v.string(),
+});
+
+export type SharePreapproval = v.InferOutput<typeof SharePreapprovalSchema>;
+
 export const ShareGrantSchema = v.object({
   slates: v.array(v.string()),
   members: v.array(ShareGrantMemberSchema),
   /** Absent on old rows means forkable (D4). */
   fork: v.optional(v.boolean()),
+  /** An `owner` share's standing approvals; absent means none. */
+  preapproved: v.optional(v.array(SharePreapprovalSchema)),
 });
 
 export type ShareGrant = v.InferOutput<typeof ShareGrantSchema>;
@@ -56,13 +78,20 @@ const SlateGraphNamespaceSchema = v.object({
 
 export type SlateGraphNamespace = v.InferOutput<typeof SlateGraphNamespaceSchema>;
 
-export const SlateCapabilityGraphSchema = v.object({
+const SlateCapabilityGraphSchema = v.object({
   slate: v.string(),
   slates: v.array(v.string()),
   namespaces: v.array(SlateGraphNamespaceSchema),
 });
 
 export type SlateCapabilityGraph = v.InferOutput<typeof SlateCapabilityGraphSchema>;
+
+/** What a share's server can reach, as the share sheet lists it before the owner turns on `owner` mode: the graph,
+ *  and the revision of the slate it was read at, which approving names (null: the slate never built, so no reach can
+ *  be approved). */
+export const SlateReachSchema = v.object({ ...SlateCapabilityGraphSchema.entries, revision: v.nullable(v.string()) });
+
+export type SlateReach = v.InferOutput<typeof SlateReachSchema>;
 
 export const LiveShareRecordSchema = v.object({
   id: v.string(),
@@ -73,14 +102,110 @@ export const LiveShareRecordSchema = v.object({
   createdAt: v.number(),
   revokedAt: v.nullable(v.number()),
   users: v.array(v.string()),
+  /** Of `users`, those added to edit the slate too. */
+  editors: v.optional(v.array(v.string()), []),
+  /** Whose access its server acts with (docs/SLATE-SHARING-NIMBUS.md §2). */
+  mode: ShareModeSchema,
+  /** `owner` mode: the revision whose reach the owner approved; null in `own` mode. */
+  grantRevision: v.nullable(v.string()),
+  /** The last editor of an unapproved batch, from the slate's edit mark; null once approved or rolled back. */
+  editedBy: v.nullable(v.string()),
+  /** Its card's words while its owner lists it in the Gallery; null when not listed, and always on an `owner` share. */
+  gallery: v.nullable(v.object({ line: v.string(), category: GalleryCategorySchema })),
   /** Computed where the row is answered, never stored. */
   paused: v.optional(v.boolean()),
+  /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
+   *  approves again. Computed where the row is answered. */
+  stale: v.optional(v.boolean()),
 });
 
 export type LiveShareRecord = v.InferOutput<typeof LiveShareRecordSchema>;
 
+const ApprovedMembersSchema = v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }));
+
+/** `POST /api/shared/live`, its owner's: a slate shared live, in `own` mode unless they turn on `owner` over the reach
+ *  they read at `revision` (its `SlateReach`). */
+export const LiveShareBodySchema = v.object({
+  workspace: v.string(),
+  slate: v.string(),
+  visibility: v.picklist(['users', 'public']),
+  emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+  /** Of the people a `users` share names, those added to edit the slate too; each is added if `emails` left them out. */
+  editors: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+  approved: v.optional(ApprovedMembersSchema),
+  fork: v.optional(v.boolean()),
+  mode: v.optional(ShareModeSchema),
+  revision: v.optional(v.string()),
+  /** H7, offered at a slate's first share: `empty` shares a copy made now, code only (`share.slate` is the copy's). */
+  start: v.optional(ShareStartSchema),
+});
+
+export type LiveShareBody = v.InferOutput<typeof LiveShareBodySchema>;
+
+/** `POST`, its owner's: a live share's mode set, or its reach approved again at the slate's revision now. */
+export const LIVE_SHARE_MODE_PATH = '/api/shared/live/mode';
+
+/** Its body: `owner` names the acting members approved and the revision the reach was read at. */
+export const LiveShareModeBodySchema = v.variant('mode', [
+  v.object({ workspace: v.string(), share: v.string(), mode: v.literal('own') }),
+  v.object({
+    workspace: v.string(), share: v.string(), mode: v.literal('owner'), revision: v.string(), approved: ApprovedMembersSchema,
+  }),
+]);
+
+export type LiveShareModeBody = v.InferOutput<typeof LiveShareModeBodySchema>;
+
+/** `POST`, its owner's: a live share listed in the Gallery with its card's words, or taken off it. Only an `own` share is
+ *  listed (§2): one on its owner's access reaches what its owner reaches, which no listing may offer anyone. */
+export const LIVE_SHARE_LISTING_PATH = '/api/shared/live/listing';
+
+export const LiveShareListingBodySchema = v.variant('listed', [
+  v.object({ workspace: v.string(), share: v.string(), listed: v.literal(true), line: v.pipe(v.string(), v.maxLength(140)), category: GalleryCategorySchema }),
+  v.object({ workspace: v.string(), share: v.string(), listed: v.literal(false) }),
+]);
+
+export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySchema>;
+
+/** `POST`, signed in: where a live share opens for this person (a public share's address, else their signed entry to
+ *  one that names them), with the slate it serves and its title, which the page that frames it names it by. */
+export const LIVE_SHARE_OPEN_PATH = '/api/shared/live/open';
+
+export const LiveShareOpenSchema = v.object({ url: v.string(), slate: v.string(), title: v.string() });
+
+export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
+
+/** `POST`, its owner's: the standing approvals of a slate's shared server that stand now, as its share sheet lists
+ *  them beside the reach. */
+export const LIVE_SHARE_PREAPPROVALS_PATH = '/api/shared/live/preapprovals';
+
+export const SlatePreapprovalsBodySchema = v.object({ workspace: v.string(), slate: v.string() });
+
+/** `POST`, its owner's: one standing approval taken back, from every share of the shared slate; answered as they stand
+ *  after. */
+export const LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH = '/api/shared/live/preapprovals/withdraw';
+
+export const SlatePreapprovalWithdrawSchema = v.object({
+  workspace: v.string(),
+  /** The shared slate, whose sheet it is. */
+  slate: v.string(),
+  entry: v.object({ slate: v.string(), namespace: v.string(), member: v.string(), root: v.record(v.string(), v.string()) }),
+});
+
+export type SlatePreapprovalWithdraw = v.InferOutput<typeof SlatePreapprovalWithdrawSchema>;
+
+/** A shared slate's standing approvals at its revision now (null where it has not built), one of each, whichever share
+ *  holds it. */
+export const SlatePreapprovalsSchema = v.object({
+  slate: v.string(),
+  revision: v.nullable(v.string()),
+  preapproved: v.array(SharePreapprovalSchema),
+});
+
+export type SlatePreapprovals = v.InferOutput<typeof SlatePreapprovalsSchema>;
+
 export const LiveShareCreatedSchema = v.object({
   share: LiveShareRecordSchema,
+  /** Its one link: the app's page for it (`APP_ROUTES.sharedLive`), which frames its host; null with no app origin. */
   url: v.nullable(v.string()),
 });
 

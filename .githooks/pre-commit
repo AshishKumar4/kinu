@@ -2,7 +2,7 @@
 #
 # Every commit, batch merges included, runs oxlint with this repository's rules (`.oxlintrc.json`: type-aware,
 # warnings fail) on the files it touches; commit-msg checks the message. The `local` tier (the typecheck, the
-# whole-tree lint and the structural gates) runs in the armada tier a push to integration/** or main is proved by
+# whole-tree lint and the structural gates) runs in the armada tier a push to next-rc or main is proved by
 # (.githooks/pre-push, L25), with every other ci row, so nothing reaches integration unproved.
 #
 # NEVER --no-verify. It lints the working tree's copy of each staged file.

@@ -116,6 +116,32 @@ describe('the owner\'s usage per account, across workspaces', () => {
     }
   });
 
+  test('the account\'s own AI in other people\'s slates is counted with its workspaces\' calls, on the same provider account', async () => {
+    const identity: AuthIdentity = { userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
+    const inRooms: AccountSpend = { provider: 'anthropic', account: 'work', calls: 2, callsWithoutUsage: 0, unpricedCalls: 0, usage: { input: 100, output: 4 }, usd: 0.25 };
+
+    const stub = userAccount({
+      async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+      async userMcp_warmConnections() { return { servers: 0 }; },
+      async listActiveWorkspaces() { return WORKSPACES; },
+      async listCredentials() { return held([]); },
+      async slateAiSpend() { return [inRooms]; },
+    });
+
+    const env: UserRoutesEnv<string> = {
+      UserDO: { idFromName: (n) => n, get: () => stub },
+      OrchestratorAgent: workspaces,
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    };
+
+    const response = await serveFamily(userRoutes, { identity, ctx: workerContext() })(new Request('https://kinu.example.com/api/user/usage'), env);
+    const usage = v.parse(AccountUsageSchema, await response?.json());
+
+    expect(usage.accounts.find((account) => account.provider === 'anthropic')).toMatchObject({
+      calls: 6 + 2, usage: { input: 2_000 + 100, output: 6 + 4 }, usd: 1 + 0.25,
+    });
+  });
+
   test('the CLI route answers a workspace.read token and refuses one without it', async () => {
     const tokens = new Map<string, AccessTokenScope[]>([
       [`pta_${USER_ID}_${'r'.repeat(44)}`, ['workspace.read']],

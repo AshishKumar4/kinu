@@ -117,7 +117,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       expect(await page.$('[data-agent-pane] textarea')).toBeNull();
       expect(await listShown(page)).toBe(true);
 
-      await page.click('[data-rail] a[aria-label="Kinu home"]');
+      await page.click('[data-rail] nav[aria-label="Primary"] a[href="/"]');
       await page.waitForSelector('[data-gallery-blank]');
       expect(await page.$(LIST)).toBeNull();
       await page.close();

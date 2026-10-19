@@ -11,6 +11,8 @@ export { EphemeralSlates, initEphemeralSlateTable } from './ephemeral';
 
 export { SlateUsageStore, initSlateUsageTable } from './usage';
 
+export { SlateConsentStore, type PartAiAnswer, type PartConnectionAnswer } from './consents';
+
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteSlateStateStore, slateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
 
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
@@ -29,7 +31,9 @@ export type { DurableAppIdentity, DurableApps } from './durable-app';
 
 export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 
-export { shareLiveSlate } from './live-sharing';
+export { confinedTo } from './scoped-reader';
+
+export { preapproveSlateEffect, shareLiveSlate } from './live-sharing';
 
 export { SlateBuilds, initSlateBuildTable, slateImage, type FailingSlateBuild, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from './builds';
 
@@ -40,3 +44,33 @@ export { SlateProcesses, heldSlateKey, type RunningSlate, type SlateLaunch, type
 export { SlateShareViewers, type SlateShareViewersDeps, type ViewerAdmission, type ViewerRun } from './share-viewers';
 
 export { SlateController, type HeldSlatePorts, type SlateAppCall, type SlateApps, type SlateClassProcess, type SlateControllerPorts } from './controller';
+
+export { GalleryIndex, initGalleryTables } from './gallery';
+
+export { codecAdmits, CodecSchema, UNDECLARED, type Codec } from './codec';
+
+export {
+  GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,
+  type GalleryCard, type GalleryListingSync, type ShareMode, type SlateConsent, type SlateRevision,
+} from './share-modes';
+
+export {
+  EffectDecisionSchema, PartDeclarationSchema, PartOutputSchema, PartRunAnswerSchema,
+  PartRunRequestSchema, PartShowRequestSchema, SlateConsentsAnswerSchema, type SlateConsentsAnswer,
+  slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartReleasePath, slatePartRunPath, slatePartShowPath, PartReleaseRequestSchema,
+  type ConsentAsk, type EffectAsk, type PartAction, type PartDeclaration, type PartOutput, type PartRunAnswer, type PartRunRequest,
+  type PartShowRequest,
+} from './personal-parts';
+
+export { sealedPartDocument } from './part-content';
+
+export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams } from './slate-ai';
+
+export { answer as slateAnswer } from './controller';
+
+export {
+  EffectApprovals, canonicalRoot, containedTool, partCallRoot, partCallVerdict, plainData, preapprovedEffect, serverAuthority, slateRevision, type ToolContract,
+  type EffectCall, type LiveShareAuthority, type PartCall, type PartCallVerdict, type ServerAuthority,
+} from './share-policy';
+
+export { SharedServers, type OwnerEffects, type ServerCall, type ServerSend, type SharedServerDeps, type SlateCallFrom, type SlateLineage } from './shared-server';

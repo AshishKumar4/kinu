@@ -27,7 +27,6 @@ import {
 } from '../src/index';
 import { imageCarrier } from '../src/types/tool-images';
 import { callCodemodeMember } from '../src/tools/sandbox-contract';
-import { cutShareGrant, grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
 
 const NO_BROWSER_RUN = { missing: 'this suite reaches no Browser Run' };
 
@@ -834,21 +833,15 @@ describe('web on a shared slate', () => {
     return paths;
   }
 
-  test("a share visitor's screenshot and long rendered page come back to the slate and write nothing", async () => {
+  test("a slate's screenshot and long rendered page come back to the slate and write nothing", async () => {
     const { rt } = createTestRuntime();
     const page = `<html><body><p>${'a'.repeat(2_100_000)}</p></body></html>`;
     const pageBytes = new TextEncoder().encode(page).length;
     const run = stubBrowserRun((action) => (action === 'screenshot' ? new Response(PNG) : rendered(page)));
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: SHELL })).fetch, browser: run.browser });
-    const usage = [{ namespace: 'web', member: 'screenshot' }, { namespace: 'web', member: 'fetch' }, { namespace: 'web', member: 'openBrowser' }];
-    const grant = cutShareGrant(slateCapabilityGraph({ slate: 'news', workspace: 'w', catalog: { mcp: [], slates: ['news'] }, usage: () => usage }), []);
-    // A slate's web writes nothing into the workspace: a share visitor may call it.
+    // A slate's web writes nothing into the workspace.
     const slateWeb = createWebCodemodeProvider({ provider, files: null });
     const before = await tree(rt.storage.vfs);
-
-    expect(grantAdmits(grant, 'news', 'web', 'screenshot')).toMatchObject({ impact: 'observe' });
-    // Opening a browser acts: a share admits it only when its owner approves it.
-    expect(grantAdmits(grant, 'news', 'web', 'openBrowser')).toBeNull();
 
     const shot = await callCodemodeMember([slateWeb], 'web', 'screenshot', ['https://example.com/']);
     const fetched = await callCodemodeMember([slateWeb], 'web', 'fetch', ['https://example.com/', { render: true }]);

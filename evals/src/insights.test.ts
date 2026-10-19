@@ -165,6 +165,9 @@ describe('deterministic trial insights', () => {
     for (const [code, wrote] of [
       [`await workspace.writeFile('${REPORT}', '{}');`, true],
       [`await file.write('${REPORT}', '{}');`, true],
+      [`await workspace.fs.write('${REPORT}', '{}');`, true],
+      [`await workspace.fs.text('${REPORT}');`, false],
+      [`await computer.fs.write('${REPORT}', '{}');`, false],
       [`await workspace.readFile('${REPORT}');`, false],
       [`// workspace.writeFile('${REPORT}', '{}');`, false],
     ] as const) {

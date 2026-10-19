@@ -146,7 +146,7 @@ export function toolAllowedBySkills(
   return false;
 }
 
-/** `workspace.*` matches `workspace.readFile`; `Bash(git:*)` matches by its head. */
+/** `workspace.*` matches `workspace.fs.text`; `Bash(git:*)` matches by its head. */
 function matchesToolPattern(toolName: string, pattern: string): boolean {
   if (pattern === toolName) return true;
   const paren = pattern.indexOf('(');
