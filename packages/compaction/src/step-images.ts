@@ -10,8 +10,14 @@
  * The cutoff moves in batches of {@link STEP_IMAGE_BATCH}: between moves each request extends the last, so the
  * provider's cache holds. Measured on two models over a 24-step turn of screenshots, batches of four cost 35% (Claude)
  * and 29% (GPT) less than moving one image a step, and kept the context a quarter smaller than batches of eight.
+ *
+ * A moved image is retired from the turn's context where its host keeps one: the message is swapped for good, so no later
+ * step reads its bytes back, holds them, or moves them again. Moved for each request alone, every image the turn took
+ * stayed in the context its isolate held, and each step walked them all: a 450-step screenshot turn's agent isolate held
+ * 170 MB live, where the platform allows it 128 MB (#103).
  */
 import type { ModelMessage } from 'ai';
+import type { MessageSwap } from '@kinu.run/core';
 import type { Attachment, AttachmentLocation, Turn } from '@better-compact/core';
 import { carriedMedia, kinuCodec } from './codec';
 import { KEEP_RECENT_IMAGES, type AttachmentStore } from './attachments';
@@ -77,9 +83,10 @@ function carriedFiles(messages: readonly ModelMessage[]): number {
   return files;
 }
 
-/** A step's pass over `messages`: undefined when no image moves; synchronous when every moving image is stored already. */
+/** A step's pass over `messages`: undefined when no image moves; synchronous when every moving image is stored already
+ *  and none is retired. `retire`: the host's, which keeps each swapped message's replacement in the turn's context. */
 export function moveStepImages(
-  messages: readonly ModelMessage[], store: AttachmentStore, turn: TurnImages,
+  messages: readonly ModelMessage[], store: AttachmentStore, turn: TurnImages, retire?: (swaps: readonly MessageSwap[]) => Promise<void>,
 ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined> {
   // Read whole only when a batch could move: a long turn's history is large, and its steps are many.
   if (carriedFiles(messages) < KEEP_RECENT_IMAGES + STEP_IMAGE_BATCH) return undefined;
@@ -106,9 +113,30 @@ export function moveStepImages(
     return moved ? kinuCodec.decode(turns, [...messages]) : undefined;
   };
 
+  // Each message the move rewrote, kept as rewritten where the host keeps the context: the codec decodes every message
+  // it left alone to the same object, so a changed one stands where it was.
+  const retired = async (output: ModelMessage[] | undefined): Promise<ModelMessage[] | undefined> => {
+    if (retire === undefined || output?.length !== messages.length) return output;
+
+    const swaps = output.flatMap((to, at): MessageSwap[] => {
+      const from = messages[at];
+
+      return from === undefined || from === to ? [] : [{ from, to }];
+    });
+
+    if (swaps.length === 0) return output;
+    await retire(swaps);
+
+    // Retired, they never come back: the turn's store forgets them, and holds no screenshot's bytes as a key. One that
+    // could not be stored stayed in place, and is still not tried again this turn.
+    for (const image of moving) if (links.get(image.payload) !== null) links.delete(image.payload);
+
+    return output;
+  };
+
   const unstored = moving.filter((image) => !links.has(image.payload));
 
-  if (unstored.length === 0) return placed();
+  if (unstored.length === 0) return retire === undefined ? placed() : retired(placed());
 
   return (async () => {
     for (const image of unstored) {
@@ -118,6 +146,6 @@ export function moveStepImages(
       links.set(image.payload, item === undefined ? null : await store.store(image.attachment, item, image.location));
     }
 
-    return placed();
+    return await retired(placed());
   })();
 }

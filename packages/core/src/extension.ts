@@ -42,6 +42,15 @@ export interface PrepareStepContext {
   readonly messages: ModelMessage[];
   /** The host stops waiting on any hook once it fires. */
   readonly abortSignal?: AbortSignal;
+  /** Where the host keeps the turn's context: each of `messages` a hook swapped for good is swapped there too, so no later
+   *  step reads it back. Absent where the step's messages are not the context's own. */
+  readonly retire?: (swaps: readonly MessageSwap[]) => Promise<void>;
+}
+
+/** One of a step's messages, `from`, and what stands for it from now on, `to`. */
+export interface MessageSwap {
+  readonly from: ModelMessage;
+  readonly to: ModelMessage;
 }
 
 /** Lets the awaited prepareStep path resume the chain where the synchronous walk stopped. */
@@ -166,6 +175,7 @@ export class ExtensionHost {
         stepNumber: ctx.stepNumber,
         messages,
         abortSignal: ctx.abortSignal,
+        ...(ctx.retire !== undefined && { retire: ctx.retire }),
       });
 
       if (next instanceof Promise) {
@@ -193,6 +203,7 @@ export class ExtensionHost {
           stepNumber: ctx.stepNumber,
           messages: current,
           abortSignal: ctx.abortSignal,
+          ...(ctx.retire !== undefined && { retire: ctx.retire }),
         })), ctx.abortSignal);
 
         if (next) {
