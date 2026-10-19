@@ -9,7 +9,7 @@
 import {
   objectNamed,
   buildSlateShareHost, liveSharePagePath, parseSlateShareLabel, previewHostSuffix, previewPortSuffix, workspaceAddressRefusal,
-  ingressAdmitted, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
+  ingressAdmitted, keptSlateContext, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
@@ -104,10 +104,24 @@ shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
     return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
   }
 
-  return await viewerCookieResponse(env, { workspace, handle, subject, consent }, '/');
+  const kept = keptSlateContext(url);
+
+  // On to the slate's page, framed as it was asked for.
+  return await viewerCookieResponse(env, { workspace, handle, subject, consent }, kept === '' ? '/' : `/?${kept}`);
 });
 
 
+
+/**
+ * Whether a request acts (any method but GET, HEAD or OPTIONS, or a socket's upgrade) from anywhere but this share's own
+ * origin. A viewer's cookie rides every same-site request, and every other share and preview host is same-site, so such
+ * a request never carries the cookie's authority. One naming no origin is refused alike: absence grants nothing.
+ */
+function actsFromElsewhere(request: Request, url: URL): boolean {
+  const acting = !['GET', 'HEAD', 'OPTIONS'].includes(request.method) || request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+
+  return acting && request.headers.get('origin') !== url.origin;
+}
 
 shareHostRoutes.all('*', async (c) => {
   const { env, handle, workspace } = c.env;
@@ -115,6 +129,11 @@ shareHostRoutes.all('*', async (c) => {
   const url = new URL(request.url);
   // Read the claim before the sanitizer strips the cookie.
   const cookie = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+
+  if (cookie !== null && actsFromElsewhere(request, url)) {
+    return new Response('A share acts on its viewer\'s behalf only from its own page', { status: 403, headers: { 'cache-control': 'no-store' } });
+  }
+
   const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(env, request), consented: cookie?.consented === true };
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');

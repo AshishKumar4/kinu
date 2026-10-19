@@ -103,17 +103,16 @@ function makeFs(workspace, cwd) {
 
   async function readFile(path, options) {
     const target = resolveAt(cwd, path);
-    const raw = await workspace.readFile(target);
-    const refused = refusalOf(raw);
+    const text = await workspace.fs.text(target);
+    const refused = refusalOf(text);
     if (refused) throw fsError('ENOENT', refused, target, 'open');
-    const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
     const encoding = encodingOf(options);
     if (encoding === undefined || encoding === null) return new TextEncoder().encode(text);
     return text;
   }
   async function writeFile(path, data) {
     const target = resolveAt(cwd, path);
-    const result = await workspace.writeFile(target, toText(data));
+    const result = await workspace.fs.write(target, toText(data));
     const refused = refusalOf(result);
     if (refused) throw fsError('EACCES', refused, target, 'open');
   }
@@ -128,10 +127,16 @@ function makeFs(workspace, cwd) {
   }
   async function readdir(path, options) {
     const target = resolveAt(cwd, path);
-    const entries = await workspace.readdir(target);
-    const refused = refusalOf(entries);
-    if (refused) throw fsError('ENOENT', refused, target, 'scandir');
-    const names = Array.isArray(entries) ? entries.map(String) : [];
+    const names = [];
+    // A listing comes a page at a time; Node's is the whole directory.
+    for (let offset = 0; ;) {
+      const page = await workspace.fs.list(target, { offset });
+      const refused = refusalOf(page);
+      if (refused) throw fsError('ENOENT', refused, target, 'scandir');
+      names.push(...page.entries);
+      if (!page.truncated || page.truncated.next >= page.truncated.total || page.entries.length === 0) break;
+      offset = page.truncated.next;
+    }
     if (!(options && options.withFileTypes)) return names;
     const base = target.replace(/\/+$/, '');
     return await Promise.all(names.map(async (name) => {
@@ -141,24 +146,15 @@ function makeFs(workspace, cwd) {
   }
   async function stat(path) {
     const target = resolveAt(cwd, path);
-    let directory = false;
-    let size = 0;
-    try {
-      const entries = await workspace.readdir(target);
-      directory = Array.isArray(entries);
-    } catch {
-      directory = false;
-    }
-    if (!directory) {
-      const text = await readFile(target, 'utf8');
-      size = new TextEncoder().encode(text).byteLength;
-    }
+    const found = await workspace.fs.stat(target);
+    const refused = refusalOf(found);
+    if (refused) throw fsError('ENOENT', refused, target, 'stat');
     return {
-      size,
-      mtimeMs: 0,
-      mtime: new Date(0),
-      isFile: () => !directory,
-      isDirectory: () => directory,
+      size: found.size,
+      mtimeMs: found.mtimeMs,
+      mtime: new Date(found.mtimeMs),
+      isFile: () => !found.isDir,
+      isDirectory: () => found.isDir,
       isSymbolicLink: () => false,
     };
   }
@@ -181,14 +177,12 @@ function makeFs(workspace, cwd) {
   const copyFile = (from, to) => carry(from, to, 'cp -- ', 'copyfile');
   const rename = (from, to) => carry(from, to, 'mv -- ', 'rename');
   async function access(path) {
-    const target = resolveAt(cwd, path);
-    const present = await workspace.exists(target);
-    if (present !== true) throw fsError('ENOENT', 'no such file or directory', target, 'access');
+    await stat(path);
   }
   const promises = {
     readFile, writeFile, appendFile, readdir, stat, lstat: stat, mkdir, rm, unlink, rmdir,
     copyFile, rename, access,
-    exists: async (path) => (await workspace.exists(resolveAt(cwd, path))) === true,
+    exists: async (path) => refusalOf(await workspace.fs.stat(resolveAt(cwd, path))) === null,
   };
   const callbackForm = (fn) => (...args) => {
     const callback = typeof args[args.length - 1] === 'function' ? args.pop() : null;

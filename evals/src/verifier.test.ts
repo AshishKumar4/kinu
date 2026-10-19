@@ -141,7 +141,9 @@ const LONG_BRIEF = `Tally the waitlist signups per country. ${'The file is a CSV
 /**
  * An inspector over one live helper and one released, as core subordinates/inspection-path.ts answers: a path reaches
  * live children only, so by name the released helper is missing, and every retained helper is reached by its actor from
- * the root. Run summaries and events are previews; the canonical history retains the full run-linked assignment.
+ * the root. Run summaries and events are previews; the canonical history retains the full run-linked assignment, as a
+ * hirer's brief projects it: a `system` entry. Measured on staging 667f96316, 2026-10-19: a finished hire's history held
+ * its brief as `system` and its answer as `assistant`, both under the run's id.
  */
 function inspecting(): VerifierSession {
   const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
@@ -178,7 +180,7 @@ function inspecting(): VerifierSession {
       if (request.view !== 'history') return Promise.resolve(missing);
 
       return Promise.resolve({ view: 'history', page: { status: 'end', items: runs.map((run, index) => ({
-        id: `message-${String(index)}`, position: index, role: 'user', turnId: `turn-${String(index)}`,
+        id: `message-${String(index)}`, position: index, role: 'system', turnId: `turn-${String(index)}`,
         runId: `run-${String(index)}`, content: run.brief, parts: [{ type: 'text', text: run.brief }], createdAt: 10 + index,
       })) } });
     },

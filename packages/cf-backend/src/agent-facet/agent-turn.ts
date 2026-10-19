@@ -3,7 +3,7 @@ import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessage, type
 import {
   actorAffinity, HeadCapture, ownerLaneTools, toolsInWorkMode, withEffectReceipt, decodeJsonValue, decodeModelMessageValues, encodeModelMessageValues, replayPolicyFor, REAL_CLOCK, driveDeliveredRun, permitInPlan, imageModelOutput,
   type AuthRequest, type AuthResolution, type HandedOffTurn, type SettledRun, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type JsonValue, type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
-  turnSourcesFromBundle, captureOperationProfile, PROVIDER_WAIT_PART, type ModelCallReport, type ModelOperationEvent, type ProviderWaitInfo,
+  turnSourcesFromBundle, captureOperationProfile, currentOperationProfile, recordModelOperations, PROVIDER_WAIT_PART, type ModelCallReport, type ModelOperationSink, type ProviderWaitInfo,
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
   type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps, type TurnCraftLedger,
@@ -127,7 +127,6 @@ export interface AgentWorkspace {
   logActivity(lines: readonly AgentTurnActivity[]): Promise<void>;
   /** The agent's non-turn model calls (its compaction's folds), filed with the workspace's spend. */
   reportModelCall(report: ModelCallReport): Promise<void>;
-  reportModelOperation(event: ModelOperationEvent): Promise<void>;
 }
 
 class StepWords implements UnderlyingDefaultSource<Uint8Array> {
@@ -338,8 +337,6 @@ export class FacetSpend {
     return this.kept?.splice(0) ?? [];
   }
 
-  readonly operations = (event: ModelOperationEvent): void => { this.file(() => this.workspace.reportModelOperation(event)); };
-
   async settled(): Promise<void> {
     await this.filed;
   }
@@ -347,6 +344,13 @@ export class FacetSpend {
   private file(work: () => Promise<void>): void {
     this.filed = this.filed.then(() => hold(logged('agent.spend_relay_failed', { doing: "filing an agent's spend with its workspace", otherwise: 'unavailable' }, work)));
   }
+}
+
+/** Each of the agent's model calls' start and end, kept in its own ledger beside the call's attempts, under the run whose
+ *  operation made it, else `runId`: as the CLI keeps them. Relayed to the workspace, each crossed twice a call, and its
+ *  workspace's write of the start held the step's grant there (#103). */
+export function modelOperations(actor: HostedActor, runId: string): ModelOperationSink {
+  return recordModelOperations(actor.stores.eventRecorder, () => currentOperationProfile(actor.handle)?.runId ?? runId);
 }
 
 /** The registry an agent's isolate resolves its models through, over its own providers (`AgentFacet.models`). */
@@ -409,6 +413,7 @@ export function facetTurnSources(turn: {
   readonly recordsIn: string;
 }) {
   const { actor, prepared, spend } = turn;
+  const operations = modelOperations(actor, turn.recordsIn);
   const bound: TurnBound = { turnId: turn.turnId, runId: turn.runId, epoch: turn.epoch };
   // The profile the turn assembled on, until its first step's pace carries it to the workspace (D5).
   let unbound: ResolvedTurnProfile | null = null;
@@ -434,7 +439,7 @@ export function facetTurnSources(turn: {
     logger: compactionDiagnostics,
     models: { normalize: (spec) => registry.normalizeSpecSync(spec || prepared.sources.model), resolve: (spec) => registry.resolveModel(spec, affinity) },
     report: (_actor, report) => spend.report(report),
-    operations: spend.operations,
+    operations,
     turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic },
   });
 
@@ -442,8 +447,8 @@ export function facetTurnSources(turn: {
     rt: actor.runtime,
     config: actor.stores.config,
     models: { normalize: (spec) => registry.normalizeSpecSync(spec), resolve: (spec) => registry.resolveModel(spec, affinity), routed: routedModelReads(registry) },
-    scaffoldSpend: { source: 'scaffold', report: spend.report, operations: spend.operations },
-    operations: spend.operations,
+    scaffoldSpend: { source: 'scaffold', report: spend.report, operations },
+    operations,
     observeStream: async (chunks) => { await turn.workspace.observe(lines(waits.around(chunks))); },
     paceStep: async (signal) => {
       const profile = unbound;
@@ -565,6 +570,8 @@ export async function deliveredRun(
       sources,
       compaction: trigger,
       tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, runId, epoch: bound.epoch, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
+      // Its tools are the workspace's, run there, and so is its program.
+      stores: null,
       opening: decodeModelMessageValues(prepared.opening),
       capture,
       isAborted: () => signal.aborted,
@@ -607,11 +614,9 @@ export async function deliveredRun(
   };
 
   try {
-    // The agent a run is delivered to, a node or a head, is a run actor whose transcript holds no turn: no slates are
-    // stamped on its answer.
+    // The agent a run is delivered to, a node or a head, holds no slates: none is stamped on its answer.
     await driveDeliveredRun(actor, task, {
       prepare,
-      prepareAnswer: (completion) => database.prepareAnswer(completion),
       // Prepared before the commit, spilled if it outgrows a row; kept by it.
       ended: async (report) => {
         const charges = spend.takeCharges();

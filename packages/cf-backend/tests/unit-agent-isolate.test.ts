@@ -30,7 +30,7 @@ test('a planner a Build turn hires cannot write files through the workspace', as
 
     return answered
       ? chatCompletion(run, 'Root waits.')
-      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'planner', lifetime: 'task', mission: 'Plan the change.' } }, 'call_planner');
+      : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'planner', lifetime: 'task', message: 'Plan the change.' } }, 'call_planner');
   });
 
   const workspace = gatewayWorkspace(gateway);
@@ -189,7 +189,7 @@ test("a hire made with context=inherit carries its hirer's working conversation 
     if (!opening.includes('The code word is OTTER.')) return chatCompletion(run, 'Root noted.');
 
     return toolOutputs(run) === '[]'
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', context: 'inherit', mission: 'Pass it on.' } }, 'call_inherit')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', context: 'inherit', message: 'Pass it on.' } }, 'call_inherit')
       : chatCompletion(run, 'Hired.');
   });
 
@@ -315,7 +315,7 @@ test("a hired agent's working context is read and edited where its conversation 
 test("a child's client snapshot counts its own chat inputs and answers", async () => {
   const gateway = stubAiBinding((run) => openingOf(run).includes('Counter task.') || toolOutputs(run) !== '[]'
     ? chatCompletion(run, 'Done.')
-    : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'durable', mission: 'Counter task.' } }, 'call_counter'));
+    : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'durable', message: 'Counter task.' } }, 'call_counter'));
 
   const workspace = gatewayWorkspace(gateway);
 

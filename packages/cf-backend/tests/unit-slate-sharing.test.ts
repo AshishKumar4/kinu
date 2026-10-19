@@ -9,14 +9,17 @@ import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/u
 import { resetRecordedMcp, seedConfiguredMcpServer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '@kinu.run/core/slates';
 
+/** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
+const UNSHARED = { incarnation: 'test', generation: 0, ancestors: {} };
+
 type Owner = ReturnType<typeof orchestratorHarness>;
 
 /** What the slate reaches, as its owner runs it: each call is recorded where the host routes it, whatever it answers. */
 async function exerciseIssuesSlate(owner: Owner): Promise<void> {
   for (const [path, args] of [
-    [['mcp', 'github', 'read_issue'], [{}]], [['readFile'], ['/slates/issues/src/server.ts']], [['memory', 'recall'], ['seen']], [['slates', 'other', 'summary'], []],
+    [['mcp', 'github', 'read_issue'], [{}]], [['fs', 'text'], ['/slates/issues/src/server.ts']], [['memory', 'recall'], ['seen']], [['slates', 'other', 'summary'], []],
   ] as const) {
-    await owner.agent.slateCallAs(ROOT_SLATE_CALLER, 'issues', 'workspace', { path: [...path], args: [...args], invocation: null });
+    await owner.agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'issues', name: 'workspace', lineage: UNSHARED }, { path: [...path], args: [...args], invocation: null });
   }
 }
 
@@ -112,7 +115,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     expect((await forker.agent.listSlates()).slates).toEqual([{ id: fork.slate, title: 'Issue triage', port: undefined }]);
 
     // The fork calls the forker's own surface, where no MCP server of that name is connected.
-    expect(await forker.agent.slateCallAs(ROOT_SLATE_CALLER, fork.slate, 'workspace', { path: ['mcp', 'github', 'read_issue'], args: [{}], invocation: null }))
+    expect(await forker.agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: fork.slate, name: 'workspace', lineage: UNSHARED }, { path: ['mcp', 'github', 'read_issue'], args: [{}], invocation: null }))
       .toMatchObject({ ok: false, reason: 'missing' });
 
     // S6 for blueprints.

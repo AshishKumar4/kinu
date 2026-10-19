@@ -359,7 +359,7 @@ describe('remote executor exec abort', () => {
     const { rt } = createTestRuntime();
 
     const provider = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     });
 
     const controller = new AbortController();

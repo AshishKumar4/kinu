@@ -19,7 +19,7 @@ import { rawParam, type FamilyEnv } from '../api/context';
 type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
-  | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay'
+  | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
 >;
 
 export interface AccountApiEnv<Id> extends CreateWorkspaceEnv<Id>, ProviderEnv {

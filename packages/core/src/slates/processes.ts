@@ -104,9 +104,9 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
   }
 
   /** The process holding `port`, and the key it is held under. */
-  onPort(port: number): { readonly held: string; readonly id: string } | null {
+  onPort(port: number): { readonly held: string; readonly id: string; readonly process: Process } | null {
     for (const [held, running] of this.running) {
-      if (running.app?.port === port) return { held, id: running.id };
+      if (running.app?.port === port) return { held, id: running.id, process: running.process };
     }
 
     return null;
@@ -175,7 +175,7 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
 
       // Only the root's build process is the durable application; shares and Plan roots are private and must never
       // attach to its facet. A block is only ever seen through its preview, so it always has one.
-      const app = source.kind === 'message' || (caller.share === undefined && caller.path.length === 0 && caller.workMode === 'build')
+      const app = source.kind === 'message' || (caller.share === undefined && caller.via === undefined && caller.path.length === 0 && caller.workMode === 'build')
         ? await this.ports.apps.ensure({ owner: id, preferredPort: source.project.slate.port })
         : null;
 

@@ -87,7 +87,6 @@ describe('the inline executor `exec` honours the same contract', () => {
     return createInlineExecutor({
       filesOwner: 'agent',
       vfs: rt.storage.vfs,
-      memory: rt.memory,
       craftStore: rt.craftStore,
       shell,
       sql: rt.storage.sql,

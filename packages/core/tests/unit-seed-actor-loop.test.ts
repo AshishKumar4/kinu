@@ -11,7 +11,6 @@ import { getCurrentScaffoldVersion } from '../src/scaffold/versions';
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
-import { initCodemodeStateTable } from '../src/identity/program-state';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 // Not the barrel: this suite must run without the context plane.
 import type { Identity, SqlExecutor } from '../src/types/primitives';
@@ -55,7 +54,6 @@ function build(): Fixture {
   execRaw(WORKSPACE_IDENTITY_DDL);
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
-  initCodemodeStateTable(execRaw);
   initScaffoldTables(execRaw);
   const workspaceId = crypto.randomUUID();
   void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'seeded')`;

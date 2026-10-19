@@ -12,6 +12,7 @@ import { Effect } from 'effect';
 import type { CallJob } from '../types/primitives';
 import type { TurnTrace } from '../obs/index';
 import type { ToolExecutionOptions } from 'ai';
+import { retiredField } from './retired';
 
 export type { Impact };
 
@@ -153,7 +154,7 @@ function inputRefusal(op: Operation, input: JsonValue, issues: readonly v.BaseIs
   const sent = v.safeParse(JsonObjectSchema, input);
   const unknown = sent.success ? Object.keys(sent.output).filter((field) => !Object.hasOwn(op.input.entries, field)) : [];
 
-  const said = [...unknown.map((field) => `unknown field "${field}"`), ...issues.flatMap((issue) => {
+  const said = [...unknown.map((field) => retiredField(operationId(op), field) ?? `unknown field "${field}"`), ...issues.flatMap((issue) => {
     const field = v.getDotPath(issue) ?? '';
 
     if (issue.type === 'strict_object' && issue.expected === 'never') return [];

@@ -1,4 +1,4 @@
-import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, type VFS, type VfsDirent } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Skill discovery over the roots `/skills` views, merged by `SKILL_ROOTS`. Malformed files are
  * skipped; reads stay under the `admissionBytes` ceiling and the budget's file count.
@@ -216,23 +216,23 @@ export function discoverSkills(
 /** One root's unopened candidates in name order; a missing directory or mount is empty. */
 function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<Omit<SkillFile, 'source'>[]> {
   return Effect.gen(function* () {
-    // Looked up before it is listed: a listing walks to a missing root twice, and every turn asks for every root.
-    const listed = async (): Promise<string[]> => ((await vfs.stat(dir, { follow: false })) === null ? [] : (await vfs.readdir(dir)).map(({ name }) => name));
-
-    const entries = yield* Effect.tryPromise({ try: listed, catch: (cause) => ({ cause }) }).pipe(
+    // Listed with no lookup before it, and only a folder or a link asked for its SKILL.md: on the shared Drive each lookup
+    // is a call to the account's store on the turn's way, where a missing local root's second walk is a statement (#103).
+    const entries = yield* Effect.tryPromise({ try: async (): Promise<readonly VfsDirent[]> => await vfs.readdir(dir), catch: (cause) => ({ cause }) }).pipe(
       Effect.catch((failed) => (classify(failed) === 'enoent' || (isVfsError(failed.cause) && failed.cause.code === 'ENXIO')
-        ? Effect.succeed<string[]>([])
+        ? Effect.succeed<readonly VfsDirent[]>([])
         : Effect.die(failed.cause))),
     );
 
     const candidates: Omit<SkillFile, 'source'>[] = [];
 
-    for (const entry of entries) {
+    for (const { name: entry, type } of entries) {
       if (entry.endsWith('.md')) {
         candidates.push({ name: entry.slice(0, -'.md'.length), path: `${dir}/${entry}`, folder: null });
         continue;
       }
 
+      if (type === 'file') continue;
       const folder = `${dir}/${entry}`;
 
       if (yield* Effect.promise(() => exists(vfs, `${folder}/${SKILL_FOLDER_FILE}`))) {

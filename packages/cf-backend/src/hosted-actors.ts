@@ -1,7 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type CodemodeBuilder, type SeatedActor, type TierId } from '@kinu.run/core';
+import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type CodemodeBuilder, type SeatedActor, type ServedStores, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
@@ -27,6 +27,8 @@ type SurfaceSources = RunTurnSources & Pick<TurnAssemblySources, 'wiredToolNames
  *  sources it assembles from and the capture its calls record into. */
 interface RunSurface {
   readonly tools: ToolSet;
+  /** The store operations `tools` run. */
+  readonly stores: ServedStores;
   readonly sources: RunTurnSources;
   readonly capture: HeadCapture;
 }
@@ -46,6 +48,8 @@ export interface SurfaceTurn {
  *  tools its eval reaches, the operation they run under, and its hirer's report where its lane carries one. */
 export interface ToolScope {
   readonly execution: () => ReceiptExecution;
+  /** The store operations to project, when the call already serves them (another mode's tools in the same call). */
+  readonly served?: ServedStores;
   readonly ledgers: TurnLedgers;
   readonly external: () => ToolSet;
   readonly profile: () => OperationProfile | null;
@@ -75,6 +79,8 @@ export interface ActorSurface {
   readonly resolved: ResolvedSurface;
   /** The tools the workspace runs for it. */
   readonly tools: ToolSet;
+  /** The store operations they run, which its programs and its scaffold's machines run too. */
+  readonly stores: ServedStores;
   /** Its turn's whole surface as its model is offered it: `tools`, and its owner's lane declared, which its own isolate
    *  runs. */
   readonly offered: ToolSet;
@@ -401,7 +407,7 @@ export function prepareHostedTurn(
         ...(task.explicitTier !== undefined && { explicitTier: task.explicitTier }),
       },
       text: task.body,
-      ...(run !== undefined && { run: { tools: run.inference.tools, sources: run.inference.sources, capture: run.inference.capture } }),
+      ...(run !== undefined && { run: { tools: run.inference.tools, stores: run.inference.stores, sources: run.inference.sources, capture: run.inference.capture } }),
       ...(task.frozen !== undefined && { frozen: task.frozen }),
     }));
 

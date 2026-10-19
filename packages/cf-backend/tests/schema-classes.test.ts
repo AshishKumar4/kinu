@@ -9,7 +9,9 @@ import { join } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createWebhookSecretStore } from '@kinu.run/core';
+import { initControlPlaneSchema } from '@kinu.run/core/control-plane/store';
 import { initBuiltinAccounts } from '@kinu.run/core/identity';
+import { Database as SqliteDatabase } from 'bun:sqlite';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { agentDatabase } from './helpers/agent-facets';
@@ -36,11 +38,19 @@ test('each Durable Object class makes the tables scripts/schema-classes.json nam
   // builtin sign-in directory's, an account's, and the webhook secrets, a workspace's.
   initBuiltinAccounts(<T,>(query: TemplateStringsArray, ...values: (string | number | null)[]) => account.db.query<T, (string | number | null)[]>(query.join('?')).all(...values));
   createWebhookSecretStore(makeSqlExec(workspace.db));
-  const measured = { account: madeTables(account.db), workspace: madeTables(workspace.db), agent: madeTables(agentDatabase(workspace.db, 'schema-classes')) };
+  const control = new SqliteDatabase(':memory:');
+
+  initControlPlaneSchema(makeSqlExec(control));
+
+  const measured = {
+    account: madeTables(account.db), workspace: madeTables(workspace.db), agent: madeTables(agentDatabase(workspace.db, 'schema-classes')),
+    control: madeTables(control),
+  };
+
   const held = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(readFileSync(CLASSES, 'utf8')));
 
   account.close();
 
   if (process.env.KINU_SCHEMA_CLASSES === 'write') writeFileSync(CLASSES, `${JSON.stringify({ ...held, ...measured }, null, 2)}\n`);
-  expect({ account: held.account, workspace: held.workspace, agent: held.agent }).toEqual(measured);
+  expect({ account: held.account, workspace: held.workspace, agent: held.agent, control: held.control }).toEqual(measured);
 });

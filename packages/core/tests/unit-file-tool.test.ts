@@ -7,8 +7,10 @@ import * as v from 'valibot';
 import { applyFileEdits, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
-import { createTestRuntime } from './helpers';
-import { createFileTool } from '../src/tools/file-operations';
+import { createTestRuntime, fileNamespaceOver, fileToolOver } from './helpers';
+
+import { FILE } from '../src/operations/file';
+import { operationId } from '../src/operations/operation';
 
 type FileToolInput = JsonObject & { readonly op: string };
 
@@ -28,7 +30,6 @@ import { KinuError } from '../src/obs/index';
 import { failedToolOutcome } from '../src/tools/outcome';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes, resolvePath } from '../src/vfs/resolve';
-
 
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
@@ -170,7 +171,6 @@ describe('applyFileEdits', () => {
   });
 });
 
-
 /** What a read showed of the file: each line's text after its number and tab, footer dropped. */
 function shownLines(output: string): string[] {
   return output.split('\n\n[')[0].split('\n').map((line) => {
@@ -259,7 +259,7 @@ describe('the honest read, scanned rather than made resident', () => {
   test('one line larger than the cap hands over a recipe instead of clipping silently', async () => {
     const huge = await slice('x'.repeat(500), { maxChars: 300 });
     expect(huge.output).toContain('is 500 chars and does not fit');
-    expect(huge.output).toContain('workspace.readFile inside eval');
+    expect(huge.output).toContain(operationId(FILE.text));
     expect(huge.output.length).toBeLessThanOrEqual(300);
   });
 
@@ -356,7 +356,6 @@ describe('the honest read, scanned rather than made resident', () => {
   });
 });
 
-
 describe('TurnFileLedger', () => {
 
   test('a leading BOM does not change the text identity observed by a read', () => {
@@ -421,7 +420,6 @@ describe('TurnFileLedger', () => {
     expect(ledger.active).toBe(true);
   });
 });
-
 
 /**
  * Plane with a ranged read like every production plane. `perRead` caps bytes per `readRange` so small
@@ -494,7 +492,6 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
 
       if (opts.revisions) stat.revision = revisions.get(path) ?? 1;
 
-
       return stat;
     },
     async unlink(path: string) { files.delete(path); },
@@ -509,7 +506,7 @@ type FileToolTestInput = FileToolInput | { op: string; path: string | number } |
 
 /** The entry as the tool surface serves it: behind the input check a program meets. */
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
-  const entry = withCheckedInput('file', createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
+  const entry = withCheckedInput('file', fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
 
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
@@ -538,7 +535,6 @@ test('a denied edit keeps its counter through the persisted file-edit event', as
   } finally { db.close(); }
 });
 
-
 describe('file tool', () => {
   test('read returns the content and authorizes the edit that follows', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
@@ -552,6 +548,24 @@ describe('file tool', () => {
 
     expect(edited).toEqual({ path: 'a.ts', reference: 'vfs://home/main/a.ts', applied: [{ line: 1, removedLines: 1, addedLines: 1 }], checked: 'digest' });
     expect(vfs.files.get('a.ts')).toBe('const x = 2;\n');
+  });
+
+  test('file.text hands a program the whole file, and a replace through the native tool after it is not blind', async () => {
+    const long = Array.from({ length: FILE_READ_LINES + 500 }, (_, at) => `line ${String(at)} ${'w'.repeat(at % 7 === 0 ? FILE_READ_LINE_CHARS + 10 : 3)}`).join('\n');
+    const vfs = memoryVfs({ 'big.md': long });
+    const ledger = new TurnFileLedger();
+    const file = fileNamespaceOver(() => ({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget: new TurnContextBudget() }));
+    const { call } = toolFor(vfs, ledger);
+
+    expect(await file.tools.text?.execute('big.md')).toBe(long);
+    await call({ op: 'write', path: 'big.md', content: 'replaced' });
+    expect(vfs.files.get('big.md')).toBe('replaced');
+  });
+
+  test('the native tool reads a window: a whole-file read is a program\'s alone', async () => {
+    const { call } = toolFor(memoryVfs({ 'a.ts': 'x\n' }));
+
+    await expect(call({ op: 'text', path: 'a.ts' })).rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('an edit without a read is refused, and the refusal names the call to make', async () => {
@@ -762,7 +776,7 @@ describe('file tool', () => {
     };
 
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
-      const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
+      const entry = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
       await toolExecute(entry)({ op: 'write', path, content: 'x' });
     }
 
@@ -816,7 +830,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'big.txt': 'x'.repeat(500) });
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
-    const entry = createFileTool({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
+    const entry = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger, budget });
     const shown = v.parse(StringResultSchema, await toolExecute(entry)({ op: 'read', path: 'big.txt' }));
     expect(budget.snapshot().admittedChars).toBe(shown.length);
   });
@@ -841,7 +855,6 @@ describe('file tool', () => {
     await expect(call({ op: 'edit', path: 'a.ts', edits: [{ old_text: numbered, new_text: 'gone' }] })).rejects.toThrow('copy only the text after the tab');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
   });
-
 
   test('a path of the wrong type is refused, not fed to `path.trim()`', async () => {
     // A non-string path must be answered, not thrown as a TypeError.
@@ -939,7 +952,7 @@ describe('a `file` read never makes the file resident', () => {
     }
 
     // The refusal names the one read that does cover it.
-    await expect(overwrite()).rejects.toThrow('workspace.readFile');
+    await expect(overwrite()).rejects.toThrow(operationId(FILE.text));
     expect(vfs.files.get('wide.txt')).toBe(body);
 
     expect(await call({ op: 'edit', path: 'wide.txt', edits: [{ old_text: 'beta', new_text: 'BETA' }] }))
@@ -1223,8 +1236,8 @@ describe('a bulk read is bounded where it is produced', () => {
     // An absolute entry cap: three times the directory returns the same names and says so.
     expect(shown.length).toBeLessThan(3_000);
     expect(v.parse(v.array(v.string()), bigger.entries)).toEqual(shown);
-    expect(big.truncated).toEqual({ shown: shown.length, total: 3_000 });
-    expect(bigger.truncated).toEqual({ shown: shown.length, total: 9_000 });
+    expect(big.truncated).toEqual({ shown: shown.length, total: 3_000, next: shown.length });
+    expect(bigger.truncated).toEqual({ shown: shown.length, total: 9_000, next: shown.length });
   });
 
   test('the byte ceiling bites on its own — few entries, enormous names', async () => {
@@ -1233,9 +1246,28 @@ describe('a bulk read is bounded where it is produced', () => {
     const shown = v.parse(v.array(v.string()), body.entries);
 
     expect(shown.length).toBeLessThan(wide.length);
-    expect(body.truncated).toEqual({ shown: shown.length, total: wide.length });
+    expect(body.truncated).toEqual({ shown: shown.length, total: wide.length, next: shown.length });
     // Control: the same count of ordinary names comes back whole.
     expect(await listed(plainNames(wide.length))).toEqual({ path: '/d', entries: plainNames(wide.length) });
+  });
+
+  test('a listing past the ceiling continues from `next` until every entry has been seen', async () => {
+    const names = plainNames(3_000);
+    const vfs = { ...memoryVfs(), async readdir() { return names.map((name) => ({ name, type: 'file' as const })); } };
+    const file = fileNamespaceOver(() => ({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
+    const Page = v.object({ entries: v.array(v.string()), truncated: v.optional(v.object({ total: v.number(), next: v.number() })) });
+    const seen: string[] = [];
+
+    for (let offset = 0; ; ) {
+      const page = v.parse(Page, await file.tools.list?.execute('/d', { offset }));
+
+      seen.push(...page.entries);
+
+      if (page.truncated === undefined || page.truncated.next >= page.truncated.total) break;
+      offset = page.truncated.next;
+    }
+
+    expect(seen).toEqual(names);
   });
 
   test('a listing that fits is whole, and says nothing about truncation', async () => {

@@ -34,7 +34,7 @@ function askedCall(words: string): JsonObject | null {
   if (told !== null) return { op: 'message', agent: told[1] ?? '', message: told[2] ?? '' };
   const hired = HIRE.exec(words);
 
-  return hired === null ? null : { op: 'hire', name: hired[1] ?? '', role: hired[2] ?? '', mission: hired[3] ?? '' };
+  return hired === null ? null : { op: 'hire', name: hired[1] ?? '', role: hired[2] ?? '', message: hired[3] ?? '' };
 }
 
 /**

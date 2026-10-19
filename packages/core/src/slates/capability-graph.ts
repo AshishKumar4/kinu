@@ -8,6 +8,7 @@ import { settleSync } from '../obs/effect';
 import type { Impact } from '@agent-core/core/facets';
 import { slateAddressImpact, slateOwnerOnly } from './members';
 import type { ShareGrant, ShareGrantMember, SlateCapabilityGraph, SlateGraphMember, SlateGraphNamespace } from './sharing';
+import type { RoomService } from './room-api';
 
 /** What the owner's workspace offers now; a namespace naming something absent becomes a `problem` row, never a blank. */
 export interface SlateSurfaceCatalog {
@@ -124,6 +125,22 @@ function graphRow({ slate, namespace, members, catalog, workspace }: GraphRowInp
   if (head === 'slates' && !catalog.slates.includes(name)) return { ...row, problem: `no slate named ${name}` };
 
   return row;
+}
+
+/**
+ * What a visitor's own parts will ask them to connect, from what the slate reaches: each MCP server by its title, or by
+ * its name where its owner's catalog has none (never Kinu's `mcp.` namespace for it), and the model. Its workspace, the
+ * web and the other slates it calls are its owner's, never a visitor's connection.
+ */
+export function visitorNeeds(graph: SlateCapabilityGraph): RoomService[] {
+  const needs = new Map<string, RoomService>();
+
+  for (const { namespace, title } of graph.namespaces) {
+    if (namespace.startsWith('mcp.')) needs.set(namespace, { kind: namespace === 'mcp.github' ? 'github' : 'mcp', title: title === namespace ? namespaceTarget(namespace) : title });
+    else if (namespace === 'ai') needs.set(namespace, { kind: 'ai', title: 'AI' });
+  }
+
+  return [...needs.values()];
 }
 
 /** Walks the slates a slate has called, root first, each once. */

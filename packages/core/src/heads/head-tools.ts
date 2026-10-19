@@ -8,7 +8,7 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import { defineOperation, serve } from '../operations/operation';
 import { operationTool } from '../tools/operation-surfaces';
-import { buildToolSurface, type CodemodeBuilder } from '../tools/builtins';
+import { buildToolSurface, surfaceStores, type CodemodeBuilder, type ServedTools, type ToolSurfaceDeps } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture } from './head-inference';
 import { HEAD_BUILTIN_TOOLS, MERGE_STRATEGIES } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -62,7 +62,8 @@ const SPLIT = defineOperation({
   output: v.string(),
 });
 
-export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
+/** A head's tools and the store operations they run, served once for both. */
+export function buildHeadToolSet(deps: HeadToolDeps): ServedTools {
   const { input, capture } = deps;
 
   // The accumulators plus the depth-gated split; the capture wrap records their calls with the builtins'.
@@ -101,7 +102,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     }));
   }
 
-  return buildToolSurface({
+  const surface: ToolSurfaceDeps = {
     rt: deps.rt,
     conversations: deps.conversations,
     workMode: input.mode,
@@ -112,5 +113,9 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     codemode: deps.codemode,
     effectClaims: deps.effectClaims,
     wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
-  });
+  };
+
+  const stores = surfaceStores(surface);
+
+  return { tools: buildToolSurface({ ...surface, served: stores }), stores };
 }

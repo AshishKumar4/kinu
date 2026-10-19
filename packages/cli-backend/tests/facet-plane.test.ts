@@ -3,8 +3,9 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { actorHomeName, codemodeSurface, executorNamespace, narrowToolSurface, type JsonValue } from '@kinu.run/core';
-import { scratchDir, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
+import { actorHomeName, codemodeSurface, narrowToolSurface, type JsonValue } from '@kinu.run/core';
+import { fileNamespaceFor } from '../../core/tests/helpers';
+import { scratchDir, toolExecute, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 import { cleanupFacetScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { actorReferenceOf, localActorDirectory, recoverLocalActorRetirements, registerLocalActor } from '@kinu.run/core';
@@ -139,8 +140,8 @@ describe('local actor file-plane identity', () => {
     const child = childRuntime(root.rt, root, 'writer');
     expect((await exec(child, 'echo mine > note.txt')).exitCode).toBe(0);
     // Its executors alone: where `require('fs')` and `process` start is the shell's.
-    const namespaces = (child.executionRouter?.getProviders() ?? []).map(executorNamespace);
-    const run = toolExecute<{ code: string }, { result: JsonValue }>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces })(codemodeSurface(child, {})));
+    const namespaces = (child.executionRouter?.getProviders() ?? []).map((provider) => fileNamespaceFor(child, provider));
+    const run = toolExecute<{ code: string }, { result: JsonValue }>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces })(codemodeSurface(child, {}, () => ({}), { stores: freshServedStores() })));
     const read = await run({ code: 'return [process.cwd(), await require("fs/promises").readFile("note.txt", "utf8")];' });
     expect(read.result).toEqual([child.cwd, 'mine\n']);
   });

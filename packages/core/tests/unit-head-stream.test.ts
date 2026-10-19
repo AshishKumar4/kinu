@@ -102,7 +102,7 @@ async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Pr
 
   return {
     ...seat,
-    compaction: fixtureCompaction(), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
+    compaction: fixtureCompaction(), tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
     ...over,
   };
 }

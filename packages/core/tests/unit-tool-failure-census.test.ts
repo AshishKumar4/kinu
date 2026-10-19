@@ -575,7 +575,7 @@ describe('each executor tool files its own failure in the right part', () => {
   });
 
   test('nimbus: a narrow handle is a refusal, and one a program handles is no failure', async () => {
-    // `unsupported`, so `refused`: this handle has no `runCode` and retrying cannot grow one.
+    // `unsupported`, so `refused`: this handle has no `startProcess` and retrying cannot grow one.
     const { rt } = createTestRuntime();
 
     const box: SessionBox = { ready: async () => {},
@@ -583,10 +583,10 @@ describe('each executor tool files its own failure in the right part', () => {
       files: sessionFilesOver() };
 
     const narrow = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), memory: rt.memory, craftStore: rt.craftStore },
+      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     });
 
-    const refusal = await narrow.tools.runCode.execute('print(1)');
+    const refusal = await narrow.tools.startProcess.execute('node server.js');
     expect(refusal).toMatchObject({ reason: 'unsupported' });
     expect(censusOf(call({ name: 'eval', toolCallId: 'handled', result: refusal, outcome: { success: true } })).failures).toEqual([]);
   });
@@ -611,11 +611,6 @@ describe('each executor tool files its own failure in the right part', () => {
     // The parent's errno remains ENOENT, which classifies as missing.
     const census = censusOf(await escalate(createParentExecutor({
       handle: {
-        read: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
-        write: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
-        list: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
-        stat: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
-        delete: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
         exec: async () => { throw new VfsError('ENOENT', 'no such shell', '/p'); },
       },
     })));
@@ -630,11 +625,6 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const provider = createParentExecutor({
       handle: {
-        read: async () => new Uint8Array(),
-        write: async () => null,
-        list: async () => [],
-        stat: async () => null,
-        delete: async () => null,
         exec: () => new Promise(() => { /* the parent never answers */ }),
       },
     });
@@ -654,7 +644,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const workspace = createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
     });
 
@@ -669,7 +659,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const workspace = createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
     });
 

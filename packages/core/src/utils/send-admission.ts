@@ -16,19 +16,20 @@ export function newSendLatch(): SendLatch {
 }
 
 /**
- * `false` when a turn already holds admission; `begin` is then never called and the caller keeps the draft.
- * `begin` must resolve at the turn's terminal settle (finished, failed, or aborted).
+ * The admitted run: `begin`'s own promise, its failure the caller's to read. Null when a turn already holds admission;
+ * `begin` is then never called and the caller keeps the draft. `begin` must settle at the turn's terminal settle
+ * (finished, failed, or aborted), which releases the latch.
  */
-export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean {
-  if (latch.owner !== null) return false;
+export function admitTurn(latch: SendLatch, begin: () => Promise<void>): Promise<void> | null {
+  if (latch.owner !== null) return null;
   const token = ++latch.minted;
   latch.owner = token;
   const release = (): void => { if (latch.owner === token) latch.owner = null; };
 
-  return settleSync(Effect.try({ try: () => { begin().then(release, release); }, catch: (cause) => ({ cause }) }).pipe(
+  return settleSync(Effect.try({ try: begin, catch: (cause) => ({ cause }) }).pipe(
+    Effect.tap((run) => Effect.sync(() => { run.then(release, release); })),
     Effect.tapError(() => Effect.sync(release)),
     Effect.catch((failed) => Effect.die(failed.cause)),
-    Effect.as(true),
   ));
 }
 

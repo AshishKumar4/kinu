@@ -55,6 +55,7 @@ export interface SwarmFacetObservation {
   readonly summary: string;
   readonly candidate: string;
   readonly reportedItself: boolean;
+  readonly chat: readonly { readonly role: string; readonly text: string }[];
 }
 
 /** A swarm node's `eval` over a tool main crafted, before and after main's store retires it by score. */

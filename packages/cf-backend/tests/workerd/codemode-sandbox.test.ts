@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, isStepCount, tool, jsonSchema } from 'ai';
@@ -34,7 +34,7 @@ const created: string[] = [];
 const workspace = {
   name: 'workspace',
   fns: {
-    readFile: async (...args: unknown[]) => {
+    'fs.text': async (...args: unknown[]) => {
       const path = text(args, 0);
       const stored = files.get(path);
 
@@ -42,13 +42,21 @@ const workspace = {
 
       return stored;
     },
-    writeFile: async (...args: unknown[]) => {
+    'fs.write': async (...args: unknown[]) => {
       files.set(text(args, 0), text(args, 1));
 
       return 'ok';
     },
-    readdir: async (...args: unknown[]) => children(text(args, 0)),
-    exists: async (...args: unknown[]) => files.has(text(args, 0)),
+    'fs.list': async (...args: unknown[]) => ({ path: text(args, 0), entries: children(text(args, 0)) }),
+    'fs.stat': async (...args: unknown[]) => {
+      const path = text(args, 0);
+      const stored = files.get(path);
+      const isDir = [...files.keys()].some((name) => name.startsWith(`${path.replace(/\/+$/, '')}/`));
+
+      return stored !== undefined || isDir
+        ? { path, size: stored?.length ?? 0, mtimeMs: 0, isDir }
+        : { success: false, reason: 'missing', error: `ENOENT: no such file: ${path}` };
+    },
     exec: async (...args: unknown[]) => `ran: ${text(args, 0)}`,
     createTool: async (...args: unknown[]) => {
       created.push(text(args, 2));
@@ -69,24 +77,33 @@ function toolsProvider(crafted: Array<{ name: string; code: string; description:
   };
 }
 
-const state = new Map<string, JsonValue>();
+const scratchRows = new Map<string, JsonValue>();
 
-const stateProvider = {
-  name: 'state',
+const dbProvider = {
+  name: 'db',
   fns: {
-    get: async (...args: unknown[]) => state.get(text(args, 0)) ?? null,
-    set: async (...args: unknown[]) => {
-      state.set(text(args, 0), decodeJsonValue({ value: args[1] }));
+    createTable: async (...args: unknown[]) => v.parse(v.object({ name: v.string(), scope: v.literal('private') }), args[0]),
+    insert: async (...args: unknown[]) => {
+      const rows = v.parse(v.array(v.object({ key: v.string(), value: JsonValueSchema })), args[1]);
 
-      return { ok: true };
+      for (const row of rows) scratchRows.set(row.key, row.value);
+
+      return { rowsAffected: rows.length };
     },
-    delete: async (...args: unknown[]) => {
-      state.delete(text(args, 0));
+    select: async (...args: unknown[]) => {
+      const query = v.parse(v.optional(v.object({ where: v.optional(v.object({ key: v.string() })) }), {}), args[1]);
 
-      return null;
+      return [...scratchRows].filter(([key]) => query.where === undefined || query.where.key === key).map(([key, value]) => ({ key, value }));
+    },
+    deleteRows: async (...args: unknown[]) => {
+      const { key } = v.parse(v.object({ key: v.string() }), args[1]);
+
+      return { rowsAffected: Number(scratchRows.delete(key)) };
     },
   },
 };
+
+const SCRATCH_TABLE = 'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "key", type: "text", primaryKey: true }, { name: "value", type: "json" }] });';
 
 describe('the eval sandbox under workerd', () => {
   const executor = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }));
@@ -139,7 +156,7 @@ describe('the eval sandbox under workerd', () => {
       "return { text, kinds, listing: await fs.readdir('.'), workspace: env.workspace };",
     ].join('\n');
 
-    const result = await executor.execute(program, [toolsProvider([]), stateProvider, workspace]);
+    const result = await executor.execute(program, [toolsProvider([]), dbProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({
       text: 'hello from the workspace',
@@ -159,7 +176,7 @@ describe('the eval sandbox under workerd', () => {
       'return { cwd: process.cwd(), nextTick: typeof process.nextTick, missing };',
     ].join('\n');
 
-    const result = await executor.execute(program, [toolsProvider([]), stateProvider, workspace]);
+    const result = await executor.execute(program, [toolsProvider([]), dbProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({
       cwd: WORKSPACE_ROOT,
@@ -180,7 +197,7 @@ describe('the eval sandbox under workerd', () => {
       'return { native, quad: await tools.quad(3) };',
     ].join('\n');
 
-    const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
+    const result = await executor.execute(program, [toolsProvider(crafted), dbProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({ native: { echoed: { op: 'read', path: 'notes.md' } }, quad: 12 });
   });
@@ -212,7 +229,7 @@ describe('the eval sandbox under workerd', () => {
       'return { fine: await tools.fine(), failure };',
     ].join('\n');
 
-    const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
+    const result = await executor.execute(program, [toolsProvider(crafted), dbProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toMatchObject({
       fine: 2,
@@ -234,7 +251,7 @@ describe('the eval sandbox under workerd', () => {
       'return { waited: await tools.waited(5), failure };',
     ].join('\n');
 
-    const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
+    const result = await executor.execute(program, [toolsProvider(crafted), dbProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toMatchObject({
       waited: 15,
@@ -245,29 +262,30 @@ describe('the eval sandbox under workerd', () => {
   test('a program reaches a member by the name it wrote, logs a value as JSON, and saves a tool from the function itself', async () => {
     const result = await executor.execute([
       '// clear a key, show what is left, and save a tool',
-      "await state.set('gone', 1);",
-      "await state.delete('gone');",
-      "console.log({ left: await state.get('gone') }, [], 'as written');",
+      SCRATCH_TABLE,
+      "await db.insert('scratch', [{ key: 'gone', value: 1 }]);",
+      "await db.deleteRows('scratch', { key: 'gone' });",
+      "console.log({ left: await db.select('scratch', { where: { key: 'gone' } }) }, [], 'as written');",
       String.raw`return await workspace.createTool('greet', 'Greets by name', async (args) => 'it\'s ' + args.name);`,
-    ].join('\n'), [toolsProvider([]), stateProvider, workspace]);
+    ].join('\n'), [toolsProvider([]), dbProvider, workspace]);
 
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({ name: 'greet', action: 'created' });
     expect(result.logs?.join(' ')).toContain('as written');
-    expect(state.has('gone')).toBe(false);
+    expect(scratchRows.has('gone')).toBe(false);
     // Its source as the program wrote it, escapes and all: nothing read it as a string first.
     expect(created).toEqual([String.raw`async (args) => 'it\'s ' + args.name`]);
   });
 
-  test('state survives between two programs, and a host failure is attributed to its namespace member', async () => {
-    const first = await executor.execute("// save\nawait state.set('n', 41); return 'saved'", [toolsProvider([]), stateProvider, workspace]);
+  test('private db scratch survives between two programs, and a host failure is attributed to its namespace member', async () => {
+    const first = await executor.execute(`${SCRATCH_TABLE}\nawait db.insert('scratch', [{ key: 'n', value: 41 }]); return 'saved'`, [toolsProvider([]), dbProvider, workspace]);
     expect(first.result).toBe('saved');
-    const second = await executor.execute("// load\nreturn (await state.get('n')) + 1", [toolsProvider([]), stateProvider, workspace]);
+    const second = await executor.execute("// load\nreturn (await db.select('scratch', { where: { key: 'n' } }))[0].value + 1", [toolsProvider([]), dbProvider, workspace]);
     expect(second.result).toBe(42);
 
     const failed = await executor.execute(
-      "// read a file that is not there\nreturn await workspace.readFile('absent.md')",
-      [toolsProvider([]), stateProvider, workspace],
+      "// read a file that is not there\nreturn await workspace.fs.text('absent.md')",
+      [toolsProvider([]), dbProvider, workspace],
     );
 
     expect(failed.error).toBeUndefined();
@@ -302,12 +320,12 @@ describe('the eval sandbox under workerd', () => {
 
   test('fetch is absent without egress and reaches the network stack through the loopback entrypoint', async () => {
     const program = "// probe the network\ntry { await fetch('https://example.invalid/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";
-    const offline = await executor.execute(program, [toolsProvider([]), stateProvider, workspace]);
+    const offline = await executor.execute(program, [toolsProvider([]), dbProvider, workspace]);
     expect(String(offline.result)).toContain('threw: ');
 
     // The loopback stub `enable_ctx_exports` mints for the exported class.
     const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false } }));
-    const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
+    const result = await online.execute(program, [toolsProvider([]), dbProvider, workspace]);
     // `.invalid` resolves for nobody: the network's own failure comes back via the marked 502, not a sandbox refusal.
     expect(String(offline.result)).toContain('not permitted to access the internet');
     expect(String(result.result)).toContain('threw: fetch failed: ');
@@ -319,7 +337,7 @@ describe('the eval sandbox under workerd', () => {
     const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false } }));
     const program = "// probe the metadata service\ntry { await fetch('http://169.254.169.254/latest/meta-data/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";
 
-    const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
+    const result = await online.execute(program, [toolsProvider([]), dbProvider, workspace]);
 
     expect(result.error).toBeUndefined();
     expect(result.result).toBeTypeOf('string');
@@ -358,7 +376,7 @@ describe('the eval sandbox under workerd', () => {
 
     const crafted = [{
       name: 'copy_notes',
-      code: 'async (args) => { await workspace.writeFile(args.to, (await workspace.readFile(args.from)).toUpperCase()); return await workspace.readFile(args.to); }',
+      code: 'async (args) => { await workspace.fs.write(args.to, (await workspace.fs.text(args.from)).toUpperCase()); return await workspace.fs.text(args.to); }',
       description: '',
     }];
 
@@ -388,7 +406,7 @@ describe('the eval sandbox under workerd', () => {
             ? { stdout: 'Error (exit 3)\n--- stderr ---\nprinted, not failed', stderr: '', exitCode: 0 }
             : { stdout: `ran: ${command}`, stderr: '', exitCode: 0 };
         },
-        readFile: async (...args: unknown[]) => {
+        'fs.text': async (...args: unknown[]) => {
           read.push(text(args, 0));
 
           return '{"reason":"io","error":"a saved API error"}';
@@ -443,7 +461,7 @@ describe('the eval sandbox under workerd', () => {
       'return { fine: await tools.fine(), failures };',
     ].join('\n');
 
-    const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
+    const result = await executor.execute(program, [toolsProvider(crafted), dbProvider, workspace]);
 
     expect(result.error).toBeUndefined();
     expect(result.result).toMatchObject({
@@ -464,7 +482,7 @@ describe('the eval sandbox under workerd', () => {
     files.set(`${home}/plan.md`, 'the hire\'s own plan');
 
     const program = "// read a relative path\nconst fs = require('fs/promises');\nreturn { cwd: process.cwd(), plan: await fs.readFile('plan.md', 'utf8') };";
-    const result = await executor.execute(program, [toolsProvider([], home), stateProvider, workspace]);
+    const result = await executor.execute(program, [toolsProvider([], home), dbProvider, workspace]);
 
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({ cwd: '/home/sub-hosted', plan: 'the hire\'s own plan' });

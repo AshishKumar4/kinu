@@ -6,6 +6,7 @@
  */
 import { Data, Effect } from 'effect';
 import { settle } from '../obs/effect';
+import type { KinuError } from '../obs/error';
 import { hmacSha256Hex } from '../utils/crypto';
 import * as v from 'valibot';
 
@@ -20,6 +21,12 @@ const CONTROL_PLANE_CAPABILITIES = {
   'index.workspace': 'ingest',
   'index.forget': 'ingest',
   'feedback.write': 'ingest',
+  // The Gallery: read by anyone, signed in or not; marked by a signed-in person, whose email the Worker's route names;
+  // listed by a workspace's share; forgotten with an account. The Worker holds the grade on each one's behalf.
+  'gallery.read': 'ingest',
+  'gallery.mark': 'ingest',
+  'gallery.list': 'ingest',
+  'gallery.forget': 'ingest',
   'overview.read': 'admin',
   'users.read': 'admin',
   'workspaces.read': 'admin',
@@ -94,6 +101,7 @@ export function requireControl(
   env: ControlSecretEnv,
   caller: PresentedCaller,
   capability: ControlCapability,
+  refused?: KinuError,
 ): Promise<ControlGrade> {
   return settle(Effect.gen(function* () {
     const grade = yield* resolveGrade(env, caller);
@@ -105,6 +113,9 @@ export function requireControl(
         + `This caller ${grade === null ? 'presented no recognized capability' : `holds only ${grade}`}.`,
       ));
     }
+
+    // Asked after the capability, so a caller without it learns nothing of the store.
+    if (refused !== undefined) return yield* refused;
 
     return grade;
   }));

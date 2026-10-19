@@ -20,14 +20,13 @@ export function localNodeRuntime(source: CLIRuntime, actor: ActorHandle, stores:
   // Its own stores, as its host bound it: a node reading the parent's claim ledger would present the parent's turns as
   // its own history.
   const { plane, toolFiles } = actorFilePlane({ source, actor, stores });
-  let ledger: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
   // The machine and its gates are the source's.
   const executionRouter = new DefaultExecutionRouter(source.approvalPolicy);
 
   executionRouter.register(hostWorkspaceExecutor({
-    vfs: toolFiles, files: plane, home: source.storage.home, planes: source.planes, memory: source.memory, craftStore: source.craftStore,
-    shell: source.shell, sql: source.storage.sql, actor, ledger: () => ledger?.(),
+    vfs: toolFiles, files: plane, home: source.storage.home, planes: source.planes, craftStore: source.craftStore,
+    shell: source.shell, sql: source.storage.sql, actor,
   }));
 
   return {
@@ -50,6 +49,5 @@ export function localNodeRuntime(source: CLIRuntime, actor: ActorHandle, stores:
     shell: source.shell,
     checkpoints: source.checkpoints,
     setShellApprovalChannel: source.setShellApprovalChannel,
-    setTurnFileLedgerProvider: (provider) => { ledger = provider; },
   };
 }

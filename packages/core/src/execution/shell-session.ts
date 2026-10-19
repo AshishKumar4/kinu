@@ -19,7 +19,7 @@ export function shellExecOptions(input: { value: unknown }): ShellExecOptions {
 
 const ReportsCwdSchema = v.object({ reportCwd: v.literal(true) });
 
-/** The shell tool's call, answered as the model reads it (`commandResultAt`); a program's reads `commandResult`. */
+/** The shell tool's call, answered as the model reads it (`commandResultAt`); a program's reads it without the start directory. */
 export function reportsCwd(input: { context: unknown }): boolean {
   return v.is(ReportsCwdSchema, input.context);
 }

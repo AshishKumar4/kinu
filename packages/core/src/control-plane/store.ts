@@ -9,6 +9,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/index';
 import { settleSync } from '../obs/effect';
 import { boundedInt } from '../utils/bounds';
+import { initGalleryTables } from '../slates/gallery';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import {
   FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
@@ -70,8 +71,10 @@ const DDL = [
   `CREATE INDEX IF NOT EXISTS cp_audit_at ON cp_audit (at DESC, id)`,
 ] as const;
 
+/** The control plane's tables: its index of users, workspaces, feedback and audit, and the Gallery's (slates/gallery.ts). */
 export function initControlPlaneSchema(sql: ControlPlaneSql): void {
   for (const statement of DDL) sql.exec(statement);
+  initGalleryTables((statement) => { sql.exec(statement); });
 }
 
 export const ControlUserRowSchema = v.object({
@@ -301,6 +304,13 @@ export function forgetWorkspace(
     target.at ?? now, target.userId, target.name);
 }
 
+
+/** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
+export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
+  return select(sql, v.object({ name: v.string() }),
+    `SELECT w.name FROM cp_workspaces w WHERE w.user_id = ? AND w.removed_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM cp_workspaces v WHERE v.name = w.name AND v.removed_at IS NULL)`, userId).map((row) => row.name);
+}
 
 export interface ReconcileOutcome {
   present: number;

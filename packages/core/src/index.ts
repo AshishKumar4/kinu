@@ -32,6 +32,7 @@ export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-t
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
   type RunTurnSources, type TurnSourcesBundle, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
+  type TurnTools,
 } from './orchestrator/turn-assembly';
 
 export {
@@ -64,7 +65,7 @@ export type {
 
 export { inTurnSurface, scopedTurnSurface, TurnSurface } from './orchestrator/main-turn-surface';
 
-export { turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
+export { standingFileLedger, turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -291,7 +292,7 @@ export {
   formatBlueprintId, parseBlueprintId, blueprintPagePath, liveSharePagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
-  ShareGrantSchema, SlateCapabilityGraphSchema, ShareCardSchema,
+  ShareGrantSchema, ShareCardSchema,
   LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
   type ShareKind, type LiveShareVisibility, type BlueprintInspection, type BlueprintView,
   type BlueprintFork, type BlueprintBundle,
@@ -299,7 +300,35 @@ export {
   type ShareGrantMember, type ShareGrant, type ShareCard,
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
+  LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
+  LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, SlatePreapprovalsSchema,
+  type SharePreapproval, type SlatePreapprovals, type SlatePreapprovalWithdraw,
+  SlateReachSchema, LiveShareBodySchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema,
+  type SlateReach, type LiveShareBody, type LiveShareModeBody, type LiveShareListingBody,
 } from './slates/sharing';
+
+export { ShareModeSchema, type ShareMode } from './slates/share-modes';
+
+export { RoomServiceSchema } from './slates/room-api';
+
+export type {
+  RoomPerson, RoomRole, RoomAccess, RoomAudience, RoomService, RoomTool, RoomSource, RoomReach, ForkPreview,
+} from './slates/room-api';
+
+export {
+  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
+  type GalleryReport,
+} from './slates/gallery-api';
+
+// The part and consent contracts the client parses: `./slates` pulls the server's runtime, so the browser reads them here.
+export {
+  PartRunAnswerSchema, PartRunRequestSchema, SlateConsentsAnswerSchema,
+  slateApprovalPath, slateConsentsPath, slatePartFramePath, slatePartReleasePath, slatePartRunPath, slatePartShowPath,
+  type ConsentAsk, type EffectAsk, type PartAction, type PartRunAnswer, type PartRunRequest, type PartShowRequest,
+} from './slates/personal-parts';
+
+export { SlateConsentSchema, type SlateConsent } from './slates/share-modes';
 
 export { slateAddressImpact, slateOwnerOnly } from './slates/members';
 
@@ -318,16 +347,16 @@ export type { SlateProcess } from './slates/process';
 
 export {
   isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, slateIdFor, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer, type SlateSurfaceResult, type SlateSurfaceValue, isJsonAnswer,
-  type SlateSummary, type SlateProblem,
+  type SlateSummary, type SlateProblem, SharedSlateFilesSchema, SlateFileChangeSchema, type SharedSlateFiles, type SlateFileChange,
 } from './slates/rpc';
 
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateStorageCall } from './slates/state';
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
-  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateLinkId,
+  buildSlateHostContext, isSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
-  SlateFrameMessageSchema,
+  SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
 export {
@@ -518,15 +547,12 @@ export {
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 
-export { createStateCodemodeProvider } from './tools/state-operations';
 
 export { executorNamespace } from './tools/executor-operations';
 
 export { DB, type AppColumnType } from './operations/db';
 
-export { STATE } from './operations/state';
 
-export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
 
 export {
   APP_TABLE_SCOPES, APP_MUTATIONS,
@@ -657,11 +683,17 @@ export {
 
 export {
   buildBuiltinTools,
+  builtinStoreDeps,
+  surfaceStores,
+  type ServedTools,
+  type BuiltinStoreInputs,
   ownerLaneTools, ownerLaneDeclarations,
   codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
 } from './tools/builtins';
+
+export { serveStores, type ServedStores, type StoreDeps } from './tools/actor-stores';
 
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
 export {
@@ -691,7 +723,7 @@ export { createMemoryCodemodeProvider, serveMemory, type MemoryDeps } from './to
 export { MEMORY } from './operations/memory';
 
 export {
-  nativeTool, nativeToolSchema, codemodeNamespace, callOperation, listOperations, type OperationCaller, type OperationListing,
+  nativeTool, nativeToolSchema, codemodeNamespace, nestedMembers, type NestedMembers, callOperation, listOperations, type OperationCaller, type OperationListing,
 } from './tools/operation-surfaces';
 
 export {
@@ -1066,7 +1098,7 @@ export {
 } from './execution/command-call';
 
 export {
-  commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './execution/exec-result';
 
 export {
@@ -1078,7 +1110,7 @@ export {
 } from './execution/escalation';
 
 export {
-  answerParentRpc, createParentExecutor, createParentWorkspaceVfs, type ParentWorkspaceHandle, type ParentExecResult,
+  answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcWrite,
 } from './execution/parent';
 
@@ -1089,7 +1121,7 @@ export {
 
 export { explainSandboxError } from './tools/sandbox-errors';
 
-export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 
@@ -1274,7 +1306,7 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  buildModelCallEvent,
+  buildModelCallEvent, pricedModelCallEvent,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -1460,7 +1492,7 @@ export {
   DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
   type DeferredApprovalAnswer,
-  type DeferredApprovalNotice, type ParkedWrites,
+  type DeferredApprovalNotice, type ParkedWrites, type SlateEffectVerdict,
 } from './safety/deferred-approval';
 
 export {
@@ -1507,8 +1539,10 @@ export {
 } from './safety/secret-scan';
 
 export {
-  boundWriteOf, performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
+  performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
+
+export { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,
@@ -1859,7 +1893,7 @@ export type { RunListEntry, RunSummary } from './read-models/runs';
 export { headStepSources, spendLedger, workspaceSpend } from './read-models/workspace-spend';
 
 export {
-  AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountUsage,
+  AccountSpendSchema, AccountUsageSchema, accountSpendOfCall, mergeAccountSpend, readAccountUsage,
   type AccountUsage,
 } from './read-models/account-usage';
 
@@ -2151,6 +2185,7 @@ export {
 export {
   buildSlateShareHost, parseSlateShareLabel,
 } from './preview/slate-share-host';
+
 
 export {
   PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,

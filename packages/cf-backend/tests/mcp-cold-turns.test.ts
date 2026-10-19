@@ -174,7 +174,7 @@ test("a slate's call to a server its cold user object is still dialling waits fo
   await files.mkdir('/slates/board', { recursive: true });
   await writeText(files, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
 
-  const answer = await workspace.agent.slateCallAs(ROOT_SLATE_CALLER, 'board', 'workspace', {
+  const answer = await workspace.agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'board', name: 'workspace', lineage: { incarnation: 'test', generation: 0, ancestors: {} } }, {
     path: ['mcp', 'tracker', 'find_issue'], args: [{ title: 'login' }], invocation: null,
   });
 

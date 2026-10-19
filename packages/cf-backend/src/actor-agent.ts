@@ -76,7 +76,8 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
-  EvolutionLanes, drainPendingEvents, ActorAdvisor, turnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
+  EvolutionLanes, drainPendingEvents, ActorAdvisor, standingFileLedger, turnLedgers, type TurnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
+  builtinStoreDeps, serveStores, type BuiltinStoreInputs, type BuiltinToolDeps, type ServedStores,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -91,12 +92,11 @@ import {
   type RunEventRecorder,
   // Spend governor is opt-in: no label means no cap.
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
-  normalizeUsage, priceCall, type Usage,
-  generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
-  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
+  priceCall, type Usage,
+  WORKSPACE_RUN_ID, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink,
   recordModelOperations, type ModelAttemptInfo, type ProviderWaitInfo,
   // Prices a model_call row only when the rate belongs to that call's own model.
-  buildModelCallEvent,
+  pricedModelCallEvent,
   type FactsStore,
   createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
   agentArtifactDirectory, agentHome, MAIN_AGENT,
@@ -145,7 +145,7 @@ import {
   activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
-  agentRoleSwitch, toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
+  toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
@@ -178,6 +178,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
+import { slateAiAnswer } from '@kinu.run/core/slates';
 import { OwnedModelServices } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { AgentFacetCalls } from "./agent-facet/agent-facet";
@@ -348,12 +349,22 @@ interface WorkspaceTitleInputs {
  * unreachable; every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
-/** A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. */
+/**
+ * A namespace member a slate calls: run it, or, when the host asks only whether it may, refuse as running it would. A
+ * viewer's call is admitted (`context.admit`) at the last moment before it acts: an authorization is the act of a member
+ * the class runs itself.
+ */
 async function slateMember(
   providers: readonly CodemodeProvider[], route: Extract<SlateRoute, { kind: 'namespace' }>, context: SlateDispatchContext,
 ): Promise<JsonValue> {
-  if (!context.authorizeOnly) return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  if (!context.authorizeOnly) {
+    context.admit?.();
+
+    return await callCodemodeMember(providers, route.namespace, route.member, route.args) ?? null;
+  }
+
   requireCodemodeMember(providers, route.namespace, route.member);
+  context.admit?.();
 
   return null;
 }
@@ -376,8 +387,10 @@ function hostedActorSurface(
 ) {
   const { account } = reach;
   const webSearch = web.search;
-  // A slate's call is no turn of the actor's: it accounts into ledgers of its own.
-  const ledgers = scopedTurnSurface()?.ledgers ?? turnLedgers();
+  // A slate's call is no turn of the actor's: it accounts into ledgers of its own, but for its files, whose reads stand
+  // across its calls as the actor's own programs' do.
+  const scoped = scopedTurnSurface()?.ledgers;
+  const ledgers = scoped ?? turnLedgers();
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
 
@@ -385,19 +398,21 @@ function hostedActorSurface(
     throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
   }
 
-  const surface = hostedSurfaceActor(actor, {
-    web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    conversations, vectorStore: runtime.vectorStore, ...(account !== undefined && { account }), ledgers: () => ledgers,
-    ownerWaits: reach.ownerWaits,
-  });
-
-  const native = buildBuiltinTools({
+  const deps: BuiltinToolDeps = {
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
     conversations, ...(account !== undefined && { account }),
-    fileLedger: ledgers.files, contextBudget: ledgers.context,
+    fileLedger: scoped?.files ?? standingFileLedger(runtime), contextBudget: ledgers.context,
+  };
+
+  // Served once: the slate's `tools.*` and its named namespaces run the same operations.
+  const stores = serveStores(builtinStoreDeps(deps));
+
+  const surface = hostedSurfaceActor(actor, {
+    web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
+    stores, ownerWaits: reach.ownerWaits,
   });
 
-  return { actor: surface, native };
+  return { actor: surface, native: buildBuiltinTools(deps, stores) };
 }
 
 /** What a slate binding call runs with: the mode its actor's role leaves it, and that role's tool reach. */
@@ -420,6 +435,13 @@ async function reachedIn<A>(
 
 /** The evolution lane's `fibers` row name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
+
+/** What a call already holds when it builds an agent's own tools again: its ledgers, and the store operations its other
+ *  projections run, which the tools project rather than serving their own. */
+export interface OwnToolsHeld {
+  readonly ledgers: TurnLedgers;
+  readonly stores?: ServedStores;
+}
 
 /** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
 export function unownedWorkspace(): KinuError {
@@ -1506,21 +1528,6 @@ export abstract class ActorAgent extends Agent<Env> {
     this.budget.debit(tokens, opts);
   }
 
-  /**
-   * A facet's non-turn model call, filed in the root workspace's event log so spend is not stranded
-   * in facet SQLite. Not `@callable` (spend must not be writable over WS/HTTP); allowlisted in
-   * rpc-surface.ts.
-   */
-  async reportFacetModelCall(report: ModelCallReport): Promise<void> {
-    this.reportModelCall(report);
-  }
-
-  /** A facet's model-operation frames, to the same root log as reportFacetModelCall.
-   *  Not `@callable`; allowlisted in rpc-surface.ts. */
-  async reportFacetModelOperation(event: ModelOperationEvent): Promise<void> {
-    this.modelOperations(event);
-  }
-
   // Head-journal writes for a recursive split run in this isolate (orchestrator.ts `runHostedSplit`),
   // so spawn/report rows land beside their head_steps. Never `@callable`; allowlisted in rpc-surface.ts.
 
@@ -1601,13 +1608,20 @@ export abstract class ActorAgent extends Agent<Env> {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.boundSql,
-      surface: (task, context, callScope) => createScaffoldCandidateSurface({
-        ...this.scaffoldCandidateModel(),
-        tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
-        callScope,
-        history: this.makeScaffoldHistory(),
-        spend: this.scaffoldSpend(),
-      }, task, context),
+      surface: (task, context, callScope) => {
+        // One set for the run: each request's tools project it, and so do its machines.
+        const ledgers = this.ownLedgers();
+        const stores = serveStores(builtinStoreDeps(this.ownStoreInputs(ledgers)));
+
+        return createScaffoldCandidateSurface({
+          ...this.scaffoldCandidateModel(),
+          tools: () => this.ownTools(this.turnWorkMode(), callScope ?? null, { ledgers, stores }).raw,
+          stores,
+          callScope,
+          history: this.makeScaffoldHistory(),
+          spend: this.scaffoldSpend(),
+        }, task, context);
+      },
     };
   }
 
@@ -1817,13 +1831,10 @@ export abstract class ActorAgent extends Agent<Env> {
   /**
    * Record one non-turn model call (judges, fast tier, evolution, compaction, AI bindings) as a
    * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
-   * live in core's `buildModelCallEvent`.
+   * live in core's `pricedModelCallEvent`.
    */
   protected reportModelCall(report: ModelCallReport): void {
-    const event = buildModelCallEvent(report, {
-      effectiveSpec: this.effectiveModelSpec(),
-      pricing: this.modelCatalog.pricing(),
-    });
+    const event = pricedModelCallEvent(report, this.modelCatalog);
 
     settleLoggedSync('event.model_call_emit_failed', { doing: 'recording a model_call run event', otherwise: 'io' }, () => {
       this.eventRecorder.emit(currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID), event);
@@ -2121,7 +2132,8 @@ export abstract class ActorAgent extends Agent<Env> {
     return '';
   }
 
-  private operationProfile(): OperationProfile | null {
+  /** The operation the workspace agent's tools now run under: the call's, else its turn's. */
+  protected operationProfile(): OperationProfile | null {
     return currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
   }
 
@@ -2298,7 +2310,6 @@ export abstract class ActorAgent extends Agent<Env> {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
-        slateBuild: (slate) => this.slateBuild(slate),
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -2395,7 +2406,7 @@ export abstract class ActorAgent extends Agent<Env> {
       return yield* Effect.promise(async () => this.withHostedActor(this.hostedSlateCaller(name), async (actor) => {
         if (route.kind === 'ai') {
           // A hosted actor runs the model call through its own profile, resolved now.
-          return await this.slateAiRun(route, actor.handle);
+          return await this.slateAiRun(route, actor.handle, context.admit);
         }
 
         if (route.kind === 'agent') {
@@ -2418,6 +2429,9 @@ export abstract class ActorAgent extends Agent<Env> {
         const reach = slateToolReach(authority.reach);
 
         if (route.kind === 'tool') {
+          // The caller's word read again where the tool is sent, as the root's tools are.
+          context.admit?.();
+
           return this.callSlateTool({ rt: actor.runtime, actor: surface.actor, reach, route, mode: authority.mode, context });
         }
 
@@ -2475,6 +2489,9 @@ export abstract class ActorAgent extends Agent<Env> {
         case 'tool': {
           const authority = yield* Effect.promise(async () => this.slateAuthority(mode, this.slateNamespaces(mode)));
 
+          // A viewer's call is admitted as the tool starts; each member its program reaches meets `nested` as it runs.
+          context.admit?.();
+
           return yield* Effect.promise(async () => this.callSlateTool({
             rt: this.rt, actor: this.surfaceActor(mode, context.viewer ? 'viewer' : 'owner'), reach: slateToolReach(authority.reach), route, mode: authority.mode, context,
           }));
@@ -2508,6 +2525,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
           if (!authority.reach.allowsTool(descriptor.toolKey)) return yield* new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
 
+          // A viewer's call is admitted here, after every wait to prepare it and with none between it and the send.
+          context.admit?.();
           const answered = yield* Effect.promise(async () => callUserMcpTool({ stub, caller }, descriptor, route.args, undefined));
 
           // A slate calls on its viewer's behalf, not any agent's.
@@ -2525,6 +2544,8 @@ export abstract class ActorAgent extends Agent<Env> {
           if (route.viewer !== undefined) metadata.viewer = route.viewer;
 
           const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
+
+          context.admit?.();
 
           if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
 
@@ -2544,9 +2565,14 @@ export abstract class ActorAgent extends Agent<Env> {
           return { reply };
         }
 
-        case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route));
+        case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route, undefined, context.admit));
 
-        case 'rpc': return yield* Effect.promise(async () => this.slateReadModel(route.method));
+        case 'rpc': {
+          context.admit?.();
+
+          return yield* Effect.promise(async () => this.slateReadModel(route.method));
+        }
+
         case 'app': return yield* new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
       }
     }));
@@ -2564,6 +2590,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private async slateAiRun(
     route: Extract<SlateRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
+    admit?: () => void,
   ): Promise<SlateSurfaceValue> {
     let profile: ResolvedTurnProfile;
 
@@ -2580,43 +2607,13 @@ export abstract class ActorAgent extends Agent<Env> {
       throw cause;
     }
 
-    const spec = profile.tier.model;
-    const model = this.ownedModelServices.resolveModel(spec);
-    const input: GenerateRequest = { model, prompt: route.prompt };
+    // Priced as every call is: its model's rate, warmed when it is not the turn's own.
+    await this.modelCatalog.warm([profile.tier.model]);
+    // A viewer's call is admitted once the model is ready, as it is asked.
+    admit?.();
 
-    if (route.system !== undefined) input.system = route.system;
-
-    if (route.stream === true) return this.slateAiStream({ model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) }, spec);
-
-    const answer = await generateReported(input, {
-      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-      spec,
-    });
-
-    const usage = normalizeUsage(answer.usage);
-
-    return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
-  }
-
-  /**
-   * `ai.stream`: the answer's text as UTF-8 bytes, each written as the model writes it, which the slate's class reads as
-   * text. Its spend is filed once the stream drains, as any streamed call's is; a reader that stops early ends the call.
-   */
-  private slateAiStream(request: StreamRequest, spec: string): ReadableStream<Uint8Array> {
-    const chunks = streamTextReported(request, {
-      spend: { source: 'slate', report: (report) => this.reportModelCall(report), operations: this.modelOperations }, spec,
-    });
-
-    const encoder = new TextEncoder();
-
-    return new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const next = await chunks.next();
-
-        if (next.done === true) controller.close();
-        else controller.enqueue(encoder.encode(next.value));
-      },
-      async cancel() { await chunks.return(undefined); },
+    return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations,
     });
   }
 
@@ -2650,7 +2647,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const scope: CodemodeScope = { reach, nested: context.nested, namespaces: (executor) => actorNamespaces(actor, policy, { executor }) };
 
-    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}), route.name, route.input, scope)) ?? null;
+    return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}, () => ({}), { stores: actor.stores }), route.name, route.input, scope)) ?? null;
   }
 
   /** Workspace read models belong to the root; the orchestrator supplies them. */
@@ -2725,14 +2722,19 @@ export abstract class ActorAgent extends Agent<Env> {
       });
     }
 
-    const providers = actorNamespaces(this.surfaceActor(requested), SURFACE_POLICY.operations);
+    // One set for the call: its namespaces and its tools, in whichever mode its role leaves, run the same store
+    // operations on one ledger and one budget.
+    const ledgers = this.ownLedgers();
+    const own = this.ownTools(requested, null, { ledgers });
+    const providers = actorNamespaces(this.surfaceActor(requested, 'owner', own.stores), SURFACE_POLICY.operations);
 
     // The workspace's own agent, which reaches its external tools.
-    const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
+    const mcp = await this.buildUserMcpTools(own.raw, Promise.resolve(this.modelCatalog));
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
     const external = { ...this.extensions.tools(), ...mcp };
+    const tools = authority.mode === requested ? own.raw : this.ownTools(authority.mode, null, { ledgers, stores: own.stores }).raw;
 
-    return await reachedIn(authority, providers, { ...external, ...this.getRawToolsForWorkMode(authority.mode) }, use);
+    return await reachedIn(authority, providers, { ...external, ...tools }, use);
   }
 
   /** Cold ordinary actors retain their existing opener; active run seats are used, never re-composed. */
@@ -2767,31 +2769,20 @@ export abstract class ActorAgent extends Agent<Env> {
    * This actor as every caller's namespaces are built over it (`actorNamespaces`); it delegates in `mode`. A share's
    * viewer's calls reach the web without the pass the owner's carry to the workspace's own previews.
    */
-  protected surfaceActor(mode: WorkMode, as: 'owner' | 'viewer' = 'owner'): SurfaceActor {
+  /**
+   * This actor as a caller's namespaces are built over it. `stores`: the store operations a caller's native tools run,
+   * which its programs run too; a caller holding none (a slate) has them served here, over the same inputs.
+   */
+  protected surfaceActor(mode: WorkMode, as: 'owner' | 'viewer' = 'owner', stores?: ServedStores): SurfaceActor {
     return {
       executors: () => this.rt.executionRouter?.getProviders() ?? [],
       web: {
         search: as === 'owner' ? this.ownedModelServices.getWebSearchProvider() : this.ownedModelServices.getViewerWebSearchProvider(), files: this.rt.storage,
         browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
       },
-      memory: () => ({
-        memory: this.rt.memory, vectorStore: this.rt.vectorStore, facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
-        account: this.account.memory({ by: 'agent', agent: this.actorHandle().name }),
-      }),
-      files: () => {
-        // The turn the program runs in, else ledgers of the program's own.
-        const ledgers = this.mainTurn()?.ledgers ?? turnLedgers();
-
-        return {
-          vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
-          ledger: ledgers.files, budget: ledgers.context, slateBuild: (slate) => this.slateBuild(slate),
-        };
-      },
-      // `this.taskList` is the store the turn's snapshot reads; the role switch is the native `tasks` tool's.
-      tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.operationProfile()?.inputs?.envelope ?? null) }),
+      stores: stores ?? serveStores(builtinStoreDeps(this.ownStoreInputs(this.ownLedgers()))),
       // Plan is decided per table scope at invocation.
       db: this.stores.appData,
-      programState: this.rt.actor.programState,
       agents: () => this.ownAgentsToolDeps(mode),
       self: this.agentSelf(),
       // The workspace's agent reads what waits on its owner through its own `agent.*`.
@@ -3240,8 +3231,21 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.ownTools(mode, claimScope ?? null).raw;
   }
 
-  /** The workspace agent's own tools in `mode` outside any turn of its, from the one factory every agent's are built by. */
-  protected abstract ownTools(mode: WorkMode, scope: string | null): ActorToolsets;
+  /** The workspace agent's own tools in `mode` outside any turn of its, from the one factory every agent's are built by.
+   *  `held`: the call's ledgers and the store operations its other projections already run. */
+  protected abstract ownTools(mode: WorkMode, scope: string | null, held?: OwnToolsHeld): ActorToolsets;
+
+  /** What this agent's builtins read its stores from, as its own tools do, on `ledgers`: for a caller holding none of
+   *  them (a slate, a scaffold's run). */
+  protected abstract ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs;
+
+  /**
+   * The ledgers this agent's own tools account into: its turn's, else, outside any turn, a budget of the call's own
+   * and its runtime's standing file ledger, which every caller outside a turn shares (`standingFileLedger`).
+   */
+  protected ownLedgers(): TurnLedgers {
+    return this.mainTurn()?.ledgers ?? { ...turnLedgers(), files: standingFileLedger(this.rt) };
+  }
 
   /** The workspace agent's delegation in `mode`, as its programs reach it. */
   protected abstract ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps;
@@ -3502,7 +3506,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const explicitTier = turnTags({ metadata: this.turnDrivingMetadata() }).tier;
 
     const assembled = await assembleActorTurn(
-      { ...surface.sources, toolset: () => surface.tools, externalTools: async () => surface.surface.external },
+      { ...surface.sources, toolset: () => ({ tools: surface.tools, stores: surface.stores }), externalTools: async () => surface.surface.external },
       {
         userText: extractLastUserText(history), workMode: mode, ...(explicitTier !== undefined && { explicitTier }),
         pagesInAnswer: answerDrawsPages(this.turnDrivingMetadata()),

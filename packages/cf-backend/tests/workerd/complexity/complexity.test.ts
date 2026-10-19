@@ -264,6 +264,10 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * inputs its profile resolved from, kept once per distinct inputs (`actor_profile_inputs`, +1), and each opening is
  * recorded where the workspace judges the closes that name it (`actor_executions`, +1; a close naming the newest
  * opening is judged by the held fence row and reads nothing).
+ * 379 against 377 on 3c27a547b, both at both sizes on 2026-10-18 (#103): a model call's start and end are its agent's
+ * own run events (main's isolate +2, the workspace's -2), a told end is read before it is written, so the room hears it
+ * before the write (`TurnFences.ending`, +1), and a missing local skills root is listed with no lookup before it (+1),
+ * which on the shared Drive saves a call to the account's store. The workspace's 190, main's isolate's 189.
  * What remains, by group. Workspace: the Agents SDK's job queue (65, every arm and alarm asks it, and it is the SDK's);
  * the settle sequence's terminal effects and receipts (25: each attempt is written before its call, and each retry
  * read follows a write of its own); the evolution pass and the turn's review (27); the four reports' acceptance,
@@ -441,10 +445,13 @@ test('a production turn runs no more statements than it was measured at, and ask
  * last tool call with the answering step and the close 14; 39 in all for four tool steps, 33 for one.
  * 17 at the open on the admission lane (e47ed4e8f): MEMORY.md's tail rides the turn's sources, read in the workspace
  * (`AgentMemory.tail` and the memory its isolate opened for it, gone); 35 in all, 29 for one.
+ * 16 and 13 on 2026-10-18 (#103): a model call's start and end stay in its agent's own ledger, beside its attempts, as
+ * the CLI keeps them (`host.reportModelOperation`, gone at the open and the close); 33 in all, 28 for one. Against
+ * 3c27a547b the same day: 17 and 14.
  */
 /** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
  *  per earlier step. */
-const CROSSINGS = { open: 17, step: 2, close: 14 } as const;
+const CROSSINGS = { open: 16, step: 2, close: 13 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the

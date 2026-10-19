@@ -111,6 +111,27 @@ describe('parallel armada evaluations', () => {
     expect(() => selectTrialReport(JSON.stringify({ testResults: [report, report] }), item)).toThrow('expected one');
   });
 
+  // Production bc78a94bd, 2026-10-19: a minecraft trial's harness threw after 988 s, vitest-evals kept its own failed
+  // run (no metadata, no output, `{ type, message }` errors), and the trial failed naming only the schema it broke.
+  test('a trial whose harness threw before recording its run is refused with what the harness threw', () => {
+    const item = ITEMS[0];
+
+    if (item === undefined) throw new Error('the pilot matrix is empty');
+
+    const report = caseReport(item, 'failed');
+    const [assertion] = report.assertionResults;
+
+    if (assertion === undefined) throw new Error('the case report has no trial');
+
+    const thrown = { ...assertion, meta: { harness: { run: {
+      session: { events: [{ type: 'message', role: 'user', content: 'Build a tower.' }] }, usage: {},
+      errors: [{ type: 'ZodError', message: 'Invalid input: expected string\nat events.4.content' }],
+    } } } };
+
+    expect(() => selectTrialReport(JSON.stringify({ testResults: [{ ...report, assertionResults: [thrown] }] }), item))
+      .toThrow(`the trial's harness threw before it recorded the run: ZodError: Invalid input: expected string\nat events.4.content`);
+  });
+
   test('per-trial artifacts merge by file; missing and duplicate trials stay incomplete instead of invented outcomes', () => {
     const dir = scratchDir('eval-artifact-merge');
     const candidate = ITEMS.filter((item) => item.leg === 'candidate');

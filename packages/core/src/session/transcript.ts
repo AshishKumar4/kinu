@@ -346,6 +346,14 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`.length > 0;
   }
 
+  /** Which of `ids` name an entry of this chat, in one statement however many are asked. */
+  holding(ids: readonly string[]): ReadonlySet<string> {
+    this.actor.assertCurrent();
+
+    return new Set(this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}
+      AND id IN (SELECT value FROM json_each(${JSON.stringify(ids)}))`.map((row) => row.id));
+  }
+
   /** The one read of the chat's newest entry: its id, and its position, which is the chat's length less one. */
   private newest(): { readonly id: string; readonly position: number } | undefined {
     this.actor.assertCurrent();

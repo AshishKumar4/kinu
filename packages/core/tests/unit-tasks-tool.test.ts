@@ -1,4 +1,5 @@
 // Behaviour tests for the `tasks` tool's model-facing contract; store semantics live in unit-task-list.test.ts.
+import { serveTasks } from '../src/tools/tasks-operations';
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -200,7 +201,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync.bind(rt.storage));
-    const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
+    const provider = createTasksCodemodeProvider(serveTasks(taskList, rt.actor.config));
 
     const added = v.parse(
       AddedSchema,
@@ -225,7 +226,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
     const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync.bind(rt.storage));
-    const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
+    const provider = createTasksCodemodeProvider(serveTasks(taskList, rt.actor.config));
     await codemodeExecute(provider, 'add')(['Parent task']);
     await codemodeExecute(provider, 'add')(['Child task'], { parent: 't1' });
     await codemodeExecute(provider, 'update')('t2', 'dropped');

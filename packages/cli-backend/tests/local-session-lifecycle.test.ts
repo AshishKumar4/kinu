@@ -1,7 +1,7 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase, createRecordingLogger } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, fakeCommandMember, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, workspaceDatabase, createRecordingLogger, freshServedStores } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, JobOutputFrameSchema, processJobHolder, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -891,7 +891,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         ...agentSelfRest,
       })],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
+    })({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -918,7 +918,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         ...agentSelfRest,
         armCompactNow: async () => { arms++; },
       })],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
+    })({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] });
 
     const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: 'return await agent.compactNow();',
@@ -1294,11 +1294,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(JSON.stringify(result?.result)).toContain('computed inline');
   });
 
-  test('the CLI sandbox binds state.* as the shared docstring promises', async () => {
-    // The shared `eval` description promises `state.set`/`state.get`; the CLI factory list must bind the provider.
+  test('the CLI sandbox keeps program scratch in a private db table', async () => {
     const { session, events } = setup(
       'unused',
-      codemodeModel('await state.set("probe", "found")\nawait state.get("probe")'),
+      codemodeModel([
+        'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "value", type: "text" }] });',
+        'await db.insert("scratch", [{ value: "found" }]);',
+        'return (await db.select("scratch"))[0].value;',
+      ].join('\n')),
       { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true } },
     );
 
@@ -1311,7 +1314,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test("eval binds only the namespaces the role admits: a role without shell, file or slate reaches no workspace", async () => {
     const analyst = { description: 'Reads memory.', instructions: 'Answer from memory.', tier: 'default', preset: 'audit', allowedTools: ['eval', 'memory'] } as const;
 
-    const { rt, session, events } = setup('unused', codemodeModel('await workspace.writeFile("revoked-workspace.txt", "must not land")'), {
+    const { rt, session, events } = setup('unused', codemodeModel('await workspace.fs.write("revoked-workspace.txt", "must not land")'), {
       profileAuthority: async () => {
         const { catalog } = present(await swarmsOn(rt, staticModelPlane())(), "the workspace's own catalog");
         const withAnalyst = { ...catalog, roles: { ...catalog.roles, analyst } };
@@ -1370,12 +1373,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(text).toContain('never detached');
   });
 
-  test('a native file read authorizes workspace.writeFile in the same CLI turn', async () => {
+  test('a native file read authorizes workspace.fs.write in the same CLI turn', async () => {
     const model = toolSequenceModel([
       { name: 'file', input: { op: 'read', path: 'shared.txt' } },
       {
         name: 'eval',
-        input: { code: 'return await workspace.writeFile("shared.txt", "changed by codemode");' },
+        input: { code: 'return await workspace.fs.write("shared.txt", "changed by codemode");' },
       },
     ]);
 
@@ -1388,11 +1391,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       .toBe('changed by codemode');
   });
 
-  test('a workspace.readFile authorizes native file write in the same CLI turn', async () => {
+  test('a workspace.fs.text authorizes native file write in the same CLI turn', async () => {
     const model = toolSequenceModel([
       {
         name: 'eval',
-        input: { code: 'return await workspace.readFile("shared.txt");' },
+        input: { code: 'return await workspace.fs.text("shared.txt");' },
       },
       {
         name: 'file',

@@ -783,7 +783,7 @@ describe('account panels', () => {
 
               // Account settings is reached from the account menu at the head
               // of the rail, so the nav carries no row of its own for it.
-              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/devices', '/drive', '/plugins', '/workspaces']);
+              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/devices', '/drive', '/gallery', '/plugins', '/workspaces']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the account

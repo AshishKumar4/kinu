@@ -40,8 +40,8 @@ async function hiredNoOne(session: VerifierSession): Promise<boolean | undefined
 }
 
 test('a helper hired natively or from a program fails hired-no-one, and a turn that hired no one passes', async () => {
-  const native = lead([ended('agents', { op: 'hire', name: 'board-builder', brief: 'Build the board' })], 'board-builder');
-  const program = lead([ended('eval', { code: 'await agents.hire({ name: "board-builder", brief: "Build the board" });' })], 'board-builder');
+  const native = lead([ended('agents', { op: 'hire', role: 'task', name: 'board-builder', message: 'Build the board' })], 'board-builder');
+  const program = lead([ended('eval', { code: 'await agents.hire("task", "Build the board", { name: "board-builder" });' })], 'board-builder');
   const alone = lead([ended('eval', { code: 'return await workspace.slates.chess.$preview();' })], null);
 
   expect(await Promise.all([hiredNoOne(native), hiredNoOne(program), hiredNoOne(alone)])).toEqual([false, false, true]);

@@ -3,7 +3,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, WORKSPACE_ROOT, type Clock } from '@kinu.run/core';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent, toolsInWorkMode, WORKSPACE_ROOT, type Clock, builtinStoreDeps, serveStores } from '@kinu.run/core';
 import { codemodeSurface, narrowToolSurface } from '@kinu.run/core';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { diagnostics } from '@kinu.run/core/obs';
@@ -14,7 +14,7 @@ import { configureRemoteAiFixture } from '../helpers/remote-ai-profile';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
-import { SlateBinding } from '../../src/slates/bindings';
+import { SlateBinding, type SlateBindingProps } from '../../src/slates/bindings';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { createRuntimeExecutor, jobContextAnswers } from '../../src/codemode-sandbox';
 import { isJsonAnswer, SLATE_STORAGE_BINDING, type SlateSurfaceResult } from '@kinu.run/core';
@@ -24,6 +24,12 @@ import type { CraftedFromNodeObservation, HandedStream, NodeJobObservation, OneP
 export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
+
+/** A chat message's text as a pane draws it. */
+const ChatTextSchema = v.object({
+  role: v.string(),
+  parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
+});
 
 const PROBE_RPC = ['probeLatencies', 'burn', 'markedFacet', 'facetMarks', 'onePlane', 'swarmNode', 'agentFor', 'craftedFromNode', 'swarmJobNode', 'jobWindowArmed', 'outrunJobWindow', 'jobRows', 'taskEvents'];
 
@@ -214,7 +220,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     this.rt.craftStore.create({ name: 'double', description: 'doubles a number', code: 'async (n) => n * 2' });
     const seams = this.hostedSeams();
     const seat = await hostNodeSeat(seams, { nodeId: 'crafted-node', rootId: 'crafted-swarm', depth: 1 });
-    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)(codemodeSurface(seat.actor.runtime, {}), narrowToolSurface(undefined)) }).eval?.execute;
+    const execute = toolsInWorkMode('build', { eval: nodeCodemodeTool(seams, seat.actor)(codemodeSurface(seat.actor.runtime, {}, () => ({}), { stores: serveStores(builtinStoreDeps({ rt: seat.actor.runtime, conversations: seat.actor.stores.conversationSearch, vectorStore: null })) }), narrowToolSurface(undefined)) }).eval?.execute;
 
     if (execute === undefined) throw new Error('the node has no eval');
 
@@ -267,14 +273,20 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     await this.reclaimSettledExplorationActors();
     const facet = await this.agentFacetOf<AgentFacet>(seat.actor.record.actorId);
     bootId ??= crypto.randomUUID();
+    const retired = this.actorDirectoryStore().retained(seat.actor.record.actorId)?.retiringAt != null;
+    // Its chat as its own store keeps it once it is retired, read as a pane's seed is.
+    const messages: unknown = await facet.seed(this.agentSnapshot(seat.actor.record.actorId));
+
+    const chat = v.parse(v.array(ChatTextSchema), messages).map((message) => ({
+      role: message.role, text: message.parts.flatMap((part) => (part.type === 'text' && part.text !== undefined ? [part.text] : [])).join(''),
+    }));
 
     return {
       actorId: seat.actor.record.actorId, home: home.home,
       sameIsolate: (await facet.boot()) === bootId,
       workspaceClaims: this.ctx.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ?', seat.actor.record.actorId).one().n,
       claims: await facet.turns(),
-      retired: this.actorDirectoryStore().retained(seat.actor.record.actorId)?.retiringAt != null,
-      summary: run.report.summary, candidate: run.candidate, reportedItself: run.reportedItself,
+      retired, summary: run.report.summary, candidate: run.candidate, reportedItself: run.reportedItself, chat,
     };
   }
 }
@@ -339,7 +351,8 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
   // Each relay is built here, in this isolate, so the answer read is the one it hands the platform.
   async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateSurfaceResult>> {
     await this.target(workspace);
-    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };
+    // Minted as the host mints a process's bindings: with its lineage, here a process of an unshared slate.
+    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER, lineage: { incarnation: 'probe', generation: 0, ancestors: {} } } satisfies SlateBindingProps;
     const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
     await binding.call(['put'], ['seen', 'kept'], null);
     const answer = await binding.call(['get'], ['seen'], null);

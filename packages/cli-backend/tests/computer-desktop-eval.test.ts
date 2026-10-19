@@ -8,7 +8,7 @@ import {
   WORKSPACE_ROOT, createSandboxExecutor, executorNamespace, gateProviderExec, narrowToolSurface, withClampedToolResult,
   type SandboxHandle,
 } from '@kinu.run/core';
-import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
+import { createTestRuntime, toolExecute, freshServedStores } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 
 const PNG = 'iVBORw0KGgo=';
@@ -21,7 +21,7 @@ const unreachable = async (): Promise<never> => {
 const box: SandboxHandle = {
   ensureReady: unreachable, exec: unreachable, readFile: unreachable, writeFile: unreachable, writeFileIfDigest: unreachable,
   listFiles: unreachable, statFile: unreachable, deleteFile: unreachable, exposePort: unreachable, unexposePort: unreachable,
-  getExposedPorts: unreachable, startSupervisedProcess: unreachable, stopSupervisedProcess: unreachable,
+  getExposedPorts: unreachable, startSupervisedProcess: unreachable, stopSupervisedProcess: unreachable, supervisedProcessLogs: unreachable,
   listSupervisedProcesses: unreachable, portToken: unreachable, probePort: unreachable, portListeners: unreachable,
   resize: unreachable, answerRest: unreachable, releaseDesktop: unreachable,
   desktop: async () => ({ kind: 'screen', png: PNG, width: 1280, height: 768 }),
@@ -33,7 +33,7 @@ test('a program that returns the screenshot hands the model the screen as an ima
 
   // As an actor's eval is built: the program runner, its result clamped with images (delegation/actor-tools.ts).
   const evalTool = withClampedToolResult(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [computer] })({
-    cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [],
+    cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [],
   }), { files: rt.storage, producer: 'eval', images: true });
 
   const output = await toolExecute<{ code: string }, unknown>(evalTool)({ code: 'return await computer.screenshot();' });

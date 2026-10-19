@@ -445,8 +445,8 @@ describe('renderActiveSkillsSection + tool gating', () => {
   });
 
   test('toolAllowedBySkills: glob-suffix `workspace.*` matches namespace', () => {
-    expect(toolAllowedBySkills('workspace.readFile', ['workspace.*'])).toBe(true);
-    expect(toolAllowedBySkills('workspace.readFile', ['workspace'])).toBe(true);
+    expect(toolAllowedBySkills('workspace.fs.text', ['workspace.*'])).toBe(true);
+    expect(toolAllowedBySkills('workspace.fs.text', ['workspace'])).toBe(true);
     expect(toolAllowedBySkills('computer.exec', ['workspace.*'])).toBe(false);
   });
 
@@ -733,6 +733,22 @@ describe('discoverSkills', () => {
     expect(v.calls.readFile).not.toContain(path);
     // The small one beside it was read normally.
     expect(v.calls.readFile).toContain(`${WORKSPACE_SKILLS_DIR}/minnow.md`);
+  });
+
+  // #103: on staging 667f96316 every turn stat'ed then listed the shared Drive's skills root, two calls to the account's
+  // store (about 60 and 50 ms) in a row before its first model call.
+  test('each skills root is listed in one call, and only a folder is asked for its SKILL.md', async () => {
+    const v = memoryVfs({
+      [`${WORKSPACE_SKILLS_DIR}/one.md`]: skillFile('one', 'ONE'),
+      [`${WORKSPACE_SKILLS_DIR}/notes.txt`]: 'not a skill',
+      [`${WORKSPACE_SKILLS_DIR}/two/SKILL.md`]: skillFile('two', 'TWO'),
+    });
+
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+
+    expect(found.skills.filter((s) => s.source !== 'builtin').map((s) => s.name).sort()).toEqual(['one', 'two']);
+    expect(v.calls.readdir.sort()).toEqual([SHARED_SKILLS_DIR, WORKSPACE_SKILLS_DIR].sort());
+    expect(v.calls.stat.filter((path) => path === SHARED_SKILLS_DIR || path === WORKSPACE_SKILLS_DIR || path.startsWith(`${WORKSPACE_SKILLS_DIR}/notes.txt`))).toEqual([]);
   });
 
   // KINU-050: a huge directory admits only as many headers as the budget carries, in sorted order.

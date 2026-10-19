@@ -83,10 +83,12 @@ describe('slate sharing surfaces', () => {
           const live = await freshPage(gallery, 'sharedialog', theme, viewport);
 
           try {
-            // One sentence, who can open it, the fork choice, and the reach folded behind one row.
-            const lead = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');
-            expect(lead).toContain('It runs in your workspace, as you.');
+            // Who can open it, the fork choice, and whose access it runs with: their own unless the owner picks theirs
+            // (docs/SLATE-SHARING-NIMBUS.md §2), with no reach of the owner's to list until then.
             expect(await live.$eval('[data-share-access]', (element) => element.getAttribute('data-share-access'))).toBe('users');
+            expect(await live.$eval('[data-share-mode][aria-checked="true"]', (element) => element.getAttribute('data-share-mode'))).toBe('own');
+            expect(await live.$('[data-share-reach]')).toBeNull();
+            expect(await live.$('[data-share-owner-warning]')).toBeNull();
             expect(await live.$eval('[data-share-fork]', (box) => box instanceof HTMLInputElement && box.checked)).toBe(true);
             // docs/SLATE-SHARING.md S5, independent of the constants used to render these bounds.
             const limits = await live.$eval('[data-share-limits]', (element) => element.textContent ?? '');
@@ -99,6 +101,9 @@ describe('slate sharing surfaces', () => {
 
             expect({ requests, dollars }).toEqual({ requests: [120], dollars: [2] });
             
+            // My access lists the reach the people it is shared with act within, and says what that means first.
+            await live.click('[data-share-mode="owner"]');
+            await live.waitForSelector('[data-share-owner-warning]');
             // Folded, the reach names what the slate reaches (a server by its title), not the slate's own keys.
             const reach = await live.$eval('[data-share-reach]', (element) => element.textContent ?? '');
             expect(reach).toContain('GitHub');
@@ -123,9 +128,90 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-share-access]');
             await live.click('[data-share-access-option="public"]');
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
-            
+
+            // A slate shared whose own files do not build alone says why it does not run.
+            expect(await live.$('[data-share-broken]')).not.toBeNull();
+
+            // A team share says who edits and who uses it, and that an editor's change stopped it on the owner's access.
+            expect(await live.$$eval('[data-live-share="live-team-2"] [data-live-share-person]', (rows) => rows.map((row) => [row.getAttribute('data-live-share-person'), row.getAttribute('data-live-share-role')])))
+              .toEqual([['pat@example.com', 'edit'], ['sam@example.com', 'use']]);
+            expect(await live.$eval('[data-live-share="live-team-2"] [data-live-share-mode]', (element) => element.textContent ?? '')).toContain('pat@example.com');
+
+            // What the owner answered "Always for this slate" to is listed by what it reaches, on its root, and taken back
+            // from every share of the slate in one press, sent as the list named it.
+            expect(await live.$$eval('[data-share-always-entry]', (rows) => rows.map((row) => row.getAttribute('data-share-always-entry'))))
+              .toEqual(['issue-triage/mcp.github.create_issue', 'issue-triage/workspace.fs.write']);
+            const standing = await live.$eval('[data-share-always]', (element) => element.textContent ?? '');
+            expect(standing).toContain('GitHub');
+            expect(standing).toContain('acme');
+            await live.click('[data-share-always-entry="issue-triage/mcp.github.create_issue"] [data-share-always-withdraw]');
+            await live.waitForFunction(() => document.querySelector('[data-share-always-entry="issue-triage/mcp.github.create_issue"]') === null);
+            expect(JSON.parse(await live.$eval('html', (root) => root.getAttribute('data-gallery-withdrawn')) ?? 'null'))
+              .toEqual({ slate: 'issue-triage', namespace: 'mcp.github', member: 'create_issue', root: { org: 'acme' } });
+            expect(await live.$('[data-share-always-entry="issue-triage/workspace.fs.write"]')).not.toBeNull();
+
+            // A share on the owner's access whose code changed is stopped; the owner sees its reach again, then approves it
+            // at the slate's revision now.
+            expect(await live.$eval('[data-live-share="live-board-1"] [data-live-share-mode]', (element) => element.getAttribute('data-live-share-mode'))).toBe('owner');
+            await live.click('[data-live-share="live-board-1"] [data-live-share-review]');
+            await live.waitForSelector('[data-share-approve-reach]');
+            expect(await live.$('[data-share-reach]')).not.toBeNull();
+            expect(await live.$('[data-share-submit]')).toBeNull();
+            await live.click('[data-share-approve-reach]');
+            await live.waitForFunction(() => document.querySelector('[data-live-share="live-board-1"] [data-live-share-review]') === null);
+            expect(await live.$('[data-share-submit]')).not.toBeNull();
+
+            // On the owner's access it is never listed, and the row says why.
+            expect(await live.$('[data-share-gallery-owner]')).not.toBeNull();
+            expect(await live.$('[data-share-gallery]')).toBeNull();
+
+            // And it moves to each person's own access in one press: nothing of the owner's is used.
+            await live.click('[data-live-share="live-board-1"] [data-live-share-own]');
+            await live.waitForSelector('[data-live-share="live-board-1"] [data-live-share-mode="own"]');
+            expect(await live.$('[data-live-share="live-board-1"] [data-live-share-own]')).toBeNull();
+
+            // Then it can be listed, by a line and a category asked for first.
+            await live.click('[data-share-gallery]');
+            await live.type('[data-share-gallery-line]', 'Triage issues by label');
+            await live.click('[data-share-gallery-category="developer"]');
+            await live.click('[data-share-gallery-list]');
+            await live.waitForFunction(() => (document.querySelector('[data-share-gallery-for]')?.textContent ?? '').includes('Triage issues by label'));
+            // And taken off again.
+            await live.click('[data-share-gallery]');
+            await live.waitForFunction(() => !(document.querySelector('[data-share-gallery-for]')?.textContent ?? '').includes('Triage issues by label'));
           } finally {
             await live.close();
+          }
+
+          // A slate's first share asks what they start with; an empty copy shares a fork of its code in its place.
+          const first = await freshPage(gallery, 'sharedialog-first', theme, viewport);
+
+          try {
+            expect(await first.$eval('[data-share-start][aria-checked="true"]', (element) => element.getAttribute('data-share-start'))).toBe('as-is');
+            await first.click('[data-share-start="empty"]');
+            // Each person added uses it, or edits it too.
+            await first.type('[data-share-emails]', 'pat@example.com, sam@example.com');
+            await first.waitForSelector('[data-share-person="sam@example.com"]');
+            expect(await first.$('[data-share-editors-note]')).toBeNull();
+            await first.click('[data-share-person="pat@example.com"] [data-share-person-role="edit"]');
+            await first.waitForSelector('[data-share-editors-note]');
+            await first.click('[data-share-submit]');
+            await first.waitForSelector('[data-share-created]');
+            const sent = JSON.parse(await first.$eval('html', (root) => root.getAttribute('data-gallery-shared')) ?? '{}');
+
+            expect([sent.slate, sent.start, sent.emails, sent.editors]).toEqual(['issue-triage', 'empty', ['pat@example.com', 'sam@example.com'], ['pat@example.com']]);
+          } finally {
+            await first.close();
+          }
+
+          // A slate already shared asks nothing of it: its later shares share what the first one did.
+          const again = await freshPage(gallery, 'sharedialog', theme, viewport);
+
+          try {
+            await again.waitForSelector('[data-share-mode]');
+            expect(await again.$('[data-share-start]')).toBeNull();
+          } finally {
+            await again.close();
           }
 
           const dialog = await freshPage(gallery, 'sharedialog-blueprint', theme, viewport);

@@ -146,6 +146,16 @@ export class TurnFences {
     return offered === undefined ? null : v.parse(TurnFactsSchema, JSON.parse(offered.facts_json));
   }
 
+  /** What {@link ended} would answer for the end of run `runId` its agent told, read without writing it. */
+  ending(actorId: string, runId: string): Pick<FencedOpening, 'seq' | 'turnId'> | 'unfenced' | null {
+    const [row] = this.sql<{ seq: number; turn_id: string; run_id: string; ended_at: number | null }>`SELECT seq, turn_id, run_id, ended_at
+      FROM actor_turn_fence WHERE actor_id = ${actorId}`;
+
+    if (row === undefined) return 'unfenced';
+
+    return row.run_id === runId && row.ended_at === null ? { seq: row.seq, turnId: row.turn_id } : null;
+  }
+
   /**
    * Ends the open run if it is the one expected, and answers the opening it ended: its facts frozen in the agent's store
    * since its preparation, its offer goes, and nothing refills it. An end the agent told names its run; an end the

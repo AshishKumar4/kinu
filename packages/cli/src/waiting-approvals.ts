@@ -4,7 +4,7 @@
  */
 
 import {
-  boundWriteOf, describeExecutionContext, executorLabel, timeAgo, type DeferredApproval, type DeferredApprovalAnswer,
+  approvalKindOf, describeExecutionContext, type ApprovalKind, executorLabel, timeAgo, type DeferredApproval, type DeferredApprovalAnswer,
 } from '@kinu.run/core';
 import { attempt, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -78,13 +78,21 @@ export function askWaitingApprovals(
 
 /** A file write's exact bytes are its approval; a terminal cannot show them, so only the web approves one. */
 export function terminalMayApprove(action: DeferredApproval): boolean {
-  return boundWriteOf(action.command) === null;
+  return approvalKindOf(action).kind === 'command';
+}
+
+/** What a waiting approval would do, drawn literally. */
+function parkedWhat(parked: ApprovalKind): string {
+  switch (parked.kind) {
+    case 'command': return literalText(parked.command || '(command)');
+    case 'write': return `Replace ${literalText(parked.write.path)}`;
+    case 'slate-effect': return `${literalText(parked.effect.tool)} on ${literalText(parked.effect.server)}, for ${literalText(parked.effect.viewer)}`;
+  }
 }
 
 /** What a prompt shows of a waiting approval, the command drawn literally: controls shown, never obeyed. */
 export function waitingApprovalDetails(action: DeferredApproval): string {
-  const write = boundWriteOf(action.command);
-  const what = write === null ? literalText(action.command || '(command)') : `Replace ${literalText(write.path)}`;
+  const what = parkedWhat(approvalKindOf(action));
 
   const context = describeExecutionContext(action.context);
   const where = context === '' ? '' : `Runs ${literalText(context)}`;

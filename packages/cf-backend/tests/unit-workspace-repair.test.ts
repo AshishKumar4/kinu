@@ -23,3 +23,58 @@ test('a workspace holding the webhook secrets as production made them repairs th
   expect(db.query('SELECT secret_id, secret FROM webhook_secrets').all()).toEqual([{ secret_id: 's-1', secret: 'hush' }]);
   db.exec("INSERT INTO webhook_secrets (secret_id, trigger_id, secret) VALUES ('s-2', 't-1', 'also')");
 });
+
+test('a workspace\'s live shares made before share modes repair to their viewers\' own access, no owner grant implied', () => {
+  const db = new Database(':memory:');
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+  db.exec(`DROP TABLE slate_live_shares; CREATE TABLE slate_live_shares (
+    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, visibility TEXT NOT NULL CHECK (visibility IN ('users', 'public')),
+    handle TEXT NOT NULL UNIQUE, grant_json TEXT NOT NULL, created_at INTEGER NOT NULL, revoked_at INTEGER
+  ); INSERT INTO slate_live_shares VALUES ('s-1', 'board', 'users', '0123456789', '{"slates":["board"],"members":[]}', 1, NULL)`);
+  kvOf(db).set('kinu.schema_stamp', 1);
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+
+  expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.workspace);
+  // Nor listed in the Gallery: no share was before the listing columns.
+  expect(db.query('SELECT id, handle, mode, grant_revision, listing_line, listing_category FROM slate_live_shares').all())
+    .toEqual([{ id: 's-1', handle: '0123456789', mode: 'own', grant_revision: null, listing_line: null, listing_category: null }]);
+});
+
+test('a workspace\'s share people added before roles repair to using the slate, none of them to edit it', () => {
+  const db = new Database(':memory:');
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+  db.exec(`DROP TABLE slate_live_share_users; CREATE TABLE slate_live_share_users (
+    share_id TEXT NOT NULL, user_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL,
+    PRIMARY KEY (share_id, user_id)
+  ); INSERT INTO slate_live_share_users VALUES ('s-1', 'u-pat', 'pat@example.test', 1)`);
+  kvOf(db).set('kinu.schema_stamp', 1);
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+
+  expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.workspace);
+  expect(db.query('SELECT share_id, user_id, email, role FROM slate_live_share_users').all())
+    .toEqual([{ share_id: 's-1', user_id: 'u-pat', email: 'pat@example.test', role: 'use' }]);
+});
+
+test('a workspace without editor marks repairs losslessly, with no unapproved edits invented', () => {
+  const db = new Database(':memory:');
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+  db.exec(`INSERT INTO slate_live_shares (id, slate_id, visibility, handle, grant_json, created_at, mode, grant_revision)
+    VALUES ('s-1', 'board', 'users', '0123456789', '{"slates":["board"],"members":[]}', 1, 'owner', 'r0')`);
+  db.exec("INSERT INTO slate_live_share_users VALUES ('s-1', 'u-pat', 'pat@example.test', 1, 'edit')");
+  db.exec('DROP TABLE slate_edit_marks');
+  kvOf(db).set('kinu.schema_stamp', 1);
+
+  unstartedOrchestratorHarness(undefined, 'shared', db);
+
+  expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.workspace);
+  expect(db.query('SELECT id, handle, mode, grant_revision FROM slate_live_shares').all())
+    .toEqual([{ id: 's-1', handle: '0123456789', mode: 'owner', grant_revision: 'r0' }]);
+  expect(db.query('SELECT email, role FROM slate_live_share_users').all()).toEqual([{ email: 'pat@example.test', role: 'edit' }]);
+  expect(db.query('SELECT * FROM slate_edit_marks').all()).toEqual([]);
+  db.exec("INSERT INTO slate_edit_marks VALUES ('board', 'pat@example.test', 'r0')");
+});

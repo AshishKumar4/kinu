@@ -15,7 +15,7 @@ import {
   decodeJsonValue, explainSandboxError, toolsNamespace,
   renderCodemodeDescription, programDeclarations, describeProgramSource, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, createToolArguments,
+  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, createToolArguments, nestedMembers,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
 import { programBody } from './executor';
@@ -98,7 +98,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
-          const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
+          const providerBindings: Record<string, Record<string, CodemodeExecute | Record<string, CodemodeExecute>>> = {};
 
           for (const p of providers) {
             const nsp: Record<string, CodemodeExecute> = {};
@@ -115,7 +115,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
             if (p.name === 'workspace' && create !== undefined) nsp['createTool'] = (...toolArgs) => create(...createToolArguments(toolArgs));
 
-            providerBindings[p.name] = nsp;
+            // A member group (`fs.read`) is an object of its members, as in the CF sandbox.
+            providerBindings[p.name] = nestedMembers(nsp);
           }
 
           const workspace = providerBindings['workspace'] ?? {};

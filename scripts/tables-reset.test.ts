@@ -174,7 +174,7 @@ function deployment(stale: number, onBuildBefore = 0) {
 
       if (unseen-- > 0) return { status: 401, text: 'not yet', version: 'v-candidate' };
 
-      if (path === 'roots') return { status: 200, text: JSON.stringify({ accounts: ['directory', 'u-seen'] }), version: 'v-candidate' };
+      if (path === 'roots') return { status: 200, text: JSON.stringify({ accounts: ['directory', 'u-seen'], control: ['site'] }), version: 'v-candidate' };
 
       if (body !== null) asked.push(body);
 
@@ -193,13 +193,14 @@ test('the walk reaches every object by name, from the roots, and only reads Clou
 
   // Staging rc12, 2026-10-16: an object asked by its listed id, which never recorded a name, threw as it constructed.
   expect(asked.map((body) => `${body.class} ${body.names.join(',')}`)).toEqual([
+    'ControlPlaneDO site',
     'UserDO directory,u-seen',
     'UserDO u-builtin',
     'OrchestratorAgent u-seen-ws,u-builtin-ws',
   ]);
   expect(asked.every((body) => !('ids' in body))).toBe(true);
   // Listed by Cloudflare and named by no root: counted, never opened. `u-seen` was named, so it is not among them.
-  expect({ reached: reached.length, unnamed: unnamed.length }).toEqual({ reached: 5, unnamed: 60 });
+  expect({ reached: reached.length, unnamed: unnamed.length }).toEqual({ reached: 6, unnamed: 60 });
   expect(unnamed).not.toContain(sha256Hex('u-seen'));
   expect(forgotten).toEqual(admitted);
 });
@@ -209,7 +210,7 @@ test('a batch answered by the build before is asked again until the candidate an
 
   await walk(target);
 
-  expect(asked[0]?.names).toEqual(['directory', 'u-seen']);
+  expect(asked.map((body) => body.names[0]).slice(0, 2)).toEqual(['site', 'directory']);
 });
 
 test('an edge that still serves the build before after the propagation bound fails the walk, and the pass is deleted', async () => {

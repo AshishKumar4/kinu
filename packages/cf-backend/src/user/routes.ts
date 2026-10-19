@@ -4,8 +4,7 @@ import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
-import { pictureKey, type PictureBucket } from '../slates/pictures';
-import { SlateDirectoryName } from '@kinu.run/core/slates';
+import { pictureKey, PictureAddressSchema, readSlatePicture, type PictureBucket } from '../slates/pictures';
 import { FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
@@ -16,7 +15,7 @@ import { listProviderCatalog } from './available-models';
 import { notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { displayNameProblem, err, isWorkspaceName, json, safeJson, safeJsonParse } from '@kinu.run/core';
+import { displayNameProblem, err, json, safeJson, safeJsonParse } from '@kinu.run/core';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 import type { UserCaller } from '@kinu.run/core';
@@ -44,6 +43,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove'
   | 'userMcp_handleOAuthCallback'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
+  | 'slateAiSpend'
 >;
 
 export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
@@ -217,27 +217,18 @@ userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new
   headers: appendIdentityHeaders(c.req.raw.headers, c.get('identity')),
 }))));
 
-const PictureSchema = v.object({
-  workspace: v.pipe(v.string(), v.check(isWorkspaceName)),
-  slate: SlateDirectoryName,
-  digest: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)),
-});
-
+// The owner's own pictures: admitted by the roster. Their private preview's, so never a Gallery card's.
 userRoutes.get('/api/user/pictures/:workspace/:slate/:digest', async (c) => {
-  const picture = v.safeParse(PictureSchema, c.req.param());
+  const picture = v.safeParse(PictureAddressSchema, c.req.param());
   const bucket = c.env.SLATE_PICTURES;
 
   if (!picture.success || bucket === undefined) return err(404, 'No such picture.');
+
   const { workspace, slate, digest } = picture.output;
 
   if (!await c.get('stub').hasWorkspace(c.get('owner'), workspace)) return err(404, 'No such picture.');
-  const object = await bucket.get(pictureKey(workspace, slate, digest));
 
-  if (object === null) return err(404, 'No such picture.');
-
-  return new Response(object.body, {
-    headers: { 'content-type': 'image/webp', 'cache-control': 'private, max-age=31536000, immutable', etag: object.httpEtag },
-  });
+  return await readSlatePicture(bucket, pictureKey(workspace, slate, digest), 'private') ?? err(404, 'No such picture.');
 });
 
 // A visit the roster did not take is a 404: the workspace is gone, or not visitable while it is created or torn down,

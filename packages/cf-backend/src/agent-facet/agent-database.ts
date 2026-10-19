@@ -11,7 +11,7 @@ import {
   localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
   type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
-  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
+  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, TurnReports,
   PlanReviewStore, OwnerQuestionStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
@@ -696,27 +696,14 @@ export class AgentDatabase {
     };
   }
 
-  /** A run's answer, prepared: the returned write appends it in the commit that ends the run. Nothing where the transcript
-   *  holds no turn to answer. */
-  async prepareAnswer(completion: NonNullable<HeadReport['canonicalCompletion']>): Promise<() => void> {
-    const transcript = this.transcript();
 
-    if (transcript.newestId() === null) return () => {};
-
-    const entry = await transcript.prepareAssistant({
-      id: crypto.randomUUID(), turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
-      finalText: completion.finalTextReference,
-    });
-
-    return () => { transcript.appendAssistant(entry); };
-  }
-
-
-  /** Or reserved and not yet written. */
-  admitted(id: string): boolean {
+  /** Of `ids`, in order, those this agent holds neither as a row of its chat nor as a send it reserved and has not written. */
+  unseen(ids: readonly string[]): string[] {
     const { actor, transcript } = this.readable();
+    const written = transcript.holding(ids);
+    const reserved = new PendingSendStore(this.sql, actor.actorId).holding(ids);
 
-    return transcript.has(id) || new PendingSendStore(this.sql, actor.actorId).has(id);
+    return ids.filter((id) => !written.has(id) && !reserved.has(id));
   }
 
   /** What a turn has told its hirer, kept as its tools answered: only ever more. */

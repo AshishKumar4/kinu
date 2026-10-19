@@ -19,7 +19,7 @@ import type { RunInference } from '../heads/head-inference';
 import type { SeatedActor } from '../state/actor-host';
 import type { EffectClaimDeps } from '../tools/effect-claim';
 import type { RunTurnSources } from '../orchestrator/turn-assembly';
-import { buildToolSurface, type CodemodeBuilder } from '../tools/builtins';
+import { buildToolSurface, surfaceStores, type CodemodeBuilder, type ServedTools, type ToolSurfaceDeps } from '../tools/builtins';
 import type { ReportDeps } from '../tools/report-operations';
 import type { BackgroundJobRunner } from '../jobs/runner';
 import { stepLoopJobs, type StepLoopJobSeat } from '../jobs/step-loop';
@@ -266,7 +266,7 @@ function buildNodeToolSet(input: {
   readonly arbitrate: NodeArbiter | null;
   readonly jobRunner: BackgroundJobRunner;
   readonly mode: WorkMode;
-}): ToolSet {
+}): ServedTools {
   const { deps, scratch } = input;
 
   // Annotated rather than inline: the only destination that declares `bodyOnly`.
@@ -292,7 +292,7 @@ function buildNodeToolSet(input: {
 
   // The proposal merges after the finish, so the sandbox never declares it; the session's ledger records each call, the
   // background handle the model was told included.
-  return buildToolSurface({
+  const surface: ToolSurfaceDeps = {
     rt: deps.actor.runtime,
     conversations: deps.conversations,
     workMode: input.mode,
@@ -308,7 +308,11 @@ function buildNodeToolSet(input: {
       backgroundable: CONFINED_BACKGROUNDABLE_TOOLS,
       mode: () => input.mode,
     }),
-  });
+  };
+
+  const stores = surfaceStores(surface);
+
+  return { tools: buildToolSurface({ ...surface, served: stores }), stores };
 }
 
 /**
@@ -401,7 +405,7 @@ async function runNodeLoop(
   });
 
   // A null arbiter is the only spelling of "no branch can be granted here".
-  const tools = buildNodeToolSet({
+  const { tools, stores } = buildNodeToolSet({
     deps,
     turnId: spec.headInput.id,
     scratch,
@@ -416,6 +420,7 @@ async function runNodeLoop(
     sources: deps.sources,
     clock: deps.clock,
     tools,
+    stores,
     brief: (callable) => nodeSystemPrompt({ base: spec.base, isolation: spec.isolation, home: spec.home, toolNames: callable }),
     opening: spec.messages,
     capture,

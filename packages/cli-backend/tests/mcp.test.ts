@@ -12,7 +12,7 @@ import { connectMcpServers } from '../src/mcp';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
-import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
+import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -155,7 +155,7 @@ describe('connectMcpServers', () => {
 
     try {
       const run = toolExecute<{ code: string }, unknown>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
-        cwd: WORKSPACE_ROOT,
+        cwd: WORKSPACE_ROOT, stores: freshServedStores(),
         native: {}, craftedTools: () => [], external: () => external,
       }));
 

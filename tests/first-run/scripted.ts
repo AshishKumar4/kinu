@@ -61,7 +61,7 @@ function namesIn(result: string): string[] {
 /** A name as the dismiss ask quotes it: a JSON string. */
 const QuotedNameSchema = v.pipe(v.string(), v.parseJson(), v.string());
 
-const hire = (mission: string): ScriptedAnswer => call('agents', { op: 'hire', lifetime: 'task', role: 'task', mission });
+const hire = (message: string): ScriptedAnswer => call('agents', { op: 'hire', lifetime: 'task', role: 'task', message });
 
 const why = 'The owner asked for this command on that machine.';
 
@@ -156,7 +156,7 @@ const delegation: Script = (request) => {
 
   if (ask === DELEGATION_ROSTER_ASK) {
     return steps(request, [
-      call('agents', { op: 'hire', role: 'task', mission: STANDBY_MISSION }),
+      call('agents', { op: 'hire', role: 'task', message: STANDBY_MISSION }),
       call('agents', { op: 'list' }),
     ], ([, roster]) => `ROSTER ${namesIn(roster?.result ?? '').join(' ')}`);
   }
@@ -315,7 +315,7 @@ const nestedChat: Script = (request) => {
 
   if (request.userTexts.slice(1).some((text) => text.includes(NESTED_WORD))) return { text: NESTED_WORD };
 
-  return steps(request, [call('agents', { op: 'hire', role: 'task', mission: NESTED_MISSION })], () => 'HIRED');
+  return steps(request, [call('agents', { op: 'hire', role: 'task', message: NESTED_MISSION })], () => 'HIRED');
 };
 
 /** The words every case sends its root agent: a conversation holding one is a case's, never a helper's. */

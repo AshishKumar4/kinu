@@ -19,7 +19,7 @@ import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { WorkspaceClient } from './workspace-rpc';
-import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type FacetModels, type LiveTurn, type TurnBound } from './agent-turn';
+import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, modelOperations, type FacetModels, type LiveTurn, type TurnBound } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -236,7 +236,8 @@ export class FacetChat {
     return await assembleActorTurn({
       ...bundle,
       ...(mission !== null && { budget: mission }),
-      toolset: () => tools,
+      // Its tools are the workspace's, run there, and so is its scaffold's program.
+      toolset: () => ({ tools, stores: null }),
       externalTools: async () => ({}),
       // A measure between turns binds nothing: no turn is open to bind it to.
       settle: async (profile, inputs) => {
@@ -644,7 +645,7 @@ export class FacetChat {
     const { routed } = sources.models;
 
     return await suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
-      llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: this.spend.operations }, system),
+      llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: modelOperations(actor, WORKSPACE_RUN_ID) }, system),
       ...(routed !== undefined && { attemptOf: (spec: string) => routed.attemptFor(spec) }),
     }, prompt), mission);
   }

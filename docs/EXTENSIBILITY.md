@@ -403,7 +403,7 @@ One `model_call` builder gives the spend census one row shape. One
 
 ## Worked example: a lifetime per question
 
-`agents({action:'hire', lifetime:'task', role, mission})` adds a lifetime to the
+`agents({op:'hire', lifetime:'task', role, message})` adds a lifetime to the
 delegation ladder. It adds no action, no table, no loop, and no actor builder.
 
 1. Declare the note once. `AGENTS_TOOL_NOTES.hire`

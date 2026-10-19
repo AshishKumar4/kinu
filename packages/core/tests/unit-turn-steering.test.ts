@@ -16,8 +16,8 @@ import {
 } from '../src/orchestrator/turn-steering';
 import type { JsonObject } from '../src/utils/json';
 import type { ToolOutcome } from '../src/tools/outcome';
-import { makeSqlExec } from './helpers';
-import { createFileTool } from '../src/tools/file-operations';
+import { makeSqlExec, fileToolOver } from './helpers';
+
 import { cloudPlanes } from '../src/vfs/resolve';
 import { TurnContextBudget } from '../src/context-budget';
 import { historyTurnPairs } from '../src/identity/conversation-store';
@@ -28,7 +28,7 @@ async function fileProgressTurn(opts: { readonly readAt: number; readonly editAt
 
   await seedFiles(memory.vfs, { '/a.ts': opts.missed ? 'alpha alpha\n' : 'alpha\n' });
 
-  const file = createFileTool({
+  const file = fileToolOver({
     vfs: memory.vfs, home: '/', planes: cloudPlanes('/'),
     ledger: orch.acc.ledgers.files, budget: new TurnContextBudget(),
   });

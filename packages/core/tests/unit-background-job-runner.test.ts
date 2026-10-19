@@ -381,7 +381,7 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
   // Production crafted-harbor-37f29697, 2026-10-16: a card titled `return await agents ? undefined : undefined;`.
   test('an eval call is labelled by the intent its first line declares, else as a tool program, never by its code', () => {
     const { runner, store } = setup();
-    const declared = runner.create('eval', { code: '\n  // read the notes\n  return await workspace.readFile("/a");' }, 'build', new AbortController());
+    const declared = runner.create('eval', { code: '\n  // read the notes\n  return await workspace.fs.text("/a");' }, 'build', new AbortController());
     const undeclared = runner.create('eval', { code: 'return await agents ? undefined : undefined;' }, 'build', new AbortController());
 
     expect([store.get(declared)?.label, store.get(undeclared)?.label]).toEqual(['read the notes', 'A tool program']);

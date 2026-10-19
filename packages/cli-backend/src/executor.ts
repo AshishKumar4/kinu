@@ -4,7 +4,7 @@
  */
 
 import { normalizeCode } from '@cloudflare/codemode/normalize';
-import { decodeJsonValue, JsonValueSchema } from '@kinu.run/core';
+import { decodeJsonValue, JsonValueSchema, nestedMembers, type NestedMembers } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,9 +21,8 @@ const subprocessResultSchema = v.variant('ok', [
 
 type ProviderFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
 
-interface ExecutorNamespace {
-  [toolName: string]: ProviderFunction;
-}
+/** A namespace as a program holds it: each member by its name, a member group (`fs.read`) as an object of its members. */
+type ExecutorNamespace = NestedMembers<ProviderFunction>;
 
 const INTERPRETERS: ReadonlyMap<string, { readonly command: string; readonly extension: string }> = new Map([
   ['python', { command: 'python3', extension: '.py' }],
@@ -185,18 +184,23 @@ async function executeInProcess(
   const context: Record<string, ExecutorNamespace> = {};
 
   for (const p of providers) {
+    // A member group (`fs.read`) is an object of its members, as in CLI eval and the CF sandbox.
+    const members = nestedMembers(p.fns);
+
     context[p.name] = new Proxy<ExecutorNamespace>({}, {
       get: (_target, toolName) => {
         // Never a thenable: `await agents` would call `then` as a member and wait on an answer nothing gives.
         if (typeof toolName !== 'string' || toolName === 'then') return undefined;
 
+        const member = Object.hasOwn(members, toolName) ? members[toolName] : undefined;
+
+        if (member !== undefined && typeof member !== 'function') return member;
+
         // Forward every argument: host bridge calls are multi-arg.
         return async (...args: JsonValue[]) => {
-          const fn = p.fns[toolName];
+          if (member === undefined) throw new Error(`Tool "${toolName}" not found in "${p.name}"`);
 
-          if (!fn) throw new Error(`Tool "${toolName}" not found in "${p.name}"`);
-
-          return fn(...args);
+          return member(...args);
         };
       },
     });

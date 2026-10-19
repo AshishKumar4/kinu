@@ -68,6 +68,8 @@ export { CodemodeLauncher } from "./codemode-sandbox";
 
 export { SlateBinding } from "./slates/bindings";
 
+export { PartBinding } from "./slates/part-binding";
+
 export { DevboxGateway } from '@kinu.run/devbox';
 
 /** The sandbox container's outbound HTTP, and a Nimbus workspace's egress (`NimbusWorkspaceOptions.egress`). */
@@ -371,9 +373,11 @@ worker.all('/client-node-stubs.ts', viteDevAsset);
 worker.all(`${AGENT_BUNDLE_DIRECTORY}/*`, () => new Response('Not found', { status: 404 }));
 
 // Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority.
-for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);
+// The Gallery, a live share's entry and a shared slate's part frames are only their shell: their own routes decide what a
+// visitor reads, and whom a share admits.
+for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, '/gallery']) worker.all(path, appShell);
 
-for (const prefix of ['/auth', '/assets', '/shared/blueprint']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
+for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
 
 worker.use('*', (c, next) => settle(Effect.gen(function* () {
   const request = c.req.raw;

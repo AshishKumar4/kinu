@@ -72,6 +72,8 @@ test('a CLI turn runs what its row claims, restores a clamped output from the pa
   const folder = scratchDir('shell-files-output-flow-folder');
   const rt = createCLIRuntime(db, { cwd: folder, llm: DUMMY_LLM });
   rt.actor.config.setLearning(false);
+  // This flow measures execution and output, with the owner approving programs in their folder.
+  rt.setShellApprovalChannel?.(async () => 'allow');
 
   const requests: LanguageModelV2CallOptions[] = [];
 
@@ -109,7 +111,7 @@ test('a CLI turn runs what its row claims, restores a clamped output from the pa
   const claimed = claimedPart.split(', ').filter((capability) => probed.has(capability));
   const ran = [...(shown[0] ?? '').matchAll(/CAP:(\w+)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 
-  expect(ran).toContain('javascript');
+  expect(ran, shown[0]).toContain('javascript');
   expect(claimed.sort()).toEqual(ran.sort());
 
   // A clamped output names where it is whole; the shell and the file tool both reach what it left out there.

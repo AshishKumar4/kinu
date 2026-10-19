@@ -263,6 +263,5 @@ export function workspaceClient(workspace: AgentWorkspaceCalls): WorkspaceClient
     sayToParent: (...args) => settle(viaPort((port) => port.sayToParent(...args))),
     logActivity: (...args) => settle(viaPort((port) => port.logActivity(...args))),
     reportModelCall: (...args) => settle(viaPort((port) => port.reportModelCall(...args))),
-    reportModelOperation: (...args) => settle(viaPort((port) => port.reportModelOperation(...args))),
   };
 }

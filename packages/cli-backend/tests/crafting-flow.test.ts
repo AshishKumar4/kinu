@@ -8,7 +8,7 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import { codemodeSurface, initWorkspaceSchema, narrowToolSurface, toolsInWorkMode, type JsonValue, type RunEvent, type WebSearchProvider } from '@kinu.run/core';
-import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase } from '@kinu.run/test-utils';
+import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase, servedStoresOf } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
@@ -33,13 +33,13 @@ const REPORT = JSON.stringify({ testResults: [{ assertionResults: [
 ] }] });
 
 const TOTALS = `async (args) => {
-  const rows = JSON.parse(await workspace.readFile(args.path)).testResults.flatMap((suite) => suite.assertionResults);
+  const rows = JSON.parse(await workspace.fs.text(args.path)).testResults.flatMap((suite) => suite.assertionResults);
   const count = (status) => rows.filter((row) => row.status === status).length;
   return { total: rows.length, passed: count('passed'), failed: count('failed'), skipped: rows.length - count('passed') - count('failed'),
     durationMs: rows.reduce((sum, row) => sum + (row.duration ?? 0), 0) };
 }`;
 
-const WRITER = 'async (args) => { await workspace.writeFile(args.path, args.text); return await workspace.readFile(args.path); }';
+const WRITER = 'async (args) => { await workspace.fs.write(args.path, args.text); return await workspace.fs.text(args.path); }';
 
 const BROKEN = 'async () => { throw new Error("nope"); }';
 
@@ -49,7 +49,7 @@ const create = (name: string, body: string): string => `await workspace.createTo
 /** The eval programs each turn runs, by the words that open it; a turn answers once its programs are spent. */
 const TURNS = {
   'Build the report tools.': [
-    `await workspace.writeFile('reports/trial.json', ${JSON.stringify(REPORT)}); ${create('report_totals', TOTALS)} ${create('write_result', WRITER)} await workspace.createTool('doubleIt', 'doubleIt tool', async (n) => n * 2); return 'made';`,
+    `await workspace.fs.write('reports/trial.json', ${JSON.stringify(REPORT)}); ${create('report_totals', TOTALS)} ${create('write_result', WRITER)} await workspace.createTool('doubleIt', 'doubleIt tool', async (n) => n * 2); return 'made';`,
     "return { totals: await tools.report_totals({ path: 'reports/trial.json' }), wrote: await tools.write_result({ path: 'reports/output.txt', text: 'saved' }), doubled: await tools.doubleIt(21) };",
     `${create('brokenIt', BROKEN)} return 'made';`,
     'return await tools.brokenIt();',
@@ -140,7 +140,7 @@ test('a crafted tool is made, called, scored out, shared with a node, and still 
 
     // Crafted tools are the workspace's: a swarm node's eval calls main's, and main's scoring retired the same one there.
     const seat = await session.hostNode({ nodeId: 'crafting-node', rootId: 'crafting-swarm', depth: 1 });
-    const nodeEval = present(toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB, () => seat.actor.session.orchestrator.acc.ledgers)(codemodeSurface(seat.actor.runtime, {}), narrowToolSurface(undefined)) }).eval, 'the node\'s eval');
+    const nodeEval = present(toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB)(codemodeSurface(seat.actor.runtime, {}, () => ({}), { stores: servedStoresOf(seat.actor.runtime, seat.actor.stores.conversationSearch, seat.actor.session.orchestrator.acc.ledgers) }), narrowToolSurface(undefined)) }).eval, 'the node\'s eval');
     const node = await toolExecute<{ code: string }, { result: JsonValue }>(nodeEval)({ code: 'return [await tools.doubleIt(21), typeof tools.brokenIt];' });
 
     expect(node.result).toEqual([42, 'undefined']);

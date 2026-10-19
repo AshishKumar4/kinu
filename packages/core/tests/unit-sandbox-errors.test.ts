@@ -1,3 +1,4 @@
+import { retiredMembersOf } from '../src/operations/retired';
 /**
  * What a codemode program receives when a call fails, and explainSandboxError: a ReferenceError for a
  * native tool used as a codemode global becomes a correction naming that tool's own namespace from TOOL_REACH.
@@ -19,17 +20,20 @@ import { createInlineExecutor, createNimbusWorkspaceExecutor, type InlineExecuto
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import { createParentExecutor } from '../src/execution/parent';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
-import { createStateCodemodeProvider } from '../src/tools/state-operations';
 import { executorNamespace } from '../src/tools/executor-operations';
 import { createAgentsCodemodeProvider } from '../src/delegation/agents-operations';
 import { createReportCodemodeProvider } from '../src/tools/report-operations';
-import { createMemoryCodemodeProvider } from '../src/tools/memory-operations';
-import { createTasksCodemodeProvider } from '../src/tools/tasks-operations';
-import { createFileCodemodeProvider } from '../src/tools/file-operations';
+import { createMemoryCodemodeProvider, serveMemory } from '../src/tools/memory-operations';
+import { createTasksCodemodeProvider, serveTasks } from '../src/tools/tasks-operations';
+import { createFileCodemodeProvider, serveFile } from '../src/tools/file-operations';
 import { createDbCodemodeProvider } from '../src/tools/db-codemode';
 import { createWebCodemodeProvider } from '../src/tools/web-operations';
 import { createAgentSelfProvider } from '../src/tools/agent-self';
 import { createTestRuntime, conversationsFor } from './helpers';
+
+test('a program naming state is told to use a private db table', () => {
+  expect(explainSandboxError('state is not defined')).toContain('state was removed: use a private db table');
+});
 
 /**
  * A dependency whose every property is another such double and none of which can be called, so each member takes
@@ -148,7 +152,7 @@ test('a native tool a program calls runs only on input its own schema admits', a
 
 test('every member of every namespace refuses with the one declared Refusal, and the program records it', async () => {
   const { rt } = createTestRuntime();
-  const inline: InlineExecutorDeps = { filesOwner: 'agent', vfs: refusingDouble(), memory: refusingDouble(), craftStore: refusingDouble(), shell: refusingDouble() };
+  const inline: InlineExecutorDeps = { filesOwner: 'agent', vfs: refusingDouble(), craftStore: refusingDouble(), shell: refusingDouble() };
 
   const namespaces = [
     executorNamespace(createInlineExecutor({ ...inline, slate: refusingDouble() })),
@@ -156,22 +160,24 @@ test('every member of every namespace refuses with the one declared Refusal, and
     executorNamespace(createSandboxExecutor(refusingDouble(), { previewHostSuffix: 'preview.test' })),
     executorNamespace(createSandboxExecutor()),
     executorNamespace(createParentExecutor({ handle: refusingDouble() })),
-    executorNamespace(createDeviceTunnelExecutor(refusingDouble())),
+    // Its capabilities are read from the live fleet, so the double answers that one read: no machine is connected.
+    executorNamespace(createDeviceTunnelExecutor({ rpc: refusingDouble(), refreshStatus: refusingDouble(), status: () => ({ devices: [] }) })),
     { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }), undefined) },
-    createStateCodemodeProvider(refusingDouble()),
     createAgentsCodemodeProvider(() => refusingDouble()),
     createReportCodemodeProvider(() => refusingDouble()),
-    createMemoryCodemodeProvider(() => refusingDouble()),
-    createTasksCodemodeProvider(refusingDouble(), refusingDouble()),
-    createFileCodemodeProvider(() => refusingDouble()),
-    createDbCodemodeProvider(refusingDouble()),
+    createMemoryCodemodeProvider(serveMemory(() => refusingDouble())),
+    createTasksCodemodeProvider(serveTasks(refusingDouble(), refusingDouble())),
+    createFileCodemodeProvider(serveFile(() => refusingDouble())),
+    createDbCodemodeProvider(refusingDouble(), { private: true }),
     createWebCodemodeProvider(refusingDouble()),
     createAgentSelfProvider(refusingDouble()),
   ];
 
   // What a program reads from `describe`: every member declared as a signature or a const (native tools by their schemas), and every
   // declared result admitting a Refusal.
+  // A retired member is no declared member: it only refuses, naming its successor.
   const undeclared = namespaces.filter((namespace) => namespace.name !== CRAFTED_TOOL_NAMESPACE).flatMap((namespace) => Object.keys(namespace.tools)
+    .filter((member) => !retiredMembersOf(namespace.name).some((retired) => retired.member === member))
     .filter((member) => namespace.declarations?.[member] === undefined
       && ![` ${member}(`, `const ${member}:`].some((form) => (namespace.types ?? '').includes(form)))
     .map((member) => `${namespace.name}.${member}`));

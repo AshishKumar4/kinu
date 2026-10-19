@@ -3,8 +3,8 @@
 `lean/` holds hand-written abstract models of selected agent, evolution,
 execution, exploration, MCTS, safety and storage behavior. Check them with
 `bash scripts/verify-lean.sh`. Plain `lake build` compiles the declarations and
-skips the audits that follow it. Five requirements are also refined against
-the deployed TypeScript and SQLite on generated cases (see *Implementation
+skips the audits that follow it. Requirements marked `proved-and-refined` are
+also checked against deployed functions on generated cases (see *Implementation
 correspondence*); the rest are proved of their model only.
 
 Cite theorems by name, never by line number: on 2026-08-19 a line citation slid
@@ -26,11 +26,13 @@ evidence.
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 6 | what each shipped executor claims, over the inputs its constructor reads | The capability lists are transcribed from the constructors; no fixture runs them |
 | Safety | 30 | the credential store's client view, envelope binding and rotation; what a connected machine's file methods reach in each tier; the connect ticket, token rotation and reuse revocation | The cipher's guarantees are premises. Paths are judged where a syscall reaches them, and a link swapped after the check is outside the model. A connection is one atomic step inside the token's window |
+| SharingNimbus | 29 | the shared server's own/owner-mode authority, revision-bound personal consent, single-use approvals for every uncontained call (reads included), code-only forks, per-call revocation, fixed-history noninterference and delegated-egress disclosure | The pure policy functions are refined by 461 generated cases. Egress confinement assumes truthful read-only/closed-world declarations. Host routing, confined processes, sealed rendering, exact approval prompts and Workers/Nimbus isolation require runtime evidence; hash collision resistance, redirects, timing channels and relaying are not proved |
 
-Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
-reports 451 named declarations, and the traceability map enrolls all 451: 75
-under `proved-and-refined` requirements, 316 under `proved-in-abstract-model`
-and 60 under `by-construction-witness`.
+Measured 2026-10-16: 52 requirements and 422 enrolled theorems. The eight
+`PR-SHARE-NIMBUS` requirements replace the retired room/DIFC requirements and
+enroll 29 theorems in `lean/Kinu/SharingNimbus/`. The fixture
+`lean/fixtures/share-policy-cases.json` evaluates the Lean decisions; its replay
+test calls `serverAuthority`, `containedTool`, `partCallVerdict` and `EffectApprovals` directly.
 
 Status is declared on a requirement and inherited by every theorem it claims,
 so the same status words count over two totals: theorems and requirements. Name
@@ -40,9 +42,9 @@ Near-definitional statements, such as the nonnegativity of a `Nat` EMA score,
 count as witnesses. They are not deep safety
 proofs.
 
-By requirement, over 48: 7 `proved-and-refined`, 31 `proved-in-abstract-model`,
-9 `by-construction-witness`, 1 `trusted-model-assumption`. The last status
-appears only in this total, because that requirement claims no theorem.
+The `trusted-model-assumption` status appears only in requirement totals,
+because its requirement claims no theorem. The manifest is the live inventory;
+historical room proofs and their fixtures are no longer registered evidence.
 
 ## Statuses
 

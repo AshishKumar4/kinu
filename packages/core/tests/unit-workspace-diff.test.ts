@@ -18,7 +18,7 @@ import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { createTestRuntime } from './helpers';
-import { commandResult, type CommandResult } from '../src/execution/exec-result';
+import { commandResultAt, type CommandResult } from '../src/execution/exec-result';
 import { agentCred, provisionAgentHome, actorHomeName } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
@@ -65,7 +65,7 @@ function shellIn(cwd: string): ExecutionRouter {
           const [command] = v.parse(v.tuple([v.string()]), args);
           const result = await runToExit(['/bin/sh', '-lc', command], { cwd, env: gitEnv() });
 
-          return commandResult({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? undefined });
+          return commandResultAt({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? undefined }, false);
         },
       },
     },

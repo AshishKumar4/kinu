@@ -49,7 +49,10 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
     }
   }
 
-  for (const leg of run.pass ? ['candidate'] : ['candidate', 'baseline']) {
+  // The legs the run planned, read off its items: a leg whose every trial was lost still reports, empty.
+  const legs = [...new Set(items.map((item) => item.leg))];
+
+  for (const leg of legs) {
     const legDir = join(dir, leg);
 
     mkdirSync(legDir, { recursive: true });
@@ -94,18 +97,21 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
     verdictExit = assertions.length === items.length && assertions.every((assertion) => assertion.status === 'passed') ? 0 : 1;
     writeFileSync(join(dir, 'results.json'), readFileSync(join(dir, 'candidate', 'results.json')));
   } else {
-    for (const [leg, worker] of [['candidate', deploymentOf('staging').worker], ['baseline', deploymentOf('production').worker]] as const) {
+    const workers = { candidate: deploymentOf('staging').worker, baseline: deploymentOf('production').worker };
+
+    for (const leg of legs) {
       await step(`${leg}-platform`, ['evals/scripts/platform-bugs.ts', join(dir, leg, 'results.json'),
-        '--worker', worker, '--out', join(dir, leg, 'platform.json')], { network: true });
+        '--worker', workers[leg], '--out', join(dir, leg, 'platform.json')], { network: true });
       await step(`${leg}-validate`, ['evals/scripts/validate.ts', join(dir, leg, 'results.json'), '--trials', String(run.trials)]);
     }
 
     const compareArgs = ['evals/scripts/compare.ts', '--candidate', join(dir, 'candidate', 'results.json'),
-      '--baseline', join(dir, 'baseline', 'results.json'), '--candidate-build', run.candidateBuild, '--baseline-build', run.baselineBuild,
+      ...legs.includes('baseline') ? ['--baseline', join(dir, 'baseline', 'results.json'), '--baseline-build', run.baselineBuild] : [],
+      '--candidate-build', run.candidateBuild,
       '--tasks', run.taskFiles.map((file) => file.slice('evals/tasks/'.length).replace(/\.eval\.ts$/u, '')).join(','),
       '--trials', String(run.trials), '--out', join(dir, 'comparison')];
 
-    for (const leg of ['candidate', 'baseline']) {
+    for (const leg of legs) {
       const platform = join(dir, leg, 'platform.json');
 
       if (existsSync(platform)) compareArgs.push(`--${leg}-platform`, platform);
@@ -114,10 +120,13 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
     if (await step('compare', compareArgs) !== 0) throw new Error('comparison failed: compare.log retains its real error');
     const verdict = v.parse(v.object({ pass: v.boolean(), reason: v.string() }), JSON.parse(readFileSync(join(dir, 'comparison', 'verdict.json'), 'utf8')));
 
-    verdictExit = verdict.pass ? 0 : 1;
     writeFileSync(join(dir, 'verdict.log'), `${verdict.reason}\n`);
     await step('trajectories', ['evals/scripts/trajectories.ts', join(dir, 'candidate', 'results.json'), join(dir, 'comparison', 'trajectories.md')]);
     writeFileSync(join(dir, 'comparison', 'comment.md'), `<!-- kinu-evals-results -->\n${readFileSync(join(dir, 'comparison', 'comparison.md'), 'utf8')}\nArmada jobs: ${run.jobs.join(', ')}.\n`);
+
+    // Staging alone compares models on one build: its report is the result, and there is no verdict to stand or fall.
+    if (!legs.includes('baseline')) return 0;
+    verdictExit = verdict.pass ? 0 : 1;
     mkdirSync(join(dir, 'why'), { recursive: true });
 
     const diagnosis = await step('diagnose', ['evals/scripts/diagnose.ts', '--results', join(dir, 'candidate', 'results.json'),

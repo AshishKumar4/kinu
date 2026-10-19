@@ -123,13 +123,13 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   if (team && offers.has('hire')) {
     const hire = {
       role: ROLE,
-      mission: text(20000, `The brief, run as the new agent's first turn${temporary ? '; for lifetime "task", the whole question' : ''}.`),
+      message: text(20000, `The brief, run as the new agent's first turn${temporary ? '; for lifetime "task", the whole question' : ''}.`),
       name: optional(described(v.string(), 'A name for the new agent.')),
       tier: optional(tierField(temporary)),
-      context: optional(described(v.picklist(SWARM_CONTEXTS), 'fresh (default) starts from the mission and a digest of your recent messages; inherit also carries your recent turns.')),
+      context: optional(described(v.picklist(SWARM_CONTEXTS), 'fresh (default) starts from the message alone; inherit also carries your recent turns.')),
     };
 
-    const help = `Create a helper under a role for one workstream; its mission is its first turn. It returns at once; the helper's report, or its failure, arrives later as a message that opens your next turn. It stays in your roster, with its context, after it reports. ${nestingRoom(team.delegation)}`;
+    const help = `Create a helper under a role for one workstream; its message is its first turn. It returns at once; the helper's report, or its failure, arrives later as a message that opens your next turn. It stays in your roster, with its context, after it reports. ${nestingRoom(team.delegation)}`;
     const lifetime = optional(described(v.picklist(SUBORDINATE_LIFETIMES), 'durable (default) stays in your roster; task answers one question, as a later message, and is archived.'));
 
     served.push(temporary

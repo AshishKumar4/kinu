@@ -460,7 +460,7 @@ function namesRoot(command: string, root: string): boolean {
 }
 
 /** The user's when the command names or reaches under one of their roots, or its session may be there. */
-export function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): FilesOwner {
+function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): FilesOwner {
   const roots = executor.shellSession?.userRoots() ?? [];
 
   if (executor.filesOwner === 'user' || roots.length === 0) return executor.filesOwner;
@@ -576,16 +576,6 @@ export function reviewFileAccess(access: FileAccess): ApprovalResult {
   if (access.op !== 'read' && access.reaches === 'outside-directory') hits.push(WRITE_OUTSIDE);
 
   if (access.reaches === 'user-mount' && (access.op === 'delete' || (access.op === 'write' && access.replaces === true))) hits.push(OVERWRITE);
-
-  return { decision: dominant(hits), hits };
-}
-
-/** `runCode` in another language: its text cannot show what it does to the user's files, so it asks there. */
-export function reviewProgram(code: string, filesOwner: FilesOwner): ApprovalResult {
-  const review = reviewCommand(code, filesOwner);
-
-  if (filesOwner === 'agent') return review;
-  const hits = [...review.hits, { decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.' } as const];
 
   return { decision: dominant(hits), hits };
 }

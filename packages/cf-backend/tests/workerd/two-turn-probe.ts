@@ -170,7 +170,7 @@ const FACET_CALLS = Object.keys({
   listRuns: true, runSummaries: true, runEvents: true, runEventText: true, idle: true, deliverAdvice: true,
   step: true, frozen: true, seed: true, media: true, historyPage: true, messageCount: true, inspect: true,
   inheritedContext: true, workingContext: true, turnRequests: true, turnRequest: true, spend: true, context: true,
-  searchConversations: true, scrollConversation: true, browseConversations: true, admitted: true, interrupt: true,
+  searchConversations: true, scrollConversation: true, browseConversations: true, unseen: true, interrupt: true,
   recover: true, outOfMemory: true, archivePage: true,
 } satisfies Record<keyof AgentFacetCalls, true>);
 
@@ -342,7 +342,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   async answerSlates(agent: string): Promise<AgentSlateUi> {
     const reason = (result: SlateAnswer<unknown>) => (result.ok ? 'ok' : result.reason);
     // A page's own call resolves its source first, so a block that resolves is refused only for the authority lent to it.
-    const call = async (id: string) => reason(await this.slateCallAs(ROOT_SLATE_CALLER, id, 'workspace', { path: ['exists'], args: ['/home'], invocation: null }));
+    const call = async (id: string) => reason(await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: id, name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, { path: ['fs', 'stat'], args: ['/home'], invocation: null }));
     const { items } = await this.agentCall(agent, (isolate, snapshot) => isolate.historyPage(snapshot, {}));
     const answer = items.filter((item) => item.role === 'assistant').at(-1)?.id ?? 'none';
     const ask = items.filter((item) => item.role === 'user').at(-1)?.id ?? 'none';
@@ -412,8 +412,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    */
   async answerPageModes(): Promise<AnswerPageModes> {
     const write = async () => {
-      const result = await this.slateCallAs(ROOT_SLATE_CALLER, 'a-page/card', 'workspace', {
-        path: ['writeFile'], args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
+      const result = await this.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'a-page/card', name: 'workspace', lineage: { incarnation: 'probe', generation: 0, ancestors: {} } }, {
+        path: ['fs', 'write'], args: ['/home/main/page-mode.txt', 'written by the page'], invocation: null,
       });
 
       return result.ok ? 'ok' : result.reason;

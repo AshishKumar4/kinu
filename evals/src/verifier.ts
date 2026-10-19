@@ -110,7 +110,8 @@ export async function rosterOf(session: Inspecting): Promise<(RosterHelper & { l
   }
 }
 
-/** Full assignments from the actor's canonical conversation, keyed only by the run that stored them. */
+/** Full assignments from the actor's canonical conversation, keyed only by the run that stored them: a run's first entry
+ *  that is not its answer, `system` as a hirer's brief projects and `user` as a person's words do. */
 async function briefsOf(session: Inspecting, address: HelperAddress): Promise<ReadonlyMap<string, string>> {
   const briefs = new Map<string, { position: number; role: string; parts: readonly { readonly type?: unknown; readonly text?: unknown }[] }>();
 
@@ -120,7 +121,7 @@ async function briefsOf(session: Inspecting, address: HelperAddress): Promise<Re
     if (answer.view !== 'history') throw new Error(`the helper's assignments could not be read: ${JSON.stringify(answer)}`);
 
     for (const entry of answer.page.items) {
-      if (entry.role !== 'user' || typeof entry.runId !== 'string') continue;
+      if (entry.role === 'assistant' || typeof entry.runId !== 'string') continue;
       const opening = briefs.get(entry.runId);
 
       if (opening === undefined || entry.position < opening.position) briefs.set(entry.runId, entry);

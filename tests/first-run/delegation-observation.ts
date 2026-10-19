@@ -9,7 +9,7 @@ const OpSchema = v.object({
   op: v.string(), lifetime: v.optional(v.picklist(['durable', 'task'])), agent: v.optional(v.string()),
 });
 
-const TaskHireArgsSchema = v.looseObject({ op: v.literal('hire'), lifetime: v.literal('task'), mission: v.string() });
+const TaskHireArgsSchema = v.looseObject({ op: v.literal('hire'), lifetime: v.literal('task'), message: v.string() });
 
 /** A task hire as `agents` answers it: at once, its helper still at work (cafab2bfc, SUBAGENTS.md s4). */
 const HiredSchema = v.looseObject({ status: v.literal('working'), lifetime: v.literal('task'), agent: v.string() });
@@ -37,11 +37,11 @@ function calls(events: readonly RunEvent[], op: string): ToolCallEnd[] {
   });
 }
 
-/** One task hire, by the helper it named and the mission it gave. */
+/** One task hire, by the helper it named and the message it gave. */
 export interface TaskHire {
   readonly call: ToolCallEnd;
   readonly agent: string;
-  readonly mission: string;
+  readonly message: string;
 }
 
 /** The task hires `events` made, oldest first. */
@@ -50,7 +50,7 @@ export function taskHires(events: readonly RunEvent[]): TaskHire[] {
     const args = v.safeParse(TaskHireArgsSchema, call.args);
     const hired = v.safeParse(HiredSchema, call.result);
 
-    return args.success && hired.success ? [{ call, agent: hired.output.agent, mission: args.output.mission }] : [];
+    return args.success && hired.success ? [{ call, agent: hired.output.agent, message: args.output.message }] : [];
   });
 }
 

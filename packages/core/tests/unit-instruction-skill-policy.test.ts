@@ -22,7 +22,7 @@ function vfs(source: string): VFS {
 const REVIEWED = `---
 name: deploy
 description: deploy safely
-allowed-tools: [workspace.readFile]
+allowed-tools: [workspace.fs.text]
 ---
 Review the diff first.
 `;
@@ -54,7 +54,7 @@ describe('skill trust binds raw policy source', () => {
     });
 
     expect(approved.active[0]?.trust).toBe('approved');
-    expect(approved.active[0]?.allowed_tools).toEqual(['workspace.readFile']);
+    expect(approved.active[0]?.allowed_tools).toEqual(['workspace.fs.text']);
 
     const changedVfs = vfs(POLICY_CHANGED);
     const changed = await discoverSkills(changedVfs, { admissionTokens: 10_000 });
@@ -75,7 +75,7 @@ describe('skill trust binds raw policy source', () => {
     expect(demoted.active[0]?.trust).toBe('unverified');
     expect(demoted.active[0]?.allowed_tools).toEqual(['shell']);
     // Known answers computed without calling the function under test.
-    expect(instructionDigest(REVIEWED)).toBe('e0919db09d4f769f92f0e140d20cc0e81b49e6335e167138d6794c2adf60300e');
+    expect(instructionDigest(REVIEWED)).toBe('eefcebef8869b96206ce21ddbdda24a9304327ecd9da58d66308ed98e50fc340');
     expect(instructionDigest(POLICY_CHANGED)).toBe('fa1e149284a484694dcde937a4987c88f3f40f301935565748ab87e61b9466a0');
   });
 
@@ -115,8 +115,8 @@ describe('skill trust binds raw policy source', () => {
     });
 
     if (view === null) throw new Error('expected skill source');
-    expect(view.digest).toBe('e0919db09d4f769f92f0e140d20cc0e81b49e6335e167138d6794c2adf60300e');
-    expect(view.preview).toContain('allowed-tools: [workspace.readFile]');
+    expect(view.digest).toBe('eefcebef8869b96206ce21ddbdda24a9304327ecd9da58d66308ed98e50fc340');
+    expect(view.preview).toContain('allowed-tools: [workspace.fs.text]');
     expect(view.preview).toContain('Review the diff first.');
   });
 });
