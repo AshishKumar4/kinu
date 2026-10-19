@@ -50,11 +50,11 @@ export const THINKING_TURN_ANSWER = 'Thought it through.';
 
 /** A turn that reasons for a few seconds in small steps before it answers, so a tab can join or reconnect mid-thought. */
 /** The dropped-file row's ask, and the attachment's one data row: the model answers with whether that row reached it. */
-export const DROPPED_FILE_ASK = 'Check these coupons';
+export const DROPPED_FILE_ASK = 'Check these errors';
 
-export const DROPPED_FILE_ROW = 'SAVE20,20';
+export const DROPPED_FILE_ROW = 'GET /api/health,500';
 
-export const DROPPED_FILE_ARRIVED = 'The file arrived; SAVE20 is in it.';
+export const DROPPED_FILE_ARRIVED = 'The file arrived; GET /api/health is in it.';
 
 export function droppedFileTurn(request: ScriptedRequest): ScriptedAnswer | null {
   const last = request.userTexts.at(-1) ?? '';
@@ -384,15 +384,15 @@ const APPROVAL_TEXT = /approved plan/i;
 /** The plan-tasks row's asks: a chore before any plan exists, then the plan itself, sent on a Plan turn. */
 export const PLAN_TASKS_CHORE = 'Plan tasks probe: note the old chore before any plan.';
 
-export const PLAN_TASKS_PLAN = 'Plan tasks probe: plan the guard fix.';
+export const PLAN_TASKS_PLAN = 'Plan tasks probe: plan the binding fix.';
 
 /** What the plan-tasks row's turns add: a chore before the plan, then the approved plan's step, its subtask, and a
  *  step added from a program. */
 export const PLAN_TASK_TITLES = {
-  chore: 'Sweep the old logs', step: 'Guard the segment read', sub: 'Cover the guest cart', programmed: 'Ship the guard fix',
+  chore: 'Sweep the old logs', step: 'Read the renamed binding', sub: 'Cover the missing binding', programmed: 'Ship the binding fix',
 } as const;
 
-const PLAN_TASKS_MARKDOWN = ['# Guard the segment read', '', '1. Guard the read.', '2. Cover the guest cart.', '3. Ship it.'].join('\n');
+const PLAN_TASKS_MARKDOWN = ['# Read the renamed binding', '', '1. Read the binding.', '2. Cover the missing binding.', '3. Ship it.'].join('\n');
 
 /** The ids a native `tasks` add answers with. */
 const TasksAddedSchema = v.pipe(v.string(), v.parseJson(), v.looseObject({ added: v.array(v.looseObject({ id: v.string() })) }));
@@ -452,7 +452,7 @@ export function planTasksProbe(request: ScriptedRequest): ScriptedAnswer | null 
 
 /** The mission the walkthrough is driven with, sent on a Plan turn. */
 export const PLAN_MISSION
-  = 'The SAVE20 coupon 500s at checkout. Plan the fix, then build me a dashboard of the support queue.';
+  = 'The api Worker answers 500 on /api/health. Plan the fix, then build me a dashboard of the support queue.';
 
 export const SLATE_ID = 'support-queue';
 
@@ -461,25 +461,26 @@ export const SLATE_TITLE = 'Support queue';
 
 /** The plan the scripted agent submits — Markdown, as `submit_plan` takes it. */
 export const PLAN_MARKDOWN = [
-  '# Repair the `applyCoupon` eligibility guard',
+  '# Read the sessions database as `SESSIONS_DB`',
   '',
   '## What is wrong',
   '',
-  '`applyCoupon` reads `cart.customer.segment` before the guest cart has a',
-  'customer, so a guest applying SAVE20 throws and checkout answers 500.',
+  '`openDb` reads `env.DB`, but the last deploy renamed the D1 binding to',
+  '`SESSIONS_DB`, so every route that opens the database throws and',
+  '/api/health answers 500.',
   '',
   '## Steps',
   '',
-  '1. Guard the segment read in `applyCoupon`: a guest cart has no segment, and',
-  '   a coupon with no segment rule applies to every cart.',
-  '2. Refuse an ineligible coupon with the cart untouched, and return the',
-  '   refusal to the checkout route instead of throwing.',
-  '3. Add the guest-cart case to the coupon regression suite.',
+  '1. Read `env.SESSIONS_DB` in `openDb`, falling back to `env.DB` until every',
+  '   environment has redeployed.',
+  '2. Fail by the binding\'s name when an environment binds neither, instead of',
+  '   throwing on `undefined.prepare`.',
+  '3. Add the renamed and the missing binding to the Worker\'s regression suite.',
   '',
   '## How it is verified',
   '',
-  '- A guest applying SAVE20 gets the discount; the response is 200.',
-  '- A refused coupon leaves the cart total and the discount rows unchanged.',
+  '- /api/health answers 200 with the database up, on staging and locally.',
+  '- A Worker with no database bound fails by the binding\'s name.',
 ].join('\n');
 
 const SLATE_MANIFEST = JSON.stringify({
@@ -493,7 +494,7 @@ const SLATE_SERVER = [
   '',
   'const ROWS = [',
   '  { queue: "Billing", open: 14, breached: 2 },',
-  '  { queue: "Checkout", open: 9, breached: 0 },',
+  '  { queue: "API", open: 9, breached: 0 },',
   '  { queue: "Accounts", open: 5, breached: 1 },',
   '];',
   '',
@@ -532,7 +533,7 @@ const SLATE_WRITES: readonly ScriptedAnswer[] = [
  */
 export const planWalkthrough: ScriptedModel = (request) => {
   const approved = request.userTexts.some((text) => APPROVAL_TEXT.test(text));
-  const asked = request.userTexts.some((text) => text.includes('SAVE20'));
+  const asked = request.userTexts.some((text) => text.includes('/api/health'));
 
   if (!asked || request.available.length === 0) return { text: FALLBACK_ANSWER };
 
@@ -556,7 +557,7 @@ export const planWalkthrough: ScriptedModel = (request) => {
 
   return {
     text: [
-      'The guard is fixed and the guest-cart case is in the regression suite.',
+      'The Worker reads the database by its new binding, and the missing-binding case is in the regression suite.',
       `The support queue dashboard is a slate: ${SLATE_TITLE}, open in its own tab.`,
     ].join(' '),
   };

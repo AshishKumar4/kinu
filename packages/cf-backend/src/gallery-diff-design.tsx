@@ -19,7 +19,7 @@ import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import { NotesProvider, noteOf, type NotesStore, type OpenDraft } from "@/components/surfaces/changes/notes-provider";
 import { AnnotationType } from "@plannotator/ui/types";
 
-const WORKSPACE = "checkout-fixes";
+const WORKSPACE = "api-worker";
 
 const NOW = new Date(2026, 8, 23, 16, 5).getTime();
 
@@ -29,367 +29,322 @@ function snapshot(path: string, status: FileStatus, before: string, after: strin
 
 const lines = (...rows: string[]): string => rows.join("\n");
 
-const APPLY_BEFORE = lines(
-  'import type { Cart, Coupon } from "./types";',
-  'import { rules } from "./rules";',
-  'import { roundCents } from "../lib/money";',
-  'import { formatDate } from "../lib/dates";',
+const DB_BEFORE = lines(
+  "import type { Env, Session } from \"./env\";",
+  "import { log } from \"./log\";",
   "",
-  "export class CouponError extends Error {",
-  "  constructor(readonly code: string, message: string) {",
-  "    super(message);",
+  "/** A session id is 32 hex characters; anything else never reaches the database. */",
+  "export function validSessionId(id: string): boolean {",
+  "  return /^[0-9a-f]{32}$/.test(id);",
+  "}",
+  "",
+  "export function openDb(env: Env): D1Database {",
+  "  return env.DB;",
+  "}",
+  "",
+  "export async function readSession(env: Env, id: string): Promise<Session | null> {",
+  "  if (!validSessionId(id)) return null;",
+  "",
+  "  return await openDb(env).prepare(\"SELECT * FROM sessions WHERE id = ?\").bind(id).first<Session>();",
+  "}",
+  "",
+  "export async function writeSession(env: Env, session: Session): Promise<void> {",
+  "  await openDb(env)",
+  "    .prepare(\"INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)\")",
+  "    .bind(session.id, session.userId, session.expiresAt)",
+  "    .run();",
+  "}",
+  "",
+  "/** The health route reports what this answers, so its monitors watch the database too. */",
+  "export async function databaseUp(env: Env): Promise<boolean> {",
+  "  try {",
+  "    await openDb(env).prepare(\"SELECT 1\").first();",
+  "",
+  "    return true;",
+  "  } catch (error) {",
+  "    log.error(\"db.unreachable\", { error: String(error) });",
+  "",
+  "    return false;",
   "  }",
-  "}",
-  "",
-  "/** A code is six to twelve letters or digits; anything else never reaches the rules. */",
-  "export function validCode(code: string): boolean {",
-  "  return /^[A-Z0-9]{6,12}$/.test(code);",
-  "}",
-  "",
-  "/** A coupon applies once per cart; a second apply is a no-op. */",
-  "export function applyCoupon(cart: Cart, coupon: Coupon): Cart {",
-  "  if (cart.coupons.includes(coupon.code)) return cart;",
-  "",
-  "  if (coupon.expiresAt !== null && coupon.expiresAt < Date.now()) {",
-  "    throw new CouponError(\"expired\", `Coupon ${coupon.code} has expired`);",
-  "  }",
-  "",
-  "  const rule = rules[coupon.kind];",
-  "  const discount = rule.percent",
-  "    ? cart.subtotal * (coupon.value / 100)",
-  "    : coupon.value;",
-  "",
-  "  return {",
-  "    ...cart,",
-  "    coupons: [...cart.coupons, coupon.code],",
-  "    discount: roundCents(cart.discount + discount),",
-  "    total: roundCents(cart.subtotal - cart.discount - discount),",
-  "  };",
-  "}",
-  "",
-  "export function removeCoupon(cart: Cart, code: string): Cart {",
-  "  if (!cart.coupons.includes(code)) return cart;",
-  "",
-  "  return {",
-  "    ...cart,",
-  "    coupons: cart.coupons.filter((each) => each !== code),",
-  "  };",
-  "}",
-  "",
-  "/** Stacking is decided per rule: a fixed coupon stacks, a percentage one does not. */",
-  "export function stacks(cart: Cart, coupon: Coupon): boolean {",
-  "  return cart.coupons.length === 0 || rules[coupon.kind].stackable;",
-  "}",
-  "",
-  "export function expiresLabel(coupon: Coupon): string {",
-  "  return coupon.expiresAt === null ? \"Never expires\" : `Expires ${formatDate(coupon.expiresAt)}`;",
-  "}",
-  "",
-  "export function describeCoupon(coupon: Coupon): string {",
-  "  const rule = rules[coupon.kind];",
-  "",
-  "  return rule.percent ? `${coupon.value}% off` : `$${coupon.value} off`;",
   "}",
 );
 
-const APPLY_AFTER = lines(
-  'import type { Cart, Coupon, CouponKind } from "./types";',
-  'import { rules } from "./rules";',
-  'import { roundCents } from "../lib/money";',
-  'import { formatDate } from "../lib/dates";',
+const DB_AFTER = lines(
+  "import type { Env, Session } from \"./env\";",
+  "import { log } from \"./log\";",
   "",
-  "export class CouponError extends Error {",
-  "  constructor(readonly code: string, message: string) {",
-  "    super(message);",
+  "export class MissingBinding extends Error {",
+  "  constructor(readonly binding: string) {",
+  "    super(`The ${binding} binding is not configured for this Worker`);",
   "  }",
   "}",
   "",
-  "/** A code is six to twelve letters or digits; anything else never reaches the rules. */",
-  "export function validCode(code: string): boolean {",
-  "  return /^[A-Z0-9]{6,12}$/.test(code);",
+  "/** A session id is 32 hex characters; anything else never reaches the database. */",
+  "export function validSessionId(id: string): boolean {",
+  "  return /^[0-9a-f]{32}$/.test(id);",
   "}",
   "",
-  "/** A coupon applies once per cart; a second apply is a no-op. */",
-  "export function applyCoupon(cart: Cart, coupon: Coupon): Cart {",
-  "  if (cart.coupons.includes(coupon.code)) return cart;",
+  "/** The sessions database, by the binding wrangler.jsonc gives it. */",
+  "export function openDb(env: Env): D1Database {",
+  "  const db = sessionsBinding(env);",
   "",
-  "  if (coupon.expiresAt !== null && coupon.expiresAt < Date.now()) {",
-  "    throw new CouponError(\"expired\", `Coupon ${coupon.code} expired on ${formatDate(coupon.expiresAt)}`);",
+  "  if (db === undefined) throw new MissingBinding(\"SESSIONS_DB\");",
+  "",
+  "  return db;",
+  "}",
+  "",
+  "/** Until every environment has redeployed, the old name still answers. */",
+  "function sessionsBinding(env: Env): D1Database | undefined {",
+  "  // DB is the name before 2026-09-22; SESSIONS_DB is the one wrangler.jsonc gives it now.",
+  "  return env.SESSIONS_DB ?? env.DB;",
+  "}",
+  "",
+  "export async function readSession(env: Env, id: string): Promise<Session | null> {",
+  "  if (!validSessionId(id)) return null;",
+  "",
+  "  return await openDb(env).prepare(\"SELECT * FROM sessions WHERE id = ?\").bind(id).first<Session>();",
+  "}",
+  "",
+  "export async function writeSession(env: Env, session: Session): Promise<void> {",
+  "  await openDb(env)",
+  "    .prepare(\"INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)\")",
+  "    .bind(session.id, session.userId, session.expiresAt)",
+  "    .run();",
+  "}",
+  "",
+  "/** The health route reports what this answers, so its monitors watch the database too. */",
+  "export async function databaseUp(env: Env): Promise<boolean> {",
+  "  try {",
+  "    await openDb(env).prepare(\"SELECT 1\").first();",
+  "",
+  "    return true;",
+  "  } catch (error) {",
+  "    log.error(\"db.unreachable\", { error: String(error) });",
+  "",
+  "    return false;",
   "  }",
-  "",
-  "  const rule = rules[kindOf(coupon)];",
-  "  const discount = rule.percent",
-  "    ? cart.subtotal * (Math.min(coupon.value, rule.maxPercent) / 100)",
-  "    : coupon.value;",
-  "",
-  "  return {",
-  "    ...cart,",
-  "    coupons: [...cart.coupons, coupon.code],",
-  "    discount: roundCents(cart.discount + discount),",
-  "    total: roundCents(cart.subtotal - cart.discount - discount),",
-  "  };",
-  "}",
-  "",
-  "export function removeCoupon(cart: Cart, code: string): Cart {",
-  "  if (!cart.coupons.includes(code)) return cart;",
-  "",
-  "  return {",
-  "    ...cart,",
-  "    coupons: cart.coupons.filter((each) => each !== code),",
-  "  };",
-  "}",
-  "",
-  "/** Stacking is decided per rule: a fixed coupon stacks, a percentage one does not. */",
-  "export function stacks(cart: Cart, coupon: Coupon): boolean {",
-  "  return cart.coupons.length === 0 || rules[kindOf(coupon)].stackable;",
-  "}",
-  "",
-  "export function expiresLabel(coupon: Coupon): string {",
-  "  return coupon.expiresAt === null ? \"Never expires\" : `Expires ${formatDate(coupon.expiresAt)}`;",
-  "}",
-  "",
-  "export function describeCoupon(coupon: Coupon): string {",
-  "  const rule = rules[kindOf(coupon)];",
-  "",
-  "  return rule.percent ? `${coupon.value}% off` : `$${coupon.value} off`;",
-  "}",
-  "",
-  "/** Rows written before migration 0042 carry no kind; their value column says which one they are. */",
-  "function kindOf(coupon: Coupon): CouponKind {",
-  "  return coupon.kind ?? (coupon.valuePercent === null ? \"fixed\" : \"percent\");",
   "}",
 );
 
-const RULES_BEFORE = lines(
-  'import type { CouponKind } from "./types";',
-  "",
-  "export interface Rule {",
-  "  readonly percent: boolean;",
-  "  readonly stackable: boolean;",
+const CONFIG_BEFORE = lines(
+  "{",
+  "  \"name\": \"api\",",
+  "  \"main\": \"src/index.ts\",",
+  "  \"compatibility_date\": \"2026-09-01\",",
+  "  \"d1_databases\": [",
+  "    { \"binding\": \"SESSIONS_DB\", \"database_name\": \"sessions\", \"database_id\": \"4c1e9a20-7b5d-4f3e-9c2a-1d8e6f0b3a71\" }",
+  "  ]",
   "}",
-  "",
-  "export const rules: Record<CouponKind, Rule> = {",
-  "  fixed: { percent: false, stackable: true },",
-  "  percent: { percent: true, stackable: false },",
-  "};",
 );
 
-const RULES_AFTER = lines(
-  'import type { CouponKind } from "./types";',
-  "",
-  "export interface Rule {",
-  "  readonly percent: boolean;",
-  "  readonly stackable: boolean;",
-  "  /** A percentage above this is a data error, so it is clamped rather than charged. */",
-  "  readonly maxPercent: number;",
+const CONFIG_AFTER = lines(
+  "{",
+  "  \"name\": \"api\",",
+  "  \"main\": \"src/index.ts\",",
+  "  \"compatibility_date\": \"2026-09-01\",",
+  "  \"d1_databases\": [",
+  "    { \"binding\": \"SESSIONS_DB\", \"database_name\": \"sessions\", \"database_id\": \"4c1e9a20-7b5d-4f3e-9c2a-1d8e6f0b3a71\" }",
+  "  ],",
+  "  // Staging bound its database by the old name; it reads the new one too.",
+  "  \"env\": {",
+  "    \"staging\": {",
+  "      \"d1_databases\": [",
+  "        { \"binding\": \"SESSIONS_DB\", \"database_name\": \"sessions-staging\", \"database_id\": \"b72f0c51-3e8a-4d19-a6c4-5e2b9d7f1c08\" }",
+  "      ]",
+  "    }",
+  "  }",
   "}",
-  "",
-  "export const rules: Record<CouponKind, Rule> = {",
-  "  fixed: { percent: false, stackable: true, maxPercent: 0 },",
-  "  percent: { percent: true, stackable: false, maxPercent: 50 },",
-  "};",
 );
 
 const MIGRATION_BEFORE = lines(
-  "-- 0042: every coupon states its kind.",
-  "ALTER TABLE coupons ADD COLUMN kind TEXT;",
-  "",
-  "UPDATE coupons SET kind = 'fixed' WHERE value_cents IS NOT NULL;",
+  "-- 0007: sessions move from KV to D1.",
+  "CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL);",
 );
 
 const MIGRATION_AFTER = lines(
-  "-- 0042: every coupon states its kind.",
-  "ALTER TABLE coupons ADD COLUMN kind TEXT;",
+  "-- 0007: sessions move from KV to D1.",
+  "CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL);",
   "",
-  "UPDATE coupons SET kind = 'fixed' WHERE value_cents IS NOT NULL;",
-  "UPDATE coupons SET kind = 'percent' WHERE value_percent IS NOT NULL;",
-  "",
-  "-- A row with neither value is a data error: stop here rather than guess.",
-  "SELECT RAISE(ABORT, 'coupon without a kind') FROM coupons WHERE kind IS NULL;",
+  "-- The session reads and the expiry sweep both look sessions up by expiry.",
+  "CREATE INDEX sessions_expires_at ON sessions (expires_at);",
 );
 
 const TEST_AFTER = lines(
-  'import { describe, expect, test } from "bun:test";',
-  'import { applyCoupon, describeCoupon } from "../src/apply-coupon";',
-  'import { cartOf, couponOf } from "./helpers";',
+  "import { describe, expect, test } from \"bun:test\";",
+  "import { databaseUp, openDb, readSession } from \"../../src/db\";",
+  "import { envWith } from \"../helpers\";",
   "",
-  "describe(\"coupons written before migration 0042\", () => {",
-  "  test(\"SAVE20 with no kind applies as 20% off\", () => {",
-  "    const cart = cartOf({ subtotal: 80 });",
-  "    const coupon = couponOf({ code: \"SAVE20\", kind: null, valuePercent: 20 });",
+  "describe(\"the sessions database binding\", () => {",
+  "  test(\"openDb reads SESSIONS_DB\", () => {",
+  "    const db = { prepare: () => null };",
+  "    const env = envWith({ SESSIONS_DB: db });",
   "",
-  "    expect(applyCoupon(cart, coupon).total).toBe(64);",
+  "    expect(openDb(env)).toBe(db);",
   "  });",
   "",
-  "  test(\"SAVE10 with no kind applies as $10 off\", () => {",
-  "    const cart = cartOf({ subtotal: 80 });",
-  "    const coupon = couponOf({ code: \"SAVE10\", kind: null, valueCents: 1000 });",
+  "  test(\"an environment deployed before the rename still reads DB\", () => {",
+  "    const db = { prepare: () => null };",
   "",
-  "    expect(applyCoupon(cart, coupon).total).toBe(70);",
+  "    expect(openDb(envWith({ DB: db }))).toBe(db);",
   "  });",
   "",
-  "  test(\"a percentage above the rule's ceiling is clamped\", () => {",
-  "    const cart = cartOf({ subtotal: 100 });",
-  "    const coupon = couponOf({ code: \"TYPO90\", kind: \"percent\", valuePercent: 90 });",
-  "",
-  "    expect(applyCoupon(cart, coupon).total).toBe(50);",
+  "  test(\"no binding at all fails by its name\", () => {",
+  "    expect(() => openDb(envWith({}))).toThrow(\"SESSIONS_DB\");",
   "  });",
   "",
-  "  test(\"the label reads the inferred kind\", () => {",
-  "    expect(describeCoupon(couponOf({ code: \"SAVE20\", kind: null, valuePercent: 20 }))).toBe(\"20% off\");",
+  "  test(\"the health check reports a missing database as down\", async () => {",
+  "    expect(await databaseUp(envWith({}))).toBe(false);",
+  "  });",
+  "",
+  "  test(\"a malformed session id never reaches the database\", async () => {",
+  "    expect(await readSession(envWith({}), \"not-an-id\")).toBeNull();",
   "  });",
   "});",
 );
 
 const LEGACY_BEFORE = lines(
   "/**",
-  " * The discount path before coupons had rules. Nothing imports it since the",
-  " * checkout moved to applyCoupon; it stays only so old carts can be priced.",
+  " * Sessions as they were kept before the D1 database. Nothing imports it since",
+  " * the Worker moved to readSession; it stays only for sessions that have not expired.",
   " */",
-  'import type { Cart } from "./types";',
+  "import type { Env } from \"./env\";",
   "",
-  "export function legacyDiscount(cart: Cart, code: string): number {",
-  "  switch (code) {",
-  "    case \"WELCOME\":",
-  "      return 5;",
-  "    case \"SAVE10\":",
-  "      return 10;",
-  "    case \"SAVE20\":",
-  "      return cart.subtotal * 0.2;",
-  "    default:",
-  "      return 0;",
-  "  }",
+  "export async function legacySession(env: Env, id: string): Promise<string | null> {",
+  "  return await env.SESSIONS_KV.get(`session:${id}`);",
   "}",
   "",
-  "export function legacyTotal(cart: Cart, code: string): number {",
-  "  return Math.max(0, cart.subtotal - legacyDiscount(cart, code));",
+  "export async function legacyUser(env: Env, id: string): Promise<string | null> {",
+  "  const session = await legacySession(env, id);",
+  "",
+  "  return session === null ? null : JSON.parse(session).userId;",
   "}",
 );
 
 const README_BEFORE = lines(
-  "# checkout",
+  "# api",
   "",
-  "Prices a cart and applies coupons. `applyCoupon` is the only way a discount",
-  "reaches a cart.",
+  "Serves `/api` for the app. Every route that reads a session goes through",
+  "`readSession` in `src/db.ts`.",
   "",
-  "## Coupons",
+  "## Sessions",
   "",
-  "A coupon is fixed (`value_cents`) or a percentage (`value_percent`).",
+  "Sessions live in the D1 database `sessions`.",
   "",
   "## Tests",
   "",
-  "Run `bun test packages/checkout`.",
+  "Run `bun test workers/api`.",
 );
 
 const README_AFTER = lines(
-  "# checkout",
+  "# api",
   "",
-  "Prices a cart and applies coupons. `applyCoupon` is the only way a discount",
-  "reaches a cart.",
+  "Serves `/api` for the app. Every route that reads a session goes through",
+  "`readSession` in `src/db.ts`.",
   "",
-  "## Coupons",
+  "## Sessions",
   "",
-  "A coupon is fixed (`value_cents`) or a percentage (`value_percent`), and its",
-  "`kind` column says which. Rows written before migration 0042 have no kind;",
-  "`applyCoupon` reads it from the value column instead.",
+  "Sessions live in the D1 database `sessions`, bound as `SESSIONS_DB`. An",
+  "environment deployed before the rename still binds it as `DB`; `openDb`",
+  "reads either until every environment has redeployed.",
   "",
   "## Tests",
   "",
-  "Run `bun test packages/checkout`.",
+  "Run `bun test workers/api`.",
 );
 
-const COUPON_FILES: readonly FileDiff[] = [
-  snapshot("packages/checkout/src/apply-coupon.ts", "changed", APPLY_BEFORE, APPLY_AFTER),
-  snapshot("packages/checkout/src/rules.ts", "changed", RULES_BEFORE, RULES_AFTER),
-  snapshot("packages/checkout/src/legacy-discount.ts", "removed", LEGACY_BEFORE, ""),
-  snapshot("packages/checkout/migrations/0042_coupon_kind.sql", "changed", MIGRATION_BEFORE, MIGRATION_AFTER),
-  snapshot("packages/checkout/tests/coupon-kind.test.ts", "added", "", TEST_AFTER),
-  snapshot("packages/checkout/README.md", "changed", README_BEFORE, README_AFTER),
+const WORKER_FILES: readonly FileDiff[] = [
+  snapshot("workers/api/src/db.ts", "changed", DB_BEFORE, DB_AFTER),
+  snapshot("workers/api/wrangler.jsonc", "changed", CONFIG_BEFORE, CONFIG_AFTER),
+  snapshot("workers/api/src/kv-sessions.ts", "removed", LEGACY_BEFORE, ""),
+  snapshot("workers/api/migrations/0007_sessions.sql", "changed", MIGRATION_BEFORE, MIGRATION_AFTER),
+  snapshot("workers/api/test/integration/sessions-binding.test.ts", "added", "", TEST_AFTER),
+  snapshot("workers/api/README.md", "changed", README_BEFORE, README_AFTER),
 ];
 
-const COUPON_CHANGES: ChangeSet = {
+const WORKER_CHANGES: ChangeSet = {
   baseline: "snapshot 4f1c9a",
-  source: "workspace", label: "Workspace", mode: "vfs-baseline", files: COUPON_FILES, trackedSince: NOW - 111 * 60e3,
+  source: "workspace", label: "Workspace", mode: "vfs-baseline", files: WORKER_FILES, trackedSince: NOW - 111 * 60e3,
 };
 
 
 const RUNBOOK = lines(
-  "# Coupon incident runbook",
+  "# API incident runbook",
   "",
   ...Array.from({ length: 34 }, (_, index) => [
     `## Step ${String(index + 1)}`,
     "",
     index % 2 === 0
-      ? "Check the coupon's kind and value columns before touching the cart."
-      : "Re-run `bun test packages/checkout` and keep the output in the incident.",
+      ? "Tail the Worker with `wrangler tail api --status error` before touching the code."
+      : "Check `/api/health` from outside the network, and keep its answer in the incident.",
     "",
   ]).flat(),
 );
 
-const OLD_CART = lines(
-  'import type { Cart } from "./types";',
+const OLD_ROUTER = lines(
+  'import type { Env } from "./env";',
   "",
-  ...Array.from({ length: 40 }, (_, index) => `export const OLD_RULE_${String(index)} = ${String(index * 5)};`),
+  ...Array.from({ length: 40 }, (_, index) => `export const ROUTE_${String(index)} = "/api/v1/route-${String(index)}";`),
 );
 
-const CSV_BEFORE = lines("id,code,kind,value", ...Array.from({ length: 1400 }, (_, index) => `${String(index)},SAVE${String(index % 50)},fixed,${String(index % 20)}`));
+const SEED_COLUMNS = "id,user_id,expires_at,store";
 
-const CSV_AFTER = lines("id,code,kind,value", ...Array.from({ length: 1400 }, (_, index) => {
-  const kind = index % 20 === 5 && index < 970 ? "percent" : "fixed";
+const SEED_BEFORE = lines(SEED_COLUMNS, ...Array.from({ length: 1400 }, (_, index) => `${String(index)},user-${String(index % 50)},${String(1790000000 + index * 60)},kv`));
 
-  return `${String(index)},SAVE${String(index % 50)},${kind},${String(index % 20)}`;
+const SEED_AFTER = lines(SEED_COLUMNS, ...Array.from({ length: 1400 }, (_, index) => {
+  const store = index % 20 === 5 && index < 970 ? "kv" : "d1";
+
+  return `${String(index)},user-${String(index % 50)},${String(1790000000 + index * 60)},${store}`;
 }));
 
 const EDGE_CHANGES: ChangeSet = {
   source: "workspace", label: "Workspace", mode: "vfs-baseline", trackedSince: NOW - 26 * 60 * 60e3,
   files: [
-    { path: "packages/checkout/src/generated/schema.ts", status: "changed", added: 1214, removed: 1180, lines: [], truncated: true },
-    { path: "data/exports/orders-2026.json", status: "changed", added: 0, removed: 0, lines: [], omitted: "large" },
-    { path: "public/receipt-logo.png", status: "changed", added: 0, removed: 0, lines: [], omitted: "binary" },
-    snapshot("data/seed/coupons.csv", "changed", CSV_BEFORE, CSV_AFTER),
+    { path: "workers/api/worker-configuration.d.ts", status: "changed", added: 1214, removed: 1180, lines: [], truncated: true },
+    { path: "data/exports/sessions-2026.json", status: "changed", added: 0, removed: 0, lines: [], omitted: "large" },
+    { path: "public/status-badge.png", status: "changed", added: 0, removed: 0, lines: [], omitted: "binary" },
+    snapshot("data/seed/sessions.csv", "changed", SEED_BEFORE, SEED_AFTER),
     snapshot("docs/incident-runbook.md", "added", "", RUNBOOK),
-    snapshot("packages/checkout/src/old-cart.ts", "removed", OLD_CART, ""),
+    snapshot("workers/api/src/old-router.ts", "removed", OLD_ROUTER, ""),
   ],
 };
 
 const DEVICE_PATCH = [
-  "diff --git a/src/app/checkout/page.tsx b/src/app/checkout/page.tsx",
+  "diff --git a/src/app/issues/page.tsx b/src/app/issues/page.tsx",
   "index 3f2a1c0..9b8e7d2 100644",
-  "--- a/src/app/checkout/page.tsx",
-  "+++ b/src/app/checkout/page.tsx",
-  "@@ -41,6 +41,9 @@ export default function CheckoutPage() {",
-  "   const [code, setCode] = useState(\"\");",
-  "   const cart = useCart();",
-  "-  const total = cart.subtotal - cart.discount;",
-  "+  const total = useMemo(",
-  "+    () => cart.subtotal - cart.discount,",
-  "+    [cart.subtotal, cart.discount],",
+  "--- a/src/app/issues/page.tsx",
+  "+++ b/src/app/issues/page.tsx",
+  "@@ -41,6 +41,9 @@ export default function IssuesPage() {",
+  "   const [label, setLabel] = useState(\"\");",
+  "   const issues = useIssues();",
+  "-  const open = issues.filter((issue) => issue.state === \"open\");",
+  "+  const open = useMemo(",
+  "+    () => issues.filter((issue) => issue.state === \"open\"),",
+  "+    [issues],",
   "+  );",
   " ",
   "   return (",
-  "     <main className=\"checkout\">",
-  "@@ -88,6 +91,7 @@ function CouponField({ onApply }: { onApply: (code: string) => void }) {",
+  "     <main className=\"issues\">",
+  "@@ -88,6 +91,7 @@ function LabelFilter({ onFilter }: { onFilter: (label: string) => void }) {",
   "       <input",
   "         value={value}",
-  "         onChange={(event) => setValue(event.target.value.toUpperCase())}",
-  "+        aria-label=\"Coupon code\"",
+  "         onChange={(event) => setValue(event.target.value.toLowerCase())}",
+  "+        aria-label=\"Filter by label\"",
   "       />",
-  "       <button type=\"button\" onClick={() => onApply(value)}>Apply</button>",
+  "       <button type=\"button\" onClick={() => onFilter(value)}>Filter</button>",
   "     </form>",
-  "diff --git a/public/receipt-logo.png b/public/receipt-logo.png",
+  "diff --git a/public/logo.png b/public/logo.png",
   "index 1a2b3c4..5d6e7f8 100644",
-  "Binary files a/public/receipt-logo.png and b/public/receipt-logo.png differ",
+  "Binary files a/public/logo.png and b/public/logo.png differ",
   "diff --git a/src/lib/format.ts b/src/lib/format.ts",
   "new file mode 100644",
   "index 0000000..a1b2c3d",
   "--- /dev/null",
   "+++ b/src/lib/format.ts",
-  "@@ -0,0 +1,6 @@",
-  "+export function money(cents: number): string {",
-  "+  return new Intl.NumberFormat(\"en-US\", {",
-  "+    style: \"currency\",",
-  "+    currency: \"USD\",",
-  "+  }).format(cents / 100);",
+  "@@ -0,0 +1,5 @@",
+  "+export function ago(at: number, now: number): string {",
+  "+  const minutes = Math.round((now - at) / 60_000);",
+  "+",
+  "+  return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`;",
   "+}",
 ].join("\n");
 
@@ -400,17 +355,17 @@ const BLOG_PATCH = [
   "+++ b/posts/launch.md",
   "@@ -1,3 +1,3 @@",
   " # Launch week",
-  "-Checkout ships on Monday.",
-  "+Checkout and coupons ship on Monday.",
+  "-The issues dashboard ships on Monday.",
+  "+The issues dashboard and its label filter ship on Monday.",
   " ",
 ].join("\n");
 
 /** Two repositories in the laptop's working folder, each a folder of the list. */
 const DEVICE_CHANGES: ChangeSet = {
-  source: "laptop", label: "laptop", mode: "git", baseline: "blog@9f8a7b6 shop@3f2a1c0", repositories: ["blog", "shop"],
+  source: "laptop", label: "laptop", mode: "git", baseline: "blog@9f8a7b6 dashboard@3f2a1c0", repositories: ["blog", "dashboard"],
   files: [
     ...parseGitDiff(BLOG_PATCH).map((file) => ({ ...file, path: `blog/${file.path}` })),
-    ...parseGitDiff(DEVICE_PATCH).map((file) => ({ ...file, path: `shop/${file.path}` })),
+    ...parseGitDiff(DEVICE_PATCH).map((file) => ({ ...file, path: `dashboard/${file.path}` })),
   ],
 };
 
@@ -424,55 +379,55 @@ const IDLE: TurnLiveness = { kind: "idle" };
 const MESSAGES: UIMessage[] = [
   {
     id: "u1", role: "user",
-    parts: [{ type: "text", text: "The SAVE20 coupon returns a 500 at checkout. Find out why and fix it." }],
+    parts: [{ type: "text", text: "/api/health on the api Worker has answered 500 since the last deploy. Find out why and fix it." }],
   },
   {
     id: "a1", role: "assistant",
     parts: [
-      { type: "text", text: "Found it. Migration 0042 backfilled `kind` for fixed coupons only, so a percentage coupon written before it has no kind, and `applyCoupon` reads `rules[coupon.kind]`." },
-      { type: "tool-file", toolCallId: "t1", state: "output-available", input: { op: "edit", path: "packages/checkout/src/apply-coupon.ts" }, output: "ok" },
-      { type: "tool-file", toolCallId: "t2", state: "output-available", input: { op: "edit", path: "packages/checkout/src/rules.ts" }, output: "ok" },
-      { type: "tool-file", toolCallId: "t3", state: "output-available", input: { op: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "ok" },
-      { type: "tool-file", toolCallId: "t4", state: "output-available", input: { op: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
-      { type: "tool-run", toolCallId: "t5", state: "output-available", input: { runtime: "computer", command: "bun test packages/checkout" }, output: "18 pass\n0 fail" },
+      { type: "text", text: "Found it. The config renamed the sessions database's binding to `SESSIONS_DB`, but `openDb` still returns `env.DB`, which is undefined now, so every request that opens the database fails." },
+      { type: "tool-file", toolCallId: "t1", state: "output-available", input: { op: "edit", path: "workers/api/src/db.ts" }, output: "ok" },
+      { type: "tool-file", toolCallId: "t2", state: "output-available", input: { op: "edit", path: "workers/api/wrangler.jsonc" }, output: "ok" },
+      { type: "tool-file", toolCallId: "t3", state: "output-available", input: { op: "edit", path: "workers/api/migrations/0007_sessions.sql" }, output: "ok" },
+      { type: "tool-file", toolCallId: "t4", state: "output-available", input: { op: "write", path: "workers/api/test/integration/sessions-binding.test.ts" }, output: "ok" },
+      { type: "tool-run", toolCallId: "t5", state: "output-available", input: { runtime: "computer", command: "bun test workers/api" }, output: "18 pass\n0 fail" },
     ],
   },
   {
     id: "a2", role: "assistant",
     parts: [{
       type: "text",
-      text: "Fixed. `applyCoupon` now reads a missing kind from the value column, a percentage is clamped at its rule's ceiling, and migration 0042 backfills percentage coupons too. I removed the unused legacy discount path and added four tests; all 18 checkout tests pass.",
+      text: "Fixed. `openDb` reads the database as `SESSIONS_DB`, falls back to the old name until every environment has redeployed, and fails by name when neither is bound. Staging binds the new name too, and migration 0007 indexes sessions by expiry. I removed the unused KV session store and added five tests; all 18 of the Worker's tests pass.",
     }],
   },
 ];
 
-const APPLY = "packages/checkout/src/apply-coupon.ts";
+const DB = "workers/api/src/db.ts";
 
-const CLAMP = "Math.min(coupon.value, rule.maxPercent)";
+const FALLBACK = "env.SESSIONS_DB ?? env.DB";
 
-const CLAMP_AT = (APPLY_AFTER.split("\n")[26] ?? "").indexOf(CLAMP);
+const FALLBACK_AT = (DB_AFTER.split("\n")[26] ?? "").indexOf(FALLBACK);
 
 const BASELINE = "snapshot 4f1c9a";
 
-const CLAMP_ANCHOR: DiffAnchor = {
-  scope: "text", path: APPLY, side: "new", lineStart: 27, lineEnd: 27, charStart: CLAMP_AT, charEnd: CLAMP_AT + CLAMP.length, baseline: BASELINE,
+const FALLBACK_ANCHOR: DiffAnchor = {
+  scope: "text", path: DB, side: "new", lineStart: 27, lineEnd: 27, charStart: FALLBACK_AT, charEnd: FALLBACK_AT + FALLBACK.length, baseline: BASELINE,
 };
 
 const NOTES: readonly ChangeNote[] = [
   noteOf({
-    id: "clamp", type: AnnotationType.COMMENT, createdA: NOW - 9 * 60e3, anchor: CLAMP_ANCHOR, quote: CLAMP,
-    text: "Clamp it, but log it too: a 90% coupon is a data error someone should hear about.",
+    id: "fallback", type: AnnotationType.COMMENT, createdA: NOW - 9 * 60e3, anchor: FALLBACK_ANCHOR, quote: FALLBACK,
+    text: "Keep the fallback for this deploy, but log it: a read through the old name is something to hear about.",
   }),
   noteOf({
-    id: "label-test", type: AnnotationType.DELETION, createdA: NOW - 7 * 60e3,
-    anchor: { scope: "lines", path: "packages/checkout/tests/coupon-kind.test.ts", side: "new", lineStart: 27, lineEnd: 29, baseline: BASELINE },
+    id: "id-test", type: AnnotationType.DELETION, createdA: NOW - 7 * 60e3,
+    anchor: { scope: "lines", path: "workers/api/test/integration/sessions-binding.test.ts", side: "new", lineStart: 27, lineEnd: 29, baseline: BASELINE },
     quote: (TEST_AFTER.split("\n").slice(26, 29)).join("\n"),
   }),
   noteOf({
     id: "legacy", type: AnnotationType.COMMENT, createdA: NOW - 5 * 60e3,
-    anchor: { scope: "file", path: "packages/checkout/src/legacy-discount.ts", baseline: BASELINE },
-    quote: "packages/checkout/src/legacy-discount.ts",
-    text: "Keep this until the old carts are migrated; they still price through it.",
+    anchor: { scope: "file", path: "workers/api/src/kv-sessions.ts", baseline: BASELINE },
+    quote: "workers/api/src/kv-sessions.ts",
+    text: "Keep this until the KV sessions expire; a few users still sign in through it.",
   }),
 ];
 
@@ -480,7 +435,7 @@ const SENT: readonly ChangeNote[] = [
   ...NOTES,
   noteOf({
     id: "all", type: AnnotationType.GLOBAL_COMMENT, createdA: NOW - 3 * 60e3, quote: "",
-    text: "Good fix. After these, run the checkout tests again and tell me what changed.",
+    text: "Good fix. After these, run the Worker's tests again and tell me what changed.",
   }),
 ];
 
@@ -494,19 +449,19 @@ function cardOf(notes: readonly ChangeNote[]): ChangeNotesCard {
 }
 
 const WRITING: OpenDraft = {
-  anchor: CLAMP_ANCHOR, quote: CLAMP,
-  initialText: "Clamp it, but log it too: a 90% coupon is a data error someone should hear about.",
+  anchor: FALLBACK_ANCHOR, quote: FALLBACK,
+  initialText: "Keep the fallback for this deploy, but log it: a read through the old name is something to hear about.",
 };
 
 const REPLY: UIMessage = {
   id: "a3", role: "assistant",
-  parts: [{ type: "text", text: "On it. I'll log a clamped percentage, drop the label test, and keep `legacy-discount.ts` until the old carts are migrated. Then I'll rerun the checkout tests." }],
+  parts: [{ type: "text", text: "On it. I'll log each read through the old binding, drop the malformed-id test, and keep `kv-sessions.ts` until the KV sessions expire. Then I'll rerun the Worker's tests." }],
 };
 
 function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly ChangeNote[] | null; onOpenNote: (anchor: DiffAnchor | undefined) => void }) {
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<WorkMode>("build");
-  const [model, setModel] = useState("anthropic/claude-opus-4");
+  const [model, setModel] = useState("opencode-go/muse-spark-1.3-contributor");
 
   return (
     <div className={`flex h-full min-w-0 flex-1 flex-col ${wide ? "border-r p-border" : ""}`}>
@@ -519,7 +474,7 @@ function ChatColumn({ wide, sent, onOpenNote }: { wide: boolean; sent: readonly 
         <Composer value={value} onValueChange={setValue} onSend={() => setValue("")} onStop={() => {}} placeholder="Send a message..."
           disabled={false} liveness={IDLE} mode={{ value: mode, onChange: setMode }}
           attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
-          modelPicker={<ModelPicker models={[{ spec: "anthropic/claude-opus-4", label: "Claude Opus 4", provider: "Anthropic" }]} value={model} onChange={setModel} size="xs" />}
+          modelPicker={<ModelPicker models={[{ spec: "opencode-go/muse-spark-1.3-contributor", label: "Muse Spark 1.3", provider: "OpenCode Go" }]} value={model} onChange={setModel} size="xs" />}
           notices={[]} />
       </div>
     </div>
@@ -542,8 +497,8 @@ function useWide(): boolean {
   return wide;
 }
 
-function clampRow(): HTMLElement | null {
-  const card = document.querySelector(`[data-file-card="${APPLY}"]`);
+function fallbackRow(): HTMLElement | null {
+  const card = document.querySelector(`[data-file-card="${DB}"]`);
 
   if (card?.querySelector('[data-diff-tinted="pending"]') !== null) return null;
 
@@ -576,7 +531,7 @@ function useDesignSelection(kind: string | null): void {
     if (kind === null) return;
 
     const timer = setInterval(() => {
-      const row = clampRow();
+      const row = fallbackRow();
       const code = row?.querySelector<HTMLElement>("[data-code]");
 
       if (row === null || code === null || code === undefined) return;
@@ -592,7 +547,7 @@ function useDesignSelection(kind: string | null): void {
       }
 
       window.getSelection()?.removeAllRanges();
-      window.getSelection()?.addRange(textRange(code, CLAMP_AT, CLAMP_AT + CLAMP.length));
+      window.getSelection()?.addRange(textRange(code, FALLBACK_AT, FALLBACK_AT + FALLBACK.length));
       code.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     }, 60);
 
@@ -634,7 +589,7 @@ function setsFor(params: URLSearchParams): readonly ChangeSet[] {
 
   if (params.get("set") === "edge") return [EDGE_CHANGES];
 
-  return params.has("source") || params.has("menu") ? [COUPON_CHANGES, laptop] : [COUPON_CHANGES];
+  return params.has("source") || params.has("menu") ? [WORKER_CHANGES, laptop] : [WORKER_CHANGES];
 }
 
 function Scene({ params }: { params: URLSearchParams }) {

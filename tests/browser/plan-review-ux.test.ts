@@ -695,7 +695,7 @@ describe('annotating a plan', () => {
       const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { annotationSaves: 'held' } });
       await page.waitForSelector('[data-plan-review-root]');
 
-      await addGlobalComment(page, 'Cover the guest cart first');
+      await addGlobalComment(page, 'Cover the missing binding first');
       await addGlobalComment(page, 'Keep the refusal shape');
       expect(await decisionEnabled(page, 'Request changes')).toBe(false);
 
@@ -710,7 +710,7 @@ describe('annotating a plan', () => {
 
       const saves = await landedSaves(page);
 
-      expect(saves.at(-1)).toEqual(['Cover the guest cart first', 'Keep the refusal shape']);
+      expect(saves.at(-1)).toEqual(['Cover the missing binding first', 'Keep the refusal shape']);
       expect(await page.evaluate(() => document.documentElement.dataset.galleryAnnotationsMostInFlight)).toBe('1');
 
       // The decision saves the comments once more before it is sent.
@@ -720,7 +720,7 @@ describe('annotating a plan', () => {
       await page.waitForFunction(() => (document.documentElement.dataset.galleryPlanFeedback ?? '').length > 0);
       const feedback = await page.evaluate(() => document.documentElement.dataset.galleryPlanFeedback ?? '');
 
-      expect(feedback).toContain('Cover the guest cart first');
+      expect(feedback).toContain('Cover the missing binding first');
       expect(feedback).toContain('Keep the refusal shape');
       await page.close();
     });
@@ -731,13 +731,13 @@ describe('annotating a plan', () => {
       const page = await openFrame(newPage, origin, { frame: 'planreview', mode: 'dark', viewport: { width: 1280, height: 900 }, params: { annotationSaves: 'fail-first' } });
       await page.waitForSelector('[data-plan-review-root]');
 
-      await addGlobalComment(page, 'Cover the guest cart first');
+      await addGlobalComment(page, 'Cover the missing binding first');
       await page.waitForFunction(() => document.body.innerText.includes('the plan store is busy'));
       expect(await landedSaves(page)).toEqual([]);
 
       await addGlobalComment(page, 'Keep the refusal shape');
       await page.waitForFunction(() => JSON.parse(document.documentElement.dataset.galleryAnnotationsSaved ?? '[]').length === 1);
-      expect(await landedSaves(page)).toEqual([['Cover the guest cart first', 'Keep the refusal shape']]);
+      expect(await landedSaves(page)).toEqual([['Cover the missing binding first', 'Keep the refusal shape']]);
       expect(await page.evaluate(() => document.body.innerText.includes('the plan store is busy'))).toBe(false);
       await page.close();
     });

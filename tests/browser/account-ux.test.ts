@@ -856,7 +856,7 @@ describe('account panels', () => {
             const body = await devices.evaluate(() => document.body.innerText);
 
             // Each machine's link state, then the grant state per workspace.
-            for (const text of ['Workstation', 'connected', 'Owner laptop', 'offline', 'checkout-fixes', 'Denied']) {
+            for (const text of ['Workstation', 'connected', 'Owner laptop', 'offline', 'api-worker', 'Denied']) {
               expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 

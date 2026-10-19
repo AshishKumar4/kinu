@@ -1445,11 +1445,11 @@ async function measureDroppedFile(newPage: LiveApp['newPage'], origin: string): 
     await page.$eval('[data-agent-pane$="/main"]', (pane, row) => {
       const files = new DataTransfer();
 
-      files.items.add(new File([`coupon,discount\n${row}\n`], 'coupons.csv', { type: 'text/csv' }));
+      files.items.add(new File([`route,status\n${row}\n`], 'errors.csv', { type: 'text/csv' }));
       pane.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
       pane.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
     }, DROPPED_FILE_ROW);
-    await until(page, 'the dropped file in the composer', `(document.querySelector('#chat [data-composer-root]')?.textContent ?? '').includes('coupons.csv')`);
+    await until(page, 'the dropped file in the composer', `(document.querySelector('#chat [data-composer-root]')?.textContent ?? '').includes('errors.csv')`);
     await sendInChat(page, DROPPED_FILE_ASK);
     await until(page, 'the turn to answer', `/file arrived|No file reached/u.test(document.querySelector('#chat')?.textContent ?? '')`);
 

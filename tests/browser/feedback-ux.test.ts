@@ -1000,7 +1000,7 @@ async function run(): Promise<Observed> {
 
     // ── the shipped shell, routed ────────────────────────────────────────
     // `Layout`, its rail, and the account menu's own Feedback affordance,
-    // mounted at `/workspace/checkout-fixes`. The two frames above prove the
+    // mounted at `/workspace/api-worker`. The two frames above prove the
     // capture; this one proves the SUBMISSION: the route and the workspace a
     // report carries are read off a route the router resolved, and no bare
     // component mount can produce either.
@@ -1391,8 +1391,8 @@ describe('a report sent from the routed app', () => {
     expect(submission).toBeDefined();
     // Not `/`: the fixture frames send from the gallery's own root, and this
     // pair of fields is what the ingest keys a report to a workspace by.
-    expect(submission?.route).toBe('/workspace/checkout-fixes');
-    expect(submission?.workspace).toBe('checkout-fixes');
+    expect(submission?.route).toBe('/workspace/api-worker');
+    expect(submission?.workspace).toBe('api-worker');
     expect(submission?.screenshot?.type).toBe('image/png');
     expect(submission?.outcome).toBe('answered');
   });

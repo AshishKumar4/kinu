@@ -7,11 +7,11 @@ import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const AUDITOR_PANE = '[data-agent-pane="checkout-fixes/agents/coupon-auditor"]';
+const AUDITOR_PANE = '[data-agent-pane="api-worker/agents/binding-auditor"]';
 
-const REFINER_PANE = '[data-agent-pane="checkout-fixes/agents/refiner"]';
+const REFINER_PANE = '[data-agent-pane="api-worker/agents/refiner"]';
 
-/** A message only the coupon auditor's own transcript holds. */
+/** A message only the binding auditor's own transcript holds. */
 const AUDITOR_SAID = 'Two rules skip the expiry check';
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, phone: { width: 390, height: 844 } } as const;
@@ -64,7 +64,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
 
         expect(await chatShows(page, AUDITOR_PANE)).toBe(true);
         // Its task came from Main, so the chat shows it as an event that names the hirer, never as the person's words.
-        expect(await page.$eval(AUDITOR_PANE, (pane) => pane.textContent ?? '')).toMatch(/from Main[\s\S]*Audit every coupon rule/);
+        expect(await page.$eval(AUDITOR_PANE, (pane) => pane.textContent ?? '')).toMatch(/from Main[\s\S]*Audit the binding of every route/);
         await page.close();
       });
     });
@@ -79,9 +79,9 @@ describe('opening an agent shows its live chat in the main chat area', () => {
 
         await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
         // A task one past a head names its owner and offers no door: there is no conversation of its own to open.
-        expect(await page.evaluate(() => document.body.textContent?.includes('Serialize gift-card lines · packages/cart/src/serializer.ts'))).toBe(true);
-        expect(await page.$('button[aria-label="Open packages/cart/src/serializer.ts\'s conversation"]')).toBeNull();
-        await page.click('button[aria-label="Open Coupon auditor\'s conversation"]');
+        expect(await page.evaluate(() => document.body.textContent?.includes('Move the webhook route onto openDb · workers/api/src/routes/webhooks.ts'))).toBe(true);
+        expect(await page.$('button[aria-label="Open workers/api/src/routes/webhooks.ts\'s conversation"]')).toBeNull();
+        await page.click('button[aria-label="Open Binding auditor\'s conversation"]');
         await page.waitForSelector(AUDITOR_PANE);
         await page.waitForFunction((pane, said) => document.querySelector(pane)?.textContent?.includes(said), {}, AUDITOR_PANE, AUDITOR_SAID);
 
@@ -116,7 +116,7 @@ describe("an agent's chat says when its turn waits on the provider, as the works
       const page = await gallery.newPage();
 
       await page.setViewport(VIEWPORTS.desktop);
-      await page.goto(`${gallery.origin}/gallery.html?frame=workspaceshell&agent=coupon-auditor`, { waitUntil: 'networkidle0' });
+      await page.goto(`${gallery.origin}/gallery.html?frame=workspaceshell&agent=binding-auditor`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(`${AUDITOR_PANE} [data-composer-root] textarea`);
 
       const shown = await page.evaluate(async (pane) => {

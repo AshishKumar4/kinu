@@ -5,7 +5,7 @@ import { useCopy, type CopyStatus } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
 import { LandingFrame } from './LandingFrame';
 import { HeroDust } from './hero-dust/HeroDust';
-import { CHECKOUT_FRAME_CAPTION } from './landing-fixtures';
+import { WORK_FRAME_CAPTION } from './landing-fixtures';
 import { SearchTreeHero } from './search-tree/SearchTreeHero';
 import { useWideHero } from './search-tree/stage';
 
@@ -138,7 +138,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
       </div>
       <div className="landing-shell pb-20 lg:pb-24">
         <figure className="mt-14 lg:mt-16">
-          <LandingFrame kind="checkout" caption={CHECKOUT_FRAME_CAPTION} />
+          <LandingFrame kind="work" caption={WORK_FRAME_CAPTION} />
           <figcaption className="px-1 pt-3 text-[11px] leading-relaxed p-text-4">The tabs, the Work panel and Retry act on this page only.</figcaption>
         </figure>
       </div>

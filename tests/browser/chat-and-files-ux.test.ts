@@ -825,7 +825,7 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       await page.setViewport({ width: 1280, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('.p-thread-column [data-tool-run]');
-      await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/route-checker'); });
+      await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/api-worker/agents/route-checker'); });
       await page.waitForFunction(() => document.querySelector('[data-composer-root] textarea')?.getAttribute('placeholder')?.includes('route-checker') === true);
       await page.waitForSelector('.p-thread-column [data-tool-run]');
       expect((await chatRuns(page)).map((line) => [line.calls, line.state, line.rowsShown])).toEqual([['6', 'settled', 0], ['20', 'settled', 0], ['2', 'settled', 0], ['2', 'settled', 0]]);
@@ -1036,13 +1036,13 @@ describe('the drive, browsing the one composite plane', () => {
   });
 
   test('Markdown opens rendered, and the Source toggle shows what it rendered', () => {
-    expect(observed.filesMarkdownRendered.heading).toBe('Checkout coupon regression');
+    expect(observed.filesMarkdownRendered.heading).toBe('Sessions binding regression');
     expect(observed.filesMarkdownRendered.showsSource).toBe(false);
-    expect(observed.filesPreviewText).toContain('Checkout coupon regression');
+    expect(observed.filesPreviewText).toContain('Sessions binding regression');
   });
 
   test('a whole file opens in an editor seeded from its own bytes', () => {
-    expect(observed.filesEditorSeedsFromTheFile).toContain('Checkout coupon regression');
+    expect(observed.filesEditorSeedsFromTheFile).toContain('Sessions binding regression');
   });
 
   test('rename and delete land on the plane and the listing says so', () => {
@@ -1374,7 +1374,7 @@ function readingOrder(page: Page, needles: readonly string[]): Promise<number[]>
 }
 
 const agentReport = (id: string, timestamp: number, content: string) => ({
-  type: 'subordinate_event', id, kind: 'report', subordinate: 'coupon-auditor', status: 'completed', content, timestamp,
+  type: 'subordinate_event', id, kind: 'report', subordinate: 'binding-auditor', status: 'completed', content, timestamp,
 });
 
 /** The gallery's spliced webhook, and the words of the answer's two steps around it. */
@@ -1452,7 +1452,7 @@ describe('a chat\'s events', () => {
       const page = await newPage();
       await page.setViewport({ width: 1440, height: 2400 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('pricing-service.ts') === true);
+      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('routes/webhooks.ts') === true);
       // The fixture's two asks were written eight and six minutes ago.
       const now = await page.evaluate(() => Date.now());
 
@@ -1467,7 +1467,7 @@ describe('a chat\'s events', () => {
       await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('New Lilt chat activity') === true);
 
       const [first, between, second, after] = await readingOrder(page, [
-        'Add the coupon-kind regression test', 'between the two asks', 'Now rewrite the pricing service', 'after every answer',
+        'Add the missing-binding regression test', 'between the two asks', 'Now move the webhook routes onto openDb', 'after every answer',
       ]);
 
       expect({ between: (first ?? 0) < (between ?? 0) && (between ?? 0) < (second ?? 0), after: (second ?? 0) < (after ?? 0) })
@@ -1496,7 +1496,7 @@ describe('a chat\'s events', () => {
       await page.setViewport({ width: 1440, height: 2400 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&devices=none`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('.p-thread-column');
-      const handOff = 'anthropic/claude-sonnet-4 took over from anthropic/claude-opus-4: provider stream reset';
+      const handOff = 'anthropic/claude-sonnet-4 took over from opencode-go/muse-spark-1.3-contributor: provider stream reset';
 
       await pushFrames(page, [
         { type: 'model_fallback', message: handOff },
@@ -1927,7 +1927,7 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
 
       expect(await revertAttributes(page, 'data-revert-turn')).toEqual(['rv-u1']);
       const body = await page.evaluate(() => document.body.innerText);
-      expect(body).toContain('Add the coupon-kind regression test');
+      expect(body).toContain('Add the missing-binding regression test');
       expect(body).not.toContain('read its rules from the campaign table');
       expect(body).not.toContain('File history is unavailable');
       await page.close();
@@ -1988,9 +1988,9 @@ describe('how a settled turn ended', () => {
       const notes = await page.evaluate(() => {
         const chat = document.querySelector('#chat');
         const at = (words: string) => [...(chat?.querySelectorAll('*') ?? [])].filter((node) => node.textContent?.includes(words) === true).at(-1);
-        const stoppedCall = at('coupon-kind.test.ts');
-        const nextAsk = at('Now rewrite the pricing service');
-        const finishedCall = at('packages/pricing');
+        const stoppedCall = at('sessions-binding.test.ts');
+        const nextAsk = at('Now move the webhook routes onto openDb');
+        const finishedCall = at('workers/api/src/routes');
         const after = (anchor: Element | undefined, node: Element) => anchor !== undefined && (anchor.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
         const statuses = [...(chat?.querySelectorAll('[role="status"]') ?? [])];
 
@@ -2182,7 +2182,7 @@ describe('file preview request generation at the actual FilesSurface boundary', 
       // not overwrite the fresh resource identity selected by the listing.
       const preview = await page.$eval('[data-files-preview-body]', (body) => body.textContent ?? '');
       expect(preview).toContain('Fresh after refresh');
-      expect(preview).not.toContain('Checkout coupon regression');
+      expect(preview).not.toContain('Sessions binding regression');
       await page.close();
     });
   });
@@ -2220,7 +2220,7 @@ describe('history and roster request generations at actual hook boundaries', () 
       await page.click('[data-roster-local-rename]');
       // POSITIVE FIRST: the local transition really landed.
       await page.waitForFunction(
-        () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
+        () => document.querySelector('[data-roster-probe]')?.textContent === 'api-worker:Renamed locally',
       );
       // POSITIVE SECOND: the mount read is still held, so there is a reply to
       // release. A roster whose read already ended has nothing to retire and
@@ -2243,7 +2243,7 @@ describe('history and roster request generations at actual hook boundaries', () 
       );
 
       expect(await page.$eval('[data-roster-probe]', (el) => el.textContent ?? ''))
-        .toBe('checkout-fixes:Renamed locally');
+        .toBe('api-worker:Renamed locally');
       await page.close();
     });
   });
@@ -2904,7 +2904,7 @@ describe('composer and message continuity at browser boundaries', () => {
       }));
 
       expect(failed.role).toBe('note');
-      expect(failed.text).toContain('Checkout diagram');
+      expect(failed.text).toContain('Request flow diagram');
       expect(failed.href).toBe('/assets/missing-continuity-image.png');
       expect(await page.$('[data-image-failure] img')).toBeNull();
       expect(await page.$('[data-image-success] [data-markdown-image-error]')).toBeNull();
@@ -3513,7 +3513,7 @@ describe('Work keeps up with what is happening and what happened', () => {
       const rows = await page.evaluate(() => [...document.querySelectorAll('[data-journal-row]')].map((row) => row.textContent ?? ''));
 
       // Each fixture row by something only it says, in the order the fixture's times put them; a closed task names whose it was.
-      const order = ['2f8b1d04', 'coupon docs page · main', 'SAVE20 coupon 500 · main', 'Stage the rollout · courier', '9d3c6e11'];
+      const order = ['2f8b1d04', 'API docs page · main', '/api/health 500 · main', 'Stage the rollout · courier', '9d3c6e11'];
 
       expect(rows.map((row) => order.findIndex((marker) => row.includes(marker)))).toEqual(order.map((_, at) => at));
       // The running job is Now's, not the journal's.
@@ -3966,7 +3966,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '340');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -4010,7 +4010,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '340');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -4060,7 +4060,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '2000');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -4083,7 +4083,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       expect(state.width).toBeLessThan(before);
       expect(state.stored['kinu.inspector.ashish@example.com']).toBe('2000');
       expect(Object.keys(state.stored).filter((key) => key.startsWith('kinu.inspector.open.')).sort()).toEqual([
-        'kinu.inspector.open.ashish@example.com.checkout-fixes',
+        'kinu.inspector.open.ashish@example.com.api-worker',
       ]);
 
       await page.close();
@@ -4137,7 +4137,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '400');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -4234,7 +4234,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.setViewport({ width: 1350, height: 900 });
       await committedPast(commitsAfterFirst);
 
-      const openKey = 'kinu.inspector.open.ashish@example.com.checkout-fixes';
+      const openKey = 'kinu.inspector.open.ashish@example.com.api-worker';
 
       expect(await page.evaluate((key: string) => localStorage.getItem(key), openKey)).toBeNull();
 
@@ -4253,7 +4253,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '340');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -4296,7 +4296,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       expect(state.width).toBe(Number(state.stored['kinu.inspector.ashish@example.com']));
       expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeLessThan(340);
-      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
+      expect(state.stored['kinu.inspector.open.ashish@example.com.api-worker']).toBe('1');
 
       await page.close();
     });
@@ -4309,7 +4309,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '400');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -4351,7 +4351,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // width off the seed proves the commit was claimed as the user's.
       expect(state.width).toBeCloseTo(Number(state.stored['kinu.inspector.ashish@example.com']), -1);
       expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeLessThan(400);
-      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
+      expect(state.stored['kinu.inspector.open.ashish@example.com.api-worker']).toBe('1');
 
       await page.close();
     });
@@ -4394,7 +4394,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '300');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '0');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '0');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-inspector-expand]');
@@ -4407,7 +4407,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       const { stored } = await readInspectorState(page);
 
-      expect(stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
+      expect(stored['kinu.inspector.open.ashish@example.com.api-worker']).toBe('0');
 
       await page.close();
     });
@@ -4457,7 +4457,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
         localStorage.setItem('kinu.inspector.ashish@example.com', '300');
-        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.api-worker', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]');
@@ -4480,7 +4480,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       const state = await readInspectorState(page);
 
       expect(await inspectorShown(page)).toBe('collapsed');
-      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
+      expect(state.stored['kinu.inspector.open.ashish@example.com.api-worker']).toBe('0');
       // The stored resting width is the reset's 340 or the pre-reset 300 —
       // the collapse claims whichever the panel answered at call time, and
       // the reset's own emission can never overwrite it.
@@ -4676,7 +4676,7 @@ describe('attachments at the message cap', () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-      const pane = '[data-agent-pane="checkout-fixes/main"]';
+      const pane = '[data-agent-pane="api-worker/main"]';
       await page.waitForSelector(`${pane} textarea:not([disabled])`);
 
       // Two separate drops in one task: both read their files while the other is still being read.
@@ -4730,7 +4730,7 @@ describe('the composer while a turn runs and under a status row', () => {
 
       const attach = await page.$(`${live} input[type="file"]`);
       const file = `${process.env.TMPDIR ?? '/tmp'}/branch-attachment.csv`;
-      await Bun.write(file, 'cart,total\n1,20\n');
+      await Bun.write(file, 'route,total\n/api/health,20\n');
       await attach?.uploadFile(file);
       await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('branch-attachment.csv'), {}, live);
       expect(await branch()).toBe(false);

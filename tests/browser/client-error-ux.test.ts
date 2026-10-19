@@ -50,7 +50,7 @@ const STAMP = { version: '0.1.0+abc1234', sha: LOADED_SHA, builtAt: '2026-08-07T
 const MESSAGE_NEEDLE = 'MESSAGE_LEAKS_IF_REPORTED_0001';
 
 /** The workspace the route resolves for. A report must carry the TEMPLATE. */
-const WORKSPACE = 'checkout-fixes';
+const WORKSPACE = 'api-worker';
 
 const ReportSchema = v.object({
   event: v.string(),

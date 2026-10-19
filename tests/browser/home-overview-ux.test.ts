@@ -107,10 +107,10 @@ describe('the home workspace cards', () => {
 
         // One chip per line, the shared headline: a waiting decision outranks
         // the live turn beside it, and its count rides the label.
-        const coupon = cardNamed(list, 'API Worker');
-        expect(coupon.chip).toBe('Needs you · 2');
-        expect(coupon.chipClass).toContain('p-warning');
-        expect(coupon.task).toBe('Investigate intermittent checkout failures in the coupon migration');
+        const worker = cardNamed(list, 'API Worker');
+        expect(worker.chip).toBe('Needs you · 2');
+        expect(worker.chipClass).toContain('p-warning');
+        expect(worker.task).toBe('Investigate intermittent 500s after the sessions binding rename');
 
         expect(cardNamed(list, 'Dew').chip).toBe('Working');
 

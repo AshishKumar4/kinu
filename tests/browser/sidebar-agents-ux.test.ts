@@ -9,7 +9,7 @@ import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const LIST = '[data-sidebar-agents="checkout-fixes"]';
+const LIST = '[data-sidebar-agents="api-worker"]';
 
 async function shell(gallery: Gallery, width: number): Promise<Page> {
   const page = await gallery.newPage();
@@ -43,7 +43,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       await still(page);
 
       const top = await page.$$eval(`${LIST} nav > ul > li > [data-agent-row]`, (rows) => rows.map((row) => row.textContent));
-      expect(top).toEqual(['Main', 'Fix SAVE20 coupon 500s', 'Should checkout support gift cards?', 'Speed up cart render', 'Review: payments refactor']);
+      expect(top).toEqual(['Main', 'Fix the /api/health 500s', 'Should the nightly sweep move to a cron trigger?', 'Read the overnight error logs', 'Review: payments refactor']);
 
       // A hire sits under the chat or agent that hired it, never beside the person's chats.
       const parentOf = (key: string) => page.$eval(`${LIST} [data-agent-row="${key}"]`, (row) => row.parentElement?.parentElement?.closest('li')?.querySelector('[data-agent-row]')?.getAttribute('data-agent-row'));
@@ -57,7 +57,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       expect(await parentOf('a-sampler')).toBe('a-refine');
 
       await page.click(`${LIST} [data-agent-row="a-scout"]`);
-      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/coupon-auditor"]');
+      await page.waitForSelector('[data-agent-pane="api-worker/agents/binding-auditor"]');
       await page.waitForFunction((list) => document.querySelector(`${list} [data-agent-row="a-scout"]`)?.getAttribute('aria-current') === 'page', {}, LIST);
 
       await page.click(`${LIST} [data-agents-back]`);
@@ -138,7 +138,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
 
       await page.click(`${drawn} [data-agent-row="actor-docs"]`);
       await page.waitForFunction(() => document.querySelector('[data-drawer]') === null);
-      await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/docs"]');
+      await page.waitForSelector('[data-agent-pane="api-worker/agents/docs"]');
       await page.close();
     });
   });
@@ -158,15 +158,15 @@ describe('the sidebar before the roster answers', () => {
         const list = () => page.evaluate(() => ({
           busy: document.querySelector('[aria-busy="true"]') !== null,
           empty: document.body.innerText.includes('No workspaces yet.'),
-          storefront: [...document.querySelectorAll('[data-rail] a[href^="/workspace/"]')].some((link) => link.textContent?.includes('API Worker')),
+          workspace: [...document.querySelectorAll('[data-rail] a[href^="/workspace/"]')].some((link) => link.textContent?.includes('API Worker')),
         }));
 
         try {
           if (roster === 'held') {
-            expect(await list()).toEqual({ busy: true, empty: false, storefront: false });
+            expect(await list()).toEqual({ busy: true, empty: false, workspace: false });
             await page.evaluate(() => window.dispatchEvent(new Event('gallery:roster-release')));
             await page.waitForFunction(() => document.querySelector('[aria-busy="true"]') === null);
-            expect(await list()).toEqual({ busy: false, empty: false, storefront: true });
+            expect(await list()).toEqual({ busy: false, empty: false, workspace: true });
           } else {
             await page.waitForFunction(() => document.body.innerText.includes('No workspaces yet.'));
             expect((await list()).busy).toBe(false);
@@ -214,7 +214,7 @@ describe('who is at work, and who is who', () => {
 
   test('agents at work with no tab spin on the All agents row and are counted on the bar\'s agents button', async () => {
     await withGallery(async (gallery) => {
-      // The fixture's out-of-sight workers: the coupon auditor it hired, and two swarm workers.
+      // The fixture's out-of-sight workers: the binding auditor it hired, and two swarm workers.
       const busy = await shell(gallery, 1280);
       // Nothing works out of sight here: every agent has a tab, and all of them are idle.
       const quiet = await gallery.newPage();

@@ -50,7 +50,7 @@ const { github: GITHUB, vercel: VERCEL } = ASKS;
 
 /** The standup part's own markup, and what it proposes to show everyone. */
 const STANDUP = {
-  html: `<ul style="margin:0;padding-left:18px;font:13px/1.6 system-ui;color:#1f2937"><li>#412 Fix checkout rounding</li><li>#409 Drop the old banner</li></ul>`,
+  html: `<ul style="margin:0;padding-left:18px;font:13px/1.6 system-ui;color:#1f2937"><li>#412 Health check fails after the binding rename</li><li>#409 Drop the old banner</li></ul>`,
   show: { label: "Your open pull requests, as the team sees them", value: { author: "you", open: [412, 409] } },
 };
 

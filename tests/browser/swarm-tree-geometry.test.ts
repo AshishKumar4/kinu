@@ -820,7 +820,7 @@ async function explorerAt(newPage: Gallery['newPage'], origin: string, asked: st
 test('a permalink opens its own swarm or none, and a merge is drawn unscored with no winner', async () => {
   await withGallery(async ({ newPage, origin }) => {
     const newest = await explorerAt(newPage, origin, null);
-    expect([newest.name, newest.missing]).toEqual(['coupon.kind readers', false]);
+    expect([newest.name, newest.missing]).toEqual(['env.DB readers', false]);
     await newest.page.close();
 
     const unknown = await explorerAt(newPage, origin, 'never-ran');
@@ -828,7 +828,7 @@ test('a permalink opens its own swarm or none, and a merge is drawn unscored wit
     await unknown.page.close();
 
     const merge = await explorerAt(newPage, origin, 'root-merge-1');
-    expect([merge.name, merge.missing]).toEqual(['rules-by-kind call sites', false]);
+    expect([merge.name, merge.missing]).toEqual(['env.DB call sites', false]);
     await settled(merge.page);
 
     const heads = await merge.page.$$eval('g.mcts-node[data-node]', (nodes) => nodes.map((node) => ({

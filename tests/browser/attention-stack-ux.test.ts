@@ -249,7 +249,7 @@ test('a plan in the stack opens on its own page, from whichever tool the inspect
     await page.waitForFunction(() => document.querySelector('#inspector button[aria-label="Files"][aria-current="true"]') === null);
     const shown = await page.$eval('#inspector nav [aria-current="true"]', (tab) => ({ nav: tab.closest('nav')?.getAttribute('aria-label'), tab: tab.getAttribute('aria-label') }));
 
-    expect(shown).toEqual({ nav: 'Pages', tab: expect.stringContaining('applyCoupon') });
+    expect(shown).toEqual({ nav: 'Pages', tab: expect.stringContaining('SESSIONS_DB') });
     await page.waitForSelector('[data-plan-review-root]');
     expect(await stacked(page)).toEqual([plan]);
     await page.close();
@@ -281,14 +281,14 @@ test('an agent\'s own pane stacks the asks that agent raised, and none of the wo
     const page = await newPage();
     await opened(page, origin, '&asks=mixed&consent=waiting');
     await page.waitForSelector('[data-attention-stack]');
-    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/coupon-auditor'); });
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/api-worker/agents/binding-auditor'); });
 
-    const pane = '[data-agent-pane="checkout-fixes/agents/coupon-auditor"]';
+    const pane = '[data-agent-pane="api-worker/agents/binding-auditor"]';
 
     await page.waitForSelector(`${pane} [data-attention-stack]`);
     expect(await page.$$eval(`${pane} [data-attention-card], ${pane} [data-attention-behind]`, (cards) => cards.map((card) => card.getAttribute('data-attention-card') ?? card.getAttribute('data-attention-behind'))))
-      .toEqual(['action:plan:coupon-auditor:pa-1:1']);
-    expect(await page.$eval(`${pane} [data-attention-card]`, (card) => card.textContent)).toContain('Audit every coupon rule');
+      .toEqual(['action:plan:binding-auditor:pa-1:1']);
+    expect(await page.$eval(`${pane} [data-attention-card]`, (card) => card.textContent)).toContain('Audit the binding of every route');
     await page.close();
   });
 });
@@ -303,13 +303,13 @@ test("a parked command's row in Work opens its card in the workspace's chat, fro
 
     await page.click(`[data-attention-behind="${first}"]`);
     await page.waitForFunction((key) => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === key, {}, first);
-    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/checkout-fixes/agents/coupon-auditor'); });
+    await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/api-worker/agents/binding-auditor'); });
     await openWork(page);
     await page.waitForSelector('[data-pending-action="park-write"]');
 
     // The workspace's own chat is shown, its stack open on that command's card, the batch it is part of.
     await page.click('[data-pending-action="park-write"]');
-    await page.waitForFunction(() => document.querySelector('[data-agent-pane="checkout-fixes/main"] [data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-write');
+    await page.waitForFunction(() => document.querySelector('[data-agent-pane="api-worker/main"] [data-attention-card]')?.getAttribute('data-attention-card') === 'action:park-write');
     expect(await page.$$eval('[data-attention-card] [data-parked-command]', (rows) => rows.map((row) => row.getAttribute('data-parked-command'))))
       .toEqual(['park-publish', 'park-push', 'park-write']);
     await page.close();
