@@ -1159,10 +1159,10 @@ run_soak() {
 }
 export -f run_soak
 
-# THE EVAL ACCOUNTS' PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment
-# one drives: this one and, for a staging build, production, the baseline the evals compare it with. The evals and the
-# soak run detached, on armada and after this deploy, and a key missing there is every trial's HTTP 401; this is their
-# one owner, awaited here. A key not stored is a red, its finding the provisioner's own, and no eval starts.
+# EVAL-SERVICE'S PROVIDER KEYS (scripts/eval-provider-keys.ts), stored before any eval starts, on each deployment one
+# drives: this one and, for a staging build, production, the baseline the evals compare it with. Awaited here, so a key
+# not stored is this deploy's red, its finding the provisioner's own, and no eval starts. The trial accounts are keyed by
+# the run that leases them (scripts/evals-map.ts, scripts/evals-lease.ts), on its block alone.
 provision_eval_keys() {
   local origin
   for origin in "$@"; do

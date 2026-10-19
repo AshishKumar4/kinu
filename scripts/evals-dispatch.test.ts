@@ -8,6 +8,7 @@ import { collectEvalTasks } from '../evals/src/eval';
 import { parseResults, trials } from '../evals/src/results';
 import { whyIncomplete } from '../evals/src/comparison';
 import { evalItems, evalMapArgv, evalQueue, evalTaskFiles } from './evals-map';
+import { claimOf } from '../evals/src/slot';
 import { joinTrialReports, selectTrialReport, type TrialItem } from './evals-artifacts';
 import { ciVerdictRow } from './ci-verdicts';
 
@@ -79,7 +80,8 @@ describe('parallel armada evaluations', () => {
   });
 
   test('the supported CLI names Kinu\'s connection, one budget and no elapsed limit, and its sole artifact extraction path', () => {
-    const argv = evalMapArgv('abcdef123456', '/tmp/evals', ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_EVAL_WEB_IDENTITY'], 70);
+    const argv = evalMapArgv({ sha: 'abcdef123456', out: '/tmp/evals', identities: ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_EVAL_WEB_IDENTITY'], trials: 70,
+      claim: { first: 49, last: 118, hosts: ['staging.kinu.run', 'kinu.run'] } });
 
     expect(argv[0]).toContain('node_modules/.bin/armada');
     expect(argv[1]).toBe('map');
@@ -92,6 +94,8 @@ describe('parallel armada evaluations', () => {
     expect(argv.find((word) => word.startsWith('--connection='))).toMatch(/armada-kinu\.json$/u);
     expect(argv).toContain('--secrets=KINU_EVAL_STAGING_WEB_IDENTITY,KINU_EVAL_WEB_IDENTITY');
     expect(argv.slice(argv.indexOf('--') + 1)).toEqual(['bun', 'evals/scripts/trial.ts']);
+    // The job's label is the run's claim on its leased block, which the next run reads back (scripts/evals-lease.ts).
+    expect(claimOf(argv.find((word) => word.startsWith('--label='))?.slice('--label='.length) ?? '')).toEqual({ first: 49, last: 118, hosts: ['staging.kinu.run', 'kinu.run'] });
   });
 
   test('Vitest selection strips skipped cases, anchors trial one, and rejects the wrong or duplicated case', () => {
