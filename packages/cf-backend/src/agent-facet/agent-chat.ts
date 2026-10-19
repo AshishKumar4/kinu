@@ -653,7 +653,7 @@ export class FacetChat {
   /** The workspace's model settings changed: the next request is measured on them, and a refusal they fix may answer. */
   async modelSettingsChanged(): Promise<void> {
     this.session.reviseContext({ counted: true });
-    await this.terminal.modelSettingsChanged();
+    await this.terminal.ownerActed();
   }
 
   /** The forced rebuild the next turn assembly takes, under the key it reads. */

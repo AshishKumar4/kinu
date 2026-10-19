@@ -66,7 +66,7 @@ describe('a task reminder', () => {
     const owed: Parameters<OwedTurnQueue['appendOwedTurn']>[0][] = [];
 
     const effect = present(chatTerminalEffects({
-      chat: () => ({ announcementOnDisk: () => false, announcementInFlight: () => false, appendOwedTurn: (turn) => { owed.push(turn); } }),
+      chat: () => ({ announcementOnDisk: () => false, announcementInFlight: () => false, announcementHeld: () => false, appendOwedTurn: (turn) => { owed.push(turn); } }),
       orchestrator: () => null,
       engine: { learnFromTurn: () => Promise.reject(new Error('a reminder learns nothing')) },
     }).task_reminder, 'the reminder body');
