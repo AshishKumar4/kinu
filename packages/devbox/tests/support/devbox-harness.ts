@@ -352,6 +352,8 @@ export class FakeSandbox {
   readonly starts: StartRecord[] = [];
   readonly kills: string[] = [];
   readonly execs: string[] = [];
+  /** The variables each process launch (`devbox-process`) was handed, in order. */
+  readonly launchEnvs: Record<string, string>[] = [];
   readonly exposures: { port: number; token: string | undefined; name: string | undefined }[] = [];
   get schedules(): string[] { return alarmTimes.get(this.ctx.storage)?.scheduled ?? []; }
   /** Configured probe answers for services on a started container, retained
@@ -1072,6 +1074,8 @@ export class FakeSandbox {
 
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
+
+    if (args[3] === 'devbox-process') this.launchEnvs.push({ ...options.env });
 
     if (PROCESS_SCRIPTS.has(args[3] ?? '')) return await this.#processScript(args, pid);
 

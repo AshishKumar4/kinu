@@ -623,9 +623,10 @@ export function mockAgentsSdk(): void {
       authUrl: string | null = pendingMcpAuthUrl;
       /** `auth()` reads this off the constructor's third argument, as the real one does. */
       readonly redirectUrl: string;
-      constructor(_storage: DurableObjectStorage, _clientName?: string, baseRedirectUrl = '') {
+      constructor(storage: DurableObjectStorage, _clientName?: string, baseRedirectUrl = '') {
         this.redirectUrl = baseRedirectUrl;
         pendingMcpAuthUrl = null;
+        oauthStorages.push(storage);
       }
 
       // Answered as empty storage answers, so the real SDK auth flow runs against it.
@@ -887,6 +888,18 @@ let mcpDiscoveryFailure: Error | null = null;
 
 /** `userMcp_add` constructs the provider itself, so the provider stub picks this up at construction. */
 let pendingMcpAuthUrl: string | null = null;
+
+/** The storage each OAuth provider was handed, in order: what the SDK would keep a login in. */
+const oauthStorages: DurableObjectStorage[] = [];
+
+/** The storage the last OAuth provider made was handed. */
+export function lastOAuthStorage(): DurableObjectStorage {
+  const storage = oauthStorages.at(-1);
+
+  if (storage === undefined) throw new Error('no OAuth provider has been made');
+
+  return storage;
+}
 
 export function queueMcpAuthUrl(authUrl: string): void {
   pendingMcpAuthUrl = authUrl;

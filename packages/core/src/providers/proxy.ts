@@ -45,7 +45,7 @@ export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
 
 /** Cloudflare keys also run the AI Gateway API; Codex refuses Workers egress (403); Claude's is Claude Code's. */
 const PROXY_DENIED_CRED_KEYS: readonly string[] = [
-  'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth', 'claude.oauth', 'chatgpt.oauth',
+  'cloudflare.oauth', 'cloudflare.ai-gateway', 'cloudflare.web-search', 'codex.oauth', 'claude.oauth', 'chatgpt.oauth',
 ];
 
 export function isProxyDeniedCredentialKey(key: string): boolean {

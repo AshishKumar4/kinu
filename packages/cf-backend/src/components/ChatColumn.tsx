@@ -5,6 +5,8 @@ import { ArrowsClockwiseIcon, PaperclipIcon } from "@phosphor-icons/react";
 import type { UIMessage } from "ai";
 import { isPlaceholderMission, liveTailRow, threadLiveTail, turnFailure, turnFailureFacts, type WorkspaceNotice } from "@kinu.run/core";
 import { detach } from "@kinu.run/core/obs";
+import { useParams } from "react-router-dom";
+import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 import { AskedQuestionsContext } from "@/components/QuestionCard";
 import { foldEventTurns } from "@/components/ChatEvents";
 import { ChatLiveTail, MessageView, ModelFallbackRows, SteerBubble } from "@/components/MessageView";
@@ -215,6 +217,9 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
 
   useOpeningMessage(extras.opening === true && state.connectionStatus === "connected", sendWords);
 
+  // The route's workspace: a secret moved out of a draft here is allowed here.
+  const secretGuard = usePastedSecretGuard({ draft: ui.draft, setDraft: ui.setDraft, workspace: useParams().agentId });
+
   const pickModel = useCallback((spec: string) => detach(Effect.promise(async () => state.setModel(spec))), [state]);
   const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
@@ -257,14 +262,14 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           textareaRef={inputRef}
           value={ui.draft}
           onValueChange={ui.setDraft}
-          onSend={send}
+          onSend={secretGuard.guarded("send", send)}
           placeholder={placeholder}
           disabled={state.connectionStatus !== "connected"}
           liveness={state.liveness}
           onRecover={state.recoverTurn}
           onStop={stop}
-          {...(extras.onBranch !== undefined && { onBranch: extras.onBranch })}
-          attention={attention}
+          {...(extras.onBranch !== undefined && { onBranch: secretGuard.guarded("branch", extras.onBranch) })}
+          attention={<>{secretGuard.offer}{attention}</>}
           mode={{ value: ui.mode, onChange: ui.setMode }}
           {...(attachments !== undefined && { attachments: { parts: [...attachments.parts], onAdd: attachments.add, onRemove: attachments.remove } })}
           modelPicker={<ConnectedModelPicker value={as?.model.model ?? ""} onChange={pickModel} size="xs"

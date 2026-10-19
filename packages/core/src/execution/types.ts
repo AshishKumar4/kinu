@@ -13,6 +13,7 @@ import type { FilesOwner } from '../safety/command-review';
 import type { PreparedCall } from '../safety/approval-gate';
 import type { ShellSession } from './shell-session';
 import type { DesktopScreen } from './desktop';
+import { asSecretsCaller, secretsCaller } from './secrets-caller';
 
 /**
  * "No work deadline" for a mechanism that insists on a timer: the largest `setTimeout` delay; larger values
@@ -46,12 +47,20 @@ export const COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 export function commandTool(
   description: string, prepare: CommandTool['prepare'], extra: Pick<ExecutorTool, 'planAllowed'> = {},
 ): CommandTool {
+  // Run for whom it was asked, wherever its run is called from: an approval that admits it later is no caller of it.
+  const asked: CommandTool['prepare'] = (args) => {
+    const caller = secretsCaller();
+    const prepared = prepare(args);
+
+    return 'refused' in prepared ? prepared : { call: prepared.call, run: (state) => asSecretsCaller(caller, () => prepared.run(state)) };
+  };
+
   return {
     ...extra,
     description,
-    prepare,
+    prepare: asked,
     execute: async (...args) => {
-      const prepared = prepare(args);
+      const prepared = asked(args);
 
       return 'refused' in prepared ? prepared.refused : await prepared.run();
     },

@@ -10,7 +10,7 @@ import { settleSync } from '../obs/effect';
 import { isSlateMethodName } from './rpc';
 import { SLATE_READ_MODELS, type SlateReadModel } from './read-models';
 import { grantAdmits } from './capability-graph';
-import { AGENT_ASK_MEMBER, AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact, slateOwnerOnly } from './members';
+import { AGENT_ASK_MEMBER, AI_RUN_MEMBER, AI_STREAM_MEMBER, shareMemberRefusal, slateAddressImpact, slateOwnerOnly } from './members';
 import { retiredMember } from '../operations/retired';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
@@ -302,7 +302,9 @@ function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<Sla
   const { route: found, address } = call;
   const refused = new KinuError('denied', `Slate ${id} does not grant ${address.namespace}.${address.member} to viewers`);
 
-  if (slateOwnerOnly(address)) return Effect.fail(new KinuError('denied', `${address.namespace}.${address.member} runs only in its owner's own slate, never for a share's viewer`));
+  const ownerOnly = shareMemberRefusal(address);
+
+  if (ownerOnly !== null) return Effect.fail(new KinuError('denied', address.namespace === 'computer' ? ownerOnly : `${ownerOnly}, never for a share's viewer`));
 
   if (found.kind === 'app') return grant.slates.includes(found.id) ? Effect.succeed(call) : Effect.fail(refused);
   const entry = grantAdmits(grant, id, address.namespace, address.member);
@@ -331,6 +333,9 @@ export function admitNestedViewerCall(grant: ShareGrant, slate: string, address:
 }
 
 function nestedViewerCall(grant: ShareGrant, slate: string, address: SlateAddress): Effect.Effect<void, KinuError> {
+  const refused = shareMemberRefusal(address);
+
+  if (refused !== null) return Effect.fail(new KinuError('denied', refused));
   const impact = slateExcludes(address) ? null : slateAddressImpact(address);
 
   return impact !== null && grantAdmits(grant, slate, address.namespace, address.member)?.impact === impact

@@ -28,12 +28,11 @@ import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-
 import { initToolEffectClaimTable, openLocalActor } from '@kinu.run/core';
 import { tierAuthority, toolSequenceModel } from './helpers/local-session';
 import { LocalAgentSession } from '../src/local-session';
-import { WEB_SEARCH_INDEX } from '@kinu.run/core';
 
 // A head owns no store: its rows are actor-keyed in the parent's one database.
 
 const stubWeb: WebSearchProvider = {
-  search: async () => ({ query: '', results: [], source: WEB_SEARCH_INDEX }),
+  search: async () => ({ query: '', results: [], source: 'exa' as const }),
   fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),

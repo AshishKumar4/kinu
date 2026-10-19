@@ -49,7 +49,7 @@ import {
   type WorkMode, type PromptFile, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
-  type EgressSecretSummary,
+  type GrantedSecrets,
 } from '@kinu.run/core';
 import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, joinHarnessFibersOf, mockAgentsSdk, trackHarnessLane } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
@@ -335,7 +335,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     throw new Error(`the send ${id} was handed back before a turn took it`);
   }
   /** Main's conversation as its window reads it. */
-  harnessMainHistory(): Promise<UIMessage[]> { return this.chatTransport.wire.seed(); }
+  async harnessMainHistory(): Promise<UIMessage[]> { return (await this.chatTransport.wire.seed()).messages; }
   /** The model main's turns run on, in its isolate and on this object's own model lanes. */
   /** Main's turns, in its own isolate, run on `factory`; this object's own lanes (a judge, a title) keep theirs, so a
    *  turn parked at its model call never parks them. */
@@ -1022,11 +1022,11 @@ export async function mainRows(harness: Pick<ActorHarness<HarnessOrchestratorAge
 export async function storedChat(
   harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent' | 'db'>, actor?: ActorHandle,
 ): Promise<UIMessage[]> {
-  if (actor !== undefined) return await chatSeed(historyOver(harness, actor).transcript(CHAT_SESSION_ID), keptMediaName);
+  if (actor !== undefined) return (await chatSeed(historyOver(harness, actor).transcript(CHAT_SESSION_ID), keptMediaName)).messages;
 
   await harness.agent.harnessMainHistory();
 
-  return await chatSeed(agentHistory(harness, workspaceMainActor(harness.db).actorId).history.transcript(CHAT_SESSION_ID), keptMediaName);
+  return (await chatSeed(agentHistory(harness, workspaceMainActor(harness.db).actorId).history.transcript(CHAT_SESSION_ID), keptMediaName)).messages;
 }
 
 /** A settled response's improvement lanes and advisor review ran: their rows completed, or the whole
@@ -1798,11 +1798,11 @@ export function makeEnv(
 
             return profile === null ? null : { displayName: null, createdAt: 0, lastSeenAt: 0, onboardedAt: null, workspaceCount: 1, ...profile };
           },
-          // No stored egress secrets; `failVault` drives an unreadable vault.
-          listEgressSecrets: async (): Promise<EgressSecretSummary[]> => {
+          // No secret granted here; `failVault` drives an unreadable vault.
+          grantedSecrets: async (): Promise<GrantedSecrets> => {
             if (userPlane?.failVault) throw userPlane.failVault;
 
-            return [];
+            return { granted: [], withheld: 0 };
           },
           // A job holding no device commands: what the hub answers when nothing needs stopping.
           cancelDeviceRequestsForBackgroundJob: async (): Promise<[]> => [],

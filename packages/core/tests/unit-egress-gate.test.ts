@@ -27,9 +27,9 @@ function placeholder(seed: string): string {
 }
 
 const STRIPE: EgressSecretBinding = {
-  id: 'bind-stripe',
-  label: 'Stripe live key',
-  host: 'api.stripe.com',
+  name: 'STRIPE_SECRET_KEY',
+  hosts: ['api.stripe.com'],
+  position: { kind: 'authorization' },
   placeholder: placeholder('a'),
 };
 
@@ -104,19 +104,56 @@ describe('planEgress', () => {
 
     expect(plan).toEqual({
       kind: 'forward',
-      substitutions: [{ bindingId: 'bind-stripe', placeholder: STRIPE.placeholder }],
+      substitutions: [{ name: 'STRIPE_SECRET_KEY', placeholder: STRIPE.placeholder }],
     });
   });
 
-  test('a placeholder in the URL is substituted too — some APIs want it there', () => {
+  test('a secret read from a query parameter is substituted there, and only there', () => {
+    const google: EgressSecretBinding = { name: 'GOOGLE_API_KEY', hosts: ['*.googleapis.com'], position: { kind: 'query', name: 'key' }, placeholder: placeholder('q') };
+    const at = (url: string) => planEgress({ host: new URL(url).hostname, url, headers: [] }, [google]);
+
+    expect(at(`https://maps.googleapis.com/maps/api/geocode/json?address=x&key=${google.placeholder}`).kind).toBe('forward');
+    expect(at(`https://maps.googleapis.com/maps/api/geocode/json?key=${google.placeholder}&echo=${google.placeholder}`).kind).toBe('refuse');
+    expect(at(`https://maps.googleapis.com/${google.placeholder}?key=${google.placeholder}`).kind).toBe('refuse');
+  });
+
+  test('over wss a secret read from a query parameter is substituted there, and refused anywhere else in the URL', () => {
+    const stream: EgressSecretBinding = { name: 'STREAM_KEY', hosts: ['stream.example.com'], position: { kind: 'query', name: 'key' }, placeholder: placeholder('w') };
+    const at = (url: string) => planEgress({ host: 'stream.example.com', url, headers: [] }, [stream]).kind;
+
+    expect([at(`wss://stream.example.com/v1?key=${stream.placeholder}`), at(`wss://stream.example.com/${stream.placeholder}?key=${stream.placeholder}`)])
+      .toEqual(['forward', 'refuse']);
+  });
+
+  test("THE STORAGE CASE: an allowed host's URL naming the secret is refused, so it cannot be stored as a key name", () => {
+    const cloudflare: EgressSecretBinding = { name: 'CLOUDFLARE_API_TOKEN', hosts: ['api.cloudflare.com'], position: { kind: 'authorization' }, placeholder: placeholder('c') };
+
+    const plan = planEgress({
+      host: 'api.cloudflare.com',
+      url: `https://api.cloudflare.com/client/v4/accounts/a1/storage/kv/namespaces/n1/values/${cloudflare.placeholder}`,
+      headers: [['authorization', `Bearer ${cloudflare.placeholder}`]],
+    }, [cloudflare]);
+
+    expect(plan.kind).toBe('refuse');
+    expect(plan.kind === 'refuse' && plan.reason).toContain('only in the Authorization header');
+    expect(plan.kind === 'refuse' && plan.reason).toContain('the URL');
+  });
+
+  test('a secret in a header its API does not read it from is refused, naming the header', () => {
     const plan = planEgress({
       host: 'api.stripe.com',
-      url: `https://api.stripe.com/v1/charges?key=${STRIPE.placeholder}`,
-      headers: [],
+      url: 'https://api.stripe.com/v1/charges',
+      headers: [['authorization', `Bearer ${STRIPE.placeholder}`], ['x-echo', STRIPE.placeholder]],
     }, [STRIPE]);
 
-    expect(plan.kind).toBe('forward');
-    expect(plan.kind === 'forward' && plan.substitutions).toHaveLength(1);
+    expect(plan.kind === 'refuse' && plan.reason).toContain('the x-echo header');
+  });
+
+  test('a secret read from a named header rides in that header whatever its case, and not in Authorization', () => {
+    const anthropic: EgressSecretBinding = { name: 'ANTHROPIC_API_KEY', hosts: ['api.anthropic.com'], position: { kind: 'header', name: 'x-api-key' }, placeholder: placeholder('h') };
+    const sent = (name: string) => planEgress({ host: 'api.anthropic.com', url: 'https://api.anthropic.com/v1/messages', headers: [[name, anthropic.placeholder]] }, [anthropic]).kind;
+
+    expect([sent('X-Api-Key'), sent('authorization')]).toEqual(['forward', 'refuse']);
   });
 
   test('THE EXFILTRATION CASE: a placeholder sent to another host is refused', () => {
@@ -131,6 +168,31 @@ describe('planEgress', () => {
     // The refusal names the destination and the binding, never the secret.
     expect(plan.kind === 'refuse' && plan.reason).toContain('api.stripe.com');
     expect(plan.kind === 'refuse' && plan.reason).toContain('attacker.test');
+  });
+
+  test.each([
+    ['http://api.stripe.com/v1/charges', 'refuse'],
+    ['ws://api.stripe.com/v1/stream', 'refuse'],
+    ['wss://api.stripe.com/v1/stream', 'forward'],
+  ] as const)('a placeholder for its own host over %p is %s: a secret crosses the network only encrypted', (url, kind) => {
+    const plan = planEgress({ host: 'api.stripe.com', url, headers: [['authorization', `Bearer ${STRIPE.placeholder}`]] }, [STRIPE]);
+
+    expect(plan.kind).toBe(kind);
+  });
+
+  test('a secret with several hosts is substituted at each of them, and refused at any other', () => {
+    const github: EgressSecretBinding = { name: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], position: { kind: 'authorization' }, placeholder: placeholder('g') };
+    const at = (host: string) => planEgress({ host, url: `https://${host}/`, headers: [['authorization', `token ${github.placeholder}`]] }, [github]).kind;
+
+    expect([at('api.github.com'), at('github.com'), at('gist.github.com')]).toEqual(['forward', 'forward', 'refuse']);
+  });
+
+  test('a placeholder inside a Basic credential is found, as `curl -u` and git over https send it', () => {
+    const basic = `Basic ${btoa(`x-access-token:${STRIPE.placeholder}`)}`;
+
+    expect(planEgress({ host: 'api.stripe.com', url: 'https://api.stripe.com/', headers: [['authorization', basic]] }, [STRIPE]))
+      .toEqual({ kind: 'forward', substitutions: [{ name: 'STRIPE_SECRET_KEY', placeholder: STRIPE.placeholder }] });
+    expect(planEgress({ host: 'attacker.test', url: 'https://attacker.test/', headers: [['authorization', basic]] }, [STRIPE]).kind).toBe('refuse');
   });
 
   test('a revoked placeholder is refused, not forwarded as a dummy', () => {
@@ -158,7 +220,7 @@ describe('planEgress', () => {
 describe('grants are the workspace set, or a subset', () => {
   const root: ApprovalGrant[] = [
     { rule: 'rm-rf', executor: 'computer' },
-    { rule: 'egress-secret:bind-stripe', executor: 'computer' },
+    { rule: 'git-push-force', executor: 'computer' },
   ];
 
   test('a facet that has recorded nothing inherits the whole root set', () => {
@@ -175,7 +237,7 @@ describe('grants are the workspace set, or a subset', () => {
   test('a facet can never hold a grant its root lacks', () => {
     const own = [
       { rule: 'rm-rf', executor: 'computer' },
-      { rule: 'egress-secret:bind-prod-db', executor: 'computer' },
+      { rule: 'drop-database', executor: 'computer' },
       { rule: 'rm-rf', executor: 'device' },
     ];
 
@@ -215,7 +277,7 @@ describe('inherited approval policy', () => {
   });
 
   test('after resolving, the root\'s mode and grants apply', async () => {
-    const grant = { rule: 'egress-secret:bind-stripe', executor: 'computer' };
+    const grant = { rule: 'git-push-force', executor: 'computer' };
     const policy = createInheritedApprovalPolicy(rootSource('allow_all', [grant]).source);
     await policy.resolve?.();
     expect(policy.mode()).toBe('allow_all');

@@ -52,15 +52,19 @@ const TRAILER_BYTES = new TextEncoder().encode(TRAILER);
 /**
  * A named call: restores the name's directory and exported variables from `$4/$2.bash`, starts in `$3` when given, and
  * saves both there (mode 0600) as it exits, `exit 3` included, with a private trailer on stdout saying where it
- * started and ended.
+ * started and ended. The call's own variables, named in `$5`, are set again after the restore and never saved: they are
+ * this call's (a secret's value is never written to the state file), not the shell's.
  */
 const WRAPPER = `
 __kinu_dir=$4
 __kinu_file="\${__kinu_dir/#\\~/$HOME}/$2.bash"
+__kinu_own=$5
+__kinu_carry=$(for __kinu_key in $__kinu_own; do [[ -v $__kinu_key ]] && printf 'export %s=%q\\n' "$__kinu_key" "\${!__kinu_key}"; done)
 if [[ -f "$__kinu_file" ]]; then
   while IFS= read -r __kinu_key; do unset "$__kinu_key"; done < <(compgen -e)
   source "$__kinu_file"
 fi
+eval "$__kinu_carry"
 if [[ -n "$3" ]]; then cd -- "$3" || exit; fi
 __kinu_start=$PWD
 exec 3>&1
@@ -68,7 +72,7 @@ __kinu_save() {
   local __kinu_status=$?
   umask 077
   mkdir -p -- "\${__kinu_file%/*}"
-  { printf '# cwd:%s\\n' "$PWD"; printf 'cd -- %q\\n' "$PWD"; export -p; } > "$__kinu_file"
+  { printf '# cwd:%s\\n' "$PWD"; printf 'cd -- %q\\n' "$PWD"; (for __kinu_key in $__kinu_own; do unset "$__kinu_key"; done; export -p); } > "$__kinu_file"
   chmod 600 -- "$__kinu_file"
   printf '\\n\\036KINUCWD\\0%s\\0%s\\0' "$__kinu_start" "$PWD" >&3
   return "$__kinu_status"
@@ -91,9 +95,12 @@ export interface MachineShellCall {
 
 /**
  * An unnamed call is the command itself, behind a `cd` when it has a `cwd`; it keeps nothing, so it needs no wrapper.
- * A named one runs through the wrapper.
+ * A named one runs through the wrapper, which sets `own` (the names of the call's own variables) again over what it
+ * restores.
  */
-export function machineShellCall(command: string, call: Pick<ShellExecOptions, 'cwd' | 'name'>, place: MachineShellPlace): MachineShellCall {
+export function machineShellCall(
+  command: string, call: Pick<ShellExecOptions, 'cwd' | 'name'>, place: MachineShellPlace, own: readonly string[],
+): MachineShellCall {
   if (call.name === undefined && call.cwd === undefined) {
     return { command, output: (sink) => sink, settle: (result) => ({ ...result, cwd: place.home }) };
   }
@@ -112,7 +119,7 @@ export function machineShellCall(command: string, call: Pick<ShellExecOptions, '
   const key = stateKey(place, call.name);
 
   return {
-    command: `bash -c ${shellQuote(WRAPPER)} kinu ${shellQuote(command)} ${shellQuote(key)} ${shellQuote(call.cwd ?? '')} ${shellQuote(place.stateDirectory)}`,
+    command: `bash -c ${shellQuote(WRAPPER)} kinu ${shellQuote(command)} ${shellQuote(key)} ${shellQuote(call.cwd ?? '')} ${shellQuote(place.stateDirectory)} ${shellQuote(own.join(' '))}`,
     output: withoutTrailer,
     settle(result) {
       const at = result.stdout.lastIndexOf(TRAILER);
@@ -159,7 +166,7 @@ export function createBashShell(raw: Shell, place: MachineShellPlace): Shell {
     async exec(command, stdinOrOptions) {
       // The wrapper owns the directory and the name; the machine runs it where it starts every command.
       const { cwd, name, ...rest } = shellExecOptions({ value: stdinOrOptions });
-      const call = machineShellCall(command, { ...(cwd !== undefined && { cwd }), ...(name !== undefined && { name }) }, place);
+      const call = machineShellCall(command, { ...(cwd !== undefined && { cwd }), ...(name !== undefined && { name }) }, place, []);
       const output = rest.output;
 
       return call.settle(await raw.exec(call.command, output === undefined ? rest : { ...rest, output: call.output(output) }));

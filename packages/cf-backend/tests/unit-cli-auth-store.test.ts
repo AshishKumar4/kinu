@@ -171,6 +171,26 @@ describe('KV-backed CLI auth store', () => {
   });
 });
 
+describe('minting a CLI bearer is the owner capability\'s alone', () => {
+  const USER_ID = '0123456789abcdef0123456789abcdef';
+
+  test('the device flow mints through the real account object, and a workspace holding its own capability cannot', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const env = testEnv(makeKv(), { idFromName: () => USER_ID, get: () => harness.userDO });
+    const workspace: UserCaller = { workspaceToken: await provisionTestWorkspace(harness, 'workspace-a') };
+
+    const started = await startAuth(env, 'https://kinu.example.com', 'terminal');
+    await approveCliAuth(env, started.userCode, { userId: USER_ID, email: 'ashish@example.com', sub: 'sub', provider: 'test', authTime: Date.now() }, '127.0.0.1');
+    const approved = await pollCliAuth(env, started.deviceToken, '127.0.0.1');
+
+    expect(approved.status).toBe('approved');
+    expect(approved.token).toMatch(new RegExp(`^ptc_${USER_ID}_`));
+    // A CLI bearer is the whole account's: a workspace that could mint one would hold every sibling.
+    await expect(harness.userDO.mintCliToken(workspace, USER_ID, 'c'.repeat(64), 'escalation')).rejects.toThrow('account authority');
+    harness.close();
+  });
+});
+
 describe('CLI auth approval replay', () => {
   const approver = {
     userId: '0123456789abcdef0123456789abcdef',

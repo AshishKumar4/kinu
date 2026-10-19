@@ -27,14 +27,14 @@ const JobIdArgsSchema = v.tuple([v.string()]);
 
 const DecideArgsSchema = v.tuple([v.string(), v.number(), v.picklist(['request_changes', 'approve']), v.optional(v.string())]);
 
-export const LANDING_MODEL = 'anthropic/claude-opus-4';
+export const LANDING_MODEL = 'opencode-go/muse-spark-1.3-contributor';
 
 export const LANDING_MODELS: ModelMenuEntry[] = [
-  { spec: LANDING_MODEL, label: 'Claude Opus 4', provider: 'Anthropic' },
+  { spec: LANDING_MODEL, label: 'Muse Spark 1.3', provider: 'OpenCode Go' },
   { spec: 'workers-ai/llama-4', label: 'Llama 4 (Workers AI)', provider: 'Workers AI' },
 ];
 
-export const LANDING_WORKSPACE = 'checkout-fixes';
+export const LANDING_WORKSPACE = 'api-worker';
 
 /** No exploration runs, so `surfaceHasContent` hides Swarms. */
 export const LANDING_TAB_PRESENCE: TabPresence = { explorations: false, work: true };
@@ -44,8 +44,8 @@ const NO_FIGURES = { activeMs: 0, cacheEma: null };
 /** A project's day-to-day chats. */
 export const LANDING_CHATS: readonly PanelAgent[] = [
   mainPanelAgent({ activity: 'working' }),
-  { colour: 1, key: 'actor-gift-cards', label: 'Should checkout support gift cards?', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'gift-cards' }, tab: true, input: true, figures: NO_FIGURES },
-  { colour: 2, key: 'actor-cart', label: 'Speed up cart render', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'cart-render' }, tab: true, input: true, figures: NO_FIGURES },
+  { colour: 1, key: 'actor-cron', label: 'Should the nightly sweep move to a cron trigger?', category: 'user', activity: 'waiting', parent: 'main', open: { kind: 'chat', path: 'cron-sweep' }, tab: true, input: true, figures: NO_FIGURES },
+  { colour: 2, key: 'actor-logs', label: 'Read last night\'s error logs', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'error-logs' }, tab: true, input: true, figures: NO_FIGURES },
 ];
 
 /** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
@@ -53,7 +53,7 @@ const QUIET = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, ha
 
 export const LANDING_ROSTER = {
   entries: [
-    { name: 'checkout-fixes', displayName: 'Storefront', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
+    { name: 'api-worker', displayName: 'API Worker', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
     { name: 'perf-audit', displayName: 'Dew', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
     { name: 'email-triage', displayName: 'Support inbox', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5 },
   ].map((entry) => ({ ...entry, overview: { ...QUIET, slates: [], shares: [] }, decisions: 0 })),
@@ -73,66 +73,66 @@ export const LANDING_PROFILE: UserProfile = {
   controlPlane: false,
 };
 
-export const CHECKOUT_FRAME_CAPTION = 'Sample workspace';
+export const WORK_FRAME_CAPTION = 'Sample workspace';
 
-export const CHECKOUT_MESSAGES: UIMessage[] = [
+export const WORKER_MESSAGES: UIMessage[] = [
   {
-    id: 'landing-checkout-user',
+    id: 'landing-worker-user',
     role: 'user',
-    parts: [{ type: 'text', text: 'Audit the checkout flow, find why the SAVE20 coupon 500s, and fix it. Deploy to staging when green.' }],
+    parts: [{ type: 'text', text: 'The api Worker has answered 500 on /api/health since the last deploy. Find out why and fix it. Deploy to staging when green.' }],
   },
   {
-    id: 'landing-checkout-agent',
+    id: 'landing-worker-agent',
     role: 'assistant',
     parts: [
-      { type: 'text', text: 'Fixed the SAVE20 coupon 500 — migration 0042 patched, 14 tests green.' },
-      { type: 'tool-run', toolCallId: 'landing-run', state: 'output-available', input: { runtime: 'computer', command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: 'HTTP 500' },
-      { type: 'tool-eval', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons`;\nreturn rows;' }, output: '[{"code":"SAVE20","kind":null,"value":20}]' },
-      { type: 'tool-file', toolCallId: 'landing-read', state: 'output-available', input: { op: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
-      { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-error', input: { op: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{}, {}] }, errorText: 'old_text not found or not unique' },
-      { type: 'tool-file', toolCallId: 'landing-reread', state: 'output-available', input: { op: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
-      { type: 'tool-file', toolCallId: 'landing-patch', state: 'output-available', input: { op: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{ old_text: "WHERE kind = 'fixed'", new_text: 'WHERE kind IS NULL' }] }, output: 'ok' },
-      { type: 'tool-file', toolCallId: 'landing-write', state: 'output-available', input: { op: 'write', path: 'packages/checkout/tests/coupon-kind.test.ts' }, output: 'ok' },
-      { type: 'tool-run', toolCallId: 'landing-tests', state: 'output-available', input: { runtime: 'computer', command: 'bun test packages/checkout --filter coupon' }, output: '14 passed' },
+      { type: 'text', text: 'Fixed the 500: `openDb` read the sessions database by its old binding. 18 tests green, staging deploying.' },
+      { type: 'tool-run', toolCallId: 'landing-run', state: 'output-available', input: { runtime: 'computer', command: 'bunx wrangler tail api --status error' }, output: "TypeError: Cannot read properties of undefined (reading 'prepare') at openDb (src/db.ts:12)" },
+      { type: 'tool-eval', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Which binding names does each environment give the database?\nconst config = JSON.parse(await fs.read("workers/api/wrangler.jsonc"));\nreturn config.d1_databases.map((db) => db.binding);' }, output: '["SESSIONS_DB"]' },
+      { type: 'tool-file', toolCallId: 'landing-read', state: 'output-available', input: { op: 'read', path: 'workers/api/src/db.ts' }, output: '…' },
+      { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-error', input: { op: 'edit', path: 'workers/api/src/db.ts', edits: [{}, {}] }, errorText: 'old_text not found or not unique' },
+      { type: 'tool-file', toolCallId: 'landing-reread', state: 'output-available', input: { op: 'read', path: 'workers/api/src/db.ts' }, output: '…' },
+      { type: 'tool-file', toolCallId: 'landing-patch', state: 'output-available', input: { op: 'edit', path: 'workers/api/src/db.ts', edits: [{ old_text: 'return env.DB;', new_text: 'return env.SESSIONS_DB ?? env.DB;' }] }, output: 'ok' },
+      { type: 'tool-file', toolCallId: 'landing-write', state: 'output-available', input: { op: 'write', path: 'workers/api/test/integration/sessions-binding.test.ts' }, output: 'ok' },
+      { type: 'tool-run', toolCallId: 'landing-tests', state: 'output-available', input: { runtime: 'computer', command: 'bun test workers/api' }, output: '18 passed' },
       { type: 'tool-tasks', toolCallId: 'landing-task', state: 'output-available', input: { op: 'update', id: 't4', status: 'done' }, output: 'ok' },
     ],
   },
 ];
 
-const CHECKOUT_TASKS = [
-  { id: 't1', parentId: null, title: 'Reproduce the SAVE20 coupon 500', status: 'done', updatedAt: NOW - 44e5, note: null, subtasks: [] },
+const WORKER_TASKS = [
+  { id: 't1', parentId: null, title: 'Reproduce the 500 on /api/health', status: 'done', updatedAt: NOW - 44e5, note: null, subtasks: [] },
   {
-    id: 't2', parentId: null, title: 'Patch the coupon kind backfill', status: 'active', updatedAt: NOW - 8e5, note: null,
+    id: 't2', parentId: null, title: 'Read the sessions database by its new binding', status: 'active', updatedAt: NOW - 8e5, note: null,
     subtasks: [
-      { id: 't5', parentId: 't2', title: 'Backfill kind for percentage coupons', status: 'done', updatedAt: NOW - 21e5, note: null },
-      { id: 't6', parentId: 't2', title: 'Re-run the migration on a copy', status: 'active', updatedAt: NOW - 6e5, note: null },
+      { id: 't5', parentId: 't2', title: 'Fix openDb and the webhook route', status: 'done', updatedAt: NOW - 21e5, note: null },
+      { id: 't6', parentId: 't2', title: 'Bind the new name on staging too', status: 'active', updatedAt: NOW - 6e5, note: null },
     ],
   },
   { id: 't3', parentId: null, title: 'Deploy to staging when the suite is green', status: 'open', updatedAt: NOW - 52e5, note: null, subtasks: [] },
-  { id: 't4', parentId: null, title: 'Add a regression test for the percentage case', status: 'done', updatedAt: NOW - 4e5, note: null, subtasks: [] },
+  { id: 't4', parentId: null, title: 'Add a test for a missing binding', status: 'done', updatedAt: NOW - 4e5, note: null, subtasks: [] },
 ];
 
 export const LANDING_OWNER = { actorId: 'actor-main', name: 'main', title: 'main', retired: false, path: [] };
 
-const CHECKOUT_CHANGELOG = {
+const WORKER_CHANGELOG = {
   seenAt: NOW - 30e5,
   unseenCount: 0,
   entries: [
-    { id: 'cl_1', kind: 'tool', at: NOW - 26e5, scaffoldVersion: null, revert: true, summary: 'Learned a tool: coupon_replay', evidence: 'extracted from 3 successful turns · quality 0.61' },
-    { id: 'cl_2', kind: 'fact', at: NOW - 50e5, scaffoldVersion: null, revert: true, summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration", evidence: null },
+    { id: 'cl_1', kind: 'fact', at: NOW - 26e5, scaffoldVersion: null, revert: true, summary: 'Remembered: staging still binds the sessions database as DB', evidence: null },
+    { id: 'cl_2', kind: 'fact', at: NOW - 50e5, scaffoldVersion: null, revert: true, summary: "Remembered: the api Worker's sessions database is bound as SESSIONS_DB since the Sept 22 deploy", evidence: null },
   ],
 };
 
 /** A first drive: never interrupted, never retried, serving nothing. */
 const FIRST_DRIVE = { epoch: 0, retriedBy: null, resumeAfter: null, serves: null } as const;
 
-const CHECKOUT_JOBS: BackgroundJob[] = [
-  { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null, ...FIRST_DRIVE },
-  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, attemptStartedAt: NOW - 61e5, settledAt: NOW - 58e5, ...FIRST_DRIVE },
+const WORKER_JOBS: BackgroundJob[] = [
+  { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test workers/api', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, attemptStartedAt: NOW - 9e5, settledAt: null, ...FIRST_DRIVE },
+  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test workers/api --filter binding', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — openDb still reads env.DB', createdAt: NOW - 61e5, attemptStartedAt: NOW - 61e5, settledAt: NOW - 58e5, ...FIRST_DRIVE },
 ];
 
-const CHECKOUT_PENDING: PendingAction[] = [
-  { id: 'defer-coupon-kind', kind: 'deferred_action', at: NOW - 3e5, title: 'Approve: a command the agent wants to run on device', detail: 'bun run db:migrate 0042' },
+const WORKER_PENDING: PendingAction[] = [
+  { id: 'defer-sessions-migration', kind: 'deferred_action', at: NOW - 3e5, title: 'Approve: a command the agent wants to run on device', detail: 'bunx wrangler d1 migrations apply SESSIONS_DB --remote' },
 ];
 
 export interface WorkFixture {
@@ -141,9 +141,9 @@ export interface WorkFixture {
   readonly pending: () => PendingAction[];
 }
 
-export function checkoutWorkFixture(onChange: () => void): WorkFixture {
-  let jobs = CHECKOUT_JOBS;
-  let pending = CHECKOUT_PENDING;
+export function workerWorkFixture(onChange: () => void): WorkFixture {
+  let jobs = WORKER_JOBS;
+  let pending = WORKER_PENDING;
 
   const rpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
@@ -154,9 +154,9 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
       return answer({ view: request.view, path: request.path, page: { status: 'end', items: [] } });
     }
 
-    if (method === 'listWorkspaceWork') return answer({ plans: [], tasks: [{ owner: LANDING_OWNER, plan: null, tasks: CHECKOUT_TASKS }] });
+    if (method === 'listWorkspaceWork') return answer({ plans: [], tasks: [{ owner: LANDING_OWNER, plan: null, tasks: WORKER_TASKS }] });
 
-    if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
+    if (method === 'getEvolutionChangelog') return answer(WORKER_CHANGELOG);
 
     if (method === 'listBackgroundJobs') return answer(jobs);
 
@@ -192,26 +192,26 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
 }
 
 
-const PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
+const PLAN_MARKDOWN = `# Read the sessions database as \`SESSIONS_DB\`
 
-The checkout accepts archived coupons because the eligibility guard reads the campaign state after the discount has already been applied. This plan moves the guard ahead of mutation and keeps the current response contract.
+The api Worker fails every request that opens its database: the config renamed the D1 binding to \`SESSIONS_DB\`, but \`openDb\` still reads \`env.DB\`. This plan reads it by the new name and keeps the health route's response.
 
 ## Scope
 
-- Read the coupon and campaign in one transaction.
-- Reject archived or expired campaigns before any cart row changes.
-- Keep the existing error code for clients that already handle an ineligible coupon.
+- Read the sessions database by one binding name everywhere.
+- Fail by the binding's name when an environment binds neither.
+- Keep \`/api/health\`'s response for the monitors that already poll it.
 
 ## Implementation
 
-1. Move the eligibility check before the cart update in \`applyCoupon\`.
-2. Return the existing \`coupon_ineligible\` result when the campaign is archived or expired.
-3. Keep the route adapter unchanged; it already maps that result to the public response.
+1. Read \`env.SESSIONS_DB\` in \`openDb\`, falling back to \`env.DB\` until every environment has redeployed.
+2. Move \`routes/webhooks.ts\` onto \`openDb\`; it is the one route that reads the binding itself.
+3. Leave the health route unchanged; it already reports what \`openDb\` answers.
 
 ## Verification
 
-- Run the focused checkout test with active, archived, and expired campaigns.
-- Confirm that a refused coupon leaves the cart total and discount rows unchanged.`;
+- Run the Worker's tests with the binding present, renamed, and missing.
+- Deploy to staging and watch \`wrangler tail\` for errors before production.`;
 
 export const PLAN_FIXTURE: PlanReview = {
   id: 'landing-plan',
@@ -223,10 +223,10 @@ export const PLAN_FIXTURE: PlanReview = {
     id: 'landing-plan-note',
     blockId: 'block-3',
     startOffset: 0,
-    endOffset: 46,
+    endOffset: 58,
     type: 'COMMENT',
-    text: 'Read both rows with FOR UPDATE, or a second request can apply the same coupon.',
-    originalText: 'Read the coupon and campaign in one transaction.',
+    text: 'Log each read through the old name too, so we hear when an environment still binds it.',
+    originalText: 'Read the sessions database by one binding name everywhere.',
     createdA: NOW - 6e4,
     author: 'You',
   }],

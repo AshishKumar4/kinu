@@ -69,9 +69,17 @@ test('a trial account may hold its provider keys and its own bookkeeping, and no
 });
 
 test('the stored model catalog is one provisioned row, not a waiver for other configuration or runtime rows', () => {
-  expect(inheritedRows({ user_config: 1 }, 1)).toEqual({});
-  expect(inheritedRows({ user_config: 1 }, 0)).toEqual({ user_config: 1 });
-  expect(inheritedRows({ user_config: 2, experience_library: 3 }, 7)).toEqual({ user_config: 1, experience_library: 3 });
+  expect(inheritedRows({ user_config: 1 }, { catalog: true, gateway: false })).toEqual({});
+  expect(inheritedRows({ user_config: 1 })).toEqual({ user_config: 1 });
+  expect(inheritedRows({ user_config: 2, experience_library: 3 }, { catalog: true, gateway: false })).toEqual({ user_config: 1, experience_library: 3 });
+});
+
+// Staging 2620e7c05, 2026-10-19: a trial account given the deployment's AI Gateway to run a gateway model held
+// user_config 1, the selection, and the guard refused it as a row a trial would inherit.
+test('the AI Gateway the provisioner selects is one provisioned row, beside the catalog, and nothing more', () => {
+  expect(inheritedRows({ user_config: 1 }, { catalog: false, gateway: true })).toEqual({});
+  expect(inheritedRows({ user_config: 2 }, { catalog: true, gateway: true })).toEqual({});
+  expect(inheritedRows({ user_config: 3, experience_library: 1 }, { catalog: true, gateway: true })).toEqual({ user_config: 1, experience_library: 1 });
 });
 
 // Every trial's workspace registers on its account as a device-status watcher, and deleting the workspace leaves the
@@ -86,6 +94,7 @@ function deployment(state: {
   workspaces: { name: string; lastVisited: number }[];
   readonly held?: Record<string, number>;
   readonly catalogVersion?: number;
+  readonly gateway?: string;
 }) {
   const deleted: string[] = [];
 
@@ -102,6 +111,9 @@ function deployment(state: {
         authority: { kind: 'account', accountId: account ?? 'eval-service' }, version: state.catalogVersion ?? 0,
         digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG), catalog: BUILTIN_PROFILE_CATALOG,
       });
+
+      // As the product answers it (CredentialsStore.listAIGateways): the selection, read before any Cloudflare call.
+      if (url.pathname === '/api/user/cloudflare/gateways') return Response.json({ connected: state.gateway !== undefined, selectedId: state.gateway ?? null, gateways: [], error: null });
 
       if (request.method === 'DELETE' && url.pathname.startsWith('/api/user/workspaces/')) {
         const name = decodeURIComponent(url.pathname.slice('/api/user/workspaces/'.length));
@@ -136,6 +148,15 @@ describe('opening on a trial account', () => {
 
     servers.push(configured.server, stale.server);
     await expect(prepareTrialAccount(configured.target, now)).resolves.toBeUndefined();
+    await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
+  });
+
+  test('so does the AI Gateway a gateway model\'s run selects, beside the catalog', async () => {
+    const gated = deployment({ workspaces: [], held: { user_config: 2 }, catalogVersion: 1, gateway: 'kinu-ai-gateway-staging' });
+    const stale = deployment({ workspaces: [], held: { user_config: 2 }, catalogVersion: 1 });
+
+    servers.push(gated.server, stale.server);
+    await expect(prepareTrialAccount(gated.target, now)).resolves.toBeUndefined();
     await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
   });
 

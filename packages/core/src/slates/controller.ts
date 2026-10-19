@@ -18,6 +18,7 @@ import type { SqlExec } from '../types/primitives';
 import { projectJsonValue, type JsonValue } from '../utils/json';
 import type { WorkspaceSession } from '../vfs/nimbus-workspace';
 import { SLATES_ROOT } from '../vfs/workspace-path';
+import { removeWhole } from '../vfs/mounts';
 import { slateAuthority } from './authority';
 import { WorkspaceBlueprints, type BlueprintReading } from './blueprints';
 import type { SlateBuilds } from './builds';
@@ -924,7 +925,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const vfs = session.vfs.as(caller.cred);
 
       session.vfs.withTransaction(() => {
-        if (vfs.exists(root)) vfs.removeRecursive(root);
+        if (vfs.exists(root)) removeWhole(vfs, root);
         forgetSlateFiles(this.ports.sql, new SlateId(id));
         this.state.forget(id);
         this.usage.forget(id);

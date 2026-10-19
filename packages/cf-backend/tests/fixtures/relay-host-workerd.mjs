@@ -71,7 +71,7 @@ export class Workspace extends DurableObject {
       program: async (turnId, code, providers) => {
         await fetch('http://held.invalid/');
         pressure();
-        const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
+        const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
         return await executor.execute('async () => await codemode.read()', [{ name: 'codemode', fns: providers.fns }]);
       },

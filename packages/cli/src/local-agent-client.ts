@@ -312,7 +312,8 @@ export class LocalAgentClient implements AgentClient {
     const pivotRow = rows[findForkPivot(rows, point)];
 
     if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
-    await this.session.revertConversation(pivotRow.id);
+    // A walk-back leaves files as they are: the agent is told what its rewound turns left.
+    await this.session.revertConversation(pivotRow.id, { chatOnly: true });
     this.activeCliSession = createCliSession(this.agentName, {
       ...this.deps.transcript,
       conversationId: CHAT_SESSION_ID,

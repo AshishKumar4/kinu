@@ -71,7 +71,7 @@ import { ActorSession, type ActorTurnLease,
   turnTags, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, chainWebSearch, restBrowserRunAccess, REAL_CLOCK, webSearchChainOf, type Clock, type WebSearchProvider,
   actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
   agentRoleSwitch, builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
@@ -873,7 +873,7 @@ export class LocalAgentSession {
 
     const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.getActiveRoleId() });
     this.chat.reviseContext({ counted: true });
-    await this.terminal.modelSettingsChanged();
+    await this.terminal.ownerActed();
 
     return changed;
   }
@@ -885,7 +885,7 @@ export class LocalAgentSession {
       onChanged: () => {
         this.rebuildToolSurface();
         this.chat.reviseContext({ counted: true });
-        this.tracked(() => this.terminal.modelSettingsChanged());
+        this.tracked(() => this.terminal.ownerActed());
       },
     }, spec);
   }
@@ -901,7 +901,7 @@ export class LocalAgentSession {
   setProviderAccount(provider: string, account: string | null): ReturnType<typeof setProviderAccount> {
     const set = setProviderAccount(this.config, provider, account);
 
-    this.tracked(() => this.terminal.modelSettingsChanged());
+    this.tracked(() => this.terminal.ownerActed());
 
     return set;
   }
@@ -1188,9 +1188,10 @@ export class LocalAgentSession {
     return this.chat.interrupt(cutoff === null ? undefined : { producer: 'self', seq: cutoff });
   }
 
-  /** Continue from before `entryId`; refused while a turn is held. */
-  revertConversation(entryId: string): Promise<void> {
-    return this.chat.revertTo(entryId);
+  /** Continue from before `entryId`; refused while a turn is held. A chat-only walk-back tells the agent what its
+   *  rewound turns left; this machine's processes and ports have no reader here, so the notice names none. */
+  revertConversation(entryId: string, options?: { readonly chatOnly?: boolean }): Promise<void> {
+    return this.chat.revertTo(entryId, options?.chatOnly === true ? {} : undefined);
   }
 
   clearConversation(): Promise<KinuError | null> {
@@ -2109,23 +2110,24 @@ export class LocalAgentSession {
     return conversationKey(this.conversation(), this.sessionId);
   }
 
-  /** Search through the signed-in account's own (Cloudflare's Web Search API), or a stored `tavily` credential, which
-   *  wins; local HTML→markdown. */
+  /** Signed in, the account's own search through its deployment; signed out, this machine's chain with its own keys.
+   *  Local HTML→markdown. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
-    const getAuth = this.modelResolver?.getAuth;
-    const firstParty = this.modelResolver?.firstPartySearch;
+    const resolver = this.modelResolver;
+    const getAuth = resolver?.getAuth ?? (async () => null);
 
-    const options: DefaultWebSearchProviderDeps = {
+    this._webSearchProvider = createDefaultWebSearchProvider({
       fetch: globalThis.fetch,
+      search: resolver?.accountSearch ?? chainWebSearch({
+        fetch: globalThis.fetch,
+        getAuth,
+        report: this.modelCallSink,
+        chain: async () => webSearchChainOf((await this.profiles().envelope()).catalog),
+      }),
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
       browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch }),
-    };
-
-    if (getAuth) options.getAuth = getAuth;
-
-    if (firstParty !== undefined) options.firstParty = firstParty;
-    this._webSearchProvider = createDefaultWebSearchProvider(options);
+    });
 
     return this._webSearchProvider;
   }

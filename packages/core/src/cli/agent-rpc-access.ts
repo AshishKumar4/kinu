@@ -126,6 +126,9 @@ export const AGENT_RPC_ACCESS = {
   getExecutorDiff: 'interactive',
   getExecutorFiles: 'interactive',
   getExposedPorts: 'interactive',
+  // Who can open a preview of the computer: the owner's own decision, never a token's.
+  getComputerPreviewPublic: 'interactive',
+  setComputerPreviewPublic: 'interactive',
   getFacts: 'interactive',
   getEvolutionConfig: 'interactive',
   // Raw unredacted event payloads; a workspace.read token gets only the read models.

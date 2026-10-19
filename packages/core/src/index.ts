@@ -854,7 +854,7 @@ export { toolDescription } from './utils/tool-description';
 export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
-  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability,
+  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability, type SecretsInContext,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';
@@ -1085,6 +1085,10 @@ export {
 } from './execution/device-terminal';
 
 export {
+  DeviceScreenHub, screenFromSocket, readScreenData,
+} from './execution/device-screen';
+
+export {
   nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
   type NimbusExecResult, type NimbusPortInfo, nimbusSessionFiles,
 } from './execution/nimbus';
@@ -1185,7 +1189,7 @@ export {
 
 export {
   withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
-  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
+  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps, removeWhole,
   type VfsMount, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
 } from './vfs/mounts';
@@ -1369,6 +1373,7 @@ export type { Credential, OAuthCredential, OpenAICompatCredential } from './cred
 export {
   createCredentialCipher,
   type CredentialCipher,
+  type CredentialEncryptionEnv,
 } from './credentials/envelope';
 
 export {
@@ -1448,11 +1453,13 @@ export {
   EVAL_WORKSPACE_PREFIX,
   evalAccountEmail,
   inheritedRows,
+  type ProvisionedConfig,
   isEvalAccountEmail,
   parseEvalAccount,
   type EvalAccount,
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
+  DEVICE_SCREEN_PATH,
   ORCHESTRATOR_AGENT_SLUG,
 } from './cloud-wire';
 
@@ -1485,9 +1492,9 @@ export {
 } from './safety/approval-gate';
 
 export {
-  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, egressGrants,
-  grantedEgressBindings, findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
-  createScrubStream, type EgressSecretBinding, type EgressRequestFacts,
+  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, revealHeader, revealUrl, positionWords,
+  findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
+  createScrubStream, SecretPositionSchema, type EgressSecretBinding, type EgressRequestFacts, type SecretPosition,
   type ScrubReplacement,
 } from './safety/egress-gate';
 
@@ -1499,9 +1506,10 @@ export {
 } from './safety/deferred-approval';
 
 export {
-  initEgressVaultTables, listEgressSecrets, putEgressSecret, revokeEgressSecret, resolveEgressInjection,
-  type EgressSecretSummary, type PutEgressSecretInput, type EgressInjection, type EgressInjectionResult,
-  type EgressVaultDeps,
+  initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
+  grantedSecrets, revealedSecrets, resolveEgressInjection,
+  type SecretSummary, type SecretGrant, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
+  type EgressInjectionResult, type EgressVaultDeps,
 } from './safety/egress-vault';
 
 export {
@@ -1522,7 +1530,7 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
   DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentAnswer, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
   type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
@@ -1534,8 +1542,10 @@ export {
 } from './safety/workspace-proposals';
 
 export {
-  SECRET_PATTERNS, redactSecrets, type SecretPattern,
+  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern, type SecretProvider,
 } from './safety/secret-patterns';
+
+export { parseDotenv, pastedSecrets, type DotenvEntry, type PastedSecret } from './safety/pasted-secrets';
 
 export {
   scanText, countDetections, secretSightings, type SecretFinding, type SecretSighting,
@@ -1699,6 +1709,8 @@ export {
 } from './orchestrator/chat-session';
 
 export type { DeliveredRun } from './orchestrator/chat-queue';
+
+export { CHAT_REWOUND_EVENT, type RewindComputer, type RewindTold } from './orchestrator/rewind-notice';
 
 export { startActorTurn } from './orchestrator/actor-turn';
 
@@ -2027,7 +2039,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
+export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage, type ChatWindow } from './read-models/status';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
@@ -2126,7 +2138,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING, webSearchChainOf,
 } from './profiles';
 
 export type {
@@ -2202,7 +2214,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposed, sandboxPreviewExposures,
+  sandboxPreviewExposure, sandboxPreviewExposures,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 
@@ -2240,6 +2252,8 @@ export {
   DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';
+
+export { DeviceDesktopSchema, NO_DESKTOP, type DeviceDesktop } from './execution/device-desktop';
 
 export {
   COPY_SCRIPT, GITHUB_ICON, REPO_URL,
@@ -2476,7 +2490,7 @@ export {
 
 export {
   sandboxIdForWorkspace,
-  isKinuSandboxId,
+  workspaceOfSandbox,
 } from './preview/sandbox-id';
 
 export {
@@ -2573,6 +2587,10 @@ export {
   type HostedNodeHome,
   withHostedNodeExecution,
 } from './execution/node-home';
+
+export { withCommandEnvironment, type CommandEnvironment } from './execution/command-environment';
+
+export { providersWithoutOwnerSecrets, withholdingOwnerSecrets, type SecretsCaller } from './execution/secrets-caller';
 
 export {
   objectNamed, type ObjectNamespace,

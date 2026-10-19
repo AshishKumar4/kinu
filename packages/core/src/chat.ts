@@ -7,7 +7,6 @@ import {
   APICallError,
   InvalidResponseDataError,
   isLoopFinished,
-  NoOutputGeneratedError,
   streamText,
   wrapLanguageModel,
   type ModelMessage,
@@ -59,7 +58,8 @@ import type { ProviderPacer } from './providers/pacing';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
-import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
+import { renderThrownChain, settle, toKinuError, type KinuError, type TurnTrace } from './obs/index';
+import { Effect } from 'effect';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, withStableSchemas } from './tools/tool-schema';
@@ -211,28 +211,13 @@ export interface ChatOptions {
 export const INTERRUPTED_TURN = 'The turn was interrupted before it finished.';
 
 /** One call's frame, closed whichever way it left; never awaited, so the end row lands before `turn_end`. */
-function settleModelOperation(
-  operation: ModelOperation,
-  stream: { usage: PromiseLike<LanguageModelUsage>; response: PromiseLike<{ modelId: string }> },
-  cut: boolean,
-): void {
-  if (cut) {
-    operation.failed({ cause: new Error(INTERRUPTED_TURN) });
-
-    return;
-  }
-
-  void Promise.all([stream.usage, stream.response]).then(
-    ([usage, response]) => operation.completed({
-      usage: normalizeUsage(usage),
-      modelId: response.modelId,
-    }),
-    operationRejected(operation),
-  );
+/** A call's end, as the SDK's `onEnd` hands it over. */
+interface CallEnd {
+  readonly steps: readonly StepResult<ToolSet>[];
+  readonly usage: LanguageModelUsage;
+  readonly modelId: string;
 }
 
-const operationRejected = (operation: ModelOperation) =>
-  (...rejection: [unknown]): void => { operation.failed({ cause: rejection[0] }); };
 
 interface AnswerStep {
   readonly content: StepResult<ToolSet>['content'];
@@ -284,6 +269,45 @@ export interface StepRecord {
   readonly toolResults: readonly { readonly event: Extract<ChatEvent, { type: 'tool-result' }>; readonly args: JsonObject }[];
 }
 
+/**
+ * A drained call that did not fail: cut, its steps as `onAbort` handed them over, since a cut run never settles the SDK's;
+ * else its end as `onEnd` handed it over. Each of the SDK's own accessors (`steps`, `usage`, `response`) opens a reader
+ * of its own on the call's stream, a tee and two transforms, and the stream keeps every part the call streamed for the
+ * next: read seven times a call, they carried 37,452 of the 100,000 part-stages of the heap gate's long turn in its
+ * agent's isolate (#m2180e). One is read only where no end arrived, a call that streamed no step, for what the SDK found.
+ */
+function endedCall(call: ProviderCall, ending: {
+  readonly steps: PromiseLike<readonly StepResult<ToolSet>[]>;
+  readonly operation: ModelOperation;
+  readonly produced: ModelMessage[];
+}): Effect.Effect<CallOutcome, KinuError> {
+  const { operation, produced } = ending;
+
+  return Effect.suspend((): Effect.Effect<CallOutcome, KinuError> => {
+    if (call.interrupted) {
+      operation.failed({ cause: new Error(INTERRUPTED_TURN) });
+
+      return Effect.succeed({ steps: call.recordedSteps, produced, finishReason: call.lastFinishReason, interrupted: true, failure: null });
+    }
+
+    const { end } = call;
+
+    if (end !== null) {
+      operation.completed({ usage: normalizeUsage(end.usage), modelId: end.modelId });
+
+      return Effect.succeed({ steps: end.steps, produced, finishReason: call.lastFinishReason, interrupted: false, failure: null });
+    }
+
+    return Effect.promise(() => Promise.allSettled([ending.steps])).pipe(Effect.flatMap(([settled]) => {
+      const cause = settled?.status === 'rejected' ? settled.reason : new Error('the model call settled its steps without its end');
+
+      operation.failed({ cause });
+
+      return Effect.fail(toKinuError({ doing: 'finishing a model call', cause, otherwise: 'unavailable' }));
+    }));
+  });
+}
+
 interface CallOutcome {
   /** The SDK's steps on a natural finish, the `onAbort` handover on a cut. */
   readonly steps: readonly StepResult<ToolSet>[];
@@ -320,6 +344,8 @@ class ProviderCall {
   interrupted = false;
   /** An aborted run never settles `result.steps`, so this is a cut call's only record of its steps. */
   recordedSteps: readonly StepResult<ToolSet>[] = [];
+  /** Its end, as `onEnd` handed it over: never, for a cut call or one that finished no step. */
+  end: CallEnd | null = null;
   streamError: unknown;
   /** Whether the step the error cut had streamed, read on arrival: the step's end clears it. */
   private streamedBeforeError = false;
@@ -340,7 +366,16 @@ class ProviderCall {
   private readonly openResults = new Map<string, StepRecord['toolResults'][number]>();
   private responseSoFar: readonly ModelMessage[] = [];
   readonly finishedSteps: StepResult<ToolSet>[] = [];
-  private readonly pendingStepEvents: PendingStepEvent[] = [];
+  /** Each by the call's own number of the step it ends, from 1. */
+  private readonly pendingStepEvents: Array<{ readonly step: number; readonly event: PendingStepEvent }> = [];
+  /**
+   * Steps whose end the caller has read off the stream. The SDK passes a step's end on before it calls `onStepEnd`, so
+   * the caller may still hold that step's words when its hook runs: a step's hooks and its `step-finish` event wait
+   * until the caller has read them, so a step's words always precede its record. Unordered, a head's live words landed
+   * after its step's record once nothing else pulled the stream ahead (#m2180e).
+   */
+  private stepsRead = 0;
+  private readonly readWaiters: Array<{ readonly steps: number; readonly read: () => void }> = [];
   /** When the step's request left (`prepareStep`): a cache warm counts its TTL from there
    *  (docs/research/harness/anthropic-sources.md §2). */
   private stepSentAt = Date.now();
@@ -385,6 +420,10 @@ class ProviderCall {
   aborted(steps: readonly StepResult<ToolSet>[]): void {
     this.recordedSteps = steps;
     this.interrupted = true;
+  }
+
+  ended(end: CallEnd): void {
+    this.end = end;
   }
 
   /** SDK getters are read before stream consumers can lag the seal. */
@@ -434,7 +473,7 @@ class ProviderCall {
       this.openResults.delete(part.toolCallId);
     }
 
-    if (record.step !== undefined) this.pendingStepEvents.push({ ...record.step, responseMessages: record.messages });
+    if (record.step !== undefined) this.pendingStepEvents.push({ step: this.finishedSteps.length, event: { ...record.step, responseMessages: record.messages } });
 
     return own;
   }
@@ -454,11 +493,33 @@ class ProviderCall {
   }
 
   *takeStepEvents(): Generator<ChatEvent> {
-    while (this.pendingStepEvents.length > 0) {
-      const ev = this.pendingStepEvents.shift();
+    for (let next = this.pendingStepEvents[0]; next !== undefined && next.step <= this.stepsRead; next = this.pendingStepEvents[0]) {
+      this.pendingStepEvents.shift();
 
-      if (ev) yield { type: 'step-finish' as const, ...ev, source: 'native' };
+      yield { type: 'step-finish' as const, ...next.event, source: 'native' };
     }
+  }
+
+  /** Once the caller has read the end of the call's `steps`th step, or stopped reading. */
+  async untilRead(steps: number): Promise<void> {
+    if (this.stepsRead >= steps) return;
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    this.readWaiters.push({ steps, read: resolve });
+    await promise;
+  }
+
+  /** The caller stopped reading: nothing it has not read will be. */
+  stoppedReading(): void {
+    this.stepRead(Number.POSITIVE_INFINITY);
+  }
+
+  private stepRead(steps: number): void {
+    this.stepsRead = steps;
+
+    for (const waiter of this.readWaiters.filter((each) => each.steps <= steps)) waiter.read();
+
+    this.readWaiters.splice(0, this.readWaiters.length, ...this.readWaiters.filter((each) => each.steps > steps));
   }
 
   consume(chunk: TextStreamPart<ToolSet>): ChatEvent | null {
@@ -485,6 +546,7 @@ class ProviderCall {
 
       case 'finish-step':
         this.stepEnded(chunk.finishReason);
+        this.stepRead(this.stepsRead + 1);
 
         return null;
 
@@ -621,24 +683,6 @@ class ProviderCall {
 
     return this.stepContent.length > 0 ? [...finished, { role: 'assistant' as const, content: this.stepContent }] : finished;
   }
-}
-
-/** A call that finishes no step rejects the SDK's deferred accessors, unhandled if unread: tolerated for zero steps
- *  and cuts, anything else recorded as a defect. */
-function suppressDeferredRejections(
-  result: { steps: PromiseLike<unknown>; finishReason: PromiseLike<unknown>; rawFinishReason: PromiseLike<unknown>; usage: PromiseLike<unknown> },
-  tolerated: () => boolean,
-): void {
-  const ignore = (error: Error): void => {
-    if (NoOutputGeneratedError.isInstance(error) || tolerated()) return;
-
-    diagnostics.failure(
-      'llm_call.deferred_rejected',
-      toKinuError({ doing: 'settle an unread stream accessor', cause: error, otherwise: 'io' }),
-    );
-  };
-
-  for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.usage]) deferred.then(undefined, ignore);
 }
 
 /** The serving model's prompt-cache plan; marker strategies re-roll tail breakpoints each step. */
@@ -1004,6 +1048,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       },
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
+      onEnd: ({ steps, totalUsage, response }) => { call.ended({ steps, usage: totalUsage, modelId: response.modelId }); },
       providerOptions: { ...current.providerOptions, ...callRetries(route.callRetries) },
       prepareStep: pacedPrepareStep(opts.paceStep, signal, prepareStep, (ended) => { stepEnded = ended; }),
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
@@ -1037,6 +1082,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         }
 
         try {
+          await call.untilRead(call.finishedSteps.length);
           // Recorded: the step that ended is the turn's `stepCount - 1`, the number its request was prepared under.
           await extensions?.emitStepEnd({ stepNumber: stepCount - 1 });
           await opts.onStep?.(step, own);
@@ -1048,7 +1094,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       },
     });
 
-    suppressDeferredRejections(result, () => call.interrupted || signal.aborted);
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
     const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })));
 
@@ -1079,6 +1124,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
     } finally {
       let completed = false;
+
+      call.stoppedReading();
 
       try {
         if (!drained && call.streamError === undefined && call.stepFailure === null) consumer.abort();
@@ -1114,13 +1161,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       return { steps: call.finishedSteps, produced: paired, finishReason: undefined, interrupted: false, failure };
     }
 
-    // A cut run never settles `result.response`/`result.steps`; read what `onAbort` handed over.
-    const cut = call.interrupted;
-
-    settleModelOperation(operation, result, cut);
-    const steps = cut ? call.recordedSteps : await result.steps;
-
-    return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
+    return await settle(endedCall(call, { steps: result.steps, operation, produced: paired }));
   };
 
   /** A fallback gets its own provider's cache, replay and options, and a request assembled for it: its window, its

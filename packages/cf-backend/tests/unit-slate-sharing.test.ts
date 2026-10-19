@@ -63,7 +63,9 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
     await user.userDO.setCredential(caller, 'anthropic', { kind: 'bearer', token: providerKey });
     const vaultSecret = 'owner-vault-secret-' + '9f8e7d6c';
-    const vault = await user.userDO.putEgressSecret(caller, { id: 'vault-1', label: 'Stripe', host: 'api.stripe.com', secret: vaultSecret });
+    await user.userDO.putSecrets(caller, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position: { kind: 'authorization' }, value: vaultSecret }], ['issues-owner']);
+    const vault = { placeholder: (await user.userDO.grantedSecrets({ workspaceToken: capability })).granted[0]?.placeholder ?? '' };
+    expect(vault.placeholder).not.toBe('');
 
     const files = workspaceFiles(owner.agent);
     await authorIssuesSlate(files);

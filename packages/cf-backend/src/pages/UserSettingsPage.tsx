@@ -15,6 +15,7 @@ import { useAccount } from "@/hooks/use-account";
 import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
+import { SecretsPanel } from "@/components/account/SecretsPanel";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
@@ -25,6 +26,7 @@ import { ComputerSizeSettings } from "@/components/ComputerSize";
 import { BetaSettings } from "@/components/BetaSettings";
 import { AccountMemoryCard } from "@/components/account/AccountMemoryCard";
 import { AppearanceCard } from "@/components/account/AppearanceCard";
+import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -152,7 +154,11 @@ export default function UserSettingsPage() {
           </>
         )}
 
+        {section === "secrets" && <SecretsPanel />}
+
         {section === "models" && <ProfileCatalogSettings />}
+
+        {section === "search" && <WebSearchSettings place="settings" returnTo="/user/settings#search" />}
 
         {section === "computer" && <ComputerSizeSettings />}
 

@@ -22,10 +22,14 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'credentials.model': 'workspace',
   /** The rest of the credential store (`github`, admin keys) and every write to it. */
   'credentials.other': 'workspace',
-  /** Egress secret vault: add, rotate, revoke, list bindings. */
-  'egress_secrets.manage': 'workspace',
-  /** Resolving an intercepted placeholder to the real secret; the destination and grant check happens here. */
-  'egress_secrets.inject': 'workspace',
+  /** The account's secrets: add, replace, delete, list, and grant them to workspaces. Owner-only: a workspace writing
+   *  this would grant itself the owner's keys. */
+  'secrets.manage': 'owner_only',
+  /** Opening a secret for a request a workspace's egress intercepted. Owner-only: the egress holds the owner capability
+   *  and names the workspace from its sealed props; the workspace itself never opens a placeholder. */
+  'secrets.inject': 'owner_only',
+  /** The calling workspace's own grants: names, hosts, placeholders, and the values its agents may read. */
+  'secrets.read_self': 'workspace',
   /** AI Gateway discovery/selection: account administration, not inference. */
   'ai_gateway.admin': 'workspace',
   /** MCP tool descriptors and dispatch (acts with the owner's credentials). */
@@ -58,8 +62,13 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'builtin_accounts': 'owner_only',
   'profile.resolve': 'workspace',
   'config': 'workspace',
-  /** CLI bearer tokens, CI access tokens, websocket tickets. Minting one is account takeover. */
+  /** Verifying a CLI bearer, a CI access token or a socket ticket, and listing them: none is minted or ended here. */
   'auth_tokens': 'workspace',
+  /** Minting a CLI bearer, a CI access token, a browser session or an agent-connect ticket. Owner-only: each carries the
+   *  whole account's authority, so a workspace that could mint one would hold every sibling. */
+  'auth_tokens.mint': 'owner_only',
+  /** Revoking sessions and tokens, or raising the credential floor. Owner-only: a workspace could lock its owner out. */
+  'auth_tokens.revoke': 'owner_only',
   /** Whether a bearer that authenticated a socket on this workspace may still act; names no token, mints nothing. */
   'auth_tokens.socket': 'workspace',
   /** Signing in to a subscription provider (ChatGPT, Claude). */

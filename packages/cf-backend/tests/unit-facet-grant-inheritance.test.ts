@@ -18,7 +18,7 @@ const GATED_RULE = 'git-force-push';
 const ROOT_GRANTS: ApprovalGrant[] = [
   { rule: 'rm-recursive', executor: 'computer' },
   { rule: GATED_RULE, executor: 'computer' },
-  { rule: 'egress-secret:stripe', executor: 'computer' },
+  { rule: 'git-push-force', executor: 'computer' },
 ];
 
 describe('reachability of the root policy read', () => {
@@ -152,13 +152,13 @@ describe('a facet holds the root set, or a subset of it', () => {
 
   test('a facet cannot hold a grant its root lacks', async () => {
     const policy = createInheritedApprovalPolicy(source('strict', [
-      { rule: 'egress-secret:prod-db', executor: 'computer' },
+      { rule: 'drop-database', executor: 'computer' },
     ]).deps);
 
     await policy.resolve?.();
-    expect(policy.granted?.({ rule: 'egress-secret:prod-db', executor: 'computer' })).toBe(false);
+    expect(policy.granted?.({ rule: 'drop-database', executor: 'computer' })).toBe(false);
     expect(grantsAreSubset(
-      resolveInheritedGrants({ root: ROOT_GRANTS, own: [{ rule: 'egress-secret:prod-db', executor: 'computer' }] }),
+      resolveInheritedGrants({ root: ROOT_GRANTS, own: [{ rule: 'drop-database', executor: 'computer' }] }),
       ROOT_GRANTS,
     )).toBe(true);
   });
@@ -170,7 +170,7 @@ describe('a facet holds the root set, or a subset of it', () => {
 
     await policy.resolve?.();
     expect(policy.granted?.({ rule: 'rm-recursive', executor: 'computer' })).toBe(true);
-    expect(policy.granted?.({ rule: 'egress-secret:stripe', executor: 'computer' })).toBe(false);
+    expect(policy.granted?.({ rule: 'git-push-force', executor: 'computer' })).toBe(false);
   });
 
   test('the root\'s MODE applies too, so a facet does not silently harden to strict', async () => {

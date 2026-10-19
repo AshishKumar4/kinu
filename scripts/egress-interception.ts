@@ -247,7 +247,8 @@ function interceptionReasons(routes: ContainerClass): string[] {
   return reasons;
 }
 
-function importedImplementation(sources: ReadonlyMap<string, string>, file: string, name: string): SyntaxNode | undefined {
+/** The module `file` imports `name` from, by a relative path. */
+function importedImplementation(sources: ReadonlyMap<string, string>, file: string, name: string): { readonly path: string; readonly root: SyntaxNode } | undefined {
   const tree = parse(file, sources.get(file) ?? '').root;
 
   for (const statement of tree.children) {
@@ -257,7 +258,7 @@ function importedImplementation(sources: ReadonlyMap<string, string>, file: stri
     const path = posix.normalize(posix.join(posix.dirname(file), statement.raw.source.value)) + '.ts';
     const text = sources.get(path);
 
-    if (text !== undefined) return parse(path, text).root;
+    if (text !== undefined) return { path, root: parse(path, text).root };
   }
 
   return undefined;
@@ -299,8 +300,12 @@ function vaultPolicyReasons({ base, kinu, routes, vault }: VaultClasses, sources
 
   if (!callsIn(vault.node).some(call => callName(call) === 'handleContainerEgress')) reasons.push('the native vault entry does not enter credential injection');
   const implementation = importedImplementation(sources, vault.file, 'handleContainerEgress');
+  // One hop on: the door every program's request leaves by (`sendOut`), which the container's egress sends through.
+  const sendsOut = implementation !== undefined && callsIn(implementation.root).some(call => callName(call) === 'sendOut');
+  const sender = sendsOut ? importedImplementation(sources, implementation.path, 'sendOut') : undefined;
 
-  if (implementation === undefined || !callsIn(implementation).some(call => callName(call) === 'resolveEgressInjection')) reasons.push('credential injection does not consult the owner vault');
+  if (!sendsOut) reasons.push('the container egress does not leave through sendOut');
+  else if (sender === undefined || !callsIn(sender.root).some(call => callName(call) === 'resolveEgressInjection')) reasons.push('credential injection does not consult the owner vault');
 
   return reasons;
 }
