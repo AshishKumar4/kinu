@@ -2146,7 +2146,8 @@ export abstract class ActorAgent extends Agent<Env> {
     return '';
   }
 
-  private operationProfile(): OperationProfile | null {
+  /** The operation the workspace agent's tools now run under: the call's, else its turn's. */
+  protected operationProfile(): OperationProfile | null {
     return currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
   }
 

@@ -1729,10 +1729,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  protected override ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs {
+  /** `build` over the workspace agent as its own seat: the reach its policy gives it, and the operation its tools run under. */
+  private asRoot<A>(build: (seat: CFSeat, reach: ActorReach, operation: () => OperationProfile | null) => A): A {
     const root = this.rootBound();
 
-    return this.storeInputs({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), ledgers, () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null);
+    return build({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), () => this.operationProfile());
+  }
+
+  protected override ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs {
+    return this.asRoot((seat, reach, operation) => this.storeInputs(seat, reach, ledgers, operation));
   }
 
   protected actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
@@ -1784,7 +1789,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The workspace agent's own tools in `mode` outside any turn of its: a scaffold's rollout, a slate's call, a retry. */
   protected override ownTools(mode: WorkMode, scope: string | null, held?: OwnToolsHeld): ActorToolsets {
     const root = this.rootBound();
-    const operation = () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
+    const operation = () => this.operationProfile();
 
     return this.actorTools({ ...root, runtime: this.rt }, surfaceReach(actorPolicy(root.record), { authorship: 'owner', mode, awaitsReply: false }, true), mode, {
       // A call outside any operation (a slate's) is no turn's effect.
@@ -1796,9 +1801,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps {
-    const root = this.rootBound();
-
-    return this.actorAgentsToolDeps({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), mode, () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null);
+    return this.asRoot((seat, reach, operation) => this.actorAgentsToolDeps(seat, reach, mode, operation));
   }
 
   /**
