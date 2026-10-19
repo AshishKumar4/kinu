@@ -150,6 +150,13 @@ const ProfileNodeSchema: v.GenericSchema<ProfileNode> = v.object({
 
 const SamplingReplySchema = v.object({ result: v.object({ profile: v.object({ head: ProfileNodeSchema }) }) });
 
+/** A CPU profile's samples, each a node, and the time before it. */
+const CpuReplySchema = v.object({ result: v.object({ profile: v.object({
+  nodes: v.array(v.object({ id: v.number(), callFrame: v.object({ functionName: v.string() }) })),
+  samples: v.array(v.number()),
+  timeDeltas: v.array(v.number()),
+}) }) });
+
 export interface Allocations {
   readonly total: number;
   readonly sites: readonly { readonly site: string; readonly bytes: number }[];
@@ -191,6 +198,10 @@ export interface Inspector {
   readonly markedBytes: (marker: string) => Promise<number>;
   readonly sampleAllocations: () => Promise<void>;
   readonly allocations: () => Promise<Allocations>;
+  /** Samples the isolate's CPU from now; {@link cpuBusyMs} stops it. */
+  readonly sampleCpu: () => Promise<void>;
+  /** The time the isolate ran since {@link sampleCpu}, idle left out, in ms. */
+  readonly cpuBusyMs: () => Promise<number>;
   readonly close: () => void;
 }
 
@@ -278,6 +289,20 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
       await send('HeapProfiler.startSampling', { samplingInterval: 65_536, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
     },
     allocations: async () => allocationSites(v.parse(SamplingReplySchema, JSON.parse(await send('HeapProfiler.stopSampling'))).result.profile.head),
+    sampleCpu: async () => {
+      await send('Profiler.enable');
+      await send('Profiler.setSamplingInterval', { interval: 500 });
+      await send('Profiler.start');
+    },
+    cpuBusyMs: async () => {
+      const { profile } = v.parse(CpuReplySchema, JSON.parse(await send('Profiler.stop'))).result;
+      const idle = new Set(profile.nodes.filter((node) => node.callFrame.functionName === '(idle)').map((node) => node.id));
+      let busy = 0;
+
+      for (const [at, sample] of profile.samples.entries()) if (!idle.has(sample)) busy += profile.timeDeltas[at] ?? 0;
+
+      return busy / 1000;
+    },
     close: () => { socket.close(); },
   };
 }

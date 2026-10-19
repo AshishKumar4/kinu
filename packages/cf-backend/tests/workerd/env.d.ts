@@ -169,6 +169,7 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   abortExecutorFileWrite(): Promise<void>;
   prepareTerminal(): Promise<void>;
   openDeviceTerminal(): Promise<void>;
+  isolateOutOfMemory(actorId: string, diedAt: number): Promise<void>;
 }
 
 /** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */

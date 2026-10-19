@@ -804,6 +804,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       return { ...assembled, changed: base.changed };
     },
     consume: step => stepContext.consume({ ...step, cache: servingRoute }),
+    ...(stepContext.retire !== undefined && { retire: (swaps) => stepContext.retire?.(swaps) ?? Promise.resolve() }),
   };
 
   let servingRoute = turnRoute;

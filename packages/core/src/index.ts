@@ -408,6 +408,7 @@ export {
   type ToolCallContext,
   type ToolResultContext,
   type PrepareStepContext,
+  type MessageSwap,
   type TransformContext,
   type CompactionTrigger,
 } from './extension';

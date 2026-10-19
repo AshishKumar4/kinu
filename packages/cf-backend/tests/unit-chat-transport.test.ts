@@ -719,7 +719,9 @@ describe('ChatWireTransport', () => {
     await h.land(answered);
   });
 
-  test('a finished step the relay replays is whole, one delta a part, and the step still streaming is replayed as it came', async () => {
+  // #103: the room held every chunk a turn relayed until it ended, so a screenshot turn's room held each image again: 39.8
+  // MB of the workspace isolate's 78.5 MB live at the 150th step of one.
+  test('a finished step goes from the relay as the next starts: a tab joining later is replayed it from the ledger', async () => {
     const h = openRequest();
     const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
@@ -728,19 +730,53 @@ describe('ChatWireTransport', () => {
 
     await h.transport.observe(chunks([
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't0' }, ...tokens('t0', ['o', 'n', 'e']), { type: 'text-end', id: 't0' },
-      { type: 'tool-input-start', toolCallId: 'c0', toolName: 'eval' },
-      { type: 'tool-input-delta', toolCallId: 'c0', inputTextDelta: '{"co' }, { type: 'tool-input-delta', toolCallId: 'c0', inputTextDelta: 'de":1}' },
       { type: 'finish-step' },
-      { type: 'start-step' }, { type: 'text-start', id: 't1' }, ...tokens('t1', ['t', 'w']),
     ]));
+    // As the agent records it before its next step starts.
+    h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
+    await h.transport.observe(chunks([{ type: 'start-step' }, { type: 'text-start', id: 't1' }, ...tokens('t1', ['t', 'w'])]));
 
     const joining = h.connection('c2');
     await h.transport.onConnect(joining);
     await h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
 
     expect(replayOf(h.connectionFrames('c2'))).toEqual([
-      'start', 'start-step', 'text-start', 'text-delta one', 'text-end', 'tool-input-start c0', 'tool-input-delta c0', 'finish-step',
+      'start', 'start-step', 'R text-start', 'R text-delta one', 'R text-end', 'finish-step',
       'start-step', 'text-start', 'text-delta t', 'text-delta w', 'complete',
+    ]);
+    expect(h.asked).toEqual(['run-input-req-1']);
+    h.transport.closeTurn('input-req-1', [...h.history]);
+    await h.land(answered);
+  });
+
+  test('a step that finishes while a tab reads the ledger stays in the relay for it, its deltas merged, and goes after', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, ...STEP_ONE]));
+    h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
+    await h.transport.observe(chunks([{ type: 'start-step' }, { type: 'text-start', id: 't1' }, { type: 'text-delta', id: 't1', delta: 'tw' }]));
+    const read = Promise.withResolvers<void>();
+    const reading = Promise.withResolvers<void>();
+
+    h.ledgerReads(() => {
+      reading.resolve();
+
+      return read.promise;
+    });
+
+    const joining = h.connection('c2');
+    await h.transport.onConnect(joining);
+    const acked = h.transport.onMessage(joining, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+
+    await reading.promise;
+    await h.transport.observe(chunks([{ type: 'text-delta', id: 't1', delta: 'o' }, { type: 'text-end', id: 't1' }, { type: 'finish-step' }, { type: 'start-step' }]));
+    read.resolve();
+    await acked;
+
+    expect(replayOf(h.connectionFrames('c2'))).toEqual([
+      'start', 'start-step', 'R text-start', 'R text-delta one', 'R text-end', 'finish-step',
+      'start-step', 'text-start', 'text-delta two', 'text-end', 'finish-step', 'start-step', 'complete',
     ]);
     h.transport.closeTurn('input-req-1', [...h.history]);
     await h.land(answered);

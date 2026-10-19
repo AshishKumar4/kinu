@@ -13,12 +13,6 @@ import type {
   ToolResultPart,
   UserModelMessage,
 } from 'ai';
-import {
-  assistantModelMessageSchema,
-  modelMessageSchema,
-  toolModelMessageSchema,
-  userModelMessageSchema,
-} from 'ai';
 import { binaryReplacer, CHARS_PER_TOKEN, fnv1a64, UNPRICED_MEDIA_TOKENS } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -420,7 +414,7 @@ function decodeTurn(turn: Turn): ModelMessage[] {
 
   for (const message of group) {
     if (message.role === 'assistant') {
-      const rebuilt = rebuildAssistant(message, turn.items, placement);
+      const rebuilt = rebuildAssistant(message, turn.items, placement, group);
 
       if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'user') {
@@ -467,11 +461,38 @@ function collectSurvival(items: Item[]): Survival {
   return survival;
 }
 
+/** A moved attachment's link, as a step left it in its result's place (`step-images`). */
+const MOVED_ATTACHMENT = /\[[a-z]+\/[^\]\s]+(?: \d+x\d+)? -> [^\]\s]+\]/gu;
+
+function linksIn(text: string): string[] {
+  return [...text.matchAll(MOVED_ATTACHMENT)].map((match) => match[0]);
+}
+
+/** The links the result of call `toolCallId` holds in its turn: a stub that strips the call keeps them, so the model can
+ *  still open what moved, as it could before the step moved it for good (#103). */
+function movedLinks(group: readonly ModelMessage[], toolCallId: string): string[] {
+  for (const message of group) {
+    if (message.role !== 'tool') continue;
+
+    for (const part of message.content) {
+      if (part.type !== 'tool-result' || part.toolCallId !== toolCallId) continue;
+      const { output } = part;
+
+      if (output.type === 'text') return linksIn(output.value);
+
+      return output.type === 'content' ? output.value.flatMap((entry) => (entry.type === 'text' ? linksIn(entry.text) : [])) : [];
+    }
+  }
+
+  return [];
+}
+
 /** Rebuild in IR order so a synthetic tool stub takes the native position of the item it replaced. */
 function rebuildAssistant(
   message: AssistantModelMessage,
   items: Item[],
   placement: Placement,
+  group: readonly ModelMessage[],
 ): AssistantModelMessage | null {
   if (isString(message.content)) {
     const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
@@ -515,7 +536,7 @@ function rebuildAssistant(
     if (part.type === 'tool-call') {
       const stub = stubByCall.get(part);
 
-      if (stub) parts.push({ type: 'text', text: stub.text });
+      if (stub) parts.push({ type: 'text', text: [stub.text, ...movedLinks(group, part.toolCallId)].join(' ') });
       else if (assistantPartSurvives(part, items)) parts.push(part);
     } else if (assistantPartSurvives(part, items)) {
       parts.push(part.type === 'tool-result' ? placement.sent.get(part) ?? part : part);
@@ -780,24 +801,33 @@ function isStoredToolPairHandle<Value>(value: Value): value is Value & StoredToo
   return parsed.success && parsed.output[TOOL_PAIR_HANDLE] === true;
 }
 
+/**
+ * A handle is the codec's own: `encode` set each from a typed message or part, so its shape is enough to tell which. Each
+ * check parsed the whole value against the SDK's message schema, and `decode` checks every message of the history, each
+ * step: a 150-step screenshot turn's codec allocated 369 of its agent isolate's 893 MB a window of 50 steps (#103).
+ */
+const NativeMessageHandle = v.looseObject({ role: v.picklist(['system', 'user', 'assistant', 'tool']), content: v.union([v.string(), v.array(v.unknown())]) });
+
+const NativePartHandle = v.looseObject({ type: v.string() });
+
 function isModelMessageGroup<Value>(value: Value): value is Value & ModelMessage[] {
-  return Array.isArray(value) && value.every((message) => modelMessageSchema.safeParse(message).success);
+  return Array.isArray(value) && value.every((message) => isModelMessage(message));
 }
 
 function isModelMessage<Value>(value: Value): value is Value & ModelMessage {
-  return modelMessageSchema.safeParse(value).success;
+  return v.is(NativeMessageHandle, value);
 }
 
 function isAssistantPart<Value>(value: Value): value is Value & AssistantPart {
-  return assistantModelMessageSchema.safeParse({ role: 'assistant', content: [value] }).success;
+  return !isModelMessage(value) && v.is(NativePartHandle, value);
 }
 
 function isUserPart<Value>(value: Value): value is Value & UserPart {
-  return userModelMessageSchema.safeParse({ role: 'user', content: [value] }).success;
+  return !isModelMessage(value) && v.is(NativePartHandle, value);
 }
 
 function isToolPart<Value>(value: Value): value is Value & ToolPart {
-  return toolModelMessageSchema.safeParse({ role: 'tool', content: [value] }).success;
+  return !isModelMessage(value) && v.is(NativePartHandle, value) && (value.type === 'tool-result' || value.type === 'tool-approval-response');
 }
 
 function isNativeHandle<Value>(value: Value): value is Value & NativeHandle {
