@@ -12,6 +12,12 @@ interface ReachConnection {
   readonly label?: string;
 }
 
+/** The namespaces of a slate's surface a person is told of: the workspace's crafted tools are its agent's own concern
+ *  (the owner, W0919-09), so they ask nothing of the person. */
+export function personReaches(reaches: readonly string[]): string[] {
+  return reaches.filter((namespace) => namespace.split(".")[0] !== "tools");
+}
+
 /** One namespace of a slate's surface, as a person reads what it asks of them. */
 export function reachConnection(namespace: string): ReachConnection {
   // The head is the first name; the rest, dots and all, is the server or slate it names.
@@ -20,7 +26,6 @@ export function reachConnection(namespace: string): ReachConnection {
 
   switch (head) {
     case "mcp": return { text: `Connect an MCP server named "${name}" to your account.`, to: APP_ROUTES.userMcp, label: "MCP servers" };
-    case "tools": return { text: "Calls tools crafted in this workspace." };
     case "slates": return { text: `Calls another slate with id "${name}"; fork or author it in this workspace.` };
     case "device": return { text: "Runs on one of your machines: link a device and grant this workspace access.", to: APP_ROUTES.devices, label: "Devices" };
     case "web": return { text: "Uses this workspace's web access, as you." };
@@ -42,6 +47,7 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
   onOpen: () => void;
 }) {
   const [opening, setOpening] = useState(false);
+  const shown = personReaches(reaches);
 
   return (
     <div className="h-full overflow-y-auto px-[18px] py-[18px]" data-fork-reach>
@@ -54,8 +60,8 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
           </div>
         </header>
         <ul className="space-y-2">
-          {reaches.length === 0 && <li className="p-card px-4 py-3 text-xs p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</li>}
-          {reaches.map((namespace) => {
+          {shown.length === 0 && <li className="p-card px-4 py-3 text-xs p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</li>}
+          {shown.map((namespace) => {
             const connection = reachConnection(namespace);
 
             return (

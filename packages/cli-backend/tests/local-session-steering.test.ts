@@ -803,6 +803,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('digest assembles from the real local ledgers; viewing zeroes unseen', async () => {
     const { rt, session } = setup('quiet');
+    // A crafted tool is the agent's own (W0919-09): the changelog holds the fact, and nothing of the tool.
     rt.craftStore.create({
       name: 'local_helper', description: 'a locally crafted helper',
       code: 'async () => 1',
@@ -811,19 +812,18 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
                         VALUES (${rt.actor.actorId}, 'editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
 
     const view = session.getEvolutionChangelog();
-    const tool = present(view.entries.find((entry) => entry.kind === 'tool'), 'the crafted-tool changelog entry');
     const facts = present(view.entries.find((entry) => entry.kind === 'fact'), 'the learned-fact changelog entry');
 
-    expect(tool.summary).toContain('local helper');
+    expect(JSON.stringify(view.entries)).not.toContain('local_helper');
     expect(facts.items?.map((entry) => entry.summary)).toEqual([expect.stringContaining('helix')]);
-    expect(view.unseenCount).toBe(2);
+    expect(view.unseenCount).toBe(1);
 
     session.markChangelogSeen();
     expect(session.getEvolutionChangelog().unseenCount).toBe(0);
     await session.end();
   });
 
-  test('revert by id forgets the fact for real; a crafted tool is informational and has no revert', async () => {
+  test('revert by id forgets the fact for real, and leaves the crafted tools alone', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
       name: 'kept_tool', description: 'stays', code: 'async () => 2',
@@ -832,16 +832,11 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
                         VALUES (${rt.actor.actorId}, 'stale', '"value"', 1.0, NULL, ${Date.now()})`;
 
     const view = session.getEvolutionChangelog();
-    const tool = present(view.entries.find((e) => e.kind === 'tool'), 'the crafted-tool changelog entry');
     const facts = present(view.entries.find((e) => e.kind === 'fact'), 'the learned-fact changelog entry');
-
-    // A crafted tool is not owner-approvable: its Journal entry carries no revert action.
-    expect(tool.revert).toBeUndefined();
-    expect((await session.revertChangelogEntry(tool.id)).ok).toBe(false);
-    expect(rt.craftStore.get('kept_tool')).toBeTruthy();
 
     expect((await session.revertChangelogEntry(facts.id)).ok).toBe(true);
     expect(rt.storage.sql`SELECT * FROM agent_facts WHERE key = 'stale'`).toHaveLength(0);
+    expect(rt.craftStore.get('kept_tool')).toBeTruthy();
 
     expect(session.getEvolutionChangelog().entries.filter((e) => e.revert)).toHaveLength(0);
     const again = await session.revertChangelogEntry(facts.id);

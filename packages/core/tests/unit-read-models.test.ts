@@ -892,8 +892,8 @@ describe('config plane', () => {
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
     const { db, sql, actor, config } = workspace();
-    void sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
-      VALUES ('summarize', 'sum', 'x', ${Date.now()}, ${Date.now()})`;
+    void sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${actor.actorId}, 1, ${Date.now()}, 'an earlier way of working', 'historical')`;
 
     expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
     expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);

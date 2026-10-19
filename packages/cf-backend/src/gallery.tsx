@@ -5621,11 +5621,6 @@ const CHANGELOG = {
       evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie",
     },
     {
-      id: "cl_2", kind: "tool", at: NOW - 26e5, scaffoldVersion: null, revert: true,
-      summary: "Learned a tool: bisect_migration",
-      evidence: "extracted from 3 successful turns · quality 0.82",
-    },
-    {
       id: "cl_3", kind: "fact", at: NOW - 50e5, scaffoldVersion: null, revert: true,
       summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
       evidence: null,
@@ -5805,15 +5800,6 @@ const workRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "listWorkspaceWork") return rpcResult(WORKSPACE_WORK).json<T>();
 
   if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
-
-  // The crafted rows the CHANGELOG digest names, with their EMA scores.
-  if (method === "getToolDescriptions") return rpcResult({
-    builtIn: [], executors: [],
-    crafted: [
-      { name: "bisect_migration", description: "Walk a migration's revisions to find the one that changed a column's shape.", exposure: "codemode", wired: true, qualityScore: 0.82, usageCount: 14 },
-      { name: "coupon_replay", description: "Replay a checkout against a coupon code and diff the response.", exposure: "codemode", wired: true, qualityScore: 0.61, usageCount: 3 },
-    ],
-  }).json<T>();
 
   return stubRpc<T>(method, args);
 };

@@ -327,7 +327,7 @@ describe('CLI TUI layout', () => {
               unseenCount: 1,
               entries: [{
                 id: 'change-1',
-                kind: 'tool',
+                kind: 'fact',
                 at: 1,
                 summary: 'Added a parser',
                 evidence: '3 accepted turns',

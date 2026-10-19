@@ -33,7 +33,7 @@ const ScaffoldRunEventSchema = v.object({
 });
 
 const CHANGELOG_ENTRY_KINDS = [
-  'scaffold', 'tool', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
+  'scaffold', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
 ] as const;
 
 export type ChangelogEntryKind = (typeof CHANGELOG_ENTRY_KINDS)[number];
@@ -169,29 +169,6 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
     if (revertable) entry.revert = { type: 'scaffold_rollback', target: String(e.version) };
 
     return entry;
-  });
-}
-
-function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  const rows = sql<{ name: string; description: string; created_at: number; updated_at: number; score: number; uses: number }>`
-    SELECT name, description, created_at, updated_at, score, uses
-    FROM crafted_tools ORDER BY updated_at DESC LIMIT ${limit}`;
-
-  return rows.map((r) => {
-    const at = Math.max(r.updated_at, r.created_at);
-    const verb = r.updated_at > r.created_at ? 'Updated crafted tool' : 'Crafted tool';
-    const readableName = r.name.replace(/[._-]+/g, ' ');
-    // Tools start at a neutral EMA prior, so the score is always real.
-    const score = `EMA ${r.score.toFixed(2)} over ${r.uses} uses`;
-
-    // No revert: retiring a tool belongs to the Tools surface.
-    return {
-      id: `tool:${r.name}:${at}`,
-      kind: 'tool' as const,
-      at,
-      summary: `${verb === 'Crafted tool' ? 'Created' : 'Updated'} a tool: ${readableName}`,
-      evidence: `${verb} ${r.name}${r.description ? `: ${r.description}` : ''} · ${score}`,
-    };
   });
 }
 
@@ -480,7 +457,6 @@ export function buildChangelog(
 
       const entries = [
         ...scaffoldEntries(sql, actor),
-        ...toolEntries(sql, limit),
         ...gepaEntries(sql, actor, limit),
         ...artifactEntries(sql, actor, limit),
         ...refinementEntries(sql, actor, limit),
@@ -520,7 +496,7 @@ export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenA
 
 /**
  * The changes that wait on the owner: a skill the agent wrote for itself, held until they approve it. Everything else
- * in the journal it did by itself and only records (facts learned, turns rated, tools made, a tuning run, a trial's
+ * in the journal it did by itself and only records (facts learned, turns rated, a tuning run, a trial's
  * verdict, a refinement applied or refused), so none of it is a request (the owner, 2026-10-16). A pending scaffold
  * is the queue's own row.
  */
