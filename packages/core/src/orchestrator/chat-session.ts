@@ -6,6 +6,7 @@
 
 import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
+import type { RewindComputer } from './rewind-notice';
 import {
   deliveredSignal, IntentResultSchema, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type IntentInput, type IntentResult, type OwedDelivery,
   type TurnDeliveryInput,
@@ -1312,9 +1313,10 @@ export class ChatSession {
     );
   }
 
-  /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
-  async revertTo(entryId: string): Promise<void> {
-    await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);
+  /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. With
+   *  `computer`, a chat-only rewind: the agent is told what stands on it (`rewind-notice.ts`). */
+  async revertTo(entryId: string, computer?: RewindComputer): Promise<void> {
+    await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void, computer);
     // An open question's call, or an answered one not yet resumed, ends the conversation: a walk-back removes it.
     this.abandonQuestions();
     this.emit({ type: 'history-reverted', entryId });

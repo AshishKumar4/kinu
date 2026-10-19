@@ -2977,6 +2977,10 @@ function rosterMoved(): void {
 }
 
 async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
+  // The choice the dialog sent: a chat-only rewind tells the agent what its turns left on the computer.
+  const chosen = v.safeParse(v.object({ chatOnly: v.boolean() }), args?.[1]);
+
+  document.documentElement.dataset.galleryRevertChatOnly = chosen.success ? String(chosen.output.chatOnly) : "unsaid";
   galleryRevertConversation(v.parse(v.string(), args?.[0]));
 
   return null;

@@ -1699,6 +1699,8 @@ export {
 
 export type { DeliveredRun } from './orchestrator/chat-queue';
 
+export { CHAT_REWOUND_EVENT, type RewindComputer } from './orchestrator/rewind-notice';
+
 export { startActorTurn } from './orchestrator/actor-turn';
 
 export {

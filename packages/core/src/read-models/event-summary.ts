@@ -5,6 +5,7 @@
  */
 
 import * as v from 'valibot';
+import { CHAT_REWOUND_EVENT } from '../orchestrator/rewind-notice';
 
 export interface EventSummary {
   /** What happened, short: "Task reminder". */
@@ -46,6 +47,11 @@ const SummaryFieldsSchema = v.looseObject({
   reason: v.optional(v.string()),
   planTitle: v.optional(v.string()),
   feedback: v.optional(v.string()),
+  rewoundFiles: v.optional(Count),
+  rewoundPaths: v.optional(v.array(v.string())),
+  rewoundCommands: v.optional(Count),
+  runningProcesses: v.optional(Count),
+  exposedPorts: v.optional(v.array(v.number())),
 });
 
 type SummaryFields = v.InferOutput<typeof SummaryFieldsSchema>;
@@ -89,6 +95,20 @@ const planDecision = (approved: boolean) => (fields: SummaryFields): EventSummar
 
 const counted = (count: number | undefined, said: (count: number) => string): string | false => (count ?? 0) > 0 && said(count ?? 0);
 
+/** A chat-only rewind's notice (`rewind-notice.ts`): what the rewound turns changed, and what the computer holds now. */
+function rewound(fields: SummaryFields): EventSummary {
+  const ports = fields.exposedPorts ?? [];
+  const paths = fields.rewoundPaths ?? [];
+  const unnamed = (fields.rewoundFiles ?? 0) - paths.length;
+
+  return withLine('Rewound', joined([
+    counted(fields.rewoundFiles, (count) => `${plural(count, 'file')} changed`),
+    counted(fields.rewoundCommands, (count) => plural(count, 'command')),
+    counted(fields.runningProcesses, (count) => `${plural(count, 'process', 'processes')} running`),
+    ports.length > 0 && `${ports.length === 1 ? 'port' : 'ports'} ${ports.join(', ')}`,
+  ]), { ...(paths.length > 0 && { detail: [...paths, ...(unnamed > 0 ? [`and ${plural(unnamed, 'more file')}`] : [])].join('\n') }) });
+}
+
 /** The events with fields to say, each by its own summary. */
 const SUMMARIES = new Map<string, (fields: SummaryFields) => EventSummary>([
   ['task_reminder', taskReminder],
@@ -106,6 +126,7 @@ const SUMMARIES = new Map<string, (fields: SummaryFields) => EventSummary>([
     counted(fields.heads, (count) => plural(count, 'branch', 'branches')), counted(fields.runs?.length, (count) => plural(count, 'run')),
   ]))],
   ['owner_waits_cleared', (fields) => withLine('Waits cleared', fields.what ?? undefined)],
+  [CHAT_REWOUND_EVENT, rewound],
 ]);
 
 /** The other events a turn can open on, each the same every time: they carry no fields. */
