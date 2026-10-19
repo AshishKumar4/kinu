@@ -223,7 +223,12 @@ export function mockAgentsSdk(): void {
       readonly [HARNESS_AGENT] = true;
       /** The vendor base builds the one manager in its constructor (`agents/dist/src-5W6JNKVb.js:821`);
        *  since cloudflare/agents#1897 that is the only way a manager reaches storage. */
-      readonly mcp = new FakeMCPClientManager();
+      readonly mcp = new FakeMCPClientManager((callbackUrl) => this.createMcpOAuthProvider(callbackUrl));
+
+      /** The vendor base's default; UserDO builds its own. */
+      createMcpOAuthProvider(_callbackUrl: string): RecordedMcpAuthProvider {
+        return {};
+      }
       #lifecycle: Lifecycle | undefined;
       /** The SDK's own Lifecycle: capability services, the start and the job queue are not approximated. */
       get lifecycle(): Lifecycle {
@@ -1145,6 +1150,10 @@ interface HarnessDisposable {
  */
 class FakeMCPClientManager {
   mcpConnections: Record<string, RecordedMcpConnection> = {};
+
+  /** The agent's `createMcpOAuthProvider`, which the vendor's restore builds a row's provider with
+   *  (`agents/dist/src-BZeu-SCD.js:1959`, `client-fyQrLGkD.js:1688-1692`). */
+  constructor(private readonly createAuthProvider?: (callbackUrl: string) => RecordedMcpAuthProvider) {}
   /** The vendor's restore-once flag; the host's write to it is the contract under test. */
   _isRestored = false;
 
@@ -1228,7 +1237,7 @@ class FakeMCPClientManager {
       if (this.mcpConnections[row.id]) continue;
 
       const connection: RecordedMcpConnection = {
-        connectionState: 'connecting', connectionError: null, tools: [], options: { transport: row.transport },
+        connectionState: 'connecting', connectionError: null, tools: [], options: { transport: this.restoredTransport(row) },
       };
 
       this.mcpConnections[row.id] = connection;
@@ -1236,6 +1245,19 @@ class FakeMCPClientManager {
     }
 
     this._isRestored = true;
+  }
+
+  /** A row with a callback gets the provider the agent builds for it, its server and client set as the vendor sets them;
+   *  a provider is never persisted, so the row's own is never restored. */
+  private restoredTransport(row: RecordedMcpServer): RecordedMcpTransport {
+    if (row.callbackUrl === '' || this.createAuthProvider === undefined) return row.transport;
+    const authProvider = this.createAuthProvider(row.callbackUrl);
+
+    authProvider.serverId = row.id;
+
+    if (row.clientId !== null) authProvider.clientId = row.clientId;
+
+    return { ...row.transport, authProvider };
   }
 
   /** `_restoreServer`: connect, then discover. Unheld, it lands before restore returns. */

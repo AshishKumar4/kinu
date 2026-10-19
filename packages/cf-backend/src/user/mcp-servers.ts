@@ -263,11 +263,19 @@ export class UserMcpServers {
     }]));
   }
 
-  /** A sealed credential must run on the seam, which the SDK cannot persist and so never restores. */
+  /**
+   * What the SDK cannot restore runs on a transport this plane builds: a sealed credential, on the seam it never
+   * persists, and a registered app's client, whose secret is the deployment's and which the SDK's restore, building the
+   * agent's default provider, would refresh and sign in without.
+   */
   private needsOwnedTransport(row: McpHydrationRow): boolean {
     const live = this.host.mcp.mcpConnections[row.id]?.options.transport;
 
-    return row.headers !== null && (live === undefined || !('fetch' in live) || live.fetch === undefined);
+    if (row.headers !== null) return live === undefined || !('fetch' in live) || live.fetch === undefined;
+    const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
+
+    return preset?.auth === 'oauth-app' && mcpAppCredentials(this.host.env, preset) !== null
+      && !(live?.authProvider instanceof RegisteredAppOAuthClientProvider);
   }
 
   /** Starts `connect` unless a dial of this server is in flight; its outcome lands on the connection, a failure logged. */
