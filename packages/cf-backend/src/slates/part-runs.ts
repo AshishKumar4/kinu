@@ -84,6 +84,8 @@ interface PartRun {
   issued: number;
   /** The first slot whose call differed from the earlier run's: from it on, nothing is answered from the journal. */
   diverged: number | null;
+  /** Each call it sent and has not yet journaled: a paused run's journal is read only once every one of them is. */
+  readonly inFlight: Set<Promise<void>>;
 }
 
 /** A run's answered calls by the slot of the order they were made in; a hole where a call was not answered. */
@@ -108,14 +110,20 @@ interface Continuation {
   readonly part: string;
   readonly revision: string;
   readonly args: readonly JsonValue[];
+  /** Its journal, read only once `settled`: every call it had sent when it paused is journaled by then. */
   readonly steps: Journal;
+  readonly settled: Promise<unknown>;
 }
 
-/** A run stopped for its viewer's decision: what it asks, what it was answered so far, and the revision it ran at. */
+/**
+ * A run stopped for its viewer's decision: what it asks, its journal and when every call it had already sent is in it,
+ * and the revision it ran at. Its viewer is asked at once; its journal is read on resume, once settled.
+ */
 interface PausedAnswer {
   readonly kind: 'paused';
   readonly needed: Exclude<PartConnectionAnswer<JsonValue>, { kind: 'ran' | 'missing' }>;
   readonly steps: Journal;
+  readonly settled: Promise<unknown>;
   readonly revision: string;
 }
 
@@ -176,7 +184,7 @@ export class PersonalParts {
       if (answer.kind !== 'paused') return answer;
       const continuation = crypto.randomUUID();
 
-      this.continuations.set(continuation, { viewer: viewer.userId, slate, part, revision: answer.revision, args: resumed.args, steps: answer.steps });
+      this.continuations.set(continuation, { viewer: viewer.userId, slate, part, revision: answer.revision, args: resumed.args, steps: answer.steps, settled: answer.settled });
 
       return answer.needed.kind === 'needs-consent'
         ? { kind: 'needs-consent', ask: answer.needed.ask, continuation } satisfies PartRunAnswer
@@ -203,13 +211,16 @@ export class PersonalParts {
 
       if (slateRevision(this.deps.controller.builds, slate) !== held.revision) return stale;
 
+      // Every call the run had sent when it paused is journaled first: a call it already made is answered as it was,
+      // never made again.
+      yield* Effect.promise(async () => held.settled);
       const calls = held.steps.flatMap((step) => (step === undefined || step.call === null ? [] : [step.call]));
 
       const still = calls.length === 0 || this.deps.connections === undefined ? [] : yield* attempt(
         { doing: `reading ${viewer.email}'s consents`, otherwise: 'unavailable' }, async () => this.deps.connections?.consented(viewer, calls) ?? [],
       );
 
-      return still.every(Boolean) ? { args: held.args, replay: held.steps, revision: held.revision } : stale;
+      return still.every(Boolean) ? { args: held.args, replay: [...held.steps], revision: held.revision } : stale;
     });
   }
 
@@ -232,7 +243,7 @@ export class PersonalParts {
       }
 
       const id = crypto.randomUUID();
-      const run: PartRun = { slate, viewer, revision, needed: null, steps: [], replay: [...replay], issued: 0, diverged: null };
+      const run: PartRun = { slate, viewer, revision, needed: null, steps: [], replay: [...replay], issued: 0, diverged: null, inFlight: new Set() };
       const bindings = Object.fromEntries(PART_SURFACES.map((name) => [name, exports.PartBinding({ props: { workspace, slate, run: id, name } })]));
 
       this.runs.set(id, run);
@@ -246,7 +257,8 @@ export class PersonalParts {
         return yield* Effect.ensuring(this.called(process, fn, args), Effect.promise(async () => { await process.stop(); }));
       }), Effect.sync(() => { this.runs.delete(id); }));
 
-      if (run.needed !== null) return { kind: 'paused', needed: run.needed, steps: [...run.steps], revision };
+      // Its journal goes with it as it stands, and goes on filling as the calls it already sent come back.
+      if (run.needed !== null) return { kind: 'paused', needed: run.needed, steps: run.steps, settled: Promise.all(run.inFlight), revision };
 
       if (drawn.kind === 'failed') return drawn;
       const output = v.safeParse(PartOutputSchema, drawn.value);
@@ -331,26 +343,45 @@ export class PersonalParts {
       // The run's word read again where the viewer's account is called: ended, or its viewer removed, it sends nothing.
       const admit = (): void => { this.stillRunning(runId, slate); };
 
-      const answer = yield* this.connected(run, { path: call.path, args }, admit);
+      const answer = yield* this.sent(run, Effect.gen({ self: this }, function* () {
+        const answered = yield* this.connected(run, { path: call.path, args }, admit);
+
+        if (answered.kind !== 'ran') return answered;
+        // Journaled once it came back, the run paused or not: a resumed run is answered it, and never sends it again.
+        const step = yield* Effect.promise(async () => journaled(key, this.consentFor(run, call.path, args), answered.value));
+
+        run.steps[slot] = step;
+
+        return { kind: 'kept', step } as const;
+      }));
 
       // Answered to a run still running for someone still admitted: else the run, or its viewer's access, ended meanwhile.
       if (this.runs.get(runId) !== run || !this.admitted(run.viewer, slate)) return yield* new KinuError('denied', `Slate ${slate}'s part ended for ${run.viewer.email} while it ran`);
 
-      if (answer.kind === 'ran') {
-        const step = yield* Effect.promise(async () => journaled(key, this.consentFor(run, call.path, args), answer.value));
-
-        run.steps[slot] = step;
-
-        return answerOf(step);
-      }
+      if (answer.kind === 'kept') return answerOf(answer.step);
 
       if (answer.kind === 'missing') return yield* new KinuError('missing', answer.message);
+
       run.needed = answer;
 
       return yield* new KinuError('denied', answer.kind === 'needs-consent'
         ? `${run.viewer.email} has not let this slate use ${answer.ask.server} this way yet`
         : `${run.viewer.email} has not approved ${answer.ask.server}.${answer.ask.tool} with this payload yet`);
     })));
+  }
+
+  /** A call sent for `run`, counted in flight until it is answered and journaled (or refused). */
+  private sent<A>(run: PartRun, call: Effect.Effect<A, KinuError>): Effect.Effect<A, KinuError> {
+    return Effect.suspend(() => {
+      const done = Promise.withResolvers<undefined>();
+
+      run.inFlight.add(done.promise);
+
+      return Effect.ensuring(call, Effect.sync(() => {
+        run.inFlight.delete(done.promise);
+        done.resolve(undefined);
+      }));
+    });
   }
 
   /** A call as the viewer's account names it: an MCP tool's; null for anything else. */

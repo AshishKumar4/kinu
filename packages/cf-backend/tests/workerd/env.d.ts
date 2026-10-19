@@ -379,6 +379,8 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   ownersOwnWrite(): Promise<{ first: string; asked: string[]; second: string; after: number }>;
   exerciseHop(member?: string): Promise<void>;
   inheritedRaw(): Promise<{ answered: string; written: boolean }>;
+  inheritedAfterRevoke(share: string): Promise<{ inheriting: number; retained: string; written: boolean }>;
+  craftedAcrossRevoke(share: string): Promise<string[]>;
   ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
   environments(): Promise<string[]>;
   ownerCall(method: string): Promise<string>;
@@ -419,6 +421,8 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   revokeDuringNextCall(): Promise<void>;
   revokeBeforeNextSend(): Promise<void>;
   holdModelForNextTool(): Promise<void>;
+  holdStreamOnce(): Promise<void>;
+  releaseStream(): Promise<void>;
   resumePart(viewer: string, part: string, continuation: string, args?: import('@kinu.run/core').JsonValue[]): Promise<import('@kinu.run/core/slates').PartRunAnswer | null>;
   withdrawConsent(viewer: string, server: string, root: Record<string, string>): Promise<void>;
 }

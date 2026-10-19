@@ -252,6 +252,30 @@ test('a server started, or a request made, under other sharing of its slate acts
   expect(servers.lineage('board', { incarnation: 'p1', generation: live.generation('board'), ancestors: {} }, record)?.message).toContain("sharing changed since this request began");
 });
 
+test('R4-P1 inherited chain. a slate started under a shared one acts no more, request or none, once that one shares otherwise', () => {
+  const { servers, live } = world('owner');
+  // The digest, reached by the owner's request through the shared board: its own sharing, and the board's as it was then.
+  const digest = { incarnation: 'p2', generation: live.generation('digest'), ancestors: { board: live.generation('board') } };
+
+  expect(servers.lineage('digest', digest, null)).toBeNull();
+  live.revoke('s1');
+  // The board now lends the owner everything, so nothing else would bound the digest: its sealed lineage refuses it.
+  expect(servers.authorityOf('board')).toEqual({ kind: 'owner' });
+  expect(servers.lineage('digest', digest, null)?.message).toContain("Slate board's sharing changed since slate digest was started under it");
+});
+
+test('R4-P1 nested lineage. a member reached inside a running call meets its lineage before any bound as it stands now', () => {
+  const { servers, live } = world('owner');
+  const board = { incarnation: 'p1', generation: live.generation('board'), ancestors: {} };
+  const member = { slate: 'board', chain: [], address: { namespace: 'workspace', member: 'deleteFile' } };
+
+  expect(servers.beyond({ ...member, fence: { lineage: board, record: null } })?.message).toContain('does not reach');
+  live.revoke('s1');
+  // Unshared now, the member is the owner's own; reached by the call that began shared, it is refused.
+  expect(servers.beyond(member)).toBeNull();
+  expect(() => { servers.within({ ...member, fence: { lineage: board, record: null } }); }).toThrow('started before its sharing changed');
+});
+
 test('R3-P1 fence. a sharing change fences its slate in the same call that writes the row, before anything can await', () => {
   const { servers, live } = world('own');
   const ownServer = { incarnation: 'p1', generation: live.generation('board'), ancestors: {} };

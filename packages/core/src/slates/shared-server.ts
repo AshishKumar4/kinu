@@ -164,7 +164,7 @@ export class SharedServers {
   }
 
   /** {@link beyond}, naming the owner who can change it where the server lends nothing. */
-  bounded(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence'>): Effect.Effect<KinuError | null> {
+  bounded(call: Pick<ServerCall, 'slate' | 'chain' | 'address'>): Effect.Effect<KinuError | null> {
     return Effect.map(Effect.promise(async () => this.owner()), (owner) => this.beyond(call, owner));
   }
 

@@ -21,7 +21,7 @@ import {
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { initSlateLiveShareTables, preapproveSlateEffect, slateDirectory } from '@kinu.run/core/slates';
-import { SlateHost } from '../../src/slates/host';
+import { SlateHost, type SlateDispatchContext } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunRequest, type SlateCallFrom, type SlateCaller, type SlateConsent, type SlateLineage } from '@kinu.run/core/slates';
 import type { PartViewer } from '../../src/slates/part-runs';
@@ -147,6 +147,17 @@ const PROBE_WEB = createWebCodemodeProvider({
   files: null, prelude: { missing: 'a slate drives a browser from its class' },
 });
 
+/** A member a crafted tool reaches inside itself, weighed as codemode-tool.ts weighs it: admitted, or its refusal. */
+function reachedInside(context: SlateDispatchContext): string {
+  try {
+    context.nested?.('workspace', 'writeFile');
+
+    return 'admitted workspace.writeFile';
+  } catch (cause) {
+    return cause instanceof Error ? cause.message : String(cause);
+  }
+}
+
 export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly filesystem = new ProcessFiles(this.vfs);
@@ -168,6 +179,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   readonly #environments: string[] = [];
   /** A write held between its preparation and its send, while a test changes its share. */
   #heldWrite: { readonly reached: { resolve: () => void }; readonly release: { readonly promise: Promise<void> } } | null = null;
+  /** A read of `path` held once admitted, as a slow tool runs, while a test changes the sharing it runs under. */
+  #heldRead: { readonly path: string; readonly reached: { resolve: () => void }; readonly release: { readonly promise: Promise<void> } } | null = null;
+  /** What a crafted tool reached inside itself (`SlateDispatchContext.nested`): each member admitted, or its refusal. */
+  readonly #reachedInside: string[] = [];
   /** Each viewer's own account, as their parts reach it. */
   private readonly accounts = new FakeViewerAccounts();
   /** The lineage of the process that made the last call naming a request (`slateCallAs`): what a replay presents. */
@@ -263,6 +278,16 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
         if (route.namespace === 'web') return await callCodemodeMember([PROBE_WEB], 'web', route.member, route.args) ?? null;
 
+        const running = route.member === 'readFile' && route.args[0] === this.#heldRead?.path ? this.#heldRead : null;
+
+        if (running !== null) {
+          running.reached.resolve();
+          await running.release.promise;
+        }
+
+        // A crafted tool, as codemode-tool.ts runs one: each member it reaches inside itself is weighed just before it runs.
+        if (route.member === 'readFile' && route.args[0] === '/crafted') this.#reachedInside.push(reachedInside(context));
+
         if (route.member === 'readFile') {
           const path = v.is(v.string(), route.args[0]) ? route.args[0] : '/x';
 
@@ -345,6 +370,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '  async hopWrite() { return await this.env.workspace.slates.digest.scribble(); }',
       // Into the digest, whose own code then calls its binding naming no request: the board's bound must still hold it.
       '  async hopRaw() { return await this.env.workspace.slates.digest.rawWrite(); }',
+      // Into the digest, which reads `/gate` (a test holds it there) and then calls its binding naming no request.
+      '  async hopGated() { return await this.env.workspace.slates.digest.gatedRaw(); }',
+      // A crafted tool of the owner's, which reaches another member inside itself while it runs.
+      '  async crafted() { return await this.env.workspace.readFile("/crafted"); }',
       // Straight to its binding, naming no request: the runner's wrapper is the slate's own code, never a boundary.
       '  async raw() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
       '  async fetch() { return new Response("share-ok"); }',
@@ -361,9 +390,12 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '  async digest() { return "digest-ok"; }',
       '  async scribble() { return await this.env.workspace.writeFile("/x", "from digest"); }',
       '  async rawWrite() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw from digest"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
+      '  async gatedRaw() { await this.env.workspace.readFile("/gate"); return await this.rawWrite(); }',
       '}',
     ].join('\n'));
     files.writeFile('/x', 'fixture-bytes');
+    files.writeFile('/gate', 'gate');
+    files.writeFile('/crafted', 'crafted');
   }
 
   /**
@@ -581,6 +613,66 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const answered = await this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hopRaw', args: [] });
 
     return { answered: answered.ok ? JSON.stringify(answered.value) : answered.error, written: this.#writes > before };
+  }
+
+  /**
+   * The owner's own request into their shared board hops into the digest (unshared), whose read of `/gate` is held while
+   * the board's last share is revoked. How many processes that inherited the board's bound still ran after the revoke;
+   * what the digest answered when run again as that inheriting caller, its code calling its binding naming no request;
+   * and whether anything was written.
+   */
+  async inheritedAfterRevoke(share: string): Promise<{ inheriting: number; retained: string; written: boolean }> {
+    const hold = { path: '/gate', reached: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+    const before = this.#writes;
+
+    const inheritors = async (): Promise<SlateCaller[]> => {
+      const found: SlateCaller[] = [];
+
+      await this.host.controller.processes.stopWhere((running) => {
+        if (running.caller.via?.[SLATE_ID] !== undefined) found.push(running.caller);
+
+        return false;
+      });
+
+      return found;
+    };
+
+    this.#heldRead = hold;
+    const call = this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hopGated', args: [] });
+
+    await hold.reached.promise;
+    this.#heldRead = null;
+    const [sealed] = await inheritors();
+
+    if (sealed === undefined) throw new Error('the digest ran with no bound inherited from the board');
+    await this.revoke(share);
+    const inheriting = (await inheritors()).length;
+
+    hold.release.resolve();
+    await call;
+    const retained = await this.host.call({ caller: sealed, id: 'digest', method: 'rawWrite', args: [] });
+
+    return { inheriting, retained: retained.ok ? JSON.stringify(retained.value) : retained.error, written: this.#writes > before };
+  }
+
+  /**
+   * The owner's own crafted tool on their shared board, run once while shared, then held as it runs while the board's last
+   * share is revoked: what each was answered for the member its share never granted, reached inside itself.
+   */
+  async craftedAcrossRevoke(share: string): Promise<string[]> {
+    await this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'crafted', args: [] });
+    const hold = { path: '/crafted', reached: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+
+    this.#heldRead = hold;
+    const call = this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'crafted', args: [] });
+
+    await hold.reached.promise;
+    this.#heldRead = null;
+    await this.revoke(share);
+    hold.release.resolve();
+    await call;
+
+    return [...this.#reachedInside];
   }
 
   /**
@@ -921,7 +1013,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** The lineage a process of `id` started now would carry: its slate's sharing as it stands. */
   private lineageNow(id: string): SlateLineage {
-    return { incarnation: 'probe', generation: this.host.controller.generation(id) };
+    return { incarnation: 'probe', generation: this.host.controller.generation(id), ancestors: {} };
   }
 
   /** The notes slate, its parts declared, shared with Alice and Bob; Carol has no share of it. */
@@ -989,6 +1081,15 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   holdModelForNextTool(): void {
     this.accounts.holdModelForNextTool();
+  }
+
+  /** The next model stream is asked, then held until `releaseStream`; the next tool call is read only once it was asked. */
+  holdStreamOnce(): void {
+    this.accounts.holdStreamOnce();
+  }
+
+  releaseStream(): void {
+    this.accounts.releaseStream();
   }
 
   /** The notes share revoked while the next connection call is prepared, after the run checked it and before it is sent. */

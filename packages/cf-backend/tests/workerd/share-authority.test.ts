@@ -131,3 +131,33 @@ it('R3-P2 one environment. a call the shared server makes runs in its environmen
   expect(environments[0]).toBe('readFile:owner');
   expect(environments.slice(shared)).toEqual(['readFile:shared', 'readFile:shared']);
 });
+
+// Fourth review of 870c59e83 (MechanicalToad, 2026-10-17): a bound inherited through a shared slate, and a member a running
+// tool reaches inside itself, end with the sharing they began under.
+it('R4-P1 inherited chain. a slate the shared one hopped to acts no more once its last share is revoked, naming no request', async () => {
+  const probe = subject('review4-inherited');
+
+  await probe.start();
+  await probe.exerciseHop('gatedRaw');
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+  const seen = await probe.inheritedAfterRevoke(created.share.id);
+
+  // Stopped with the board's own processes; and run again as it was minted, refused by the board's sealed sharing.
+  expect(seen.inheriting).toBe(0);
+  expect(seen.retained).toContain('Slate board\'s sharing changed since slate digest was started under it');
+  expect(seen.written).toBe(false);
+});
+
+it('R4-P1 nested lineage. a member a running tool reaches inside itself is refused once its slate\'s sharing changed', async () => {
+  const probe = subject('review4-nested');
+
+  await probe.start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+  const [shared, revoked, ...more] = await probe.craftedAcrossRevoke(created.share.id);
+
+  // Shared, its grant never reached the member; revoked while the tool ran, it is not the owner's for that.
+  expect(shared).toContain('does not reach workspace.writeFile');
+  expect(revoked).toContain('started before its sharing changed');
+  expect(more).toEqual([]);
+});
+

@@ -378,7 +378,7 @@ export class SlateHost {
       if (viewer !== undefined) {
         return await this.controller.viewers.call({
           share: viewer.share, id, request: parsed.output, chain, issued, gate: (call) => gate(call, viewer.subject),
-          bound: (address) => servers.bounded({ slate: id, chain, address, fence: { lineage, record: issued } }),
+          bound: (address) => servers.bounded({ slate: id, chain, address }),
           run: (route, nested, admit) => this.run(shareCaller(viewer.share), route, {
             nested: (namespace, member) => { within(namespace, member); nested(namespace, member); },
             admit,

@@ -44,6 +44,18 @@ export class FakeViewerAccounts implements PartConnections {
     this.modelHeld = Promise.withResolvers<undefined>();
   }
 
+  /** The next model call streams only once let go (`releaseStream`), and the next tool call is read only after it was asked. */
+  private streamHeld: { readonly asked: ReturnType<typeof Promise.withResolvers<undefined>>; readonly bytes: ReturnType<typeof Promise.withResolvers<undefined>> } | null = null;
+
+  holdStreamOnce(): void {
+    this.streamHeld = { asked: Promise.withResolvers<undefined>(), bytes: Promise.withResolvers<undefined>() };
+  }
+
+  releaseStream(): void {
+    this.streamHeld?.bytes.resolve(undefined);
+    this.streamHeld = null;
+  }
+
   /** Run once, while the next call is being prepared, before the run's word is read again at the send. */
   beforeNextSend: (() => void) | null = null;
   private readonly consents = new Map<string, SlateConsent>();
@@ -73,6 +85,7 @@ export class FakeViewerAccounts implements PartConnections {
     const before = this.beforeNextSend;
 
     this.beforeNextSend = null;
+    await this.streamHeld?.asked.promise;
     await Promise.resolve();
     before?.();
     admit();
@@ -116,8 +129,11 @@ export class FakeViewerAccounts implements PartConnections {
     const text = `${viewer.email}'s own model, reply ${this.modelAsked}`;
 
     if (call.route.stream !== true) return { kind: 'ran', value: text };
+    const streamHeld = this.streamHeld;
 
-    return { kind: 'ran', value: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(text)); controller.close(); } }) };
+    streamHeld?.asked.resolve(undefined);
+
+    return { kind: 'ran', value: new ReadableStream<Uint8Array>({ async pull(controller) { await streamHeld?.bytes.promise; controller.enqueue(new TextEncoder().encode(text)); controller.close(); } }) };
   }
 
   consented(viewer: PartViewer, calls: readonly PartToolCall[]): Promise<readonly boolean[]> {

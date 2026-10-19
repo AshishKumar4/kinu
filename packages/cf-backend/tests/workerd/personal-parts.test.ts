@@ -278,3 +278,26 @@ it("R3-P1 parallel journal. calls made at once are journaled in the order made, 
   expect(dispatched.filter((call) => call.includes('issue_read'))).toHaveLength(1);
   expect(dispatched.filter((call) => call.includes('mcp.Fetch'))).toHaveLength(1);
 });
+
+it('R4-P2 paused in flight. a call already sent when its run paused is kept as it comes back: the resumed run asks the model once', async () => {
+  const { probe, revision } = await started('parts-paused-in-flight', []);
+
+  await probe.consent('alice', { ...FETCH, revision });
+  await probe.consent('alice', { server: 'ai', root: {}, tools: ['stream'], effects: false, revision });
+  // Her model is asked and streams slowly; her issue, read meanwhile, waits on her consent, and the run pauses.
+  await probe.holdStreamOnce();
+  const consent = await probe.runPart('alice', 'parallel');
+
+  if (consent?.kind !== 'needs-consent') return expect.unreachable(`asked for the read, not ${JSON.stringify(consent)}`);
+  await probe.consent('alice', { server: 'mcp.GitHub', root: REPO, tools: ['issue_read'], effects: false, revision });
+  // Resumed while the reply still streams: it is answered the reply once it is in, never asks her model again.
+  const resuming = probe.resumePart('alice', 'parallel', consent.continuation);
+
+  await probe.releaseStream();
+  const asked = await resuming;
+
+  if (asked?.kind !== 'needs-approval') return expect.unreachable(`asked for the effect, not ${JSON.stringify(asked)}`);
+  await probe.decide('alice', asked.ask.id, true);
+  expect(shown(await probe.resumePart('alice', 'parallel', asked.continuation)).html).toContain("alice@probe.test's own model, reply 1 / ");
+  expect((await probe.dispatched()).filter((call) => call.includes(' ai '))).toEqual(['alice@probe.test ai stream']);
+});
