@@ -32,6 +32,7 @@ export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-t
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
   type RunTurnSources, type TurnSourcesBundle, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
+  type TurnTools,
 } from './orchestrator/turn-assembly';
 
 export {
@@ -681,6 +682,8 @@ export {
 export {
   buildBuiltinTools,
   builtinStoreDeps,
+  surfaceStores,
+  type ServedTools,
   type BuiltinStoreInputs,
   ownerLaneTools, ownerLaneDeclarations,
   codemodeSurface,

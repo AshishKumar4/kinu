@@ -1,3 +1,4 @@
+import type { ServedStores } from '../tools/actor-stores';
 import type { LanguageModel, ToolSet } from 'ai';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
@@ -21,7 +22,10 @@ export interface ScaffoldCandidateBinding extends ScaffoldRunControl {
   readonly profile: () => Promise<ResolvedTurnProfile>;
   readonly bindModel: (spec: string) => LanguageModel;
   readonly modelContext: (spec: string) => Promise<PromptModelContext>;
+  /** Read per request: the tools in the mode it runs in now, each projecting `stores`. */
   readonly tools: () => ToolSet;
+  /** The store operations the run's tools run, served once for it, which its machines run too. */
+  readonly stores: ServedStores;
   readonly spend: ModelCallSpend;
   readonly callScope?: string;
   readonly history: ScaffoldSurface['history'];
@@ -79,6 +83,7 @@ export function createScaffoldCandidateSurface(
       return runOperationProfile(operation, () => callTool(name, args));
     },
     history: binding.history,
+    stores: binding.stores,
     llmStream: async function* (call) {
       const resolved = await request();
       yield* operationProfileStream(createScaffoldLLMStream(resolved.options)(call), resolved.context);

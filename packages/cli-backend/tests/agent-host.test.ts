@@ -48,7 +48,7 @@ import {
   type LocalHostedAgent,
 } from '../src/agent-host';
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
-import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim } from '@kinu.run/test-utils';
+import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
@@ -1792,7 +1792,7 @@ describe('LocalAgentHost', () => {
       task: 'Check the probe.', rationale: 'Check the probe.', mode: 'build', inheritedContext: [],
       mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
     }, {
-      actor: seat.actor, runId: seat.runId,
+      actor: seat.actor, runId: seat.runId, stores: servedStoresOf(seat.actor.runtime, seat.actor.stores.conversationSearch),
       sources: { ...seat.sources, models: { ...seat.sources.models, resolve: () => model } },
       clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     });

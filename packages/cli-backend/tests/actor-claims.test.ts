@@ -117,7 +117,7 @@ async function runTurn(bound: Bound, opts: {
   await bound.actor.openTurnInput(lease, { item: {}, message: opts.input, birthContext: async () => [] });
 
   const result = await bound.actor.execute(lease, {
-    task: 'go', loopVersion: opts.loopVersion,
+    task: 'go', loopVersion: opts.loopVersion, stores: null,
     chat: { modelSpec: 'test/model', model: opts.model, system: 'sys', tools: opts.tools ?? {} },
     extensions: [], dynamic: () => ({}),
   }, (event) => opts.onEvent?.(event));

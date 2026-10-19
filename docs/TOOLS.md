@@ -378,10 +378,10 @@ TypeScript does not parse in `node -e`; write it to a `.ts` file and run
 `node file.ts`. A runtime installs the first time a command names it. Measured
 2026-10-19 on staging `667f96316`: from a fresh workspace, `exec` gave the same
 output `runCode` gave in each of its five languages, and installed Python and
-Ruby on first use (`runcode-probe.md` in the surface plan's folder). An
-interpreter handed its program as text (`python3 -c`, `node -e`, a heredoc)
-over the user's files asks once, on `exec` as on `shell`
-(`safety/command-review.ts`).
+Ruby on first use (`runcode-probe.md` in the surface plan's folder). On the
+user's machines `exec` is approved as it always was: command review, strict
+mode, the bound-directory gate and device consent. An interpreter handed its
+program as text meets those rules alone (ARCHITECTURE-DECISIONS M5, O4).
 
 A removed member is refused with its successor named, never run under its old
 name. `operations/retired.ts` is the one table: `workspace.readFile`,

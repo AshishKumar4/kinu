@@ -526,7 +526,7 @@ export class AgentTurns {
     const { explicitTier, frozen } = turn.request;
 
     const sources = await materializeTurnSources(
-      { ...surface.sources, toolset: () => surface.offered, externalTools: async () => ({}) },
+      { ...surface.sources, toolset: () => ({ tools: surface.offered, stores: surface.stores }), externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
         ...(input.model !== undefined && { model: input.model }), ...(explicitTier !== undefined && { explicitTier }),
@@ -680,7 +680,8 @@ export class AgentTurns {
     const { actor } = prepared;
     const supplied = Array.isArray(providers) ? providers : [{ name: 'codemode', fns: providers }];
     const signal = turn.request.run?.inference.signal;
-    const control = signal === undefined ? {} : { signal };
+    // Its machines' `fs` runs the store operations its turn's tools run.
+    const control = { stores: prepared.surface.stores, ...(signal !== undefined && { signal }) };
 
     return await actor.runtime.executor.execute(code, [...supplied, ...scaffoldProviders(actor.runtime, control, this.mode(turn, prepared))], opts);
   }

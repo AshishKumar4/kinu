@@ -233,7 +233,7 @@ import {
   unownedWorkspace,
   type ActorDynamicContextExtras,
   type HostedOwnerQuestions, type HostedPlanReviews,
-  type UntimedArms,
+  type UntimedArms, type OwnToolsHeld,
 } from "./actor-agent";
 import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
@@ -1600,7 +1600,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const ownerLane = { askOwner: false, submitPlan: false, replyToComment: false };
 
     return this.assembledSurface(actor, opened.surface, {
-      resolved, tools: run.tools, raw: run.tools, capture: run.capture, reports: { spoke: false, settled: false },
+      resolved, tools: run.tools, stores: run.stores, raw: run.tools, capture: run.capture, reports: { spoke: false, settled: false },
       ownerLane, offered: { ...run.tools, ...ownerLaneDeclarations(ownerLane) }, sources: run.sources, codemodeCapabilities: () => [],
     });
   }
@@ -1637,14 +1637,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // Eval declares the turn's external tools in the description it is built with, and the tools above were built
     // before this turn read them.
-    if (Object.keys(surface.declared).length > 0) built = this.actorTools(actor, reach, workMode, scope);
+    if (Object.keys(surface.declared).length > 0) built = this.actorTools(actor, reach, workMode, { ...scope, served: built.stores });
     const held = { taskPlan: lane.taskPlan, surface, sql: runtime.storage.sql };
     const tools = this.turnTools(withToolText(built.turn, overrides.tools), held);
     // Its plans and questions commit in its own isolate's store, which builds these tools and keeps their receipts.
     const ownerLane = { askOwner: reach.turn.askOwner, submitPlan: reach.turn.submitPlan, replyToComment: reach.turn.replyToComment };
 
     const assembled = await this.assembledSurface(actor, surface, {
-      resolved, tools, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
+      resolved, tools, stores: built.stores, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
       // `agent` / `llm` are reachable only inside `eval`: derived from the namespaces its programs reach.
       codemodeCapabilities: (asked) => (reach.actor.kind === 'workspace' ? codemodeCapabilitiesFor(this.ownNamespaces(asked)) : []),
       ...(artifacts.trial !== null && { trial: artifacts.trial }),
@@ -1729,10 +1729,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
-  protected override ownStoreInputs(): BuiltinStoreInputs {
+  protected override ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs {
     const root = this.rootBound();
 
-    return this.storeInputs({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), this.ownLedgers(), () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null);
+    return this.storeInputs({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), ledgers, () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null);
   }
 
   protected actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
@@ -1763,6 +1763,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const deps: ActorToolsetDeps = {
       ...this.storeInputs(actor, reach.actor, scope.ledgers, scope.profile),
+      ...(scope.served !== undefined && { served: scope.served }),
       workMode: mode,
       // The store its effects commit to keeps each call's receipt (design v2 §4), keyed on the execution it serves.
       effectClaims: { actor: actor.handle, sql: runtime.storage.sql, execution: scope.execution, transaction: (body) => this.ctx.storage.transactionSync(body) },
@@ -1781,15 +1782,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** The workspace agent's own tools in `mode` outside any turn of its: a scaffold's rollout, a slate's call, a retry. */
-  protected override ownTools(mode: WorkMode, scope: string | null): ActorToolsets {
+  protected override ownTools(mode: WorkMode, scope: string | null, held?: OwnToolsHeld): ActorToolsets {
     const root = this.rootBound();
     const operation = () => currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
 
     return this.actorTools({ ...root, runtime: this.rt }, surfaceReach(actorPolicy(root.record), { authorship: 'owner', mode, awaitsReply: false }, true), mode, {
       // A call outside any operation (a slate's) is no turn's effect.
       execution: () => (scope === null ? currentOperationProfile(this.actorHandle()) ?? { turnId: WORKSPACE_RUN_ID, runId: WORKSPACE_RUN_ID } : { turnId: scope, runId: scope }),
-      ledgers: this.ownLedgers(), external: () => this.mainTurn()?.declared ?? {}, profile: operation,
+      ledgers: held?.ledgers ?? this.ownLedgers(), external: () => this.mainTurn()?.declared ?? {}, profile: operation,
       driving: this.turnDrivingMetadata(),
+      ...(held?.stores !== undefined && { served: held.stores }),
     });
   }
 

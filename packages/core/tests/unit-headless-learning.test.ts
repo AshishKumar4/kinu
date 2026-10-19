@@ -110,7 +110,7 @@ describe('a headless actor runs the step clock only', () => {
         const asked = requests.length;
 
         const report = await runHeadInference(preparedHeadRun(headInput(), {
-          ...runningOn(seat, model), tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
+          ...runningOn(seat, model), tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
         }));
 
         // The run ended on its own answer: the advisor was hired, and nothing waited on it.
@@ -155,7 +155,7 @@ describe('a headless actor runs the step clock only', () => {
       ...runningOn(seat, scriptedTurnModel({ doGenerate: async () => ({
         content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
       }) })),
-      tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
+      tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
     }));
 
     expect(report.status).toBe('completed');
@@ -173,6 +173,7 @@ describe('a headless actor runs the step clock only', () => {
 
     const report = await runHeadInference(preparedHeadRun(headInput(), {
       ...runningOn(seat, probingHead(failing + 1)),
+      stores: null,
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async ({ n }) => {
         if (n < failing) throw new Error(`probe ${String(n)} exploded`);
     

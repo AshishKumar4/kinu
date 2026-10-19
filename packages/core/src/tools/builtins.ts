@@ -289,18 +289,28 @@ export interface ToolSurfaceDeps extends BuiltinToolDeps {
   /** Claimed inside the Plan check, so a refused call claims nothing. */
   effectClaims?: EffectClaimDeps;
   wrapFinished?: (finished: ToolSet) => ToolSet;
+  /** The store operations this surface projects, served by its caller so its other projections (a slate's call, a
+   *  scaffold's machines) run the same ones; absent, served here from these deps. */
+  served?: ServedStores;
+}
+
+/** A surface's tools and the store operations they run, served once for both. */
+export interface ServedTools {
+  readonly tools: ToolSet;
+  readonly stores: ServedStores;
+}
+
+/** The store operations a surface's deps serve: `served` when its caller holds them, else served once from the deps. */
+export function surfaceStores(deps: BuiltinStoreInputs & { readonly served?: ServedStores }): ServedStores {
+  return deps.served ?? serveStores(builtinStoreDeps(deps));
 }
 
 export function buildToolSurface(surfaceDeps: ToolSurfaceDeps): ToolSet {
-  // One read ledger and budget for the native tools and `eval`'s namespaces, whoever supplies them.
-  const deps: ToolSurfaceDeps = {
-    ...surfaceDeps,
-    fileLedger: surfaceDeps.fileLedger ?? new TurnFileLedger(),
-    contextBudget: surfaceDeps.contextBudget ?? new TurnContextBudget(),
-  };
-
-  // Served once: the native tools and a program's named members are projections of this one set.
-  const stores = serveStores(builtinStoreDeps(deps));
+  // Served once: the native tools and a program's named members are projections of this one set, and every native
+  // tool accounts into the read ledger and budget it does.
+  const stores = surfaceStores(surfaceDeps);
+  const { ledger, budget } = stores.deps.files();
+  const deps: ToolSurfaceDeps = { ...surfaceDeps, fileLedger: ledger, contextBudget: budget };
   const built = buildBuiltinTools(deps.workMode === 'plan' ? { ...deps, workMode: 'build' } : deps, stores);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
   const merged = deps.extra === undefined ? narrowed : { ...narrowed, ...withCheckedInputs(deps.extra) };

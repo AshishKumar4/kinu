@@ -1,9 +1,9 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
-import { REAL_CLOCK, turnLedgers } from '@kinu.run/core';
+import { REAL_CLOCK } from '@kinu.run/core';
 import { jsonSchema, tool } from 'ai';
 import type { ModelMessage } from 'ai';
-import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel, servedStoresOf } from '@kinu.run/test-utils';
 import {
   startActorTurn, prepareActorProgram,
   runHeadInference, preparedHeadRun, HeadCapture,
@@ -43,7 +43,7 @@ function headInput(): HeadInput {
 }
 
 async function runtime(source: string, version = 1) {
-  const { rt, testSql } = createTestRuntime();
+  const { rt, testSql, stores } = createTestRuntime();
   // Production initializer: claimed turns need the whole actor state plane, which `createTestRuntime` does not bootstrap.
   initActorStateSchema(makeWorkspaceSchemaSql(testSql.db));
   rt.executor = createSandboxedExecutor();
@@ -52,7 +52,8 @@ async function runtime(source: string, version = 1) {
   await files.mkdir('scaffold', { recursive: true });
   await writeText(files, rt.identity.scaffold.path + '.v' + version, source);
 
-  return { rt, files };
+  // The store operations a turn's tools run, which its scaffold's machines run too.
+  return { rt, files, served: servedStoresOf(rt, stores.conversationSearch) };
 }
 
 function unusedModel() {
@@ -74,7 +75,7 @@ test('abort after preparation refuses program entry before memory or text effect
 
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const reason = new Error('cancelled before first next');
@@ -92,7 +93,7 @@ test('cancellation retains an admitted memory effect but refuses subsequent effe
 
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);
@@ -110,7 +111,7 @@ test('hosted polled cancellation refuses a promoted direct effect without a sign
   const model = unusedModel();
 
   const report = await runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
+    ...headLoopSeams(rt, { model: () => model }), stores: null, clock: REAL_CLOCK, capture: new HeadCapture(),
     isAborted: () => true, abortReason: () => 'already cancelled',
     tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
   }));
@@ -128,14 +129,14 @@ test('a native refusal keeps the same failed outcome in the turn and in the head
     throw new KinuError('denied', 'fixture permission refused');
   } }) };
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools } });
 
   const events = await collect(prepared.events);
   expect(events.find(event => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'denied' });
 
   const report = await runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => unusedModel() }), clock: REAL_CLOCK, tools, capture: new HeadCapture(), isAborted: () => false,
+    ...headLoopSeams(rt, { model: () => unusedModel() }), stores: null, clock: REAL_CLOCK, tools, capture: new HeadCapture(), isAborted: () => false,
   }));
 
   expect(report.toolCalls).toMatchObject([{ name: 'fail', outcome: { success: false, reason: 'denied' } }]);
@@ -172,7 +173,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   const deltas: Array<{ kind: string; text: string }> = [];
 
   const report = await runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, tools, capture, isAborted: () => false,
+    ...headLoopSeams(rt, { model: () => model }), stores: null, clock: REAL_CLOCK, tools, capture, isAborted: () => false,
     reportMessages: produced => { messages.push(...produced); },
     reportDelta: (kind, text) => { deltas.push({ kind, text }); },
   }));
@@ -195,7 +196,7 @@ test('the turn receives a tool\'s actual output data, not its model-side renderi
     toModelOutput: () => ({ type: 'text', value: 'model-only representation' }),
   }) };
 
-  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
+  const admitted = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model, system: 'sys', history: [], tools },
   });
 
@@ -228,7 +229,7 @@ test('a custom model call preserves completed tool messages when its next reques
   } });
 
   const running = runHeadInference(preparedHeadRun(headInput(), {
-    ...headLoopSeams(rt, { model: () => model }), clock: REAL_CLOCK, capture: new HeadCapture(),
+    ...headLoopSeams(rt, { model: () => model }), stores: null, clock: REAL_CLOCK, capture: new HeadCapture(),
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema, execute: async () => value }) },
     reportMessages: produced => { messages.push(...produced); },
@@ -267,7 +268,7 @@ test('invalid native argument containers cannot become an empty successful call'
   const { rt } = await runtime('async function run() { await host.callTool("mutate", []); }');
   let effects = 0;
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: null,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [],
       tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
     },
@@ -279,7 +280,7 @@ test('invalid native argument containers cannot become an empty successful call'
 });
 
 test('router namespace effects use the same lifetime admission as host effects', async () => {
-  const { rt } = await runtime("async function run() { await workspace.exec('echo one'); await workspace.exec('echo two'); }");
+  const { rt, served } = await runtime("async function run() { await workspace.exec('echo one'); await workspace.exec('echo two'); }");
 
   if (rt.executionRouter === undefined) throw new Error('the runtime fixture has no execution router');
   const started = Promise.withResolvers<void>();
@@ -296,7 +297,7 @@ test('router namespace effects use the same lifetime admission as host effects',
   } } }];
   const abort = new AbortController();
 
-  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', ledgers: turnLedgers(),
+  const prepared = await admitActorTurn({ runtime: rt, mode: 'build', loopVersion: 1, task: 'go', stores: served,
     chat: { modelSpec: 'test/model', model: unusedModel(), system: 'sys', history: [], tools: {}, signal: abort.signal } });
 
   const running = collect(prepared.events);

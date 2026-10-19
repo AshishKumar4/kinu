@@ -42,7 +42,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       runId: seat.runId,
       clock: REAL_CLOCK,
       sources: seat.sources,
-      tools: buildHeadToolSet({
+      ...buildHeadToolSet({
         input, capture, rt: seat.actor.runtime, conversations: seat.conversations,
         codemode: deps.codemode(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
         jobs: { jobRunner: runner, backgroundable: CONFINED_BACKGROUNDABLE_TOOLS, mode: () => input.mode },

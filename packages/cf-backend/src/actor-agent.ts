@@ -436,6 +436,13 @@ async function reachedIn<A>(
 /** The evolution lane's `fibers` row name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
 
+/** What a call already holds when it builds an agent's own tools again: its ledgers, and the store operations its other
+ *  projections run, which the tools project rather than serving their own. */
+export interface OwnToolsHeld {
+  readonly ledgers: TurnLedgers;
+  readonly stores?: ServedStores;
+}
+
 /** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
 export function unownedWorkspace(): KinuError {
   return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
@@ -1615,13 +1622,20 @@ export abstract class ActorAgent extends Agent<Env> {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.boundSql,
-      surface: (task, context, callScope) => createScaffoldCandidateSurface({
-        ...this.scaffoldCandidateModel(),
-        tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
-        callScope,
-        history: this.makeScaffoldHistory(),
-        spend: this.scaffoldSpend(),
-      }, task, context),
+      surface: (task, context, callScope) => {
+        // One set for the run: each request's tools project it, and so do its machines.
+        const ledgers = this.ownLedgers();
+        const stores = serveStores(builtinStoreDeps(this.ownStoreInputs(ledgers)));
+
+        return createScaffoldCandidateSurface({
+          ...this.scaffoldCandidateModel(),
+          tools: () => this.ownTools(this.turnWorkMode(), callScope ?? null, { ledgers, stores }).raw,
+          stores,
+          callScope,
+          history: this.makeScaffoldHistory(),
+          spend: this.scaffoldSpend(),
+        }, task, context);
+      },
     };
   }
 
@@ -2721,14 +2735,19 @@ export abstract class ActorAgent extends Agent<Env> {
       });
     }
 
-    const providers = actorNamespaces(this.surfaceActor(requested), SURFACE_POLICY.operations);
+    // One set for the call: its namespaces and its tools, in whichever mode its role leaves, run the same store
+    // operations on one ledger and one budget.
+    const ledgers = this.ownLedgers();
+    const own = this.ownTools(requested, null, { ledgers });
+    const providers = actorNamespaces(this.surfaceActor(requested, 'owner', own.stores), SURFACE_POLICY.operations);
 
     // The workspace's own agent, which reaches its external tools.
-    const mcp = await this.buildUserMcpTools(this.getRawToolsForWorkMode(requested), Promise.resolve(this.modelCatalog));
+    const mcp = await this.buildUserMcpTools(own.raw, Promise.resolve(this.modelCatalog));
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
     const external = { ...this.extensions.tools(), ...mcp };
+    const tools = authority.mode === requested ? own.raw : this.ownTools(authority.mode, null, { ledgers, stores: own.stores }).raw;
 
-    return await reachedIn(authority, providers, { ...external, ...this.getRawToolsForWorkMode(authority.mode) }, use);
+    return await reachedIn(authority, providers, { ...external, ...tools }, use);
   }
 
   /** Cold ordinary actors retain their existing opener; active run seats are used, never re-composed. */
@@ -2774,7 +2793,7 @@ export abstract class ActorAgent extends Agent<Env> {
         search: as === 'owner' ? this.ownedModelServices.getWebSearchProvider() : this.ownedModelServices.getViewerWebSearchProvider(), files: this.rt.storage,
         browser: { sessions: this.browserSessionsFor(this.rt.actor.actorId), prelude: BROWSER_PRELUDE },
       },
-      stores: stores ?? serveStores(builtinStoreDeps(this.ownStoreInputs())),
+      stores: stores ?? serveStores(builtinStoreDeps(this.ownStoreInputs(this.ownLedgers()))),
       // Plan is decided per table scope at invocation.
       db: this.stores.appData,
       agents: () => this.ownAgentsToolDeps(mode),
@@ -3225,11 +3244,13 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.ownTools(mode, claimScope ?? null).raw;
   }
 
-  /** The workspace agent's own tools in `mode` outside any turn of its, from the one factory every agent's are built by. */
-  protected abstract ownTools(mode: WorkMode, scope: string | null): ActorToolsets;
+  /** The workspace agent's own tools in `mode` outside any turn of its, from the one factory every agent's are built by.
+   *  `held`: the call's ledgers and the store operations its other projections already run. */
+  protected abstract ownTools(mode: WorkMode, scope: string | null, held?: OwnToolsHeld): ActorToolsets;
 
-  /** What this agent's builtins read its stores from, as its own tools do: for a caller holding none of them (a slate). */
-  protected abstract ownStoreInputs(): BuiltinStoreInputs;
+  /** What this agent's builtins read its stores from, as its own tools do, on `ledgers`: for a caller holding none of
+   *  them (a slate, a scaffold's run). */
+  protected abstract ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs;
 
   /**
    * The ledgers this agent's own tools account into: its turn's, else, outside any turn, a budget of the call's own
@@ -3498,7 +3519,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const explicitTier = turnTags({ metadata: this.turnDrivingMetadata() }).tier;
 
     const assembled = await assembleActorTurn(
-      { ...surface.sources, toolset: () => surface.tools, externalTools: async () => surface.surface.external },
+      { ...surface.sources, toolset: () => ({ tools: surface.tools, stores: surface.stores }), externalTools: async () => surface.surface.external },
       {
         userText: extractLastUserText(history), workMode: mode, ...(explicitTier !== undefined && { explicitTier }),
         pagesInAnswer: answerDrawsPages(this.turnDrivingMetadata()),

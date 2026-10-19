@@ -74,7 +74,7 @@ import { ActorSession, type ActorTurnLease,
   createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
-  agentRoleSwitch, builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores,
+  agentRoleSwitch, builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
   REPORT_TOOL, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
@@ -2138,17 +2138,23 @@ export class LocalAgentSession {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.rt.storage.sql,
-      surface: (task, context, callScope) => createScaffoldCandidateSurface({
-        rt: this.rt,
-        compose: () => this.composeNextRequest(),
-        profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
-        bindModel: spec => this.modelResolver?.resolveModel(spec, this.affinity()) ?? this.defaultModel('scaffold model lane'),
-        modelContext: spec => this.modelCatalog.contextFor(spec),
-        tools: () => this.rolloutTools(callScope ?? currentOperationProfile(this.rt.actor)?.turnId ?? WORKSPACE_RUN_ID),
-        callScope,
-        history: this.makeScaffoldHistory(),
-        spend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
-      }, task, context),
+      surface: (task, context, callScope) => {
+        // One set for the run: each request's tools project it, and so do its machines.
+        const stores = serveStores(builtinStoreDeps(this.storeInputs()));
+
+        return createScaffoldCandidateSurface({
+          rt: this.rt,
+          compose: () => this.composeNextRequest(),
+          profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
+          bindModel: spec => this.modelResolver?.resolveModel(spec, this.affinity()) ?? this.defaultModel('scaffold model lane'),
+          modelContext: spec => this.modelCatalog.contextFor(spec),
+          tools: () => this.rolloutTools(callScope ?? currentOperationProfile(this.rt.actor)?.turnId ?? WORKSPACE_RUN_ID, stores),
+          stores,
+          callScope,
+          history: this.makeScaffoldHistory(),
+          spend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+        }, task, context);
+      },
     };
   }
 
@@ -2780,9 +2786,15 @@ export class LocalAgentSession {
   }
 
   private buildToolSets(): void {
+    // Both modes project one served set, on the turn's ledgers.
+    let served: ServedStores | undefined;
+
     for (const mode of ['build', 'plan'] as const) {
       // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
-      this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(mode, () => this.turnExecution()));
+      const built = buildActorTools({ ...this.actorToolsetDeps(mode, () => this.turnExecution()), ...(served !== undefined && { served }) });
+
+      served = built.stores;
+      this.toolSets[mode] = built;
     }
 
     this.activateToolMode(this.actorSession.workMode);
@@ -2861,16 +2873,20 @@ export class LocalAgentSession {
 
   /** Raw tools with the effect-claim id pinned to the rollout, so a live run and a replay claim the
    *  same call once. Raw because backgrounding would key work to the ambient turn. */
-  private rolloutTools(callScope: string): ToolSet {
-    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => ({ turnId: callScope, runId: callScope }))).raw;
+  /** A rollout's tools in the mode it runs in now, projecting the run's one served set. */
+  private rolloutTools(callScope: string, served: ServedStores): ToolSet {
+    const mode = currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build';
+
+    return buildActorTools({ ...this.actorToolsetDeps(mode, () => ({ turnId: callScope, runId: callScope })), served }).raw;
   }
 
   private activateToolMode(mode: WorkMode): void {
     this.tools = this.toolSurface(mode);
   }
 
-  /** The tool set this turn's gates (`report`, `submit_plan`, `reply_to_comment`) build; rebuilt when they moved, never re-resolving a model. */
-  private turnToolSet(mode: WorkMode): ToolSet {
+  /** The tool set this turn's gates (`report`, `submit_plan`, `reply_to_comment`) build, and the store operations it
+   *  runs; rebuilt when they moved, never re-resolving a model. */
+  private turnToolSet(mode: WorkMode): TurnTools {
     const gates = `${String(this.reportGateOpen())}:${String(this.planSubmissionOpen('build'))}:${String(this.planReviewSurface())}:${String(this.planReplyOpen())}`;
 
     if (this.toolSets[mode] === undefined || this.toolSetGates !== gates) {
@@ -2878,17 +2894,23 @@ export class LocalAgentSession {
       this.toolSetGates = gates;
     }
 
-    return this.toolSurface(mode);
+    const surface = this.ownToolsets(mode);
+
+    return { tools: surface.turn, stores: surface.stores };
   }
 
   private toolSetGates: string | null = null;
 
   private toolSurface(mode: WorkMode): ToolSet {
+    return this.ownToolsets(mode).turn;
+  }
+
+  private ownToolsets(mode: WorkMode): ActorToolsets {
     const surface = this.toolSets[mode];
 
     if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
 
-    return surface.turn;
+    return surface;
   }
 }
 

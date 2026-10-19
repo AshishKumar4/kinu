@@ -77,6 +77,7 @@ async function runHead(mission: MissionScope | null, opts: { stopAfter?: number 
     ...await hostedHead(steppingModel({ input: 1_000, output: 200, ...opts })),
     compaction: fixtureCompaction(),
     tools: buildHeadAccumulatorTools(capture),
+    stores: null,
     capture,
     clock: REAL_CLOCK, isAborted: () => false,
   };

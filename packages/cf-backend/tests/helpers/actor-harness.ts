@@ -632,7 +632,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   protected override actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
     if (this._suppliedTools !== null && reach.actor.kind === 'workspace' && mode === turnTags({ metadata: this.turnUserMetadata() }).mode) {
-      return { turn: this._suppliedTools, raw: this._suppliedTools };
+      // The supplied tools run none of the actor's stores; its programs and machines still run the actor's own set.
+      return { turn: this._suppliedTools, raw: this._suppliedTools, stores: super.actorTools(actor, reach, mode, scope).stores };
     }
 
     return super.actorTools(actor, reach, mode, scope);

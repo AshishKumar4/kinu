@@ -565,6 +565,8 @@ export async function deliveredRun(
       sources,
       compaction: trigger,
       tools: facetTurnTools(workspace, prepared, actor, { id: task.sequenceId, runId, epoch: bound.epoch, mode: task.mode, parentDriven: false, driving: undefined, live, capture, database }),
+      // Its tools are the workspace's, run there, and so is its program.
+      stores: null,
       opening: decodeModelMessageValues(prepared.opening),
       capture,
       isAborted: () => signal.aborted,

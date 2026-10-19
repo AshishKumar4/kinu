@@ -99,7 +99,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       return sandboxEntry('fn-ran');
     };
 
-    const tools = buildHeadToolSet({
+    const { tools } = buildHeadToolSet({
       conversations: conversationsFor(rt),
       input: headInput({ allowedTools: allowed }),
       capture: new HeadCapture(),
@@ -132,7 +132,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
       return sandboxEntry('fn-ran');
     };
 
-    const tools = buildHeadToolSet({
+    const { tools } = buildHeadToolSet({
       conversations: conversationsFor(rt),
       input: headInput({ allowedTools: ['shell'] }),
       capture: new HeadCapture(),
