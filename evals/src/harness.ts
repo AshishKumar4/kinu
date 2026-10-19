@@ -344,8 +344,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const turns: EvalTurnResult[] = [];
       const errors: HarnessError[] = [];
       let session: KinuPublicSession | undefined;
-      let productSha = 'unknown';
-      let served: Served | null = null;
+      // The build and Worker version the trial opened on, read again at its end (buildChanged).
+      let served: Served = { sha: 'unknown', version: null };
       const account = identity.slotOf(input);
       let attempted: string | undefined;
       let turnStartedAt = Date.now();
@@ -362,7 +362,6 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
             await timeline.span('account', () => prepareTrialAccount(own, Date.now(), { subject, sequence: identity.sequence }));
             served = await timeline.span('build', () => deployedBuild(own));
-            productSha = served.sha;
 
             const created = await timeline.span('open', () => openWorkspace(own, { subject, mission: task.mission, model: input.model }));
 
@@ -437,7 +436,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
       try {
         const after = await timeline.span('build', () => deployedBuild(target));
-        const changed = buildChanged(served ?? { sha: productSha, version: null }, after);
+        const changed = buildChanged(served, after);
 
         if (changed !== null) errors.push({ name: 'EvalBuildChanged', message: changed });
       } catch (error) {
@@ -486,7 +485,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         },
         errors: scrubbed,
         metadata: {
-          taskId: task.id, taskVersion: identity.taskVersion, evalCommit: identity.evalCommit, productSha,
+          taskId: task.id, taskVersion: identity.taskVersion, evalCommit: identity.evalCommit, productSha: served.sha,
           arm: input.arm, trial: input.trial, origin: target.origin, account, workspace: session?.workspace ?? null,
           evidence: join(evidenceRoot, evalNameSlug(input.model), input.arm, `${task.id}-trial-${String(input.trial)}`),
         },
