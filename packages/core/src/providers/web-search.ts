@@ -52,11 +52,13 @@ export const CLOUDFLARE_WEB_SEARCH = {
     v.transform(({ items }): SearchAnswer => ({ hits: items.map((item) => ({ url: item.url, title: item.title, snippet: item.description })) })),
   ),
   /**
-   * The API's own refusal (`web_search_payment_required`, 402, measured 2026-10-17), or the REST API's envelope (403
-   * `Authentication error` to a token without Workers AI Read, measured 2026-10-19).
+   * The API's own refusal (`web_search_payment_required`, 402, measured 2026-10-17), AI Gateway's (400 `Please configure
+   * AI Gateway in the Cloudflare dashboard` for a gateway the account lacks, measured 2026-10-19), or the REST API's
+   * envelope (403 `Authentication error` to a token without Workers AI Read, measured 2026-10-19).
    */
   refusal: v.union([
     v.pipe(v.object({ error: v.object({ message: v.string() }) }), v.transform(({ error }) => error.message)),
+    v.pipe(v.object({ error: v.pipe(v.array(v.object({ message: v.string() })), v.minLength(1)) }), v.transform(({ error }) => error.map((e) => e.message).join('; '))),
     v.pipe(v.object({ errors: v.pipe(v.array(v.object({ message: v.string() })), v.minLength(1)) }), v.transform(({ errors }) => errors.map((e) => e.message).join('; '))),
   ]),
 } as const;

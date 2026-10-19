@@ -171,11 +171,21 @@ describe('a refusal along the chain', () => {
     expect(w.waits).toEqual([]);
   });
 
-  test('a request the provider calls malformed ends the search: no other entry is asked', async () => {
-    const w = world({ binding: () => Response.json({ error: { message: 'query: must be at most 1024 characters' } }, { status: 400 }) });
+  test("a 400 hands over too, and AI Gateway's own refusal is read in its words", async () => {
+    // Cloudflare's answer to a search on a gateway the account lacks (2026-10-19).
+    const missingGateway = () => Response.json({
+      success: false, result: [], messages: [], error: [{ code: 2001, message: 'Please configure AI Gateway in the Cloudflare dashboard' }],
+      name: 'AiGatewayError', httpCode: 400, internalCode: 2001,
+    }, { status: 400 });
 
-    await expect(w.searchWith([EXA, LINKUP])({ query: 'q', limit: 5 })).rejects.toMatchObject({ code: 'bad_input' });
-    expect(w.asked).toEqual(['exa:q:5']);
+    const w = world({ binding: (provider) => (provider === 'exa' ? missingGateway() : items()) });
+
+    expect((await w.searchWith([EXA, LINKUP])({ query: 'q', limit: 5 })).source).toBe('linkup');
+    w.later(10 * 60_000);
+    await expect(w.searchWith([EXA])({ query: 'q', limit: 5 })).rejects.toMatchObject({
+      code: 'bad_input', message: "Exa on this deployment's AI Gateway: Cloudflare answered 400: Please configure AI Gateway in the Cloudflare dashboard",
+    });
+    expect(w.asked).toEqual(['exa:q:5', 'linkup:q:5', 'exa:q:5']);
   });
 
   test('a search its caller cancels ends there: no later entry is asked', async () => {

@@ -230,9 +230,8 @@ export function chainWebSearch(deps: WebSearchDeps): WebSearch {
         if (outcome.kind === 'answered') return outcome.response;
         pacer.park(payer.lane, outcome.retryAfterMs);
 
-        // A request the provider calls malformed is malformed for every provider: the search ends here.
-        if (outcome.status !== null && codeForStatus(outcome.status) === 'bad_input') return yield* Effect.fail(exhausted(outcome));
-
+        // Every refusal hands over, a 400 too: a one-line query is rarely what a provider refuses. Cloudflare answers 400
+        // to a gateway the account lacks (2026-10-19), and another entry may be paid for elsewhere.
         if (!final) {
           said.push(outcome.said);
 
