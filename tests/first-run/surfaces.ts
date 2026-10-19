@@ -83,6 +83,7 @@ export const CAPABILITY_ROWS = {
   'a long command on the owner\'s machine, its output seen while it runs': ['device-job-output'],
   'a swarm whose nodes run as hosted agents and settle': ['exploration'],
   'a live web search': ['web-search'],
+  'a web search with no search key, on the deployment\'s own provider': ['web-search-keyless'],
   'a slate driving a browser its caller opened': ['slate-browser'],
   'an internal address refused on every fetch path': ['capability-isolation'],
   'a correction sent while the agent works': ['steer-correction'],

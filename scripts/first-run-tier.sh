@@ -134,6 +134,19 @@ if [[ ${#CASES_RESOLVED[@]} -ne 2 || "${CASES_RESOLVED[0]}" != "$KINU_ORIGIN" ]]
 fi
 CASES_TOKEN="${CASES_RESOLVED[1]}"
 KINU_TOKEN=$CASES_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$CASES_ACCOUNT" || exit 1
+
+# THE KEYLESS ACCOUNT: the scripted model and no search key, so web-search-keyless's search takes the deployment's own
+# provider, as the search of a person with no key does (the owner's 522, 2026-10-17). Its case runs in first-run-cases
+# and names the account itself.
+KEYLESS_ACCOUNT=keyless
+KINU_EVAL_ACCOUNT=$KEYLESS_ACCOUNT bun scripts/eval-session-mint.ts || exit 1
+KEYLESS_OUT="$(KINU_EVAL_ACCOUNT=$KEYLESS_ACCOUNT bun scripts/eval-credentials.ts)"
+mapfile -t KEYLESS_RESOLVED <<< "$KEYLESS_OUT"
+if [[ ${#KEYLESS_RESOLVED[@]} -ne 2 || "${KEYLESS_RESOLVED[0]}" != "$KINU_ORIGIN" ]]; then
+  echo "first-run: no CLI bearer for the $KEYLESS_ACCOUNT eval account at $KINU_ORIGIN." >&2
+  exit 1
+fi
+KINU_TOKEN="${KEYLESS_RESOLVED[1]}" bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$KEYLESS_ACCOUNT" || exit 1
 KINU_TOKEN=$FLEET_TOKEN bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$FLEET_ACCOUNT" || exit 1
 
 # THE CASE THAT WRITES ACCOUNT SETTINGS ACTS AS ITS OWN ACCOUNT. workspace-settings
