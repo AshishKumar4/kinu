@@ -129,7 +129,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
+  type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -6130,13 +6130,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
   /** DO-only, like the blueprint twin, for the same reason. */
-  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
+  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<OwnedLiveShare>> {
     return (await this.slates()).controller.shareLiveWith(share, users);
   }
 
   /** DO-only: a live share's mode, set by its owner's own share sheet, which the app host proves is theirs. No agent
    *  turns on `owner` mode, so no slate op or callable reaches this. */
-  async setLiveShareMode(body: LiveShareModeBody): Promise<SlateAnswer<LiveShareRecord>> {
+  async setLiveShareMode(body: LiveShareModeBody): Promise<SlateAnswer<OwnedLiveShare>> {
     return (await this.slates()).controller.setLiveShareMode(body);
   }
 
@@ -6158,7 +6158,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** DO-only, for the same reason: a live share listed in the Gallery, or taken off it, by its owner's share sheet. */
-  async setLiveShareListing(body: LiveShareListingBody): Promise<SlateAnswer<LiveShareRecord>> {
+  async setLiveShareListing(body: LiveShareListingBody): Promise<SlateAnswer<OwnedLiveShare>> {
     return (await this.slates()).controller.setLiveShareListing(body);
   }
 

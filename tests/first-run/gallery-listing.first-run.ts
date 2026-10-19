@@ -7,8 +7,8 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  APP_ROUTES, galleryPath, GalleryPageSchema, GallerySlateSchema, gallerySlatePath, LIVE_SHARE_LISTING_PATH, LiveShareCreatedSchema, LiveShareRecordSchema,
-  type GalleryListing, type LiveShareRecord, type RoomService,
+  APP_ROUTES, galleryPath, GalleryPageSchema, GallerySlateSchema, gallerySlatePath, LIVE_SHARE_LISTING_PATH, LiveShareCreatedSchema, OwnedLiveShareSchema,
+  type GalleryListing, type OwnedLiveShare, type RoomService,
 } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
@@ -50,13 +50,13 @@ async function indexed(origin: string, line: string): Promise<GalleryListing | n
 }
 
 /** Its owner lists `share` in the Gallery with `line`, as their share sheet does: the share as it answers after. */
-async function listShare(input: { origin: string; headers: Readonly<Record<string, string>>; workspace: string; share: string; line: string }): Promise<LiveShareRecord | null> {
+async function listShare(input: { origin: string; headers: Readonly<Record<string, string>>; workspace: string; share: string; line: string }): Promise<OwnedLiveShare | null> {
   const listing = await fetch(`${input.origin}${LIVE_SHARE_LISTING_PATH}`, {
     method: 'POST', headers: { ...input.headers, 'content-type': 'application/json' },
     body: JSON.stringify({ workspace: input.workspace, share: input.share, listed: true, line: input.line, category: 'developer' }),
   });
 
-  const listed = listing.ok ? v.safeParse(LiveShareRecordSchema, await listing.json()) : null;
+  const listed = listing.ok ? v.safeParse(OwnedLiveShareSchema, await listing.json()) : null;
 
   return listed?.success === true ? listed.output : null;
 }

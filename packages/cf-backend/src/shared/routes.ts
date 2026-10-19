@@ -12,7 +12,7 @@ import {
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
-  type LiveShareRecord, type SlateAnswer,
+  type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import { shareViewerKey } from '../viewer-pass';
@@ -322,7 +322,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
  * owner reviewed (docs/SLATE-SHARING-NIMBUS.md §2). Where that refuses (the slate changed since), the share is revoked
  * again, so nothing is left shared other than as asked. The share as it stands, or the refusal.
  */
-async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share: LiveShareRecord; body: LiveShareBody }): Promise<LiveShareRecord | Response> {
+async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share: OwnedLiveShare; body: LiveShareBody }): Promise<OwnedLiveShare | Response> {
   const { body, share } = made;
 
   if (body.mode !== 'owner' || body.revision === undefined) return share;

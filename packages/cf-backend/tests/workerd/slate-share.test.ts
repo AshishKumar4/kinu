@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
-import { LiveShareRecordSchema, ViewerRequestRecordSchema } from '@kinu.run/core';
+import { OwnedLiveShareSchema, ViewerRequestRecordSchema } from '@kinu.run/core';
 import type { SlateShareProbeRpc } from './env';
 
 type Probe = DurableObjectStub<SlateShareProbeRpc>;
@@ -11,7 +11,7 @@ const subject = (name: string): Probe =>
   // SAFETY: the binding is the probe worker's own class; the Rpc interface is its exact surface.
   env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName(name));
 
-const ShareCreated = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
+const ShareCreated = v.object({ share: OwnedLiveShareSchema, url: v.nullable(v.string()) });
 
 const Requests = v.object({ ok: v.literal(true), value: v.array(ViewerRequestRecordSchema) });
 
@@ -90,7 +90,7 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   expect(impacts('issues:mcp.github')).toEqual([['add_issue_comment', 'externalSend'], ['issue_read', 'observe']]);
   expect(impacts('issues:workspace')).toEqual([['fs.text', 'observe'], ['fs.write', 'mutate']]);
 
-  const ShareSchema = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
+  const ShareSchema = v.object({ share: OwnedLiveShareSchema, url: v.nullable(v.string()) });
 
   const granted = async (visibility: 'public' | 'users', approved: Array<{ slate: string; namespace: string; member: string }>) => v.parse(
     ShareSchema, answer(await probe.operationAs('root', { op: 'share', id: 'issues', visibility, approved })),
@@ -303,7 +303,7 @@ it("an owner share's approval moves with its owner's own edit, and a review read
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
     await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
-  const shares = async () => v.parse(v.object({ ok: v.literal(true), value: v.array(LiveShareRecordSchema) }), await probe.liveShares()).value;
+  const shares = async () => v.parse(v.object({ ok: v.literal(true), value: v.array(OwnedLiveShareSchema) }), await probe.liveShares()).value;
   const before = (await shares()).find((row) => row.id === created.share.id);
 
   expect(before).toMatchObject({ mode: 'owner', grantRevision: expect.any(String), stale: false });

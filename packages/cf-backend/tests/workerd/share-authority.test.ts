@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 import * as v from 'valibot';
-import { LiveShareRecordSchema } from '@kinu.run/core';
+import { OwnedLiveShareSchema } from '@kinu.run/core';
 import type { SlateShareProbeRpc } from './env';
 
 type Probe = DurableObjectStub<SlateShareProbeRpc>;
@@ -10,7 +10,7 @@ const subject = (name: string): Probe =>
   // SAFETY: the binding is the probe worker's own class; the Rpc interface is its exact surface.
   env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName(name));
 
-const ShareCreated = v.object({ share: LiveShareRecordSchema, url: v.nullable(v.string()) });
+const ShareCreated = v.object({ share: OwnedLiveShareSchema, url: v.nullable(v.string()) });
 
 const CLAIM = { userId: null, source: 'vitest', consented: true };
 

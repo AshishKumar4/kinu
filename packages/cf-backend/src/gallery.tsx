@@ -87,7 +87,7 @@ import { installPartsFixture, installShareModeFixture, PART_PREVIEWS_ENTRY, Part
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { ForkReachPanel } from "@/components/slates/ForkReachPanel";
-import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharePreapproval, SlateReach } from "@kinu.run/core";
+import type { BlueprintInspection, BlueprintView, OwnedLiveShare, SharePreapproval, SlateReach } from "@kinu.run/core";
 import UserSettingsPage from "@/pages/UserSettingsPage";
 import ConnectedPage from "@/pages/ConnectedPage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
@@ -5741,7 +5741,7 @@ const SHARE_GRAPH: SlateReach = {
   ],
 };
 
-const LIVE_SHARE: LiveShareRecord = {
+const LIVE_SHARE: OwnedLiveShare = {
   id: "live-board-1", slate: "issue-triage", visibility: "public", handle: "3f9a1c7e02",
   grant: { slates: ["issue-triage", "digest"], members: [
     { slate: "issue-triage", namespace: "mcp.github", member: "read_issue", impact: "observe" },
@@ -5751,12 +5751,12 @@ const LIVE_SHARE: LiveShareRecord = {
     { slate: "digest", namespace: "workspace", member: "fs.text", impact: "observe" },
   ] },
   // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
-  createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, gallery: null,
+  createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, paused: false, gallery: null,
   views: { viewers: 12, opens: 40, signedOutOpens: 9 },
 };
 
 /** Its team's share: Pat edits it, Sam uses it, and Pat's last change stopped it on the owner's access. */
-const TEAM_SHARE: LiveShareRecord = {
+const TEAM_SHARE: OwnedLiveShare = {
   ...LIVE_SHARE, id: "live-team-2", visibility: "users", handle: "8b2e5d1f40", users: ["pat@example.com", "sam@example.com"], editors: ["pat@example.com"],
   createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com", views: { viewers: 2, opens: 7, signedOutOpens: 0 },
 };

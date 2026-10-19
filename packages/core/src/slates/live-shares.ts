@@ -57,7 +57,6 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS slate_share_views (
     share TEXT NOT NULL,
     viewer TEXT NOT NULL,
-    first_seen INTEGER NOT NULL,
     opens INTEGER NOT NULL,
     PRIMARY KEY (share, viewer)
   )`);
@@ -354,9 +353,9 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   /** `viewer` ({@link SIGNED_OUT_VIEWER} for someone signed out) opened `share` through its link. */
   opened(share: string, viewer: string): void {
     this.db.exec(
-      `INSERT INTO slate_share_views (share, viewer, first_seen, opens) VALUES (?, ?, ?, 1)
+      `INSERT INTO slate_share_views (share, viewer, opens) VALUES (?, ?, 1)
        ON CONFLICT (share, viewer) DO UPDATE SET opens = opens + 1`,
-      share, viewer, this.now(),
+      share, viewer,
     );
   }
 
