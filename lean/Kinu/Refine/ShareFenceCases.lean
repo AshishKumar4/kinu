@@ -10,7 +10,8 @@ def slates : List String := ["board", "aux", "third"]
 def shareId (id : Nat) : String := "share-" ++ toString id
 
 def lineageJson (token : Fence.Lineage) : Json := .obj [
-  ("incarnation", .str token.incarnation), ("generation", .ofNat token.generation)]
+  ("incarnation", .str token.incarnation), ("generation", .ofNat token.generation),
+  ("ancestors", .obj (token.ancestors.map fun (slate, generation) => (slate, .ofNat generation)))]
 
 def invocationJson (record : Fence.Invocation) : Json := .obj [
   ("incarnation", .str record.incarnation),
@@ -30,7 +31,9 @@ def authorityFields (authority : LiveShareAuthority) : List (String × Json) := 
 inductive Op where
   | mutate (event : Fence.Event)
   | launch (slate incarnation : String)
+  | inherit (slate incarnation : String) (parent : Nat) (chain : List String)
   | call (slot : Nat) (record : Option Fence.Invocation)
+  | nested (slot : Nat) (record : Option Fence.Invocation) (chain : List String) (namespace_ member : String)
   | listing (slate : String) (id : Nat) (on : Bool)
   | users (slate : String) (id : Nat)
   | preapprove (slate : String)
@@ -64,10 +67,24 @@ def runOp (trace : Trace) (op : Op) : Trace × Json :=
       ({ trace with launches := trace.launches ++ [launch], records := trace.records ++ [recordAt trace.store incarnation] },
         [("op", .str "launch"), ("slate", .str slate), ("slot", .ofNat trace.launches.length),
          ("incarnation", .str incarnation), ("expected", lineageJson launch.lineage)])
+    | .inherit slate incarnation parent chain =>
+      let via := (trace.launches.getD parent default).lineage.ancestors
+      let launch := Fence.beginLaunch trace.store slate incarnation (Fence.inheritAncestors trace.store via chain)
+      ({ trace with launches := trace.launches ++ [launch], records := trace.records ++ [recordAt trace.store incarnation] },
+        [("op", .str "inherit"), ("slate", .str slate), ("slot", .ofNat trace.launches.length),
+         ("incarnation", .str incarnation), ("parent", .ofNat parent), ("chain", .arr (chain.map Json.str)),
+         ("expected", lineageJson launch.lineage)])
     | .call slot record =>
       let launch := trace.launches.getD slot default
       (trace, [("op", .str "call"), ("slot", .ofNat slot), ("record", Json.opt invocationJson record),
         ("expected", .bool (Fence.lineage trace.store launch.slate launch.lineage record))])
+    | .nested slot record chain namespace_ member =>
+      let launch := trace.launches.getD slot default
+      let call : GrantMember := ⟨launch.slate, namespace_, member, "observe"⟩
+      (trace, [("op", .str "nested"), ("slot", .ofNat slot), ("record", Json.opt invocationJson record),
+        ("chain", .arr (chain.map Json.str)), ("namespace", .str namespace_), ("member", .str member),
+        ("unfenced", .bool (Fence.weighNested trace.store chain call "r1" != .refused)),
+        ("expected", .bool (Fence.nestedAdmission trace.store launch.lineage record chain call "r1"))])
     | .listing slate id on => (trace, [("op", .str "listing"), ("slate", .str slate), ("id", .str (shareId id)), ("on", .bool on)])
     | .users slate id => (trace, [("op", .str "users"), ("slate", .str slate), ("id", .str (shareId id))])
     | .preapprove slate => (trace, [("op", .str "preapprove"), ("slate", .str slate)])
@@ -121,15 +138,72 @@ def directed : List Op := [
   .mutate (.revoke "board" 2), .call 3 none,
   .launch "board" "p4", .call 4 none]
 
+/-- The owner's request reaches two independent descendants. Revoking the last
+    ancestor share leaves current weighing unbounded, but neither sealed
+    process may act, even with a freshly minted request or after a re-share. -/
+def inherited : List Op := [
+  .mutate (.add "board" (row 0 (owner "r1"))), .launch "board" "root",
+  .inherit "aux" "child" 0 ["board", "board", "aux"], .call 1 none,
+  .inherit "third" "grandchild" 1 ["aux"], .call 2 none,
+  .nested 1 none [] "mcp.GitHub" "read", .nested 2 none ["board", "aux"] "mcp.GitHub" "read",
+  .launch "aux" "unsealed-control",
+  .mutate (.revoke "board" 0),
+  .call 1 none, .call 2 none,
+  .call 1 (some ⟨"child", [("board", 2), ("aux", 0)]⟩),
+  .call 2 (some ⟨"grandchild", [("board", 2), ("aux", 0), ("third", 0)]⟩),
+  .nested 1 none [] "mcp.GitHub" "read", .nested 2 none ["board", "aux"] "mcp.GitHub" "read",
+  .nested 2 (some ⟨"grandchild", [("board", 2), ("third", 0)]⟩) [] "mcp.GitHub" "read",
+  .call 3 none, .nested 3 none ["board"] "mcp.GitHub" "read",
+  .mutate (.add "board" (row 1 (owner "r1"))),
+  .inherit "third" "still-sealed" 1 ["board", "aux"], .call 4 none,
+  .nested 4 none [] "mcp.GitHub" "read",
+  .mutate (.revoke "board" 1), .call 1 none, .call 2 none, .call 4 none,
+  .nested 4 none [] "mcp.GitHub" "read"]
+
+/-- A new shared hop is added without replacing an earlier seal. Own/owner
+    mode changes and the callee's own sharing also fence nested members. -/
+def nested : List Op := [
+  .mutate (.add "board" (row 0 (owner "r1"))), .launch "board" "root",
+  .inherit "aux" "child" 0 ["board"],
+  .mutate (.add "aux" (row 1 (owner "r1"))),
+  .inherit "third" "grandchild" 1 ["board", "aux"], .call 2 none,
+  .nested 2 none [] "mcp.GitHub" "read",
+  .nested 2 (some ⟨"other-process", []⟩) [] "mcp.GitHub" "read",
+  .nested 2 (some ⟨"grandchild", [("third", 1)]⟩) [] "mcp.GitHub" "read",
+  .mutate (.setAuthority "aux" 1 own), .call 2 none,
+  .nested 2 none [] "mcp.GitHub" "read",
+  .mutate (.revoke "aux" 1), .call 2 none,
+  .nested 2 none ["aux"] "mcp.GitHub" "read",
+  .launch "board" "own-change", .nested 3 none [] "mcp.GitHub" "read",
+  .nested 3 none [] "mcp.GitHub" "other",
+  .mutate (.revoke "board" 0),
+  .nested 3 none [] "mcp.GitHub" "read",
+  .nested 3 (some ⟨"own-change", [("board", 2)]⟩) [] "mcp.GitHub" "read",
+  .launch "third" "record-chain",
+  .nested 4 (some ⟨"record-chain", [("aux", 3)]⟩) [] "mcp.GitHub" "read",
+  .mutate (.add "aux" (row 2 own)),
+  .nested 4 (some ⟨"record-chain", [("aux", 3)]⟩) [] "mcp.GitHub" "read",
+  .nested 4 none [] "mcp.GitHub" "read"]
+
 def genAuthority : Gen LiveShareAuthority := do
   let grant ← SharePolicyCases.genGrant
   if ← chance 1 2 then return ⟨.own, grant, none⟩
   return ⟨.owner, grant, some (← pick ["r1", "r2", "r3"])⟩
 
+def genRecord (trace : Trace) (slot : Nat) (slate : String) : Gen (Option Fence.Invocation) := do
+  let launch := trace.launches.getD slot default
+  let held := trace.records.getD slot default
+  match ← below 5 with
+  | 0 => return none
+  | 1 => return some held
+  | 2 => return some { held with incarnation := "other-process" }
+  | 3 => return some (recordAt trace.store launch.lineage.incarnation)
+  | _ => return some { held with generations := [(slate, (trace.store slate).generation + 1)] }
+
 def genOp (trace : Trace) : Gen Op := do
   let slate ← pick slates
   let shares := (trace.store slate).shares
-  match ← below 10 with
+  match ← below 13 with
   | 0 | 1 => return .mutate (.add slate (row trace.nextId (← genAuthority)))
   | 2 =>
     let id ← if shares.isEmpty || (← chance 1 5) then pure 999 else pure (← pick shares).id
@@ -143,19 +217,20 @@ def genOp (trace : Trace) : Gen Op := do
   | 5 | 6 =>
     if trace.launches.isEmpty then return .launch slate "p0"
     let slot ← below trace.launches.length
-    let launch := trace.launches.getD slot default
-    let held := trace.records.getD slot default
-    let record ← match ← below 5 with
-      | 0 => pure none
-      | 1 => pure (some held)
-      | 2 => pure (some { held with incarnation := "other-process" })
-      | 3 => pure (some (recordAt trace.store launch.lineage.incarnation))
-      | _ => pure (some { held with generations := [(slate, (trace.store slate).generation + 1)] })
-    return .call slot record
-  | 7 =>
+    return .call slot (← genRecord trace slot slate)
+  | 7 | 12 =>
+    if trace.launches.isEmpty then return .launch slate "p0"
+    let slot ← below trace.launches.length
+    return .nested slot (← genRecord trace slot slate) (← pick [[], [slate], slates, slates.reverse])
+      (← pick ["mcp.GitHub", "mcp.Other"]) (← pick ["read", "send", "other"])
+  | 8 =>
+    if trace.launches.isEmpty then return .launch slate "p0"
+    return .inherit slate ("p" ++ toString trace.launches.length) (← below trace.launches.length)
+      (← pick [[], [slate], slates, slates.reverse, ["board", "board", "aux"]])
+  | 9 =>
     if shares.isEmpty then return .mutate .observe
     return .listing slate (← pick shares).id (← chance 1 2)
-  | 8 =>
+  | 10 =>
     let live := shares.filter (·.live)
     if live.isEmpty then return .mutate .observe
     return .users slate (← pick live).id
@@ -172,6 +247,6 @@ def genCase : Gen (Option Json) := do
 
 def fixture : String := fixtureText [
   ("fixture", .str "share-fence-cases"), ("model", .str "Kinu.SharingNimbus.Fence"), ("seed", .str "0x46454e4345")]
-  ([traceCase directed] ++ runGen 0x46454e4345 (casesOf 100 genCase))
+  ([traceCase directed, traceCase inherited, traceCase nested] ++ runGen 0x46454e4345 (casesOf 100 genCase))
 
 end Kinu.Refine.ShareFenceCases

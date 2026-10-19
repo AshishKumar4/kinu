@@ -1,4 +1,4 @@
-/** Replay the model's interleavings against the real SQLite store and lineage checker.
+/** Replay the model's interleavings against the real SQLite store, lineage and nested-member gates.
  * This checks the launch inputs/fences, not Nimbus process teardown or asynchronous launch restart. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -14,7 +14,11 @@ const FIXTURE = resolve(import.meta.dir, '../../../lean/fixtures/share-fence-cas
 
 const Mode = v.picklist(['own', 'owner']);
 
-const Lineage = v.object({ incarnation: v.string(), generation: v.number() });
+const Generations = v.record(v.string(), v.number());
+
+const Lineage = v.object({ incarnation: v.string(), generation: v.number(), ancestors: Generations });
+
+const Invocation = v.nullable(v.object({ incarnation: v.string(), generations: Generations }));
 
 const Snapshot = v.array(v.object({
   slate: v.string(), generation: v.number(), shared: v.boolean(), rows: v.record(v.string(), v.object({ mode: Mode, live: v.boolean() })),
@@ -35,8 +39,15 @@ const Fixture = v.object({
         op: v.literal('launch'), slate: v.string(), slot: v.number(), incarnation: v.string(), expected: Lineage, ...After,
       }),
       v.object({
-        op: v.literal('call'), slot: v.number(), expected: v.boolean(),
-        record: v.nullable(v.object({ incarnation: v.string(), generations: v.record(v.string(), v.number()) })), ...After,
+        op: v.literal('inherit'), slate: v.string(), slot: v.number(), incarnation: v.string(),
+        parent: v.number(), chain: v.array(v.string()), expected: Lineage, ...After,
+      }),
+      v.object({
+        op: v.literal('call'), slot: v.number(), expected: v.boolean(), record: Invocation, ...After,
+      }),
+      v.object({
+        op: v.literal('nested'), slot: v.number(), chain: v.array(v.string()), namespace: v.string(), member: v.string(),
+        record: Invocation, unfenced: v.boolean(), expected: v.boolean(), ...After,
       }),
       v.object({ op: v.literal('listing'), slate: v.string(), id: v.string(), on: v.boolean(), ...After }),
       v.object({ op: v.literal('users'), slate: v.string(), id: v.string(), ...After }),
@@ -57,12 +68,96 @@ function authorityOf(step: { mode: 'own' | 'owner'; grantRevision: string | null
   return { mode: 'owner', grantRevision: step.grantRevision };
 }
 
-describe('sharing fences refine the atomic store and SharedServers.lineage', () => {
+type FixtureStep = v.InferOutput<typeof Fixture>['cases'][number]['steps'][number];
+
+function replayStep(step: FixtureStep, live: SlateLiveShareStore, servers: SharedServers, launches: { slate: string; lineage: SlateLineage }[]): void {
+  if (step.op === 'add' || step.op === 'setAuthority') {
+    const authority = authorityOf(step);
+
+    if (step.op === 'add') {
+      live.add({ id: step.id, slate: step.slate, visibility: 'users', handle: step.id, grant: step.grant, authority });
+    } else {
+      live.setAuthority(step.id, authority, step.grant);
+    }
+  } else if (step.op === 'revoke') {
+    if (step.missing) expect(() => live.revoke(step.id)).toThrow(expect.objectContaining({ code: 'missing' }));
+    else live.revoke(step.id);
+  } else if (step.op === 'launch' || step.op === 'inherit') {
+    const ancestors: Record<string, number> = {};
+
+    if (step.op === 'inherit') {
+      const parent = launches[step.parent];
+
+      if (parent === undefined) throw new Error(`Fixture names missing parent ${step.parent}`);
+      Object.assign(ancestors, parent.lineage.ancestors);
+
+      for (const slate of step.chain) {
+        if (live.isShared(slate) && ancestors[slate] === undefined) ancestors[slate] = live.generation(slate);
+      }
+    }
+
+    const lineage = { incarnation: step.incarnation, generation: live.generation(step.slate), ancestors };
+
+    expect(lineage).toEqual(step.expected);
+    launches[step.slot] = { slate: step.slate, lineage };
+  } else if (step.op === 'call' || step.op === 'nested') {
+    const launch = launches[step.slot];
+
+    if (launch === undefined) throw new Error(`Fixture names missing launch ${step.slot}`);
+    const record = step.record === null ? null : { id: 'host-issued-request', chain: Object.keys(step.record.generations), ...step.record };
+
+    if (step.op === 'call') {
+      const refusal = servers.lineage(launch.slate, launch.lineage, record);
+
+      expect(refusal === null).toBe(step.expected);
+
+      if (refusal !== null) expect(refusal.code).toBe('denied');
+    } else {
+      const call = { slate: launch.slate, chain: step.chain, address: { namespace: step.namespace, member: step.member } };
+      const fenced = { ...call, fence: { lineage: launch.lineage, record } };
+
+      for (const [input, expected] of [[call, step.unfenced], [fenced, step.expected]] as const) {
+        expect(servers.beyond(input) === null).toBe(expected);
+
+        if (expected) expect(() => servers.within(input)).not.toThrow();
+        else expect(() => servers.within(input)).toThrow(expect.objectContaining({ code: 'denied' }));
+      }
+    }
+  } else if (step.op === 'listing') {
+    live.setListing(step.id, step.on ? { line: 'Fixture listing', category: 'developer' } : null);
+  } else if (step.op === 'users') {
+    live.addUsers(step.id, [{ userId: 'fixture-viewer', email: 'fixture@example.test' }]);
+  } else if (step.op === 'preapprove') {
+    live.preapprove(step.slate, { slate: step.slate, namespace: 'mcp.GitHub', member: 'read', root: {}, revision: 'r1' });
+  } else if (step.op === 'withdrawPreapproval') {
+    live.withdrawPreapproval(step.slate, { slate: step.slate, namespace: 'mcp.GitHub', member: 'read', root: {} });
+  }
+
+  // This projection deliberately excludes grant/revision changes: those
+  // are re-weighed at send, whereas launch-time egress/browser choices are fenced.
+  const rows = live.list();
+
+  for (const expected of step.after) {
+    expect({
+      slate: expected.slate, generation: live.generation(expected.slate), shared: live.isShared(expected.slate),
+      rows: Object.fromEntries(rows.filter((row) => row.slate === expected.slate)
+        .map((row) => [row.id, { mode: row.mode, live: row.revokedAt === null }])),
+    }).toEqual(expected);
+  }
+}
+
+describe('sharing fences refine the atomic store, inherited lineage and nested admissions', () => {
   test('the corpus interleaves current and stale calls with every store mutation', () => {
     expect(new Set(cases.flatMap((c) => c.steps.map((s) => s.op))))
-      .toEqual(new Set(['add', 'revoke', 'setAuthority', 'launch', 'call', 'listing', 'users', 'preapprove', 'withdrawPreapproval', 'observe']));
-    expect(new Set(cases.flatMap((c) => c.steps.flatMap((s) => (s.op === 'call' ? [s.expected] : [])))))
-      .toEqual(new Set([true, false]));
+      .toEqual(new Set(['add', 'revoke', 'setAuthority', 'launch', 'inherit', 'call', 'nested', 'listing', 'users', 'preapprove', 'withdrawPreapproval', 'observe']));
+    const admissions = cases.flatMap((c) => c.steps.filter((s) => s.op === 'call' || s.op === 'nested'));
+
+    for (const op of ['call', 'nested']) {
+      expect(new Set(admissions.filter((s) => s.op === op).map((s) => s.expected))).toEqual(new Set([true, false]));
+    }
+
+    expect(cases.some((c) => c.steps.some((s) => s.op === 'nested' && s.unfenced && !s.expected))).toBe(true);
+    expect(cases.some((c) => c.steps.some((s) => s.op === 'inherit' && Object.keys(s.expected.ancestors).length > 1))).toBe(true);
   });
 
   test.each(cases.map((c, i) => [i, c] as const))('Lean interleaving %d', (_i, c) => {
@@ -78,55 +173,7 @@ describe('sharing fences refine the atomic store and SharedServers.lineage', () 
     const launches: { slate: string; lineage: SlateLineage }[] = [];
 
     try {
-      for (const step of c.steps) {
-        if (step.op === 'add' || step.op === 'setAuthority') {
-          const authority = authorityOf(step);
-
-          if (step.op === 'add') {
-            live.add({ id: step.id, slate: step.slate, visibility: 'users', handle: step.id, grant: step.grant, authority });
-          } else {
-            live.setAuthority(step.id, authority, step.grant);
-          }
-        } else if (step.op === 'revoke') {
-          if (step.missing) expect(() => live.revoke(step.id)).toThrow(expect.objectContaining({ code: 'missing' }));
-          else live.revoke(step.id);
-        } else if (step.op === 'launch') {
-          const lineage = { incarnation: step.incarnation, generation: live.generation(step.slate) };
-
-          expect(lineage).toEqual(step.expected);
-          launches[step.slot] = { slate: step.slate, lineage };
-        } else if (step.op === 'call') {
-          const launch = launches[step.slot];
-
-          if (launch === undefined) throw new Error(`Fixture names missing launch ${step.slot}`);
-          const record = step.record === null ? null : { id: 'host-issued-request', chain: Object.keys(step.record.generations), ...step.record };
-          const refusal = servers.lineage(launch.slate, launch.lineage, record);
-
-          expect(refusal === null).toBe(step.expected);
-
-          if (refusal !== null) expect(refusal.code).toBe('denied');
-        } else if (step.op === 'listing') {
-          live.setListing(step.id, step.on ? { line: 'Fixture listing', category: 'developer' } : null);
-        } else if (step.op === 'users') {
-          live.addUsers(step.id, [{ userId: 'fixture-viewer', email: 'fixture@example.test' }]);
-        } else if (step.op === 'preapprove') {
-          live.preapprove(step.slate, { slate: step.slate, namespace: 'mcp.GitHub', member: 'read', root: {}, revision: 'r1' });
-        } else if (step.op === 'withdrawPreapproval') {
-          live.withdrawPreapproval(step.slate, { slate: step.slate, namespace: 'mcp.GitHub', member: 'read', root: {} });
-        }
-
-        // This projection deliberately excludes grant/revision changes: those
-        // are re-weighed at send, whereas launch-time egress/browser choices are fenced.
-        const rows = live.list();
-
-        for (const expected of step.after) {
-          expect({
-            slate: expected.slate, generation: live.generation(expected.slate), shared: live.isShared(expected.slate),
-            rows: Object.fromEntries(rows.filter((row) => row.slate === expected.slate)
-              .map((row) => [row.id, { mode: row.mode, live: row.revokedAt === null }])),
-          }).toEqual(expected);
-        }
-      }
+      for (const step of c.steps) replayStep(step, live, servers, launches);
     } finally {
       db.close();
     }

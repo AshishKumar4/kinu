@@ -210,6 +210,19 @@ import Kinu
 #print axioms Kinu.SharingNimbus.Fence.a_ready_launch_still_has_the_sharing_it_chose
 #print axioms Kinu.SharingNimbus.Fence.splitting_a_share_change_from_its_fence_admits_stale_owner_authority
 #print axioms Kinu.SharingNimbus.Fence.the_atomic_share_change_refuses_the_same_stale_binding
+#print axioms Kinu.SharingNimbus.Fence.an_admitted_binding_keeps_every_ancestor_fence
+#print axioms Kinu.SharingNimbus.Fence.inheritance_keeps_every_ancestor_and_its_sealed_generation
+#print axioms Kinu.SharingNimbus.Fence.a_new_shared_ancestor_is_sealed_at_its_current_generation
+#print axioms Kinu.SharingNimbus.Fence.inheritance_is_transitive
+#print axioms Kinu.SharingNimbus.Fence.a_changed_ancestor_permanently_refuses_every_descendant
+#print axioms Kinu.SharingNimbus.Fence.a_changed_ancestor_fences_every_process_below_every_hop
+#print axioms Kinu.SharingNimbus.Fence.every_nested_admission_has_current_lineage
+#print axioms Kinu.SharingNimbus.Fence.a_changed_slate_permanently_refuses_every_nested_admission
+#print axioms Kinu.SharingNimbus.Fence.a_changed_ancestor_permanently_refuses_every_nested_admission
+#print axioms Kinu.SharingNimbus.Fence.a_foreign_invocation_refuses_every_nested_admission
+#print axioms Kinu.SharingNimbus.Fence.a_stale_invocation_fence_refuses_every_nested_admission
+#print axioms Kinu.SharingNimbus.Fence.a_binding_that_seals_only_itself_admits_revoked_ancestor_owner_authority
+#print axioms Kinu.SharingNimbus.Fence.the_inherited_seal_refuses_the_same_stale_owner_call
 
 /-! ## Kinu/Storage/FTS5Search.lean -/
 
