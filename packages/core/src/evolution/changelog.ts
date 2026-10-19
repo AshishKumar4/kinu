@@ -19,7 +19,7 @@ import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactSta
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
-  type RefinementDisposition, type RefinementStage,
+  type RefinementDisposition, type RefinementStage, type RefinementTrigger,
 } from './refinement';
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
@@ -311,15 +311,19 @@ const REFINEMENT_DISPOSITION_PROSE = {
   rejected: 'rejected by you',
 } satisfies Record<RefinementDisposition, string>;
 
+const DREAM_TRIGGER: Record<RefinementTrigger, string> = {
+  explicit: 'you asked for it',
+  cadence: 'five new turns since the last dream',
+  idle: 'the agent was idle',
+};
+
 /**
  * An aggregate card per refinement; children carry the reverts through each
  * artifact's own path (`fact_forget`, `artifact_revert`).
  */
 function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   return createRefinementStore(sql, actor).list(limit).map((request) => {
-    const trigger = request.trigger === 'explicit'
-      ? 'you asked for it'
-      : 'unresolved low-rated turns accumulated';
+    const trigger = DREAM_TRIGGER[request.trigger];
 
     const turns = `${String(request.turnIds.length)} rated turn${request.turnIds.length === 1 ? '' : 's'}`;
 

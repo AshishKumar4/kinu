@@ -17,7 +17,8 @@ import * as v from 'valibot';
 
 import { judgeAuthoredEdit } from './proposer';
 import { listArtifactVersions, sectionArtifact, type ArtifactVersion } from './artifacts';
-import { listTurnRatings, type TurnRating } from './ratings';
+import { listTurnRatings, renderRating, type TurnRating } from './ratings';
+import type { DecisionQuestion } from '../providers/decision-model';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
   RefinementProposalSchema, createRefinementStore, evolutionDebt, holdRefinementLane, refinementAnswerStored,
@@ -102,23 +103,49 @@ export async function requestRefinement(
   return refinementRequestView(request);
 }
 
+/** The cheapest step of a dream, before any draft: one decision-model question over the batch. */
+const TRIAGE = {
+  worth: {
+    type: 'noul',
+    instructions: 'Does any of these turns show something the agent should change about how it works: a correction or a '
+      + 'repeated request from the user, a tool it struggled with, a misunderstanding, or needless length?',
+  },
+} as const satisfies Record<string, DecisionQuestion>;
+
+/** A yes is more likely than a no. */
+const TRIAGE_YES = 0.5;
+
 /**
- * The automatic trigger, or null when nothing is owed. Safe every tick: the
- * debt key is the idempotency key, and a taken batch stops counting as debt.
+ * An automatic dream, or null when none is owed. `cadence` needs five new rated turns, `idle` one. The decision model
+ * triages the batch first: below an even chance of something worth changing, the dream ends there, its turns covered,
+ * and nothing is drafted. Safe every tick: the debt key is the idempotency key, and a taken batch stops counting.
+ * No decision model, or one that refused (already said to the owner), opens nothing and leaves the turns owed.
  */
-export async function refinementDebtRequest(
+export async function dreamRequest(
   deps: RefinementDeps,
+  trigger: Extract<RefinementTrigger, 'cadence' | 'idle'>,
 ): Promise<RefinementRequestView | null> {
-  const debt = evolutionDebt(deps.control.sql, deps.control.rt.actor);
+  const { sql, rt } = deps.control;
+  const debt = evolutionDebt(sql, rt.actor);
 
-  if (!debt.owed) return null;
+  if (debt.turnIds.length === 0 || (trigger === 'cadence' && !debt.owed) || rt.decide === undefined) return null;
+  const turns = listTurnRatings(sql, rt.actor, { turnIds: debt.turnIds });
+  const triaged = await rt.decide({ state: turns.map(renderRating).join('\n\n---\n\n'), questions: TRIAGE });
+  const worth = triaged?.answers.worth;
 
-  return requestRefinement(deps, {
-    trigger: 'evolution_debt',
-    scope: 'workspace',
-    turnIds: debt.turnIds,
-    debtKey: debt.key,
-  });
+  if (worth?.type !== 'noul') return null;
+  const opened = await requestRefinement(deps, { trigger, scope: 'workspace', turnIds: debt.turnIds, debtKey: debt.key });
+
+  if (opened.stage !== 'requested') return opened;
+  const store = createRefinementStore(sql, rt.actor);
+  const of = `${String(turns.length)} turn${turns.length === 1 ? '' : 's'} (p=${worth.noul.toFixed(2)})`;
+
+  if (worth.noul < TRIAGE_YES) store.advance(opened.id, 'requested', 'refused', { detail: `Triage found nothing worth changing in ${of}` });
+  else store.record(opened.id, 'requested', { detail: `Triage found something worth a look in ${of}` });
+
+  const settled = store.get(opened.id);
+
+  return settled === null ? opened : refinementRequestView(settled);
 }
 
 export type RefinementLaneStep =

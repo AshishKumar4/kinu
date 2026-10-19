@@ -17,7 +17,7 @@ import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { modifyScaffold } from '../scaffold/modify';
 import { checkMisevolution } from '../safety/misevolution';
 import { scaffoldRefusal } from '../scaffold/safety-patterns';
-import { isLowRating, listTurnRatings, type TurnRating, type WrongReason } from './ratings';
+import { isLowRating, listTurnRatings, renderRating, type WrongReason } from './ratings';
 import { StruggleSchema, type Struggle } from './struggles';
 import { runGepa } from './gepa/engine';
 import { finishGepaRun, makePersistingHooks, startGepaRun } from './gepa/persistence';
@@ -113,13 +113,6 @@ interface JudgedTurn {
   /** The recorded turn as the decision model reads it. */
   readonly state: string;
 }
-
-const renderRating = (rating: TurnRating): string => [
-  `USER REQUEST:\n${rating.request}`,
-  `AGENT ACTIONS:\n${rating.actions || '(none)'}`,
-  `AGENT FINAL ANSWER:\n${rating.answer}`,
-  ...(rating.followup === null ? [] : [`USER'S NEXT MESSAGE:\n${rating.followup}`]),
-].join('\n\n');
 
 const renderStruggles = (struggles: readonly Struggle[]): string => struggles
   .map((struggle) => `${struggle.kind} on ${struggle.tool ?? '(no tool)'} x${String(struggle.count)}: ${struggle.sample}`)

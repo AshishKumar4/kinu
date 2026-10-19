@@ -274,7 +274,7 @@ describe('two actors, one database: refinement_requests', () => {
     const b = createRefinementStore(w.sql, w.b);
 
     const input = {
-      trigger: 'evolution_debt' as const, scope: 'workspace' as const,
+      trigger: 'cadence' as const, scope: 'workspace' as const,
       turnIds: ['turn-1', 'turn-2'], debtKey: 'digest-1', now: 1,
     };
 

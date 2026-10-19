@@ -191,7 +191,7 @@ Reverts dispatch to the real code paths rather than a separate undo log (`execut
 
 A refinement reviews the agent's own recent failures and proposes the smallest typed edits. It is the only evolution lane whose proposer is a full agent: the read-only task lifetime (`agents.hire` with `lifetime:'task'`, reached programmatically through `TemporaryAgentPort`) reads the trajectory and answers with one strict object.
 
-`/refine` opens one on request. The automatic trigger opens one when three or more corrected or frustrated turns sit unresolved and no earlier request has taken them (`MIN_REFINEMENT_DEBT`). Three is a pattern rather than a coincidence.
+`/refine` opens one on request. Otherwise a dream opens every five new rated turns (`DREAM_CADENCE`, the owner's cadence) or, with any new turn, when the agent is idle; a turn is new until a dream has read it, whatever its rating. Before anything is drafted, the decision model triages the batch with one question (`TRIAGE`): below an even chance that something is worth changing, the dream ends there, its turns covered, at the cost of one decision call. No decision model, or one the owner must fix, opens nothing and leaves the turns owed.
 
 Debt excludes covered turns before it caps the batch, not after. A batch is at most twelve (`MAX_REFINEMENT_DEBT_BATCH`), oldest first, and the remainder is reported ("8 more waiting behind this batch") rather than dropped. Filtering a fixed window would let twelve refined failures hide every older unresolved one permanently.
 

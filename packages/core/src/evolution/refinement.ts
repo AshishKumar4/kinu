@@ -24,7 +24,8 @@ import { listTurnRatings } from './ratings';
 import { workspaceSkillPath } from '../skills/discover';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
-const REFINEMENT_TRIGGERS = ['explicit', 'evolution_debt'] as const;
+/** A dream opens when the owner asks, every five new turns (`cadence`), or when the agent sits idle. */
+const REFINEMENT_TRIGGERS = ['explicit', 'cadence', 'idle'] as const;
 
 export type RefinementTrigger = (typeof REFINEMENT_TRIGGERS)[number];
 
@@ -607,8 +608,8 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
   };
 }
 
-/** Three is the smallest batch with a failure to answer beside the rest. */
-const MIN_REFINEMENT_DEBT = 3;
+/** The owner's cadence: a dream every five new turns. */
+const DREAM_CADENCE = 5;
 
 /** Bounds the brief, not the ledger; leftovers accrue to the next batch under its own key. */
 const MAX_REFINEMENT_DEBT_BATCH = 12;
@@ -629,41 +630,39 @@ export const EvolutionDebtSchema: v.GenericSchema<EvolutionDebt> = v.object({
 });
 
 /**
- * Derived, never stored. Exclusion happens before the limit, and the cut takes the oldest rows;
- * otherwise refined recent failures hide older unresolved ones forever.
+ * The rated turns no dream has read yet, oldest first. Derived, never stored: a dream's own `turn_ids` cover its turns.
+ * Exclusion happens before the limit, and the cut takes the oldest rows; otherwise newer dreams hide older turns forever.
+ * Five are owed a dream (`cadence`); an idle agent dreams over any.
  */
 export function evolutionDebt(
   sql: SqlExecutor, actor: ActorHandle, opts: { limit?: number } = {},
 ): EvolutionDebt {
   const covered = createRefinementStore(sql, actor).coveredTurnIds();
   const seen = new Set<string>();
-  const unresolved: string[] = [];
+  const fresh: string[] = [];
 
-  // One effective rating per turn; turns rated 2 or lower are owed.
-  for (const row of listTurnRatings(sql, actor, { low: true })) {
+  // One effective rating per turn, whatever it is: a good turn is evidence beside a bad one.
+  for (const row of listTurnRatings(sql, actor)) {
     if (covered.has(row.turnId) || seen.has(row.turnId)) continue;
     seen.add(row.turnId);
-    unresolved.push(row.turnId);
+    fresh.push(row.turnId);
   }
 
-  // Ledger order is newest-first; the oldest unresolved failure is owed.
-  unresolved.reverse();
+  // Ledger order is newest-first; the oldest turn is read first.
+  fresh.reverse();
   const cap = Math.max(1, opts.limit ?? MAX_REFINEMENT_DEBT_BATCH);
-  const batch = unresolved.slice(0, cap);
-  const owed = batch.length >= MIN_REFINEMENT_DEBT;
-  const backlog = unresolved.length - batch.length;
+  const batch = fresh.slice(0, cap);
+  const owed = batch.length >= DREAM_CADENCE;
+  const backlog = fresh.length - batch.length;
+  const turns = `${String(batch.length)} new rated turn${batch.length === 1 ? '' : 's'}`;
 
   return {
     turnIds: batch,
     owed,
     key: batch.length === 0 ? '' : fnv1a64(batch.join('\n')),
     summary: batch.length === 0
-      ? 'no unresolved low-rated turns: nothing is owed a refinement'
-      : (owed
-        ? `${String(batch.length)} unresolved low-rated turn${batch.length === 1 ? '' : 's'} `
-          + 'are owed a refinement'
-        : `${String(batch.length)} unresolved low-rated turn${batch.length === 1 ? '' : 's'}: `
-          + `a refinement opens at ${String(MIN_REFINEMENT_DEBT)}`)
+      ? 'no new rated turns since the last dream'
+      : (owed ? `${turns} since the last dream are owed one` : `${turns} since the last dream: a dream opens at ${String(DREAM_CADENCE)}, or when the agent is idle`)
       + (backlog > 0 ? `, and ${String(backlog)} more waiting behind this batch` : ''),
   };
 }

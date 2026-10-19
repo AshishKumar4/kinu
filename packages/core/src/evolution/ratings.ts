@@ -287,6 +287,14 @@ export interface RatingQuery {
  * (`RATING_SOURCES`). Turn ids lead the join so each probes `idx_turn_ratings_actor_turn`; a window walks
  * `idx_turn_ratings_actor` in order and stops at the limit.
  */
+/** A rated turn as a decision model reads it: the request, what the agent did, its answer, and the user's next words. */
+export const renderRating = (rating: TurnRating): string => [
+  `USER REQUEST:\n${rating.request}`,
+  `AGENT ACTIONS:\n${rating.actions || '(none)'}`,
+  `AGENT FINAL ANSWER:\n${rating.answer}`,
+  ...(rating.followup === null ? [] : [`USER'S NEXT MESSAGE:\n${rating.followup}`]),
+].join('\n\n');
+
 export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: RatingQuery = {}): TurnRating[] {
   actor.assertCurrent();
   const [p0, p1] = RATING_SOURCES;

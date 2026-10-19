@@ -200,7 +200,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     title: 'a refinement with no rated turns is refused on the record, and an unknown one decides nothing',
     async run({ surface }) {
       expect(await surface.listRefinements(5)).toMatchObject({
-        requests: [], debt: { owed: false, summary: 'no unresolved low-rated turns: nothing is owed a refinement' },
+        requests: [], debt: { owed: false, summary: 'no new rated turns since the last dream' },
       });
 
       const request = await surface.requestRefinement({ turnIds: ['turn-1'] });

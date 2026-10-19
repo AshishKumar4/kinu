@@ -33,6 +33,7 @@ import { vfsDirname } from '../src/utils/vfs-helpers';
 import { gatherApprovableInstructions } from '../src/read-models/instruction-approvals';
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { DecisionResult } from '../src/providers/decision-model';
 import type { AgentStores } from '../src/state/agent-stores';
 import type {
   TemporaryAgentPort, TemporaryRunOutcome, TemporaryRunRequest,
@@ -46,10 +47,11 @@ import { extractJsonObject } from '../src/providers/structured';
 import { renderIssues } from '../src/utils/json';
 
 /** Module-private threshold; the `summary` assertion below keeps this literal in sync. */
-const MIN_REFINEMENT_DEBT = 3;
+/** The owner's cadence: a dream every five new turns. */
+const DREAM_CADENCE = 5;
 
 import {
-  advanceRefinementLane as advanceLane, refinementDebtRequest, requestRefinement, type RefinementLaneStep,
+  advanceRefinementLane as advanceLane, dreamRequest, requestRefinement, type RefinementLaneStep,
 } from '../src/evolution/refinement-lane';
 import type { EvolutionHelperAnswer } from '../src/identity/evolution-helpers';
 import {
@@ -197,7 +199,9 @@ interface Fixture {
   stores: AgentStores;
   facts: FactsStore;
   approvals: InstructionApprovalStore;
-  deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number): RefinementDeps;
+  deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number, worth?: number): RefinementDeps;
+  /** The triage questions the decision model was asked, in order. */
+  triaged: string[];
 }
 
 function fixture(): Fixture {
@@ -210,6 +214,7 @@ function fixture(): Fixture {
   initInstructionApprovalsTable(rt.storage.execRaw);
   initRefinementTables(rt.storage.execRaw);
   const facts = createFactsStore(rt.storage.sql, rt.actor);
+  const triaged: string[] = [];
 
   const approvals = new InstructionApprovalStore(
     rt.storage.sql, rt.actor, 'test-workspace',
@@ -221,10 +226,18 @@ function fixture(): Fixture {
     stores,
     facts,
     approvals,
-    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4)) => {
+    triaged,
+    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4), worth = 0.9) => {
       // The judge-only comparison: a candidate scoring above the incumbent fixes every bad turn and harms no good one.
-      rt.decide = async () => {
+      // A dream's triage answers `worth`.
+      rt.decide = async (request): Promise<DecisionResult> => {
         const better = score(CANDIDATE) > score(INCUMBENT);
+
+        if ('worth' in request.questions) {
+          triaged.push(request.state);
+
+          return { answers: { worth: { type: 'noul', noul: worth } }, usage: { input: 1, output: 1 } };
+        }
 
         return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
       };
@@ -1080,7 +1093,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const input = {
-      trigger: 'evolution_debt' as const,
+      trigger: 'cadence' as const,
       scope: 'workspace' as const,
       turnIds: ['neg-0', 'neg-1', 'neg-2'],
       debtKey: 'debt-abc',
@@ -1091,7 +1104,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.request.id).toBe(first.request.id);
-    expect(store.list().filter((row) => row.trigger === 'evolution_debt')).toHaveLength(1);
+    expect(store.list().filter((row) => row.trigger === 'cadence')).toHaveLength(1);
   });
 
   test('a request abandoned before the refiner answered is re-asked exactly once', async () => {
@@ -1447,28 +1460,28 @@ describe('promotion — a cold turn is the only thing that applies', () => {
   });
 });
 
-describe('evolution debt — the automatic trigger, and its visibility', () => {
-  test('debt accumulates from unresolved negative outcomes', () => {
+describe('a dream — every five new turns, or when the agent is idle, triaged first', () => {
+  test('new rated turns accrue toward a dream, whatever their rating, and five are owed one', () => {
     const fx = fixture();
     expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).turnIds).toEqual([]);
 
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT - 1);
+    seedGradedTurns(fx.rt, 2, 2);
     const shallow = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
-    expect(shallow.turnIds).toHaveLength(MIN_REFINEMENT_DEBT - 1);
+    expect(shallow.turnIds).toHaveLength(4);
     expect(shallow.owed).toBe(false);
     // Goes red if the module's constant moves without this file's literal.
-    expect(shallow.summary).toContain(`opens at ${String(MIN_REFINEMENT_DEBT)}`);
+    expect(shallow.summary).toContain(`opens at ${String(DREAM_CADENCE)}`);
 
-    seedGradedTurns(fx.rt, 1);
+    seedGradedTurns(fx.rt, 0, 1);
     const owed = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
-    expect(owed.turnIds.length).toBeGreaterThanOrEqual(MIN_REFINEMENT_DEBT);
+    expect(owed.turnIds).toHaveLength(DREAM_CADENCE);
     expect(owed.owed).toBe(true);
     expect(owed.key).toMatch(/^[0-9a-f]{16,}$/);
   });
 
-  test('the automatic trigger opens one request and never re-opens the same batch', async () => {
+  test('the cadence opens one dream after a triage that finds something worth changing, and never the same turns twice', async () => {
     const fx = fixture();
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT);
+    seedGradedTurns(fx.rt, 3, 2);
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace', summary: 'none', edits: [],
@@ -1478,52 +1491,69 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const debt = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
 
-    const first = await refinementDebtRequest(deps);
-    expect(first?.trigger).toBe('evolution_debt');
+    const first = await dreamRequest(deps, 'cadence');
+    expect(first?.trigger).toBe('cadence');
     expect(first?.stage).toBe('requested');
     expect(first?.turnIds).toEqual(debt.turnIds);
+    // The triage read every turn of the batch.
+    expect(fx.triaged).toHaveLength(1);
+    expect(fx.triaged[0]).toContain('no, shorter please');
 
     // Primary guard: the batch is taken, so nothing is owed twice.
-    expect(await refinementDebtRequest(deps)).toBeNull();
+    expect(await dreamRequest(deps, 'cadence')).toBeNull();
     expect(store.list()).toHaveLength(1);
 
     // Second guard: the unique debt key, for a racing derivation.
     const replayed = store.open({
-      trigger: 'evolution_debt',
+      trigger: 'cadence',
       scope: 'workspace',
       turnIds: debt.turnIds,
       debtKey: debt.key,
     });
 
     expect(replayed.created).toBe(false);
-    expect(replayed.request.id).toBe(present(first, 'the first debt request').id);
+    expect(replayed.request.id).toBe(present(first, 'the first dream').id);
     expect(store.list()).toHaveLength(1);
   });
 
-  test('below the threshold the trigger does not fire', async () => {
+  test('a triage that finds nothing worth changing ends the dream there: no draft, and the turns are covered', async () => {
     const fx = fixture();
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT - 1);
-    const { port } = scriptedRefiner('{}');
-    expect(await refinementDebtRequest(fx.deps(port))).toBeNull();
+    seedGradedTurns(fx.rt, 0, DREAM_CADENCE);
+    const { port, requests } = scriptedRefiner('{}');
+    const dream = await dreamRequest(fx.deps(port, undefined, 0.2), 'cadence');
+
+    expect(dream?.stage).toBe('refused');
+    expect(dream?.detail).toContain('nothing worth changing');
+    expect(requests).toHaveLength(0);
+    expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).turnIds).toEqual([]);
   });
 
-  test('turns a request already covers stop counting as debt', async () => {
+  test('below the cadence nothing opens, but an idle agent dreams over any new turn', async () => {
     const fx = fixture();
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT);
+    seedGradedTurns(fx.rt, 1, 0);
+    const { port } = scriptedRefiner('{}');
+    expect(await dreamRequest(fx.deps(port), 'cadence')).toBeNull();
+
+    const idle = await dreamRequest(fx.deps(port), 'idle');
+    expect(idle?.trigger).toBe('idle');
+    expect(idle?.turnIds).toHaveLength(1);
+    expect(await dreamRequest(fx.deps(port), 'idle')).toBeNull();
+  });
+
+  test('turns a dream already covers stop counting, and new turns accrue under a new key', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3, 2);
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace', summary: 'none', edits: [],
     }));
 
-    const deps = fx.deps(port);
-
-    await refinementDebtRequest(deps);
+    await dreamRequest(fx.deps(port), 'cadence');
     const remaining = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(remaining.turnIds).toEqual([]);
     expect(remaining.owed).toBe(false);
 
-    // Fresh failures accrue debt under a different key.
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT, 0);
+    seedGradedTurns(fx.rt, 1, 4);
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.key).not.toBe(remaining.key);
@@ -1669,7 +1699,7 @@ describe('mixed outcomes settle honestly', () => {
   });
 });
 
-describe('evolution debt pages, and never loses an older row', () => {
+describe('dreams page, and never lose an older turn', () => {
   test('a batch is capped, and the remainder is named rather than dropped', () => {
     const fx = fixture();
     const { negatives } = seedGradedTurns(fx.rt, 20, 0);
@@ -1689,24 +1719,24 @@ describe('evolution debt pages, and never loses an older row', () => {
       scope: 'workspace', summary: 'none', edits: [],
     })).port);
 
-    const first = await refinementDebtRequest(deps);
+    const first = await dreamRequest(deps, 'cadence');
     expect(first?.turnIds).toHaveLength(12);
 
     // A windowed read would see only covered rows and strand the older failures.
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.turnIds).toEqual(negatives.slice(12));
-    expect(next.key).not.toBe(present(first, 'the first debt request').turnIds.join(''));
+    expect(next.key).not.toBe(present(first, 'the first dream').turnIds.join(''));
 
-    const second = await refinementDebtRequest(deps);
-    expect(second?.id).not.toBe(present(first, 'the first debt request').id);
+    const second = await dreamRequest(deps, 'cadence');
+    expect(second?.id).not.toBe(present(first, 'the first dream').id);
     expect(second?.turnIds).toEqual(negatives.slice(12));
     expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).owed).toBe(false);
   });
 
   test('a covered batch newer than an uncovered one does not hide it', () => {
     const fx = fixture();
-    const { negatives: older } = seedGradedTurns(fx.rt, 3, 0);
+    const { negatives: older } = seedGradedTurns(fx.rt, DREAM_CADENCE, 0);
     const { negatives: newer } = seedGradedTurns(fx.rt, 14, 0);
     // A request takes the newest rows explicitly.
     createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({

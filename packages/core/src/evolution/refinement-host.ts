@@ -1,7 +1,7 @@
 /** Host-facing refinement calls, shared by both backends; the lane is refinement-lane.ts. */
 
 import {
-  advanceRefinementLane, refinementDebtRequest, requestRefinement,
+  advanceRefinementLane, dreamRequest, requestRefinement,
   type RefinementLaneStep, type RequestRefinementInput,
 } from './refinement-lane';
 import * as v from 'valibot';
@@ -47,7 +47,7 @@ export async function refinementPass(deps: RefinementDeps): Promise<RefinementLa
   releaseRefinementLane(sql, rt.actor.actorId);
 
   return settle(attempt({ doing: 'running the refinement lane', otherwise: 'unavailable' }, async () => {
-    await refinementDebtRequest(deps);
+    await dreamRequest(deps, 'cadence');
 
     return advanceRefinementLane(deps);
   }).pipe(Effect.tapError(() => Effect.sync(() => {
