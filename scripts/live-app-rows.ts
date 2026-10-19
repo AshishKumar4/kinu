@@ -1306,8 +1306,11 @@ async function measureChatScroll(newPage: LiveApp['newPage'], origin: string): P
     }
 
     await waitOn(page, 'the history page response', settledAfter(page, reads, HISTORY_PAGE_METHOD));
-    await until(page, 'the older messages to render', `${CHAT_ROWS} > ${String(rows)}`);
-    await settled(page, SCROLL_METRICS, { scroller: CHAT_SCROLLER });
+    // Read once the pane is still: a page that brought nothing older fails here, by name, rather than waiting on rows.
+    await settled(page, `String(${CHAT_ROWS}) + ':' + ${SCROLL_METRICS}`, { scroller: CHAT_SCROLLER });
+    const after = v.parse(v.number(), await page.evaluate(CHAT_ROWS));
+
+    if (after <= rows) throw new Error(`the history page came back, but no older messages rendered: ${String(rows)} rows before it, ${String(after)} after`);
 
     return true;
   };

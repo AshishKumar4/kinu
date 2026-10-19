@@ -2,7 +2,6 @@ import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** One agent in its own loader isolate (D9), the workspace agent's included. */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
-import type { UIMessage } from 'ai';
 import { Effect } from 'effect';
 import { attemptInItsWords, flight, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import {
@@ -16,7 +15,7 @@ import {
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
-import { censusOf, type MediaRef, type Repair, type StoreCensus, type StoredImage } from '@kinu.run/core';
+import { censusOf, type ChatWindow, type MediaRef, type Repair, type StoreCensus, type StoredImage } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -117,7 +116,7 @@ export interface AgentFacetCalls {
    *  block on the profile the step's pace bound, its turn's first. */
   step(turnId: string, dynamic: DynamicContext | null): Promise<void>;
   /** This chat's newest page, as a tab is sent it on connecting or a turn's end. */
-  seed(snapshot: AgentSnapshot): Promise<UIMessage[]>;
+  seed(snapshot: AgentSnapshot): Promise<ChatWindow>;
   /** One image a page of this chat named; each crosses alone, never inside a page. */
   media(snapshot: AgentSnapshot, ref: MediaRef): Promise<StoredImage | null>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
@@ -467,7 +466,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     await this.pacer.grant(turnId, dynamic);
   }
 
-  async seed(snapshot: AgentSnapshot): Promise<UIMessage[]> {
+  async seed(snapshot: AgentSnapshot): Promise<ChatWindow> {
     return await this.open(snapshot).seed();
   }
 

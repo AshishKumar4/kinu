@@ -53,7 +53,7 @@ import { AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads, userCredentials } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
-import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
+import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
@@ -97,7 +97,7 @@ import { createCodemodeToolFactory } from "./codemode-tool";
 import { BROWSER_PRELUDE } from './browser-prelude';
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
-import type { ToolSet, UIMessage } from "ai";
+import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
@@ -1220,7 +1220,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. The room hears the end before
    *  this object writes it: a frame waits for the writes made before it, and the answer it tells of is already durable in
    *  the agent's own store (#103). */
-  private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
+  private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: ChatWindow): Promise<void> {
     const { runId } = event;
     const fences = new TurnFences(this.boundSql);
     const ended = fences.ending(actorId, runId);

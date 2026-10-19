@@ -8,6 +8,9 @@ export const CHAT_SESSION_ID = 'default';
  *  each older page it scrolls back to. Images cross as addresses (`chat-media.ts`), so this is words and calls. */
 export const CHAT_PAGE_BYTES = 1024 * 1024;
 
+/** The rows a tab is seeded with: its newest window, the rest read as it scrolls back. */
+export const CHAT_SEED_ROWS = 60;
+
 export function initSessionTranscriptTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS conversation_entries (
     actor_id TEXT NOT NULL,

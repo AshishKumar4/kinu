@@ -19,7 +19,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
-  UIMessageSchema, type SentWords, type ChatTransport, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
+  UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -48,7 +48,7 @@ export interface ChatWire {
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): ChatSocket | undefined;
   /** The chat's newest page, oldest first: what a tab is sent as it connects or a turn ends (`chatSeed`). */
-  seed(): Promise<UIMessage[]>;
+  seed(): Promise<ChatWindow>;
   /** One image a page named; each crosses alone, never inside a page. */
   media(ref: MediaRef): Promise<StoredImage | null>;
   /** Of `ids`, in order, those the agent holds neither as a durable row nor as an accepted send's reservation: the hook
@@ -217,9 +217,13 @@ class OpenParts {
   }
 }
 
-function transcriptFrame(history: readonly UIMessage[]): string {
-  return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: history });
+/** `older`: where the tab's scroll-back reads on from, so it asks for no rows it was just sent. */
+function transcriptFrame(window: ChatWindow): string {
+  return JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: window.messages, older: window.older });
 }
+
+/** A turn's end with no window to show: the tab keeps what it has. */
+const NO_WINDOW: ChatWindow = { messages: [], older: null };
 
 /** `owed`: an owner's intent the request carried, on its way to the agent's wake. */
 function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: string; owed?: string }): string {
@@ -548,7 +552,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   retryRequest(requestId: string, shown: readonly UIMessage[]): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const newestAsked = (messages: readonly UIMessage[]): string | undefined => [...messages].reverse().find((message) => message.role === 'user')?.id;
-      const messageId = newestAsked(shown) ?? newestAsked(yield* attemptInItsWords('io', () => this.wire.seed()));
+      const messageId = newestAsked(shown) ?? newestAsked((yield* attemptInItsWords('io', () => this.wire.seed())).messages);
 
       if (messageId === undefined) return this.done(requestId, { error: 'There is no message to retry.' });
 
@@ -616,7 +620,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
    * agent that holds them. A turn told ended after the next one opened was ended by that opening: its window now would
    * drop the answer streaming in.
    */
-  closeTurn(turnId: string, window: readonly UIMessage[]): void {
+  closeTurn(turnId: string, window: ChatWindow): void {
     const live = this.live;
 
     if (live === null) {
@@ -641,13 +645,13 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   /** An answer stamped after its end: its tabs are shown the window again, unless a turn is live, whose end carries it
    *  (a window sent mid-turn would drop the answer streaming in). */
-  answerAmended(window: readonly UIMessage[]): void {
+  answerAmended(window: ChatWindow): void {
     if (this.live === null) this.wire.broadcast(transcriptFrame(window));
   }
 
   /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. */
   async closeLostTurn(turnId: string): Promise<void> {
-    this.closeTurn(turnId, this.live?.turnId === turnId ? await this.wire.seed() : []);
+    this.closeTurn(turnId, this.live?.turnId === turnId ? await this.wire.seed() : NO_WINDOW);
   }
 
   async deliver(event: SessionEvent): Promise<void> {

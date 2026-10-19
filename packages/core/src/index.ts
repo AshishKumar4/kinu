@@ -2027,7 +2027,7 @@ export type {
   InstructionSourceView,
 } from './read-models/instruction-approvals';
 
-export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
+export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage, type ChatWindow } from './read-models/status';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
