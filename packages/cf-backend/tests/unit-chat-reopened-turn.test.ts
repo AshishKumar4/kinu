@@ -10,9 +10,10 @@
  * and its sockets outlive (`resetRootIsolate`), and the workspace's reactivation, which closes its sockets and starts
  * its agents' isolates afresh. A client joining an open turn, a tab's reload or a redial into the re-drive, is told the
  * steps finished before the room opened the turn, restated from the isolate's ledger, then the relay's chunks: one path
- * for both. Measured here (2026-10-10): the room asked no ledger once the root's turns left the workspace, so a tab that
- * joined a re-drive drew the rest of the answer without the steps before the restart; and an open turn's transcript
- * frame holds its user row alone, since the answer row is written at the commit.
+ * for both. A third cut ends neither: the isolate's relay into its workspace, whose turn goes on through the port its
+ * isolate opens next. Measured here (2026-10-10): the room asked no ledger once the root's turns left the workspace, so
+ * a tab that joined a re-drive drew the rest of the answer without the steps before the restart; and an open turn's
+ * transcript frame holds its user row alone, since the answer row is written at the commit.
  *
  * Restored from the in-object suite (c1867c232^) on these boundaries, with two contracts changed:
  * - "An activation ending between a step's seal and its ledger rows" held that window open with a turn extension's
@@ -40,9 +41,9 @@ import {
   catalogTurn, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, nextTurn, ownDatabase, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
   type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
-import { answeringGateway, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, pausedCompletion, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
 import { abandonHarnessFibers } from './helpers/agents-sdk';
-import { copyNextOpening, delayNextTurnEnd, loseNextOpeningAnswer, type TurnOpeningRequest } from './helpers/agent-facets';
+import { copyNextOpening, cutPort, delayNextTurnEnd, loseNextOpeningAnswer, type TurnOpeningRequest } from './helpers/agent-facets';
 import { MISSION_LABELS_METADATA_KEY, turnFailure } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 
@@ -941,4 +942,31 @@ test("a person's tab that reloads inside a turn draws its finished steps once ea
   expect({ drawn: drawnSteps(again.shown()), heard: calls(reloaded.heard.items) })
     .toEqual({ drawn: ['echo 1: output-available', 'echo 2: output-available'], heard: ['call_0', 'call_1'] });
   await again.close();
+});
+
+// The platform ends an RPC session it reads as hung, as it did the relays behind 1d3be46ba. Measured here (2026-10-19):
+// the step's own relay failing ended the turn in error, its tab told so, though its answer was stored whole.
+test("a turn whose relay to its workspace is cut while a step streams ends once, on its whole answer", async () => {
+  const rest = Promise.withResolvers<void>();
+  const workspace = gatewayWorkspace(stubAiBinding((run) => pausedCompletion(run, 'Half', rest.promise, ' and whole.')));
+
+  await workspace.started;
+  const sent = new AwaitedList<Frame>();
+  const { socket } = socketOn(workspace.agent, 'req-cut-socket', (raw) => { sent.push(v.parse(FrameSchema, JSON.parse(raw))); });
+
+  await workspace.agent.onConnect(socket, CONNECT);
+  const answered = Promise.resolve(workspace.agent.onMessage(socket, chatRequest('req-cut')));
+
+  await sent.until((frames) => frames.some((frame) => chunkOf(frame)?.delta === 'Half'));
+  cutPort(workspace.agent.agentOf(workspaceMainActor(workspace.db).actorId).storageKey);
+  rest.resolve();
+  await answered;
+  await workspace.agent.harnessAgentsIdle();
+  const answers = (await storedChat(workspace)).filter((message) => message.role === 'assistant');
+
+  expect({
+    ends: sent.items.filter((frame) => frame.id === 'req-cut' && frame.done === true).map((frame) => frame.error === true),
+    answers: answers.map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join('')),
+    runs: (await workspace.agent.getRunSummaries()).items.map((run) => run.status),
+  }).toEqual({ ends: [false], answers: ['Half and whole.'], runs: ['completed'] });
 });

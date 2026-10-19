@@ -160,26 +160,36 @@ describe(productFlowTestName('splice', 'what reaches the agent while it answers 
     observed = await flowRow('splice', spliceSitsWhereItWasRead);
   });
 
+  /** Positions found and strictly ascending. */
   const ordered = (order: readonly number[]) => order.every((at) => at >= 0) && order.every((at, i) => i === 0 || at > (order[i - 1] ?? -1));
 
-  test('while the agent works, the card waits amber', () => {
-    const { waited } = verdictOf(observed, 'splice');
+  const pings = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
 
-    expect(['pending', 'shown']).toContain(waited.state ?? 'none');
+  // 1008-x: every card piled at the bottom of a running turn; each is drawn as it arrives, after the step it arrived in.
+  test('while the agent works, each card is drawn as it arrives, amber, after the words of its step', () => {
+    const { arrivals } = verdictOf(observed, 'splice');
+
+    expect(arrivals.map((arrival, i) => ({
+      drawn: arrival.cards.map((card) => card.ping),
+      working: arrival.working,
+      newest: ['pending', 'shown'].includes(arrival.cards.at(-1)?.state ?? 'none'),
+      ordered: ordered(arrival.order.slice(0, 2 * (i + 1))),
+    }))).toEqual(pings(arrivals.length).map((count) => ({ drawn: pings(count), working: true, newest: true, ordered: true })));
+    expect(arrivals).toHaveLength(3);
   });
 
-  test('once read, it sits inside the answer between the words before it and the answer after it, green', () => {
-    const { answered } = verdictOf(observed, 'splice');
+  test('once read, every card sits inside the answer where it arrived, green, and the agent heard each in order', () => {
+    const { answered, heard } = verdictOf(observed, 'splice');
 
-    expect({ spliced: answered.spliced, state: answered.state, tone: answered.tone, ordered: ordered(answered.order) })
-      .toEqual({ spliced: true, state: 'seen', tone: 'p-success', ordered: true });
+    expect({ cards: answered.cards, ordered: ordered(answered.order), heard })
+      .toEqual({ cards: pings(3).map((ping) => ({ ping, state: 'seen', tone: 'p-success', spliced: true })), ordered: true, heard: 'PINGS HEARD: 1, 2, 3' });
   });
 
-  test('a reload draws it there still', () => {
+  test('a reload draws every card there still', () => {
     const { reloaded } = verdictOf(observed, 'splice');
 
-    expect({ spliced: reloaded.spliced, state: reloaded.state, tone: reloaded.tone, ordered: ordered(reloaded.order) })
-      .toEqual({ spliced: true, state: 'seen', tone: 'p-success', ordered: true });
+    expect({ cards: reloaded.cards, ordered: ordered(reloaded.order) })
+      .toEqual({ cards: pings(3).map((ping) => ({ ping, state: 'seen', tone: 'p-success', spliced: true })), ordered: true });
   });
 });
 

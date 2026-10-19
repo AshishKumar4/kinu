@@ -98,6 +98,67 @@ async function settleAccountFixture(page: Page): Promise<void> {
   await retry?.click();
 }
 
+declare global {
+  interface Window {
+    /** What `holdSignIns` holds, oldest first. */
+    __heldAccount?: { readonly key: string; readonly release: (failed: boolean) => Promise<void> }[];
+  }
+}
+
+const CLAUDE_FINISH = 'POST /api/user/claude/finish';
+
+const CHATGPT_FINISH = 'POST /api/user/chatgpt/paste/finish';
+
+const CREDENTIALS = 'GET /api/user/credentials';
+
+const PLAN = 'GET /api/user/chatgpt';
+
+/**
+ * Holds the account's answers to the two sign-ins and to the reads that show them. A sign-in is finished when let
+ * through; a read answers as the account stood when it was asked, and arrives when let through.
+ */
+async function holdSignIns(page: Page): Promise<void> {
+  await page.evaluate((reads, finishes) => {
+    const inner = window.fetch;
+    const held: NonNullable<Window['__heldAccount']> = [];
+
+    window.__heldAccount = held;
+    window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+      const key = `${init?.method ?? 'GET'} ${new URL(input instanceof Request ? input.url : String(input), location.href).pathname}`;
+
+      if (!reads.includes(key) && !finishes.includes(key)) return inner(input, init);
+      const asked = reads.includes(key) ? inner(input, init) : null;
+      const arrived = Promise.withResolvers<Response>();
+
+      held.push({ key, release: async (failed) => {
+        const answer = failed ? Response.json({ error: 'the account did not answer' }, { status: 503 }) : await (asked ?? inner(input, init));
+        const body = new Uint8Array(await answer.arrayBuffer());
+        const read = Promise.withResolvers<void>();
+
+        // Settles once the page has read the whole answer.
+        arrived.resolve(new Response(new ReadableStream({ start: (into) => { into.enqueue(body); }, pull: (into) => { into.close(); read.resolve(); } }),
+          { status: answer.status, headers: answer.headers }));
+        await read.promise;
+      } });
+
+      return arrived.promise;
+    }, { preconnect: inner.preconnect });
+  }, [CREDENTIALS, PLAN], [CLAUDE_FINISH, CHATGPT_FINISH]);
+}
+
+/** Lets the newest held `key` through, as a failure when `failed`, and returns once the page has read it. */
+async function letThrough(page: Page, key: string, failed = false): Promise<void> {
+  await page.evaluate(async (wanted, fail) => {
+    const held = window.__heldAccount ?? [];
+    const at = held.map((entry) => entry.key).lastIndexOf(wanted);
+
+    if (at < 0) throw new Error(`nothing held for ${wanted}`);
+    await held.splice(at, 1)[0]?.release(fail);
+  }, key, failed);
+}
+
+const heldOf = (page: Page, key: string) => page.evaluate((wanted) => (window.__heldAccount ?? []).filter((entry) => entry.key === wanted).length, key);
+
 /** Workspace entries are complete, the current route is marked, and filters return the requested entries. */
 async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport: keyof typeof VIEWPORTS): Promise<void> {
   await page.waitForSelector('[aria-label="Search workspaces"]');
@@ -366,6 +427,62 @@ describe('account panels', () => {
         await page.waitForFunction(() => document.querySelector('[data-provider="ChatGPT"]')?.textContent?.includes('Connected') === true
           && document.querySelector('[data-chatgpt-connect]') === null);
         await page.waitForFunction(() => document.body.textContent?.includes("You're using your ChatGPT plan") === true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // m2071: after ChatGPT's address was pasted back its row said Not connected until connecting Claude re-read it, with an
+  // error beside it. Each sign-in re-reads its own provider at once; a read asked before the other provider finished,
+  // arriving late, neither covers the newer answer nor shows its failure.
+  test('Claude and ChatGPT sign-ins that overlap and answer out of order each end connected, with no error', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'setupmodal&panel=providers', 'dark', 'desktop');
+      const code = '[aria-label="Claude sign-in code"]';
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await page.waitForSelector('[data-chatgpt-connect]');
+        await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
+        await page.waitForSelector('[data-chatgpt-way="here"] input');
+        await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
+        await page.click('[data-provider="Claude"] button');
+        await page.waitForSelector(code);
+        await page.type(code, 'good-code');
+
+        // ChatGPT's finish is asked first and Claude's second; Claude's answers first, so its reads hold no ChatGPT sign-in.
+        await holdSignIns(page);
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish', '[data-chatgpt-way="here"]');
+        await page.waitForFunction(() => window.__heldAccount?.length === 1);
+        await page.focus(code);
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => window.__heldAccount?.length === 2);
+        await letThrough(page, CLAUDE_FINISH);
+        await page.waitForFunction((reads) => reads.every((read) => window.__heldAccount?.some((entry) => entry.key === read)), {}, [CREDENTIALS, PLAN]);
+        await letThrough(page, CHATGPT_FINISH);
+        await page.waitForSelector('[data-chatgpt-way="here"]', { hidden: true });
+        expect(await heldOf(page, PLAN)).toBe(2);
+
+        // The newest reads arrive first; Claude's arrive after them, its plan stale and its credentials refused.
+        await letThrough(page, PLAN);
+        await letThrough(page, CREDENTIALS);
+        await page.waitForFunction(() => ['ChatGPT', 'Claude'].every((name) => document.querySelector(`[data-provider="${name}"] button[aria-label^="Disconnect"]`) !== null));
+        await letThrough(page, PLAN);
+        await letThrough(page, CREDENTIALS, true);
+        await page.evaluate(() => {
+          const drawn = Promise.withResolvers<void>();
+
+          requestAnimationFrame(() => { requestAnimationFrame(() => { drawn.resolve(); }); });
+
+          return drawn.promise;
+        });
+
+        expect(await page.evaluate(() => ({
+          connected: ['ChatGPT', 'Claude'].filter((name) => document.querySelector(`[data-provider="${name}"] button[aria-label^="Disconnect"]`) !== null),
+          failures: document.querySelectorAll('[role="dialog"] :is([data-resource-state="error"], [role="alert"])').length,
+        }))).toEqual({ connected: ['ChatGPT', 'Claude'], failures: 0 });
       } finally {
         await page.close();
       }
