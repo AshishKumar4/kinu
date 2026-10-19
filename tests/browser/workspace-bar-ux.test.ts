@@ -3,13 +3,42 @@
  * opens a chat as the current tab; a chat renames in its tab and deletes after a confirmation; Main renames and never
  * deletes; drafts stay with their conversation; and the open tab is the one the hairline rises around.
  */
+import { writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
+import * as v from 'valibot';
+import { scratchDir } from '@kinu.run/test-utils';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
+declare global {
+  interface Window {
+    galleryNavigate?: (path: string) => Promise<void>;
+  }
+}
+
 const CHATS = 'nav[aria-label="Chats"]';
+
+/** Picks `file` as a person does: `box`'s own attach button opens the file picker, and its chip shows the file taken. */
+async function pick(page: Page, box: string, file: string): Promise<void> {
+  writeFileSync(file, `${basename(file)}\n`);
+  const [chooser] = await Promise.all([page.waitForFileChooser(), page.click(`${box} button[aria-label="Attach files"]`)]);
+
+  await chooser.accept([file]);
+  await page.waitForFunction((at, name) => (document.querySelector(at)?.textContent ?? '').includes(name), {}, box, basename(file));
+}
+
+/** Presses `send` and answers the parts the chat transport was handed for the message it sent. */
+async function sentBy(page: Page, send: string): Promise<string[]> {
+  const before = await page.evaluate(() => Number(document.documentElement.dataset.galleryChatSends ?? '0'));
+
+  await page.click(send);
+  await page.waitForFunction((was) => Number(document.documentElement.dataset.galleryChatSends ?? '0') > was, {}, before);
+
+  return v.parse(v.array(v.string()), JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]')));
+}
 
 /** The open tab's label, as the bar shows it. */
 function openTab(page: Page): Promise<string> {
@@ -261,25 +290,45 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
     });
   });
 
-  test('a file attached in the new-chat box goes out with the opening message', async () => {
+  // m2063: the new-chat and new-workspace boxes had no attach control. Each box's own control opens the file picker,
+  // and the file picked goes out with the message that box sends.
+  test('each prompt box sends the file its attach control picked: the chat, a new chat, a new workspace', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await openWorkspacePage(newPage, origin);
+      const files = scratchDir('prompt-attachments');
+      const main = '[data-agent-pane="checkout-fixes/main"]';
+
+      await pick(page, `${main} [data-composer-root]`, join(files, 'notes.csv'));
+      await page.type(`${main} textarea`, 'Read my notes');
+      expect(await sentBy(page, `${main} button[aria-label="Send"]`)).toEqual(['file:notes.csv', 'text:Read my notes']);
 
       await page.click(`${CHATS} a[aria-label="New chat"]`);
       await page.waitForSelector('[data-new-chat] textarea');
-      await page.$eval('[data-new-chat] form', (form) => {
-        const files = new DataTransfer();
-        files.items.add(new File(['sku,qty\nSAVE20,1\n'], 'cart.csv', { type: 'text/csv' }));
-        form.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
-        form.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
-      });
-      await page.waitForFunction(() => (document.querySelector('[data-new-chat] [data-attachments]')?.textContent ?? '').includes('cart.csv'));
+      await pick(page, '[data-new-chat]', join(files, 'cart.csv'));
       await page.type('[data-new-chat] textarea', 'Why does this cart 500?');
-      await page.click('[data-new-chat] button[type="submit"]');
-      await waitForNewChatOpen(page);
-      await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
+      expect(await sentBy(page, '[data-new-chat] button[type="submit"]')).toEqual(['file:cart.csv', 'text:Why does this cart 500?']);
 
-      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:cart.csv', 'text:Why does this cart 500?']);
+      // Home's box creates the workspace; the file waits in its chat and goes out with the first message there.
+      await page.evaluate(() => {
+        const inner = window.fetch;
+
+        window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => (init?.method === 'POST'
+          && new URL(input instanceof Request ? input.url : String(input), location.href).pathname === '/api/user/workspaces'
+          ? Promise.resolve(Response.json({ name: 'cart-audit', displayName: 'Cart audit', createdAt: 1, lastVisited: 1 }))
+          : inner(input, init)), { preconnect: inner.preconnect });
+      });
+      await page.evaluate(async () => { await window.galleryNavigate?.('/'); });
+      const home = 'form:has(#workspace-mission)';
+      const created = '[data-agent-pane="cart-audit/main"]';
+
+      await page.waitForSelector(home);
+      await pick(page, home, join(files, 'brief.md'));
+      await page.type('#workspace-mission', 'Audit the cart');
+      await page.click(`${home} button[type="submit"]`);
+      await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('brief.md'), {}, `${created} [data-composer-root]`);
+      await page.waitForSelector(`${created} textarea:not([disabled])`);
+      await page.type(`${created} textarea`, 'Start with the brief');
+      expect(await sentBy(page, `${created} button[aria-label="Send"]`)).toEqual(['file:brief.md', 'text:Start with the brief']);
       await page.close();
     });
   });
@@ -637,6 +686,43 @@ describe('a chat\'s status, as the bar paints it', () => {
         expect(seen.failed).toEqual({ label: 'none', glow: 'none', outline: 'none', mark: 'Last turn failed', eyes: 'none', tile: 'none', badge: false });
         await page.close();
       }
+    });
+  });
+});
+
+// m2088: `?frame=characters` once fell through to the gallery's index and showed no mascot. It is where the mascots are
+// looked at side by side: every state row draws the same characters, each drawn, in the face that state gives it.
+describe('the characters frame', () => {
+  test('draws every character in each state row it lists, in that state\'s face', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=characters`, { waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => (document.getElementById('root')?.childElementCount ?? 0) > 0);
+
+      const rows = await page.$$eval('[data-mascot-state]', (found) => found.map((row) => {
+        const marks = [...row.querySelectorAll('[data-face]')];
+
+        return {
+          state: row.getAttribute('data-mascot-state'),
+          characters: marks.map((mark) => mark.getAttribute('data-accessory') ?? '').join(),
+          // Off its row's face, or not drawn: hidden, of no size, or with nothing in it.
+          astray: marks.filter((mark) => {
+            const tile = mark.querySelector('svg');
+            const box = tile?.getBoundingClientRect();
+            const drawn = tile?.getBBox();
+
+            return mark.getAttribute('data-face') !== row.getAttribute('data-mascot-state') || tile?.checkVisibility() !== true
+              || !box?.width || !box.height || !drawn?.width || !drawn.height;
+          }).length,
+          count: marks.length,
+        };
+      }));
+
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.filter((row) => row.astray > 0 || row.count < 2)).toEqual([]);
+      expect(new Set(rows.map((row) => row.characters)).size).toBe(1);
+      await page.close();
     });
   });
 });

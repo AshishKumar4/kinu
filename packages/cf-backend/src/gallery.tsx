@@ -7645,7 +7645,11 @@ function nodeQuery(): string {
   return node === null ? "" : `?node=${encodeURIComponent(node)}`;
 }
 
-function workspacePageFrame(): MountedFrame {
+/** Home too, so a workspace created on it opens here with what its prompt carried. */
+async function workspacePageFrame(): Promise<MountedFrame> {
+  // Not a static import: that would fold the home page's chunk into the gallery's, which the setup modal's test holds apart.
+  const { default: HomePage } = await import("@/pages/HomePage");
+
   serveGalleryRpc(workspacePageRpc);
 
   seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
@@ -7657,6 +7661,7 @@ function workspacePageFrame(): MountedFrame {
       <>
         <GalleryNavigator />
         <Routes>
+          <Route index element={<div className="h-screen overflow-hidden p-bg p-text"><HomePage /></div>} />
           <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path={APP_ROUTES.workspaceAgentPath} element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
@@ -7959,7 +7964,7 @@ async function mount() {
   else if (frame === "environment" || frame === "files") ({ node, entries } = driveFrame(frame));
   else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
-  else if (frame === "workspacepage") ({ node, entries } = workspacePageFrame());
+  else if (frame === "workspacepage") ({ node, entries } = await workspacePageFrame());
   else if (frame === "usersettingsstate") ({ node, entries } = userSettingsStateFrame());
   else if (frame === "devicesandbox") node = <DeviceSandboxFrame />;
   else if (dynamicFixture !== undefined) ({ node, entries } = await dynamicFixture());
