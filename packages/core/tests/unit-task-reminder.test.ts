@@ -51,6 +51,8 @@ test('a turn that settles with open tasks owes a reminder naming them', () => {
   expect(decision.text).toContain('(Reminder 1/2)');
   expect(decision.text).toContain('<system-reminder>');
   expect(decision.text).toContain('2 open task(s)');
+  // What the person's card names: the open ones, not the finished parent.
+  expect(decision.titles).toEqual(['ship the feature', 'write the test']);
 });
 
 test('an empty open list owes nothing and resets the count', () => {

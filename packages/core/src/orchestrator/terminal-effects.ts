@@ -8,7 +8,7 @@
 import { Data, Exit, Result } from 'effect';
 import * as v from 'valibot';
 
-import { parseJsonValue, JsonValueSchema, type JsonValue } from '../utils/json';
+import { parseJsonValue, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { ASKED, type Holds } from '../utils/held-reads';
 import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, RUN_END_REASONS,
@@ -34,6 +34,7 @@ import {
 import { attempt, diagnostics, hold, toKinuError, type ErrorCode } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
+import { TASK_REMINDER_OPEN_KEY } from '../read-models/event-summary';
 import { TASK_TURN_ENDINGS } from '../subordinates/temporary';
 
 /** The picklist is {@link RUN_END_REASONS}, so a stored row cannot carry an unknown word. */
@@ -153,7 +154,7 @@ export function terminalEffect<I>(spec: {
 export interface OwedTurnQueue {
   announcementOnDisk(identity: string): boolean;
   announcementInFlight(identity: string): boolean;
-  appendOwedTurn(turn: { readonly text: string; readonly idempotencyKey: string; readonly event: string }): void;
+  appendOwedTurn(turn: { readonly text: string; readonly idempotencyKey: string; readonly event: string; readonly metadata?: JsonObject }): void;
 }
 
 /** Owed until the follow-up turn's own durable row exists; queued once per response key. */
@@ -161,6 +162,8 @@ function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
   readonly input: v.GenericSchema<unknown, I>;
   readonly event: string;
   readonly text: (input: I) => string;
+  /** What the person's card says the turn was about, beside its event. */
+  readonly metadata?: (input: I) => JsonObject;
   readonly key: (scope: string) => string;
 }): TerminalEffect {
   return terminalEffect({
@@ -173,7 +176,7 @@ function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
       if (loop.announcementOnDisk(identity)) return { status: 'completed', detail: 'the follow-up turn is on disk' };
 
       if (!loop.announcementInFlight(identity)) {
-        loop.appendOwedTurn({ text: spec.text(input), idempotencyKey: identity, event: spec.event });
+        loop.appendOwedTurn({ text: spec.text(input), idempotencyKey: identity, event: spec.event, ...(spec.metadata && { metadata: spec.metadata(input) }) });
       }
 
       return { status: 'owed', detail: 'the follow-up turn is queued and not yet on disk' };
@@ -200,10 +203,13 @@ function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): Term
   return fixedOwedTurnEffect(queue, { event: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT, prefix: 'output-continuation' });
 }
 
-/** The text is a recorded input: a replay announces what the turn was owed. */
+/** The text is a recorded input: a replay announces what the turn was owed. The tasks it names are kept beside it for
+ *  the person's card; a row recorded before they were has none, and its card says only that it reminded. */
 function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
   return owedTurnTerminalEffect(queue, {
-    input: v.object({ text: v.string() }), event: TASK_REMINDER_EVENT, text: ({ text }) => text,
+    input: v.object({ text: v.string(), titles: v.optional(v.array(v.string())) }),
+    event: TASK_REMINDER_EVENT, text: ({ text }) => text,
+    metadata: ({ titles }): JsonObject => (titles === undefined ? {} : { [TASK_REMINDER_OPEN_KEY]: titles }),
     key: taskReminderIdempotencyKey,
   });
 }

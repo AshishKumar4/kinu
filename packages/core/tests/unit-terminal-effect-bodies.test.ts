@@ -5,9 +5,9 @@ import { Database } from 'bun:sqlite';
 
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS, TerminalEffectLedger, initTerminalEffectTable,
-  terminalEffect, chatTerminalEffects, TerminalEffectInterrupt,
+  terminalEffect, chatTerminalEffects, TerminalEffectInterrupt, type OwedTurnQueue,
 } from '../src/orchestrator/terminal-effects';
-import { projectJsonValue, type CompletedTurn } from '../src/index';
+import { classifyProgrammaticTurn, projectJsonValue, type CompletedTurn } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 import { present, testActorHandle } from '@kinu.run/test-utils';
 
@@ -55,6 +55,41 @@ describe('turnRecordTerminalEffect', () => {
     expect(recorded).toMatchObject([{
       continuity: 'conversation', options: { recordedAt: 1_000, enabled: false, id: 'turn-msg-1' },
     }]);
+  });
+});
+
+describe('a task reminder', () => {
+  const REMINDED = '<system-reminder>\nYou stopped with 1 open task(s):\n- Store the export\n</system-reminder>';
+
+  /** The card the owed turn draws, from the metadata its queue writes beside its event. */
+  const owedCard = async (input: { text: string; titles?: string[] }) => {
+    const owed: Parameters<OwedTurnQueue['appendOwedTurn']>[0][] = [];
+
+    const effect = present(chatTerminalEffects({
+      chat: () => ({ announcementOnDisk: () => false, announcementInFlight: () => false, appendOwedTurn: (turn) => { owed.push(turn); } }),
+      orchestrator: () => null,
+      engine: { learnFromTurn: () => Promise.reject(new Error('a reminder learns nothing')) },
+    }).task_reminder, 'the reminder body');
+
+    await effect.run(input, 'msg-1');
+    const [turn] = owed;
+
+    return { turn, card: classifyProgrammaticTurn({ metadata: { ...turn?.metadata, kinuEvent: turn?.event ?? '' } }) };
+  };
+
+  test('its card names the open tasks kept beside it, and nothing of what the agent is handed', async () => {
+    const { turn, card } = await owedCard({ text: REMINDED, titles: ['Store the export'] });
+    expect(turn?.text).toBe(REMINDED);
+    expect(card?.kind).toBe('system_event');
+    expect(JSON.stringify(card)).toContain('Store the export');
+    expect(JSON.stringify(card)).not.toContain('system-reminder');
+  });
+
+  test('a row recorded before its titles were kept still runs, and its card names no task', async () => {
+    const { turn, card } = await owedCard({ text: REMINDED });
+    expect(turn?.text).toBe(REMINDED);
+    expect(JSON.stringify(card)).not.toContain('Store the export');
+    expect(JSON.stringify(card)).not.toContain('system-reminder');
   });
 });
 
