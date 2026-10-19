@@ -15,8 +15,9 @@ export const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity-secret' satisfies Platfo
 
 export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
 
-/** Each its own user: `devices` (the fleet), `scripted` (scripted-model tiers). */
-export const EVAL_ACCOUNTS = ['devices', 'scripted'] as const;
+/** Each its own user: `devices` (the fleet), `scripted` (scripted-model tiers), `keyless` (the scripted model with no
+ *  search key, so a search takes the deployment's own provider, as a person's with no key does). */
+export const EVAL_ACCOUNTS = ['devices', 'scripted', 'keyless'] as const;
 
 export const EVAL_TRIAL_ACCOUNTS = 512;
 

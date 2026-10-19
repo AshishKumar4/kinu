@@ -51,9 +51,9 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { REAL_CLOCK } from '../../packages/core/src/index';
+import { REAL_CLOCK, type EvalAccount } from '../../packages/core/src/index';
 import {
-  createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow, scoreToolOutcomes, toolOutcomes,
+  createObservedModelAccumulator, EVAL_ACCOUNT_ENV, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow, scoreToolOutcomes, toolOutcomes,
   projectRunEventProvenance, publishRunRecord,
   reportLiveModelSpend, retainEpisodeTranscript, subgoalsOutcome, withEpisodeEvidence,
   type EpisodeEvidenceReader, type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalSubgoal, type EvalTier,
@@ -132,8 +132,9 @@ const TRANSCRIPTS = join(
  * module at import so the reason is printed on the line above the skip rather
  * than inside a test nobody ran.
  */
-export function firstRunPlan(suite: string): PublicSessionPlan | null {
-  const resolution = resolvePublicSessionPlan(suite, EVAL_MODELS[FIRST_RUN_TIER]);
+export function firstRunPlan(suite: string, account?: EvalAccount): PublicSessionPlan | null {
+  const resolution = resolvePublicSessionPlan(suite, EVAL_MODELS[FIRST_RUN_TIER],
+    account === undefined ? process.env : { ...process.env, [EVAL_ACCOUNT_ENV]: account });
 
   if (resolution.kind === 'unavailable') {
     console.warn(`[skip] ${suite} — ${resolution.remedy}`);
@@ -173,8 +174,8 @@ export function firstRunCaseId(moduleUrl: string): string {
  * then cannot be torn down. One short word keeps the attribution (the suite
  * slug says which tier, the record says which case) and every name short.
  */
-export function firstRunCasePlan(suite: string, subject: string): PublicSessionPlan | null {
-  const plan = firstRunPlan(suite);
+export function firstRunCasePlan(suite: string, subject: string, account?: EvalAccount): PublicSessionPlan | null {
+  const plan = firstRunPlan(suite, account);
 
   if (plan === null) return null;
 

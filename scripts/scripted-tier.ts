@@ -20,7 +20,7 @@ import { resolveWebIdentity, webHeaders } from '../evals/src/workspace-roster';
 import {
   SCRIPTED_MODEL_ID, SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC,
 } from '../packages/test-utils/src/scripted-model-spec';
-import { SCRIPTED_CREDENTIAL, defaultToScriptedModel, registerScriptedModel, registerScriptedSearch } from './scripted-model';
+import { SCRIPTED_CREDENTIAL, defaultToScriptedModel, forgetSearchKey, registerScriptedModel, registerScriptedSearch } from './scripted-model';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 
 const [origin, named, ...rest] = process.argv.slice(2);
@@ -52,7 +52,8 @@ const headers = webHeaders(identity.identity);
 
 await registerScriptedModel(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey);
 
-await registerScriptedSearch(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey);
+// `keyless` holds no search key (EVAL_ACCOUNTS): its searches reach the deployment's own provider.
+await (account === 'keyless' ? forgetSearchKey(origin, headers) : registerScriptedSearch(origin, SCRIPTED_MODEL_ORIGIN, headers, modelKey));
 
 await defaultToScriptedModel(origin, headers);
 

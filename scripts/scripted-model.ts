@@ -158,6 +158,11 @@ export async function registerScriptedSearch(origin: string, baseURL: string, he
   });
 }
 
+/** Leave the account `headers` name with no search key, so a `web` search takes the deployment's own provider. */
+export async function forgetSearchKey(origin: string, headers: Record<string, string>): Promise<void> {
+  await apiJson(origin, '/api/user/credentials/tavily', { method: 'DELETE', headers });
+}
+
 /** The scripted model as the account's default tier, so every workspace it makes runs on it, the ones made from the
  *  home page included. */
 const SCRIPTED_DEFAULT: CatalogNeed = (catalog) => catalog.tiers.default.model === SCRIPTED_MODEL_SPEC
