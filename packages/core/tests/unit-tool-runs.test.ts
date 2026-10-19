@@ -137,6 +137,14 @@ describe("a phase's line", () => {
     expect(toolRunSummary(block.steps)).toEqual({ calls: 3, failed: 0, title: 'Read db.ts and wrangler.jsonc', now: 'Reading admin.ts' });
   });
 
+  test('a running command with no words of its own still says what kind of call it is', () => {
+    const migrating: Part = { type: 'tool-shell', toolCallId: 'm', state: 'input-available', input: { runtime: 'workspace', command: 'bunx wrangler d1 migrations apply SESSIONS_DB --remote' } };
+    const [block] = groupMessageParts([shell('m0', 'bunx wrangler d1 migrations list SESSIONS_DB', 'pending'), migrating]);
+
+    if (block?.kind !== 'run') throw new Error('no phase');
+    expect(toolRunSummary(block.steps)).toMatchObject({ title: '', now: 'Running a command' });
+  });
+
   test("a model's lines are read by each phase's first call, and a malformed one is no line", () => {
     const written = writtenTitles({ metadata: { [PHASE_TITLES_METADATA_KEY]: { p1a: 'Found the renamed D1 binding' }, [TURN_TITLE_METADATA_KEY]: 'Fixed and shipped the Worker' } });
 

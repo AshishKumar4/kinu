@@ -163,13 +163,14 @@ const ONGOING = new Map(Object.entries({
   Saved: "Saving", Recalled: "Recalling", Planned: "Planning", Updated: "Updating", Reported: "Reporting",
 }));
 
-/** What a running call is doing; "" when its arguments do not say. */
+/** What a running call is doing: in its row's words, or, where they say nothing, the kind of call it is. */
 export function ongoing(part: AnyToolPart): string {
-  const said = describeToolCall(getToolName(part), argsOf(part));
+  const name = getToolName(part);
+  const said = describeToolCall(name, argsOf(part));
   const [verb = "", ...rest] = said.split(" ");
   const going = ONGOING.get(verb);
 
-  if (said === "") return "";
+  if (said === "") return name === "shell" || name === "run" ? "Running a command" : `Using ${name}`;
 
   return going === undefined ? `Running ${said.charAt(0).toLowerCase()}${said.slice(1)}` : [going, ...rest].join(" ");
 }

@@ -171,13 +171,16 @@ export function ToolRun({ steps, live, written, children }: { steps: readonly Ru
   const follow = `${String(steps.length)}:${last?.kind === "tool" ? last.part.state : String(last?.parts.map((part) => part.text.length).join())}`;
   const title = live ? summary.title : written ?? summary.title;
   const now = live && summary.now !== "" ? summary.now : null;
+  // Before any of its calls has words, the line is what is running.
+  const label = title === "" ? `${now ?? "Working"}…` : title;
+  const nowAfter = title === "" ? null : now;
 
   return (
     <ChatDisclosure live={live} failed={!live && summary.failed > 0} folded="hidden" follow={follow} viewport="max-h-36"
-      label={<span key={title} className={written !== undefined && !live ? "animate-fade-in" : undefined}>{title || "Starting"}</span>}
-      after={(now !== null || summary.failed > 0 || span !== null) && (
+      label={<span key={label} className={written !== undefined && !live ? "animate-fade-in" : undefined} data-tool-run-now={nowAfter === null && now !== null ? "" : undefined}>{label}</span>}
+      after={(nowAfter !== null || summary.failed > 0 || span !== null) && (
         <span className="shrink-0 p-row-text p-text-3">
-          {now !== null && <> · <span data-tool-run-now>{now}…</span></>}
+          {nowAfter !== null && <> · <span data-tool-run-now>{nowAfter}…</span></>}
           {summary.failed > 0 && <> · <span className="p-danger" data-tool-run-failed={summary.failed}>{summary.failed} failed</span></>}
           {span !== null && <> · {span}</>}
         </span>
