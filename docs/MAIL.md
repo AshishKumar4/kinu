@@ -275,10 +275,15 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 
 - `ashish@kinu.run` belongs to the owner's Personal assistant: a workspace installed from the `personal-assistant` blueprint at onboarding, with its main agent "Kinu". The Home lane designs the blueprint and its Home strip.
 - Its main mail view is **Important**: the assistant's picks, each with a one-line reason. Home's "Today" strip shows the top three with the same row (`components/mail/ImportantMailRow.tsx`).
+- **The assistant is called by its own name** everywhere: "Kinu", or what the owner renamed it to ("Kinu picked these", "Kinu's draft"), never "Personal assistant's".
+- **With no assistant installed,** each place that needs one offers it: Important shows a card that opens a modal to install the blueprint.
 
 **One small Mail page** at `/mail`:
 
-- Five views: **Important** (the default), **All**, **Sent**, **Drafts** and **Trash**. A select narrows any view to one address. There is no folder tree and no per-agent folder.
+- Laid out as the Workspaces page is: the title, then `Segmented` views and Kinu's `Choice` for the address beside the search box, then the list as a `p-group` beside the reading card.
+- Five views: **Important** (the default), **All**, **Sent**, **Drafts** and **Trash**. The address choice narrows any view to one address. There is no folder tree and no per-agent folder.
+- **A row** reads as Kinu's rows do: who and when, the subject, then the assistant's reason (Important) or the first words.
+- **The reading card:** the subject, the address and who reads it, the assistant's reason, then the thread as a `p-group`. Earlier messages fold to one line, quoted text folds behind "•••", attachments are Kinu's file chips (`AttachmentChip`), and HTML is sealed.
 - **Drafts** are mail the owner sends as themselves: their own, and replies the assistant drafted for them.
 - **Unverified mail** has no folder of its own. It sits in All with a "Not verified" mark and never wakes an agent.
 - Desktop: the list and a reading pane. Phone: the list, and a thread over it with Back.
@@ -289,15 +294,17 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 - The Mail icon in the sidebar footer, between the account button and Devices. Its badge counts unread Important mail. The footer is the Home lane's `SidebarFooter`.
 - `mail.<domain>`, a permanent redirect to `https://<domain>/mail` (below).
 
-**Each workspace gets an Inbox tool** in its side panel, beside Work, Changes, Files, Agent, Environment and Activity.
+**An agent's mail folds into its Agent tab** in the side panel (owner, 2026-10-19), not a tab of its own.
 
-- It lists mail to and from the workspace's address and its agents' addresses, filtered by address with `Segmented`. A thread opens in the panel.
-- This is how the owner reaches an agent's or a workspace's mail from inside the workspace.
+- The tab gains an "Its mail" `Section` under "Who it is", which now shows the agent's address. The workspace's main agent shows the workspace's address.
+- The section is there only while the agent has mail, and the Agent tool counts its unread mail. A workspace with no mail shows nothing new.
+- A thread opens in place in the section; "In Mail" opens the Mail page narrowed to that address.
 
-**In the chat:** an arrival or an agent's draft is an event pill (`EventRow`, the same row background jobs and agent reports use). The pill says whose word the mail carries:
+**In the chat:** an arrival or an agent's draft is an event pill (`EventRow`, the row every system event uses). It is one line, says whose word the mail carries, and opens in place to the mail's own words:
 
-- the owner's verified mail: "Your mail · verified";
-- anyone else's: "Mail · <sender>", untrusted input that can't instruct.
+- the owner's verified mail: "Your mail · verified · your instruction";
+- anyone else's: "Mail · <sender> · can't instruct";
+- an agent's draft: "Mail draft · to <address>", marked "waiting on you" until its card is answered.
 
 **An agent's outgoing mail is one approval card in the existing Needs-you, and nothing else.**
 
@@ -312,7 +319,7 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 
 **Mailflare is a product reference only,** for behaviour: what a Gmail-like box offers. No Mailflare code, styles or assets are copied (provenance in §0).
 
-**The wireframe** is `packages/cf-backend/src/gallery-mail.tsx`, frame `mail`. It shows the Mail page at `/mail`, and at `&at=workspace` the API Worker workspace with its Inbox open, its chats' pills, and scout's approval card. Until the Home lane's footer lands, the frame draws a stand-in for it.
+**The wireframe** is `packages/cf-backend/src/gallery-mail.tsx`, frame `mail`. It shows the Mail page at `/mail`, and at `&at=workspace` the API Worker workspace with the Agent tab's mail, its chats' pills, and scout's approval card. `&assistant=<name>` renames the assistant, and `&assistant=none` shows an account without one. The sidebar is the shell's own (`SidebarFooter`).
 
 ## 8. "AI native", concretely
 
@@ -383,7 +390,7 @@ There are two new Durable Object classes, each with its own schema class: `mailn
 - **`mail_addresses.reads_person`** goes. The person's box names its reader, the Personal assistant, in `workspace` and `actor_id`.
 - **`mail_labels`** goes. The design has no labels, and a `+tag` stays in `delivered_to`.
 - **`mail_messages.woke`** is new.
-  - Writer: `deliver`. Readers: the Mail page and the Inbox tool ("Woke main to read and draft").
+  - Writer: `deliver`. Readers: the Mail page and the Agent tab's mail ("main read it and may draft").
   - It records the wake decision under the address's policy at delivery. That policy can change later, so the decision cannot be derived afterwards.
 
 ### `MailName`: one per root label (`idFromName(label)`)
