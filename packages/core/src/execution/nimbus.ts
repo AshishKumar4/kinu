@@ -26,7 +26,7 @@ import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
 
 /**
  * A command's options: the shared session contract's, as far as Kinu sets them. `cred` is host-injected only
- * ({@link NimbusExecOptionsSchema} omits it so an agent cannot choose uid 0); `shellId` names the transport's shell, which
+ * (the agent-facing option schemas omit it so an agent cannot choose uid 0); `shellId` names the transport's shell, which
  * a host keys per agent; `detach` frees that shell for its next call while the command runs on.
  */
 type NimbusExecOptions = Pick<SessionExecOptions, 'cwd' | 'env' | 'timeoutMs' | 'stdin' | 'cred' | 'shellId' | 'execId' | 'detach'>;
@@ -37,7 +37,7 @@ export type NimbusExecResult = ExecOutput;
 
 export type NimbusPortInfo = SessionPort;
 
-/** `startProcess` result: the process is still running, so no exit code or output; read `logs`, stop via `killProcess`. */
+/** `startProcess` result: the process is still running, so no exit code or output; read `logs`, stop via `stopProcess`. */
 export type NimbusStartResult = SessionStartResult;
 
 /** A remote session's file plane as Kinu reads it: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
@@ -100,14 +100,7 @@ function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
 
 const StringSchema = v.string();
 
-/** Agent-facing option schemas; both omit `cred` so an invented one is stripped. Adding it would let agents choose their uid. */
-const NimbusExecOptionsSchema: v.GenericSchema<NimbusExecOptions> = v.object({
-  cwd: v.optional(v.string()),
-  env: v.optional(v.record(v.string(), v.string())),
-  timeoutMs: v.optional(v.number()),
-  stdin: v.optional(v.string()),
-});
-
+/** The agent-facing option schema omits `cred`, so an invented one is stripped. Adding it would let agents choose their uid. */
 const NimbusRunCodeOptionsSchema: v.GenericSchema<NimbusRunCodeOptions> = v.object({
   cwd: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
@@ -136,11 +129,6 @@ function nimbusCall(member: 'runCode' | 'startProcess', text: string, options: N
   };
 }
 
-const ProcessInputSchema = v.union([
-  v.number(),
-  v.object({ pid: v.number(), lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
-]);
-
 const PortInputSchema = v.union([v.number(), v.object({ port: v.number() })]);
 
 const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
@@ -153,26 +141,6 @@ function stringifyResult(input: { value: unknown }): string {
   if (input.value == null) return '';
 
   try { return JSON.stringify(input.value, null, 2); } catch (error) { return `unserializable process result: ${renderThrownChain({ cause: error })}`; }
-}
-
-/** Render a startProcess result stating the process is still running and which calls observe or stop it. */
-function formatStartResult(result: NimbusStartResult): CommandResult {
-  const running = result.process.state === 'running';
-
-  const lines = [
-    running
-      ? `started (long-running) pid=${result.pid}: ${result.command}`
-      : `started pid=${result.pid}: ${result.command}: already ${result.process.state}` +
-        (result.process.exitCode != null ? ` (exit ${result.process.exitCode})` : ''),
-  ];
-
-  if (result.ports.length > 0) {
-    lines.push(`listening on port${result.ports.length > 1 ? 's' : ''} ${result.ports.map((p) => p.port).join(', ')}: workspace.exposePort(<port>) returns the preview URL and whether a request to it reaches the server`);
-  }
-
-  lines.push(`output: workspace.logs(${result.pid}) · stop: workspace.killProcess(${result.pid})`);
-
-  return commandResult({ stdout: lines.join('\n'), exitCode: running ? 0 : result.process.exitCode ?? 0 });
 }
 
 /** What every member of the live session works over: its box, the one way a call through it marks the session in use
@@ -207,6 +175,18 @@ function runCodeMember({ box, touch }: NimbusReach): ExecutorTool {
   });
 }
 
+/** A process id as `startProcess` answers it: the Nimbus pid, as text. */
+const ProcessIdSchema = v.pipe(v.string(), v.regex(/^\d+$/u, 'a process id `startProcess` answered'), v.transform(Number));
+
+const StartOptionsSchema = v.optional(v.object({ cwd: v.optional(v.string()) }), {});
+
+/** One row of the hosted runtime's process table, as far as a listing reads it. */
+const ProcessRowSchema = v.object({ pid: v.number(), command: v.string(), state: v.string(), longRunning: v.boolean() });
+
+const KilledSchema = v.object({ ok: v.boolean() });
+
+const LoggedSchema = v.object({ text: v.string() });
+
 /** `workspace.startProcess`. */
 function startProcessMember({ box, touch }: NimbusReach): ExecutorTool {
   return commandTool('Start a background process in Nimbus; returns while it is still running.', (args) => {
@@ -216,13 +196,15 @@ function startProcessMember({ box, touch }: NimbusReach): ExecutorTool {
     const command = parseInput(StringSchema, { value: args[0] });
 
     if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string')) };
-    const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
+    const options = parseInput(StartOptionsSchema, { value: args[1] });
+
+    if (options === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: its options are `{ cwd? }`')) };
 
     return {
       call: nimbusCall('startProcess', command, options),
-      run: async (): Promise<CommandResult> => {
+      run: async () => {
         try {
-          return formatStartResult(await touch(() => startProcess(command, options)));
+          return { processId: String((await touch(() => startProcess(command, options))).pid) };
         } catch (err) {
           return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
         }
@@ -231,28 +213,46 @@ function startProcessMember({ box, touch }: NimbusReach): ExecutorTool {
   });
 }
 
-/** `workspace.killProcess`. */
-function killProcessMember({ box, touch }: NimbusReach): ExecutorTool {
+/** `workspace.stopProcess`. */
+function stopProcessMember({ box, touch }: NimbusReach): ExecutorTool {
   return {
-    description: 'Kill a Nimbus process by pid.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+    description: 'Stop a Nimbus process by the id startProcess answered.',
+    execute: async (...args: unknown[]) => {
       const processes = box.processes;
 
       if (!processes?.kill) return handleLacks('process control');
       // Bound at the guard: TypeScript drops narrowing inside closures, and binding keeps `this`.
       const kill = processes.kill.bind(processes);
-      const input = parseInput(ProcessInputSchema, { value: args[0] });
-      const pid = v.is(v.number(), input) ? input : input?.pid;
+      const pid = parseInput(ProcessIdSchema, { value: args[0] });
 
-      if (pid === undefined || !Number.isFinite(pid)) {
-        return refusalOf(new KinuError('bad_input',
-          `nimbus killProcess: invalid pid ${stringifyResult({ value: args[0] })}`));
-      }
+      if (pid === undefined) return refusalOf(new KinuError('bad_input', `nimbus stopProcess: no process id ${stringifyResult({ value: args[0] })}`));
 
       try {
-        return stringifyResult({ value: await touch(() => kill(pid)) });
+        return { stopped: v.parse(KilledSchema, await touch(() => kill(pid))).ok };
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus killProcess ${pid}`, cause: err }));
+        return refusalOf(nimbusFailure({ doing: `nimbus stopProcess ${String(pid)}`, cause: err }));
+      }
+    },
+  };
+}
+
+/** `workspace.listProcesses`: the long-running processes, as every machine lists its own. */
+function listProcessesMember({ box, touch }: NimbusReach): ExecutorTool {
+  return {
+    description: 'List the long-running Nimbus processes.',
+    planAllowed: true,
+    execute: async () => {
+      const processes = box.processes;
+
+      if (!processes?.list) return handleLacks('process listing');
+      const list = processes.list.bind(processes);
+
+      try {
+        const rows = v.parse(v.array(ProcessRowSchema), await touch(() => list()));
+
+        return rows.filter((row) => row.longRunning).map((row) => ({ processId: String(row.pid), pid: row.pid, status: row.state, command: row.command }));
+      } catch (err) {
+        return refusalOf(nimbusFailure({ doing: 'nimbus listProcesses', cause: err }));
       }
     },
   };
@@ -262,24 +262,24 @@ function killProcessMember({ box, touch }: NimbusReach): ExecutorTool {
 function logsMember({ box, touch }: NimbusReach): ExecutorTool {
   return {
     description: 'Read Nimbus process logs.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+    planAllowed: true,
+    execute: async (...args: unknown[]) => {
       const processes = box.processes;
 
       if (!processes?.logs) return handleLacks('process logs');
       const readLogs = processes.logs.bind(processes);
-      const input = parseInput(ProcessInputSchema, { value: args[0] });
-      const pid = v.is(v.number(), input) ? input : input?.pid;
+      const pid = parseInput(ProcessIdSchema, { value: args[0] });
       const limits = parseInput(LogLimitsSchema, { value: args[1] });
 
-      if (pid === undefined || !Number.isFinite(pid) || limits === undefined) {
+      if (pid === undefined || limits === undefined) {
         return refusalOf(new KinuError('bad_input',
-          `nimbus logs: takes a pid and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`));
+          `nimbus logs: takes a process id and its limits as one object, \`{ lines?, bytes? }\`; got ${stringifyResult({ value: args })}`));
       }
 
       try {
-        return stringifyResult({ value: await touch(() => readLogs(pid, limits)) });
+        return v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))).text;
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus logs ${pid}`, cause: err }));
+        return refusalOf(nimbusFailure({ doing: `nimbus logs ${String(pid)}`, cause: err }));
       }
     },
   };
@@ -460,7 +460,8 @@ export function nimbusSession(opts: NimbusSessionOpts) {
   const tools: ExecutorProvider['tools'] = {
     runCode: runCodeMember(nimbus),
     startProcess: startProcessMember(nimbus),
-    killProcess: killProcessMember(nimbus),
+    stopProcess: stopProcessMember(nimbus),
+    listProcesses: listProcessesMember(nimbus),
     logs: logsMember(nimbus),
     exposePort: exposePortMember(nimbus),
     unexposePort: unexposePortMember(nimbus),

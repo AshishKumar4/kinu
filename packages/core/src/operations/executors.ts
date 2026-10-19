@@ -20,6 +20,40 @@ const executorOp = (ns: string) => <const I extends v.StrictObjectSchema<v.Objec
   op: Pick<Operation<I, O>, 'name' | 'help' | 'input' | 'output'> & { readonly impact: Impact },
 ) => defineOperation({ ns, slate: true, ...op });
 
+const ProcessId = described(v.pipe(v.string(), v.nonEmpty()), 'The id `startProcess` answered.');
+
+/** What every machine that keeps long-running processes answers alike (`process_long`): one name and one shape each. */
+function processMembers(op: ReturnType<typeof executorOp>) {
+  return {
+    startProcess: op({
+      name: 'startProcess', impact: 'administer',
+      help: 'Start a long-running process in the background, such as a server; it returns while the process runs. Put '
+        + 'variables at the head of the command (`PORT=4100 node server.js`). `logs` reads what it writes, `stopProcess` ends it.',
+      input: v.strictObject({ command: Command, cwd: v.optional(described(v.string(), 'Where it starts; default your home.')) }),
+      output: v.strictObject({ processId: v.string() }),
+    }),
+    stopProcess: op({
+      name: 'stopProcess', help: 'End a process `startProcess` started.', impact: 'administer',
+      input: v.strictObject({ processId: ProcessId }), output: v.strictObject({ stopped: v.boolean() }),
+    }),
+    listProcesses: op({
+      name: 'listProcesses', impact: 'observe',
+      help: 'The processes `startProcess` started, with their status. One stopped at a prompt reads "waiting for input", '
+        + 'its last line in `waiting`; where it has a terminal `session` the person can open, answer it with exec '
+        + '(`tmux send-keys -t \'=<session>:\' \'<answer>\' Enter`) when the answer is yours to give, or ask the person.',
+      input: v.strictObject({}),
+      output: v.array(v.strictObject({
+        processId: v.string(), pid: v.optional(v.number()), status: v.string(), restartable: v.optional(v.boolean()),
+        command: v.string(), session: v.optional(v.string()), waiting: v.optional(v.string()),
+      })),
+    }),
+    logs: op({
+      name: 'logs', help: 'What a process wrote, its most recent output.', impact: 'observe', output: Text,
+      input: v.strictObject({ processId: ProcessId, lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
+    }),
+  } as const;
+}
+
 const ws = executorOp('workspace');
 
 export const WORKSPACE = {
@@ -63,18 +97,7 @@ export const WORKSPACE = {
       install: v.optional(described(v.picklist(['never', 'ifMissing']), 'Install the runtime when missing; default never.')),
     }),
   }),
-  startProcess: ws({
-    name: 'startProcess', help: 'Start a background process; answers its pid.', impact: 'administer', output: Text,
-    input: v.strictObject({
-      command: Command, cwd: v.optional(v.string()),
-      timeoutMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))), env: v.optional(v.record(v.string(), v.string())),
-    }),
-  }),
-  killProcess: ws({ name: 'killProcess', help: 'Stop a background process.', impact: 'administer', input: v.strictObject({ pid: v.number() }), output: Text }),
-  logs: ws({
-    name: 'logs', help: 'A background process\'s recent output.', impact: 'observe', output: Text,
-    input: v.strictObject({ pid: v.number(), lines: v.optional(v.number()), bytes: v.optional(v.number()) }),
-  }),
+  ...processMembers(ws),
   exposePort: ws({
     name: 'exposePort', impact: 'administer', input: v.strictObject({ port: ExecutorPortSchema }), output: Text,
     help: 'A public URL for a port a process serves, then whether it was reached.',
@@ -102,12 +125,7 @@ export const COMPUTER = {
   }),
   deleteFile: sb({ name: 'deleteFile', help: 'Delete a file on your computer.', impact: 'mutate', input: v.strictObject({ path: Path }), output: Text }),
   exists: sb({ name: 'exists', help: '"true" or "false".', impact: 'observe', input: v.strictObject({ path: Path }), output: Text }),
-  startProcess: sb({
-    name: 'startProcess', help: 'A supervised background job in a terminal session the person can open; answers JSON {processId, restartable: true}.', impact: 'administer',
-    input: v.strictObject({ command: Command, cwd: v.optional(v.string()) }), output: Text,
-  }),
-  stopProcess: sb({ name: 'stopProcess', help: 'Stop a supervised process.', impact: 'administer', input: v.strictObject({ processId: v.pipe(v.string(), v.nonEmpty()) }), output: Text }),
-  listProcesses: sb({ name: 'listProcesses', help: 'JSON rows {processId, pid, status, restartable, command, session?, waiting?}; status "waiting for input" with `waiting`, its last line, when a job stopped at a prompt.', impact: 'observe', input: v.strictObject({}), output: Text }),
+  ...processMembers(sb),
   rest: sb({
     name: 'rest', help: '"now" saves and stops the computer, ending what runs; "keep" runs on until it asks again.', impact: 'administer',
     input: v.strictObject({ answer: v.picklist(['now', 'keep']) }), output: Text,

@@ -22,6 +22,7 @@ import {
   allowedInPlan, inputJsonSchema, inputProblem, JSON_VALUE_MARK, jsonOf, operationId, typeJsonSchema,
   type Impact, type Operation, type OperationCall, type OperationResult, type Served,
 } from '../operations/operation';
+import { retiredMembersOf } from '../operations/retired';
 
 const typeOf = (schema: JsonSchema): string => jsonSchemaToType(schema, 'T').replace(/^type T = /u, '').replaceAll(`"${JSON_VALUE_MARK}"`, 'JsonValue');
 
@@ -302,6 +303,18 @@ function declarationOf(op: Operation): string {
   return `${doc}\n${op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
 }
 
+/** Each retired member of `ns` no served operation took back, as a call that refuses naming its successor. */
+function retiredMembers(ns: string, members: readonly Served[]): CodemodeProvider['tools'] {
+  const served = new Set(members.map(({ op }) => op.name));
+
+  return Object.fromEntries(retiredMembersOf(ns).filter(({ member }) => !served.has(member)).map(({ member, told }) => [member, {
+    description: told,
+    // It does nothing, so no work mode keeps it from saying so.
+    planAllowed: true,
+    execute: async () => await branchableToolCall(() => settle(Effect.fail(new KinuError('bad_input', told)))),
+  }]));
+}
+
 /** A namespace for programs and slates, over the same served operations; `summary` says what it is for. */
 export function codemodeNamespace(ns: string, summary: string, members: readonly Served[]): CodemodeProvider {
   return {
@@ -310,7 +323,7 @@ export function codemodeNamespace(ns: string, summary: string, members: readonly
     positionalArgs: true,
     operations: members,
     declarations: Object.fromEntries(members.map(({ op }) => [op.name, { full: operationDeclaration(op), call: callForm(op) }])),
-    tools: Object.fromEntries(members.map((served) => [served.op.name, {
+    tools: { ...retiredMembers(ns, members), ...Object.fromEntries(members.map((served) => [served.op.name, {
       description: served.op.help,
       ...(allowedInPlan(served.op) && { planAllowed: true }),
       // A refusal is the call's value, for the program to branch on.
@@ -327,7 +340,7 @@ export function codemodeNamespace(ns: string, summary: string, members: readonly
 
         return (await served.run(input, { callId: `codemode-${crypto.randomUUID()}`, ...(signal !== undefined && { signal }) })).value;
       }),
-    }])),
+    }])) },
   };
 }
 

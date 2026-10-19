@@ -2448,6 +2448,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
+  /** What a supervised job wrote most recently. */
+  supervisedLogs(processId: string, limits: { readonly lines?: number | undefined; readonly bytes?: number | undefined }): Promise<string> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* attempt('io', () => this.ensureReady());
+
+      return yield* attempt('process', () => this.#processes().logs(processId, limits));
+    }));
+  }
+
   /** A spec with no live row is not running: restoration has not started it yet, or its start
    *  failed and was recorded. */
   listSupervised(): Promise<readonly SupervisedProcessRow[]> {

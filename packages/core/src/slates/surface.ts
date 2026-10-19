@@ -11,6 +11,7 @@ import { isSlateMethodName } from './rpc';
 import { SLATE_READ_MODELS, type SlateReadModel } from './read-models';
 import { grantAdmits } from './capability-graph';
 import { AGENT_ASK_MEMBER, AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact, slateOwnerOnly } from './members';
+import { retiredMember } from '../operations/retired';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
@@ -230,6 +231,10 @@ function routed(id: string, request: SlateCallRequest, chain: readonly string[])
   // A malformed path is told its shape first; a well-formed one reaches only what the catalog puts on the surface.
   // The list names eval namespaces; `agent.send` and the rest of the surface's own are routed above it.
   return Effect.flatMap(route(id, request, chain), (found) => {
+    const retired = retiredMember(address.namespace, address.member);
+
+    // A slate kept since a member left the surface is told what replaced it.
+    if (retired !== null) return Effect.fail(new KinuError('bad_input', retired));
     const impact = slateAddressImpact(address);
 
     if (impact === null || (found.kind === 'namespace' && !slateReaches(address))) return Effect.fail(refused);

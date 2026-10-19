@@ -16,7 +16,7 @@ import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, settle, tol
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { parseInput, type JsonValue } from '../utils/json';
+import { parseInput, projectJsonValue, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
 import { desktopTools, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop';
 
@@ -89,6 +89,8 @@ export interface SandboxHandle {
   startSupervisedProcess(command: string, opts?: { cwd?: string }):
     Promise<{ processId: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
+  /** What a supervised job wrote most recently, both streams as its terminal showed them. */
+  supervisedProcessLogs(processId: string, limits: { readonly lines?: number | undefined; readonly bytes?: number | undefined }): Promise<string>;
   listSupervisedProcesses(): Promise<Array<{
     processId: string; pid?: number; status: string; command: string; restartable: boolean;
     /** The last line a job wrote, while it waits at a prompt (D95). */
@@ -530,7 +532,7 @@ function startProcessMember({ handle, touch }: Computer): ExecutorTool {
   return commandTool(
     'Start a SUPERVISED background process in the computer. Supervision records a restart ' +
       'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
-      'not and is lost. Returns JSON {processId}. Prefer this over `exec "cmd &"` for any ' +
+      'not and is lost. Answers {processId}. Prefer this over `exec "cmd &"` for any ' +
       'long-running server.',
     (args) => {
       if (!handle) return { refused: notConfigured() };
@@ -557,7 +559,7 @@ function startProcessMember({ handle, touch }: Computer): ExecutorTool {
             return handle.startSupervisedProcess(command, { cwd });
           });
 
-          return JSON.stringify({ ...started, cwd, restartable: true });
+          return { processId: started.processId };
         } catch (err) {
           return refusalOf(sandboxFailure({ doing: `computer.startProcess \`${command}\``, cause: err }));
         }
@@ -570,7 +572,7 @@ function startProcessMember({ handle, touch }: Computer): ExecutorTool {
 function stopProcessMember({ handle, touch }: Computer): ExecutorTool {
   return {
     description: 'Stop a supervised process by id and clear its restart spec.',
-    execute: async (...args: unknown[]): Promise<string | Refusal> => {
+    execute: async (...args: unknown[]) => {
       if (!handle) return notConfigured();
       const processId = parseInput(StringSchema, { value: args[0] });
 
@@ -582,9 +584,34 @@ function stopProcessMember({ handle, touch }: Computer): ExecutorTool {
         const result = await withSandboxRetry(() =>
           touch(() => handle.stopSupervisedProcess(processId)));
 
-        return JSON.stringify({ processId, ...result });
+        return { stopped: result.stopped };
       } catch (err) {
         return refusalOf(sandboxFailure({ doing: `computer.stopProcess ${processId}`, cause: err }));
+      }
+    },
+  };
+}
+
+const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
+
+/** `computer.logs`: a supervised job's one log (D95). */
+function logsMember({ handle, touch }: Computer): ExecutorTool {
+  return {
+    description: 'What a supervised process wrote most recently.',
+    planAllowed: true,
+    execute: async (...args: unknown[]) => {
+      if (!handle) return notConfigured();
+      const processId = parseInput(StringSchema, { value: args[0] });
+      const limits = parseInput(LogLimitsSchema, { value: args[1] });
+
+      if (processId === undefined || limits === undefined) {
+        return refusalOf(new KinuError('bad_input', 'computer.logs: takes a process id and its limits as one object, `{ lines?, bytes? }`'));
+      }
+
+      try {
+        return await withSandboxRetry(() => touch(() => handle.supervisedProcessLogs(processId, limits)));
+      } catch (err) {
+        return refusalOf(sandboxFailure({ doing: `computer.logs ${processId}`, cause: err }));
       }
     },
   };
@@ -599,7 +626,7 @@ function listProcessesMember({ handle, touch }: Computer): ExecutorTool {
       'can open and type into. Status "waiting for input" means it stopped at a prompt; `waiting` is its last line. ' +
       'Ask the person, or answer it yourself when the answer is yours to give, with exec: ' +
       '`tmux send-keys -t \'=<session>:\' \'<answer>\' Enter`.',
-    execute: async (): Promise<string | Refusal> => {
+    execute: async () => {
       if (!handle) return notConfigured();
 
       try {
@@ -609,7 +636,7 @@ function listProcessesMember({ handle, touch }: Computer): ExecutorTool {
           return handle.listSupervisedProcesses();
         }));
 
-        return JSON.stringify(rows);
+        return rows.map((row) => projectJsonValue({ value: row }));
       } catch (err) {
         return refusalOf(sandboxFailure({ doing: 'computer.listProcesses', cause: err }));
       }
@@ -695,6 +722,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       },
     },
     listProcesses: listProcessesMember(computer),
+    logs: logsMember(computer),
   };
 
   if (desktop !== undefined) {

@@ -6,6 +6,7 @@ import {
 import type { ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
 import { isSlateMethodName } from '../src/slates/rpc';
+import { RETIRED_MEMBERS } from '../src/operations/retired';
 
 const call = (path: string[], args: JsonValue[] = [], chain: string[] = []) => routeSlateCall({
   id: 'notes', request: { path, args, invocation: null }, chain,
@@ -161,4 +162,13 @@ test('issuedSlateInvocation returns the viewer the host recorded', () => {
     .toEqual({ id: 'issues', chain: ['root'], viewer });
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'plain' })).toEqual({ id: 'issues', chain: ['root'] });
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: null })).toBeNull();
+});
+
+test('a slate calling a member taken off the surface is told what replaced it', () => {
+  for (const [name, successor] of Object.entries(RETIRED_MEMBERS)) {
+    const [namespace = '', member = ''] = name.split('.');
+    const path = namespace === 'workspace' ? [member] : [namespace, member];
+
+    expect(() => call(path)).toThrow(successor);
+  }
 });

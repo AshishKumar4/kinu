@@ -329,7 +329,7 @@ describe("executor lifecycle state", () => {
       status: "idle",
     });
 
-    expect(await executor.tools.killProcess.execute(7)).toContain('"ok": true');
+    expect(await executor.tools.stopProcess?.execute('7')).toEqual({ stopped: true });
     expect(executor.getStatus?.().active).toBe(true);
     expect(box.calls).toContain("kill:7");
   });

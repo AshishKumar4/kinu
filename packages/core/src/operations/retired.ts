@@ -1,0 +1,42 @@
+/**
+ * Members and fields taken off the surface, each with what took its place. A call to one is refused naming its
+ * successor, so stored code that still calls it says what to change; nothing here runs. The one place retired names live.
+ */
+
+/** `namespace.member` → what replaced it, as a program calls it. */
+export const RETIRED_MEMBERS = {
+  'workspace.killProcess': 'workspace.stopProcess(processId)',
+} as const satisfies Readonly<Record<string, string>>;
+
+/** `namespace.operation` → each retired field and what to use instead. */
+export const RETIRED_FIELDS = {
+  'agents.hire': { mission: '"message"' },
+  'workspace.startProcess': {
+    env: 'the variables at the head of the command, as `PORT=4100 node server.js`',
+    timeoutMs: 'stopProcess(processId) when the work is done',
+  },
+} as const satisfies Readonly<Record<string, Readonly<Record<string, string>>>>;
+
+/** What a call to a retired member is told, or null for any other name. */
+export function retiredMember(namespace: string, member: string): string | null {
+  const name = `${namespace}.${member}`;
+
+  const successor = Object.entries(RETIRED_MEMBERS).find(([retired]) => retired === name)?.[1];
+
+  return successor === undefined ? null : `${name} was removed: use ${successor}`;
+}
+
+/** The retired members of `ns`, each with what a call to it is told. */
+export function retiredMembersOf(ns: string): readonly { readonly member: string; readonly told: string }[] {
+  return Object.entries(RETIRED_MEMBERS).flatMap(([name, successor]) => (name.startsWith(`${ns}.`)
+    ? [{ member: name.slice(ns.length + 1), told: `${name} was removed: use ${successor}` }]
+    : []));
+}
+
+/** What a retired field sent to `operation` is told, or null for any other field. */
+export function retiredField(operation: string, field: string): string | null {
+  const fields = Object.entries(RETIRED_FIELDS).find(([retired]) => retired === operation)?.[1];
+  const successor = fields === undefined ? undefined : Object.entries(fields).find(([retired]) => retired === field)?.[1];
+
+  return successor === undefined ? null : `"${field}" was removed: use ${successor}`;
+}

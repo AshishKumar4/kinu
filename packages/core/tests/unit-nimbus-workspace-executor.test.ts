@@ -1,3 +1,4 @@
+import { RETIRED_MEMBERS } from '../src/operations/retired';
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -108,11 +109,8 @@ describe('hosted Nimbus workspace provider', () => {
     });
     expect(await provider.tools.exec.execute('cat /home/main/proof.txt')).toBe('same bytes');
 
-    const started = toolText(await provider.tools.startProcess.execute('node server.js'));
-    expect(started).toContain('pid=41');
-    expect(started).toContain('workspace.logs(41)');
-    expect(started).not.toContain('nimbus.');
-    expect(await provider.tools.logs.execute(41)).toContain('ready');
+    const started = v.parse(v.object({ processId: v.string() }), await provider.tools.startProcess.execute('node server.js'));
+    expect(await provider.tools.logs.execute(started.processId)).toContain('ready');
     expect(await provider.tools.exposePort.execute(4321))
       .toBe('https://4321.example.test\nverified: a request to this URL reaches the server on port 4321');
     expect(await provider.exposePort(4321)).toEqual({
@@ -289,7 +287,7 @@ describe('the workspace process and port surface', () => {
     expect(refusal).toMatchObject({ success: false, reason: 'io' });
   });
 
-  test("a program's workspace.logs(pid, { lines, bytes }) reads the process with both limits", async () => {
+  test("a program's workspace.logs(processId, { lines, bytes }) reads the process with both limits", async () => {
     const box = fakeBox();
     const asked: unknown[] = [];
 
@@ -304,8 +302,16 @@ describe('the workspace process and port surface', () => {
 
     const workspace = executorNamespace(blockedProvider(box)).tools;
 
-    await present(workspace.logs, 'workspace.logs').execute(41, { lines: 20, bytes: 4096 });
+    await present(workspace.logs, 'workspace.logs').execute('41', { lines: 20, bytes: 4096 });
     expect(asked).toEqual([{ lines: 20, bytes: 4096 }]);
+  });
+
+  test('a program calling a member taken off the workspace is told what replaced it', async () => {
+    const workspace = executorNamespace(blockedProvider(fakeBox())).tools;
+
+    expect(await present(workspace.killProcess, 'workspace.killProcess').execute('41')).toMatchObject({
+      success: false, reason: 'bad_input', error: expect.stringContaining(RETIRED_MEMBERS['workspace.killProcess']),
+    });
   });
 
   test('a port without a listener refuses rather than advertising a working preview', async () => {
