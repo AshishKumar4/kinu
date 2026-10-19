@@ -2246,7 +2246,7 @@ export {
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';
 
-export { DeviceDesktopSchema, type DeviceDesktop } from './execution/device-desktop';
+export { DeviceDesktopSchema, NO_DESKTOP, type DeviceDesktop } from './execution/device-desktop';
 
 export {
   COPY_SCRIPT, GITHUB_ICON, REPO_URL,

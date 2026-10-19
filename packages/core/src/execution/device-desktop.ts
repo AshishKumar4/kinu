@@ -20,3 +20,5 @@ export const DeviceDesktopSchema = v.variant('state', [
 ]);
 
 export type DeviceDesktop = v.InferOutput<typeof DeviceDesktopSchema>;
+
+export const NO_DESKTOP: DeviceDesktop = { state: 'none' };

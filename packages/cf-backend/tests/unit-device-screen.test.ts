@@ -213,7 +213,7 @@ describe("a PC's screen through the owner's account", () => {
     harness.close();
   });
 
-  test('the roster shows the screen the last HELLO reported; one the hub cannot read is none', async () => {
+  test("the roster shows the screen its connection's HELLO reported: one the hub cannot read is none, and so is a PC offline", async () => {
     const harness = createTestUserDO();
     const { device } = await connectDevice(harness);
     const desktop = async () => (await harness.userDO.listDevices(await testOwner()))[0]?.desktop;
@@ -224,6 +224,12 @@ describe("a PC's screen through the owner's account", () => {
     expect(await desktop()).toEqual({ state: 'setup', detail: 'Install the Command Line Tools (xcode-select --install)' });
 
     await harness.userDO.webSocketMessage(device.ws, JSON.stringify({ ...CAPABLE_HELLO, desktop: { state: 'ready', width: 0, height: 982 } }));
+    expect(await desktop()).toEqual({ state: 'none' });
+
+    // The screen is the connection's, as its being online is: no row of the account outlives the socket with it.
+    await harness.userDO.webSocketMessage(device.ws, JSON.stringify({ ...CAPABLE_HELLO, desktop: READY }));
+    device.drop();
+    await harness.userDO.webSocketClose(device.ws, 1006, '', false);
     expect(await desktop()).toEqual({ state: 'none' });
 
     await harness.joinFibers();

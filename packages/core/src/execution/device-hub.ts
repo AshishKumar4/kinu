@@ -15,6 +15,7 @@ import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
 import { EXECUTOR_CAPABILITIES } from './types';
+import { DeviceDesktopSchema, NO_DESKTOP, type DeviceDesktop } from './device-desktop';
 import { connections, type Connections, type ConnectionSocket, type ConnectionsContext } from '@nimbus-sh/fabric/connections.js';
 import { z } from 'zod/v4';
 import * as v from 'valibot';
@@ -48,6 +49,8 @@ const DeviceAttachmentSchema = z.object({
   features: z.array(z.string()).optional(),
   probe: DeviceToolchainSchema.optional(),
   relays: z.array(z.string()).optional(),
+  /** The screen its HELLO reported (`DeviceDesktopSchema`), narrowed where it is read. */
+  desktop: z.unknown().optional(),
 });
 
 export interface DeviceSocketCtx extends ConnectionsContext {
@@ -199,6 +202,19 @@ export class DeviceSocketHub {
 
     if (!ws) return;
     this.sockets.write(ws, { ...this.sockets.read(ws) ?? { device: deviceId }, ...patch });
+  }
+
+  /** The screen a device's HELLO reported, held on its socket: like its being online, it is the connection's (1014-t). */
+  holdDesktop(deviceId: string, desktop: DeviceDesktop): void {
+    this.annotate(deviceId, { desktop });
+  }
+
+  /** None for a device with no live socket, and for one whose HELLO named a screen this hub cannot read. */
+  desktop(deviceId: string): DeviceDesktop {
+    const ws = this.liveSocket(deviceId);
+    const held = v.safeParse(DeviceDesktopSchema, ws === null ? undefined : this.sockets.read(ws)?.desktop);
+
+    return held.success ? held.output : NO_DESKTOP;
   }
 
   relayDevice(): string | null {

@@ -23,7 +23,8 @@ A PC the workspace holds is a machine in the Environment column, like the comput
 
 The device reports which of these applies in each `hello` (`DeviceDesktopSchema`,
 `packages/core/src/execution/device-desktop.ts`), and `kinu desktop share` reconnects it so the change shows at once. The
-client reads it from the device's roster row (`desktop`). A daemon older than the screen speaks device protocol 3, which
+hub holds it on the device's live socket, as it holds the device's being online, so nothing of it is stored: an offline
+PC has no screen to open. The client reads it from the device's roster row (`desktop`). A daemon older than the screen speaks device protocol 3, which
 the hub serves nothing on: it is pushed the update, as every daemon a protocol behind is.
 
 ## How the screen gets here
