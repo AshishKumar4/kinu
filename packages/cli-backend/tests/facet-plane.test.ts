@@ -3,11 +3,12 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { actorHomeName, codemodeSurface, narrowToolSurface, type JsonValue } from '@kinu.run/core';
+import { actorHomeName, codemodeSurface, narrowToolSurface, SCRATCH_ROOT, type JsonValue } from '@kinu.run/core';
 import { fileNamespaceFor } from '../../core/tests/helpers';
 import { scratchDir, toolExecute, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 import { cleanupFacetScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
+import { actorFilePlane } from '../src/actor-plane';
 import { actorReferenceOf, localActorDirectory, recoverLocalActorRetirements, registerLocalActor } from '@kinu.run/core';
 
 interface LocalRoot {
@@ -25,9 +26,9 @@ function rootRuntime(state: string, cwd = scratchDir('facet-plane-folder')): Loc
 }
 
 /** A child over its root's database: same handle, same file, its own actor row. */
-function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): CLIRuntime {
-  const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
-  const facet = actorHomeName({ origin: 'agent', name: binding.name, storageKey: binding.storageKey });
+function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string, origin: 'agent' | 'evolution' = 'agent'): CLIRuntime {
+  const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin, lifetime: origin === 'evolution' ? 'task' : 'durable' });
+  const facet = actorHomeName({ origin, name: binding.name, storageKey: binding.storageKey });
   const child = createCLIRuntime(root.db, { llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
   return shareLocalWorkspacePlane(child, parent);
@@ -55,6 +56,33 @@ describe('local actor file-plane identity', () => {
     expect(await readText(root.rt.storage.vfs, join(project, 'shared.txt'))).toBe('shared\n');
     expect(readdirSync(project)).toEqual(['shared.txt']);
     expect(child.identity.name).toBe('reader');
+  });
+
+  // The local machine's agents are one user over the own space, so its shared directory is every one's: the root, a
+  // hire, a background agent, and a head over its parent's plane, each through its file plane and its shell.
+  test('every local agent reads and writes the shared directory, which the own space holds before anyone writes it', async () => {
+    const state = scratchDir('facet-plane-scratch');
+    const project = join(state, 'project');
+    mkdirSync(project);
+    const root = rootRuntime(state, project);
+    // `vfs://scratch`, as this machine's shell and file plane name it: in the own space.
+    const shared = join(state, SCRATCH_ROOT);
+
+    expect(existsSync(shared)).toBe(true);
+    const hire = childRuntime(root.rt, root, 'reader');
+    const background = childRuntime(root.rt, root, 'tidy', 'evolution');
+    const head = actorFilePlane({ source: root.rt, actor: hire.actor, stores: hire.stores });
+    const agents: readonly [string, CLIRuntime][] = [['root', root.rt], ['hire', hire], ['background', background]];
+
+    for (const [kind, rt] of agents) {
+      await rt.storage.vfs.writeFile(`${shared}/${kind}.md`, new TextEncoder().encode(`${kind}\n`));
+      expect((await exec(rt, `echo ${kind} >> "${shared}/log.txt"`)).exitCode).toBe(0);
+    }
+
+    await head.toolFiles.writeFile(`${shared}/root.md`, new TextEncoder().encode('head edited root\n'));
+    expect(await readText(hire.storage.vfs, `${shared}/root.md`)).toBe('head edited root\n');
+    expect(await readText(root.rt.storage.vfs, `${shared}/log.txt`)).toBe('root\nhire\nbackground\n');
+    expect(readdirSync(shared).sort()).toEqual(['background.md', 'hire.md', 'log.txt', 'root.md']);
   });
 
   // Named for its brief, a child's home repeats across workspaces; the named shells it keeps on the machine must not.

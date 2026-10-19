@@ -53,3 +53,14 @@ describe('an answer is taught pages only where a person reads it with its pages 
     expect(slateUiSegments(example).map((segment) => segment.kind)).toEqual(['text', 'slate']);
   });
 });
+
+describe('the shared directory is in the file layout every agent is told', () => {
+  test('hosted and local alike: vfs://scratch, every agent\'s to read and write, beside each one\'s own home', () => {
+    for (const backend of ['cf', 'cli-local'] as const) {
+      const prompt = buildSystemPromptSync(createTestRuntime().rt, { ...WEB, backend });
+
+      expect({ backend, told: prompt.includes('`vfs://scratch` is the one directory every agent of it reads and writes') }).toEqual({ backend, told: true });
+    }
+  });
+});
+

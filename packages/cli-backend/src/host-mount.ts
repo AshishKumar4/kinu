@@ -9,7 +9,7 @@ import * as fs from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { Effect } from 'effect';
 import type { CheckpointFiles, FileCheckpoints, FileReach, MountedVfs, PathPlanes, VfsDigestWrite, VfsMount, WriteObserver } from '@kinu.run/core';
-import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, sha256Hex, withMountTable, workspacePath } from '@kinu.run/core';
+import { agentHome, FOLDER_SUBTREE, MAIN_AGENT, SCRATCH_ROOT, sha256Hex, withMountTable, workspacePath } from '@kinu.run/core';
 import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle, tolerate, tolerateAsync } from '@kinu.run/core/obs';
@@ -236,6 +236,8 @@ export type LocalPlane = MountedVfs & { readonly composite: CompositeVFS };
 /** The machine's files as its shell names them; only the folder is snapshotted. */
 export function localFilePlane(input: LocalFilePlane): LocalPlane {
   linkFolder(input.space, input.folder);
+  // There before any agent writes it, so every agent sees where shared work goes.
+  mkdirSync(join(input.space, SCRATCH_ROOT), { recursive: true });
   // The host's own links are the namespace's to follow, as the kernel's are, so no link reaches past a mount's rule.
   const namespace = new CompositeVFS(createHostMountVFS(input.folder, input.checkpoints));
   namespace.mount(input.space, spaceFiles(input.space));

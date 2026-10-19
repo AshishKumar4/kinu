@@ -1126,7 +1126,7 @@ export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  isHiddenEntry, workspacePath, SHARED_ROOTS, SLATES_ROOT, UPLOADS_ROOT, WORKSPACE_ROOT,
+  isHiddenEntry, workspacePath, SCRATCH_ROOT, SHARED_ROOTS, SLATES_ROOT, UPLOADS_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
