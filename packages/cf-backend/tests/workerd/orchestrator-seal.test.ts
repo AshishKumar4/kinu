@@ -83,6 +83,14 @@ describe('a production OrchestratorAgent stub', () => {
 
     for (const [name, call] of Object.entries(routes)) expect([name, await answerTo(call)]).not.toEqual([name, refusal(name)]);
   });
+
+  // Production bc78a94bd, eval-seed-probe-c87o3p, 2026-10-19: each of an agent isolate's deaths of memory its tail heard
+  // was refused here as an unimplemented method (agent.isolate_oom_report_failed, 4 of 4), so no turn was marked.
+  test('answers the out-of-memory report its agents\' tail sends it', async () => {
+    const stub = env.SEALED_ORCHESTRATOR.get(env.SEALED_ORCHESTRATOR.idFromName('sealed-oom'));
+
+    expect(await answerTo(() => stub.isolateOutOfMemory('no-such-agent', Date.now()))).not.toContain(refusal('isolateOutOfMemory'));
+  });
 });
 
 describe('a production UserDO stub', () => {

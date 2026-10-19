@@ -347,6 +347,8 @@ const ORCHESTRATOR_METHODS = [
   'ownsBrowserSession',
   'supervisorOp',
   'agentWorkspace',
+  // Its agents' isolate tail (`AgentIsolateTail`) reports a death of memory here.
+  'isolateOutOfMemory',
   'workspaceTitle',
   'activations',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.
