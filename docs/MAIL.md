@@ -298,7 +298,7 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 
 **An agent's mail folds into its Agent tab** in the side panel (owner, 2026-10-19), not a tab of its own.
 
-- The tab gains a `Section` labelled "Mail" (id `agent-mail`) right after Profile, whose identity block now shows the agent's address under its name. The workspace's main agent shows the workspace's address. The tab's own sections become Profile, Memory, Evolution and Activity in the UI lane's simplification.
+- The tab gains a `Section` labelled "Mail" (id `agent-mail`) right after Profile, whose identity block now shows the agent's address under its name. The workspace's main agent shows the workspace's address. The tab's own sections keep their order under plain labels in the UI lane's simplification: Profile, Memory, Activity, Evolution.
 - The section is there only while the agent has mail, and the Agent tool counts its unread mail. A workspace with no mail shows nothing new.
 - A thread opens in place in the section; "In Mail" opens the Mail page narrowed to that address.
 

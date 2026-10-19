@@ -712,7 +712,7 @@ const BOX_OF = { main: "api-worker", scout: "scout" } as const;
 
 /**
  * The Agent tab for one agent, as the inspector's simplified tab lays it out: Profile (its identity and address), then
- * Mail while the agent has any, then Memory, Evolution and Activity, each an icon and a plain label, shown closed here.
+ * Mail while the agent has any, then Memory, Activity and Evolution, each an icon and a plain label, shown closed here.
  */
 function AgentPanel({ agent, threads, open, onOpen, onChange }: {
   agent: "main" | "scout"; threads: readonly Thread[]; open: string | null; onOpen: (id: string | null) => void; onChange: (next: Thread) => void;
@@ -752,11 +752,11 @@ function AgentPanel({ agent, threads, open, onOpen, onChange }: {
       <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />} defaultOpen={false}>
         <p className="p-row-text p-text-3">Notes and facts.</p>
       </Section>
-      <Section id="evolution" title="Evolution" icon={<GitBranchIcon size={14} className="p-text-2" />} defaultOpen={false}>
-        <p className="p-row-text p-text-3">Prompt versions.</p>
-      </Section>
       <Section id="agent-doing" title="Activity" icon={<ChartLineUpIcon size={14} className="p-text-2" />} defaultOpen={false}>
         <p className="p-row-text p-text-3">Ratings.</p>
+      </Section>
+      <Section id="evolution" title="Evolution" icon={<GitBranchIcon size={14} className="p-text-2" />} defaultOpen={false}>
+        <p className="p-row-text p-text-3">Prompt versions.</p>
       </Section>
     </div>
   );
