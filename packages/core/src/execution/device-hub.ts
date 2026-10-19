@@ -8,7 +8,7 @@ import { diagnostics } from '../obs/log';
 import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, NO_DEVICE_CONNECTED, WS_OPEN, type TunnelSocket } from './device-tunnel';
+import { DeviceTunnel, NO_DEVICE_CONNECTED, type TunnelSocket } from './device-tunnel';
 import { DEVICE_ERRORS, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
 import { DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
@@ -50,9 +50,8 @@ const DeviceAttachmentSchema = z.object({
   relays: z.array(z.string()).optional(),
 });
 
-export interface DeviceSocketCtx extends ConnectionsContext {
+export interface DeviceSocketCtx extends ConnectionsContext<DeviceSocket> {
   acceptWebSocket(ws: DeviceSocket, tags: string[]): void;
-  getWebSockets(tag?: string): DeviceSocket[];
 }
 
 function deviceTag(deviceId: string): string {
@@ -77,9 +76,9 @@ export class DeviceSocketHub {
 
   private readonly relays = new DeviceRelays();
 
-  private readonly sockets: Connections<z.infer<typeof DeviceAttachmentSchema>>;
+  private readonly sockets: Connections<z.infer<typeof DeviceAttachmentSchema>, DeviceSocket>;
 
-  constructor(private readonly ctx: DeviceSocketCtx) {
+  constructor(ctx: DeviceSocketCtx) {
     this.sockets = connections(ctx, DeviceAttachmentSchema);
   }
 
@@ -123,12 +122,7 @@ export class DeviceSocketHub {
   }
 
   liveSocket(deviceId: string): DeviceSocket | null {
-    // Nimbus ask (connections socket type): get() erases the socket's send surface.
-    for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
-      if (ws.readyState === WS_OPEN) return ws;
-    }
-
-    return null;
+    return this.sockets.get(deviceTag(deviceId));
   }
 
   /** The fresh toolchain answer, or null: never asked, unable to answer, or stale. Null never means "has none". */

@@ -246,7 +246,7 @@
   // agent so instead of handing back a URL that cannot resolve. It does NOT
   // disable either executor.
   "vars": {
-    "NIMBUS_RUNTIME_CATALOG_SHA256": "11b4b6b174e87c044734207d7c8cd40a412a670e477cc99299e347559f8756fb",
+    "NIMBUS_RUNTIME_CATALOG_SHA256": "6219228c6d471932af08fb62640b3879af94c5c96120e0f5cfb6fe14636a4c90",
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
     "PREVIEW_HOST_SUFFIX": "kinu.run",
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",
@@ -401,8 +401,10 @@
   // dist/runtime/runtime-catalog.js). The var NIMBUS_RUNTIME_CATALOG_SHA256 names
   // that catalog; without it `nimbus install` refuses, naming the var. Its value is
   // the catalog Nimbus pins for its own deployments (apps/nimbus-deployments.json
-  // at its 0.18.0 release commit 9ace634a0, unchanged since 0.17.0's 025354c39). The bucket's catalog/v1.json also lists a scratch
-  // TypeScript 7 runtime whose runner no worker build registers, so it is not pinned.
+  // at its core 0.24.0 release commit 127e8ce4f): core 0.24 registers bash-runner@5
+  // and @6 and cpython-runner up to @3, which 0.18's catalog (11b4b6b1…) holds no
+  // build for past bash 5.2.37-3; this one adds bash -5 to -7, cpython -2 and -3,
+  // git 2.53.0 and TypeScript 7.0.2.
   // Measured 2026-08-17: this bucket exists on this account and IS seeded —
   // clang, python, ruby, bash, cpython. Without the binding the Worker throws
   // `NIMBUS_RUNTIME_CACHE binding missing`, which is why a hosted `python3` was
@@ -530,7 +532,7 @@
       // driven by the eval identity alone: DEV_USER_EMAIL names it, and the
       // `DEV_IDENTITY_SECRET` secret, staging's own, is its whole authority.
       "vars": {
-        "NIMBUS_RUNTIME_CATALOG_SHA256": "11b4b6b174e87c044734207d7c8cd40a412a670e477cc99299e347559f8756fb",
+        "NIMBUS_RUNTIME_CATALOG_SHA256": "6219228c6d471932af08fb62640b3879af94c5c96120e0f5cfb6fe14636a4c90",
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway-staging/workers-ai/v1",
         "PREVIEW_HOST_SUFFIX": "staging.kinu.run",
         "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",

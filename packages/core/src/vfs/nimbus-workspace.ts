@@ -26,7 +26,7 @@ import {
   type HomeRootVfs, type TmpConfiner,
 } from './agent-home';
 import * as v from 'valibot';
-import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
+import { walkedPath, WORKSPACE_ROOT } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
@@ -40,10 +40,13 @@ export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runt
 
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 
-/** `open`'s files with relative paths from `cwd`; a write makes its parent directories first, as the same credential. */
+/**
+ * `open`'s files with relative paths from `cwd`, each `..` the store's walk to take, after a link; a write makes its
+ * parent directories first, as the same credential.
+ */
 function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): WorkspaceFiles {
   const at = <T>(path: string, syscall: string, call: (files: WorkspaceFiles, absolute: string) => Awaitable<T>): Promise<T> => {
-    const absolute = workspacePath(path, cwd);
+    const absolute = walkedPath(path, cwd);
 
     return atVfsPath(absolute, syscall, async () => call(await open(), absolute));
   };
@@ -61,7 +64,7 @@ function workspaceFiles(open: () => Promise<WorkspaceFiles>, cwd: string): Works
     unlink: (path) => at(path, 'unlink', (files, absolute) => files.unlink(absolute)),
     mkdir: (path, opts) => at(path, 'mkdir', (files, absolute) => files.mkdir(absolute, opts)),
     removeRecursive: (path) => at(path, 'rm', (files, absolute) => files.removeRecursive(absolute)),
-    rename: (oldPath, newPath) => at(oldPath, 'rename', (files, absolute) => files.rename(absolute, workspacePath(newPath, cwd))),
+    rename: (oldPath, newPath) => at(oldPath, 'rename', (files, absolute) => files.rename(absolute, walkedPath(newPath, cwd))),
     readRange: (path, offset, length) => at(path, 'read', (files, absolute) => files.readRange(absolute, offset, length)),
   };
 }
@@ -104,7 +107,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceFiles {
 /**
  * The store as `cred` (default the session user) sees it, with no mount, relative paths from `home`: an actor's own state.
  * Nimbus's own SqliteFiles, never the workspace `.fs`, which is pinned to the session user; its stat carries the row's
- * revision and inode. Its `..` is still taken lexically, before any link, as SqliteVFS keys a path (NIMBUS-ASKS #53).
+ * revision and inode. Its `..` is taken after a link, as the namespace takes it (Nimbus 0.19, ask 53).
  */
 export function storeFiles(open: () => Promise<SqliteVFS>, plane: { readonly home: string; readonly cred?: VfsCred }): WorkspaceFiles {
   let files: SqliteFiles | undefined;

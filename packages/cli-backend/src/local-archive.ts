@@ -17,6 +17,7 @@ import {
   FOLDER_SUBTREE, SESSION_UID, SHARED_ROOTS, workspaceArchiveStore, type ArchiveStoreSource, type WorkspaceBundle,
 } from '@kinu.run/core';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
+import { removeWhole } from '@kinu.run/core';
 import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
 
 /** The own space's trees an archive carries (`identity/archive.ts`'s carried roots); the rest is never staged. */
@@ -53,7 +54,7 @@ export async function stageLocalArchive(roots: LocalArchiveRoots, skip: string):
 
     // The scratch store's own bootstrap is not this workspace's.
     for (const tree of SPACE_TREES) {
-      if (kernel.statIfPresent(`/${tree}`, false) !== null) kernel.removeRecursive(`/${tree}`);
+      if (kernel.statIfPresent(`/${tree}`, false) !== null) removeWhole(kernel, `/${tree}`);
     }
 
     for (const tree of SPACE_TREES) {
@@ -108,7 +109,7 @@ export function publishStoreFiles(bundle: WorkspaceBundle, roots: LocalArchiveRo
     for (const [path, disk] of trees) {
       if (kernel.statIfPresent(path, false) === null) continue;
       publish(kernel, path, disk);
-      kernel.removeRecursive(path);
+      removeWhole(kernel, path);
     }
   }));
 }

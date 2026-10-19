@@ -10,6 +10,7 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { toolExecute } from '@kinu.run/test-utils';
 import { createWorkspaceBundle, fileToolOver } from './helpers';
 import { workspaceFilePlane } from '../src/vfs/mounts';
+import { storeFiles } from '../src/vfs/nimbus-workspace';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { withApprovalGatedFiles } from '../src/execution/approval';
@@ -40,6 +41,20 @@ test('`..` after a link is the parent of where the link leads, for a read and a 
 
   expect(await readText(workspace.vfs, '/home/main/deep/written.txt')).toBe('through the link');
   expect(await workspace.vfs.stat('written.txt')).toBeNull();
+});
+
+// The store plane walks it as the namespace does (Nimbus 0.19, ask 53); before, it took `..` lexically, the link's own
+// directory (armada 20261012125457-73597035).
+test('`..` after a link on the store plane is the parent of where the link leads, for a read and a write', async () => {
+  const workspace = await linkedWorkspace();
+  const store = storeFiles(async () => (await workspace.session()).vfs, { home: WORKSPACE_ROOT });
+
+  expect(await readText(store, 'link/../target.txt')).toBe('beside where the link leads');
+
+  await writeText(store, 'link/../by-store.txt', 'through the link');
+
+  expect(await readText(workspace.vfs, '/home/main/deep/by-store.txt')).toBe('through the link');
+  expect(await workspace.vfs.stat('by-store.txt')).toBeNull();
 });
 
 test('an empty path is the home, as on the agent planes', async () => {
