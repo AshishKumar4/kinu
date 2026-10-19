@@ -415,14 +415,18 @@ export function programDeclarations(providers: readonly DescribedProvider[]): Re
 }
 
 /**
- * `describe` as a program's own function over `declarations`: a namespace or member it does not have throws, naming
- * the namespaces it does. Source text, so each backend defines it in the program's scope.
+ * `describe` as a program's own function over `declarations`: a name it does not have throws, naming the deepest
+ * declared name holding it (`workspace.slates` for `workspace.slates.$list`), else the namespaces it has. Source text,
+ * so each backend defines it in the program's scope.
  */
 export function describeProgramSource(declarations: Readonly<Record<string, string>>): string {
   return `const describe = ((declared) => (name) => {
   const namespaces = Object.keys(declared).filter((key) => !key.includes('.'));
   if (name === undefined) return namespaces.map((key) => declared[key]).join('\\n');
   if (Object.hasOwn(declared, String(name))) return declared[String(name)];
+  const parts = String(name).split('.');
+  const holder = parts.slice(1).map((_, cut) => parts.slice(0, parts.length - 1 - cut).join('.')).find((prefix) => Object.hasOwn(declared, prefix));
+  if (holder !== undefined) throw new Error(\`describe: nothing is named "\${String(name)}"; describe('\${holder}') declares what it holds\`);
   throw new Error(\`describe: nothing is named "\${String(name)}"; namespaces: \${namespaces.join(', ')}\`);
 })(${JSON.stringify(declarations)});`;
 }
