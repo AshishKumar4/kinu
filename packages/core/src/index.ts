@@ -1819,22 +1819,21 @@ export type {
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
-// GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
+// The scaffold's versions and the owner's decisions on them.
 export {
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
+  previewScaffoldLive, proposeScaffold, runScaffoldOnce,
   type EvolutionStatus, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
-// The proposer and its artifact store (docs/EVOLUTION-REDESIGN.md §3-4).
+// The artifact store a dream's section and tool edits stage in (docs/EVOLUTION-REDESIGN.md §3-4).
 export {
   artifactOverrides, artifactVersion, currentArtifacts, listArtifactVersions,
   sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
   type ArtifactOverrides, type ArtifactStatus, type ArtifactVersion,
 } from './evolution/artifacts';
 
-export { runProposer, SCAFFOLD_ARTIFACT, scoreAuthoredEdit, type ProposerOutcome } from './evolution/proposer';
 
 export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
@@ -1858,21 +1857,6 @@ export {
 } from './evolution/refinement-host';
 
 export { activateDreamSkills } from './evolution/refinement-skill';
-
-export {
-  runGepa,
-  DEFAULT_GEPA_BUDGET,
-  initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks, aggregateScore,
-} from './evolution/gepa/index';
-
-export type {
-  EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
-  GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
-  GepaIterationState, GepaProgressHooks, GepaResult,
-  GepaRunSummary, GepaStopReason,
-  GepaParetoEntry,
-} from './evolution/gepa/index';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 

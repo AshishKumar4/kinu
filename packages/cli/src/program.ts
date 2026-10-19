@@ -23,7 +23,6 @@ import {
   qualityCommand,
   eventsCommand,
   executorsCommand,
-  gepaCommand,
   headsCommand,
   swarmCommand,
   memoryCommand,
@@ -356,15 +355,6 @@ export function buildProgram(): Command {
     .action(debugCommand);
 
   program
-    .command('gepa <name> [runId]')
-    .helpGroup(INSPECT)
-    .description('Show GEPA searches, or run one over the scaffold with --run')
-    .option('--run', 'Run one proposer search over the scaffold, judged on recent turns without running it')
-    .option('--limit <n>', 'Run limit')
-    .option('--json', 'Print raw JSON')
-    .action(gepaCommand);
-
-  program
     .command('quality <name>')
     .helpGroup(INSPECT)
     .description('Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals')
@@ -465,7 +455,6 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['swarm', 'kinu swarm jarvis'],
   ['heads', 'kinu heads jarvis --limit 5'],
   ['debug', 'kinu debug jarvis -o jarvis.debug.jsonl'],
-  ['gepa', 'kinu gepa jarvis --run'],
   ['quality', 'kinu quality jarvis'],
   ['connect', 'kinu connect --label studio'],
   ['desktop', 'kinu desktop status'],

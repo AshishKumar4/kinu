@@ -4,7 +4,7 @@ import type { ComponentType, ReactNode } from "react";
 import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
 import {
   GitBranchIcon, BrainIcon,
-  SparkleIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
+  ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
   NotePencilIcon, ArrowsClockwiseIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
@@ -22,7 +22,6 @@ interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt
 const KIND_ICON = {
   scaffold: GitBranchIcon,
   fact: BrainIcon,
-  gepa: SparkleIcon,
   ratings: ChecksIcon,
   artifact: NotePencilIcon,
   refinement: ArrowsClockwiseIcon,

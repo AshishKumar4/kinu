@@ -10,8 +10,7 @@ import {
   buildChangelog, countUnseenChangelog,
   revertChangelogEntryById,
   initScaffoldTables, initTurnRatingTables,
-  initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
-  startGepaRun, finishGepaRun,
+  initFactsTable, createFactsStore, initRunEventTables,
   recordTurnRating, type RecordTurnRatingInput,
   modifyScaffold, applyPromotionDecision, getPendingScaffold,
   EvolutionEngine,
@@ -37,7 +36,6 @@ function setup() {
   initScaffoldTables(execRaw);
   initTurnRatingTables(execRaw);
   initFactsTable(execRaw);
-  initGepaTables(execRaw);
   initRefinementTables(execRaw);
 
   return { rt, stores, facts: createFactsStore(rt.storage.sql, rt.actor) };
@@ -188,33 +186,14 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(item.summary).not.toContain('v9');
   });
 
-  test('GEPA and rating entries are informational (no revert)', () => {
+  test('rating entries are informational (no revert)', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
     const actor = rt.actor;
-    const runId = startGepaRun(sql, actor, { target: 'scaffold' });
-    finishGepaRun(sql, actor, {
-      runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1',
-      metricCalls: 12, iterations: 3,
-    });
-    // An aborted run changed nothing.
-    const abortedId = startGepaRun(sql, actor, { target: 'scaffold' });
-    finishGepaRun(sql, actor, {
-      runId: abortedId, status: 'aborted', stopReason: 'aborted', winnerId: null,
-      metricCalls: 0, iterations: 0,
-    });
     rate(rt, { score: 5, source: 'thumbs', request: 'build it', answer: 'done' });
     rate(rt, { score: 1.4, source: 'model', request: 'fix it', answer: 'wrong', followup: 'no, the other one' });
 
     const entries = buildChangelog(sql, actor);
-    const gepa = entries.filter((e) => e.kind === 'gepa');
-    expect(gepa).toHaveLength(1);
-    expect(gepa[0].summary).toBe('Tuned my own instructions');
-    expect(gepa[0].evidence).toContain('found a better candidate');
-    expect(gepa[0].evidence).toContain('3 iterations');
-    expect(gepa[0].evidence).toContain('12 metric calls');
-    expect(gepa[0].revert).toBeUndefined();
-
     const ratings = present(entries.find((e) => e.kind === 'ratings'), 'the ratings entry');
     expect(ratings.summary).toContain('Rated 2 turns');
     expect(ratings.evidence).toContain('satisfaction 3.2');
@@ -760,19 +739,6 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
       .toBe(idFor([['b.two', now], ['a.one', now - 1000]]));
   });
 
-  test('a completed GEPA run is dated by when it ENDED', () => {
-    const { rt } = setup();
-    const runId = startGepaRun(rt.storage.sql, rt.actor, { target: 'scaffold' });
-    const endedAt = Date.now() + 60_000;
-    finishGepaRun(rt.storage.sql, rt.actor, {
-      runId, status: 'completed', stopReason: 'iterations_exhausted',
-      winnerId: 'cand-1', metricCalls: 12, iterations: 3,
-    });
-    void rt.storage.sql`UPDATE gepa_runs SET ended_at = ${endedAt} WHERE run_id = ${runId}`;
-
-    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'gepa');
-    expect(entry.at).toBe(endedAt);
-  });
 });
 
 describe('renderChangelogText + revert guards', () => {

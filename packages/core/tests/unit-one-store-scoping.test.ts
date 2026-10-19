@@ -19,9 +19,6 @@ import { initLessonTables, recordLesson, listLessons, getLesson, corroborateLess
 import { initTurnRatingTables, listTurnRatings, ratingOf, recordTurnRating } from '../src/evolution/ratings';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initRefinementTables, createRefinementStore } from '../src/evolution/refinement';
-import {
-  initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
-} from '../src/evolution/gepa/persistence';
 import { initActorStateSchema } from '../src/state/workspace-schema';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
@@ -299,30 +296,6 @@ describe('two actors, one database: refinement_requests', () => {
     expect(a.nextRequested()).toBeNull();
     expect(b.nextRequested()?.id).toBe(second.request.id);
     expect(a.coveredTurnIds().size).toBe(2);
-    w.close();
-  });
-});
-
-describe('two actors, one database: gepa_runs and gepa_candidates', () => {
-  test('a caller-minted candidate id belongs to one run of one actor', () => {
-    const w = world();
-    initGepaTables(w.execRaw);
-    const runA = startGepaRun(w.sql, w.a, { target: 'scaffold' });
-    const runB = startGepaRun(w.sql, w.b, { target: 'scaffold' });
-
-    const candidate = (source: string) => ({
-      id: 'cand-1', parentId: null, source,
-      scores: new Map([['i1', 1]]), feedback: new Map<string, string>(), createdAt: 1,
-    });
-
-    persistGepaCandidate(w.sql, w.a, { runId: runA, candidate: candidate('from-a'), iteration: 0 });
-    persistGepaCandidate(w.sql, w.b, { runId: runB, candidate: candidate('from-b'), iteration: 0 });
-
-    expect(w.count('gepa_candidates')).toBe(2);
-    expect(loadGepaCandidates(w.sql, w.a, runA).map((c) => c.source)).toEqual(['from-a']);
-    expect(loadGepaCandidates(w.sql, w.b, runB).map((c) => c.source)).toEqual(['from-b']);
-    expect(listGepaRuns(w.sql, w.a).map((r) => r.runId)).toEqual([runA]);
-    expect(listGepaRuns(w.sql, w.b).map((r) => r.runId)).toEqual([runB]);
     w.close();
   });
 });
@@ -877,7 +850,6 @@ describe('a handle whose validation throws is refused before the statement runs'
     initInstructionApprovalsTable(w.execRaw);
     initPlanReviewTable(w.execRaw);
     initRefinementTables(w.execRaw);
-    initGepaTables(w.execRaw);
     initExplorationRecordsTable(w.execRaw);
     initSwarmNodeRecords(w.execRaw);
     initEventsHubTables(w.exec);
@@ -918,7 +890,6 @@ describe('a handle whose validation throws is refused before the statement runs'
       ['refinement_requests', () => refinements.open({
         trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1,
       })],
-      ['gepa_runs', () => startGepaRun(w.sql, w.revocable, { target: 'scaffold' })],
       ['exploration_records', () => recordExploration(w.sql, w.revocable, {
         publication: { kind: 'open' },
         write: {

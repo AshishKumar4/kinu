@@ -39,7 +39,6 @@ function webhook(deliveryId: string, body: JsonObject = { x: 1 }): IngressDescri
 function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
-  const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
@@ -66,7 +65,6 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
     sessionWindow: store,
     reviewTurn,
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
-    runDueEvolution: async () => { trials.push(Date.now()); },
     recordRecovery: () => {},
     // Real store, so deferral and drain run the production path.
     deferTurnReview: (turn, followup, review) => store.enqueueReview(turn, followup, review),
@@ -88,7 +86,7 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
     },
   };
 
-  return { engine, reviews, sessions, trials, sql, execRaw, store };
+  return { engine, reviews, sessions, sql, execRaw, store };
 }
 
 function fakeHost(opts?: { activeTurn?: boolean }) {

@@ -45,6 +45,8 @@ interface Fixture {
   /** A new host over the same database, as a root eviction leaves. */
   rebuild(): Fixture;
   readonly released: string[];
+  /** The actors whose dream lane a cadence pass drained, in order. */
+  readonly dreamed: string[];
 }
 
 /** A real per-actor scaffold identity, since the host seeds every actor's loop pointer and bytes. */
@@ -85,6 +87,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, op
   const template = createTestRuntime().rt;
   const planes = new Map<string, VFS>();
   const released: string[] = [];
+  const dreamed: string[] = [];
 
   const orchestrationFor = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => {
     if (bound.record.name === 'unorchestrated') throw new Error('orchestration failed');
@@ -103,6 +106,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, op
     },
     engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
+    refinementLane: async () => { dreamed.push(bound.record.name); },
   }));
 
   // Memoized per actor so the session store and runtime address the same bytes.
@@ -152,7 +156,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, op
   });
 
   return {
-    db, sql, host, directory, released,
+    db, sql, host, directory, released, dreamed,
     main: { actorId: mainHandle.actorId, workspaceId: mainHandle.workspaceId, parentActorId: null },
     child: (name, creationId, origin) => {
       const handle = directory.create({
@@ -194,22 +198,13 @@ describe('one workspace database, many logical actors', () => {
       const lease = actor.session.beginTurn({ runId: 'run', turnId: 'turn' }, 'build', 0);
       actor.session.reserveClaim(lease);
       actor.session.finishTurn(lease);
-      // Three struggles with one tool over two turns: the proposer's trigger, which a pass searches.
-      const struggle = { kind: 'repeated_failure', tool: 'shell', count: 2, sample: 'exit 1' };
-
-      for (const [turnId, struggles] of [['t1', [struggle, struggle]], ['t2', [struggle]]] as const) {
-        void fx.sql`INSERT INTO turn_struggles (actor_id, turn_id, errors, steps, struggles, created_at)
-          VALUES (${actor.handle.actorId}, ${turnId}, 2, 3, ${JSON.stringify(struggles)}, ${Date.now()})`;
-      }
-
-      const searches = () => fx.sql<{ n: number }>`SELECT count(*) AS n FROM gepa_runs WHERE actor_id = ${actor.handle.actorId}`[0]?.n;
 
       actor.handle.config.setLearning(false);
       await actor.session.orchestrator.runDueSessionEvolution();
-      expect(searches()).toBe(0);
+      expect(fx.dreamed).toEqual([]);
       actor.handle.config.setLearning(true);
       await actor.session.orchestrator.runDueSessionEvolution();
-      expect(searches()).toBe(1);
+      expect(fx.dreamed).toEqual(['hosted']);
     } finally {
       fx.host.releaseAll();
       fx.db.close();

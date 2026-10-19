@@ -424,7 +424,7 @@ stand in for that proof.
    (`evolution/engine.ts`) records `{ reason: 'budget' }` and leaves the source
    row queued. It retires unreadable rows. `RefusedTurnReview`
    (`evolution/session-window.ts`) keeps the two counts apart. Count-triggered
-   session reflection, scaffold proposals and GEPA spend sit outside mission
+   session reflection, scaffold proposals and dream spend sit outside mission
    caps.
 
 2. The external bench cannot count review spend. `closeTurnRun`

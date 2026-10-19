@@ -16,7 +16,7 @@ import { putAccountFact } from "../../lib/user-api";
 import { MarkdownContent, Section } from "./shared";
 import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
-import { GepaView, QualityView } from "./evolution-panels";
+import { QualityView } from "./evolution-panels";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
 import { ChatMascot, mascotSeed } from "@/components/Marks";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -211,7 +211,7 @@ function Changing({ rpc, readMoves, version }: {
         {(view === null || resource.status === "error") && <ChangelogFailure resource={resource} reload={reload} />}
         {seenError !== null && <p className="p-meta p-warning">Could not mark these as seen: {seenError}</p>}
         {view !== null && entries.length === 0 && (
-          <Quiet>No changes yet. As it works it can refine its prompt, make tools and learn facts. Each change shows here, and most can be undone.</Quiet>
+          <Quiet>No changes yet.</Quiet>
         )}
         {entries.length > 0 && (
           <div className="p-group" data-changelog>
@@ -224,11 +224,6 @@ function Changing({ rpc, readMoves, version }: {
             <ScaffoldLineage rpc={rpc} currentVersion={version} />
           </section>
         )}
-        <section className="space-y-1.5">
-          <p className="p-eyebrow">Self-tuning</p>
-          <p className="p-meta p-text-3">Passes that try candidate prompts against its past turns, and keep a better one.</p>
-          <GepaView rpc={rpc} />
-        </section>
       </div>
     </Section>
   );

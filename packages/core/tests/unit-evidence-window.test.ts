@@ -4,16 +4,7 @@ import {
   evidenceWindow,
 } from '../src/index';
 import { digestJsonValue } from '../src/utils/json';
-import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
-import type { GepaCandidate } from '../src/evolution/gepa/types';
 import { rateTurn } from '../src/evolution/ratings';
-
-/** A seed candidate carrying `source`, the only field these prompts read. */
-function candidate(source: string): GepaCandidate {
-  return {
-    id: 'p', parentId: null, source, scores: new Map(), feedback: new Map(), createdAt: 0,
-  };
-}
 
 /** Decisive material at the very end. */
 function trajectory(chars: number, ending: string): string {
@@ -69,29 +60,5 @@ describe('the readers can see the end of a long turn', () => {
     expect(states[0]).toContain(`ASK-${ending}`);
     expect(states[0]).toContain(`ANSWER-${ending}`);
     expect(states[0]).toContain(`FOLLOWUP-${ending}`);
-  });
-
-  test('the GEPA reflector sees how each rollout ended', () => {
-    const prompt = renderReflectionPrompt({
-      parent: candidate('const x = 1;'),
-      minibatch: [{ id: 'i1', input: trajectory(20_000, `INPUT-${ending}`), evidence: trajectory(20_000, `EVIDENCE-${ending}`) }],
-      rollout: { outcomes: [{ instanceId: 'i1', outcome: { score: 0.1, feedback: trajectory(20_000, `FEEDBACK-${ending}`) } }], metricCalls: 1 },
-    });
-
-    expect(prompt).toContain(`INPUT-${ending}`);
-    expect(prompt).toContain(`EVIDENCE-${ending}`);
-    expect(prompt).toContain(`FEEDBACK-${ending}`);
-  });
-
-  test('a candidate source is head-truncated, never middle-elided — a rewrite of holed code comes back holed', () => {
-    const source = `// header\n${'const filler = 1;\n'.repeat(2000)}// footer`;
-
-    const prompt = renderReflectionPrompt({
-      parent: candidate(source),
-      minibatch: [], rollout: { outcomes: [], metricCalls: 0 },
-    });
-
-    expect(prompt).toContain('// header');
-    expect(prompt).not.toContain('// footer');
   });
 });

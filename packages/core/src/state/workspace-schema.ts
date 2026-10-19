@@ -22,7 +22,6 @@ import { initCurriculumTable } from '../curriculum/proposer';
 import { initEventsHubTables } from '../events/hub/schema';
 import { initRunEventTables } from '../events/recorder';
 import { initActorClaimTables } from '../orchestrator/actor-claims';
-import { initGepaTables } from '../evolution/gepa/persistence';
 import { initLessonTables } from '../evolution/lessons';
 import { initTurnRatingTables } from '../evolution/ratings';
 import { initStruggleTables } from '../evolution/struggles';
@@ -177,7 +176,6 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initTurnReportTable(execRaw);
   initFactsTable(execRaw);
   initCurriculumTable(execRaw);
-  initGepaTables(execRaw);
   initBackgroundJobsTable(execRaw);
   initToolEffectClaimTable(execRaw);
   initEffectTombstoneTable(execRaw);

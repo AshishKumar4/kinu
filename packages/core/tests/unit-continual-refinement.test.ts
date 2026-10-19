@@ -17,7 +17,6 @@ import { EvolutionEngine } from '../src/evolution/engine';
 import { initLessonTables } from '../src/evolution/lessons';
 import { initTurnRatingTables } from '../src/evolution/ratings';
 import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
-import { initGepaTables } from '../src/evolution/gepa/persistence';
 import {
   artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, toolArtifact, turnArtifacts,
 } from '../src/evolution/artifacts';
@@ -246,7 +245,6 @@ function fixture(): Fixture {
   initAllTables(rt.storage.execRaw, rt.storage.sql);
   initLessonTables(rt.storage.execRaw);
   initTurnRatingTables(rt.storage.execRaw);
-  initGepaTables(rt.storage.execRaw);
   initArtifactTables(rt.storage.execRaw);
   initInstructionApprovalsTable(rt.storage.execRaw);
   initRefinementTables(rt.storage.execRaw);

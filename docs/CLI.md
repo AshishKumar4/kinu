@@ -68,7 +68,6 @@ kinu <command> [options]
 | [`kinu swarm <name> [nodeId]`](#kinu-swarm-name-nodeid) | Show a workspace's swarm search history |
 | [`kinu heads <name>`](#kinu-heads-name) | Show parallel reasoning branch runs |
 | [`kinu debug <name>`](#kinu-debug-name) | Save everything about a workspace to one file: identity, messages, runs and their events, heads, swarm searches, background jobs, evolution state, memory and facts |
-| [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Show GEPA searches, or run one over the scaffold with --run |
 | [`kinu quality <name>`](#kinu-quality-name) | Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals |
 
 ### This PC
@@ -545,20 +544,6 @@ Save everything about a workspace to one file: identity, messages, runs and thei
 
 ```bash
 kinu debug jarvis -o jarvis.debug.jsonl
-```
-
-### kinu gepa <name> [runId]
-
-Show GEPA searches, or run one over the scaffold with --run.
-
-| Option | What it does |
-| --- | --- |
-| `--run` | Run one proposer search over the scaffold, judged on recent turns without running it |
-| `--limit <n>` | Run limit |
-| `--json` | Print raw JSON |
-
-```bash
-kinu gepa jarvis --run
 ```
 
 ### kinu quality <name>

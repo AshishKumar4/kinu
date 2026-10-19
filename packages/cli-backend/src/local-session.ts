@@ -84,8 +84,8 @@ import { ActorSession, type ActorTurnLease,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, getEvolutionStatus, runOptimization,
-  type ProposerOutcome, type ScaffoldControl,
+  applyScaffoldDecision, getEvolutionStatus,
+  type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type EvolutionStatus,
   activateDreamSkills, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
@@ -2218,11 +2218,6 @@ export class LocalAgentSession {
     this.invalidateModelState();
 
     return result;
-  }
-
-  /** One proposer search on `target` (default the scaffold); the edit waits like any other. */
-  runOptimization(target?: string): Promise<ProposerOutcome> {
-    return runOptimization(this.scaffoldControl, target);
   }
 
   /** `host.history`: a read-only, budgeted page, resolved per call. */

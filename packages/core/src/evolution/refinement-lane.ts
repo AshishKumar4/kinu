@@ -15,7 +15,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
-import { scoreAuthoredEdit } from './proposer';
+import { scoreAuthoredEdit } from './judge';
 import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence, type ArtifactVersion } from './artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { listTurnRatings, renderRating, type TurnRating } from './ratings';

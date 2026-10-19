@@ -62,7 +62,6 @@ import { MissionBudgetExhausted } from '../mission-budget';
 import { buildChangelog } from './changelog';
 import { DELEGATION_RUBRIC, delegationFeatures, renderDelegationFeatures } from './delegation-features';
 import { getCurrentScaffoldVersion } from '../scaffold/versions';
-import { runProposer } from './proposer';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
@@ -648,24 +647,6 @@ export class EvolutionEngine {
 
     // Session-end changelog digest over the ledgers; never blocks.
     this.emitChangelogDigest(session.startedAt);
-  }
-
-  /**
-     * The cadence lane's evolution pass: one proposer search if a trigger holds, its edit staged for the next turn whose
-     * prompt cache is cold. Never rejects: each step's rows are durable, so a failure is said and the next pass resumes.
-     */
-  async runDueEvolution(): Promise<void> {
-    if (!this.recordsTurns || this.rt.actor.parentActorId !== null || this.rt.decide === undefined) return;
-
-    try {
-      const outcome = await runProposer({ rt: this.rt, decide: this.rt.decide, reflect: this.rt.judgeModel ?? this.rt.llm, now: Date.now() });
-
-      if (outcome.kind === 'searched') {
-        this.emit({ type: 'reflection', message: `Proposer searched ${outcome.artifactId}: ${outcome.detail}` });
-      }
-    } catch (err) {
-      diagnostics.failure('evolution.proposer_failed', toKinuError({ doing: 'run the evolution pass', cause: err, otherwise: 'unavailable' }));
-    }
   }
 
   private emitChangelogDigest(since: number): void {

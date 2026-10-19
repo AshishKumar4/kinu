@@ -132,12 +132,12 @@ import {
   type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
-  previewScaffoldLive, runOptimization,
+  previewScaffoldLive,
   activateDreamSkills, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
   type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
-  type ProposerOutcome, type ScaffoldDecisionResult,
+  type ScaffoldDecisionResult,
   type ScaffoldVersionView, type EvolutionStatus,
   readScaffoldVersion,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
@@ -147,7 +147,6 @@ import {
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, aggregateScore, type GepaRunSummary,
   qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -253,7 +252,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -5192,17 +5191,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
-  /** One search of the proposer on `target` (default the scaffold); see `runOptimization` in evolution/control.ts. */
-  @callable()
-  async runOptimization(target?: string): Promise<ProposerOutcome> {
-    return runOptimization(this.scaffoldControl, target);
-  }
-
-  @callable()
-  async getGepaRuns(limit = 20): Promise<GepaRunSummary[]> {
-    return listGepaRuns(this.boundSql, this.actorHandle(), limit);
-  }
-
   /** Satisfaction per day, oldest first, with its interval: the Quality tab's series (evolution/ratings.ts). */
   @callable()
   async getQuality(days = 30): Promise<QualityDay[]> {
@@ -5213,41 +5201,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async getQualityWindow(days = 7): Promise<QualityWindow> {
     return qualityWindow(this.boundSql, this.actorHandle(), { days });
-  }
-
-  /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
-  @callable()
-  getGepaRun(runId: string): Promise<{
-    run: GepaRunSummary | null;
-    candidates: Array<{
-      id: string; parentId: string | null; source: string;
-      scores: Record<string, number>; feedback: Record<string, string>;
-      aggregateScore: number; createdAt: number;
-    }>;
-    pareto: Array<{ candidateId: string; instanceId: string; score: number }>;
-  }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.sync(() => {
-        const run = listGepaRuns(this.boundSql, this.actorHandle(), 200).find((r) => r.runId === runId) ?? null;
-
-        const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
-          id: c.id, parentId: c.parentId, source: c.source,
-          scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
-          aggregateScore: aggregateScore(c), createdAt: c.createdAt,
-        }));
-
-        // The membership table is core's; no raw SELECT across the package boundary.
-        const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
-
-        return { run, candidates, pareto };
-      }), (failed) => Effect.gen({ self: this }, function* () {
-        const error = Cause.squash(failed);
-
-        if (classify({ cause: error }) !== 'sqlite-missing-table') return yield* Effect.failCause(failed);
-
-        return { run: null, candidates: [], pareto: [] };
-      }));
-    }));
   }
 
   /** The store the change-set reads, as the session user whose plane the root actor's is. */
@@ -5871,7 +5824,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
     const reads = {
       getExecutors: () => this.getExecutors(),
-      getGepaRuns: () => this.getGepaRuns(),
       getHeadRuns: () => this.getHeadRuns(),
       getMctsTree: () => this.getMctsTree(),
       getQuality: () => this.getQuality(),

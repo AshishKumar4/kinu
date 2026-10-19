@@ -15,7 +15,6 @@ import {
   applyPromotionDecision, getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
 } from '../scaffold/versions';
 import { listArtifactVersions, type ArtifactVersion } from './artifacts';
-import { runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './proposer';
 import { nanoid } from '../utils/nanoid';
 import { KinuError, settle } from '../obs/index';
 import { Effect } from 'effect';
@@ -169,15 +168,4 @@ export async function applyScaffoldDecision(control: ScaffoldControl, mode: 'pro
   if (pending === null) return settle(Effect.fail(new KinuError('missing', 'no pending scaffold')));
 
   return await applyPromotionDecision(control.rt, pending, mode, control.events);
-}
-
-/**
- * The manual optimisation RPCs: one search of the proposer on the named artifact (`scaffold`, or an
- * `artifact_versions` id), its bad set the recent low-rated turns. The edit waits like any other.
- */
-export async function runOptimization(control: ScaffoldControl, target: string = SCAFFOLD_ARTIFACT): Promise<ProposerOutcome> {
-  // Asked only once there are turns to judge: with none the search is idle and needs no model.
-  const decide = control.rt.decide ?? (() => settle(Effect.fail(new KinuError('unavailable', 'no decision model is wired, so no edit can be judged'))));
-
-  return runProposer({ rt: control.rt, decide, reflect: control.rt.judgeModel ?? control.rt.llm, now: Date.now() }, target);
 }

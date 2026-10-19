@@ -69,6 +69,8 @@ Each turn records its struggles (tool, kind, count, a sample error), its error c
 
 ## 3. One proposer, with GEPA as its search
 
+Superseded: a dream (docs/EVOLUTION.md) replaced the proposer and its GEPA search. The dreamer drafts each edit; the judge-only comparison of §4 (`core/src/evolution/judge.ts`) still measures it.
+
 The proposer runs on the cadence lane when either trigger holds: at least three turns rated 2 or lower in the last 14 days share a `wrong` reason, or a tool's struggles cluster as above. It edits one artifact:
 
 | Artifact | Today's source | Edit allowed |
@@ -114,7 +116,7 @@ Live trials were deleted (2026-10-19): an edit that passed the pre-live tests is
 | Consolidation, sleep-time memory | Yes | Unchanged. |
 | Continual refinement | Yes | Its debt counts turns rated 2 or lower. Its section edits go through sections 4 and 5. |
 | Workspace experience import | Yes | Settles on the next rated turn: 4 or 5 adopts, 2 or lower discards. |
-| GEPA | Yes | The proposer's search, scored by the judge-only comparison. |
+| GEPA | No | Replaced by the dream, whose drafts the judge-only comparison measures. |
 | Session scaffold proposal | No | Replaced by the proposer. |
 | Shadow trials | No | Replaced by pre-live tests and staged activation. |
 | Quality curve (scaffold replay) | No | Replaced by satisfaction over time. |

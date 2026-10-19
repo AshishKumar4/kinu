@@ -92,13 +92,11 @@ The cadence lives in `AgentOrchestrator`, not the engine. Every five turns it ca
 
 `onSessionComplete` is selective. It needs at least 3 turns in the window, and `sessionWarrantsReflection()` requires that some turn errored, drew negative feedback, or was rated 2 or lower. A clean session produces no reflection. When it reflects, an LLM call analyzes the window's recent lessons and records a `session_reflection` lesson. That lesson reaches the curated memory note only when a turn in the window carries the user's own negative.
 
-### The proposer
+### Evolvable text
 
-One proposer edits the agent's own text and loop (docs/EVOLUTION-REDESIGN.md §3; `core/src/evolution/proposer.ts`). It runs on the cadence lane (`EvolutionEngine.runDueEvolution`) for the main agent only, when a trigger holds in the last 14 days: three turns rated 2 or lower that share a `wrong` reason, or three struggles with one built-in tool over two turns. A trigger whose turns were already searched (a `gepa_runs` row with the same `target_ref`) does not fire again. The manual optimisation RPC (`runOptimization`, `kinu gepa --run`, Settings) starts the same search on a named artifact.
+A dream edits the agent's own text in `artifact_versions` (`core/src/evolution/artifacts.ts`): `section:<id>` (a prompt section), `tool:<name>.description`, or `tool:<name>.schema` (the input fields' description strings only; types, required fields and enum values stay the bundled schema's). The scaffold stays in `scaffold_versions` and goes through `modifyScaffold` below. Prompt and tool assembly read each artifact's current version, else the bundled text, so an edit changes only the agent that promoted it.
 
-The proposer edits one artifact in `artifact_versions` (`core/src/evolution/artifacts.ts`): `section:<id>` (a prompt section), `tool:<name>.description`, or `tool:<name>.schema` (the input fields' description strings only; types, required fields and enum values stay the bundled schema's). A tool-struggle trigger edits that tool's text, its fields after a schema refusal; a reason trigger edits the section the decision model names. The scaffold stays in `scaffold_versions` and goes through `modifyScaffold` below. Prompt and tool assembly read each artifact's current version, else the bundled text, so an edit changes only the agent that promoted it.
-
-GEPA (`core/src/evolution/gepa/`) is the search: reflective mutation over a Pareto set, every candidate recorded in `gepa_candidates`. Its metric is the judge-only comparison of §4, asked of the decision model: for each recorded turn it reads the old and new text and answers `fixes` (would the new text have prevented this bad turn's failure) and `harms` (would it have made this good turn worse). Nothing runs the agent. The bad set is the motivating turns plus up to ten more with the same reason or tool struggles; the regression set is up to 30 recent turns rated 4 or 5 that used the artifact, thumbs first, frozen when the search starts. An edit passes when it fixes at least 60% of the bad set and harms at most one regression turn, after the static checks: at most 600 changed characters (40 changed lines of scaffold), a section's slots and flags unchanged, the schema rule, and the misevolution gate. A passing edit waits in the changelog as a candidate; a scaffold edit lands `pending` for the owner's decision. The continual-refinement lane's section edits take the same tests (`judgeAuthoredEdit`).
+Each drafted edit takes the judge-only comparison of docs/EVOLUTION-REDESIGN.md §4 (`scoreAuthoredEdit`, `core/src/evolution/judge.ts`), asked of the decision model: for each recorded turn it reads the old and new text and answers `fixes` (would the new text have prevented this bad turn's failure) and `harms` (would it have made this good turn worse). Nothing runs the agent. The bad set is the dream's low-rated turns; the regression set is up to 30 recent turns rated 4 or 5 that used the artifact, thumbs first. An edit passes when it fixes at least 60% of the bad set and harms at most one regression turn, after the static checks. A turn the decision model did not judge scores 0 on either side, so no edit passes on unavailable evidence.
 
 `modifyScaffold()` then validates through 4 gates:
 
@@ -145,11 +143,11 @@ The scaffold's pending proposal is decided by the owner (`applyScaffoldDecision`
 
 ### How much of a turn a judge sees
 
-Readers in this loop once truncated evidence to its opening (`slice(0, n)`): the GEPA reflector and the turn rater among them. A turn whose payoff lands at step 9 of 12 was invisible to them, so the loop could not select for long-horizon behaviour.
+Readers in this loop once truncated evidence to its opening (`slice(0, n)`): the turn rater among them. A turn whose payoff lands at step 9 of 12 was invisible to them, so the loop could not select for long-horizon behaviour.
 
 `core/src/utils/evidence-window.ts` is now the single source. `evidenceWindow` keeps head and tail on an even split and names what it dropped. A tool result's head carries the command echo, while a judged trajectory carries its outcome at the end, and the outcome is what is being judged.
 
-`EVIDENCE_BUDGETS` (`core/src/types/evidence.ts`) is ordered so a reader never asks for more than the row it reads was stored at. The stored `turn_ratings` budgets cap the whole ledger path and were widened first. GEPA's eval instances read those rows: `storedUserMessage` 8,000, `storedAssistantResponse` 16,000, `storedFollowup` 8,000. Readers sit under them: `outcomeUserMessage` 4,000, `outcomeAssistantResponse` 8,000, `replayTask` 6,000. A candidate's source stays head-truncated rather than windowed (`gepaParentSource` 16,000), because a rewrite of code whose middle was elided comes back with a hole.
+`EVIDENCE_BUDGETS` (`core/src/types/evidence.ts`) is ordered so a reader never asks for more than the row it reads was stored at. The stored `turn_ratings` budgets cap the whole ledger path and were widened first: `storedUserMessage` 8,000, `storedAssistantResponse` 16,000, `storedFollowup` 8,000. Readers sit under them: `outcomeUserMessage` 4,000, `outcomeAssistantResponse` 8,000, `replayTask` 6,000.
 
 The scaffold lineage is a read model over `scaffold_versions` (`listScaffoldArchive`), with no eviction.
 
@@ -159,33 +157,19 @@ The scaffold lineage is a read model over `scaffold_versions` (`listScaffoldArch
 
 CraftStore consolidation (`periodicCraftConsolidation`, `core/src/craft/consolidation.ts`) computes `effectiveScore` with the EMA (α = 0.3) and time decay on a 30-day half-life. It retires tools below 0.1 that have been used at least twice. Unscored tools are skipped. The whole pass aborts if it would empty the store: a workspace whose every tool went stale keeps a low-quality toolbox rather than an empty one.
 
-GEPA train/val split (`buildOutcomeEvalSplit`, `core/src/evolution/eval-split.ts`). The reflection minibatch draws from older turns rated 2 or lower, while the newest are held out and scored alongside regression guards rated 4 or more. The two sets are disjoint, so a winning candidate was never optimised against the instances that picked it. When the ledger holds too few failures to hold any out, the split returns a `degeneracy` reason, and the caller reports the selection as exploratory rather than overlapping the sets.
-
-A failed judge call is unavailable evidence, not a neutral score. Failure during
-seed scoring, reflection evaluation, or candidate scoring aborts the GEPA run;
-the run keeps its attempted-call count and completed iterations but selects no
-winner. Every complete candidate, including the seed, is retained before later
-evaluation starts. An incomplete candidate gets no numeric aggregate. The shared
-metric boundary refuses non-finite scores and scores outside 0..1. Iteration counts
-include rejected proposals, independently of the accepted-candidate history.
-A section proposal propagates judge failures before writing the unmeasured
-proposal.
-
 ## Evolution changelog
 
-Every self-modification shows up as a human-readable card (`core/src/evolution/changelog.ts`), a pure read model over the durable ledgers whose only owned state is a `changelog_seen_at` marker. `ChangelogEntryKind` has eight kinds:
+Every self-modification shows up as a human-readable card (`core/src/evolution/changelog.ts`), a pure read model over the durable ledgers whose only owned state is a `changelog_seen_at` marker. `ChangelogEntryKind` has five kinds:
 
 | Kind | Source | Revertable via |
 |---|---|---|
 | `scaffold` | the archive plus promotion and rollback run events | `scaffold_rollback` |
-| `tool` | `crafted_tools` joined to `craft_scores` | `craft_retire` |
 | `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
-| `gepa` | completed GEPA runs | not revertable |
 | `ratings` | `turn_ratings`: mean satisfaction with its interval, the corrected rate, and each rated turn's reason | not revertable |
 | `artifact` | `artifact_versions`, keyed `<artifactId>@<version>` because versions are numbered per artifact; a staged or current version carries the revert | `artifact_revert` |
 | `refinement` | `refinement_requests`, one card per request with one child per routed edit | the children carry the owner's own revert |
 
-Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts`): `revertScaffoldVersion`, `craftStore.delete` with the matching `craft_scores` row, `facts.forget`, and `revertArtifact`.
+Reverts dispatch to the real code paths rather than a separate undo log (`executeChangelogRevert`, `core/src/evolution/changelog.ts`): `revertScaffoldVersion`, `facts.forget`, `revertArtifact`, and `revertDreamSkill`.
 
 ## Continual refinement
 

@@ -14,7 +14,6 @@ import { renderFactValue, type FactsStore } from '../memory/facts';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
-import { listGepaRuns } from './gepa/persistence';
 import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
 import { revertDreamSkill } from './refinement-skill';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
@@ -33,7 +32,7 @@ const ScaffoldRunEventSchema = v.object({
 });
 
 const CHANGELOG_ENTRY_KINDS = [
-  'scaffold', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
+  'scaffold', 'fact', 'ratings', 'artifact', 'refinement',
 ] as const;
 
 export type ChangelogEntryKind = (typeof CHANGELOG_ENTRY_KINDS)[number];
@@ -245,21 +244,6 @@ function factAggregate(
   };
 }
 
-function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  return listGepaRuns(sql, actor, limit)
-    .filter((r) => r.status === 'completed')
-    .map((r) => ({
-      id: `gepa:${r.runId}`,
-      kind: 'gepa' as const,
-      at: r.endedAt ?? r.startedAt,
-      summary: 'Tuned my own instructions',
-      evidence: `GEPA self-optimization pass over ${r.target}` +
-        (r.winnerId ? `: found a better candidate (${r.winnerId})` : ': kept the current') +
-        ` · ${r.iterations} iterations · ${r.metricCalls} metric calls` +
-        (r.stopReason ? ` · ${r.stopReason}` : ''),
-    }));
-}
-
 const ARTIFACT_SUMMARY: Record<ArtifactStatus, string> = {
   current: 'I reworded my own',
   staged: 'After the next pause, I will reword my own',
@@ -445,7 +429,6 @@ export function buildChangelog(
 
       const entries = [
         ...scaffoldEntries(sql, actor),
-        ...gepaEntries(sql, actor, limit),
         ...artifactEntries(sql, actor, limit),
         ...refinementEntries(sql, actor, limit),
       ].filter((e) => opts.since === undefined || e.at > opts.since);

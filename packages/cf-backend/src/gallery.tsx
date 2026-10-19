@@ -114,7 +114,7 @@ import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
-  FileCheckpointEntry, FileCheckpointListing, ForkRunParams, GepaRunSummary,
+  FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
@@ -1963,8 +1963,6 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "getAlwaysActiveSkills") return rpcResult({ names: [] }).json<T>();
 
   if (method === "listTriggers") return rpcResult({ triggers: [] }).json<T>();
-
-  if (method === "getGepaRun") return rpcResult({ run: null, candidates: [], pareto: [] }).json<T>();
 
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
 
@@ -4094,57 +4092,13 @@ const QUALITY_WINDOW = {
   rated: 26, thumbs: 6, turns: 35,
 };
 
-/** Typed so the fixtures track `GepaRunSummary`, its stop reasons included. */
-const GEPA_RUNS = [
-  {
-    runId: "gepa_2", target: "scaffold", targetRef: null, startedAt: NOW - 3 * 864e5, endedAt: NOW - 3 * 864e5 + 6e5,
-    status: "completed", stopReason: "no_improvement_possible", winnerId: "cand_2b", iterations: 6, metricCalls: 48,
-  },
-  {
-    runId: "gepa_1", target: "scaffold", targetRef: null, startedAt: NOW - 12 * 864e5, endedAt: NOW - 12 * 864e5 + 9e5,
-    status: "completed", stopReason: "iterations_exhausted", winnerId: "cand_1c", iterations: 4, metricCalls: 32,
-  },
-] satisfies GepaRunSummary[];
-
-const GEPA_DETAIL = {
-  run: GEPA_RUNS[0],
-  candidates: [
-    { id: "cand_2a", parentId: null, aggregateScore: 0.61, scores: { i1: 0.6, i2: 0.55, i3: 0.68 }, createdAt: NOW - 3 * 864e5 },
-    { id: "cand_2b", parentId: "cand_2a", aggregateScore: 0.78, scores: { i1: 0.81, i2: 0.72, i3: 0.81 }, createdAt: NOW - 3 * 864e5 },
-    { id: "cand_2c", parentId: "cand_2a", aggregateScore: 0.44, scores: { i1: 0.4, i2: 0.51, i3: 0.41 }, createdAt: NOW - 3 * 864e5 },
-  ],
-  pareto: [{ candidateId: "cand_2b", instanceId: "i1", score: 0.81 }, { candidateId: "cand_2a", instanceId: "i3", score: 0.68 }],
-};
-
-const GEPA_OLDER_DETAIL = {
-  run: GEPA_RUNS[1],
-  candidates: [
-    { id: "cand_1a", parentId: null, aggregateScore: 0.52, scores: { i1: 0.5, i2: 0.49, i3: 0.57 }, createdAt: NOW - 12 * 864e5 },
-    { id: "cand_1c", parentId: "cand_1a", aggregateScore: 0.66, scores: { i1: 0.7, i2: 0.6, i3: 0.68 }, createdAt: NOW - 12 * 864e5 },
-  ],
-  pareto: [{ candidateId: "cand_1c", instanceId: "i1", score: 0.7 }],
-};
-
 const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
 
   if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
-  if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
-
   // A record: the blanket `[]` reads as a changelog that failed to load.
   if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
-
-  if (method === "getGepaRun") {
-    const [runId] = v.parse(v.tuple([v.string()]), args);
-
-    // `&gepa=held`: the newer run's candidates wait for `gallery:release-gepa`, as a slow read would.
-    if (runId === "gepa_2" && new URLSearchParams(location.search).get("gepa") === "held") {
-      await new Promise((resolve) => { window.addEventListener("gallery:release-gepa", resolve, { once: true }); });
-    }
-
-    return rpcResult(runId === "gepa_2" ? GEPA_DETAIL : GEPA_OLDER_DETAIL).json<T>();
-  }
 
   if (method === "getFacts") return rpcResult([
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
