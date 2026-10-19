@@ -78,13 +78,13 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 - **Workspace label:** the workspace's name lowercased, with `.` and `_` turned into `-`, then cut to 20 characters. It is unique per person; a clash gets `-2`.
 - **Agent label:** the agent's name. It is bound to the agent's id, never to its name: a released name is never given to a new agent, because the old address stays retired.
 
-**What a person sees:** a person's own box holds their mail, and the boxes of their workspaces and agents appear beside it. The Mail app shows them all (§7).
+**Who reads which address:** the person's own address belongs to their Personal assistant, a workspace (§7). Each workspace's and agent's address belongs to that workspace and agent. The Mail page shows them all.
 
 **Self-hosted deployments** use the same scheme on their own domain (`me@their.domain`). Their owner may also claim short top-level aliases for any of their boxes, such as `hello@their.domain` delivered to a workspace. kinu.run does not allow this, so that names cannot be squatted.
 
 **The Mission Inbox form `<workspace>@D` retires.** No deployment ever received mail through it: kinu.run has no MX, and self-hosting needs a manual onboarding that the docs record as not done. If a self-host turns out to have onboarded, a one-time import keeps its workspace addresses as aliases.
 
-**Who gets an address (the owner, 2026-10-19):** the deployment's owner gets their username address, with their workspaces' and agents' addresses under it. Other accounts get none until the owner turns on the deployment setting `mail.accounts` ("Other accounts may claim an address"). It is off by default, on kinu.run and on every self-host.
+**Who gets an address (the owner, 2026-10-19):** the deployment's owner gets their username address, with their workspaces' and agents' addresses under it. Other accounts get none until the owner sets the deployment's `MAIL_ACCOUNTS` var to `everyone` (§11). It is `operators` by default, on kinu.run and on every self-host.
 
 ## 2. Where mail lives and who owns it
 
@@ -138,7 +138,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 **What an agent can read:**
 
 - Its own box, and its workspace's.
-- The person's own box only from a workspace the owner has explicitly granted ("this workspace may read my mail"). That is a step-up setting, and it is what the triage assistant uses (§8).
+- The person's own box only from the Personal assistant, the workspace that holds it (§7).
 
 **Who may send as which address** (enforced in the Mailbox DO against the authenticated caller):
 
@@ -150,9 +150,9 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 
 **`mail.send` approval:**
 
-- **What is approved:** exactly the bytes sent (from, recipients, subject, body hash, attachment hashes), as a new approval kind `mail-send`, modelled on `slate-effect`. It is shown in the Work tab's decision stack, and inline in Mail as "scout wants to send this".
-- **Standing approvals,** each scoped to one recipient or one thread: "Always for replies on this thread" or "Always to alice@…".
-- **No approval needed:** replies to the verified owner.
+- **What is approved:** exactly the bytes sent (from, recipients, subject, body hash, attachment hashes), as a new approval kind `mail-send`, modelled on `slate-effect`.
+- **Where:** one card in the existing Needs-you (`AttentionStack` on the composer, and the Work tab's list), and nowhere else (§7).
+- **Every agent send asks** (the owner, 2026-10-19). No standing approval skips the card.
 
 **Both backends:**
 
@@ -170,15 +170,46 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 5. The Worker stores the raw message and attachments in R2, parses it with `postal-mime` (Cloudflare's documented parser, and what Kinu and Mailflare already use), and calls `Mailbox.deliver`.
 6. `deliver` is idempotent per Message-ID and content hash.
 
-**Is a sender verified?** That is Kinu's own verdict, not the edge's:
+**Is a sender verified?** That is Kinu's own reading of the verdict Cloudflare's MX writes into the message (measured below):
 
-- **Verified** means a DMARC pass aligned with the `From` domain. It is read from the top `Authentication-Results` header that Cloudflare's MX adds.
-- That header reaches the raw message but not `message.headers` (Cloudflare community report, 2024), so the Worker reads it from the raw header block.
-- Only the topmost such header, carrying Cloudflare's authserv-id, counts. Headers a sender added further down are ignored.
-- Cloudflare's exact authserv-id and result format are unknown until a domain is onboarded. **Step zero of the build measures them with real mail from gmail.com, outlook.com and yahoo.com.**
+- **Verified** means the first `Authentication-Results` field of the raw header block carries authserv-id `mx.cloudflare.net` and says `dmarc=pass header.from=<d>`, where `<d>` is the domain of the message's one `From` address.
+- **Position is what makes it Cloudflare's.** Its fields are prepended above everything the sender wrote. A sender's own `Authentication-Results: mx.cloudflare.net; dmarc=pass …` arrives intact further down, so the authserv-id alone proves nothing.
+- **The Worker reads the raw header block, never `message.headers`.** `message.headers.get('authentication-results')` joins every such field into one value, Cloudflare's first and the sender's after it.
 - Without a verified pass, the message is unverified.
-- **The owner** is a verified message whose `From` address equals the account's email. This replaces today's envelope match.
-- **Unverified mail** never wakes an agent and never matches an allowlist. It files to an "Unverified" view; it is not dropped, so nothing real is lost.
+- **A pass names a domain, not a mailbox.** Anyone the domain lets send passes the same way: another user of a shared mail provider, or another mailbox on the owner's custom domain. Probe 04 below, from a second local part on the same domain, got the identical verdict.
+
+**What a mail may do (Main, 2026-10-19):**
+
+- **The owner's instruction.** A verified mail whose `From` address is the owner's registered address is an instruction: the agent takes it up as the owner's task. This replaces today's envelope match.
+  - Mail is a weaker channel than the signed-in app, so every effect of that turn waits for an approval card in the app: sending, creating, changing.
+  - Only reading, planning and drafting run without asking.
+- **Everyone else: untrusted input.** It never instructs. It wakes an agent only by the address's wake policy, and that turn may read, plan and draft; every effect waits for the owner.
+- **Unverified mail** never wakes an agent and never matches an allowlist. It is kept and marked "Not verified", so nothing real is lost.
+
+**Measured 2026-10-19, 19:11-19:30 UTC.** Setup: an Email Routing rule sent `kinu-probe@dewml.dev` to a scratch Worker that stored the raw message, `message.headers` and every property of the message object. The messages were sent with Email Sending's `send_raw` from `probe@ashishkumarsingh.com` (DKIM `d=ashishkumarsingh.com`, `_dmarc` `p=none`). Captures: `/mnt/local/kinu/tmp/mail-probe/captures.json`.
+
+- **What Cloudflare's MX adds**, above the sender's first field and in this order:
+  1. `Received: from … by cloudflare-email.net (cloudflare) id …`
+  2. `ARC-Seal: i=1; … d=cloudflare-email.net`
+  3. `ARC-Message-Signature: i=1`
+  4. `ARC-Authentication-Results: i=1; mx.cloudflare.net; …`
+  5. `Received-SPF`
+  6. `Authentication-Results: mx.cloudflare.net; …`
+  7. `X-CF-SpamH-Score`
+- **Its verdict, verbatim except the signature values:** `Authentication-Results: mx.cloudflare.net; dkim=pass header.d=ashishkumarsingh.com header.s=cf-bounce …; dkim=pass header.d=cloudflare-smtp.net header.s=cf2024-1 …; dmarc=pass header.from=ashishkumarsingh.com policy.dmarc=none; spf=none … smtp.helo=bg-bbd.cloudflare-smtp.net; spf=pass … smtp.mailfrom=…@cf-bounce.ashishkumarsingh.com; arc=none smtp.remote-ip=104.30.16.113`.
+- **A sender's lines survive.** Probe 02's header block began with five forged fields:
+  - `Authentication-Results: mx.cloudflare.net; … dmarc=pass header.from=kinu.run policy.dmarc=reject`;
+  - `Authentication-Results: mx.google.com; dmarc=pass …`;
+  - `ARC-Authentication-Results: i=1; mx.cloudflare.net; dmarc=pass header.from=kinu.run`;
+  - `Received-SPF: pass`;
+  - `X-CF-SpamH-Score: 0`.
+
+  All five arrived unchanged, below Cloudflare's seven. Cloudflare does not remove fields that carry its own authserv-id. The same lines in the body stayed in the body.
+- **`message.headers` carries the field,** contrary to a 2024 community report: as one value, Cloudflare's text, then `, `, then the forged `mx.cloudflare.net; … dmarc=pass header.from=kinu.run`.
+- **The verdict does not name the mailbox.** Probe 04 (19:30 UTC) came `From: kinu-probe-b@ashishkumarsingh.com`, a second local part on the same sending domain. Its field read `dmarc=pass header.from=ashishkumarsingh.com policy.dmarc=none`, the same as probe 01b's.
+- **The runtime exposes no verdict.** The message object has `from`, `to`, `headers`, `raw`, `rawSize`, `setReject`, `forward`, `reply` and `canBeForwarded` (`true` here; absent from workers-types 5.20260930.2), and nothing else.
+- **Email Routing's analytics is not a verdict source.** GraphQL `emailRoutingAdaptive` has per-message `spf`, `dkim` and `dmarc` fields, read after delivery. Its `dmarc` said `none` for the message whose own header said `dmarc=pass … policy.dmarc=none`, so that field reports the policy, not the result.
+- **Email Sending cannot send an unaligned message.** `send_raw` from ashishkumarsingh.com with `From: ashish@kinu.run` is refused: `email.sending.error.email.invalid [code: 10202]`. The forgery the old path allowed (the owner's `p=none` domain in `From`, signed by another domain) needs an outside SMTP sender. See §9 for what that measured.
 
 **Waking:**
 
@@ -194,9 +225,9 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 **Prompt injection:**
 
 - **Mail bodies never reach a prompt's system sections.**
-- **The wake's event text carries metadata only:** the verified flag, the sender and the subject. It is escaped (as now) and fenced as untrusted mail. Bodies come only through `mail.read`, whose result says `untrusted: true`.
-- **A turn woken by anyone but the verified owner runs in plan mode** (`WorkMode 'plan'`). It may read and draft, and any effect waits for the owner.
-- **Today's "reply with the turn's answer" stays for the verified owner only.** That is the Mission Inbox feature.
+- **The wake's event text carries metadata only:** the verified flag, the sender and the subject. It is escaped (as now) and fenced as untrusted mail. Bodies come only through `mail.read`, whose result says `untrusted: true`. The owner's verified mail is the one exception: its text is the task, as a chat message's is.
+- **Every turn a mail starts holds its effects for the owner.** Reading, planning and drafting run; sending, creating and changing each wait for an approval card in the app. For the owner's own verified mail this is because mail is a weaker channel than the signed-in app; for anyone else's, because it is untrusted input.
+- **Today's "reply with the turn's answer" stays for the verified owner only.** That is the Mission Inbox feature. Open for the owner: whether that reply, which goes only to the owner's own address, also waits for a card.
 
 **HTML and images:**
 
@@ -206,7 +237,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 
 **Sending limits:**
 
-- **Daily cap per account (the owner, 2026-10-19):** none for the deployment owner's account; 100 a day for any other account, once `mail.accounts` lets it claim an address. Agents' sends count toward their account's cap.
+- **Daily cap per account (the owner, 2026-10-19):** none for the deployment owner's account; 100 a day for any other account, once `MAIL_ACCOUNTS` lets it claim an address. Agents' sends count toward their account's cap.
 - **Per message:** at most 50 recipients and 5 MiB, the platform's limits.
 - **Delivery status:** a Queues subscription feeds bounced, complained and rejected events into each message's status.
 - **Automatic pause:** an account whose complaint rate passes 0.1% stops sending until the owner looks.
@@ -236,20 +267,42 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 | Outbound | 3,000 a month included, then $0.35 per 1,000, on Workers Paid; 5 MiB and 50 recipients per message |
 | Storage | the R2 `MAIL` bucket at R2 prices; metadata in the account's Mailbox DO, within 10 GB |
 
-## 7. The Mail app, the icon, and mail.<domain>
+## 7. Where mail shows in Kinu (the owner, 2026-10-19)
 
-**In the app:**
+Mail is built around Kinu, not as a separate mailbox. Each piece below composes something Kinu already has.
 
-- A `/mail` route is added to the app's routes, with a Mail entry in `PRIMARY_NAV` (envelope icon). It shows a count of unread mail that needs you.
-- Each workspace view gets an Inbox place listing its own box and its agents' boxes.
+**The personal assistant holds the person's own address.**
 
-**Layout:**
+- `ashish@kinu.run` belongs to the owner's Personal assistant: a workspace installed from the `personal-assistant` blueprint at onboarding, with its main agent "Kinu". The Home lane designs the blueprint and its Home strip.
+- Its main mail view is **Important**: the assistant's picks, each with a one-line reason. Home's "Today" strip shows the top three with the same row (`components/mail/ImportantMailRow.tsx`).
 
-- On desktop, there are three columns:
-  - **Places column** (as in Drive): All inboxes; Me; each workspace with its agents nested under it; Needs review (agents' drafts and send asks); Starred; Sent; Drafts; Unverified; Trash.
-  - **Thread list.**
-  - **Reading pane.**
-- On phone, the columns stack.
+**One small Mail page** at `/mail`:
+
+- Five views: **Important** (the default), **All**, **Sent**, **Drafts** and **Trash**. A select narrows any view to one address. There is no folder tree and no per-agent folder.
+- **Drafts** are mail the owner sends as themselves: their own, and replies the assistant drafted for them.
+- **Unverified mail** has no folder of its own. It sits in All with a "Not verified" mark and never wakes an agent.
+- Desktop: the list and a reading pane. Phone: the list, and a thread over it with Back.
+- It is built from Kinu's parts: `Segmented`, `inputCls`, `Modal`, `FilledButton`, `TileMenu`, `Avatar`, and `sandboxedHtml` for sealed HTML.
+
+**How the owner reaches it:**
+
+- The Mail icon in the sidebar footer, between the account button and Devices. Its badge counts unread Important mail. The footer is the Home lane's `SidebarFooter`.
+- `mail.<domain>`, a permanent redirect to `https://<domain>/mail` (below).
+
+**Each workspace gets an Inbox tool** in its side panel, beside Work, Changes, Files, Agent, Environment and Activity.
+
+- It lists mail to and from the workspace's address and its agents' addresses, filtered by address with `Segmented`. A thread opens in the panel.
+- This is how the owner reaches an agent's or a workspace's mail from inside the workspace.
+
+**In the chat:** an arrival or an agent's draft is an event pill (`EventRow`, the same row background jobs and agent reports use). The pill says whose word the mail carries:
+
+- the owner's verified mail: "Your mail · verified";
+- anyone else's: "Mail · <sender>", untrusted input that can't instruct.
+
+**An agent's outgoing mail is one approval card in the existing Needs-you, and nothing else.**
+
+- The card is a new kind in `AttentionStack`, beside commands, consents and plans: From, To, Subject, the exact body, and Approve and send, Edit or Deny.
+- No Mail view lists pending sends.
 
 **mail.<domain> is a permanent redirect to `https://<domain>/mail`.**
 
@@ -257,37 +310,34 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 - **What the redirect gives:** one session, one CSRF boundary and one CSP. A link to `mail.<domain>/<thread>` keeps its path and lands on the same thread in the app.
 - **The one change it needs:** `mail.` must be matched before the preview-suffix catch-all, which takes `mail.kinu.run` today (measured: it answers Kinu's JSON 404). No preview or share host label may ever be `mail`.
 
-**Built from scratch on Kinu's own components:**
+**Mailflare is a product reference only,** for behaviour: what a Gmail-like box offers. No Mailflare code, styles or assets are copied (provenance in §0).
 
-- Mail is written new, on Kinu's own pieces: `.p-row` text, the Drive's places column, `TileMenu`, `Modal`, `FilledButton`, the shared `Composer`, and `sandboxedHtml` for sealed HTML. It looks and behaves like the rest of Kinu.
-- **Mailflare is a product reference only,** for behaviour and UX: what a Gmail-like box offers (a split view, compose with autosaved drafts, stars, attachments with previews, reply quoting, bulk actions). **No Mailflare code, styles or assets are copied** (provenance in §0).
-- **What Kinu has that Mailflare lacks:** conversation threads (`In-Reply-To`/`References`), FTS5 search, labels rather than a single folder, sender verification, and agents' boxes.
-- The wireframe (`packages/cf-backend/src/gallery-mail.tsx`) is written this way: Kinu components only, with fixtures.
+**The wireframe** is `packages/cf-backend/src/gallery-mail.tsx`, frame `mail`. It shows the Mail page at `/mail`, and at `&at=workspace` the API Worker workspace with its Inbox open, its chats' pills, and scout's approval card. Until the Home lane's footer lands, the frame draws a stand-in for it.
 
 ## 8. "AI native", concretely
 
 1. **Every agent's inbox is in its context.**
    - A dynamic-context section reads, for example: "Mail: 3 unread in your box (2 from verified senders), oldest 2h. From: …, subjects: …". It shows counts, verified flags and escaped subjects; no bodies.
    - It changes only when the box changes, like the other volatile sections.
-2. **Triage.**
-   - The owner can name one workspace their mail assistant. It is granted read access to their box and wakes on new mail in batches, with a cost budget.
-   - It labels threads (Needs you / FYI / Newsletters / Can wait) and writes a one-line summary per thread, which shows in the list. It drafts replies.
+2. **The personal assistant triages the person's mail.**
+   - It reads `ashish@`, the address it holds, and wakes on new mail in batches.
+   - It picks what is Important and writes the reason. It drafts replies for the owner to send as themselves.
    - It sends nothing as the person.
-3. **Drafting in the reading pane.** "Draft a reply" asks the assistant and puts the draft in the composer. "Summarise" works the same way. The person edits and sends.
-4. **Mail into work.** "Send to workspace…" on a thread hands it to a chosen workspace as a task, with the owner's authority, because the owner clicked it.
+3. **Drafts in the reading pane.** A thread with the assistant's draft offers "Open Personal assistant's draft" beside Reply. The person reads it, edits it and sends it.
+4. **Mail into work.** "Send to a workspace…" on a thread hands it to a chosen workspace as a task, with the owner's authority, because the owner clicked it in the app.
 5. **Provenance everywhere.**
-   - Sent mail shows who wrote it ("sent by scout · research").
-   - An agent's send ask shows the exact message with Approve / Edit / Deny, both in Mail and in the decision stack.
-   - The approval spends once.
+   - Sent mail shows who wrote it ("written by scout, approved by you").
+   - An agent's send is its approval card: the exact message, with Approve and send, Edit or Deny. The approval spends once.
 
 ## 9. What is measured before the build, and how it is proven
 
-Mail ships as one feature: every part of this note together, the Mission Inbox's ingress replaced in the same change (its path deleted; one path, which requires a DMARC-aligned `From`).
+Mail ships as one feature: every part of this note together, the Mission Inbox's ingress replaced in the same change (its path deleted; one path, which reads the first `Authentication-Results` field, §4).
 
-**Measured first:**
+**Measured:**
 
-- FTS5 `MATCH` with long queries, in workerd. A DO's SQLite refused a long LIKE before.
-- Once kinu.run is onboarded: Cloudflare's `Authentication-Results` format, from real gmail.com, outlook.com and yahoo.com mail.
+- FTS5 in workerd and on a deployed Durable Object (§11).
+- Cloudflare's `Authentication-Results`: its position, its authserv-id, and what survives beside it (§4).
+- **Not yet measured:** a `dmarc=fail` delivery (the owner's `p=none` domain in `From`, signed by another domain) and a third party's real mail. Neither this PC nor an armada container has outbound port 25 (2026-10-19), and Email Sending refuses an off-domain `From`. It needs one mail from an outside account the owner controls.
 
 **Proven:**
 
@@ -296,6 +346,17 @@ Mail ships as one feature: every part of this note together, the Mission Inbox's
   - a round trip to a person, a workspace and an agent;
   - a forged owner message is refused its wake;
   - an agent's send waits for approval.
+
+## Removals and replacements, for the owner's approval
+
+Owner rule, 2026-10-19: nothing that exists is removed or replaced without the owner's review. Mail changes these:
+
+- **The Mission Inbox ingress** (`core/src/events/ingress/email.ts`) is replaced by the new router, which reads Cloudflare's verdict instead of trusting the envelope sender (Main, 2026-10-19). The old path is deleted in the same change.
+- **The Mission Inbox address form `<workspace>@D`** retires for `<workspace>.<username>@D` (§1). No deployment ever received mail through it.
+- **`triggers.kind` loses `'email_route'`**: the per-workspace sender allowlist moves to `mail_allow` (§11).
+- **The `mail.` host** stops falling to the preview-suffix catch-all and redirects to `/mail` (§7).
+
+Nothing else is removed. `PRIMARY_NAV` keeps every entry; Mail's entry point is the footer icon.
 
 ## 10. Decisions
 
@@ -308,7 +369,7 @@ Mail ships as one feature: every part of this note together, the Mission Inbox's
 
 **The owner decided, 2026-10-19:**
 
-- Addresses: only the deployment's owner has one, with their workspaces' and agents'. Other accounts need the owner's setting `mail.accounts` (§1).
+- Addresses: only the deployment's owner has one, with their workspaces' and agents'. Other accounts need the deployment's `MAIL_ACCOUNTS` set to `everyone` (§1, §11).
 - Send cap: none for the owner's account; 100 a day for any other (§4).
 - No storage quota; Trash empties after 30 days (§2).
 
@@ -343,7 +404,7 @@ CREATE TABLE IF NOT EXISTS mail_name (
 **Who may claim:**
 
 - The deployment's operator (`CONTROL_PLANE_ADMINS`) may always claim.
-- Any other account may claim only while the site setting `mail.accounts` is on. It is off by default.
+- Any other account may claim only while the deployment's `MAIL_ACCOUNTS` var is `everyone`. It is `operators` by default.
 
 ### `Mailbox`: one per account (`idFromName(user_id)`)
 
@@ -474,20 +535,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5 (
 
 **Outbound sends** use Nimbus's existing outbox (`outbox_mail`), keyed per message id: written before the send, retried with backoff, and dead-lettered after 8 attempts.
 
-### The site setting
+### The setting `MAIL_ACCOUNTS` (no table)
 
-The control plane gets one new table, `control` class:
+Deployment-level settings already live in the Worker's `vars`, for example `SIGN_IN_PROVIDERS`, `CONTROL_PLANE_ADMINS` and `EMAIL_DOMAIN`. Each var is classified in `scripts/release-manifest.ts`'s `VAR_POLICY`. The control plane has no settings table: `cp_users`, `cp_workspaces`, `cp_feedback` and `cp_audit` are an index and a log (`core/src/control-plane/store.ts`).
 
-```sql
-CREATE TABLE IF NOT EXISTS cp_settings (
-  key         TEXT    PRIMARY KEY CHECK (key IN ('mail.accounts')),
-  value       TEXT    NOT NULL,
-  updated_at  INTEGER NOT NULL,
-  updated_by  TEXT    NOT NULL            -- the operator's email
-);
-```
+**Where each deployment's vars come from:**
 
-`mail.accounts` = `'on'` lets accounts other than the operator claim an address, and sets their send cap at 100 a day.
+- **kinu.run and staging** set theirs in `packages/cf-backend/wrangler.jsonc`.
+- **A self-host** gets its vars derived from the answers its deploy run keeps (`DeployInputs`, `derivedVar` in `core/src/deploy/steps.ts`). For example, `CONTROL_PLANE_ADMINS` comes from `ownerEmail`.
+- **A self-update** reruns that plan with the same answers. Its upload sends only carried and derived vars, and `keep_bindings` keeps secrets only. So a var a self-host's owner set by hand would vanish at the next update.
+
+**The setting joins them:**
+
+- **`MAIL_ACCOUNTS`:** `operators` or `everyone`.
+  - `operators`: only the deployment's operators (`CONTROL_PLANE_ADMINS`) may claim an address.
+  - `everyone`: any account may claim one, at 100 sends a day.
+- **Policy `derived`:**
+  - kinu.run and staging: `"operators"` in `wrangler.jsonc`. The owner turns it on with a config change and a release.
+  - A self-host: a deploy answer, `mailAccounts` in `DeployInputs`, `operators` by default. It is kept in the deployment record and sent again by every update.
 
 ### What changes in existing schema
 
@@ -506,7 +571,12 @@ All keys sit under `mail/<user_id>/`:
 
 An object goes when the last row naming its digest goes.
 
-### Measured before build
+### Search, measured (2026-10-19)
 
-- `fts5` with `contentless_delete` in workerd's SQLite. It needs SQLite 3.43 or later.
-- `MATCH` with long queries.
+Measured twice: in workerd by `tests/workerd/mail-search.test.ts`, and at 19:18 UTC on a deployed Durable Object (the scratch Worker of §4, with the same rows and queries). The results were the same, except that only the deployed run tried the 5,320-character query.
+
+- `mail_fts` is created exactly as declared above, and `contentless_delete` works: a deleted row is no longer found.
+- Long queries of quoted words match: one of 364 characters, and one of 5,320 characters on the deployed object. `LIKE` refuses a pattern past 50 bytes (`PLATFORM_CATALOG['do.sqlite.like_pattern_bytes']`); FTS5 `MATCH` showed no such limit.
+- Prefixes (`authent*`), column filters (`subject:invoice`) and diacritics (`cafe` finds `Café`) work.
+- Raw search-box text is FTS5 query syntax: `research.ashish@kinu.run` unquoted is refused with `fts5: syntax error near "."`. So the box's words are always sent as quoted phrases, and the box never speaks FTS5's query language.
+- `sqlite_version()` is refused in a Durable Object (`not authorized to use function`), so the version cannot be read; the features above are what was proven.
