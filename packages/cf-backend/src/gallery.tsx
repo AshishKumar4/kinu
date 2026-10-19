@@ -8,7 +8,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { mainPanelAgent, restoredRows, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
@@ -5768,7 +5768,7 @@ const STANDING: SharePreapproval[] = [
 ];
 
 /** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
-const SHARED_REFUSAL = "Slate issue-triage is shared, so it runs only as its own files build; they do not build alone yet";
+const SHARED_REFUSAL = sharedBuildRefusal("issue-triage");
 
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
 /** `first`: the slate's first share, before anyone has it, which asks what they start with. */

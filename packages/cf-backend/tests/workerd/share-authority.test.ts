@@ -59,7 +59,7 @@ it("R-P1 in-flight launch. a launch that chose the owner's network before the sl
   // built before the share, is refused, and nothing it started is left running with the owner's network.
   expect(raced.actors).toBe(1);
   expect(raced.afterShare).toBe(1);
-  expect(raced.refused).toContain('runs only as its own files build');
+  expect(raced.refused).toContain("can't run while it's shared");
   expect(raced.running).toBe(0);
 });
 

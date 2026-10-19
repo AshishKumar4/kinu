@@ -18,7 +18,7 @@ export function ListingPicture({ listing }: { listing: GalleryListing }) {
 
 function Stars({ count, on = false }: { count: number; on?: boolean }) {
   return (
-    <span className="inline-flex items-center gap-1 tabular-nums">
+    <span className="inline-flex items-center gap-1">
       <StarIcon size={13} weight={on ? "fill" : "regular"} className={on ? "p-accent" : "p-text-3"} />{count.toLocaleString("en-US")}
     </span>
   );
@@ -29,7 +29,7 @@ function Viewers({ count }: { count: number }) {
   const words = `${count.toLocaleString("en-US")} ${count === 1 ? "person has" : "people have"} opened it`;
 
   return (
-    <span className="inline-flex items-center gap-1 tabular-nums" data-gallery-viewers={count} title={words} aria-label={words}>
+    <span className="inline-flex items-center gap-1" data-gallery-viewers={count} title={words} aria-label={words}>
       <EyeIcon size={13} className="p-text-3" aria-hidden />{count.toLocaleString("en-US")}
     </span>
   );

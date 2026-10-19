@@ -454,7 +454,7 @@ function SharedRow({ row, actions }: { row: LiveShareRecord; actions: SharedRowA
             {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
             {row.gallery !== null && <span data-live-share-listed> · In the Gallery</span>}
           </span>
-          <span data-live-share-views className="block p-meta p-text-3 tabular-nums">{viewsWords(row)}</span>
+          <span data-live-share-views className="block p-meta p-text-3">{viewsWords(row)}</span>
         </span>
         <TileMenu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
       </div>
@@ -564,7 +564,7 @@ function usePeopleRoles(emails: string, visibility: LiveShareVisibility) {
   return { emailList, editing, editors, setRole };
 }
 
-/** A shared slate runs only as its own files build: why its preview refuses it, when it does. */
+/** A shared slate runs only what its own folder builds alone: why its preview refuses it, when it does (`sharedBuildRefusal`). */
 function useSharedRefusal(rpc: WorkspaceRpc, slate: string, fixture: LiveShareFixture | undefined): string | null {
   const [refused, setRefused] = useState<string | null>(fixture?.refused ?? null);
 

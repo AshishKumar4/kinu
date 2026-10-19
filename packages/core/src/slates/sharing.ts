@@ -457,3 +457,11 @@ export const SlateShareCardSchema = v.object({
 });
 
 export type SlateShareCard = v.InferOutput<typeof SlateShareCardSchema>;
+
+/**
+ * Why a shared slate does not run, as its owner and the people it is shared with read it: a shared slate runs only what
+ * its own folder builds alone (`scope: 'tree'`), and this one's does not.
+ */
+export function sharedBuildRefusal(slate: string): string {
+  return `${slate} can't run while it's shared: its files in /slates/${slate} don't build on their own. Fix them, or ask the agent to, then open it again.`;
+}
