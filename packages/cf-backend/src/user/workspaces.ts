@@ -466,12 +466,28 @@ export class UserWorkspaces {
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
+  /** The teardown running for each name: its DELETE, its deletion's job, a create that needs the name, an eval lease and
+   *  the account's deletion join it, since a second one's cleanup, keyed by the name alone, would land on a workspace
+   *  recreated after the first. */
+  private readonly tearingDown = new Map<string, Promise<void>>();
+
+  tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
+    const running = this.tearingDown.get(name);
+
+    if (running !== undefined) return running;
+    const teardown = this.tearDownOnce(name, ownerUserId).finally(() => { this.tearingDown.delete(name); });
+
+    this.tearingDown.set(name, teardown);
+
+    return teardown;
+  }
+
   /**
    * Mark it, then let its agents finish what they have open on it while it still holds its authority, then stop its MCP
    * calls and revoke in one synchronous turn before the destroy await, so a dying workspace keeps no authority past
    * its quiet. Destroy the DO before dropping the row; on failure the marked row stays and the revoke is not undone.
    */
-  async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
+  private async tearDownOnce(name: string, ownerUserId: string): Promise<void> {
     this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
     // With the mark's commit: a teardown that fails or dies on the way is run again a lap later, read or no read.
     await this.host.deletions.begun(name);
@@ -559,6 +575,9 @@ export class UserWorkspaces {
    */
   private async requireNotDeleting(name: string): Promise<void> {
     const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
+
+    // A teardown still running holds the name to its last step, past its row's removal; one that failed left it marked.
+    await Promise.allSettled([this.tearingDown.get(name)]);
 
     if (this.host.sqlx(marked, name).length === 0) return;
     await this.resumePendingDeletions();

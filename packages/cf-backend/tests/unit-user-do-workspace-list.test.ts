@@ -267,6 +267,44 @@ describe('a deletion that could not finish', () => {
     storage.close();
   });
 
+  // A second teardown of one name at once would run its own cleanup, keyed by the name alone, over a workspace
+  // recreated after the first one ended.
+  test("a create of a name whose deletion is running waits for it, and the deletion runs once", async () => {
+    const destroying = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let destroys = 0;
+
+    const harness = createTestUserDO({
+      durableObjectId: USER_ID,
+      destroyWorkspaceGate: async () => {
+        destroys += 1;
+
+        if (destroys > 1) return;
+        destroying.resolve();
+        await release.promise;
+      },
+    });
+
+    const owner = await testOwner();
+
+    await harness.userDO.registerWorkspace(owner, 'ledger');
+    const removed = harness.userDO.removeWorkspace(owner, 'ledger', USER_ID);
+
+    await destroying.promise;
+    const created = harness.userDO.registerWorkspace(owner, 'ledger');
+
+    // A read that checks its caller as the create did, asked after it: the create is past that check, so it waits on the
+    // deletion, or has begun a teardown of its own.
+    await harness.userDO.listActiveWorkspaces(owner);
+    release.resolve();
+    await removed;
+    await created;
+
+    expect({ destroys, listed: (await harness.userDO.listWorkspaces(owner)).entries.map((w) => w.name), armed: armedJobs(harness) })
+      .toEqual({ destroys: 1, listed: ['ledger'], armed: [] });
+    harness.close();
+  });
+
   test('a deletion refused parks until its account starts again, and does not wake it each lap', async () => {
     const storage = new Database(':memory:');
     let refusing = true;
