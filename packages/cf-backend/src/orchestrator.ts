@@ -2260,12 +2260,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           for (const event of this.carried(actor.actorId, cancelled)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
         }
 
-        // One whose queue waits behind its question to its owner arms no wake, and is asked all the same.
-        if (await this.agentTurns.holdsTurn(actor.actorId)
-          || (this.holdsQuestions(actor.actorId) && await this.agentCall(actor.actorId, (isolate, snapshot) => isolate.owed(snapshot)))) {
-          await this.agentTurns.interrupt(actor.actorId, null);
+        if (await this.agentTurns.holdsTurn(actor.actorId)) {
+          await this.agentTurns.beforeRetirement(actor.actorId, true);
           continue;
         }
+
+        // One that may hold a question to its owner is stopped though its wake does not stand: the queue a question holds
+        // arms none, and an isolate that ended since keeps only the question, which the Stop dismisses.
+        if (this.holdsQuestions(actor.actorId)) await this.agentTurns.interrupt(actor.actorId, null);
 
         const held = rosterOf(actor);
 
