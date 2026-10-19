@@ -85,3 +85,13 @@ it("a visitor's write on its owner's access runs once the owner approves it, and
   expect(ran.marked).toContain('visitor');
 });
 
+it("a slate's call that writes its own files answers what it did, and the slate runs the edit on its next call", async () => {
+  const subject = env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('self-edit'));
+  const ran = await subject.selfEditCalls({ workspace: 'self-edit', owner: 'self-edit-owner' });
+
+  // An edit of its own tree releases its process, but never under the call that made the edit.
+  expect(ran.first).toContain('noted one');
+  expect(ran.second).toContain('noted two');
+  expect(ran.file).toContain('two');
+});
+
