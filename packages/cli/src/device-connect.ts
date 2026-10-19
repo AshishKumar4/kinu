@@ -53,6 +53,10 @@ function daemonFiles(): Effect.Effect<DaemonFiles, KinuError> {
 
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 
+/** The screen the daemon shares (1014-t), beside device.json and never in a sandbox's sight: the portal's restore
+ *  token and the screen's size, a request to share, or why the last share failed. */
+export const DESKTOP_SHARE_PATH = join(AGENT_HOME, 'desktop.json');
+
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
 
 /** The daemon reports this root in HELLO and the hub composes `<root>/<workspace>/home`; the daemon owns everything under it. */
@@ -746,6 +750,25 @@ function pidfile<T>(doing: string, run: () => T | Promise<T>): Effect.Effect<T, 
 /** The live installed daemon the pidfile names, or null: a gone process, or another program, is none. */
 function runningDaemonPid(): Effect.Effect<number | null, KinuError> {
   return pidfile('reading which device daemon runs', () => runningMachineDaemon(PID_PATH, SCRIPT_PATH));
+}
+
+/**
+ * Asks the running daemon to share this PC's screen, or to stop when `on` is false: desktop.json says which, and
+ * SIGUSR1 has the daemon read it. Null when no daemon runs here.
+ */
+export function signalScreenShare(on: boolean, at: number): Effect.Effect<number | null, KinuError> {
+  return Effect.gen(function* () {
+    const pid = yield* runningDaemonPid();
+
+    if (pid === null) return null;
+    yield* pidfile('asking the device daemon about its screen', () => {
+      if (on) writeFileSync(DESKTOP_SHARE_PATH, `${JSON.stringify({ request: 'share', at })}\n`, { mode: 0o600 });
+      else rmSync(DESKTOP_SHARE_PATH, { force: true });
+      process.kill(pid, 'SIGUSR1');
+    });
+
+    return pid;
+  });
 }
 
 /** Takes the machine for the daemon this connect started; false while another live daemon holds it. */

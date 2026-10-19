@@ -22,8 +22,8 @@ A PC the workspace holds is a machine in the Environment column, like the comput
   - A PC with no screen to share (no graphical session, or sharing never turned on) has no Desktop tab at all.
 
 The device reports which of these applies in each `hello` (`DeviceDesktopSchema`,
-`packages/core/src/execution/device-desktop.ts`), and `kinu desktop share` reconnects it so the change shows at once. The
-hub holds it on the device's live socket, as it holds the device's being online, so nothing of it is stored: an offline
+`packages/core/src/execution/device-desktop.ts`), and again on the same socket whenever it changes, so `kinu desktop
+share` shows at once. The hub holds it on the device's live socket, as it holds the device's being online, so nothing of it is stored: an offline
 PC has no screen to open. The client reads it from the device's roster row (`desktop`). A daemon older than the screen speaks device protocol 3, which
 the hub serves nothing on: it is pushed the update, as every daemon a protocol behind is.
 
@@ -76,11 +76,19 @@ Where the daemon's screen comes from depends on the system:
   GNOME 50.1's gnome-remote-desktop speaks RDP only. Measured on the workstation: `grdctl status` lists RDP and no VNC.
   The usual VNC servers aren't installed by default either (x11vnc and wayvnc are absent there).
   - Screen and input go through `org.freedesktop.portal.ScreenCast` and `RemoteDesktop`, with a `persist_mode` 2
-    restore token so the PC asks only once.
-  - Frames come from the system's GStreamer (`pipewiresrc ! videoconvert ! jpegenc`; present on the workstation,
-    pipewiresrc 1.6.2) and are sent as RFB Tight rectangles with JPEG.
-  - Input becomes the portal's `NotifyPointerMotionAbsolute`, `NotifyPointerButton` and `NotifyKeyboardKeysym`.
-  - **permission** is the portal's own dialog on the PC. **setup** means there is no portal or no GStreamer.
+    restore token so the PC asks only once (`packages/pc-agent/src/daemon/linux-screen.js`). A helper in Python with
+    PyGObject holds the portal session; it ships inside the daemon file and runs as `python3 -c`, since an updater
+    lands only the files it already knew.
+  - Frames come from the system's GStreamer (`pipewiresrc ! videoconvert ! videorate max-rate=15 ! jpegenc`) and are
+    sent as RFB Tight rectangles with JPEG.
+  - Input becomes the portal's `NotifyPointerMotionAbsolute`, `NotifyPointerButton`, `NotifyPointerAxisDiscrete` and
+    `NotifyKeyboardKeysym`.
+  - `kinu desktop share` writes its request to `desktop.json` beside `device.json` and signals the daemon (SIGUSR1),
+    which asks in the portal's prompt and keeps the token there at 0600. Kinu's own directory is invisible to every
+    sandbox, so no agent reads it. The daemon asks, not the command, so the token and every later restore belong to
+    one process's app identity. `kinu desktop unshare` removes the file and ends any open stream.
+  - **none**: no Python with PyGObject, no `pipewiresrc`, or no portal with a monitor to share (no graphical session),
+    probed once at start. **setup**: shareable, never shared. **permission**: the portal's prompt is up on the PC.
 - **Windows**: none. The daemon doesn't run there.
 
 ## The shell
@@ -127,7 +135,7 @@ Each has a recommendation, which is the default unless the owner says otherwise.
    the screen hub; the route; the daemon's RFB server. Tested against a fixed screen, through the hub and through the
    vendored client in Chrome. No system's source ships in it, so every PC reports none.
 2. Named PC sessions in the daemon, and the strip reading them (device protocol 4, with the screen: one step from 3).
-3. Linux portal source in the daemon, and `kinu desktop share`.
+3. Linux portal source in the daemon, and `kinu desktop share` (no protocol change).
 4. The macOS helper, and its build and a measured run in the Mac proof.
 
 Each ships in a daemon release, which the hub pushes to every connected PC whose owner left updates on.
@@ -139,9 +147,13 @@ Each ships in a daemon release, which the hub pushes to every connected PC whose
   - GStreamer `pipewiresrc` 1.6.2 and `jpegenc` present;
   - ffmpeg present;
   - x11vnc and wayvnc absent.
+- Measured in a headless GNOME 50.1 session (`packages/pc-agent/scripts/linux-screen-proof.sh`, 2026-10-19): the
+  probe finds the portal; the share's prompt, its Share pressed through AT-SPI, hands back a token; the first frame is a
+  1280×800 JPEG of 77 KB; 20 pointer moves drew 19 frames, so input reaches the session; a second open on the token
+  started in 79 ms with no prompt. Five of six runs passed; the first hung with its prompt unpressed, which is the
+  proof's AT-SPI stand-in for the person at the PC, not the daemon.
 - Not measured:
-  - The portal path end to end. The workstation has no graphical session running now: its portal calls time out, and
-    a screen share on the owner's own desktop needs them present to allow it.
+  - A share on a person's own logged-in desktop, where the daemon runs as a user service.
   - Frame rate and input latency over the tunnel.
   - All of macOS: the helper's build, its permissions, and what Screen Sharing's listener binds to. Armada has no Mac;
     the Mac proof measures them on the owner's.
