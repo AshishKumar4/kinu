@@ -65,7 +65,7 @@ function needsGateway(models: readonly string[]): boolean {
 }
 
 /**
- * Give one account `gateway`: its Cloudflare login, the API token as a Cloudflare credential names it (my-gateway sends
+ * Give one account `gateway`: its Cloudflare login, the gateway token as a Cloudflare credential names it (my-gateway sends
  * it as the gateway's `cf-aig-authorization` and the management reads' bearer, measured on staging 2620e7c05), and the
  * gateway selected. Either already there is left as it is. A finding, or null.
  */
@@ -298,9 +298,10 @@ export async function provisionEvalProviderKeys(input: Provisioning): Promise<Pr
 }
 
 /**
- * The AI Gateway the deployment at `origin` runs on (its `AI_GATEWAY_URL`, wrangler.jsonc), and the Cloudflare API
- * token that may run it (`KINU_CLOUDFLARE_API_TOKEN`, ~/.config/kinu/secrets.env): a gateway model's trials are billed
- * to the deployment's own account.
+ * The AI Gateway the deployment at `origin` runs on (its `AI_GATEWAY_URL`, wrangler.jsonc), and the gateway token
+ * (`WEBSEARCH_CF_TOKEN`, ~/.config/kinu/secrets.env and armada): AI Gateway Run, Edit and Read and Workers AI, and
+ * nothing that writes the account's Workers, containers or tokens, since it is stored in deployed accounts. A gateway
+ * model's trials are billed to the deployment's own account.
  */
 function gatewayFor(origin: string): EvalGateway {
   const deployment = deploymentAt(origin);
@@ -308,11 +309,11 @@ function gatewayFor(origin: string): EvalGateway {
   const target = deployment === undefined ? { reason: `no environment in wrangler.jsonc serves ${origin}` }
     : parseGatewayTarget(deployedConfig(deployment.environment).vars?.['AI_GATEWAY_URL']);
 
-  const token = process.env['KINU_CLOUDFLARE_API_TOKEN'] ?? '';
+  const token = process.env['WEBSEARCH_CF_TOKEN'] ?? '';
 
   if ('reason' in target) throw new Error(`a gateway model needs ${origin}'s AI Gateway: ${target.reason}`);
 
-  if (token === '') throw new Error('a gateway model needs KINU_CLOUDFLARE_API_TOKEN, a Cloudflare API token with AI Gateway Run');
+  if (token === '') throw new Error('a gateway model needs WEBSEARCH_CF_TOKEN, the gateway token (AI Gateway Run)');
 
   return { accountId: target.account, id: target.id, token };
 }
