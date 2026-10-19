@@ -406,9 +406,9 @@ test("a share's numbers: distinct people signed in, every open, and signed-out o
     shares.opened('s2', 'key-pat');
 
     expect(shares.views('s1')).toEqual({ viewers: 2, opens: 6, signedOutOpens: 3 });
-    // One row per person, the first open's time kept: what is counted is a query over them, never a total kept beside.
-    expect(db.query("SELECT viewer, opens, first_seen FROM slate_share_views WHERE share = 's1' ORDER BY viewer").all())
-      .toEqual([{ viewer: '', opens: 3, first_seen: 1_003 }, { viewer: 'key-lee', opens: 1, first_seen: 1_002 }, { viewer: 'key-pat', opens: 2, first_seen: 1_000 }]);
+    // One row per person: what is counted is a query over them, never a total kept beside.
+    expect(db.query("SELECT viewer, opens FROM slate_share_views WHERE share = 's1' ORDER BY viewer").all())
+      .toEqual([{ viewer: '', opens: 3 }, { viewer: 'key-lee', opens: 1 }, { viewer: 'key-pat', opens: 2 }]);
     expect(shares.views('s2')).toEqual({ viewers: 1, opens: 1, signedOutOpens: 0 });
   } finally {
     db.close();

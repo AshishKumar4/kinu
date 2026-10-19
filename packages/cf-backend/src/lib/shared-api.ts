@@ -1,10 +1,10 @@
 /** Typed client for `/api/shared/*` and the public blueprint read; the session rides the HttpOnly cookie. */
 import { Effect } from 'effect';
 import {
-  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH,
+  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, OwnedLiveShareSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH,
   LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema,
   type SlatePreapprovals, type SlatePreapprovalWithdraw,
-  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareListingBody, type LiveShareModeBody, type LiveShareRecord,
+  type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareListingBody, type LiveShareModeBody, type OwnedLiveShare,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -112,11 +112,11 @@ export function withdrawPreapproval(input: SlatePreapprovalWithdraw): Promise<Sl
 }
 
 /** Switches a share's mode, or approves the reach again at the slate's new revision: the share as it now is. */
-export function setShareMode(body: LiveShareModeBody): Promise<LiveShareRecord> {
-  return settle(api(LiveShareRecordSchema, 'POST', LIVE_SHARE_MODE_PATH, body));
+export function setShareMode(body: LiveShareModeBody): Promise<OwnedLiveShare> {
+  return settle(api(OwnedLiveShareSchema, 'POST', LIVE_SHARE_MODE_PATH, body));
 }
 
 /** Lists a share in the Gallery with its card's words, or takes it off: the share as it now is. */
-export function listShare(body: LiveShareListingBody): Promise<LiveShareRecord> {
-  return settle(api(LiveShareRecordSchema, 'POST', LIVE_SHARE_LISTING_PATH, body));
+export function listShare(body: LiveShareListingBody): Promise<OwnedLiveShare> {
+  return settle(api(OwnedLiveShareSchema, 'POST', LIVE_SHARE_LISTING_PATH, body));
 }

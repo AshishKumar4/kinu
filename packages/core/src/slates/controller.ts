@@ -25,12 +25,12 @@ import { ROOT_SLATE_CALLER, type SlateCaller } from './caller';
 import { slateCapabilityGraph, visitorNeeds, type SlateSurfaceCatalog } from './capability-graph';
 import type { RoomService } from './room-api';
 import { WorkspaceSlateContentStore } from './content';
-import type { DurableAppIdentity, DurableApps } from './durable-app';
+import type { DurableApps } from './durable-app';
 import { EphemeralSlates } from './ephemeral';
 import { forgetSlateFiles, slateDirectory, SlateFiles } from './files';
 import { SlateLiveShareStore } from './live-shares';
 import { setShareMode, shareLiveSlate } from './live-sharing';
-import { SlateProcesses, type RunnableSlateSource, type RunningSlate, type SlateProcessPorts } from './processes';
+import { SlateProcesses, type RunnableSlateSource, type SlateProcessPorts } from './processes';
 import type { SlateProcess } from './process';
 import { parseSlateProject, slateTitle, type SlateProject } from './project';
 import {
@@ -44,7 +44,7 @@ import { slateRevision, type ToolContract } from './share-policy';
 import { confinedTo } from './scoped-reader';
 import { rollbackSlateBatch, writeSlateBatch, type SlateFileBatch } from './slate-writer';
 import type {
-  BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, SlateCapabilityGraph, SharePreapproval, SlatePreapprovals, SlatePreapprovalWithdraw,
+  BlueprintBundle, BlueprintFork, LiveShareListingBody, LiveShareModeBody, LiveShareRecord, OwnedLiveShare, SlateCapabilityGraph, SharePreapproval, SlatePreapprovals, SlatePreapprovalWithdraw,
   SlateReach, SlateShareCard, SlateShareRecord,
 } from './sharing';
 import { SlateShareStore, type ShareUser } from './shares';
@@ -332,8 +332,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return settle(this.blueprintAnswer('admitting a blueprint', (blueprints) => blueprints.admit(this.ports.workspace, bundle)));
   }
 
-  shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
-    return settle(Effect.flatMap(this.blueprintAnswer('sharing slate ' + share, () => this.live.addUsers(share, users)), (shared) => Effect.promise(async () => this.changedShares(shared))));
+  shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<OwnedLiveShare>> {
+    return settle(Effect.flatMap(this.blueprintAnswer('sharing slate ' + share, () => this.owned(this.live.addUsers(share, users))), (shared) => Effect.promise(async () => this.changedShares(shared))));
   }
 
   private async changedShares<Answer extends { readonly ok: boolean }>(changed: Answer): Promise<Answer> {
@@ -528,7 +528,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
           case 'shares': return answered({ value: blueprints.list() });
           case 'share': return await this.shareSlateLive(operation, operation.id);
 
-          case 'liveShares': return answered({ value: this.live.list().map((row) => ({ ...row, paused: this.viewers.paused(row), stale: this.stale(row), views: this.live.views(row.id) })) });
+          case 'liveShares': return answered({ value: this.live.list().map((row) => this.owned(row)) });
           case 'viewerRequests': return answered({ value: this.live.requests(operation.share) });
         }
       });
@@ -558,7 +558,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
     await this.sharingChanged(slate);
 
-    return await this.changedShares(answered({ value: created }));
+    return await this.changedShares(answered({ value: { ...created, share: this.owned(created.share) } }));
   }
 
   /**
@@ -638,13 +638,18 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return share.mode === 'owner' && share.grantRevision !== slateRevision(this.builds, share.slate);
   }
 
+  /** `share` as its owner reads it (`OwnedLiveShare`): the one place what holds of it now is added to its record. */
+  private owned(share: LiveShareRecord): OwnedLiveShare {
+    return { ...share, paused: this.viewers.paused(share), stale: this.stale(share), views: this.live.views(share.id) };
+  }
+
   /**
    * The owner's word on a live share's mode, from their own share sheet only (never a slate op an agent can make):
    * `owner`, over the reach they read at `revision`, which must be the slate's revision still; or `own`. Either way the
    * share's effects still waiting on them are retired: what they would admit was asked under another authority. No Drive
    * card names a mode, so the Drive is not told.
    */
-  setLiveShareMode(input: LiveShareModeBody): Promise<SlateAnswer<LiveShareRecord>> {
+  setLiveShareMode(input: LiveShareModeBody): Promise<SlateAnswer<OwnedLiveShare>> {
     return settle(answer(`setting share ${input.share}'s mode`, Effect.gen({ self: this }, function* () {
       const held = this.live.get(input.share);
 
@@ -690,7 +695,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       this.ports.ownerEffects?.retire(held.slate);
       yield* Effect.promise(async () => this.sharingChanged(held.slate));
 
-      return this.live.get(held.id) ?? held;
+      return this.owned(this.live.get(held.id) ?? held);
     })));
   }
 
@@ -718,7 +723,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * a share on each viewer's own access is listed (§2). The Gallery holds one listing per slate, so a share listed in
    * another's place replaces it there.
    */
-  setLiveShareListing(input: LiveShareListingBody): Promise<SlateAnswer<LiveShareRecord>> {
+  setLiveShareListing(input: LiveShareListingBody): Promise<SlateAnswer<OwnedLiveShare>> {
     return settle(answer(`listing share ${input.share}`, Effect.gen({ self: this }, function* () {
       const held = this.live.get(input.share);
 
@@ -733,7 +738,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       yield* Effect.promise(async () => this.ports.listingChanged?.(listed));
 
-      return listed;
+      return this.owned(listed);
     })));
   }
 
@@ -871,9 +876,15 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     })));
   }
 
-  /** The application is the root's, so the URL is the same whoever asks and across launches. */
+  /**
+   * The slate's served build, booted for the workspace root, at its preview's URL: the application is the root's, so the
+   * URL is the same whoever asks and across launches. A slate that cannot be served is refused, and a caller who may not
+   * start one is refused first.
+   */
   preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
-    return settle(this.answerServed(caller, id, 'preview', ({ source, app, broken }) => Effect.gen({ self: this }, function* () {
+    return settle(answer('slate ' + id + ' preview', Effect.gen({ self: this }, function* () {
+      requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
+      const { source, app, broken } = yield* Effect.promise(async () => this.processes.served(ROOT_SLATE_CALLER, id));
       const preview = yield* Effect.promise(async () => this.ports.apps.url(app.port, app.capability));
 
       if (preview.url === undefined) return yield* new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
@@ -884,21 +895,10 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       const shown = { url: preview.url, port: app.port, sized: true, title: slateTitle(source.project, id) };
 
       // Its latest source does not build: the last that did is what this URL serves, and the compiler's words say why.
-      return broken === null ? shown : { ...shown, broken };
+      const served: JsonValue = broken === null ? shown : { ...shown, broken };
+
+      return served;
     })));
-  }
-
-  /** The slate's served build, booted for the workspace root, as `read` reads it; a slate that cannot be served is
-   *  refused, and a caller who may not start one is refused first. */
-  private answerServed(
-    caller: SlateCaller, id: string, doing: 'preview',
-    read: (served: RunningSlate<Source, Process> & { readonly app: DurableAppIdentity }) => Effect.Effect<JsonValue, KinuError>,
-  ): Effect.Effect<SlateCallResult> {
-    return answer('slate ' + id + ' ' + doing, Effect.gen({ self: this }, function* () {
-      requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
-
-      return yield* read(yield* Effect.promise(async () => this.processes.served(ROOT_SLATE_CALLER, id)));
-    }));
   }
 
   /** Answers the refusal instead of failing, so the route can tell `missing` from `bad_input`. */

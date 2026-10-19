@@ -1348,7 +1348,6 @@
   "slate_share_views@packages/core/src/slates/live-shares.ts": [
     "share TEXT NOT NULL",
     "viewer TEXT NOT NULL",
-    "first_seen INTEGER NOT NULL",
     "opens INTEGER NOT NULL",
     "PRIMARY KEY (share, viewer)"
   ],

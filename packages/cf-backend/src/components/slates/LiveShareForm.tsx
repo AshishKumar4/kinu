@@ -7,7 +7,7 @@ import {
   UsersIcon, WarningIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
+import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -20,7 +20,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export interface LiveShareFixture {
   graph: SlateReach;
-  liveShares: LiveShareRecord[];
+  liveShares: OwnedLiveShare[];
   /** Why the shared slate does not run, as its preview would refuse it. */
   refused?: string;
   /** What the owner answered "Always for this slate" to, standing now. */
@@ -185,7 +185,7 @@ function PrimaryAction({ reviewing, busy, canShare, canApprove, onShare, onAppro
 }
 
 /** Who a share lets in, as the share records them. */
-function whoCanOpen(share: LiveShareRecord): string {
+function whoCanOpen(share: OwnedLiveShare): string {
   if (share.visibility === "public") return "Anyone with the link can open it.";
 
   return share.users.length === 0 ? "Only you can open it." : `${share.users.join(", ")} can open it.`;
@@ -314,10 +314,10 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
 }
 
 /** What a share runs with, as its row says it; an owner share whose code changed is stopped until approved again. */
-function modeWords(row: LiveShareRecord): ReactNode {
+function modeWords(row: OwnedLiveShare): ReactNode {
   if (row.mode === "own") return "Their own access";
 
-  if (row.stale !== true) return "Your access";
+  if (!row.stale) return "Your access";
 
   const editor = row.editedBy;
 
@@ -380,8 +380,8 @@ function NotRunning({ reason, shared }: { reason: string | null; shared: boolean
 }
 
 /** A share's numbers, as its owner reads them: who opened it through its link, and how often; never who. */
-function viewsWords(row: LiveShareRecord): string {
-  const views = row.views ?? { viewers: 0, opens: 0, signedOutOpens: 0 };
+function viewsWords(row: OwnedLiveShare): string {
+  const { views } = row;
 
   if (views.opens === 0) return "Not opened yet";
   const people = views.viewers === 1 ? "1 person opened it" : `${views.viewers.toLocaleString("en-US")} people opened it`;
@@ -392,7 +392,7 @@ function viewsWords(row: LiveShareRecord): string {
 }
 
 /** Who a share lets in, on one line: anyone with its link, or the people it names, those who edit marked. */
-function WhoLine({ row }: { row: LiveShareRecord }) {
+function WhoLine({ row }: { row: OwnedLiveShare }) {
   if (row.visibility === "public") return <span className="truncate">Anyone with the link</span>;
 
   return (
@@ -421,7 +421,7 @@ interface SharedRowActions {
 }
 
 /** What the row's menu offers for a share: its own access, its place in the Gallery, and stopping it. */
-function rowMenu(row: LiveShareRecord, actions: SharedRowActions, onListing: () => void): MenuItem[] {
+function rowMenu(row: OwnedLiveShare, actions: SharedRowActions, onListing: () => void): MenuItem[] {
   const items: MenuItem[] = [];
 
   if (row.mode === "owner") items.push({ label: "Use their own access", icon: <UserCircleIcon size={15} />, marker: "data-live-share-own", onSelect: () => actions.onOwnAccess(row.id) });
@@ -439,7 +439,7 @@ function rowMenu(row: LiveShareRecord, actions: SharedRowActions, onListing: () 
 }
 
 /** One share, on one compact row: who, whose access and its numbers, the one action a stopped share needs, and a menu. */
-function SharedRow({ row, actions }: { row: LiveShareRecord; actions: SharedRowActions }) {
+function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowActions }) {
   const [listing, setListing] = useState(false);
   const who = row.visibility === "public" ? "Anyone with the link" : "People you added";
 
@@ -451,14 +451,14 @@ function SharedRow({ row, actions }: { row: LiveShareRecord; actions: SharedRowA
           <span className="flex min-w-0 p-meta p-text-2"><WhoLine row={row} /></span>
           <span className="block p-meta p-text-3">
             <span data-live-share-mode={row.mode}>{modeWords(row)}</span>
-            {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
+            {row.paused && <span className="p-warning"> · paused today: limit reached</span>}
             {row.gallery !== null && <span data-live-share-listed> · In the Gallery</span>}
           </span>
           <span data-live-share-views className="block p-meta p-text-3">{viewsWords(row)}</span>
         </span>
         <TileMenu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
       </div>
-      {row.mode === "owner" && row.stale === true && (
+      {row.mode === "owner" && row.stale && (
         <div className="pl-[26px]">
           <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
         </div>
@@ -468,7 +468,7 @@ function SharedRow({ row, actions }: { row: LiveShareRecord; actions: SharedRowA
   );
 }
 
-function SharedNow({ shares, actions }: { shares: readonly LiveShareRecord[]; actions: SharedRowActions }) {
+function SharedNow({ shares, actions }: { shares: readonly OwnedLiveShare[]; actions: SharedRowActions }) {
   return (
     <div className="space-y-1.5">
       <p className="p-meta font-medium p-text-3">Shared now</p>
@@ -679,7 +679,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   fixture?: LiveShareFixture;
 }) {
   const [graph, setGraph] = useState<SlateReach | null>(fixture?.graph ?? null);
-  const [shares, setShares] = useState<LiveShareRecord[]>(fixture?.liveShares ?? []);
+  const [shares, setShares] = useState<OwnedLiveShare[]>(fixture?.liveShares ?? []);
   const [visibility, setVisibility] = useState<LiveShareVisibility>("users");
   const [mode, setMode] = useState<ShareMode>("own");
   // Asked at the slate's first share only: a later share shares what the first one did.
@@ -704,7 +704,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     ])), ([drawn, rows]) => {
       if (!live) return;
       setGraph(answered(drawn, SlateReachSchema));
-      setShares(answered(rows, v.array(LiveShareRecordSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
+      setShares(answered(rows, v.array(OwnedLiveShareSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
     }), showing((chain) => { if (live) setErr(chain); })));
 
 

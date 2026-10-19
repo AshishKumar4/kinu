@@ -105,7 +105,8 @@ const ShareViewsSchema = v.object({
 
 export type ShareViews = v.InferOutput<typeof ShareViewsSchema>;
 
-export const LiveShareRecordSchema = v.object({
+/** A live share as its store holds it. Its owner is answered it with what holds of it now (`OwnedLiveShareSchema`). */
+const LiveShareRecordSchema = v.object({
   id: v.string(),
   slate: v.string(),
   visibility: LiveShareVisibilitySchema,
@@ -124,16 +125,26 @@ export const LiveShareRecordSchema = v.object({
   editedBy: v.nullable(v.string()),
   /** Its card's words while its owner lists it in the Gallery; null when not listed, and always on an `owner` share. */
   gallery: v.nullable(v.object({ line: v.string(), category: GalleryCategorySchema })),
-  /** Computed where the row is answered, never stored. */
-  paused: v.optional(v.boolean()),
-  /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
-   *  approves again. Computed where the row is answered. */
-  stale: v.optional(v.boolean()),
-  /** Who opened it, counted where the row is answered. */
-  views: v.optional(ShareViewsSchema),
 });
 
 export type LiveShareRecord = v.InferOutput<typeof LiveShareRecordSchema>;
+
+/**
+ * A live share as its owner reads it, on their share sheet: its record, and what holds of it now, never stored. Every
+ * answer that hands its owner a share is one (`SlateController.owned`): its list, its making, and each change to it.
+ */
+export const OwnedLiveShareSchema = v.object({
+  ...LiveShareRecordSchema.entries,
+  /** Its spend for today is spent: it answers no one until tomorrow. */
+  paused: v.boolean(),
+  /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
+   *  approves again. */
+  stale: v.boolean(),
+  /** Who opened it. */
+  views: ShareViewsSchema,
+});
+
+export type OwnedLiveShare = v.InferOutput<typeof OwnedLiveShareSchema>;
 
 const ApprovedMembersSchema = v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }));
 
@@ -218,7 +229,7 @@ export const SlatePreapprovalsSchema = v.object({
 export type SlatePreapprovals = v.InferOutput<typeof SlatePreapprovalsSchema>;
 
 export const LiveShareCreatedSchema = v.object({
-  share: LiveShareRecordSchema,
+  share: OwnedLiveShareSchema,
   /** Its one link: the app's page for it (`APP_ROUTES.sharedLive`), which frames its host; null with no app origin. */
   url: v.nullable(v.string()),
 });
