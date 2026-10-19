@@ -1113,6 +1113,25 @@ function stripTab(name: string): string {
   })()`;
 }
 
+/**
+ * The first size choice that restarts the computer: neither the account's default, which may be the size it runs at,
+ * nor the size its control names (`current`). Picking the first unselected choice picked the explicit Small on an
+ * account whose default was Small, and no restart came (staging rc20, 2026-10-19).
+ */
+function otherSize(current: string): string {
+  return `[...document.querySelectorAll('[role="option"]')].find((option) => {
+    const text = (option.textContent ?? '').trim();
+    return !text.startsWith('Your default') && !text.startsWith(${JSON.stringify(`${current} ·`)});
+  })`;
+}
+
+/** Marks {@link otherSize}'s choice for a pointer to press, and names it. */
+function markOtherSize(current: string): string {
+  return `(() => { const option = ${otherSize(current)}; option.setAttribute('data-flow-size', ''); return (option.textContent ?? '').trim(); })()`;
+}
+
+const MARKED_SIZE = '[role="option"][data-flow-size]';
+
 /** Whether the inspector strip draws a tab named `name`. */
 function stripHas(name: string): string {
   return `document.querySelector(${JSON.stringify(`#inspector button[aria-label="${name}"]`)}) !== null`;
@@ -1869,15 +1888,12 @@ export async function computerDesktopSurvivesAResize(target: FlowTarget): Promis
     const from = v.parse(v.string(), await size.evaluate((element) => (element.textContent ?? '').trim()));
 
     await size.click();
-    await until(page, 'the size choices', `document.querySelector('[role="option"][aria-selected="false"]') !== null`);
+    await until(page, 'the size choices', `${otherSize(from)} !== undefined`);
 
     // A pointer's press, as a person picks: the list selects on the pointer's release, not on a scripted click.
-    const option = await page.$('[role="option"][aria-selected="false"]');
+    const to = v.parse(v.string(), await page.evaluate(markOtherSize(from)));
 
-    if (option === null) throw new Error('the size choices closed before one was picked');
-    const to = v.parse(v.string(), await option.evaluate((element) => (element.textContent ?? '').trim()));
-
-    await option.click();
+    await page.click(MARKED_SIZE);
     const chosen = performance.now();
 
     // The restart ends the session: the desktop stops drawing before it can be drawn again.
@@ -2126,9 +2142,12 @@ export async function computerSessionsComeBackByName(target: FlowTarget): Promis
     const size = await page.waitForSelector(`#inspector [aria-label="${computer} size"]`);
 
     if (size === null) throw new Error(`no ${computer} size control`);
+    const from = v.parse(v.string(), await size.evaluate((element) => (element.textContent ?? '').trim()));
+
     await size.click();
-    await until(page, 'the size choices', `document.querySelector('[role="option"][aria-selected="false"]') !== null`);
-    await (await page.$('[role="option"][aria-selected="false"]'))?.click();
+    await until(page, 'the size choices', `${otherSize(from)} !== undefined`);
+    await page.evaluate(markOtherSize(from));
+    await page.click(MARKED_SIZE);
     await until(page, 'the computer restarting', `document.querySelector('#inspector .xterm-rows') === null`);
     await until(page, "the restarted computer's sessions", `${SESSION_TABS}.includes('web') && ${SHOWN_TERMINAL} !== undefined`);
     await page.evaluate(`[...document.querySelectorAll('#inspector [role="tab"]')].find((tab) => (tab.textContent ?? '').trim() === 'web').click()`);
