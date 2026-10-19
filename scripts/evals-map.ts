@@ -14,7 +14,7 @@ import { deploymentOf } from './infra-manifest';
 import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
-import { KINU_ARMADA, kinuArmada, leaseBlock, outranked } from './evals-lease';
+import { KINU_ARMADA, keysWindows, kinuArmada, leaseBlock, outranked } from './evals-lease';
 import { NETWORK_SCOPE, processEvals } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
 import { REPO_ROOT as ROOT } from './repo-root';
@@ -200,6 +200,8 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
   const hosts = plan.origins.map(({ origin }) => new URL(origin).host);
   const size = plan.slots * plan.matrix.models.length * plan.matrix.arms.length * plan.matrix.trials;
   const tasks = await collectEvalTasks();
+
+  await keysWindows(console.log);
 
   for (;;) {
     const first = await leaseBlock(armada, { size, pass: plan.pass, hosts }, console.log);

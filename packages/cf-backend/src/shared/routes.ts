@@ -12,15 +12,16 @@ import {
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
-  type LiveShareRecord, type SlateAnswer,
+  type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
+import { shareViewerKey } from '../viewer-pass';
 import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { OrchestratorAgent } from '../orchestrator';
 import { workspaceOwner } from '../workspace-owner-rpc';
-import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { ROOT_SLATE_CALLER, SIGNED_OUT_VIEWER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 
 /** The owner's workspace, once the app host proved it is theirs. */
@@ -321,7 +322,7 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
  * owner reviewed (docs/SLATE-SHARING-NIMBUS.md §2). Where that refuses (the slate changed since), the share is revoked
  * again, so nothing is left shared other than as asked. The share as it stands, or the refusal.
  */
-async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share: LiveShareRecord; body: LiveShareBody }): Promise<LiveShareRecord | Response> {
+async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share: OwnedLiveShare; body: LiveShareBody }): Promise<OwnedLiveShare | Response> {
   const { body, share } = made;
 
   if (body.mode !== 'owner' || body.revision === undefined) return share;
@@ -373,7 +374,10 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
   const body = await safeJson(request, LiveIdBody);
 
   if (!body) return err(400, 'Body must be { workspace, share }');
-  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share, identity?.userId ?? null);
+  const viewer = identity === null ? SIGNED_OUT_VIEWER : await shareViewerKey(env, body.share, identity.userId);
+
+  if (viewer === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
+  const reading = await workspaceOwner(env, body.workspace).openLiveShare(body.share, identity?.userId ?? null, viewer);
 
   if (reading.ok && !reading.value.admits && identity === null) return err(401, 'Sign in to open this share');
 

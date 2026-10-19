@@ -25,6 +25,11 @@ declare module 'kinu:product' {
     protected settleBackgroundTasks(): Promise<void>;
     protected get terminal(): { idle(): Promise<void> };
     protected actorHandle(): { readonly actorId: string };
+    /** The workspace's files, as its agents' tools reach them. */
+    protected get rt(): { readonly storage: { readonly vfs: {
+      mkdir(path: string, options: { readonly recursive: boolean }): Promise<void>;
+      writeFile(path: string, data: Uint8Array): Promise<void>;
+    } } };
     /** Main's isolate, or another agent's, as the bundle reaches it. */
     protected agentFacetOf<Facet extends Rpc.WorkerEntrypointBranded>(actorId: string): Promise<Fetcher<Facet>>;
   }

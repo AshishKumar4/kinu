@@ -10,7 +10,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { LiveShareCreatedSchema, LiveShareRecordSchema, SharedSlateFilesSchema, type JsonValue } from '@kinu.run/core';
+import { LiveShareCreatedSchema, OwnedLiveShareSchema, SharedSlateFilesSchema, type JsonValue } from '@kinu.run/core';
 import { evalWorkspaceName, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { turnOnMyAccess } from './my-access';
@@ -69,10 +69,10 @@ function answered(answer: JsonValue): { readonly ok: boolean; readonly value: un
 }
 
 /** The share as its owner's sheet lists it now. */
-async function shareNow(owner: KinuPublicSession, share: string): Promise<v.InferOutput<typeof LiveShareRecordSchema> | null> {
+async function shareNow(owner: KinuPublicSession, share: string): Promise<v.InferOutput<typeof OwnedLiveShareSchema> | null> {
   const listed = answered(await owner.slateOp({ op: 'liveShares' }));
 
-  return listed.ok ? v.parse(v.array(LiveShareRecordSchema), listed.value).find((row) => row.id === share) ?? null : null;
+  return listed.ok ? v.parse(v.array(OwnedLiveShareSchema), listed.value).find((row) => row.id === share) ?? null : null;
 }
 
 interface Owner {

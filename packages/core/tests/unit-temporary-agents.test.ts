@@ -72,6 +72,8 @@ interface Scene {
   calls: string[];
   briefs: string[];
   assignments: Array<Parameters<SubordinateRuntime['assign']>[1]>;
+  /** Each child as it was born. */
+  births: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
   /** Counts `subordinate_report` rows on the real event log. */
   published(): number;
   /** The newest `subordinate_report` row's payload. */
@@ -118,6 +120,7 @@ function makeScene(options: {
   const calls: string[] = [];
   const briefs: string[] = [];
   const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
+  const births: Array<Parameters<SubordinateRuntime['spawn']>[0]> = [];
   let sequence = 0;
   let callSequence = 0;
   const wakes: number[] = [];
@@ -128,6 +131,7 @@ function makeScene(options: {
   const runtime: SubordinateRuntime = {
     async spawn(input) {
       calls.push(`spawn:${input.name}`);
+      births.push(input);
 
       if (options.fail === 'spawn') throw new Error('the facet substrate is unavailable');
 
@@ -215,6 +219,7 @@ function makeScene(options: {
     calls,
     briefs,
     assignments,
+    births,
     files,
     hired: (name) => {
       const live = directory.list().find((record) => record.name === name && record.deletedAt === null);
@@ -353,6 +358,15 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     expect(hired).toMatchObject({ name: expect.any(String) });
     expect(hired).not.toHaveProperty('answer');
     expect(scene.roster.list().map((entry) => entry.lifetime)).toEqual(['durable']);
+  });
+
+  // The schema offers `name` on every hire; on staging 5c522f12d a task hire refused it 6 times, Luna naming 3 parallel
+  // helpers to tell their answers apart.
+  test('a task hire takes the name it is given, as the helper it shows', async () => {
+    const scene = makeScene();
+    const started = await startRun(scene, { role: 'auditor', message: 'Count signups by country.', name: 'signup-country-tally' });
+
+    expect(scene.births).toEqual([expect.objectContaining({ name: started.agent, displayName: 'signup-country-tally', nameOrigin: 'user' })]);
   });
 
   test('the call says the agent is working, and its answer is one rail event that wakes the hirer', async () => {
@@ -684,17 +698,6 @@ describe('a child that cannot answer still settles its hire', () => {
 });
 
 describe('the two hire targets are decided by `role`', () => {
-  test('a task-lifetime hire refuses a name, because the row is archived before anyone could use it', async () => {
-    const scene = makeScene();
-
-    const pending = scene.call('hire', { lifetime: 'task', name: 'named-helper', role: 'auditor', message: 'go' });
-
-    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(pending).rejects.toThrow('never addressable');
-    expect(scene.calls).toEqual([]);
-    expect(scene.roster.listAll()).toEqual([]);
-  });
-
   test('a blank message is a failed call natively and in a program\'s failure census, and no agent is created', async () => {
     const scene = makeScene();
 

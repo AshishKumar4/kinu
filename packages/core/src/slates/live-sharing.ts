@@ -6,7 +6,7 @@ import { cutShareGrant } from './capability-graph';
 import type { ShareAuthority, SlateLiveShareStore } from './live-shares';
 import type { ShareMode } from './share-modes';
 import type { SlateEffect } from '../safety/approval-kind';
-import type { LiveShareCreated, LiveShareVisibility, SlateCapabilityGraph } from './sharing';
+import type { LiveShareVisibility, SlateCapabilityGraph } from './sharing';
 import { nanoid } from '../utils/nanoid';
 
 /** Ten lowercase hex characters — the handle half of the share-host label. */
@@ -23,7 +23,7 @@ export function shareLiveSlate(input: {
   readonly fork?: boolean;
   /** The share's one link, by its id: the app's page for it, never its bare host. */
   readonly url: (share: string) => string | null;
-}): LiveShareCreated {
+}) {
   // Every share starts in `own` mode: only its owner turns on `owner`, over the share sheet's reach ({@link setShareMode}).
   const grant = { ...cutShareGrant(input.graph, input.approved), fork: input.fork ?? true };
   const handle = shareHandle();

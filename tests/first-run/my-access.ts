@@ -4,12 +4,12 @@
  * starts on each viewer's own access, so a row that needs the owner's lent to a viewer turns it on here.
  */
 import * as v from 'valibot';
-import { LIVE_SHARE_MODE_PATH, LiveShareCreatedSchema, LiveShareRecordSchema, SlateReachSchema, type JsonValue, type LiveShareRecord } from '@kinu.run/core';
+import { LIVE_SHARE_MODE_PATH, LiveShareCreatedSchema, OwnedLiveShareSchema, SlateReachSchema, type JsonValue, type OwnedLiveShare } from '@kinu.run/core';
 
 const Answered = v.object({ ok: v.literal(true), value: v.unknown() });
 
 /** What the owner's word answered: the share as it stands after, or the refusal's status and words. */
-export type MyAccess = { readonly on: LiveShareRecord } | { readonly refused: { readonly status: number; readonly body: string } };
+export type MyAccess = { readonly on: OwnedLiveShare } | { readonly refused: { readonly status: number; readonly body: string } };
 
 export async function turnOnMyAccess(input: {
   readonly origin: string;
@@ -29,7 +29,7 @@ export async function turnOnMyAccess(input: {
 
   const body = await response.text();
 
-  return response.ok ? { on: v.parse(LiveShareRecordSchema, JSON.parse(body)) } : { refused: { status: response.status, body: body.slice(0, 300) } };
+  return response.ok ? { on: v.parse(OwnedLiveShareSchema, JSON.parse(body)) } : { refused: { status: response.status, body: body.slice(0, 300) } };
 }
 
 /** Each share a `share` slate op answered, turned to "my access" approving nothing beyond what observes: whether every

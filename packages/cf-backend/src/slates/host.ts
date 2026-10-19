@@ -10,7 +10,7 @@ import {
   ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, slateAddressImpact, SLATE_DRIVEN_MEMBERS,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
-  escapeHtml, keptSlateContext, publicPage, VIEWER_EXCHANGE_PATH,
+  escapeHtml, keptSlateContext, publicPage, sharedBuildRefusal, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
   type SlateFileChange, type SlateOperation,
@@ -614,7 +614,7 @@ export class SlateHost {
   servable(id: string, ownTree: boolean): Promise<void> {
     return settle(Effect.suspend(() => (ownTree || !this.controller.live.isShared(id)
       ? Effect.void
-      : Effect.fail(new KinuError('bad_input', `Slate ${id} is shared, so it runs only as its own files build; they do not build alone yet`)))));
+      : Effect.fail(new KinuError('bad_input', sharedBuildRefusal(id))))));
   }
 
   async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {

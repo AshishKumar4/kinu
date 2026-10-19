@@ -169,6 +169,7 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   abortExecutorFileWrite(): Promise<void>;
   prepareTerminal(): Promise<void>;
   openDeviceTerminal(): Promise<void>;
+  isolateOutOfMemory(actorId: string, diedAt: number): Promise<void>;
 }
 
 /** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */
@@ -386,6 +387,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   craftedAcrossRevoke(share: string): Promise<string[]>;
   gallerySearch(line: string, q: string): Promise<{ found: string[] } | { failed: string }>;
   rosterSearch(title: string, q: string): Promise<{ found: string[] } | { failed: string }>;
+  shareViews(opens: readonly string[]): Promise<{ viewers: number; opens: number; signedOutOpens: number }>;
   inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; started: string; inheriting: number; leftRunning: number }>;
   ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
   environments(): Promise<string[]>;

@@ -180,8 +180,10 @@ export function createTemporaryAgentPort(deps: {
       const roleLabel = request.roleLabel.trim();
 
       if (!roleLabel) return yield* new KinuError('bad_input', 'hire requires a role');
-      // An advisor's brief is written for it, not by anyone, so it is named for its role.
-      const name = deps.createName(`ask-${roleLabel}`, request.lane ? null : task);
+      const typed = request.name?.trim();
+      const chosen = typed === '' ? undefined : typed;
+      // An advisor's brief is written for it, not by anyone, so it is named for its role; a name the hirer gave wins.
+      const name = deps.createName(`ask-${roleLabel}`, request.lane ? null : chosen ?? task);
       const startedAt = deps.now();
 
       const outcome = (status: TemporaryRunOutcome['status'], answer: string, transcript: 'kept' | 'none', reason?: ErrorCode): TemporaryRunOutcome => ({
@@ -193,7 +195,10 @@ export function createTemporaryAgentPort(deps: {
       if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
 
       const birth: SubordinateBirthRequest = {
-        seed: { name, displayName: codenameFor(name), nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent' },
+        seed: {
+          name, displayName: chosen ?? codenameFor(name), nameOrigin: chosen === undefined ? 'auto' : 'user', role: request.role, mission: task,
+          lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent',
+        },
         assignment: {
           body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
           ...(request.inheritedContext !== undefined && { inheritedContext: request.inheritedContext }),

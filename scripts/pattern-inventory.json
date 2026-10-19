@@ -330,6 +330,13 @@
       "decision": "traversal"
     },
     {
+      "file": "packages/core/src/tools/sandbox-errors.ts",
+      "kind": "regex-literal",
+      "owner": "THROUGH_TOOLS",
+      "sourceSha256": "ded54ad18d7668d317babe69b3fd43d8c0200ea2b1401e52987ab5c4d8408286",
+      "decision": "lexical"
+    },
+    {
       "file": "packages/core/src/utils/markdown-frontmatter.ts",
       "kind": "hand-parser",
       "owner": "stripComment",

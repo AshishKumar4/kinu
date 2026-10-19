@@ -205,3 +205,31 @@ test('the file tool refuses a read through a link that climbs out of a missing d
   await expect(file({ op: 'read', path: 'loop/file.txt' })).rejects.toMatchObject({ code: 'missing' });
   expect(JSON.stringify(await file({ op: 'read', path: 'target.txt' }))).toContain('beside the link');
 });
+
+// Staging 5c522f12d: 23 first skill reads dropped `vfs://`, and a computer's own path reached the workspace's file tool.
+test('a path that names nothing is told what it names under each prefix', async () => {
+  const { file } = gatedTool(await linkedWorkspace());
+
+  await expect(file({ op: 'read', path: 'skills/slates/SKILL.md' })).rejects
+    .toThrow('`skills/slates/SKILL.md` is `/home/main/skills/slates/SKILL.md` here, `vfs://skills/slates/SKILL.md` is `/skills/slates/SKILL.md` and `computer://skills/slates/SKILL.md` is `/computer/skills/slates/SKILL.md`');
+  await expect(file({ op: 'list', path: '/workspace/true-myth' })).rejects.toThrow('`computer://workspace/true-myth` is `/computer/workspace/true-myth`');
+  await expect(file({ op: 'stat', path: '/workspace/true-myth/src/maybe.ts' })).rejects.toThrow('`computer://workspace/true-myth/src/maybe.ts` is `/computer/workspace/true-myth/src/maybe.ts`');
+  // Node's fs resolves `skills/…` against the cwd before the plane sees it (Luna, delegation t3): read from the cwd.
+  await expect(file({ op: 'read', path: '/home/main/skills/slates/SKILL.md' })).rejects
+    .toThrow('`/home/main/skills/slates/SKILL.md` is `/home/main/skills/slates/SKILL.md` here, `vfs://skills/slates/SKILL.md` is `/skills/slates/SKILL.md`');
+});
+
+// Luna searched the directory `archive` three times in a row on staging 5c522f12d; the refusal never said it was one.
+test('a read or search of a directory is told it is one, and how to look inside it', async () => {
+  const { file } = gatedTool(await linkedWorkspace());
+
+  await expect(file({ op: 'search', path: 'deep', query: 'beside' })).rejects
+    .toThrow('`deep` is a directory, and `search` takes one file: list it with `list`, or search under it with `grep -rn` in a shell');
+});
+
+test('a reference that names nothing is told where it landed, with no prefix written over it', async () => {
+  const { file } = gatedTool(await linkedWorkspace());
+
+  await expect(file({ op: 'read', path: 'vfs://nowhere/x.md' })).rejects
+    .toThrow("`vfs://nowhere/x.md` is `/nowhere/x.md` here; a relative path starts at `/home/main`");
+});

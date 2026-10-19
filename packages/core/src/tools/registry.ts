@@ -376,10 +376,15 @@ export function renderCodemodeDescription(providers: readonly DescribedProvider[
     return provider.declarations === undefined && provider.types !== undefined && provider.types !== '' ? [`- ${provider.name}:${purpose}`] : [];
   });
 
+  // Members are listed unqualified, and `tools.<name>` was the one qualified form shown, so models wrote
+  // `tools.workspace.exec` (Luna, staging 5c522f12d): one member of a listed namespace shows the call as written.
+  const shown = providers.flatMap((provider) => reachedDeclarations(provider).slice(0, 1).map(([member]) => `\`${provider.name}.${member}(...)\``))[0];
+
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
-    'Namespaces, each with its members\' call forms: positional arguments, then one object of options. '
+    ...(shown === undefined ? [] : [`Namespaces are globals of the program, beside \`tools\` and never inside it: call a member as ${shown}.`]),
+    'Each namespace with its members\' call forms: positional arguments, then one object of options. '
       + 'Any call can resolve to a `Refusal`, `{ success: false, reason, error }`.',
     ...listed,
   ].join('\n');
@@ -410,14 +415,18 @@ export function programDeclarations(providers: readonly DescribedProvider[]): Re
 }
 
 /**
- * `describe` as a program's own function over `declarations`: a namespace or member it does not have throws, naming
- * the namespaces it does. Source text, so each backend defines it in the program's scope.
+ * `describe` as a program's own function over `declarations`: a name it does not have throws, naming the deepest
+ * declared name holding it (`workspace.slates` for `workspace.slates.$list`), else the namespaces it has. Source text,
+ * so each backend defines it in the program's scope.
  */
 export function describeProgramSource(declarations: Readonly<Record<string, string>>): string {
   return `const describe = ((declared) => (name) => {
   const namespaces = Object.keys(declared).filter((key) => !key.includes('.'));
   if (name === undefined) return namespaces.map((key) => declared[key]).join('\\n');
   if (Object.hasOwn(declared, String(name))) return declared[String(name)];
+  const parts = String(name).split('.');
+  const holder = parts.slice(1).map((_, cut) => parts.slice(0, parts.length - 1 - cut).join('.')).find((prefix) => Object.hasOwn(declared, prefix));
+  if (holder !== undefined) throw new Error(\`describe: nothing is named "\${String(name)}"; describe('\${holder}') declares what it holds\`);
   throw new Error(\`describe: nothing is named "\${String(name)}"; namespaces: \${namespaces.join(', ')}\`);
 })(${JSON.stringify(declarations)});`;
 }

@@ -23,7 +23,7 @@ function newIndex() {
 function listed(slate: string, card: Partial<GalleryCard> = {}, share = `share-${slate}`): GalleryListingSync {
   return {
     share, workspace: 'sam', slate, handle: `handle-${slate}`, listed: true, url: `https://${slate}.slates.test/`,
-    card: { title: `The ${slate}`, line: `A ${slate} for the team`, category: 'work', ownerName: 'Sam', picture: null, ...card },
+    card: { title: `The ${slate}`, line: `A ${slate} for the team`, category: 'work', ownerName: 'Sam', picture: null, viewers: 0, ...card },
   };
 }
 

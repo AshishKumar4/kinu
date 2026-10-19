@@ -13,7 +13,8 @@ import {
   isEvalAccountEmail, objectNamed,
   ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
-import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
+import type { AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
+import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
 
 // Re-exported for tests: the provider binds `agents/mcp/*` at load, so tests must import it
 // via user-do (after the stub lands), not mcp.ts directly.
@@ -958,7 +959,7 @@ export class UserDO extends Agent<Env> {
 
   /** Keyed by {@link USER_MCP_CLIENT_NAME}, not this object's name: every stored grant uses that key, sealed. */
   override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
-    return new DurableObjectOAuthClientProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
+    return new KinuMcpOAuthProvider(mcpOAuthStorage(this.ctx, this.env), USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
   /** The deploy's walk (`scripts/reset.ts tables`): this account's tables and their rows, what its repair did, and the

@@ -393,12 +393,15 @@ export class Telemetry {
   constructor(
     private readonly token: string,
     private readonly args: Pick<Args, 'worker' | 'from' | 'to'>,
+    /** The API's origin, Cloudflare's own unless a test serves one. */
+    private readonly api?: string,
   ) {}
 
   /** The answer's JSON text; `result` parses it. A refusal is classified by its status (`restAnswer`). */
   async raw(body: QueryBody): Promise<string> {
     return await restAnswer({
       method: 'POST',
+      ...this.api !== undefined && { api: this.api },
       path: `/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
       token: this.token,
       body: {
@@ -458,7 +461,7 @@ export class Telemetry {
 
     return counted
       .map((a) => ({ groups: a.groups.map((g) => g.value), count: a.value, distinct: valueOf('distinct', keyOf(a)) }))
-      .sort((a, b) => b.count - a.count);
+      .sort((a, b) => b.count - a.count || byGroups(a, b));
   }
 
   /** Counts per group per hour. */
@@ -494,7 +497,7 @@ export class Telemetry {
       }
     }
 
-    return [...extent.values()];
+    return [...extent.values()].sort((a, b) => a.hour - b.hour || byGroups(a, b));
   }
 
   /** Counts per `bucketMs` bucket; `at` is the bucket's start. */
@@ -517,7 +520,7 @@ export class Telemetry {
       // The API writes UTC bucket starts as `YYYY-MM-DD HH:MM:SS`.
       at: Math.floor(Date.parse(`${bucket.time.replace(' ', 'T')}Z`) / bucketMs) * bucketMs,
       count: a.value,
-    })));
+    }))).sort((a, b) => a.at - b.at || b.count - a.count || byGroups(a, b));
   }
 
   /** Events as {@link SampleEvent}s, the fields a fixer reads kept: what was thrown or owed, where, in which request. */
@@ -542,6 +545,14 @@ export class Telemetry {
 
 function keyOf(a: Aggregate): string {
   return a.groups.map((g) => g.value).join('\u0000');
+}
+
+/**
+ * Rows of equal count in their groups' order: the API lists such rows in a different order from read to read (staging
+ * 001f6d749, 2026-10-19), so a read that kept its order never agreed with the one before on a window that did not move.
+ */
+function byGroups(a: { readonly groups: readonly string[] }, b: { readonly groups: readonly string[] }): number {
+  return a.groups.join('\u0000').localeCompare(b.groups.join('\u0000'), 'en');
 }
 
 // ---- shared readings -------------------------------------------------------

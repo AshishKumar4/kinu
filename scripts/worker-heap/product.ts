@@ -30,6 +30,22 @@ export class OrchestratorAgent extends Product {
     Reflect.deleteProperty(this, 'plant');
     Reflect.deleteProperty(this, 'failedToolCalls');
     Reflect.deleteProperty(this, 'mainIdle');
+    Reflect.deleteProperty(this, 'seedScreenshots');
+  }
+
+  /** `count` distinct PNGs of `bytes` at /home/main/shots/step-<i>.png, for the screenshot turn to read: a header naming
+   *  1280x800, as a desktop's screenshot does, then filler. */
+  async seedScreenshots(count: number, bytes: number): Promise<void> {
+    await this.rt.storage.vfs.mkdir('/home/main/shots', { recursive: true });
+
+    for (let at = 0; at < count; at++) {
+      const png = new Uint8Array(bytes);
+
+      png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 5, 0, 0, 0, 3, 32, 8, 6, 0, 0, 0]);
+
+      for (let index = 29; index < bytes; index++) png[index] = (index * 31 + at * 7919) & 0xff;
+      await this.rt.storage.vfs.writeFile(`/home/main/shots/step-${String(at)}.png`, png);
+    }
   }
 
   /** Once main's isolate runs no turn and closes none: its own idle, which the turn it runs ends. */

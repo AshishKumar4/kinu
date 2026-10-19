@@ -93,7 +93,20 @@ export const SlateReachSchema = v.object({ ...SlateCapabilityGraphSchema.entries
 
 export type SlateReach = v.InferOutput<typeof SlateReachSchema>;
 
-export const LiveShareRecordSchema = v.object({
+/** A share's numbers, from who opened it through its link (`slate_share_views`): its owner's to see, never who. */
+const ShareViewsSchema = v.object({
+  /** Distinct people signed in. */
+  viewers: v.number(),
+  /** Every open, signed out included. */
+  opens: v.number(),
+  /** Of `opens`, those by someone signed out, who are never counted as viewers. */
+  signedOutOpens: v.number(),
+});
+
+export type ShareViews = v.InferOutput<typeof ShareViewsSchema>;
+
+/** A live share as its store holds it. Its owner is answered it with what holds of it now (`OwnedLiveShareSchema`). */
+const LiveShareRecordSchema = v.object({
   id: v.string(),
   slate: v.string(),
   visibility: LiveShareVisibilitySchema,
@@ -112,14 +125,26 @@ export const LiveShareRecordSchema = v.object({
   editedBy: v.nullable(v.string()),
   /** Its card's words while its owner lists it in the Gallery; null when not listed, and always on an `owner` share. */
   gallery: v.nullable(v.object({ line: v.string(), category: GalleryCategorySchema })),
-  /** Computed where the row is answered, never stored. */
-  paused: v.optional(v.boolean()),
-  /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
-   *  approves again. Computed where the row is answered. */
-  stale: v.optional(v.boolean()),
 });
 
 export type LiveShareRecord = v.InferOutput<typeof LiveShareRecordSchema>;
+
+/**
+ * A live share as its owner reads it, on their share sheet: its record, and what holds of it now, never stored. Every
+ * answer that hands its owner a share is one (`SlateController.owned`): its list, its making, and each change to it.
+ */
+export const OwnedLiveShareSchema = v.object({
+  ...LiveShareRecordSchema.entries,
+  /** Its spend for today is spent: it answers no one until tomorrow. */
+  paused: v.boolean(),
+  /** `owner` mode whose slate was built anew since its reach was approved: its server acts with nothing until the owner
+   *  approves again. */
+  stale: v.boolean(),
+  /** Who opened it. */
+  views: ShareViewsSchema,
+});
+
+export type OwnedLiveShare = v.InferOutput<typeof OwnedLiveShareSchema>;
 
 const ApprovedMembersSchema = v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }));
 
@@ -204,7 +229,7 @@ export const SlatePreapprovalsSchema = v.object({
 export type SlatePreapprovals = v.InferOutput<typeof SlatePreapprovalsSchema>;
 
 export const LiveShareCreatedSchema = v.object({
-  share: LiveShareRecordSchema,
+  share: OwnedLiveShareSchema,
   /** Its one link: the app's page for it (`APP_ROUTES.sharedLive`), which frames its host; null with no app origin. */
   url: v.nullable(v.string()),
 });
@@ -443,3 +468,11 @@ export const SlateShareCardSchema = v.object({
 });
 
 export type SlateShareCard = v.InferOutput<typeof SlateShareCardSchema>;
+
+/**
+ * Why a shared slate does not run, as its owner and the people it is shared with read it: a shared slate runs only what
+ * its own folder builds alone (`scope: 'tree'`), and this one's does not.
+ */
+export function sharedBuildRefusal(slate: string): string {
+  return `${slate} can't run while it's shared: its files in /slates/${slate} don't build on their own. Fix them, or ask the agent to, then open it again.`;
+}

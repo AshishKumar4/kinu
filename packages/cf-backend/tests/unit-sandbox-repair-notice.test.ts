@@ -81,7 +81,7 @@ async function inboxTurns(): Promise<string[]> {
   const stored = await storedChat(workspace);
 
   return stored
-    .filter((message) => message.role === 'user' && message.id.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX))
+    .filter((message) => message.role === 'system' && message.id.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX))
     .map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''));
 }
 

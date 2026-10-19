@@ -5,7 +5,7 @@
  */
 import { expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { resolvePath } from '@kinu.run/core';
+import { resolvePath, type MessageSwap } from '@kinu.run/core';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { createCompactionExtension } from '../src/extension';
 import { KEEP_RECENT_IMAGES } from '../src/attachments';
@@ -48,6 +48,33 @@ test('a step keeps the latest few screenshots and moves the older ones out in fo
 
   expect(links).toHaveLength(4);
   expect(Buffer.from(await rt.storage.vfs.readFile(resolvePath(links[0] ?? '', rt.planes).absolute)).toString('base64')).toBe(screenshot(0));
+});
+
+// #103: moved for each request alone, every screenshot stayed in the context the agent's isolate held, and each step
+// walked them all: a 450-step screenshot turn's isolate held 170 MB live.
+test('a host that keeps the turn\'s context is handed each message a move rewrote, and its next step moves nothing again', async () => {
+  const { rt } = createTestRuntime();
+  const { extension, turn } = stepsOver(rt);
+  const context = screenshotSteps(KEEP_RECENT_IMAGES + 4);
+  const handed: MessageSwap[][] = [];
+
+  const retire = async (swaps: readonly MessageSwap[]): Promise<void> => {
+    handed.push([...swaps]);
+
+    for (const { from, to } of swaps) context[context.indexOf(from)] = to;
+  };
+
+  await turn();
+  const sent = await extension.prepareStep?.({ stepNumber: 1, messages: [...context], retire });
+
+  expect(handed.map((swaps) => swaps.length)).toEqual([4]);
+  // What the host keeps is what the request carried: the moved screenshots' bytes are in neither.
+  expect(context).toEqual(sent ?? []);
+  expect(sentScreens(context).filter((entries) => entries.includes('image'))).toHaveLength(KEEP_RECENT_IMAGES);
+
+  const next = await extension.prepareStep?.({ stepNumber: 2, messages: [...context], retire });
+
+  expect({ next, handed: handed.length }).toEqual({ next: undefined, handed: 1 });
 });
 
 test('between batches a step\'s request extends the last: what moved is the same bytes, and nothing is stored again', async () => {

@@ -20,15 +20,12 @@
  * needs no poll loop and no wall clock of its own. The durable hire, list and
  * dismiss all settle in-turn.
  *
- * SYSTEM-CARD CEILING, AND ITS BLIND SPOT. The conversation must gain no
- * "system, to be shown to the agent" cards beyond SYSTEM_CARD_CEILING, counted
- * over history rows whose role is `system`. What this count CANNOT see: the
- * public session's history drops every row's id and metadata, so a
- * harness-stamped user row (a queued signal's durable message, which the chat
- * renders as an event card rather than a user bubble) is invisible to it. A
- * product that moves its unbounded growth into metadata-stamped user rows
- * passes this subgoal; that half needs a product seam to see, and this row
- * does not add one.
+ * SYSTEM-CARD CEILING. The conversation must gain no "system, to be shown to
+ * the agent" cards beyond SYSTEM_CARD_CEILING, counted over history rows whose
+ * role is `system`: every row the harness wrote, a helper's delivered answer
+ * among them, which the chat shows as an event card and every reader of it
+ * reads as `system` (the transcript's one projection, since rc21's red: the
+ * seed read them `user`, the pages `system`).
  */
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
@@ -182,9 +179,7 @@ describe(SUITE, () => {
         subgoals.push({
           what: 'system-cards-bounded',
           reached: systemRows <= SYSTEM_CARD_CEILING,
-          detail: `${String(systemRows)} system row(s) in the conversation against a ceiling of `
-            + `${String(SYSTEM_CARD_CEILING)} (blind spot: metadata-stamped harness rows read as `
-            + 'user rows over this session — see the header)',
+          detail: `${String(systemRows)} system row(s) in the conversation against a ceiling of ${String(SYSTEM_CARD_CEILING)}`,
         });
 
         return announce(subgoals);

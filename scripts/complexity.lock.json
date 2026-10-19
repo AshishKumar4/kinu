@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
-  "files": 3461,
-  "functions": 90817,
+  "files": 3468,
+  "functions": 91031,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -179,10 +179,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/slates/BlueprintShareForm.tsx#BlueprintShareForm",
-      "complexity": 28
-    },
-    {
-      "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
       "complexity": 28
     },
     {

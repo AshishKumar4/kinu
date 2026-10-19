@@ -22,6 +22,7 @@ import { callCodemodeMember } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { namespaceDeclaration, nestedMembers } from '../src/tools/operation-surfaces';
+import { describeProgramSource, programDeclarations } from '../src/tools/registry';
 import { KINU_NODE_MODULE_SOURCE } from '../src/execution/codemode-node-shim';
 
 const ToolSummarySchema = v.object({
@@ -584,6 +585,17 @@ describe('workspace.slates', () => {
     const exec = createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell') });
     expect(exec.tools.slates).toBeUndefined();
     expect(namespaceDeclaration(exec.name, fileNamespaceFor(rt, exec).declarations ?? {})).not.toContain('  slates: {');
+  });
+
+  // The slates skill calls `workspace.slates.$list()`; on staging 5c522f12d describe() answered no `$` member at all.
+  test("describe declares the `$` members the skill documents, and a member's name points at the declaration holding it", () => {
+    const { rt } = createTestRuntime();
+    const exec = createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell'), slate: async () => ({ ok: true, value: null }) });
+    const declared = v.parse(v.function(), new Function(`${describeProgramSource(programDeclarations([fileNamespaceFor(rt, exec)]))}\nreturn describe;`)());
+    const slates = v.parse(v.string(), declared('workspace.slates'));
+
+    for (const member of ['$list()', '$fork(version)', '$preview()', '$restore(version)', '$share(options)']) expect(slates).toContain(member);
+    expect(() => declared('workspace.slates.$list')).toThrow('describe: nothing is named "workspace.slates.$list"; describe(\'workspace.slates\') declares what it holds');
   });
 
   test('invalid operation fields are refused before the available host is called', async () => {

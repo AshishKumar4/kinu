@@ -335,7 +335,7 @@ const ORCHESTRATOR_METHODS = [
   'cancelOperation',
   // Reachable by a DO stub in this Worker, never a browser; none is `@callable`.
   'routeSlateShare',
-  'readLiveShare',
+  'openLiveShare',
   'shareLiveWith',
   'liveShareBundle',
   // The owner's share sheet's mode, Gallery listing and standing approvals, and a listed share's needs for the Gallery's
@@ -352,6 +352,8 @@ const ORCHESTRATOR_METHODS = [
   'ownsBrowserSession',
   'supervisorOp',
   'agentWorkspace',
+  // Its agents' isolate tail (`AgentIsolateTail`) reports a death of memory here.
+  'isolateOutOfMemory',
   'workspaceTitle',
   'activations',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.

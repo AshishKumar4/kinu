@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  ownerAsks, planSurface,
+  newestOpener, ownerAsks, planSurface,
 } from "@kinu.run/core";
 import type { OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
@@ -70,9 +70,9 @@ interface TerminalCloseState {
 }
 
 function retryIsOwed(intents: readonly OwedOwnerIntent[], actor: string | null, messages: readonly UIMessage[]): boolean {
-  const newest = messages.reduce<string | null>((id, message) => message.role === "user" ? message.id : id, null);
+  const newest = newestOpener(messages);
 
-  return newest !== null && intents.some((intent) => intent.kind === "retry" && intent.actor === actor && intent.target === newest);
+  return newest !== undefined && intents.some((intent) => intent.kind === "retry" && intent.actor === actor && intent.target === newest);
 }
 
 /** A terminal close means the SDK stopped redialling; it is not a reconnecting state. */

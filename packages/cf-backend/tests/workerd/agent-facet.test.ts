@@ -36,9 +36,10 @@ it('a swarm node runs its inherited loop and keeps its completed claim in its ow
   expect(seen.candidate).toBe(seen.home);
   expect(seen.reportedItself).toBe(true);
   expect(seen.retired).toBe(true);
-  // Its chat is in the canonical store as every agent's is: what it was asked, whole, and what it answered.
+  // Its chat is in the canonical store as every agent's is: what it was asked, whole, as the harness's message to it, and
+  // what it answered.
   expect(seen.chat).toEqual([
-    { role: 'user', text: 'Report the working directory from the inherited loop.' },
+    { role: 'system', text: 'Report the working directory from the inherited loop.' },
     { role: 'assistant', text: expect.stringContaining(CHILD_ANSWER) },
   ]);
 });

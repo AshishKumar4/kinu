@@ -3,29 +3,24 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
 import {
-  GitBranchIcon, PackageIcon, BrainIcon,
+  GitBranchIcon, BrainIcon,
   SparkleIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
   NotePencilIcon, ArrowsClockwiseIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
-import type { ChangelogEntryKind } from "@kinu.run/core";
+import type { ChangelogEntry, ChangelogEntryKind } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { diagnostics, showing, toKinuError, detach, settle } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import { ScaffoldVersionDiff } from "./ScaffoldLineage";
-import {
-  CodeBlock,
-  changelogFactKey, changelogToolName, withToolDetails,
-  type ChangelogEntryView, type CraftedToolDetail,
-} from "./shared";
+import { CodeBlock, changelogFactKey } from "./shared";
 import { timeAgo, type StagedSkillView } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
-interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
+interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 
 const KIND_ICON = {
   scaffold: GitBranchIcon,
-  tool: PackageIcon,
   fact: BrainIcon,
   gepa: SparkleIcon,
   ratings: ChecksIcon,
@@ -35,26 +30,7 @@ const KIND_ICON = {
 
 /** Showing the digest marks it seen, so what is new to the owner is lit once. */
 export function useChangelog(rpc: WorkspaceRpc, moved = 0) {
-  const load = useCallback((): Promise<ChangelogView> => settle(Effect.gen(function* () {
-    const view = yield* Effect.promise(async () => rpc("getEvolutionChangelog", [{ limit: 30 }]));
-    // Enrichment only: a failed tool list leaves the entries as their rows hold them.
-    let tools: CraftedToolDetail[] = [];
-
-    yield* Effect.catchCause(Effect.gen(function* () {
-      const { crafted } = yield* Effect.promise(async () => rpc("getToolDescriptions", []));
-
-      tools = crafted.map(({ name, description, qualityScore, usageCount }) => ({ name, description, qualityScore, usageCount }));
-    }), (failed) => Effect.sync(() => {
-      const cause = Cause.squash(failed);
-      diagnostics.failure('changelog.tool_list_unavailable', toKinuError({
-        doing: 'enriching changelog tool entries with the live tool list',
-        cause, otherwise: 'unavailable',
-      }));
-      tools = [];
-    }));
-
-    return { ...view, entries: withToolDetails(view.entries, tools) };
-  })), [rpc]);
+  const load = useCallback((): Promise<ChangelogView> => rpc("getEvolutionChangelog", [{ limit: 30 }]), [rpc]);
 
   const { resource, reload } = useAsyncResource(load);
   const view = lastValue(resource);
@@ -107,7 +83,7 @@ function EntryField({ label, children }: { label: string; children: ReactNode })
 }
 
 /** No Edit or Remove: no UI RPC exposes either. */
-function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
+function EntryFacts({ entry }: { entry: ChangelogEntry }) {
   const when = new Date(entry.at);
   const whenText = isNaN(when.getTime()) ? null : when.toLocaleString();
 
@@ -126,27 +102,6 @@ function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
         <EntryField label="Scope">this workspace</EntryField>
         {status !== null && <EntryField label="Status">{status}</EntryField>}
         {whenText !== null && <EntryField label="When"><span title={when.toISOString()}>{whenText}</span></EntryField>}
-      </div>
-    );
-  }
-
-  if (entry.kind === 'tool') {
-    const name = changelogToolName(entry);
-    const detail = entry.toolDetail;
-
-    return (
-      <div className="space-y-1">
-        {name !== null && <EntryField label="Tool"><span className="font-mono">{name}</span></EntryField>}
-        {detail ? (
-          <>
-            {detail.description !== '' && <EntryField label="Purpose">{detail.description}</EntryField>}
-            <EntryField label="Score">EMA {detail.qualityScore.toFixed(2)} over {detail.usageCount} use{detail.usageCount === 1 ? '' : 's'}</EntryField>
-            <EntryField label="Scope">this workspace</EntryField>
-          </>
-        ) : (
-          <EntryField label="Stored"><span className="font-mono whitespace-pre-wrap break-words">{entry.evidence || entry.summary}</span></EntryField>
-        )}
-        {whenText !== null && <EntryField label="Updated"><span title={when.toISOString()}>{whenText}</span></EntryField>}
       </div>
     );
   }
@@ -177,9 +132,9 @@ function useEntryRevert(entryId: string, rpc: WorkspaceRpc, onReverted: () => vo
   return { busy, notice, revert };
 }
 
-function entryHasDetails(entry: ChangelogEntryView): boolean {
+function entryHasDetails(entry: ChangelogEntry): boolean {
   return Boolean(entry.evidence) || (entry.items?.length ?? 0) > 0
-    || entry.kind === 'fact' || entry.kind === 'tool';
+    || entry.kind === 'fact';
 }
 
 /** The scaffold version an entry changed, as a diff below it while shown. */
@@ -190,7 +145,7 @@ function EntryScaffoldDiff({ rpc, version, shown }: { rpc: WorkspaceRpc; version
 }
 
 interface ChangelogEntryCardProps {
-  entry: ChangelogEntryView;
+  entry: ChangelogEntry;
   grouped?: boolean;
   seenAt: number;
   rpc: WorkspaceRpc;
@@ -267,10 +222,10 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       {hasDetails && (
         <div id={detailsId} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded}
           className="mt-2 ml-6 border-t p-border pt-2">
-          {(entry.kind === 'fact' || entry.kind === 'tool') && (
+          {entry.kind === 'fact' && (
             <div className="mb-2"><EntryFacts entry={entry} /></div>
           )}
-          {entry.evidence && entry.kind !== 'fact' && entry.kind !== 'tool' && (
+          {entry.evidence && entry.kind !== 'fact' && (
             <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
@@ -278,7 +233,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
           {entry.items && entry.items.length > 0 && (
             <SubEntryList
               items={entry.items}
-              className={`${entry.evidence && entry.kind !== 'fact' && entry.kind !== 'tool' ? "mt-2" : ""} space-y-1.5`}
+              className={`${entry.evidence && entry.kind !== 'fact' ? "mt-2" : ""} space-y-1.5`}
               rpc={rpc}
               onReverted={onReverted}
             />
@@ -393,7 +348,7 @@ function StagedSkillDecision(
   );
 }
 
-function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: WorkspaceRpc; onReverted: () => void }) {
+function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: WorkspaceRpc; onReverted: () => void }) {
   const [kept, setKept] = useState(false);
   const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
 
@@ -402,7 +357,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: 
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text-2 leading-relaxed">{entry.summary}</div>
-          {(entry.kind === 'fact' || entry.kind === 'tool') ? (
+          {entry.kind === 'fact' ? (
             <div className="mt-1"><EntryFacts entry={entry} /></div>
           ) : entry.evidence && (
             <div className="mt-1 p-annotation p-text-3 whitespace-pre-wrap break-words">
@@ -436,7 +391,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: 
 }
 
 function SubEntryList({ items, className, rpc, onReverted }: {
-  items: readonly ChangelogEntryView[];
+  items: readonly ChangelogEntry[];
   className: string;
   rpc: WorkspaceRpc;
   onReverted: () => void;

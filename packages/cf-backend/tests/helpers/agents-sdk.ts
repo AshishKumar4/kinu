@@ -223,7 +223,12 @@ export function mockAgentsSdk(): void {
       readonly [HARNESS_AGENT] = true;
       /** The vendor base builds the one manager in its constructor (`agents/dist/src-5W6JNKVb.js:821`);
        *  since cloudflare/agents#1897 that is the only way a manager reaches storage. */
-      readonly mcp = new FakeMCPClientManager();
+      readonly mcp = new FakeMCPClientManager((callbackUrl) => this.createMcpOAuthProvider(callbackUrl));
+
+      /** The vendor base's default; UserDO builds its own. */
+      createMcpOAuthProvider(_callbackUrl: string): RecordedMcpAuthProvider {
+        return {};
+      }
       #lifecycle: Lifecycle | undefined;
       /** The SDK's own Lifecycle: capability services, the start and the job queue are not approximated. */
       get lifecycle(): Lifecycle {
@@ -896,6 +901,14 @@ export function queueMcpAuthUrl(authUrl: string): void {
   pendingMcpAuthUrl = authUrl;
 }
 
+/** Servers that answer 401 until signed in, by id: a dial meets it and authorizing again mints this link, as the SDK's
+ *  `redirectToAuthorization` sets the provider's `authUrl`. */
+const mcpSignInRequired = new Map<string, string>();
+
+export function requireMcpSignIn(id: string, authUrl: string): void {
+  mcpSignInRequired.set(id, authUrl);
+}
+
 let liveMcpManager: { mcpConnections: Record<string, RecordedMcpConnection> } | null = null;
 
 let mcpRestored = 0;
@@ -991,11 +1004,11 @@ export function failNextMcpDiscovery(error: Error): void {
 export function seedSdkMcpServer(
   id: string,
   transport: RecordedMcpTransport = {},
-  row: { callbackUrl?: string; clientId?: string | null; name?: string; url?: string } = {},
+  row: { callbackUrl?: string; clientId?: string | null; name?: string; url?: string; authUrl?: string } = {},
 ): void {
   mcpServers.set(id, {
     id, name: row.name ?? id, url: row.url ?? `https://${id}.example/sse`,
-    callbackUrl: row.callbackUrl ?? '', clientId: row.clientId ?? null, authUrl: null, transport,
+    callbackUrl: row.callbackUrl ?? '', clientId: row.clientId ?? null, authUrl: row.authUrl ?? null, transport,
     server_options: encodeSdkServerOptions(transport),
   });
 }
@@ -1100,6 +1113,7 @@ export function resetRecordedMcp(): void {
   mcpDiscoveryFailure = null;
 
   pendingMcpAuthUrl = null;
+  mcpSignInRequired.clear();
   liveMcpManager = null;
   mcpRestored = 0;
   mcpWaited = 0;
@@ -1158,6 +1172,10 @@ interface HarnessDisposable {
  */
 class FakeMCPClientManager {
   mcpConnections: Record<string, RecordedMcpConnection> = {};
+
+  /** The agent's `createMcpOAuthProvider`, which the vendor's restore builds a row's provider with
+   *  (`agents/dist/src-BZeu-SCD.js:1959`, `client-fyQrLGkD.js:1688-1692`). */
+  constructor(private readonly createAuthProvider?: (callbackUrl: string) => RecordedMcpAuthProvider) {}
   /** The vendor's restore-once flag; the host's write to it is the contract under test. */
   _isRestored = false;
 
@@ -1241,14 +1259,35 @@ class FakeMCPClientManager {
       if (this.mcpConnections[row.id]) continue;
 
       const connection: RecordedMcpConnection = {
-        connectionState: 'connecting', connectionError: null, tools: [], options: { transport: row.transport },
+        connectionState: 'connecting', connectionError: null, tools: [], options: { transport: this.restoredTransport(row) },
       };
 
       this.mcpConnections[row.id] = connection;
+
+      // A row awaiting sign-in is restored authenticating and not dialled; its provider is new, so holds no link
+      // (`client-fyQrLGkD.js:1703-1706`).
+      if (row.authUrl !== null) {
+        connection.connectionState = 'authenticating';
+        continue;
+      }
+
       this.track(this.restoreDial(connection));
     }
 
     this._isRestored = true;
+  }
+
+  /** A row with a callback gets the provider the agent builds for it, its server and client set as the vendor sets them;
+   *  a provider is never persisted, so the row's own is never restored. */
+  private restoredTransport(row: RecordedMcpServer): RecordedMcpTransport {
+    if (row.callbackUrl === '' || this.createAuthProvider === undefined) return row.transport;
+    const authProvider = this.createAuthProvider(row.callbackUrl);
+
+    authProvider.serverId = row.id;
+
+    if (row.clientId !== null) authProvider.clientId = row.clientId;
+
+    return { ...row.transport, authProvider };
   }
 
   /** `_restoreServer`: connect, then discover. Unheld, it lands before restore returns. */
@@ -1299,6 +1338,9 @@ class FakeMCPClientManager {
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
 
     const provider = connection.options.transport.authProvider;
+    const signIn = mcpSignInRequired.get(id);
+
+    if (provider !== undefined && signIn !== undefined) provider.authUrl = signIn;
 
     if (provider?.authUrl) {
       connection.connectionState = 'authenticating';

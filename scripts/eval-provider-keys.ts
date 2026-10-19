@@ -79,7 +79,8 @@ async function heldKeys(input: Provisioning, headers: Record<string, string>, wh
 }
 
 /** The keys in the operator's file, or why there are none to store. */
-function keysIn(path: string): { readonly keys: Readonly<Record<string, string>> } | { readonly why: string } {
+/** The eval provider keys at `path`, or why there are none. */
+export function keysIn(path: string): { readonly keys: Readonly<Record<string, string>> } | { readonly why: string } {
   if (!existsSync(path)) return { why: `${path} does not exist` };
   const keys = v.safeParse(KeysSchema, JSON.parse(readFileSync(path, 'utf8')));
 

@@ -16,6 +16,19 @@ export const previewSigner = labelSigner('kinu.workspace-preview.salt', 'kinu.wo
 /** Diverged from the share signer so a ticket, cookie or source hash never verifies as a share token. */
 export const viewerSigner = labelSigner('kinu.slate-viewer.salt', 'kinu.slate-viewer.v1');
 
+/** A share viewer's key for its numbers, domain-separated from every pass this module signs. */
+const shareViewerSigner = labelSigner('kinu.share-viewer.salt', 'kinu.share-viewer.v1', 32);
+
+/**
+ * `userId`'s key among the people who opened `share` (`slate_share_views`): a keyed hash no one can link to them, or one
+ * share's viewer to another's, without the deployment's secret; null where the deployment has none.
+ */
+export async function shareViewerKey(env: LabelSignerEnv, share: string, userId: string): Promise<string | null> {
+  const secret = shareViewerSigner.secret(env);
+
+  return secret === undefined ? null : await shareViewerSigner.token(secret, `kinu:share-viewer:v1:${share}:${userId}`);
+}
+
 /** A guest host's visitor identity, set by its ticket exchange and scoped to that host: a live share's viewer, a preview's owner. */
 export const VIEWER_COOKIE_NAME = '__Host-kinu_viewer';
 

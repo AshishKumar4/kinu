@@ -59,8 +59,18 @@ const DesktopPointSchema = v.tuple([Coordinate, Coordinate]);
 /** Wheel clicks: the largest scroll is one call of about 2 s at the box's 20 ms a click. */
 const WheelClicksSchema = v.pipe(v.number(), v.integer(), v.minValue(-50), v.maxValue(50));
 
+/** A chord sent as its keys in order, which models do (`["ctrl", "s"]`: the minecraft trials, 2026-10-19), is refused
+ *  with the one string to send instead. */
+function chordIsOneString(issue: v.StringIssue): string {
+  const keys = v.safeParse(v.array(v.pipe(v.string(), v.nonEmpty())), issue.input);
+
+  return keys.success && keys.output.length > 0
+    ? `a chord is one string joined by "+": send "${keys.output.join('+')}"`
+    : 'a chord is one string joined by "+", like "ctrl+s"';
+}
+
 /** A chord as a program writes it; {@link desktopChord} reads it. */
-const KeysSchema = v.pipe(v.string(), v.nonEmpty(), v.maxLength(64));
+const KeysSchema = v.pipe(v.string(chordIsOneString), v.nonEmpty(), v.maxLength(64));
 
 const ButtonSchema = v.picklist(['left', 'right', 'middle']);
 
@@ -105,8 +115,11 @@ export function watchSheet(screen: DesktopScreen, frames: number): WatchImage {
   return { width, height, screenshots: (width * height) / (screen.width * screen.height) };
 }
 
+/** What `hold` is, said where a call gets it wrong: models sent `true` and `0` for a key down and a key up. */
+const HOLD_IS = 'milliseconds the key stays down before it is released, 1 to 10,000; there is no separate key down or key up, so hold it for as long as it should act';
+
 /** How long `key` holds its chord down, as a game reads a held key. */
-const KeyHoldSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10_000));
+const KeyHoldSchema = v.pipe(v.number(HOLD_IS), v.integer(HOLD_IS), v.minValue(1, HOLD_IS), v.maxValue(10_000, HOLD_IS));
 
 /** Characters per typed action: Stop is checked between them. The reference demo's chunk, at its 12 ms a character. */
 const TYPED_CHUNK = 50;
@@ -124,6 +137,9 @@ const NAMED = new Map<string, string>([
   ...Array.from({ length: 12 }, (_, at) => [`f${String(at + 1)}`, `F${String(at + 1)}`] as const),
   ['enter', 'Return'], ['esc', 'Escape'], ['del', 'Delete'], ['pageup', 'Page_Up'], ['pagedown', 'Page_Down'],
 ]);
+
+/** Keys models write as the character they type, which xdotool cannot read: refused with the name to send. */
+const SENT_AS = new Map([[' ', 'space']]);
 
 /** A punctuation mark by the keysym name X knows it by: xdotool's `key` reads names, never the mark itself. */
 const MARKS = new Map(Object.entries({
@@ -163,6 +179,12 @@ function desktopChord(keys: string, modifiers = false): readonly string[] | Kinu
     const key = modifiers || at < tokens.length - 1 ? undefined : keyName(token) ?? undefined;
 
     if (token === '') return new KinuError('bad_input', `"${keys}" is not a chord: ${KEYS_ARE}.`);
+
+    const named = SENT_AS.get(token);
+
+    if (named !== undefined && !modifiers) {
+      return new KinuError('bad_input', `"${token}" is written "${named}": send "${tokens.map((each) => SENT_AS.get(each) ?? each).join('+')}".`);
+    }
 
     if (modifier === undefined && key === undefined) {
       return new KinuError('bad_input', modifiers || at < tokens.length - 1
