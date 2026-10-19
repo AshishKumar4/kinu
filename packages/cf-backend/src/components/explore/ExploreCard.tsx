@@ -126,7 +126,7 @@ function Card({ href, kind, id, title, line, picture, maker, needs, numbers }: {
           <span className="line-clamp-2 min-h-[2lh] p-meta p-text-2">{line}</span>
           <span className="mt-1 flex min-w-0 items-center gap-2 p-meta p-text-3">
             {maker}
-            <span className="ml-auto inline-flex shrink-0 items-center gap-1 tabular-nums">{numbers}</span>
+            <span className="ml-auto inline-flex shrink-0 items-center gap-1">{numbers}</span>
           </span>
           <span className="mt-1 flex items-center justify-between gap-2 border-t p-border pt-2.5">
             <Needs needs={needs} />

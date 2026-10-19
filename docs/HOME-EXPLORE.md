@@ -33,7 +33,7 @@ Calendar is not in it: Kinu has no calendar connection, and the design adds none
 - **Today** is four tiles, each one glance and a list beneath when opened: Needs you (the assistant's own asks, and each workspace with decisions waiting), Important (unread Important mail, the reason on each row), Workspaces (the ones it runs, each with its status and how far its plan has come), Watching (each trigger, what it last found, when it next looks). Hide folds it to one line.
 - **The chat** carries the brief, mail arrivals as event pills, and its answers. Its Needs-you cards sit in the composer's stack, as in any workspace.
 
-Today is built from reads Kinu keeps: the roster's tiles (`workspace_overviews`), the assistant's pending actions (`ownerAsks`), Mail's Important (`GET /api/user/mail/important`), and the assistant's triggers (`listTriggers`) with the first line of the turn each last began. One addition: a workspace's tile carries its active plan's title and done/total (`plan` in the overview JSON), which is how a workspace pursuing a goal shows its progress.
+Today is built from reads Kinu keeps: the roster's tiles (`workspace_overviews`), the assistant's pending actions (`ownerAsks`), Mail's Important (`GET /api/user/mail/important`), and the assistant's triggers (`listTriggers`) with the line each one's last turn wrote as its finding (`last_finding`, §9.3). One addition: a workspace's tile carries its active plan's title and done/total (`plan` in the overview JSON), which is how a workspace pursuing a goal shows its progress.
 
 ### First run
 
@@ -102,14 +102,63 @@ Each is a change to something that exists; none lands without approval.
 6. **The account menu at the top left** (the Kinu mark and caret) moves to the footer; the mark becomes a link Home. Its items are unchanged.
 7. **The folded rail's account initial** opens the account menu instead of going to Settings, and Mail and Devices join it.
 8. **The swarm explorer's route key** is renamed `explore` → `swarm` in `APP_ROUTES`, so `explore` can name Explore. Its path `/swarm/:agentId` is unchanged.
-9. **`gallery_listings`** gains a `needs` column so a feed card can show what an app needs without asking its workspace (§9).
+9. **The Gallery's tables** (`gallery_listings`, `gallery_stars`, `gallery_reports`) take a `kind` and become Explore's one store for apps and workspaces; `gallery_listings` gains `maker`, `needs` and `installs`, and `gallery_installs` is new (§9.1). Whether `slate` is renamed `item` is a choice between a clearer name and keeping today's stars and reports.
 10. **The workspace bar** shows the focus bar in a focus-layout workspace; workbench workspaces are unchanged.
+11. **`triggers`** gains `last_finding`, the line Today shows under each watch (§9.3).
 
 ## 9. DDL
 
-Additive. Each table is new except the one column in (9.3), and each follows the existing pattern beside it.
+One listings store for both kinds: the Gallery's three control-plane tables take a `kind`, and a fourth counts installs beside them. A workspace's own published blueprints sit beside its slate publications. No other table changes.
 
-### 9.1 A workspace's own Durable Object: its published blueprints (beside `slate_publications` and `slate_shares`)
+### 9.1 The control plane: one store for Explore (`gallery_listings`, `gallery_stars`, `gallery_reports`, generalized)
+
+```sql
+CREATE TABLE gallery_listings (
+  kind TEXT NOT NULL DEFAULT 'app' CHECK (kind IN ('app', 'workspace')),
+  workspace TEXT NOT NULL,
+  slate TEXT NOT NULL,
+  share TEXT NOT NULL,
+  title TEXT NOT NULL,
+  line TEXT NOT NULL,
+  category TEXT NOT NULL,
+  owner_name TEXT NOT NULL,
+  maker TEXT NOT NULL DEFAULT 'person' CHECK (maker IN ('person', 'kinu')),
+  url TEXT NOT NULL,
+  picture TEXT,
+  needs TEXT,
+  listed_at INTEGER NOT NULL,
+  viewers INTEGER NOT NULL DEFAULT 0,
+  installs INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (kind, workspace, slate)
+);
+
+CREATE TABLE gallery_stars (
+  kind TEXT NOT NULL DEFAULT 'app' CHECK (kind IN ('app', 'workspace')),
+  workspace TEXT NOT NULL, slate TEXT NOT NULL, email TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (kind, workspace, slate, email)
+);
+
+CREATE TABLE gallery_reports (
+  kind TEXT NOT NULL DEFAULT 'app' CHECK (kind IN ('app', 'workspace')),
+  workspace TEXT NOT NULL, slate TEXT NOT NULL, email TEXT NOT NULL, reason TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (kind, workspace, slate, email)
+);
+
+CREATE TABLE gallery_installs (
+  kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace')),
+  workspace TEXT NOT NULL, slate TEXT NOT NULL, user_id TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (kind, workspace, slate, user_id)
+);
+```
+
+Unchanged indexes: `gallery_stars_email(email)`, `gallery_stars_at(at)`, `gallery_reports_email(email)`.
+
+- `slate` keeps its name and now holds the listed item: a slate's id for an app, a blueprint share's id for a workspace. Keeping the name lets schema repair carry every star, report and listing across: each existing row gets `kind = 'app'` from its default. Renaming it to `item` would read better and would lose the stars and reports on repair, which keeps only matching columns; it is the owner's call (§8).
+- `maker = 'kinu'` marks Kinu's own blueprints. They are code, and the control plane writes their rows when it starts, under workspace `kinu`, so they rank, star and count installs like any other.
+- `installs` is the count of `gallery_installs`, as `viewers` is of the opens a workspace reports; an app's install is a fork.
+- `needs` is what an item reaches of its opener's, JSON, written by its listing sync.
+
+### 9.2 A workspace's own Durable Object: its published blueprints (beside `slate_publications` and `slate_shares`)
 
 ```sql
 CREATE TABLE workspace_blueprint_versions (
@@ -133,41 +182,13 @@ CREATE TABLE workspace_blueprint_shares (
 );
 ```
 
-`manifest` is the §4 manifest as JSON, its slates as publication ids of this workspace; `picture` a capture's digest, kept as slate pictures are.
+`manifest` is the §4 manifest as JSON, its slates as publication ids of this workspace; `picture` a capture's digest, kept as slate pictures are. A listed share is synced into `gallery_listings` as `kind = 'workspace'`, as a listed live share is as `kind = 'app'`.
 
-### 9.2 The control plane: Explore's index of workspace blueprints (beside `gallery_listings`, `gallery_stars`, `gallery_reports`)
-
-```sql
-CREATE TABLE explore_workspaces (
-  id TEXT PRIMARY KEY,
-  workspace TEXT NOT NULL,
-  share TEXT NOT NULL,
-  title TEXT NOT NULL,
-  line TEXT NOT NULL,
-  category TEXT NOT NULL CHECK (category IN ('work', 'money', 'home', 'developer', 'fun')),
-  owner_name TEXT NOT NULL,
-  picture TEXT,
-  needs TEXT NOT NULL,
-  listed_at INTEGER NOT NULL,
-  installs INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (workspace, share)
-);
-
-CREATE TABLE explore_workspace_stars (id TEXT NOT NULL, email TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (id, email));
-CREATE INDEX explore_workspace_stars_at ON explore_workspace_stars (at);
-
-CREATE TABLE explore_workspace_installs (id TEXT NOT NULL, user_id TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (id, user_id));
-
-CREATE TABLE explore_workspace_reports (id TEXT NOT NULL, email TEXT NOT NULL, reason TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (id, email));
-```
-
-Kinu's own blueprints are code, not rows: the index puts them first. Their stars and installs use the same two tables under ids `kinu/<slug>`, which `explore_workspaces` never holds.
-
-### 9.3 One column on an existing table
+### 9.3 A trigger's last finding
 
 ```sql
--- gallery_listings: what the app reaches of its opener's, as its listing sync last read it (JSON array; NULL before).
-needs TEXT
+-- triggers (each workspace): what the watch's last firing found, in a line, written by the turn it began.
+last_finding TEXT
 ```
 
 ### No DDL
@@ -190,8 +211,11 @@ Published as `home-explore` on the review server: `/live/home-explore/gallery.ht
 | `explore-workspace&roster=assistant` (`&install=1`) | The Personal assistant's page, and Install |
 | `welcome&step=5` | Setup's assistant step |
 
-## 11. Not settled
+## 11. Settled since the first draft
 
-- How the brief's turn finds each watch's last finding: the first line of the turn the trigger began is proposed; a `finding` the turn writes to its trigger row would be exact.
-- Whether Kinu's own blueprints may be updated in installed workspaces on the owner's word (a "Take update" on the workspace's settings) or never; this design says never.
+- A watch's last finding is a field its turn writes (`triggers.last_finding`), not read back out of the transcript.
+- Kinu's blueprints never update an installed workspace: installing makes a workspace of your own, and later versions leave it as it is.
+
+## 12. Not settled
+
 - The assistant's mail send card waits on feat/mail's `mail_send` kind; until it lands the wireframe leaves the reply in Drafts.

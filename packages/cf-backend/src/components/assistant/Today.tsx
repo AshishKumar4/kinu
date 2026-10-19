@@ -111,7 +111,7 @@ export function Today({ now, greeting, own, roster, goals, mail, watching, opene
   const date = new Date(now).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
   return (
-    <section aria-label="Today" data-today className="shrink-0 border-b p-border bg-[var(--c-bg)]">
+    <section aria-label="Today" data-today className="relative z-[1] shrink-0 border-b p-border bg-[var(--c-bg)] shadow-[0_12px_18px_-16px_rgba(0,0,0,0.55)]">
       <div className="mx-auto w-full max-w-[820px] px-3 pt-3 sm:px-5">
         <div className="flex items-baseline gap-2">
           <h2 className="text-[15px] font-semibold tracking-[-0.01em] p-text">{greeting}</h2>

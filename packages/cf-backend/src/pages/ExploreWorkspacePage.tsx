@@ -116,8 +116,8 @@ export default function ExploreWorkspacePage() {
             <p className="p-row-text p-text-2">{workspace.line}</p>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-meta p-text-3">
               <Maker maker={workspace.maker} size={20} />
-              <span className="inline-flex items-center gap-1 tabular-nums"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} installs</span>
-              <span className="inline-flex items-center gap-1 tabular-nums"><StarIcon size={13} />{workspace.stars.toLocaleString("en-US")}</span>
+              <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} installs</span>
+              <span className="inline-flex items-center gap-1"><StarIcon size={13} />{workspace.stars.toLocaleString("en-US")}</span>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <FilledButton onClick={() => setInstalling(true)} data-blueprint-install><DownloadSimpleIcon size={14} />Install</FilledButton>
