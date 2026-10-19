@@ -83,7 +83,7 @@ describe("a hired agent's job", () => {
       await pane.turnEnded(2);
 
       // An auditor has no `agent.jobResult`: the message that woke it is where it reads what its job printed.
-      const wake = (await chat(workspace)).filter((line) => line.startsWith('user:') && line.includes(job.id));
+      const wake = (await chat(workspace)).filter((line) => line.startsWith('system:') && line.includes(job.id));
 
       expect(wake).toEqual([expect.stringContaining(JOB_OUTPUT)]);
       expect((await chat(workspace)).at(-1)).toContain(JOB_NOTED);
@@ -92,7 +92,7 @@ describe("a hired agent's job", () => {
       // auditor answers as one it holds, so it is woken once all the same.
       await probe(workspace).redeliverJobWake(workspace, job.id);
 
-      expect((await chat(workspace)).filter((line) => line.startsWith('user:') && line.includes(job.id))).toHaveLength(1);
+      expect((await chat(workspace)).filter((line) => line.startsWith('system:') && line.includes(job.id))).toHaveLength(1);
     } finally {
       pane.close();
     }
@@ -109,7 +109,7 @@ describe("a hired agent's job", () => {
       expect(await pane.call('cancelBackgroundJob', [job.id, hire.name])).toEqual({ success: true, result: { ok: true } });
       await pane.turnEnded(2);
       expect(await listed(pane, hire)).toEqual([expect.objectContaining({ id: job.id, status: 'cancelled' })]);
-      expect((await chat(workspace)).filter((line) => line.startsWith('user:') && line.includes(job.id)))
+      expect((await chat(workspace)).filter((line) => line.startsWith('system:') && line.includes(job.id)))
         .toEqual([expect.stringContaining('CANCELLED')]);
 
       expect(await pane.call('dismissBackgroundJob', [job.id, hire.name])).toEqual({ success: true, result: { ok: true } });
