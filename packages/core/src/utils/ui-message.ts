@@ -34,13 +34,18 @@ export function transcriptRole(
   return row.role === 'user' && turnTags(row).author === 'harness' ? 'system' : row.role;
 }
 
-/** The newest row that opened a turn, the one a Retry names: the person's words, or what the harness gave its agent,
- *  which the chat shows as `system` ({@link transcriptRole}) and the model was sent as `user`. */
+/** Whether a chat row opened a turn: the person's words, or what the harness gave its agent, which the chat shows as
+ *  `system` ({@link transcriptRole}) and the model was sent as `user`. */
+function opensTurn(row: { readonly role: string }): boolean {
+  return row.role === 'user' || row.role === 'system';
+}
+
+/** The newest row that opened a turn: the one a Retry names. */
 export function newestOpener(messages: readonly Pick<UIMessage, 'id' | 'role'>[]): string | undefined {
   for (let at = messages.length - 1; at >= 0; at--) {
     const message = messages[at];
 
-    if (message?.role === 'user' || message?.role === 'system') return message.id;
+    if (message !== undefined && opensTurn(message)) return message.id;
   }
 
   return undefined;
