@@ -273,10 +273,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     }
   }, [clearProviderWait]);
 
-  /** Openings a Stop was pressed during, until it is known where each landed. The SDK sends the whole thread with each
-   *  request and the room sends the agent every message in it the agent does not hold, so words a Stop handed back
-   *  ran on the next request: none carries these. */
-  const stoppedOpenings = useRef(new Set<string>());
+  /** Openings whose landing is not known yet. The SDK sends the whole thread with each request and the room sends the
+   *  agent every message in it the agent does not hold, so words a Stop handed back, this tab's Stop or another's, ran on
+   *  the next request: none carries these but the request that submits them. */
+  const unlanded = useRef(new Set<string>());
 
   const {
     messages,
@@ -296,9 +296,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     ...(lastShown !== undefined && { messages: lastShown }),
     // Matches the SDK default (cloudflare/agents#2058), pinned so an upstream change cannot move it.
     throttle: 50,
-    // A Retry's window keeps them: the room reruns its newest user message, and sends the agent no words of it.
+    // A submit's own message is its newest. A Retry's window keeps them: the room reruns its newest user message, and
+    // sends the agent no words of it.
     prepareSendMessagesRequest: ({ messages: thread, trigger }) => (trigger === "submit-message"
-      ? { body: { messages: thread.filter((message) => !stoppedOpenings.current.has(message.id)) } }
+      ? { body: { messages: thread.filter((message, at) => at === thread.length - 1 || !unlanded.current.has(message.id)) } }
       : {}),
   });
 
@@ -320,9 +321,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   /** The latch is mutated in the statement that reads it, so a second press in one tick sees it
    *  held. `isStreaming` only mirrors it for rendering. */
   const sendLatch = useRef(newSendLatch());
-
-  /** The opening whose request is open: its message's id, and whether a Stop was pressed during it. */
-  const openingInFlight = useRef<{ readonly id: string; stopped: boolean } | null>(null);
 
   /** Every send that starts a turn, the opening's, the composers' and Retry's, begins once the socket's probe is
    *  answered: no caller can send into the probe's answer, and none checks for itself. A Stop pressed meanwhile
@@ -502,12 +500,6 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const abortChat = useCallback(async (): Promise<void> => {
     // Snapshot before the awaits: a Send admitted meanwhile owns the latch and must keep it.
     const aborting = sendLatch.current.owner;
-    const opening = openingInFlight.current;
-
-    if (opening !== null) {
-      opening.stopped = true;
-      stoppedOpenings.current.add(opening.id);
-    }
 
     try {
       await Promise.all([
@@ -659,11 +651,11 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [workspace, subordinate]);
 
   /**
-   * Idle: starts a turn under the send latch via the SDK chat path; it opened its turn unless a Stop pressed during it
-   * handed it back. Otherwise the actor's `send` RPC splices it into the running turn or runs it as the next turn.
-   * Where it landed is read from the workspace's record of the message under the id minted here; nothing here
-   * re-sends. `null`: nothing was sent. The decision reads the latch, not `isStreaming`: two presses in one tick both
-   * see stale reactive state.
+   * Idle: starts a turn under the send latch via the SDK chat path; the agent may still read it mid-turn, as a turn this
+   * tab has not heard of yet runs, and any tab's Stop may hand it back before a turn takes it. Otherwise the actor's
+   * `send` RPC splices it into the running turn or runs it as the next turn. Either way, where it landed is read from
+   * the workspace's record of the message under the id minted here; nothing here re-sends. `null`: nothing was sent.
+   * The decision reads the latch, not `isStreaming`: two presses in one tick both see stale reactive state.
    */
   const sendChat = useCallback((
     content: string,
@@ -686,31 +678,21 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     };
 
     if (sendLatch.current.owner === null && !isStreaming) {
-      const ended = startTurn(() => {
+      const run = startTurn(() => {
         setFrameError(null);
 
         return sendMessage({ id, role: "user", parts, metadata: { kinuMode: mode } });
       });
 
-      if (ended !== null) {
-        const opening = { id, stopped: false };
+      if (run !== null) {
+        unlanded.current.add(id);
 
-        openingInFlight.current = opening;
-
-        // Only a Stop pressed during it can have handed its words back: the agent's record of them says, once it ended.
-        const landing = attemptInItsWords("io", async (): Promise<SendLanding> => {
-          await ended;
-
-          if (openingInFlight.current === opening) openingInFlight.current = null;
-
-          return opening.stopped ? await sendLanding(record, ended, id) : "turn";
-        });
-
+        // Words no turn took leave the chat: they return to their composer.
         return settle(Effect.ensuring(
-          Effect.tapError(landing, (refused) => Effect.sync(() => {
+          Effect.tapError(attemptInItsWords("io", () => sendLanding(record, run, id)), (refused) => Effect.sync(() => {
             if (refused.code === "cancelled") setMessages((shown) => shown.filter((message) => message.id !== id));
           })),
-          Effect.sync(() => { stoppedOpenings.current.delete(id); }),
+          Effect.sync(() => { unlanded.current.delete(id); }),
         ));
       }
     }

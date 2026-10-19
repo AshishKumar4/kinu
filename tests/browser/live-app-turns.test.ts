@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
-import { DROPPED_FILE_ARRIVED, PACED_SILENCE_MS, RECONNECT_STEPS, STOPPED_ASK } from '../../scripts/live-app-scripts';
-import { liveRows, STOP_SEND_ATTEMPTS } from '../../scripts/live-app-rows';
+import { DROPPED_FILE_ARRIVED, HANDED_BACK_ASK, PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/live-app-scripts';
+import { liveRows, STOPPED_BY } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'dropped-file', 'cleared', 'stop-then-send', 'new-chat-stop',
@@ -125,21 +125,21 @@ describe('Main clears only once the server has', () => {
   });
 });
 
-// A Stop pressed as a turn opens, then a send as it leaves (staging titled-chat, 2026-10-18): the follow-up's stream was
-// closed by the stopped turn's late end, the stopped turn read as failed, and words handed back ran on the next send.
-describe('a Stop then a send at once', () => {
-  test('every follow-up is answered, and the stopped ask never is', () => {
-    const { attempts, stoppedAnswered } = verdictOf(observed.stopThenSend, 'stop-then-send');
-
-    expect({ attempts: attempts.length, stoppedAnswered }).toEqual({ attempts: STOP_SEND_ATTEMPTS, stoppedAnswered: false });
-  });
-
-  test('a Stop is no failure: words it handed back return to the draft with one info notice, and no other notice shows', () => {
+// Words a Stop handed back before any step read them (staging titled-chat, 2026-10-18; review 2026-10-19): they read as
+// a failure, stayed in the chat and ran on the next send; and only the tab whose own Stop it was was told.
+describe('words a Stop hands back, whichever tab pressed it', () => {
+  test('return to the draft of the tab that sent them, with one info notice, and leave its chat', () => {
     const { attempts } = verdictOf(observed.stopThenSend, 'stop-then-send');
 
-    expect(attempts).toEqual(attempts.map(({ draft }, index) => (draft === ''
-      ? { draft, notices: [] }
-      : { draft: `${STOPPED_ASK} ${String(index + 1)}`, notices: ['info'] })));
+    expect(attempts).toEqual(STOPPED_BY.map((stoppedBy, index) => ({
+      stoppedBy, draft: `${HANDED_BACK_ASK} ${String(index + 1)}`, notices: ['info'], shown: false,
+    })));
+  });
+
+  test('reach no model, the next request included, and the stopped ask is never answered', () => {
+    const { heardBack, stoppedAnswered, followedUp } = verdictOf(observed.stopThenSend, 'stop-then-send');
+
+    expect({ heardBack, stoppedAnswered, followedUp }).toEqual({ heardBack: [], stoppedAnswered: false, followedUp: true });
   });
 });
 
