@@ -10,7 +10,7 @@ import { subscribe } from 'agents/observability';
 import * as v from 'valibot';
 import type { AgentFacetCalls } from '../../src/agent-facet/agent-facet';
 import {
-  HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema,
+  HOSTED_ACTOR_ID_HEADER, SLEEP_TIME_CADENCE, TerminalEffectInterrupt, hostedActorSocketPath, JsonValueSchema, rowText,
   type SlateAnswer, type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import {
@@ -591,7 +591,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** Runs inside the object: `DurableObjectStub`'s mapping of `Page<ChatHistoryEntry>`
    *  overflows TypeScript's instantiation depth at the caller. */
   async chatHistoryPage(): Promise<HistoryResult> {
-    return v.parse(HistorySchema, await this.getChatHistoryPage({}));
+    const { status, items } = await this.getChatHistoryPage({});
+
+    // Each entry's words, as a reader of text alone reads its drawn parts.
+    return v.parse(HistorySchema, { status, items: items.map((item) => ({ role: item.role, content: rowText(item) })) });
   }
 
   /** Main's chat, an ask and {@link SCREENS} computer-use answers of a screenshot each, as its own store keeps them. */

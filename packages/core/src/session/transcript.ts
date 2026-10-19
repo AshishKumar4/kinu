@@ -458,11 +458,17 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     const rows = Math.min(Math.max(1, Math.floor(request.limit ?? DRAWN_PAGE_ROWS)), DRAWN_PAGE_ROWS);
     // One past the page, so a row left over says there is more.
     const read = this.entriesBefore(request.cursor?.before ?? Number.MAX_SAFE_INTEGER, rows + 1);
+    const page = read.slice(0, rows);
+
+    // The page's messages in one read, as many entries as it holds.
+    const parts = await this.messages.materializePartsOf([...new Set(page.filter((entry) => !this.unreadable(entry))
+      .flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
+
     const items: DrawnEntry[] = [];
     let bytes = 0;
 
-    for (const entry of read.slice(0, rows)) {
-      const drawn = await this.drawnEntry(entry, request.media);
+    for (const entry of page) {
+      const drawn = await this.drawnEntry(entry, request.media, parts);
       const size = drawn.message === null ? 0 : utf8Bytes(JSON.stringify(drawn.message));
 
       if (items.length > 0 && bytes + size > request.bytes) break;
@@ -510,13 +516,16 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       ORDER BY e.position DESC, p.position`);
   }
 
-  private async drawnEntry(entry: ConversationEntry, media: MediaUrl): Promise<DrawnEntry> {
-    if (!this.payloads.readsFiles && ((entry.metadata !== null && entry.metadata.path !== null)
-      || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)))) {
-      return { entry, message: null };
-    }
+  /** Whether an entry's content is spilled to a file this reader has no plane for. */
+  private unreadable(entry: ConversationEntry): boolean {
+    return !this.payloads.readsFiles && ((entry.metadata !== null && entry.metadata.path !== null)
+      || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)));
+  }
 
-    return { entry, message: await this.materializeEntry(entry, undefined, (at) => (index) => {
+  private async drawnEntry(entry: ConversationEntry, media: MediaUrl, parts: Map<string, readonly StoredPart[]>): Promise<DrawnEntry> {
+    if (this.unreadable(entry)) return { entry, message: null };
+
+    return { entry, message: await this.materializeEntry(entry, parts, (at) => (index) => {
       const ref = entry.parts[at];
 
       return media({ messageId: ref?.messageId ?? '', partNo: ref?.partNo ?? 0, index });
