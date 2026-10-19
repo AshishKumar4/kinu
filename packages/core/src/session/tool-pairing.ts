@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { KinuError } from '../obs/error';
 
 interface PairingPart {
@@ -19,12 +21,9 @@ export interface ToolPairingPart<P extends PairingPart> {
   readonly part: CallOrResult<P>;
 }
 
-function callOrResult<P extends PairingPart>(part: P): part is CallOrResult<P> {
-  if (part.type !== 'tool-call' && part.type !== 'tool-result') return false;
 
-  if (part.toolCallId === undefined) throw new KinuError('bad_input', 'tool history part has no call identity');
-
-  return true;
+function identified<P extends PairingPart>(part: P): part is CallOrResult<P> {
+  return (part.type === 'tool-call' || part.type === 'tool-result') && part.toolCallId !== undefined;
 }
 
 /**
@@ -43,7 +42,10 @@ export function toolPairingParts<P extends PairingPart>(messages: readonly Pairi
     for (let index = 0; index < content.length; index++) {
       const part = content[index];
 
-      if (callOrResult(part)) parts.push({ at, role, part });
+      if (part.type !== 'tool-call' && part.type !== 'tool-result') continue;
+
+      if (!identified(part)) return settleSync(Effect.fail(new KinuError('bad_input', 'tool history part has no call identity')));
+      parts.push({ at, role, part });
     }
   }
 
