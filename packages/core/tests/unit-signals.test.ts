@@ -4,6 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Inbox } from '../src/orchestrator/inbox';
+import { DeliveryInbox, deliveredSignal } from '../src/subordinates/deliveries';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import { USER_MESSAGE_SIGNAL_KIND, type AgentSignal, type SignalCardEvent } from '../src/types/signals';
 import { JsonObjectSchema } from '../src/utils/json';
@@ -265,6 +266,26 @@ describe('Inbox — what the agent has seen', () => {
     expect(inbox.seenSplices()).toEqual([{
       id: cards[0]?.id, atStep: 1, text: 'mid-turn: mail from bob', metadata: expect.objectContaining({ kinuEvent: 'event_drain' }),
     }]);
+  });
+
+  // A slate's word carries no key: its sender carded it under one id and the turn that read it under another, so the
+  // sender's stayed amber beside the read one until a reload (the splice flow, 1008-x).
+  test("a word delivered mid-turn without a key is the sender's one card, shown and then seen", async () => {
+    const { inbox, cards } = setup({ turnInFlight: true });
+
+    const sender = new DeliveryInbox({
+      deliver: async (delivery) => (delivery.input.kind === 'turn' && inbox.landMidTurn(deliveredSignal(delivery.id, delivery.input)) ? 'taken' : null),
+      broadcast: (event) => { if (event.type === 'signal_card') cards.push(v.parse(SignalCardEventSchema, event)); },
+    });
+
+    inbox.beginTurn(undefined);
+    await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    await sender.send({ kind: 'slate', text: 'flow-splice-ping-1' });
+    await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a')] });
+    inbox.stepEnded(1);
+
+    expect(new Set(cards.map((card) => card.id)).size).toBe(1);
+    expect(lifecycle(cards).at(-1)).toBe('seen');
   });
 
   test('a step that never ended leaves its card being shown, and the answer keeps none', async () => {
