@@ -5752,12 +5752,13 @@ const LIVE_SHARE: LiveShareRecord = {
   ] },
   // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
   createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, gallery: null,
+  views: { viewers: 12, opens: 40, signedOutOpens: 9 },
 };
 
 /** Its team's share: Pat edits it, Sam uses it, and Pat's last change stopped it on the owner's access. */
 const TEAM_SHARE: LiveShareRecord = {
   ...LIVE_SHARE, id: "live-team-2", visibility: "users", handle: "8b2e5d1f40", users: ["pat@example.com", "sam@example.com"], editors: ["pat@example.com"],
-  createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com",
+  createdAt: NOW - 2 * 864e5, grantRevision: "r1", editedBy: "pat@example.com", views: { viewers: 2, opens: 7, signedOutOpens: 0 },
 };
 
 /** The owner's "Always for this slate" answers at the slate's revision now: a GitHub change on one org, and a file write. */

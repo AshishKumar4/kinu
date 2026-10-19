@@ -2,7 +2,10 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
-import { CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, UserCircleIcon, UsersIcon, WarningIcon } from "@phosphor-icons/react";
+import {
+  CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, SquaresFourIcon, StopCircleIcon, UserCircleIcon,
+  UsersIcon, WarningIcon,
+} from "@phosphor-icons/react";
 import * as v from "valibot";
 import { LiveShareRecordSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
@@ -11,7 +14,8 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
 import { ShareListing, type ListShare } from "./ShareListing";
 import { answered } from "./BlueprintShareForm";
-import { AccessPicker, EmailsField, emailsOf, Failure, Lead, StopButton, type AccessOption } from "./ShareParts";
+import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption } from "./ShareParts";
+import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 export interface LiveShareFixture {
@@ -320,24 +324,6 @@ function modeWords(row: LiveShareRecord): ReactNode {
   return <span className="p-warning">Stopped: {editor === null ? "its code changed" : <>changed by {editor}</>} since you approved its reach</span>;
 }
 
-/** Each person a share names, and whether they edit it or use it. */
-function SharedPeople({ row }: { row: LiveShareRecord }) {
-  return (
-    <ul className="mt-0.5 space-y-0.5">
-      {row.users.map((email) => {
-        const edits = row.editors.includes(email);
-
-        return (
-          <li key={email} data-live-share-person={email} data-live-share-role={edits ? "edit" : "use"} className="flex items-center gap-2 p-meta">
-            <span className="min-w-0 flex-1 truncate p-text-2">{email}</span>
-            <span className={`shrink-0 ${edits ? "p-accent" : "p-text-3"}`}>{edits ? "Edits" : "Uses"}</span>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 /**
  * The people being added, each to use it or also to edit it: an editor changes the slate from their own workspace's
  * agent, in the owner's workspace (docs/SLATE-SHARING-NIMBUS.md, editors). Only people added by name can edit.
@@ -393,47 +379,101 @@ function NotRunning({ reason, shared }: { reason: string | null; shared: boolean
   return <p role="status" data-share-broken className="flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-meta p-text"><WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" /><span>{reason}</span></p>;
 }
 
-function SharedNow({ shares, onStop, onOwnAccess, onReview, onList, disabled }: {
-  shares: readonly LiveShareRecord[];
-  onStop: (id: string) => void;
+/** A share's numbers, as its owner reads them: who opened it through its link, and how often; never who. */
+function viewsWords(row: LiveShareRecord): string {
+  const views = row.views ?? { viewers: 0, opens: 0, signedOutOpens: 0 };
+
+  if (views.opens === 0) return "Not opened yet";
+  const people = views.viewers === 1 ? "1 person opened it" : `${views.viewers.toLocaleString("en-US")} people opened it`;
+  const opens = views.opens === 1 ? "1 open" : `${views.opens.toLocaleString("en-US")} opens`;
+  const signedOut = views.signedOutOpens === 0 ? "" : ` (${views.signedOutOpens.toLocaleString("en-US")} signed out)`;
+
+  return views.viewers === 0 ? `${opens}${signedOut}` : `${people} · ${opens}${signedOut}`;
+}
+
+/** Who a share lets in, on one line: anyone with its link, or the people it names, those who edit marked. */
+function WhoLine({ row }: { row: LiveShareRecord }) {
+  if (row.visibility === "public") return <span className="truncate">Anyone with the link</span>;
+
+  return (
+    <span className="flex min-w-0 flex-wrap gap-x-1">
+      {row.users.map((email, index) => {
+        const edits = row.editors.includes(email);
+
+        return (
+          <span key={email} data-live-share-person={email} data-live-share-role={edits ? "edit" : "use"} className="min-w-0 truncate">
+            {email}{edits && <span className="p-accent"> (edits)</span>}{index < row.users.length - 1 && ","}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+interface SharedRowActions {
+  readonly onStop: (id: string) => void;
   /** Moves an owner share to each person's own access: nothing of the owner's is used from then on. */
-  onOwnAccess: (id: string) => void;
+  readonly onOwnAccess: (id: string) => void;
   /** Shows a stopped owner share's new reach, for the owner to approve at the slate's new revision. */
-  onReview: (id: string) => void;
-  onList: (id: string, listing: Parameters<ListShare>[0]) => void;
-  disabled: boolean;
-}) {
+  readonly onReview: (id: string) => void;
+  readonly onList: (id: string, listing: Parameters<ListShare>[0]) => void;
+  readonly disabled: boolean;
+}
+
+/** What the row's menu offers for a share: its own access, its place in the Gallery, and stopping it. */
+function rowMenu(row: LiveShareRecord, actions: SharedRowActions, onListing: () => void): MenuItem[] {
+  const items: MenuItem[] = [];
+
+  if (row.mode === "owner") items.push({ label: "Use their own access", icon: <UserCircleIcon size={15} />, marker: "data-live-share-own", onSelect: () => actions.onOwnAccess(row.id) });
+
+  if (row.visibility === "public") {
+    items.push({
+      label: row.gallery === null ? "List in the Gallery…" : "Gallery listing…", icon: <SquaresFourIcon size={15} />, marker: "data-live-share-listing", onSelect: onListing,
+      ...(row.mode === "owner" && { refused: "It runs on your access. Use their own access to list it." }),
+    });
+  }
+
+  items.push({ label: "Stop sharing", icon: <StopCircleIcon size={15} />, danger: true, apart: items.length > 0, marker: "data-stop-sharing", onSelect: () => actions.onStop(row.id) });
+
+  return items;
+}
+
+/** One share, on one compact row: who, whose access and its numbers, the one action a stopped share needs, and a menu. */
+function SharedRow({ row, actions }: { row: LiveShareRecord; actions: SharedRowActions }) {
+  const [listing, setListing] = useState(false);
+  const who = row.visibility === "public" ? "Anyone with the link" : "People you added";
+
+  return (
+    <li data-live-share={row.id} className="space-y-1.5 px-3.5 py-2">
+      <div className="flex items-start gap-3">
+        <span className="flex shrink-0 pt-0.5 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
+        <span className="min-w-0 flex-1 space-y-0.5">
+          <span className="flex min-w-0 p-meta p-text-2"><WhoLine row={row} /></span>
+          <span className="block p-meta p-text-3">
+            <span data-live-share-mode={row.mode}>{modeWords(row)}</span>
+            {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
+            {row.gallery !== null && <span data-live-share-listed> · In the Gallery</span>}
+          </span>
+          <span data-live-share-views className="block p-meta p-text-3 tabular-nums">{viewsWords(row)}</span>
+        </span>
+        <TileMenu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
+      </div>
+      {row.mode === "owner" && row.stale === true && (
+        <div className="pl-[26px]">
+          <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
+        </div>
+      )}
+      {listing && row.mode === "own" && <div className="pl-[26px]"><ShareListing share={row} onList={(next) => actions.onList(row.id, next)} disabled={actions.disabled} /></div>}
+    </li>
+  );
+}
+
+function SharedNow({ shares, actions }: { shares: readonly LiveShareRecord[]; actions: SharedRowActions }) {
   return (
     <div className="space-y-1.5">
       <p className="p-meta font-medium p-text-3">Shared now</p>
       <ul className="p-group">
-        {shares.map((row) => (
-          <li key={row.id} data-live-share={row.id} className="space-y-1.5 px-3.5 py-2">
-            {/* Who and on whose access, then what the owner can do with it, then its place in the Gallery: one line each. */}
-            <div className="flex items-start gap-3">
-              <span className="flex shrink-0 pt-0.5 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate p-meta p-text-2">
-                  {row.visibility === "public" ? "Anyone with the link" : "People you added"}
-                  {row.paused === true && <span className="p-warning"> · paused today: limit reached</span>}
-                </span>
-                <span data-live-share-mode={row.mode} className="block p-meta p-text-3">{modeWords(row)}</span>
-                {row.visibility === "users" && <SharedPeople row={row} />}
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 pl-[26px]">
-              {row.mode === "owner" && row.stale === true && (
-                <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => onReview(row.id)} disabled={disabled}>Review the new reach</Button>
-              )}
-              {row.mode === "owner" && (
-                <Button size="xs" variant="ghost" data-live-share-own={row.id} onClick={() => onOwnAccess(row.id)} disabled={disabled}>Use their own access</Button>
-              )}
-              <StopButton onStop={() => onStop(row.id)} disabled={disabled} />
-            </div>
-            {/* Anyone can open it from a Gallery card only through its link. */}
-            {row.visibility === "public" && <div className="pl-[26px]"><ShareListing share={row} onList={(listing) => onList(row.id, listing)} disabled={disabled} /></div>}
-          </li>
-        ))}
+        {shares.map((row) => <SharedRow key={row.id} row={row} actions={actions} />)}
       </ul>
     </div>
   );
@@ -460,8 +500,10 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
   const titleOf = (entry: SharePreapproval) => graph?.namespaces.find((row) => row.slate === entry.slate && row.namespace === entry.namespace)?.title ?? entry.namespace;
 
   return (
-    <div data-share-always className="space-y-1.5">
-      <p className="p-meta font-medium p-text-3">Always allowed</p>
+    <details data-share-always className="group space-y-1.5">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 p-meta font-medium p-text-3">
+        <CaretRightIcon size={12} className="transition-transform group-open:rotate-90" />Always allowed ({standing.length})
+      </summary>
       <ul className="p-group">
         {standing.map((entry) => (
           <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3.5 py-2">
@@ -474,7 +516,7 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
         ))}
       </ul>
       <p className="p-meta p-text-3">These go ahead without asking you, on every share of it on your access, until its code changes.</p>
-    </div>
+    </details>
   );
 }
 
@@ -538,6 +580,93 @@ function useSharedRefusal(rpc: WorkspaceRpc, slate: string, fixture: LiveShareFi
   }, [fixture, rpc, slate]);
 
   return refused;
+}
+
+/** Whether the people it is shared with may fork it: a fork is their own copy, on their own connections. */
+function ForkChoice({ value, onChange, disabled }: { value: boolean; onChange: (fork: boolean) => void; disabled: boolean }) {
+  return (
+    <label className="flex items-start gap-3">
+      <span className="flex w-7 shrink-0 justify-center pt-1">
+        <input type="checkbox" checked={value} onChange={(event) => onChange(event.target.checked)} disabled={disabled} data-share-fork className="size-4 accent-[var(--c-accent)]" />
+      </span>
+      <span>
+        <span className="block p-row-text font-medium p-text">Let them fork it</span>
+        <span className="block p-meta p-text-3">A fork is their own copy, on their own connections.</span>
+      </span>
+    </label>
+  );
+}
+
+/** The choices a share is made with, as one line: whose access, what they start from (a first share only), and forking. */
+function choicesWords(choices: { mode: ShareMode; start: ShareStart | null; fork: boolean }): string {
+  return [
+    choices.mode === "own" ? "Runs on each person's own access" : "Runs with your access",
+    ...(choices.start === null ? [] : [choices.start === "as-is" ? "Shows what it holds now" : "Shares an empty copy"]),
+    choices.fork ? "Can be forked" : "Can't be forked",
+  ].join(" · ");
+}
+
+/** The choices, said in one line until asked for, then each in place: the safe ones are the defaults. */
+function ChoicesSummary({ words, open, onToggle, disabled }: { words: string; open: boolean; onToggle: () => void; disabled: boolean }) {
+  return (
+    <p data-share-summary className="flex flex-wrap items-baseline gap-x-2 p-meta p-text-3">
+      <span>{words}</span>
+      <button type="button" data-share-options aria-expanded={open} onClick={onToggle} disabled={disabled} className="font-medium p-accent hover:underline">
+        {open ? "Done" : "Change"}
+      </button>
+    </p>
+  );
+}
+
+interface ShareChoicesState {
+  readonly mode: ShareMode;
+  readonly start: ShareStart;
+  readonly fork: boolean;
+}
+
+/** What one share asks of a person, by the slate's reach: requests a minute each, and model spend a day where it reaches. */
+function limitsWords(graph: SlateReach): string {
+  return graph.namespaces.length > 0
+    ? `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute; the share gets $${String(SHARE_SPEND_CAP_USD_PER_DAY)} of model spend a day.`
+    : `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute.`;
+}
+
+/**
+ * A share's choices: one line of them until asked to change, then each in place. A stopped share's reach, shown for
+ * approving again, opens them with no line above. What a first share starts from is asked of it alone.
+ */
+function Choices({ choices, set, first, reviewing, reach, busy }: {
+  choices: ShareChoicesState;
+  set: { readonly mode: (mode: ShareMode) => void; readonly start: (start: ShareStart) => void; readonly fork: (fork: boolean) => void };
+  first: boolean;
+  reviewing: boolean;
+  reach: { readonly graph: SlateReach | null; readonly failed: boolean; readonly visibility: LiveShareVisibility; readonly approved: ReadonlySet<string>; readonly onToggle: (approval: Approval) => void };
+  busy: boolean;
+}) {
+  const [choosing, setChoosing] = useState(false);
+  const { mode, start, fork } = choices;
+  const { graph } = reach;
+
+  return (
+    <>
+      {!reviewing && (
+        <ChoicesSummary words={choicesWords({ mode, start: first ? start : null, fork })} open={choosing} onToggle={() => setChoosing((open) => !open)} disabled={busy} />
+      )}
+      {(choosing || reviewing) && (
+        <div data-share-choices className="space-y-4">
+          <ForkChoice value={fork} onChange={set.fork} disabled={busy} />
+          {first && <StartChoice value={start} disabled={busy} onChange={(next) => {
+            set.start(next);
+
+            if (next === "empty") set.mode("own");
+          }} />}
+          <ModeChoice value={mode} onChange={set.mode} disabled={busy || reviewing} unbuilt={graph !== null && graph.revision === null} emptyCopy={start === "empty"} />
+          {mode === "owner" && <OwnerReach graph={graph} failed={reach.failed} visibility={reach.visibility} approved={reach.approved} onToggle={reach.onToggle} disabled={busy} />}
+          {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limitsWords(graph)}</p>}
+        </div>
+      )}
+    </>
+  );
 }
 
 export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
@@ -687,12 +816,6 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     );
   }
 
-  const reaches = graph !== null && graph.namespaces.length > 0;
-
-  const limits = reaches
-    ? `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute; the share gets $${String(SHARE_SPEND_CAP_USD_PER_DAY)} of model spend a day.`
-    : `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute.`;
-
   return (
     <>
       <div className="space-y-4">
@@ -705,26 +828,13 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           </>
         )}
         <AccessPicker options={ACCESS} value={visibility} onChange={setVisibility} disabled={busy} />
-        <label className="flex items-start gap-3">
-          <span className="flex w-7 shrink-0 justify-center pt-1">
-            <input type="checkbox" checked={fork} onChange={(event) => setFork(event.target.checked)} disabled={busy} data-share-fork className="size-4 accent-[var(--c-accent)]" />
-          </span>
-          <span>
-            <span className="block p-row-text font-medium p-text">Let them fork it</span>
-            <span className="block p-meta p-text-3">A fork is their own copy, on their own connections.</span>
-          </span>
-        </label>
-        {shares.length === 0 && <StartChoice value={start} disabled={busy} onChange={(next) => {
-          setStart(next);
-
-          if (next === "empty") setMode("own");
-        }} />}
-        <ModeChoice value={mode} onChange={setMode} disabled={busy || reviewing !== null} unbuilt={graph !== null && revision === null} emptyCopy={start === "empty"} />
-        {mode === "owner" && <OwnerReach graph={graph} failed={err !== null} visibility={visibility} approved={approved} onToggle={toggle} disabled={busy} />}
-        {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limits}</p>}
+        <Choices choices={{ mode, start, fork }} set={{ mode: setMode, start: setStart, fork: setFork }} first={shares.length === 0} reviewing={reviewing !== null}
+          reach={{ graph, failed: err !== null, visibility, approved, onToggle: toggle }} busy={busy} />
         {shares.length > 0 && (
-          <SharedNow shares={shares} onStop={(id) => revoke(id)} onOwnAccess={ownAccess} onList={list} disabled={busy}
-            onReview={(id) => { setMode("owner"); setReviewing(id); }} />
+          <SharedNow shares={shares} actions={{
+            onStop: (id) => revoke(id), onOwnAccess: ownAccess, onList: list, disabled: busy,
+            onReview: (id) => { setMode("owner"); setReviewing(id); },
+          }} />
         )}
         <AlwaysAllowed standing={standing} graph={graph} onWithdraw={withdraw} disabled={busy} />
         <Failure message={err} />
