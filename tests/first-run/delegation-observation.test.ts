@@ -29,7 +29,7 @@ const MISSION = 'Reply with exactly the word bramblelight and nothing else.';
 const ASK = 'Hire one helper to say the word.';
 
 // The shape a task hire answers in since cafab2bfc: at once, its helper still at work.
-const taskHire = call('task', 4, { op: 'hire', lifetime: 'task', role: 'task', mission: MISSION }, {
+const taskHire = call('task', 4, { op: 'hire', lifetime: 'task', role: 'task', message: MISSION }, {
   status: 'working', agent: 'ask-task-ymhu3n', lifetime: 'task', role: 'task', answer: 'Working.',
 });
 
@@ -37,16 +37,16 @@ const durableHire = call('roster', 4, { op: 'hire' }, { name: 'task-9j4odl' });
 
 const roster = call('roster', 10, { op: 'list' }, { subordinates: [{ name: 'task-9j4odl' }] });
 
-test('a task hire is read by the helper it named and the mission it gave', () => {
-  expect(taskHires([durableHire, taskHire]).map((hire) => [hire.agent, hire.mission])).toEqual([['ask-task-ymhu3n', MISSION]]);
+test('a task hire is read by the helper it named and the message it gave', () => {
+  expect(taskHires([durableHire, taskHire]).map((hire) => [hire.agent, hire.message])).toEqual([['ask-task-ymhu3n', MISSION]]);
 });
 
 test('refused, errored and malformed hires are not task hires', () => {
   for (const hire of [
     { ...taskHire, error: 'transport failed' },
     { ...taskHire, outcome: { success: false, reason: 'bad_input' } },
-    call('task', 1, { op: 'assign', lifetime: 'task', mission: MISSION }, { status: 'working', lifetime: 'task' }),
-    call('task', 1, { op: 'assign', mission: MISSION }, { status: 'working', agent: 'durable', lifetime: 'task' }),
+    call('task', 1, { op: 'assign', lifetime: 'task', message: MISSION }, { status: 'working', lifetime: 'task' }),
+    call('task', 1, { op: 'assign', message: MISSION }, { status: 'working', agent: 'durable', lifetime: 'task' }),
   ] satisfies RunEvent[]) {
     expect(taskHires([hire])).toEqual([]);
   }

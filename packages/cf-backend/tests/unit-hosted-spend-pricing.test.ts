@@ -117,7 +117,7 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
     const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
 
     return step === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'researcher', name: 'profiler', mission: MISSION } }, 'hire_0')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'researcher', name: 'profiler', message: MISSION } }, 'hire_0')
       : chatCompletion(run, 'Handed off.');
   });
 
@@ -164,7 +164,7 @@ for (const kind of ['hire', 'swarm'] as const) {
 
       if (!child) return step === 0
         ? toolCallCompletion(run, { tool: 'agents', args: kind === 'hire'
-          ? { op: 'hire', role: 'researcher', name: 'counter', mission: 'Count the parser paths.' }
+          ? { op: 'hire', role: 'researcher', name: 'counter', message: 'Count the parser paths.' }
           : { op: 'swarm', preset: 'ideate', task: 'Count the parser paths.', branches: 1, depth: 1 } }, 'start')
         : chatCompletion(run, 'Handed off.');
 

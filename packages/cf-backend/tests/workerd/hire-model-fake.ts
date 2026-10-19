@@ -150,7 +150,6 @@ interface AgentsToolArgs {
   readonly op: 'hire' | 'message';
   readonly lifetime?: 'task' | 'durable';
   readonly role?: string;
-  readonly mission?: string;
   readonly agent?: string;
   readonly message?: string;
 }
@@ -263,7 +262,7 @@ function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]):
 
   // `job`: a durable hire, so the hire outlives its brief and its job wakes it.
   if (run.childScript === 'job') {
-    return toolCallBody(model, 'call_hire_job', 'agents', { op: 'hire', lifetime: 'durable', role: 'auditor', mission: JOB_MISSION });
+    return toolCallBody(model, 'call_hire_job', 'agents', { op: 'hire', lifetime: 'durable', role: 'auditor', message: JOB_MISSION });
   }
 
   return toolCallBody(model, 'call_hire_1', 'agents', {
@@ -271,7 +270,7 @@ function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]):
     // `nest-park`'s middle helper is durable: the owner dismisses it while it waits on its own task hire.
     lifetime: run.childScript === 'nest-park' ? 'durable' : 'task',
     role: 'auditor',
-    mission: run.childScript === 'answer' || run.childScript === 'throw' || run.childScript === 'park' ? HIRE_MISSION : NEST_MISSION,
+    message: run.childScript === 'answer' || run.childScript === 'throw' || run.childScript === 'park' ? HIRE_MISSION : NEST_MISSION,
   });
 }
 
@@ -287,7 +286,7 @@ async function durableLane(run: HireRun, body: OutboundBody, results: readonly s
       op: 'hire',
       lifetime: 'durable',
       role: 'auditor',
-      mission: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
+      message: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
     });
   }
 
@@ -325,7 +324,7 @@ async function childLane(run: HireRun, body: OutboundBody, results: readonly str
       op: 'hire',
       lifetime: 'task',
       role: 'auditor',
-      mission: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
+      message: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
     });
   }
 

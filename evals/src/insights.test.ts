@@ -7,8 +7,8 @@ import type { Assertion } from './results';
 const REPORT = '/home/user/reports/signups-by-country.json';
 
 // Delegation fields: staging-f3-launch-prep/launch-prep-trial-1/ledger.jsonl:12,24,33,129.
-function hire(helper: string, mission = `write ${REPORT}`): Extract<RunEvent, { type: 'tool_call_end' }> {
-  return { ...base, type: 'tool_call_end', name: 'agents', toolCallId: helper, args: { op: 'hire', mission }, result: { name: helper }, outcome: { success: true } };
+function hire(helper: string, message = `write ${REPORT}`): Extract<RunEvent, { type: 'tool_call_end' }> {
+  return { ...base, type: 'tool_call_end', name: 'agents', toolCallId: helper, args: { op: 'hire', message }, result: { name: helper }, outcome: { success: true } };
 }
 
 function facts(rows: readonly (JsonValue | RunEvent)[], result: Assertion = assertion(), extra: Partial<TrialEvidence> = {}): InsightFact[] {
@@ -59,7 +59,7 @@ describe('deterministic trial insights', () => {
   });
 
   test('successful hires are helpers, while refused hire attempts remain tool errors', () => {
-    const refused: RunEvent = { ...hire('refused'), error: 'Use mission, not message.', outcome: { success: false, reason: 'bad_input' } };
+    const refused: RunEvent = { ...hire('refused'), error: 'Use message, not mission.', outcome: { success: false, reason: 'bad_input' } };
     const observed = facts([start, refused, hire('counter'), end]);
     expect(observed.filter((fact) => fact.kind === 'helper-hired').map((fact) => fact.data)).toEqual([expect.objectContaining({ helper: 'counter' })]);
     expect(observed.find((fact) => fact.kind === 'tool-errors')).toMatchObject({ data: { tool: 'agents', code: 'bad_input', count: 1 } });

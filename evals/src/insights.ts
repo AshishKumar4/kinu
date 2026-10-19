@@ -311,10 +311,10 @@ function assignedHelper(call: Call, helpers: HelperObservations, add: RecordFact
   if (op === 'hire' && stringOf(answer.name) !== '') {
     const name = stringOf(answer.name);
 
-    add('helper-hired', { helper: name, mission: args.mission ?? null, lifetime: args.lifetime ?? null }, call.evidence);
+    add('helper-hired', { helper: name, message: args.message ?? null, lifetime: args.lifetime ?? null }, call.evidence);
     helpers.set(name, { status: null, runs: null, evidence: call.evidence });
 
-    return { helper: name, brief: stringOf(args.mission), evidence: call.evidence, call };
+    return { helper: name, brief: stringOf(args.message), evidence: call.evidence, call };
   }
 
   if ((op === 'assign' || op === 'message') && stringOf(args.agent) !== '') {

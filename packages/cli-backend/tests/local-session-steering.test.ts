@@ -1881,7 +1881,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
   test('a live session refuses a durable hire it has no host for, without writing the program\'s next file', async () => {
     const { rt, session, events } = setup('done', codemodeModel(`
-      await agents.hire({ role: 'researcher', mission: 'must not start' });
+      await agents.hire({ role: 'researcher', message: 'must not start' });
       await workspace.writeFile('probe/agents.json', 'hire ran');
     `));
 

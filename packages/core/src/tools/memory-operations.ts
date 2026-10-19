@@ -1,5 +1,6 @@
 /** The memory operations served over an agent's stores, natively and as `memory.*`. */
 import { Effect } from 'effect';
+import type * as v from 'valibot';
 import type { Memory } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { VectorStore } from '../memory/vector-store';
@@ -32,43 +33,69 @@ export interface MemoryDeps {
   readonly account?: AccountMemory;
 }
 
+/** A write as the account-aware operation takes it; where no account is wired, the same call has no `scope`. */
+type NoteCall = v.InferOutput<typeof MEMORY_WITH_ACCOUNT.note.input>;
+
+type RememberCall = v.InferOutput<typeof MEMORY_WITH_ACCOUNT.remember.input>;
+
 /**
  * Read per call, so a rebound store applies; the facts and account gates are read once, as neither changes in a session.
- * Where the account is wired, `MEMORY_WITH_ACCOUNT` is served: reads answer from both scopes and say which.
+ * Where the account is wired, `MEMORY_WITH_ACCOUNT` is served: a write may ask for the account, and a read answers from
+ * both scopes and says which. One body serves each operation in either wiring.
  */
 export function serveMemory(deps: () => MemoryDeps): readonly Served[] {
-  const { facts, account } = deps();
-
-  if (facts !== undefined && account !== undefined) return [...servedFacts(deps, facts, account), ...servedRecall(deps)];
+  const { facts } = deps();
+  // The account's operations need the facts store beside it (builtins.ts wires them together).
+  const account = facts === undefined ? undefined : deps().account;
+  const ops = account === undefined ? MEMORY : MEMORY_WITH_ACCOUNT;
 
   const served = [
-    serve(MEMORY.note, async ({ content }) => {
+    serve(ops.note, async ({ content, scope }: NoteCall) => {
+      if (scope === 'account' && account !== undefined) return { pending: true as const, proposal: await account.propose({ kind: 'note', content }) };
       const { memory, actor } = deps();
 
       await appendMemoryNote(memory, content, { by: actor.name });
 
       return { saved: true as const };
     }),
-    serve(MEMORY.search, async ({ query }) => unlabelled(await searchMemory(deps(), query))),
+    serve(ops.search, async ({ query }) => {
+      const found = await searchMemory(deps(), account, query);
+
+      return account === undefined ? unlabelled(found) : found;
+    }),
     ...servedRecall(deps),
   ];
 
   if (facts === undefined) return served;
 
   return [
-    serve(MEMORY.remember, async ({ key, value, confidence }) => {
+    serve(ops.remember, async ({ key, value, confidence, scope }: RememberCall) => {
       const stored = normalizeFactKey(key);
 
+      if (scope === 'account' && account !== undefined) return { key: stored, pending: true as const, proposal: await account.propose({ kind: 'fact', key: stored, value }) };
       facts.upsert(stored, value, { confidence, origin: { by: 'agent', agent: deps().actor.name } });
 
       return { key: stored };
     }),
-    serve(MEMORY.recall, async ({ key }) => {
-      const fact = facts.recall(normalizeFactKey(key));
+    serve(ops.recall, async ({ key }) => {
+      const stored = normalizeFactKey(key);
+      const own = facts.recall(stored);
 
-      return fact === null ? null : factAnswer(fact);
+      if (account === undefined) return own === null ? null : factAnswer(own);
+
+      if (own !== null) return { ...factAnswer(own), scope: 'workspace' as const };
+      const shared = (await account.facts()).find((fact) => fact.key === stored);
+
+      return shared === undefined ? null : { ...factAnswer(shared), scope: 'account' as const };
     }),
-    serve(MEMORY.forget, async ({ key }) => forgotten(facts, key, deps().actor.name)),
+    serve(ops.forget, async ({ key }) => {
+      const stored = normalizeFactKey(key);
+      const existed = facts.recall(stored) !== null;
+
+      facts.forget(stored, { by: 'agent', agent: deps().actor.name });
+
+      return { key: stored, existed };
+    }),
     ...served,
   ];
 }
@@ -84,50 +111,8 @@ function servedRecall(deps: () => MemoryDeps): Served[] {
   ];
 }
 
-/** Facts and notes where the account is wired: an account write is a proposal, and a read says which scope answered. */
-function servedFacts(deps: () => MemoryDeps, facts: FactsStore, account: AccountMemory): Served[] {
-  return [
-    serve(MEMORY_WITH_ACCOUNT.remember, async ({ key, value, confidence, scope }) => {
-      const stored = normalizeFactKey(key);
-
-      if (scope === 'account') return { key: stored, pending: true as const, proposal: await account.propose({ kind: 'fact', key: stored, value }) };
-      facts.upsert(stored, value, { confidence, origin: { by: 'agent', agent: deps().actor.name } });
-
-      return { key: stored };
-    }),
-    serve(MEMORY_WITH_ACCOUNT.recall, async ({ key }) => {
-      const stored = normalizeFactKey(key);
-      const own = facts.recall(stored);
-
-      if (own !== null) return { ...factAnswer(own), scope: 'workspace' as const };
-      const shared = (await account.facts()).find((fact) => fact.key === stored);
-
-      return shared === undefined ? null : { ...factAnswer(shared), scope: 'account' as const };
-    }),
-    serve(MEMORY_WITH_ACCOUNT.forget, async ({ key }) => forgotten(facts, key, deps().actor.name)),
-    serve(MEMORY_WITH_ACCOUNT.note, async ({ content, scope }) => {
-      if (scope === 'account') return { pending: true as const, proposal: await account.propose({ kind: 'note', content }) };
-      const { memory, actor } = deps();
-
-      await appendMemoryNote(memory, content, { by: actor.name });
-
-      return { saved: true as const };
-    }),
-    serve(MEMORY_WITH_ACCOUNT.search, async ({ query }) => await searchMemory(deps(), query)),
-  ];
-}
-
 function factAnswer(fact: Fact) {
   return { key: fact.key, value: fact.value, confidence: fact.confidence, source: fact.source, lastObservedAt: fact.lastObservedAt };
-}
-
-function forgotten(facts: FactsStore, key: string, agent: string) {
-  const stored = normalizeFactKey(key);
-  const existed = facts.recall(stored) !== null;
-
-  facts.forget(stored, { by: 'agent', agent });
-
-  return { key: stored, existed };
 }
 
 type SearchHit = { readonly ref: string; readonly text: string; readonly score: number; readonly scope: MemoryScope };
@@ -141,7 +126,7 @@ function unlabelled(found: { semantic: boolean; hits: SearchHit[] }) {
  * Both scopes as one ranked list (`unifiedFacts`): an account fact whose key this workspace holds is not a hit. The
  * account is read inside its arm, so a user object that does not answer costs the account's hits, never the search.
  */
-async function searchMemory({ memory, vectorStore, facts, account }: MemoryDeps, query: string): Promise<{ semantic: boolean; hits: SearchHit[] }> {
+async function searchMemory({ memory, vectorStore, facts }: MemoryDeps, account: AccountMemory | undefined, query: string): Promise<{ semantic: boolean; hits: SearchHit[] }> {
 
   const accountNotes = account === undefined ? undefined : async (q: string, limit: number) => await account.searchNotes(q, limit);
 

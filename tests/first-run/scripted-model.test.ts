@@ -368,12 +368,12 @@ async function reply(messages: readonly JsonObject[], offered: readonly string[]
 }
 
 /** The conversation after a turn that hired one helper, which answered at once that the helper is working. */
-function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly agent: string; readonly mission: string }): JsonObject[] {
+function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly agent: string; readonly message: string }): JsonObject[] {
   return [
     { role: 'user', content: ask },
     { role: 'assistant', content: 'Calling agents.', tool_calls: [{
       id: hired.id, type: 'function',
-      function: { name: 'agents', arguments: JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', mission: hired.mission }) },
+      function: { name: 'agents', arguments: JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', message: hired.message }) },
     }] },
     { role: 'tool', tool_call_id: hired.id, content: JSON.stringify({ status: 'working', agent: hired.agent, lifetime: 'task', role: 'task' }) },
     { role: 'assistant', content: 'WAITING' },
@@ -476,7 +476,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     const report = answerArrives(agent, HOME_BRIEF, `HOME ${home}`);
 
     const messages = [
-      ...hiredAndWaiting(HOME_ASK, { id: 'call_home', agent, mission: HOME_BRIEF }),
+      ...hiredAndWaiting(HOME_ASK, { id: 'call_home', agent, message: HOME_BRIEF }),
       { role: 'user', content: report },
     ];
 
@@ -490,7 +490,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     const mission = sayWordMission(DELEGATION_WORD);
 
     const messages = [
-      ...hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', mission }),
+      ...hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', message: mission }),
       { role: 'user', content: answerArrives('ask-task-ymhu3n', mission, DELEGATION_WORD) },
     ];
 
@@ -501,11 +501,11 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     const hired = await reply([{ role: 'user', content: RELAY_MISSION }]);
 
     expect(hired.tool_calls?.map((made) => made.function.arguments)).toEqual([
-      JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', mission: sayWordMission(TREE_DEEP_WORD) }),
+      JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', message: sayWordMission(TREE_DEEP_WORD) }),
     ]);
 
     const messages = [
-      ...hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', mission: sayWordMission(TREE_DEEP_WORD) }),
+      ...hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', message: sayWordMission(TREE_DEEP_WORD) }),
       { role: 'user', content: answerArrives('ask-task-deep01', sayWordMission(TREE_DEEP_WORD), TREE_DEEP_WORD) },
     ];
 
@@ -514,7 +514,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
 
   test('the tree root answers each arrival with the word it carries', async () => {
     const messages = [
-      ...hiredAndWaiting(TREE_ASK, { id: 'call_relay', agent: 'ask-task-relay1', mission: RELAY_MISSION }),
+      ...hiredAndWaiting(TREE_ASK, { id: 'call_relay', agent: 'ask-task-relay1', message: RELAY_MISSION }),
       { role: 'user', content: answerArrives('ask-task-relay1', RELAY_MISSION, TREE_DEEP_WORD) },
     ];
 
@@ -549,7 +549,7 @@ describe('a report that lands in a turn at work is not the ask that turn answers
 
   test('a word that lands in the turn that hired its helper is relayed there', async () => {
     const mission = sayWordMission(DELEGATION_WORD);
-    const hired = hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', mission }).slice(0, -1);
+    const hired = hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', message: mission }).slice(0, -1);
     const word = reported('ask-task-ymhu3n', mission, DELEGATION_WORD, 'completed').midTurnText;
 
     expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(`HIRED ${DELEGATION_WORD}`);
@@ -557,7 +557,7 @@ describe('a report that lands in a turn at work is not the ask that turn answers
 
   test('the relay relays the word that lands in the turn that hired its helper', async () => {
     const mission = sayWordMission(TREE_DEEP_WORD);
-    const hired = hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', mission }).slice(0, -1);
+    const hired = hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', message: mission }).slice(0, -1);
     const word = reported('ask-task-deep01', mission, TREE_DEEP_WORD, 'completed').midTurnText;
 
     expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(TREE_DEEP_WORD);

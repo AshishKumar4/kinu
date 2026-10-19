@@ -208,7 +208,7 @@ describe('a subordinate below a direct child is reached by its path', () => {
     const answered = requestOf(run).messages.some((message) => message.role === 'tool');
 
     return asked && !answered
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', name: 'ask-checker-a1', role: 'task', mission: 'Check the ledger.' } }, 'agents_0')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', name: 'ask-checker-a1', role: 'task', message: 'Check the ledger.' } }, 'agents_0')
       : chatCompletion(run, 'Done.');
   });
 
