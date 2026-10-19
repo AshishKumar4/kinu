@@ -304,9 +304,9 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
 
       await page.click(`${CHATS} a[aria-label="New chat"]`);
       await page.waitForSelector('[data-new-chat] textarea');
-      await pick(page, '[data-new-chat]', join(files, 'cart.csv'));
-      await page.type('[data-new-chat] textarea', 'Why does this cart 500?');
-      expect(await sentBy(page, '[data-new-chat] button[type="submit"]')).toEqual(['file:cart.csv', 'text:Why does this cart 500?']);
+      await pick(page, '[data-new-chat]', join(files, 'wrangler-tail.log'));
+      await page.type('[data-new-chat] textarea', 'Why does the deploy answer 500?');
+      expect(await sentBy(page, '[data-new-chat] button[type="submit"]')).toEqual(['file:wrangler-tail.log', 'text:Why does the deploy answer 500?']);
 
       // Home's box creates the workspace; the file waits in its chat and goes out with the first message there.
       await page.evaluate(() => {
@@ -314,16 +314,16 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
 
         window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => (init?.method === 'POST'
           && new URL(input instanceof Request ? input.url : String(input), location.href).pathname === '/api/user/workspaces'
-          ? Promise.resolve(Response.json({ name: 'cart-audit', displayName: 'Cart audit', createdAt: 1, lastVisited: 1 }))
+          ? Promise.resolve(Response.json({ name: 'worker-deploy', displayName: 'Worker deploy', createdAt: 1, lastVisited: 1 }))
           : inner(input, init)), { preconnect: inner.preconnect });
       });
       await page.evaluate(async () => { await window.galleryNavigate?.('/'); });
       const home = 'form:has(#workspace-mission)';
-      const created = '[data-agent-pane="cart-audit/main"]';
+      const created = '[data-agent-pane="worker-deploy/main"]';
 
       await page.waitForSelector(home);
       await pick(page, home, join(files, 'brief.md'));
-      await page.type('#workspace-mission', 'Audit the cart');
+      await page.type('#workspace-mission', 'Ship the Worker with wrangler');
       await page.click(`${home} button[type="submit"]`);
       await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('brief.md'), {}, `${created} [data-composer-root]`);
       await page.waitForSelector(`${created} textarea:not([disabled])`);
@@ -384,7 +384,7 @@ describe('a chat in the workspace, as an ordinary conversation', () => {
       }));
 
       expect(notice).toEqual({ alert: false, status: true });
-      await page.type('[data-composer-root] textarea', 'Look at the cart');
+      await page.type('[data-composer-root] textarea', 'Read the production logs');
       expect(await page.$('[data-composer-root] button[aria-label="Send"]:not([disabled])')).not.toBeNull();
       await page.close();
     });
