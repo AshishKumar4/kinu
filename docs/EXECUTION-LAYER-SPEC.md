@@ -97,7 +97,8 @@ on every machine (`machineOperations`, `core/src/operations/executors.ts`):
 `startProcess(command, { cwd? })`, `stopProcess(processId)`, `listProcesses()`
 and `logs(processId, { lines?, bytes? })`; `net_inbound` admits
 `exposePort(port, { name? })`, `unexposePort(port)` and `listPorts()`, which
-answer the provider's own `PortExposureResult` and `ExposedPortInfo`. A machine
+answer `{ port, url, name?, route }`, `null`, and the provider's
+`ExposedPortInfo[]`, or a refusal (`executor-operations.ts`). A machine
 with a root in the file plane (`ExecutorProviderSurface.fileRoot`) also has
 `fs`: the seven `file` operations in its own paths, a relative one from its
 home and a `..` above its root held there, each run as the `file` operation on

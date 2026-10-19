@@ -4,8 +4,9 @@
 tools. Each is a standing choice the model weighs every turn, so a longer list
 lowers selection accuracy. `buildBuiltinTools` (`tools/builtins.ts`) builds one
 set for both backends. `eval`, `shell`, `file`, `memory`, and `tasks` are always
-present; `agents`, `web`, and `report` need wired deps. A native call names its
-operation with `op`. Inside `eval`, `tools.<name>(input)` calls any tool with its
+present; `agents`, `web`, and `report` need wired deps. `file`, `agents`,
+`memory`, `tasks` and `web` select an operation with `op`; `eval`, `shell` and
+`report` take their declared input directly. Inside `eval`, `tools.<name>(input)` calls any tool with its
 native input, and a native tool's operations are also its namespace's members
 (`memory.note(text)`): both run one served operation.
 
@@ -199,9 +200,8 @@ loop-detection steers: `repeated_call`, `repeated_failure`, `no_progress`.
    Registered verifiers score verify-scored candidates. Nodes are full agents.
    See [EXPLORATION.md](./EXPLORATION.md).
 3. `hire` without `lifetime` (or with `lifetime:'durable'`) starts a persistent
-   subordinate. With `context:'fresh'` (the default) it starts from its role,
-   the message, and a digest of the caller's recent messages;
-   `context:'inherit'` also hands it the caller's recent turns.
+   subordinate. With `context:'fresh'` (the default) it starts from its role
+   and message; `context:'inherit'` also hands it the caller's recent turns.
 
 A swarm derives its answer shape from `score` and `advance`, never `settle`.
 `score:"verify"` uses a registered verifier. `score:"judge"` on a tree advance
@@ -326,7 +326,7 @@ machine (`executorNamespace`, `tools/executor-operations.ts`).
 
 A member takes its required fields positionally, then one object of options:
 `agents.hire(role, message, { lifetime: 'task' })`, `file.list(path, { offset })`.
-`tools.<name>(input)` takes a tool's native input instead, `op` included. Any
+`tools.<name>(input)` takes a tool's native input instead, including `op` where its schema declares it. Any
 call can resolve to a `Refusal`, `{ success: false, reason, error }`; returning
 one fails the program with that reason. `describe('db')` returns a namespace's
 full TypeScript declarations, `describe('db.select')` one member's, and
@@ -338,8 +338,8 @@ full TypeScript declarations, `describe('db.select')` one member's, and
 
 | Caller | Reaches |
 |---|---|
-| An actor's own program: main's, a hire's, a head's or a swarm node's | `file`, `memory` (the account's scope where it is wired), `tasks`, `db` with its `private` tables, `agent`, `web` with browser sessions, each machine; `agents` where its native `agents` is wired, and `report` where its native `report` is |
-| A slate's call, or a crafted tool a slate runs | the same less `agents`, the account and `private` tables; a share's viewer drives no browser |
+| An actor's own program: main's, a hire's, a head's or a swarm node's | `file`, `memory` (the account's scope where it is wired), `tasks`, `db` with its `private` tables, and each machine it has; `agent` where its lifecycle or owner-wait host is wired, `web`'s browser sessions where they are wired, `agents` where its native `agents` is wired, and `report` where its native `report` is |
+| A slate's call, or a crafted tool a slate runs | the members `slateReaches` admits (`slates/surface.ts`): no `agents`, `agent`, `report`, `createTool` or slate lifecycle, no member its operation keeps from slates (`switchRole`, the desktop), no account memory and no `private` tables; a share's viewer drives no browser |
 | The owner's own slate | a slate's reach, plus `agents` |
 
 ### Machines
@@ -386,8 +386,9 @@ over the user's files asks once, on `exec` as on `shell`
 A removed member is refused with its successor named, never run under its old
 name. `operations/retired.ts` is the one table: `workspace.readFile`,
 `writeFile`, `readdir` and `exists` (now `workspace.fs.text`, `write`, `list`
-and `stat`), `workspace.killProcess` (`stopProcess`), `workspace.runCode`,
-`installRuntime` and `listRuntimes` (`exec`), the machines' `readdir`, `exists`
+and `stat`), `workspace.killProcess` (`stopProcess`), `workspace.runCode` and
+`installRuntime` (`exec`), `workspace.listRuntimes` (the Execution status in the
+context), the machines' `readdir`, `exists`
 and `computer.deleteFile`, `parent.readdir` and `exists` (`file.*`), the `state`
 namespace (a `private` `db` table), `agents.hire`'s `mission` (`message`), and
 `workspace.startProcess`'s `env` and `timeoutMs`.
