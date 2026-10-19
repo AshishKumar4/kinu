@@ -1167,7 +1167,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** A call as a part's process would make it after its run ended: the last run's own name, replayed. */
   async lateCall(): Promise<SlateSurfaceResult> {
-    return await this.host.parts.call(NOTES, this.lastPartRun ?? crypto.randomUUID(), 'workspace', { path: ['mcp', 'GitHub', 'issue_read'], args: [{ owner: 'acme', repo: 'notes' }] });
+    return await this.host.parts.call(NOTES, this.lastPartRun ?? crypto.randomUUID(), 'workspace', { path: ['mcp', 'GitHub', 'issue_read'], args: [{ method: 'get_comments', owner: 'acme', repo: 'notes', issue_number: 1 }] });
   }
 
   /** Whether any row of this workspace's own storage holds `text`: every table, every column. */
@@ -1217,7 +1217,7 @@ const NOTES_SOURCE = [
   'import { SlateObject } from "kinu:slate";',
   // What a run left at module level: the next run of the image must never see it.
   'let kept = "none";',
-  'const issue = (env) => env.workspace.mcp.GitHub.issue_read({ owner: "acme", repo: "notes" });',
+  'const issue = (env) => env.workspace.mcp.GitHub.issue_read({ method: "get_comments", owner: "acme", repo: "notes", issue_number: 1 });',
   'const tried = (promise) => promise.then(() => "done", () => "refused");',
   'export class Slate extends SlateObject {',
   // Her issue, drawn with what a page script would do with it: none of it survives the cut.

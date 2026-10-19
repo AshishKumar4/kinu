@@ -117,7 +117,7 @@ const REPOSITORY_TOOLS: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<stri
     // Reads. With no `repo`, `list_discussions`, `list_discussion_categories`, `list_issue_fields` and
     // `list_issue_types` read the owner's organization; such a call names no repository, so it has no root.
     'get_file_contents', 'get_repository_tree', 'get_commit', 'list_commits', 'list_branches', 'list_tags', 'get_tag',
-    'list_releases', 'get_latest_release', 'get_release_by_tag', 'issue_read', 'list_issues', 'list_issue_fields', 'list_issue_types',
+    'list_releases', 'get_latest_release', 'get_release_by_tag', 'list_issues', 'list_issue_fields', 'list_issue_types',
     'get_label', 'list_label', 'pull_request_read', 'list_pull_requests', 'get_discussion', 'get_discussion_comments', 'list_discussions',
     'list_discussion_categories', 'actions_get', 'actions_list', 'get_job_logs', 'get_code_scanning_alert', 'list_code_scanning_alerts',
     'get_code_quality_finding', 'get_dependabot_alert', 'list_dependabot_alerts', 'get_secret_scanning_alert', 'list_secret_scanning_alerts',
@@ -131,6 +131,9 @@ const REPOSITORY_TOOLS: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<stri
   ['discussion_comment_write', new Set(['add', 'reply'])],
   // `resolve_thread` and `unresolve_thread` take the thread by `threadId` alone (pullrequests.go).
   ['pull_request_review_write', new Set(['create', 'submit_pending', 'delete_pending'])],
+  // `get_parent` and `get_sub_issues` answer the related issues wherever they are, and `get` adds its parent and the
+  // pull requests that close it from any repository (issues.go): a sub-issue may live in another repository.
+  ['issue_read', new Set(['get_comments', 'get_labels'])],
 ])]]);
 
 /**

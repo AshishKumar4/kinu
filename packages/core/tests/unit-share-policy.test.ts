@@ -124,7 +124,7 @@ describe('a call\'s root', () => {
   test('R3-P1 roots. is a repository only where its tool\'s own contract chooses by owner and repo; else its whole connection', () => {
     const named = { owner: 'acme', repo: 'notes', query: 'anything at all' };
 
-    expect(partCallRoot({ preset: 'github', tool: 'issue_read' }, named)).toEqual({ owner: 'acme', repo: 'notes' });
+    expect(partCallRoot({ preset: 'github', tool: 'list_issues' }, named)).toEqual({ owner: 'acme', repo: 'notes' });
     // A search chooses by its query: the owner and repo it is handed are decoration.
     expect(partCallRoot({ preset: 'github', tool: 'search_issues' }, named)).toEqual({});
     // Another connection, or one no preset made, with the same fields: the whole connection.
@@ -151,5 +151,16 @@ describe('a call\'s root', () => {
     // No operation named, or an empty repository (its owner's organization's), roots nothing.
     expect(partCallRoot(discussion, at)).toEqual({});
     expect(partCallRoot({ preset: 'github', tool: 'list_discussions' }, { owner: 'acme', repo: '' })).toEqual({});
+  });
+
+  test('R6-P1 cross-repository reads. an issue read that answers related issues from anywhere has no repository root', () => {
+    const at = { owner: 'acme', repo: 'notes', issue_number: 1 };
+    const read = { preset: 'github', tool: 'issue_read' };
+
+    // Its parent, its sub-issues, and the issue with its parent and closing pull requests: any repository's.
+    for (const method of ['get', 'get_sub_issues', 'get_parent']) expect(partCallRoot(read, { ...at, method })).toEqual({});
+
+    // Its comments and labels: the repository's own.
+    for (const method of ['get_comments', 'get_labels']) expect(partCallRoot(read, { ...at, method })).toEqual({ owner: 'acme', repo: 'notes' });
   });
 });
