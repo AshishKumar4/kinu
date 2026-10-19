@@ -70,6 +70,30 @@ function authorityOf(step: { mode: 'own' | 'owner'; grantRevision: string | null
 
 type FixtureStep = v.InferOutput<typeof Fixture>['cases'][number]['steps'][number];
 
+function replayAdmission(step: Extract<FixtureStep, { op: 'call' | 'nested' }>, servers: SharedServers,
+  launch: { slate: string; lineage: SlateLineage } | undefined): void {
+  if (launch === undefined) throw new Error(`Fixture names missing launch ${step.slot}`);
+  const record = step.record === null ? null : { id: 'host-issued-request', chain: Object.keys(step.record.generations), ...step.record };
+
+  if (step.op === 'call') {
+    const refusal = servers.lineage(launch.slate, launch.lineage, record);
+
+    expect(refusal === null).toBe(step.expected);
+
+    if (refusal !== null) expect(refusal.code).toBe('denied');
+  } else {
+    const call = { slate: launch.slate, chain: step.chain, address: { namespace: step.namespace, member: step.member } };
+    const fenced = { ...call, fence: { lineage: launch.lineage, record } };
+
+    for (const [input, expected] of [[call, step.unfenced], [fenced, step.expected]] as const) {
+      expect(servers.beyond(input) === null).toBe(expected);
+
+      if (expected) expect(() => servers.within(input)).not.toThrow();
+      else expect(() => servers.within(input)).toThrow(expect.objectContaining({ code: 'denied' }));
+    }
+  }
+}
+
 function replayStep(step: FixtureStep, live: SlateLiveShareStore, servers: SharedServers, launches: { slate: string; lineage: SlateLineage }[]): void {
   if (step.op === 'add' || step.op === 'setAuthority') {
     const authority = authorityOf(step);
@@ -101,28 +125,7 @@ function replayStep(step: FixtureStep, live: SlateLiveShareStore, servers: Share
     expect(lineage).toEqual(step.expected);
     launches[step.slot] = { slate: step.slate, lineage };
   } else if (step.op === 'call' || step.op === 'nested') {
-    const launch = launches[step.slot];
-
-    if (launch === undefined) throw new Error(`Fixture names missing launch ${step.slot}`);
-    const record = step.record === null ? null : { id: 'host-issued-request', chain: Object.keys(step.record.generations), ...step.record };
-
-    if (step.op === 'call') {
-      const refusal = servers.lineage(launch.slate, launch.lineage, record);
-
-      expect(refusal === null).toBe(step.expected);
-
-      if (refusal !== null) expect(refusal.code).toBe('denied');
-    } else {
-      const call = { slate: launch.slate, chain: step.chain, address: { namespace: step.namespace, member: step.member } };
-      const fenced = { ...call, fence: { lineage: launch.lineage, record } };
-
-      for (const [input, expected] of [[call, step.unfenced], [fenced, step.expected]] as const) {
-        expect(servers.beyond(input) === null).toBe(expected);
-
-        if (expected) expect(() => servers.within(input)).not.toThrow();
-        else expect(() => servers.within(input)).toThrow(expect.objectContaining({ code: 'denied' }));
-      }
-    }
+    replayAdmission(step, servers, launches[step.slot]);
   } else if (step.op === 'listing') {
     live.setListing(step.id, step.on ? { line: 'Fixture listing', category: 'developer' } : null);
   } else if (step.op === 'users') {
