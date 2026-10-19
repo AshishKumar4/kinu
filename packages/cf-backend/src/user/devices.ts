@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { objectNamed, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES } from '@kinu.run/core';
 import {
-  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -706,15 +706,20 @@ export class UserDevices {
 
       if (!stopping && !this.isActiveDevice(deviceId)) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
 
+      // The grant epoch the call was admitted under; null for a call no consent gates.
+      let admittedUnder: number | null = null;
+
       if (consentAgent !== undefined) {
         // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
         // ride a sibling workspace's grant.
+        admittedUnder = this.consentEpoch();
+
         const consent = yield* this.checkDeviceConsent({
           agentName: consentAgent, deviceId, method, params,
           workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
           actorId,
           surface,
-        });
+        }, admittedUnder);
 
         if (!consent.allowed) return yield* Effect.fail(new KinuError(consent.code, consent.reason));
       }
@@ -732,9 +737,19 @@ export class UserDevices {
       const requestId = opts?.requestId;
       const durableExec = method === DEVICE_METHOD.exec && requestId !== undefined && resolved.kind === 'workspace';
 
-      if (durableExec) yield* this.persistDeviceExec(tunnel, { requestId, deviceId, workspace: resolved.workspace }, opts);
+      const inflight = durableExec ? yield* this.prepareDeviceExec(tunnel, { requestId, deviceId, workspace: resolved.workspace }, opts) : null;
 
-      const result = yield* attemptInItsWords('io', () => tunnel.rpc(method, params, rpcOptions));
+      // Admitted, recorded and sent in one step: a revocation that landed while the call waited (on its ask, the
+      // frame's sandbox, the probe) ended the epoch it was admitted under, and nothing of it runs (L111 #4).
+      const result = yield* Effect.suspend(() => {
+        if (admittedUnder !== null && admittedUnder !== this.consentEpoch()) {
+          return Effect.fail(new KinuError('unavailable', deviceConsentMoved(this.deviceLabel(deviceId))));
+        }
+
+        if (inflight !== null) this._inflight.insert(inflight);
+
+        return attemptInItsWords('io', () => tunnel.rpc(method, params, rpcOptions));
+      });
 
       // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
       if (stopping) yield* this.recordToolPathCancellation(params, result);
@@ -743,7 +758,9 @@ export class UserDevices {
     }));
   }
 
-  private persistDeviceExec(tunnel: DeviceTunnel, call: { requestId: string; deviceId: string; workspace: string }, opts: Parameters<UserDevices['deviceRpc']>[3]): Effect.Effect<void, KinuError> {
+  /** A durable command's row, to be recorded in the step that sends it: persisted before the send, as an insert
+   *  after it races with eviction. */
+  private prepareDeviceExec(tunnel: DeviceTunnel, call: { requestId: string; deviceId: string; workspace: string }, opts: Parameters<UserDevices['deviceRpc']>[3]): Effect.Effect<Parameters<DeviceRequestLedger["insert"]>[0], KinuError> {
     const { requestId, deviceId, workspace } = call;
 
     return Effect.gen({ self: this }, function* () {
@@ -762,13 +779,7 @@ export class UserDevices {
         return yield* Effect.fail(new KinuError('bad_input', 'A background job id must name a job.'));
       }
 
-      this._inflight.insert({
-        requestId,
-        deviceId,
-        workspace: workspace,
-        actorId: opts?.actorId ?? null,
-        backgroundJobId,
-      });
+      return { requestId, deviceId, workspace, actorId: opts?.actorId ?? null, backgroundJobId };
     });
   }
 
@@ -1081,13 +1092,13 @@ export class UserDevices {
 
   /** Is this workspace bound to this device? Core's rule decides (`deviceConsentOutcome`): a standing binding, else the
    *  workspace's ask, which an unreachable workspace leaves unanswered rather than refused. */
-  private checkDeviceConsent(check: DeviceConsentCheck): Effect.Effect<DeviceConsentOutcome, KinuError> {
+  private checkDeviceConsent(check: DeviceConsentCheck, epoch: number): Effect.Effect<DeviceConsentOutcome, KinuError> {
     const { agentName, deviceId, method, params, workspaceName, actorId, surface } = check;
     const action = summarizeDeviceAction(method, params);
     const deviceLabel = this.deviceLabel(deviceId);
 
     const request: DeviceConsentRequest = {
-      deviceId, deviceLabel, method: action.method, command: action.command, epoch: this.consentEpoch(),
+      deviceId, deviceLabel, method: action.method, command: action.command, epoch,
       ...(workspaceName !== undefined && { workspaceName }), ...(actorId !== undefined && { actorId }),
       ...(surface !== undefined && { surface }),
     };
@@ -1096,9 +1107,14 @@ export class UserDevices {
       bound: this.getDeviceBinding(agentName, deviceId),
       deviceLabel,
       ask: attemptInItsWords('unavailable', () => objectNamed(this.host.env.OrchestratorAgent, agentName).askDeviceConsent(request)),
-      bind: attemptInItsWords('io', async () => {
+      // The epoch read and the binding written in one step: an approval that answered while a revocation advanced it
+      // restores nothing the owner took away (L111 #4).
+      bind: Effect.suspend(() => {
+        if (this.consentEpoch() !== epoch) return Effect.succeed(false);
+
         this.setDeviceBinding(agentName, deviceId, 'allow', action);
-        await this.devicesMoved();
+
+        return attemptInItsWords('io', () => this.devicesMoved()).pipe(Effect.as(true));
       }),
     });
   }
