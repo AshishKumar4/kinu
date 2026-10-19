@@ -381,7 +381,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   inheritedRaw(): Promise<{ answered: string; written: boolean }>;
   inheritedAfterRevoke(share: string): Promise<{ inheriting: number; retained: string; written: boolean }>;
   craftedAcrossRevoke(share: string): Promise<string[]>;
-  inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; inheriting: number }>;
+  inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; started: string; inheriting: number; leftRunning: number }>;
   ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
   environments(): Promise<string[]>;
   ownerCall(method: string): Promise<string>;

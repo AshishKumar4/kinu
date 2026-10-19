@@ -169,8 +169,11 @@ it('R5-P2 inherited launch. a callee started while a shared slate above it stops
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
   const seen = await probe.inheritedLaunchAcrossRevoke(created.share.id);
 
-  // The board's call ends with the board's own process; the digest it started is not left behind it.
+  // The board's call ends with the board's own process. The digest it started under the board's sharing is refused
+  // once it is up, and stopped, never left registered.
   expect(seen.answered).not.toContain('digest-ok');
+  expect(seen.started).toContain("Slate board's sharing changed since slate digest was started under it");
   expect(seen.inheriting).toBe(0);
+  expect(seen.leftRunning).toBe(0);
 });
 

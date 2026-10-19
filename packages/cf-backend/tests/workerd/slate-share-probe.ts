@@ -671,9 +671,10 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   /**
    * The owner's own request into their shared board hops into the digest, whose process is held as it starts (its
    * lineage minted, the board's sharing sealed in it) while the board's last share is revoked; let go, what the call
-   * answered, and how many processes that inherited the board's bound are left registered.
+   * answered, what the digest's start came to once it settled (asked for again as the caller it started for), how many
+   * processes that inherited the board's bound are left registered, and how many more of the digest's are left running.
    */
-  async inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; inheriting: number }> {
+  async inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; started: string; inheriting: number; leftRunning: number }> {
     // The board's own shared process running already, so the next launch is the digest's.
     await this.ownerCall('probe');
     const gate = Promise.withResolvers<undefined>();
@@ -683,11 +684,17 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const call = this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hop', args: [] });
 
     await reached.promise;
+    const digests = () => this.processes.getRunning().filter((entry) => entry.command.includes('digest')).length;
+    const before = digests();
+    const sealed: SlateCaller = { ...ROOT_SLATE_CALLER, via: { [SLATE_ID]: this.host.controller.generation(SLATE_ID) } };
+
     await this.revoke(share);
     gate.resolve(undefined);
     const answered = await call;
+    // The board's call ends with the board's process; the digest's start goes on, and is joined here until it settles.
+    const started = await this.host.ensure(sealed, 'digest').then(() => 'running', String);
 
-    return { answered: answered.ok ? JSON.stringify(answered.value) : answered.error, inheriting: (await this.#inheritors()).length };
+    return { answered: answered.ok ? JSON.stringify(answered.value) : answered.error, started, inheriting: (await this.#inheritors()).length, leftRunning: digests() - before };
   }
 
   /**
