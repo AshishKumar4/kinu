@@ -113,7 +113,7 @@ export class KinuDevbox extends Devbox<Env> {
   async configureEgress(params: KinuEgressParams): Promise<void> {
     await this.ctx.storage.put(EGRESS_CONFIG_KEY, params);
 
-    if (this.ctx.container?.running) await this.configureContainer();
+    await this.reconfigure();
   }
 
   protected override async outboundPolicy(): Promise<OutboundPolicy> {

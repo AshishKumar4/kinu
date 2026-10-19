@@ -4969,6 +4969,58 @@ route reading its caller's signal starts ending its work: the terminal and deskt
 model proxies, whose cancelled call the shared `onError` now answers 499 and logs as no failure. The workerd test
 `request-signal` runs on the Worker's own flags; the contract fixture carries the flag too.
 
+D102. A box adopts the running container it woke beside once per incarnation, on the first member that touches the
+container, and every such member awaits that one adoption (2026-10-19; #117). R1 holds for restoration unchanged: a
+fresh start restores inside its start block. Replaces the per-caller adoption (`#adoptionPending`, `#resolveAdoption`)
+and bd87bdfb0's checkpoint-path adoption, which mended one caller of it.
+
+What failed. Production (bc78a94bd) showed the owner a System card "failed at the checkpoint stage ... this devbox is
+not ready: no restoration has run for this container yet" every 5 minutes in every workspace. The box's object restarted
+beside a container that kept running (a deploy, then eviction between alarms), held its restoration in memory only, and
+learned what the container carried only where an entry point called `#resolveAdoption`. The heartbeat did; the
+checkpoint tick did not, so a tick that woke a fresh object failed in 0 ms and filed an incident. Workers Logs: box
+49ee9d7f filed 324 between 2026-10-17 15:38 and 10-19 01:34 UTC, one per tick; 17 production boxes filed them that week,
+and three filed about 450 each on 10-12/13 under earlier builds. Readers that skipped adoption (`portListeners`,
+`terminalSessions`, the latter moving its session records to what it read) touched a container whose restoration nothing
+had confirmed, and the adoption itself configured the container before it read the boot id.
+
+The design. `#adopted()` memoizes `#adopt()` for the object's life. Beside a running container whose box claims a
+restoration (BOOT_ID_KEY with SETTLED_KEY), it reads the kernel's boot id: equal takes the claim and configures the
+container, refusing as an admission does (D94, D47) if that fails; refuted invalidates and arms the start that restores
+it; no claim, or no running container, is nothing to adopt. Members that await it before anything else: every operation
+through `#resolveReadiness` (exec, files, processes, the desktop, previews, shells), `portListeners`,
+`terminalSessions`, a session's end, every checkpoint (tick, explicit, quiesce), `attachNow`, `devboxState`, the
+heartbeat, the startup row and every start (`#startContainer`), and the egress reconfiguration (`reconfigure`). The
+stop, the stall restart (`stopStalled`, `killExec`) and teardown do not.
+
+Only an answer refutes or takes a claim, because a restore over the running kernel attaches the last checkpoint over
+the work done since. A read that never answers, or a configuration refused for now, stands for members that only read,
+which find the box unready; the start's hook, its control listener proven by the admission's probe, asks again
+(`#overRunning`), so retries keep the startup row's pace; a step that fails is not kept at all. A retry that configures
+takes the claim; a hook that still gets no answer over a claim fails into its recovery, as an unanswered identity read
+always did. The hook also checks a
+live restoration's boot id, as the heartbeat does (T9). Readers that neither start nor wait answer from storage until the
+box is ready, and a tick on a box that is not ready arms its start and files nothing.
+
+Why not the constructor's block, which every event would wait for. `gate:do-init` refuses `blockConcurrencyWhile` in a
+constructor (`CONSTRUCTOR_REFUSED_CALLS`; armada kinu-20261019024429-b88a54aa red on a draft that adopted there):
+constructor work is synchronous storage, because anything it holds holds every event, and at the block's cap the runtime
+resets the object. The disk stall (kinu-logs/container-btrfs-wedge-2026-10-17) is that case: a container read the host
+never serves does not complete, and the platform logs nothing. A block waiting on such a read would hold the second Stop
+that restarts a stalled computer (be18d8408), and the reset would run the constructor and its block again, so the box
+could not recover while its container lived. The report also measured `/bin/true`, bash builtins and the heartbeat's
+`cat` answering through a stall, so the boot-id read is not known to hang; a non-blocking adoption stakes only the members
+that need its answer on it. Measured on a scratch Worker beside a running container (kinu-logs/activation-adoption-2026-10-19):
+the boot-id read by native exec answered in 5 to 8 ms after `ctx.abort()`, 3 of 3, and in 6 ms after idle eviction.
+
+Measured on the deployed contract fixture, one run per build, each object reset by `ctx.abort()` beside its running
+container (kinu-logs/activation-adoption-2026-10-19/ab): (A) the checkpoint tick after a reset filed the card on
+production's bc78a94bd and nothing on next-rc or this change; (B) the sessions read after a reset read the container
+while the box was `unstarted` on bc78a94bd and next-rc, and after adopting `attached` on this change; (C) with the
+container destroyed and started again from the same snapshot while the object was gone, its claim rows put back, the
+sessions read touched the new container while `unstarted` on bc78a94bd and next-rc, while this change read nothing from
+it and armed the restore; all three restored it from backup within 45 s.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
