@@ -305,6 +305,46 @@ describe('a deletion that could not finish', () => {
     harness.close();
   });
 
+  // A create that retried every marked name, read before it waited on its own, tore down one recreated meanwhile.
+  test("a create retries only its own name's deletion, and leaves a workspace recreated meanwhile standing", async () => {
+    const destroying = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let holding = false;
+
+    const options: TestUserDOOptions = {
+      durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go',
+      destroyWorkspaceGate: async (name) => {
+        if (!holding || name !== 'alpha') return;
+        destroying.resolve();
+        await release.promise;
+      },
+    };
+
+    const harness = createTestUserDO(options);
+    const owner = await testOwner();
+
+    await harness.userDO.registerWorkspace(owner, 'alpha');
+    await harness.userDO.registerWorkspace(owner, 'beta');
+    await expect(harness.userDO.removeWorkspace(owner, 'alpha', USER_ID)).rejects.toThrow();
+    await expect(harness.userDO.removeWorkspace(owner, 'beta', USER_ID)).rejects.toThrow();
+    options.destroyWorkspaceError = undefined;
+    holding = true;
+
+    // A create of alpha runs alpha's deletion again, and waits on its destroy.
+    const alpha = harness.userDO.registerWorkspace(owner, 'alpha');
+
+    await destroying.promise;
+    // Meanwhile beta's deletion lands, and beta is made again.
+    await harness.userDO.removeWorkspace(owner, 'beta', USER_ID);
+    await harness.userDO.registerWorkspace(owner, 'beta');
+    release.resolve();
+    await alpha;
+
+    expect({ destroyed: harness.destroyedWorkspaces, listed: (await harness.userDO.listWorkspaces(owner)).entries.map((w) => w.name).sort() })
+      .toEqual({ destroyed: ['beta', 'alpha'], listed: ['alpha', 'beta'] });
+    harness.close();
+  });
+
   test('a deletion refused parks until its account starts again, and does not wake it each lap', async () => {
     const storage = new Database(':memory:');
     let refusing = true;

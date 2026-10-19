@@ -537,26 +537,20 @@ export class UserWorkspaces {
   }
 
   /**
-   * Finish teardowns left marked, for a create that needs a marked name now; each is otherwise run again by its own job.
-   * Failures keep the marker and do not throw.
+   * Refuse a name whose teardown is pending; the row still owns a DO a recreate would wire into. The name's own teardown
+   * runs again first, so a transient failure does not dead-end it until its job comes due; no other name's is touched,
+   * since a sweep read before it waits could tear down one recreated meanwhile.
    */
-  private async resumePendingDeletions(): Promise<void> {
-    const pending = this.markedForDeletion();
+  private async requireNotDeleting(name: string): Promise<void> {
+    const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
 
-    if (pending.length === 0) return;
+    // A teardown still running holds the name to its last step, past its row's removal; one that failed left it marked.
+    await Promise.allSettled([this.tearingDown.get(name)]);
+
+    if (this.host.sqlx(marked, name).length === 0) return;
     const ownerUserId = this.host.ctx.id.name ?? '';
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
-      diagnostics.failure('workspace.cleanup_unowned', toKinuError({
-        doing: 'resuming a pending workspace teardown',
-        cause: new Error('this user object has no user id to authorize the destroy with'),
-        otherwise: 'denied',
-      }), { pending: pending.length });
-
-      return;
-    }
-
-    for (const name of pending) {
+    if (/^[a-f0-9]{32}$/.test(ownerUserId)) {
       try {
         await this.tearDownWorkspace(name, ownerUserId);
       } catch (err) {
@@ -566,21 +560,13 @@ export class UserWorkspaces {
           otherwise: 'io',
         }), { workspace: name });
       }
+    } else {
+      diagnostics.failure('workspace.cleanup_unowned', toKinuError({
+        doing: 'resuming a pending workspace teardown',
+        cause: new Error('this user object has no user id to authorize the destroy with'),
+        otherwise: 'denied',
+      }), { workspace: name });
     }
-  }
-
-  /**
-   * Refuse a name whose teardown is pending; the row still owns a DO a recreate would wire into.
-   * Retries the teardown first so a transient failure does not dead-end the name.
-   */
-  private async requireNotDeleting(name: string): Promise<void> {
-    const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
-
-    // A teardown still running holds the name to its last step, past its row's removal; one that failed left it marked.
-    await Promise.allSettled([this.tearingDown.get(name)]);
-
-    if (this.host.sqlx(marked, name).length === 0) return;
-    await this.resumePendingDeletions();
 
     if (this.host.sqlx(marked, name).length === 0) return;
     throw new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);
