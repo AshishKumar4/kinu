@@ -2,8 +2,9 @@
  * Every compaction path on cf (the workspace's chat, an added agent's chat and a search node, each in its own
  * isolate, and a search's inherited prefix) moves older screenshots out to links the file tool opens again, keeps the
  * newest few (KEEP_RECENT_IMAGES), and prices images for the model serving the request. The turns run on Claude, which prices a 1280x800 screenshot at
- * 1,334 tokens; its fallback, gpt-4o-mini, at 36,835 (tile pricing). Twenty fit Claude's window, so only a request the
- * fallback serves, or a search node on gpt-4o-mini, compacts them.
+ * 1,334 tokens; its fallback, gpt-4o-mini, at 36,835 (tile pricing). The turn that took the twenty moved all but its
+ * last few out as it went, in fours, for good (#103): every later request, whichever model serves it, carries those as
+ * links, and only a request the fallback serves, or a search node on gpt-4o-mini, prices the rest.
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -11,6 +12,7 @@ import { actorConnectionTag, buildBuiltinTools, type JsonValue } from '@kinu.run
 import { present, toolExecute } from '@kinu.run/test-utils';
 import { screenshot } from '../../compaction/tests/helpers';
 import { KEEP_RECENT_IMAGES } from '../../compaction/src/attachments';
+import { STEP_IMAGE_BATCH } from '../../compaction/src/step-images';
 import { conversationsFor } from '../../core/tests/helpers';
 import { asPane } from './helpers/agents-sdk';
 import { catalogTurn, driveUntil, hostedMainActor, orchestratorHarness, workspaceFiles, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -34,7 +36,7 @@ const SEARCH_ASK = 'Find a faster way to tokenize the settings files.';
 
 const SEARCH_TASK = 'Name one way to make tokenizing faster.';
 
-const LINK = /→ (vfs:\/\/[^\]\s"\\]+)\]/gu;
+const LINK = /(?:→|->) (vfs:\/\/[^\]\s"\\]+)\]/gu;
 
 const ModelSchema = v.looseObject({ model: v.string() });
 
@@ -67,7 +69,11 @@ const EARLIER = Array.from({ length: SHOTS - KEEP_RECENT_IMAGES }, (_, n) => n);
 /** The newest few, which stay in the request. */
 const NEWEST = Array.from({ length: KEEP_RECENT_IMAGES }, (_, n) => SHOTS - KEEP_RECENT_IMAGES + n);
 
-const ALL = Array.from({ length: SHOTS }, (_, n) => n);
+/** What the turn that took them retired as it went: every whole four past the newest few. */
+const RETIRED = Array.from({ length: Math.floor((SHOTS - KEEP_RECENT_IMAGES) / STEP_IMAGE_BATCH) * STEP_IMAGE_BATCH }, (_, n) => n);
+
+/** What it left in view: the rest, which a later request on a model they fit still carries inline. */
+const KEPT = Array.from({ length: SHOTS - RETIRED.length }, (_, n) => RETIRED.length + n);
 
 /** Which model a request was sent to, by the spec's own model id. */
 function servedBy(run: RecordedGatewayRun, spec: string): boolean {
@@ -182,7 +188,11 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
-    expect(carried(present(asked.primary[0], 'the request Claude refused'))).toEqual({ inline: ALL, links: [] });
+    const refusedRequest = carried(present(asked.primary[0], 'the request Claude refused'));
+
+    // A later turn carries the retired as links it can still open, whichever model serves it.
+    expect(refusedRequest.inline).toEqual(KEPT);
+    expect(await reopened(workspace, refusedRequest.links)).toEqual(RETIRED);
     expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
@@ -198,7 +208,11 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const served = carried(present(asked.fallback[0], 'the request gpt-4o-mini served'));
 
-    expect(carried(present(asked.primary[0], 'the request Claude refused'))).toEqual({ inline: ALL, links: [] });
+    const refusedRequest = carried(present(asked.primary[0], 'the request Claude refused'));
+
+    // A later turn carries the retired as links it can still open, whichever model serves it.
+    expect(refusedRequest.inline).toEqual(KEPT);
+    expect(await reopened(workspace, refusedRequest.links)).toEqual(RETIRED);
     expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });
@@ -223,7 +237,10 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const served = carried(present(asked.fallback[0], 'the node request gpt-4o-mini served'));
 
-    expect(carried(present(asked.primary[0], 'the node request Claude refused'))).toEqual({ inline: ALL, links: [] });
+    const refusedRequest = carried(present(asked.primary[0], 'the node request Claude refused'));
+
+    expect(refusedRequest.inline).toEqual(KEPT);
+    expect(await reopened(workspace, refusedRequest.links)).toEqual(RETIRED);
     expect(served.inline).toEqual(NEWEST);
     expect(await reopened(workspace, served.links)).toEqual(EARLIER);
   });

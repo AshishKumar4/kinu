@@ -1,11 +1,11 @@
 /**
- * Images within one turn (D89). The turn's ladder moves older images out only as the turn starts; a turn that looks at
- * the screen step after step would otherwise carry every screenshot until the step budget overflows. So each step
+ * Images within one turn (D89, D103). The turn's ladder moves older images out only as the turn starts; a turn that looks
+ * at the screen step after step would otherwise carry every screenshot until the step budget overflows. So each step
  * moves the images its turn's calls returned, past the latest {@link KEEP_RECENT_IMAGES}, to the agent's home through
  * the same store the ladder uses, each left as a link the agent can open again. The turn is read off the history
  * itself, everything since its last ask, not off the execution that made the calls: a turn restored after its host was
- * lost carries every screenshot its earlier executions took (a staging trial's grew to 330,000 tokens). Earlier turns'
- * images, and what the owner attached, stay the ladder's to move.
+ * lost carries every screenshot its earlier executions took (a staging trial's grew to 330,000 tokens). What the owner
+ * attached, and what a step left in place, stay the ladder's to move.
  *
  * The cutoff moves in batches of {@link STEP_IMAGE_BATCH}: between moves each request extends the last, so the
  * provider's cache holds. Measured on two models over a 24-step turn of screenshots, batches of four cost 35% (Claude)
@@ -23,7 +23,7 @@ import { carriedMedia, kinuCodec } from './codec';
 import { KEEP_RECENT_IMAGES, type AttachmentStore } from './attachments';
 
 /** Images moved out at once, past the latest {@link KEEP_RECENT_IMAGES}. */
-const STEP_IMAGE_BATCH = 4;
+export const STEP_IMAGE_BATCH = 4;
 
 /** The text left in an image's place: the rung's form, its arrow in ASCII, as model text is written. */
 function stub(attachment: Attachment, link: string): string {

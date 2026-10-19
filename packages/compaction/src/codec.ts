@@ -414,7 +414,7 @@ function decodeTurn(turn: Turn): ModelMessage[] {
 
   for (const message of group) {
     if (message.role === 'assistant') {
-      const rebuilt = rebuildAssistant(message, turn.items, placement);
+      const rebuilt = rebuildAssistant(message, turn.items, placement, group);
 
       if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'user') {
@@ -461,11 +461,38 @@ function collectSurvival(items: Item[]): Survival {
   return survival;
 }
 
+/** A moved attachment's link, as a step left it in its result's place (`step-images`). */
+const MOVED_ATTACHMENT = /\[[a-z]+\/[^\]\s]+(?: \d+x\d+)? -> [^\]\s]+\]/gu;
+
+function linksIn(text: string): string[] {
+  return [...text.matchAll(MOVED_ATTACHMENT)].map((match) => match[0]);
+}
+
+/** The links the result of call `toolCallId` holds in its turn: a stub that strips the call keeps them, so the model can
+ *  still open what moved, as it could before the step moved it for good (#103). */
+function movedLinks(group: readonly ModelMessage[], toolCallId: string): string[] {
+  for (const message of group) {
+    if (message.role !== 'tool') continue;
+
+    for (const part of message.content) {
+      if (part.type !== 'tool-result' || part.toolCallId !== toolCallId) continue;
+      const { output } = part;
+
+      if (output.type === 'text') return linksIn(output.value);
+
+      return output.type === 'content' ? output.value.flatMap((entry) => (entry.type === 'text' ? linksIn(entry.text) : [])) : [];
+    }
+  }
+
+  return [];
+}
+
 /** Rebuild in IR order so a synthetic tool stub takes the native position of the item it replaced. */
 function rebuildAssistant(
   message: AssistantModelMessage,
   items: Item[],
   placement: Placement,
+  group: readonly ModelMessage[],
 ): AssistantModelMessage | null {
   if (isString(message.content)) {
     const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
@@ -509,7 +536,7 @@ function rebuildAssistant(
     if (part.type === 'tool-call') {
       const stub = stubByCall.get(part);
 
-      if (stub) parts.push({ type: 'text', text: stub.text });
+      if (stub) parts.push({ type: 'text', text: [stub.text, ...movedLinks(group, part.toolCallId)].join(' ') });
       else if (assistantPartSurvives(part, items)) parts.push(part);
     } else if (assistantPartSurvives(part, items)) {
       parts.push(part.type === 'tool-result' ? placement.sent.get(part) ?? part : part);
