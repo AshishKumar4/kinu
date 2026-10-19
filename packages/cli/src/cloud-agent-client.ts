@@ -399,7 +399,8 @@ export class CloudAgentClient implements AgentClient {
     const pivotRow = rows[findForkPivot(rows, point)];
 
     if (pivotRow === undefined) throw new Error("Could not locate that message in the agent's chat history.");
-    await this.callRpc('revertConversation', [pivotRow.id]);
+    // A walk-back leaves files as they are: the agent is told what its rewound turns left.
+    await this.callRpc('revertConversation', [pivotRow.id, { chatOnly: true }]);
 
     return { client: this, label: `before ${pivotRow.id}` };
   }

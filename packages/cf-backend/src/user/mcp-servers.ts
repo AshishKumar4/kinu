@@ -4,7 +4,7 @@ import {
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
-import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
+import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
 import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
@@ -183,6 +183,9 @@ export class UserMcpServers {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
+  /** Servers `redialUnusable` dialled this activation: each once a wake. */
+  private readonly redialled = new Set<string>();
+
   /** MCP tool calls in flight, by the id each caller sent: `userMcp_cancelCall` stops one. */
   private readonly _mcpCalls = new Map<string, McpCallInFlight>();
 
@@ -263,11 +266,19 @@ export class UserMcpServers {
     }]));
   }
 
-  /** A sealed credential must run on the seam, which the SDK cannot persist and so never restores. */
+  /**
+   * What the SDK cannot restore runs on a transport this plane builds: a sealed credential, on the seam it never
+   * persists, and a registered app's client, whose secret is the deployment's and which the SDK's restore, building the
+   * agent's default provider, would refresh and sign in without.
+   */
   private needsOwnedTransport(row: McpHydrationRow): boolean {
     const live = this.host.mcp.mcpConnections[row.id]?.options.transport;
 
-    return row.headers !== null && (live === undefined || !('fetch' in live) || live.fetch === undefined);
+    if (row.headers !== null) return live === undefined || !('fetch' in live) || live.fetch === undefined;
+    const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
+
+    return preset?.auth === 'oauth-app' && mcpAppCredentials(this.host.env, preset) !== null
+      && !(live?.authProvider instanceof RegisteredAppOAuthClientProvider);
   }
 
   /** Starts `connect` unless a dial of this server is in flight; its outcome lands on the connection, a failure logged. */
@@ -344,8 +355,11 @@ export class UserMcpServers {
     return parseMcpHeaders(await this.host.vault.openMcpHeaders(serverId, row.headers));
   }
 
-  /** Fire-and-forget warmup its callers detach: waits for this activation's dials, then reads each
-   *  connected server's tool list. The dials themselves start at activation. */
+  /**
+   * Fire-and-forget warmup its callers detach: waits for this activation's dials, dials a failed or closed server once
+   * more, then reads each connected server's tool list. A failed server offers no descriptor, so no turn or slate
+   * reaches the call that would redial it; this is where it comes back.
+   */
   async userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
     await this.host.requireTier(caller, 'mcp.manage');
     const rows = this.host.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
@@ -354,6 +368,7 @@ export class UserMcpServers {
     try {
       await this.joinActivation();
       await this.host.mcp.waitForConnections();
+      await this.redialUnusable('unusable');
       await this.readMcpToolLists();
     } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
@@ -371,6 +386,7 @@ export class UserMcpServers {
 
     // A failed activation is a storage failure, not per-server; it must not report every server disconnected.
     await this.joinActivation();
+    await this.redialUnusable('unlinked');
     const catalog = this.catalog();
 
     const rows = withCatalog(this.host.sqlx<{ id: string; allowed_tools: string | null; preset_id: McpPresetId | null }>(
@@ -437,7 +453,7 @@ export class UserMcpServers {
     readonly callbackUrl: string;
     readonly appCredentials: { clientId: string; clientSecret: string } | null;
     readonly scope: string | undefined;
-  }): RegisteredAppOAuthClientProvider | DurableObjectOAuthClientProvider {
+  }): KinuMcpOAuthProvider {
     const { appCredentials } = input;
 
     const provider = appCredentials
@@ -445,7 +461,7 @@ export class UserMcpServers {
           storage: this.host.ctx.storage, clientName: USER_MCP_CLIENT_NAME, baseRedirectUrl: input.callbackUrl,
           clientId: appCredentials.clientId, clientSecret: appCredentials.clientSecret, scope: input.scope,
         })
-      : new DurableObjectOAuthClientProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
+      : new KinuMcpOAuthProvider(this.host.ctx.storage, USER_MCP_CLIENT_NAME, input.callbackUrl);
 
     provider.serverId = input.serverId;
 
@@ -833,6 +849,29 @@ export class UserMcpServers {
     // `mcp.call_failed` classifies this refusal by the state it names.
     throw new KinuError('unavailable', `MCP server ${serverName} is ${reached}${why ? ` (${why})` : ''}, so the call was not sent.`
       + (reached === 'authenticating' ? ' Sign in to it again in Settings.' : ''));
+  }
+
+  /**
+   * Each server no call can reach dialled once more, and waited for: a failed or closed one, and one awaiting sign-in
+   * whose link the wake lost (the SDK restores it with a new provider, and a dial authorizes again, minting a link). At
+   * most once a wake, on the warmup or the list a person opens, never on a clock: a dead server costs one dial a wake.
+   * The list redials only the unlinked, so a dead server never holds the settings page.
+   */
+  private async redialUnusable(which: 'unusable' | 'unlinked'): Promise<void> {
+    const started: Promise<void>[] = [];
+
+    for (const [serverId, connection] of Object.entries(this.host.mcp.mcpConnections)) {
+      const state = observedMcpState(connection);
+      const unlinked = state === 'authenticating' && !connection.options.transport.authProvider?.authUrl;
+      const unusable = unlinked || state === 'failed' || state === 'closed';
+
+      if (this.redialled.has(serverId) || !(which === 'unlinked' ? unlinked : unusable)) continue;
+      this.redialled.add(serverId);
+      this.dial(serverId, () => this.connectAndDiscover(serverId));
+      started.push(this.dials.get(serverId) ?? Promise.resolve());
+    }
+
+    await Promise.all(started);
   }
 
   private async connectAndDiscover(serverId: string): Promise<void> {

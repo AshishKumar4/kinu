@@ -77,7 +77,13 @@ export function scriptedMcp(request: { readonly method: string; readonly session
       tools: [{
         name: SCRIPTED_MCP_TOOL,
         description: 'Ends the session `end` names, then names the MCP session that served this call.',
-        inputSchema: { type: 'object', properties: { end: { type: 'string', description: 'A session to end.' } } },
+        inputSchema: {
+          type: 'object',
+          properties: {
+            end: { type: 'string', description: 'A session to end.' },
+            expire: { type: 'boolean', description: 'Behind OAuth: expire the access token this call carried, once answered.' },
+          },
+        },
       }],
     });
   }

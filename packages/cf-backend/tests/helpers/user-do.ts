@@ -127,6 +127,8 @@ export interface TestUserDO {
   /** The owner's answer to each card as it is raised. Default: refuse. `hold` leaves the card waiting, so an
    *  identical second ask joins it. */
   consentDecision: 'once' | 'always' | 'deny' | 'hold';
+  /** Runs while a workspace's answer to an ask is on its way back to the owner's object, as a revocation can. */
+  whileAskAnswers: ((verdict: DeviceConsentVerdict) => Promise<void>) | null;
   answerConsent(answer: 'once' | 'always' | 'deny'): Promise<void>;
   pendingConsents(workspace: string): Array<{ consentId: string }>;
   /** The owner's click, as `resolveDeviceConsent` runs it over RPC. */
@@ -442,6 +444,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   });
 
   let consentDecision: TestUserDO['consentDecision'] = 'deny';
+  let whileAskAnswers: TestUserDO['whileAskAnswers'] = null;
   // The owner's answers given at the card, until the call they answer re-issues.
   const answering: Array<Promise<boolean>> = [];
   const consentWakes: TestUserDO['consentWakes'] = [];
@@ -600,7 +603,11 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           return token ? sha256Hex(token) : null;
         },
         async askDeviceConsent(request: DeviceConsentRequest) {
-          return registryFor(name).ask(request);
+          const verdict = registryFor(name).ask(request);
+
+          await whileAskAnswers?.(verdict);
+
+          return verdict;
         },
         async announceDeviceUnavailable(devices: TestUserDO['unavailableNotices'][number]['devices']) {
           unavailableNotices.push({ workspace: name, devices });
@@ -699,6 +706,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames, devicePushes,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },
+    get whileAskAnswers() { return whileAskAnswers; },
+    set whileAskAnswers(run) { whileAskAnswers = run; },
     answerConsent: async (answer) => {
       for (const registry of registries.values()) {
         for (const waiting of registry.list()) await registry.resolve(waiting.consentId, answer);

@@ -2,7 +2,6 @@ import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** One agent in its own loader isolate (D9), the workspace agent's included. */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
-import type { UIMessage } from 'ai';
 import { Effect } from 'effect';
 import { attemptInItsWords, flight, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import {
@@ -16,7 +15,7 @@ import {
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
-import { censusOf, type MediaRef, type Repair, type StoreCensus, type StoredImage } from '@kinu.run/core';
+import { censusOf, type ChatWindow, type MediaRef, type Repair, type RewindTold, type StoreCensus, type StoredImage } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -64,7 +63,8 @@ export interface AgentFacetCalls {
   /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */
   modelSettingsChanged(snapshot: AgentSnapshot): Promise<void>;
   /** The chat continues from before `entryId`; refused while a turn runs. */
-  revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void>;
+  /** With `told`, a chat-only rewind that tells the agent what its rewound turns left. */
+  revertTo(snapshot: AgentSnapshot, entryId: string, told?: RewindTold): Promise<void>;
   /** The owner's Clear; answers why the emptied request went unmeasured, if it did. */
   clearConversation(snapshot: AgentSnapshot): Promise<string | null>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
@@ -117,7 +117,7 @@ export interface AgentFacetCalls {
    *  block on the profile the step's pace bound, its turn's first. */
   step(turnId: string, dynamic: DynamicContext | null): Promise<void>;
   /** This chat's newest page, as a tab is sent it on connecting or a turn's end. */
-  seed(snapshot: AgentSnapshot): Promise<UIMessage[]>;
+  seed(snapshot: AgentSnapshot): Promise<ChatWindow>;
   /** One image a page of this chat named; each crosses alone, never inside a page. */
   media(snapshot: AgentSnapshot, ref: MediaRef): Promise<StoredImage | null>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
@@ -324,8 +324,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
   }
 
-  async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {
-    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId)));
+  async revertTo(snapshot: AgentSnapshot, entryId: string, told?: RewindTold): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId, told)));
   }
 
   async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {
@@ -467,7 +467,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     await this.pacer.grant(turnId, dynamic);
   }
 
-  async seed(snapshot: AgentSnapshot): Promise<UIMessage[]> {
+  async seed(snapshot: AgentSnapshot): Promise<ChatWindow> {
     return await this.open(snapshot).seed();
   }
 

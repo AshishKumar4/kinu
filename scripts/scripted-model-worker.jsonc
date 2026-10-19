@@ -16,5 +16,8 @@
     { "pattern": "scripted-model.kinu.run", "custom_domain": true },
     { "pattern": "scripted-model.kinu.run/*", "zone_name": "kinu.run" }
   ],
-  "observability": { "logs": { "enabled": true } }
+  "observability": { "logs": { "enabled": true } },
+  // One object per OAuth grant of the tiers' protected MCP server (scripted-mcp-oauth.ts): its refresh generation.
+  "durable_objects": { "bindings": [{ "name": "OAUTH_GRANTS", "class_name": "ScriptedOAuthGrants" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ScriptedOAuthGrants"] }]
 }

@@ -227,7 +227,7 @@ describe('a promoted scaffold drives a local turn', () => {
 
       expect(ended?.turn.steps).toBe(2);
       expect(ended?.turn.usage).toEqual({ input: 5, output: 7 });
-      const transcript = await chatSeed(rt.stores.history.transcript(CHAT_SESSION_ID), keptMediaName);
+      const transcript = (await chatSeed(rt.stores.history.transcript(CHAT_SESSION_ID), keptMediaName)).messages;
 
       expect(transcript.flatMap((row) => row.role === 'assistant' ? row.parts.flatMap((part) => part.type === 'text' ? [part.text] : []) : []))
         .toEqual(['the default loop answered', 'program follow-up']);

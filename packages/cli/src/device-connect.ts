@@ -4,7 +4,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { Effect } from 'effect';
@@ -172,8 +172,32 @@ const LINKED_ELSEWHERE = 'This machine is linked to another Kinu account, and th
   + 'Nothing was changed. To move it, run `kinu connect` signed in as the account it should belong to.';
 
 /** The scope a device's file calls get: the directory named, made absolute, or this user's home. */
-function deviceRoot(named: string | undefined): string {
+export function deviceRoot(named: string | undefined): string {
   return named === undefined || named.trim() === '' ? homedir() : resolve(named);
+}
+
+/** `dir` with every link in it followed, as the daemon's sandbox resolves a root; as given while it does not exist. */
+function canonicalDir(dir: string): string {
+  return tolerate(() => realpathSync(dir), 'enoent') ?? dir;
+}
+
+/**
+ * What linking from `root` gives the agent, said before it is confirmed (L111 #6): the folder the daemon will resolve it
+ * to, by its absolute path, and what that folder is. A root of / is the whole machine with its commands unsandboxed;
+ * this user's home reaches the shell's startup files and git settings, which run outside the sandbox. A root through a
+ * link is said as where it leads, the name given beside it.
+ */
+export function describeConnectScope(root: string, home = homedir()): string[] {
+  const shared = canonicalDir(root);
+  const through = shared === root ? '' : ` (through ${root})`;
+
+  if (shared === '/') return [`Shares the whole machine, from /${through}.`, WHOLE_MACHINE_LINKED];
+
+  if (shared === canonicalDir(home)) {
+    return [`Shares your whole home folder, ${shared}${through}.`, 'The agent can then change your shell startup files and git settings, which run outside the sandbox. Pass --root <project folder> to keep them out of reach.'];
+  }
+
+  return [`Shares ${shared}${through} and nothing beside it.`];
 }
 
 export interface DaemonStatus {

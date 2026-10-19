@@ -977,7 +977,7 @@ export abstract class ActorAgent extends Agent<Env> {
       terminalFor: (connection) => this.terminalFor(connection),
       hostedWindowName: (actorId) => this.hostedWindowName(actorId),
       chatRoomFor: (connection) => this.chatRoomFor(connection),
-      seed: async (hosted) => await (hosted === null ? this.chatTransport.wire.seed() : this.hostedChatWire(hosted)?.seed()),
+      seed: async (hosted) => (await (hosted === null ? this.chatTransport.wire.seed() : this.hostedChatWire(hosted)?.seed()))?.messages,
       media: async (actorId, ref) => await (actorId === this.actorHandle().actorId ? this.chatTransport.wire : this.hostedChatWire(actorId))?.media(ref),
       overviewChanged: () => { this.overviewChanged(); },
       connectionOpened: () => { this.connectionOpened(); },

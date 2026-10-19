@@ -2,6 +2,7 @@ import type { ServedStores } from '../tools/actor-stores';
 import type { ModelMessage, ToolSet } from 'ai';
 
 import * as v from 'valibot';
+import { nanoid } from '../utils/nanoid';
 import { serialQueue } from '@kinu.run/agent-utils';
 import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -29,6 +30,7 @@ import type { RunEventRecorder } from '../events/recorder';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import { projectJsonValue, type JsonObject } from '../utils/json';
+import { rewindNotice, rewoundWork, type RewindNotice, type RewindTold } from './rewind-notice';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
@@ -368,11 +370,33 @@ export class ActorSession {
     });
   }
 
-  /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction. */
-  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
+  /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction.
+   *  With `told`, a chat-only rewind: the agent is told what its rewound turns did, and what the computer holds now where
+   *  the host read it, in a row of the chat its next turn reads, which starts no turn of its own. */
+  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>, told?: RewindTold): Promise<void> {
+    // Read before the cut deletes them; a turn that ran in between fails the cut's idle check.
+    const rewound = told === undefined ? null : await this.canonical.transcript(sessionId).partsFrom(entryId);
+
     this.canonical.revertTo(sessionId, entryId, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
+
+    const notice = told === undefined || rewound === null ? null : rewindNotice(rewoundWork(rewound), told.computer);
+
+    if (notice !== null) await this.tellRewound(sessionId, notice);
     this.dynamic.unload();
     await this.restoreWorkingHistory();
+  }
+
+  /** The notice in the context and as its chat's row, as a turn's opening row is, under a turn of no run. */
+  private async tellRewound(sessionId: string, notice: RewindNotice): Promise<void> {
+    const id = `rewound:${nanoid()}`;
+
+    const message = await this.canonical.append({
+      id, message: { role: 'user', content: notice.text }, origin: 'input', turnId: null, assertOwner: () => this.runtime.actor.assertCurrent(),
+    });
+
+    const transcript = this.canonical.transcript(sessionId);
+
+    transcript.appendUser(await transcript.prepareUser({ id, turnId: id, message, metadata: notice.metadata }));
   }
 
   /** A Retry of an answered turn: its answer withdrawn from the transcript and the context (`SessionHistory.withdrawAnswer`),

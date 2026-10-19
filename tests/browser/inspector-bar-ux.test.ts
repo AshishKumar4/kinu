@@ -249,7 +249,7 @@ describe('the Environment panel', () => {
           await (await required(page, '[data-env-card]', 'button', COMPUTER)).click();
           await page.waitForSelector('[data-session-cwd]', SOON);
 
-          expect(await page.evaluate(sessionLine('body'))).toMatchObject({ folder: '/workspace/storefront' });
+          expect(await page.evaluate(sessionLine('body'))).toMatchObject({ folder: '/workspace/api-worker' });
         }
       } finally { await page.close(); }
     });
@@ -376,7 +376,7 @@ describe('the Environment panel', () => {
         await openTheComputer(page, origin);
         await (await required(page, '#inspector', 'tab', 'dev server')).click();
         await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
-        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/storefront', ports: [':5173'] });
+        expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/api-worker', ports: [':5173'] });
 
         await page.click('#inspector button[aria-label="New session"]');
         await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3, SOON);

@@ -271,7 +271,7 @@ export function SessionDetails({ session, name }: { session: TerminalSession | n
   );
 }
 
-/** A folder's last part, `…/storefront`; the root and a top-level folder as they are. */
+/** A folder's last part, `…/dashboard`; the root and a top-level folder as they are. */
 function folderTail(cwd: string): string {
   const parts = cwd.split("/").filter((part) => part !== "");
 

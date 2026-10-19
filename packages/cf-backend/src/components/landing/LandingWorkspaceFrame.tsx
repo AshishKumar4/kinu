@@ -21,9 +21,9 @@ import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
 import type { ForkNode } from '@kinu.run/core';
 
 import {
-  CHECKOUT_MESSAGES, LANDING_CHATS, LANDING_MODEL, LANDING_MODELS, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
+  WORKER_MESSAGES, LANDING_CHATS, LANDING_MODEL, LANDING_MODELS, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
   SLATE_MESSAGES, SLATE_PREVIEW_URL, SLATE_SUMMARY,
-  checkoutWorkFixture, planRpc,
+  workerWorkFixture, planRpc,
 } from './landing-fixtures';
 import { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from '@kinu.run/core';
 import {
@@ -34,7 +34,7 @@ import {
 } from './landing-movie-timeline';
 import { SlateDashboard } from './SlateDashboard';
 
-export type LandingFrameKind = 'checkout' | 'plan' | 'slate';
+export type LandingFrameKind = 'work' | 'plan' | 'slate';
 
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 
@@ -47,13 +47,13 @@ interface FrameSpec {
 }
 
 const FRAME = {
-  checkout: { title: 'Storefront', surface: 'Work', mode: 'build' },
-  plan: { title: 'Storefront', surface: 'Work', mode: 'plan' },
+  work: { title: 'API Worker', surface: 'Work', mode: 'build' },
+  plan: { title: 'API Worker', surface: 'Work', mode: 'plan' },
   slate: { title: 'Support queue', surface: `${SLATE_PREFIX}${SLATE_SUMMARY.id}`, mode: 'build' },
 } satisfies Record<LandingFrameKind, FrameSpec>;
 
 const STATIC_MESSAGES = {
-  checkout: CHECKOUT_MESSAGES,
+  work: WORKER_MESSAGES,
   slate: SLATE_MESSAGES,
 } as const;
 
@@ -131,7 +131,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const plan = isMovie ? (decided ?? discrete.plan) : null;
   const decidePlan = useMemo(() => planRpc(setDecided, plan), [plan]);
   const [, setWorkVersion] = useState(0);
-  const work = useMemo(() => checkoutWorkFixture(() => setWorkVersion((version) => version + 1)), []);
+  const work = useMemo(() => workerWorkFixture(() => setWorkVersion((version) => version + 1)), []);
   const rpc = kind === 'plan' ? decidePlan : work.rpc;
   const [mode, setMode] = useState<WorkMode>(frame.mode);
   usePlanApprovedMode(plan, setMode);
@@ -464,7 +464,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         {...(isMovie
           ? { 'data-movie-phase': discrete.phase, 'data-movie-settled': discrete.settled ? 'true' : 'false' }
           : {})}
-        aria-label={kind === 'checkout' ? 'Kinu workspace interface preview' : `Kinu ${kind} interface preview`}
+        aria-label={kind === 'work' ? 'Kinu workspace interface preview' : `Kinu ${kind} interface preview`}
         className="p-workbench relative flex flex-col overflow-hidden rounded-b-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
       >
         {/* Below md the app summons a drawer from its header; the frame has no header, so no rail there. */}
@@ -510,7 +510,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                   pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
                   plan={plan} planRpc={rpc}
                   snapshot={{ status: 'loading' }} onRetryLoad={() => {}} memory={[]} memoryContent="" onSearchMemory={() => {}}
-                  mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'checkout'}
+                  mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'work'}
                   executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                   backgroundJobs={isMovie ? [] : work.jobs()} inspectedWork={[]} onRefreshJobs={() => setWorkVersion((version) => version + 1)}
                   pendingActions={isMovie ? [] : work.pending()}

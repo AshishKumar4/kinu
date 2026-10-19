@@ -903,10 +903,15 @@ export const PAGE_TABS = `[
   ...(document.querySelector('#inspector nav[aria-label="Pages"] button[aria-haspopup="menu"]')?.getAttribute('title') ?? '').split(', '),
 ].filter((name, index, names) => name !== '' && names.indexOf(name) === index)`;
 
-/** Open the share dialog only once its capability graph has supplied the limits. */
+/**
+ * Open the share dialog and its choices, as a person checks them before sharing: its one-line summary's Change opens
+ * them in place, and their limits line is drawn once the capability graph has supplied it.
+ */
 export async function openSlateShareDialog(page: Page, tile: string): Promise<void> {
   await page.click(`${tile} [data-drive-menu]`);
   await page.click(`${tile} [data-drive-share-slate]`);
+  await until(page, 'the share dialog\'s Change', `document.querySelector('[role="dialog"] [data-share-options]') !== null`);
+  await page.click('[role="dialog"] [data-share-options]');
   await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
 }
 

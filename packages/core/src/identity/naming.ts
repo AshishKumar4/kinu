@@ -34,7 +34,7 @@ const FILLER_WORDS = new Set([
 /** The words of a name drawn from a brief: enough to tell agents apart, few enough to say. */
 const BRIEF_NAME_WORDS = 3;
 
-/** A short name from what an agent was first asked: its first telling words, slugged ("fix-coupon-expiry"). */
+/** A short name from what an agent was first asked: its first telling words, slugged ("fix-health-check"). */
 function nameFromBrief(brief: string): string | null {
   const words = (brief.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) ?? [])
     .filter((word) => !FILLER_WORDS.has(word) && !/^[a-z]$/.test(word));
@@ -56,7 +56,7 @@ function nameFromBrief(brief: string): string | null {
 
 /**
  * A new child's name, one no actor of its workspace has had: its brief's first telling words, else its role's, numbered
- * on a clash ("fix-coupon-expiry-2"). Unique in the workspace, it can be the child's home (`/home/<name>`). `takenFrom`
+ * on a clash ("fix-health-check-2"). Unique in the workspace, it can be the child's home (`/home/<name>`). `takenFrom`
  * reads once what a base's names are taken.
  */
 export function mintAgentName(
@@ -279,7 +279,7 @@ const HOST_LABEL_MAX = 63;
 /**
  * The workspace's name as a host label (DEVBOX-DECISIONS D91): lowercase, each run of anything outside [a-z0-9] one
  * hyphen, no hyphen at either end, at most 63 characters; the slug's own, where the name is a placeholder or leaves
- * nothing. "Coupon fixes" is `coupon-fixes`.
+ * nothing. "Worker fixes" is `worker-fixes`.
  */
 export function workspaceHostLabel(displayName: string | null | undefined, slug: string): string {
   const label = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, HOST_LABEL_MAX).replace(/-+$/u, '');

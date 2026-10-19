@@ -104,7 +104,7 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   const body = await page.evaluate(() => document.body.innerText);
   expect(body).toContain('Workspaces');
 
-  for (const name of ['Storefront', 'Dew', 'Support inbox', 'Kinu website']) {
+  for (const name of ['API Worker', 'Dew', 'Support inbox', 'Kinu website']) {
     expect(body).toContain(name);
   }
 
@@ -135,7 +135,7 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   await page.waitForFunction(
     () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
   );
-  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Storefront');
+  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('API Worker');
   await page.click('[data-segment="all"]');
   await page.waitForFunction(
     () => document.querySelectorAll('[data-workspaces-view] a').length === 5,
@@ -793,7 +793,7 @@ describe('account panels', () => {
               // menu at its head, the roster eyebrow above the rows.
               const rail = await home.evaluate(() => document.querySelector('aside')?.innerText ?? '');
               expect(rail).toContain('WORKSPACES');
-              expect(rail).toContain('Storefront');
+              expect(rail).toContain('API Worker');
               expect(await home.$('aside [data-account-menu]')).not.toBeNull();
               
 
@@ -859,7 +859,7 @@ describe('account panels', () => {
             const body = await devices.evaluate(() => document.body.innerText);
 
             // Each machine's link state, then the grant state per workspace.
-            for (const text of ['Workstation', 'connected', 'Owner laptop', 'offline', 'checkout-fixes', 'Denied']) {
+            for (const text of ['Workstation', 'connected', 'Owner laptop', 'offline', 'api-worker', 'Denied']) {
               expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 
@@ -970,9 +970,9 @@ describe('Settings → Memory', () => {
 
           expect(text).toContain('Waiting for you');
           expect(text).toContain('Keep for every workspace');
-          expect(text).toContain('Noticed in Storefront in your own words');
+          expect(text).toContain('Noticed in API Worker in your own words');
           expect(text).toContain('Said in Support inbox, kept by main');
-          expect(text).toContain('You promoted it from Storefront');
+          expect(text).toContain('You promoted it from API Worker');
           expect(text).toContain('Invoices go to accounts@example.com');
 
           const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));

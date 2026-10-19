@@ -47,15 +47,18 @@ function createDeviceCheckpoints(options?: DeviceCheckpointOptions) {
     ensure: v.function(), list: v.function(), plan: v.function(), restore: v.function(),
   }), daemon.createCheckpoints(options));
 
+  // A raw view, as the host engine runs: the store's format is compared, not the sandbox around a device's git.
+  const view = { raw: true };
+
   return {
     ensure: async (hint: DeviceCheckpointHint, fallbackDir?: string) =>
-      v.parse(v.nullable(v.string()), await raw.ensure(hint, fallbackDir)),
+      v.parse(v.nullable(v.string()), await raw.ensure(view, hint, fallbackDir)),
     list: async (agent: string, limit?: number) =>
       v.parse(v.array(checkpointEntrySchema), await raw.list(agent, limit)),
     plan: async (agent: string, dir: string, id: string) =>
-      v.parse(checkpointPlanSchema, await raw.plan(agent, dir, id)),
+      v.parse(checkpointPlanSchema, await raw.plan(view, agent, dir, id)),
     restore: async (agent: string, dir: string, id: string) =>
-      v.parse(checkpointRestoreSchema, await raw.restore(agent, dir, id)),
+      v.parse(checkpointRestoreSchema, await raw.restore(view, agent, dir, id)),
   };
 }
 

@@ -16,8 +16,8 @@ import { inspectorPageListed } from '../../scripts/browser-page';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
 
 /** The answer's page as its author wrote it: a title, a heading, rows, and a paragraph that sets no colour. */
-const PAGE = `<!doctype html><html><head><title>Coupon redemptions</title></head><body>
-<h1>Redemptions</h1><p id="plain">SAVE20 leads this week.</p><ul id="rows">${'<li>SAVE20</li>'.repeat(12)}</ul>
+const PAGE = `<!doctype html><html><head><title>500s by route</title></head><body>
+<h1>Errors</h1><p id="plain">/api/health leads this week.</p><ul id="rows">${'<li>/api/health</li>'.repeat(12)}</ul>
 </body></html>`;
 
 /** The vendor modules the page imports beside `kinu:slate`: only what the client module names, none of it run here. */
@@ -69,7 +69,7 @@ async function servePage(page: Page): Promise<void> {
 /** The files the app ships, which ASSETS serves on the deployment. */
 const FONTS = join(import.meta.dir, '../../packages/cf-backend/public/assets/fonts');
 
-const CARD = '[data-slate-inline="pg-a1/redemptions"]';
+const CARD = '[data-slate-inline="pg-a1/errors"]';
 
 /** The answer's page in a workspace's chat, once it has said its height and is drawn. */
 async function openPage(page: Page, origin: string, theme: 'dark' | 'light', viewport: { width: number; height: number }): Promise<Frame> {
@@ -151,7 +151,7 @@ describe('an answer\'s page in the chat', () => {
             while (ground !== null && ['rgba(0, 0, 0, 0)', 'transparent'].includes(getComputedStyle(ground).backgroundColor)) ground = ground.parentElement;
 
             // The answer's own words around the page: what the page's text should read as.
-            const prose = [...document.querySelectorAll('p')].find((paragraph) => paragraph.textContent?.trim() === 'SAVE20 leads.') ?? document.body;
+            const prose = [...document.querySelectorAll('p')].find((paragraph) => paragraph.textContent?.trim() === '/api/health leads.') ?? document.body;
 
             return { text: getComputedStyle(prose).color, face: getComputedStyle(prose).fontFamily, ground: getComputedStyle(ground ?? document.body).backgroundColor };
           });
@@ -180,14 +180,14 @@ describe('an answer\'s page in the chat', () => {
       try {
         await openPage(page, origin, 'dark', { width: 1280, height: 860 });
         await page.hover(CARD);
-        await page.click(`${CARD} button[aria-label="Save redemptions as a slate"]`);
-        await page.waitForSelector(`${CARD} [data-slate-saved="coupon-redemptions"]`);
+        await page.click(`${CARD} button[aria-label="Save errors as a slate"]`);
+        await page.waitForSelector(`${CARD} [data-slate-saved="errors-by-route"]`);
         // The saved slate is among the bar's pages: its tab, or the bar's opener of the pages without room.
-        await page.waitForSelector(inspectorPageListed('Coupon redemptions'));
+        await page.waitForSelector(inspectorPageListed('500s by route'));
 
         await page.hover(CARD);
-        await page.click(`${CARD} [data-slate-saved="coupon-redemptions"]`);
-        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="Coupon redemptions"][aria-current="true"]');
+        await page.click(`${CARD} [data-slate-saved="errors-by-route"]`);
+        await page.waitForSelector('nav[aria-label="Pages"] button[aria-label="500s by route"][aria-current="true"]');
       } finally { await page.close(); }
     });
   });

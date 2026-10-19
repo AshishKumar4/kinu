@@ -24,7 +24,7 @@ const CUSTOMERS = ["id,name,plan,seats", ...Array.from({ length: 180 }, (_, inde
   `${String(index + 1)},"${PEOPLE[index % PEOPLE.length] ?? ""}",${["Team", "Pro", "Free"][index % 3] ?? ""},${String(2 + (index * 7) % 38)}`)].join("\n");
 
 const RUNBOOK = [
-  "# Runbook", "", "When checkout errors climb, start here.", "", "## First five minutes", "",
+  "# Runbook", "", "When the api Worker's errors climb, start here.", "", "## First five minutes", "",
   "1. Check the error budget on the dashboard.", "2. Roll back the last deploy if it is under an hour old.", "3. Page the on-call owner.", "",
   "## Useful", "", "- `wrangler tail --env production`", "- The [status page](https://status.example.com)", "",
 ].join("\n");
@@ -183,13 +183,13 @@ const SLATE_PICTURES = {
 
 const LIBRARY: SharedLibrary = {
   slates: [
-    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", visibility: "public", picture: SLATE_PICTURES["issue-triage"] },
+    { id: "issue-triage", title: "Issue triage", workspace: "api-worker", visibility: "public", picture: SLATE_PICTURES["issue-triage"] },
     { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", picture: SLATE_PICTURES.lighthouse },
     { id: "standup", title: "Standup notes", workspace: "email-triage" },
   ],
   mine: [
-    { id: "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, workspace: "checkout-fixes", users: ["pat@example.com"] },
-    { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, visibility: "users", workspace: "checkout-fixes", users: ["sam@example.com", "lee@example.com"], fork: true },
+    { id: "api-worker~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, workspace: "api-worker", users: ["pat@example.com"] },
+    { id: "live-board-1", kind: "live", share: "live-board-1", slate: "issue-triage", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, visibility: "users", workspace: "api-worker", users: ["sam@example.com", "lee@example.com"], fork: true },
   ],
   received: [
     { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true, unseen: true },
