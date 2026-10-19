@@ -7,7 +7,6 @@ import {
   APICallError,
   InvalidResponseDataError,
   isLoopFinished,
-  NoOutputGeneratedError,
   streamText,
   wrapLanguageModel,
   type ModelMessage,
@@ -59,8 +58,9 @@ import type { ProviderPacer } from './providers/pacing';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
-import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
-import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
+import { renderThrownChain, settleSync, toKinuError, type TurnTrace } from './obs/index';
+import { Effect } from 'effect';
+import { beginModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, withStableSchemas } from './tools/tool-schema';
 import { ToolOutcomeSchema } from './types/tool-outcome';
@@ -211,28 +211,13 @@ export interface ChatOptions {
 export const INTERRUPTED_TURN = 'The turn was interrupted before it finished.';
 
 /** One call's frame, closed whichever way it left; never awaited, so the end row lands before `turn_end`. */
-function settleModelOperation(
-  operation: ModelOperation,
-  stream: { usage: PromiseLike<LanguageModelUsage>; response: PromiseLike<{ modelId: string }> },
-  cut: boolean,
-): void {
-  if (cut) {
-    operation.failed({ cause: new Error(INTERRUPTED_TURN) });
-
-    return;
-  }
-
-  void Promise.all([stream.usage, stream.response]).then(
-    ([usage, response]) => operation.completed({
-      usage: normalizeUsage(usage),
-      modelId: response.modelId,
-    }),
-    operationRejected(operation),
-  );
+/** A call's end, as the SDK's `onEnd` hands it over. */
+interface CallEnd {
+  readonly steps: readonly StepResult<ToolSet>[];
+  readonly usage: LanguageModelUsage;
+  readonly modelId: string;
 }
 
-const operationRejected = (operation: ModelOperation) =>
-  (...rejection: [unknown]): void => { operation.failed({ cause: rejection[0] }); };
 
 interface AnswerStep {
   readonly content: StepResult<ToolSet>['content'];
@@ -320,6 +305,8 @@ class ProviderCall {
   interrupted = false;
   /** An aborted run never settles `result.steps`, so this is a cut call's only record of its steps. */
   recordedSteps: readonly StepResult<ToolSet>[] = [];
+  /** Its end, as `onEnd` handed it over: never, for a cut call or one that finished no step. */
+  end: CallEnd | null = null;
   streamError: unknown;
   /** Whether the step the error cut had streamed, read on arrival: the step's end clears it. */
   private streamedBeforeError = false;
@@ -385,6 +372,10 @@ class ProviderCall {
   aborted(steps: readonly StepResult<ToolSet>[]): void {
     this.recordedSteps = steps;
     this.interrupted = true;
+  }
+
+  ended(end: CallEnd): void {
+    this.end = end;
   }
 
   /** SDK getters are read before stream consumers can lag the seal. */
@@ -621,24 +612,6 @@ class ProviderCall {
 
     return this.stepContent.length > 0 ? [...finished, { role: 'assistant' as const, content: this.stepContent }] : finished;
   }
-}
-
-/** A call that finishes no step rejects the SDK's deferred accessors, unhandled if unread: tolerated for zero steps
- *  and cuts, anything else recorded as a defect. */
-function suppressDeferredRejections(
-  result: { steps: PromiseLike<unknown>; finishReason: PromiseLike<unknown>; rawFinishReason: PromiseLike<unknown>; usage: PromiseLike<unknown> },
-  tolerated: () => boolean,
-): void {
-  const ignore = (error: Error): void => {
-    if (NoOutputGeneratedError.isInstance(error) || tolerated()) return;
-
-    diagnostics.failure(
-      'llm_call.deferred_rejected',
-      toKinuError({ doing: 'settle an unread stream accessor', cause: error, otherwise: 'io' }),
-    );
-  };
-
-  for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.usage]) deferred.then(undefined, ignore);
 }
 
 /** The serving model's prompt-cache plan; marker strategies re-roll tail breakpoints each step. */
@@ -1004,6 +977,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       },
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
+      onEnd: ({ steps, totalUsage, response }) => { call.ended({ steps, usage: totalUsage, modelId: response.modelId }); },
       providerOptions: { ...current.providerOptions, ...callRetries(route.callRetries) },
       prepareStep: pacedPrepareStep(opts.paceStep, signal, prepareStep, (ended) => { stepEnded = ended; }),
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
@@ -1048,7 +1022,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       },
     });
 
-    suppressDeferredRejections(result, () => call.interrupted || signal.aborted);
     // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
     const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })));
 
@@ -1115,12 +1088,30 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     }
 
     // A cut run never settles `result.response`/`result.steps`; read what `onAbort` handed over.
-    const cut = call.interrupted;
+    if (call.interrupted) {
+      operation.failed({ cause: new Error(INTERRUPTED_TURN) });
 
-    settleModelOperation(operation, result, cut);
-    const steps = cut ? call.recordedSteps : await result.steps;
+      return { steps: call.recordedSteps, produced: paired, finishReason: call.lastFinishReason, interrupted: true, failure: null };
+    }
 
-    return { steps, produced: paired, finishReason: call.lastFinishReason, interrupted: cut, failure: null };
+    // Its end as `onEnd` handed it over. Each of the SDK's own accessors (`steps`, `usage`, `response`) opens a reader of
+    // its own on the call's stream, a tee and two transforms, and the stream keeps every part the call streamed for the
+    // next: read seven times a call, they carried 37,452 of the 100,000 part-stages of the heap gate's long turn in its
+    // agent's isolate (#m2180e). One is read only where no end arrived, a call that streamed no step, for what the SDK found.
+    const { end } = call;
+
+    if (end === null) {
+      const [settled] = await Promise.allSettled([result.steps]);
+      const cause = settled.status === 'rejected' ? settled.reason : new Error('the model call settled its steps without its end');
+
+      operation.failed({ cause });
+
+      return settleSync(Effect.fail(toKinuError({ doing: 'finishing a model call', cause, otherwise: 'unavailable' })));
+    }
+
+    operation.completed({ usage: normalizeUsage(end.usage), modelId: end.modelId });
+
+    return { steps: end.steps, produced: paired, finishReason: call.lastFinishReason, interrupted: false, failure: null };
   };
 
   /** A fallback gets its own provider's cache, replay and options, and a request assembled for it: its window, its
