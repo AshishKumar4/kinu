@@ -21,10 +21,10 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
 import { recordDeadEnds } from '../evals/src/browser';
 import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
-import { CHAT_COMPOSER_LIVE, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
+import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, planTasksProbe, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -182,6 +182,8 @@ export interface TierVerdicts {
   droppedFile: DroppedFileVerdict | null;
   cleared: ClearedVerdict | null;
   planTasks: PlanTasksVerdict | null;
+  stopThenSend: StopThenSendVerdict | null;
+  newChatStop: NewChatStopVerdict | null;
   slateUi: SlateUiVerdict | null;
   providerWait: ProviderWaitVerdict | null;
   state: StateVerdict | null;
@@ -1561,6 +1563,13 @@ async function firstPageReach(page: Page, heard: Promise<ScriptedRequest>): Prom
 
   // The page's own state, which a page drawn again from scratch would not have.
   await frame.evaluate(() => { document.body.dataset['clicked'] = 'yes'; });
+  // The frame eases to the height the page tells once the read lands: a click aimed while it is shorter lands where
+  // the button was, which reached no page (2 of 16 rows hung on Armada, 2026-10-18).
+  const told = await frame.evaluate(() => Math.ceil(document.documentElement.getBoundingClientRect().height));
+  const frameHeight = `document.querySelector('[data-slate-ui="first"] iframe')?.getBoundingClientRect().height ?? 0`;
+
+  await until(page, 'the first frame as tall as its page', `(${frameHeight}) >= ${String(told)}`);
+  await settled(page, frameHeight, { box: `document.querySelector('[data-slate-ui="first"] iframe')` });
   await frame.click('#send');
   const request = await waitOn(page, 'the click reaching the agent', heard);
 
@@ -1681,10 +1690,10 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
 
       if (approve instanceof HTMLElement) approve.click();
     });
-    // The handoff turn runs on its own; the row reads the Work list once it has answered, whatever it shows.
-    await until(page, "the approved plan's turn to end", `(${ANSWER_BLOCKS}).at(-1) === 'P:Implemented the approved plan.' && !(${STOP_OFFERED})`);
+    // The handoff turn runs on its own, and the list reads its tasks a refresh after each lands: the row reads where
+    // they sit once the list shows every task the turns added.
     await page.click('#inspector nav[aria-label="Workspace"] button[aria-label="Work"]');
-    await until(page, "the Work tab's plans", `document.querySelector('[data-work-plans]') !== null`);
+    await until(page, "every task the turns added in the Work list", `((shown) => ${JSON.stringify(Object.values(PLAN_TASK_TITLES))}.every((title) => shown.includes(title)))([...document.querySelectorAll('[data-task-depth]')].map(${TASK_TITLE}))`);
     await painted(page);
 
     return {
@@ -1692,6 +1701,120 @@ async function measurePlanTasks(newPage: LiveApp['newPage'], origin: string): Pr
       unlinked: v.parse(v.array(v.string()), await page.evaluate(PLANLESS_TASKS)),
     };
   } finally {
+    await page.close();
+  }
+}
+
+/** How each attempt of the stop-then-send row ended, once its follow-up was answered. */
+interface StopAttempt {
+  /** The draft then: empty, or the stopped ask's words a Stop handed back. */
+  readonly draft: string;
+  /** The tone of each notice the composer showed then. */
+  readonly notices: readonly string[];
+}
+
+export interface StopThenSendVerdict {
+  readonly attempts: readonly StopAttempt[];
+  /** Whether the chat drew the stopped ask's answer: a stopped message never runs. */
+  readonly stoppedAnswered: boolean;
+}
+
+/** Attempts per row: a Stop lands on the ask's turn at any point of its opening, which each attempt takes as it falls. */
+export const STOP_SEND_ATTEMPTS = 3;
+
+/** Presses Stop the frame it shows, then sends `followUp` the frame Send is back: as a person stops and goes on. */
+const STOP_THEN_SEND = (followUp: string): string => `new Promise((resolve) => {
+  let stopped = false;
+  const step = () => {
+    if (!stopped) {
+      const stop = [...document.querySelectorAll('#chat button[aria-label="Stop this turn"]')].find((button) => button.getClientRects().length > 0);
+      if (stop instanceof HTMLElement) {
+        stop.click();
+        stopped = true;
+        const box = document.querySelector('#chat textarea');
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, ${JSON.stringify(followUp)});
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    } else {
+      const send = document.querySelector('#chat button[aria-label="Send"]');
+      if (send instanceof HTMLButtonElement && !send.disabled) { send.click(); resolve(null); return; }
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+})`;
+
+const COMPOSER_NOTICE_TONES = `[...document.querySelectorAll('#chat [data-composer-root] [data-notice]')].map((notice) => notice.getAttribute('data-notice') ?? '')`;
+
+/**
+ * Row (2026-10-18): a Stop pressed as an ask's turn opens, then a follow-up sent as the Stop leaves. The follow-up is
+ * answered, the stopped ask never is, and nothing reads as a failure. Three defects broke it: the stopped turn's end was
+ * told its room after the follow-up's turn opened, and the room closed the follow-up's stream (never drawn); a turn
+ * stopped before its stream opened told its room the abort's own words (a red notice with Retry); and words a Stop
+ * handed back before the agent took them ended their request as a failure and stayed in the chat, so the next request
+ * sent them again and the stopped ask ran.
+ */
+async function measureStopThenSend(newPage: LiveApp['newPage'], origin: string, stopped: HeldCall): Promise<StopThenSendVerdict> {
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-stop-send-${RUN_ID}`, purpose: 'stop then send probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+  const attempts: StopAttempt[] = [];
+
+  try {
+    for (let attempt = 1; attempt <= STOP_SEND_ATTEMPTS; attempt += 1) {
+      await pressSend(page, `${STOPPED_ASK} ${String(attempt)}`);
+      await page.evaluate(STOP_THEN_SEND(`${FOLLOW_UP_ASK} ${String(attempt)}`));
+      await until(page, `follow-up ${String(attempt)}'s answer`, `(${ANSWER_BLOCKS}).includes(${JSON.stringify(`P:${FOLLOW_UP_ANSWER} ${String(attempt)}.`)}) && !(${STOP_OFFERED})`);
+      await painted(page);
+      const draft = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat textarea')?.value ?? ''`));
+
+      attempts.push({ draft, notices: await noticesRead(page, COMPOSER_NOTICE_TONES) });
+      // Words handed back are the next attempt's draft unless cleared.
+      await page.evaluate(`((box) => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, '');
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      })(document.querySelector('#chat textarea'))`);
+    }
+
+    return { attempts, stoppedAnswered: v.parse(v.boolean(), await page.evaluate(`(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(STOPPED_ANSWER)})`)) };
+  } finally {
+    stopped.release();
+    await page.close();
+  }
+}
+
+export interface NewChatStopVerdict {
+  /** Whether Stop was offered once the opening's first call reached the model and the page had painted. */
+  readonly stopOffered: boolean;
+  /** Whether the opening was answered once its call was let go. */
+  readonly answered: boolean;
+}
+
+/**
+ * Row (2026-10-18): a new chat's opening offers Stop while its first call waits on the model. The page sent the opening
+ * as its own reader of the socket's resume probe heard the answer, before the SDK's reader had; the SDK's resume then
+ * ended on that answer and set the status the send had set, so the whole first wait showed Send (titled-chat, locally:
+ * Stop after 66 s).
+ */
+async function measureNewChatStop(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<NewChatStopVerdict> {
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-new-chat-${RUN_ID}`, purpose: 'new chat probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await page.click(`${CHATS} a[aria-label="New chat"]`);
+    await until(page, 'the new-chat question', `document.querySelector('[data-new-chat] textarea') !== null`);
+    await page.type('[data-new-chat] textarea', OPENING_ASK);
+    await page.click('[data-new-chat] button[type="submit"]');
+    await until(page, "the new chat's page", `location.pathname.includes('/agents/')`);
+    await named("the opening's call to reach the model", () => held.arrived);
+    await settled(page, STOP_OFFERED);
+    const stopOffered = v.parse(v.boolean(), await page.evaluate(STOP_OFFERED));
+
+    held.release();
+    await until(page, 'the opening answered', `(${ANSWER_BLOCKS}).includes(${JSON.stringify(`P:${OPENING_ANSWER}`)}) && !(${STOP_OFFERED})`);
+
+    return { stopOffered, answered: true };
+  } finally {
+    held.release();
     await page.close();
   }
 }
@@ -1879,7 +2002,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'slate-ui', 'provider-wait', 'state',
+  'stop-then-send', 'new-chat-stop', 'slate-ui', 'provider-wait', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1901,7 +2024,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null,
-    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, slateUi: null, providerWait: null, state: null,
+    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -1921,6 +2044,8 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const unsentHeld = heldCall();
     const clearedHeld = heldCall();
     const probeWaitHeld = heldCall();
+    const stoppedHeld = heldCall();
+    const openingHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
     const waitProbe = new ProviderWaitProbe();
@@ -1933,7 +2058,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stoppedHeld, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -1966,6 +2091,8 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'dropped-file': async () => { observed.droppedFile = await attempt('dropped-file', () => measureDroppedFile(newPage, origin)); },
         'cleared': async () => { observed.cleared = await attempt('cleared', () => measureCleared(newPage, origin, clearedHeld)); },
         'plan-tasks': async () => { observed.planTasks = await attempt('plan-tasks', () => measurePlanTasks(newPage, origin)); },
+        'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stoppedHeld)); },
+        'new-chat-stop': async () => { observed.newChatStop = await attempt('new-chat-stop', () => measureNewChatStop(newPage, origin, openingHeld)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },

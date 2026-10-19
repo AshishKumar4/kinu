@@ -3,7 +3,7 @@ import { shows, type Sight } from '../src/sight';
 import { DIFFERENT_DESIGNS } from '../src/judge';
 import type { EvalPart } from '../src/task';
 import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
-import { answersWithSlates, madeNoApp, madeNoPrototype, readAnswer, readingEvidence } from './ephemeral';
+import { answerIds, answersWithSlates, madeNoApp, madeNoPrototype, readAnswer, readingEvidence } from './ephemeral';
 
 // A one-off visual answer: three treatments of a pricing table to compare in the chat. The answer should be
 // ephemeral slates, not an app. Each must show every plan's monthly price and the yearly price the checker computes
@@ -38,7 +38,7 @@ function showsEveryPrice(sight: Sight): boolean {
 /** At least three treatments, whether in one answer page or separate pages, each showing every plan's own prices. */
 function everyTreatment(verifier: EvalVerifier): Promise<EvalCheckOutcome> {
   return verifier.browse(async (browser) => {
-    const readings = await readAnswer(browser, 1, NAMES, showsEveryPrice);
+    const readings = await readAnswer(browser, answerIds(verifier), NAMES, showsEveryPrice);
 
     const treatments = PLANS.map((plan) => readings.filter((reading) => reading.held).reduce((total, reading) => total
       + new Set((reading.sight.regions[plan.plan] ?? []).flatMap((region) =>
@@ -68,7 +68,7 @@ yearly price with the annual discount taken off.`,
 
       // Pictured in a browser of its own, so a picture that cannot be taken fails this check alone.
       await verifier.check('the-treatments-look-different', () => verifier.browse(async (browser) => {
-        const pictures = await browser.answerPictures(await browser.open(), 1, NAMES, showsEveryPrice);
+        const pictures = await browser.answerPictures(await browser.open(), answerIds(verifier));
         const judged = await verifier.judgement(DIFFERENT_DESIGNS, pictures);
 
         return { pass: pictures.length > 0 && judged.verdict === true, evidence: { judged, pages: pictures.length } };

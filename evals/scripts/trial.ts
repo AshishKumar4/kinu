@@ -43,6 +43,8 @@ async function main(): Promise<number> {
   process.once('SIGTERM', terminate);
 
   const exitCode = await run.exited;
+  // This process's own time beside the trial's, so what a trial costs outside its harness is measured, not a residual.
+  const phases = { vitestMs: Math.round(performance.now() - started), scrubMs: 0, copyMs: 0 };
 
   process.off('SIGINT', interrupt);
   process.off('SIGTERM', terminate);
@@ -53,16 +55,26 @@ async function main(): Promise<number> {
 
     writeFileSync(path, `${normalized}\n`);
 
+    const scrubbing = performance.now();
+
     const scrub = Bun.spawn([process.execPath, 'evals/scripts/scrub-evidence.ts', dir],
       { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit' });
 
     if (await scrub.exited !== 0) throw new Error('trial evidence could not be scrubbed before upload');
 
+    phases.scrubMs = Math.round(performance.now() - scrubbing);
+
+    const copying = performance.now();
+
     const row = ciVerdictRow({ label: `${item.leg} ${item.task}: ${title}`, evidence: 'evals' },
       { exitCode, seconds: (performance.now() - started) / 1000, stdout: '', stderr: '' }, undefined,
       { dir, artifacts });
 
+    phases.copyMs = Math.round(performance.now() - copying);
+
     writeFileSync(join(artifacts, 'row.json'), `${JSON.stringify(row)}\n`);
+    writeFileSync(join(artifacts, 'phases.json'), `${JSON.stringify(phases)}\n`);
+    process.stdout.write(`trial phases: ${JSON.stringify(phases)}\n`);
 
     // Failed assertions are measurements, not a missing task. The comparison decides the verdict.
     return 0;

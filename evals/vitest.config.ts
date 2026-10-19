@@ -36,5 +36,10 @@ export default defineConfig({
       // A recording would serialise tool input and output verbatim; none is made.
       VITEST_EVALS_REPLAY_MODE: 'off',
     },
+    // An armada vessel runs one trial after another in one checkout, each its own vitest process, as isolated as the
+    // first: what they share is the transforms of the same files, kept here by content. Measured on armada,
+    // 2026-10-17, e01dc86b3, each of 8 task files three times in one container: 5.8-14.0 s to start the first, 1.7-4.9 s
+    // each after (transform 4.1-10.1 s, then 0.5-1.5 s); without it, 4.4-4.9 s each time.
+    experimental: { fsModuleCache: true },
   },
 });

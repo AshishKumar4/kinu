@@ -49,7 +49,7 @@ const Mount = v.object({ protocolVersion: v.literal(1), candidateRouteId: v.stri
 
 const Marker = v.object({ protocolVersion: v.literal(1), routeId: v.string(), mountPath: v.string(), configuration: Configuration });
 
-const markerPath = (path: string): string => '/run/sandbox/s3-mounts/markers/' + createHash('sha256').update(path).digest('hex') + '.json';
+export const markerPath = (path: string): string => '/run/sandbox/s3-mounts/markers/' + createHash('sha256').update(path).digest('hex') + '.json';
 
 // sandbox-shim 1.0.0's wire contract (unchanged since rc.1): SBXF v1, little-endian payload length, then data.
 function frame(kind: number, payload = new Uint8Array()): Uint8Array {

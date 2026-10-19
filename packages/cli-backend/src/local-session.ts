@@ -401,10 +401,13 @@ export class LocalAgentSession {
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.ancestors = opts.ancestors;
     this.fallbackModel = opts.model ?? null;
+    // A provider's word belongs to the operation in flight, else the session's current run.
+    const providerRun = (): string => currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID;
+
     this.modelResolver = opts.modelResolver?.withCallScope?.({
       accountFor: (provider) => this.accountChoice(provider),
-      onProviderWait: (info) => this.recordRunEvent({ type: 'provider_wait', ...info },
-        currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID),
+      onProviderWait: (info) => this.recordRunEvent({ type: 'provider_wait', ...info }, providerRun()),
+      onModelAttempt: (info) => this.recordRunEvent({ type: 'model_attempt', ...info }, providerRun()),
     })
       ?? opts.modelResolver ?? null;
     this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
@@ -2673,6 +2676,7 @@ export class LocalAgentSession {
       accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider]
         ?? actor.session.profileInputs?.envelope.catalog.accounts?.[provider],
       onProviderWait: (info) => actor.stores.eventRecorder.emit(runId, { type: 'provider_wait', ...info }),
+      onModelAttempt: (info) => actor.stores.eventRecorder.emit(runId, { type: 'model_attempt', ...info }),
     }) ?? this.modelResolver;
 
     const affinity = actorAffinity(actor.record);

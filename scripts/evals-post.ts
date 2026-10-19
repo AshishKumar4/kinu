@@ -12,6 +12,11 @@ import { REPO_ROOT as ROOT } from './repo-root';
 /** Light deploy-driver post-steps use the workstation's serialized 4G scope, never uncapped local work. */
 export const LOCAL_CHECK = '/mnt/local/kinu/bin/local-check.sh';
 
+/** A step that waits on the network (a deployment, Cloudflare's logs, a model's diagnosis or review): a 4G scope of its
+ *  own, never the shared check lock, which serializes short local checks and stops one at ten minutes, mid-answer for a
+ *  model. An eval run has no elapsed limit (AGENTS.md); a step ends when its work does. */
+export const NETWORK_SCOPE = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=4G', '-p', 'MemorySwapMax=0', '--'] as const;
+
 export async function processEvals(run: EvalRun, items: readonly TrialItem[], outcomes: readonly MapResult[], dir: string): Promise<number> {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
@@ -53,12 +58,12 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
 
   // Every command below is a post-step of the same artifacts. A failed advisory review is recorded,
   // never swapped for a mock diagnosis and never substituted for the comparison's verdict.
-  const step = async (name: string, argv: readonly string[], origin?: string): Promise<number> => {
-    const env: NodeJS.ProcessEnv = { ...process.env, LOCAL_CHECK_MEMORY: '4G' };
+  const step = async (name: string, argv: readonly string[], { origin, network = false }: { readonly origin?: string; readonly network?: boolean } = {}): Promise<number> => {
+    const env: NodeJS.ProcessEnv = { ...process.env };
 
     if (origin !== undefined) env['KINU_EVAL_ORIGIN'] = origin;
 
-    const child = Bun.spawn([LOCAL_CHECK, process.execPath, ...argv], { cwd: ROOT,
+    const child = Bun.spawn([...network ? NETWORK_SCOPE : [LOCAL_CHECK], process.execPath, ...argv], { cwd: ROOT,
       env, stdout: 'pipe', stderr: 'pipe' });
 
     const chunks: string[] = [];
@@ -91,7 +96,7 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
   } else {
     for (const [leg, worker] of [['candidate', deploymentOf('staging').worker], ['baseline', deploymentOf('production').worker]] as const) {
       await step(`${leg}-platform`, ['evals/scripts/platform-bugs.ts', join(dir, leg, 'results.json'),
-        '--worker', worker, '--out', join(dir, leg, 'platform.json')]);
+        '--worker', worker, '--out', join(dir, leg, 'platform.json')], { network: true });
       await step(`${leg}-validate`, ['evals/scripts/validate.ts', join(dir, leg, 'results.json'), '--trials', String(run.trials)]);
     }
 
@@ -117,10 +122,10 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
 
     const diagnosis = await step('diagnose', ['evals/scripts/diagnose.ts', '--results', join(dir, 'candidate', 'results.json'),
       '--baseline', join(dir, 'baseline', 'results.json'), '--comparison', join(dir, 'comparison', 'comparison.json'),
-      '--evidence', join(dir, 'candidate', 'evidence'), '--out', join(dir, 'why', 'why.md')], deploymentOf('staging').origin);
+      '--evidence', join(dir, 'candidate', 'evidence'), '--out', join(dir, 'why', 'why.md')], { origin: deploymentOf('staging').origin, network: true });
 
     const review = await step('review', ['evals/scripts/review.ts', '--results', join(dir, 'candidate', 'results.json'),
-      '--comparison', join(dir, 'comparison', 'comparison.json'), '--out', join(dir, 'why')], deploymentOf('staging').origin);
+      '--comparison', join(dir, 'comparison', 'comparison.json'), '--out', join(dir, 'why')], { origin: deploymentOf('staging').origin, network: true });
 
     const pages = ['why.md', 'review.md'].filter((name) => existsSync(join(dir, 'why', name)))
       .map((name) => readFileSync(join(dir, 'why', name), 'utf8'));

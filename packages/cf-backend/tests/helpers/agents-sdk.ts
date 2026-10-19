@@ -113,8 +113,8 @@ const RpcRequestSchema = v.pipe(v.string(), v.parseJson(), v.looseObject({
   type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(v.unknown()),
 }));
 
-export function harnessFibersRunning(): boolean {
-  return harnessFiberBodies.size > 0;
+export function harnessFibersRunning(agent: workersModule.DurableObject): boolean {
+  return (harnessFiberBodiesOf.get(agent)?.size ?? 0) > 0;
 }
 
 /** Work each object holds open through `keepAliveWhile`, as production keeps it alive for it (a drain debounce, say). */

@@ -35,9 +35,9 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { Connection } from 'agents';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { AwaitedList } from '@kinu.run/test-utils';
+import { AwaitedList, handClock, present } from '@kinu.run/test-utils';
 import {
-  driveUntil, GATEWAY_CATALOG, gatewayWorkspace, ownDatabase, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
+  catalogTurn, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, nextTurn, ownDatabase, reactivateOrchestratorHarness, storedChat, workspaceMainActor,
   type HarnessOrchestratorAgent, type StartedHarness,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -219,6 +219,67 @@ test("an isolate reset inside a turn leaves the re-driven turn every step's rows
     ledger: ['tool call_0', 'step', 'tool call_1', 'step', 'step'],
     timeline: ['tool call_0', 'step', 'tool call_1', 'step', 'step'],
   });
+});
+
+test("a workspace resumes its turn while another workspace's background program keeps running", async () => {
+  const clock = handClock(Date.now());
+
+  const gateway = stubAiBinding(run => requestOf(run).messages.some(message => message.role === 'tool')
+    ? chatCompletion(run, 'The program is running.')
+    : toolCallCompletion(run, { tool: 'eval', args: { code: 'await Promise.withResolvers().promise;' } }, 'call_program'));
+
+  const other = gatewayWorkspace(gateway, { jobClock: clock });
+  const running = catalogTurn(other.agent, 'Run the program.');
+
+  await clock.whenArmed(1);
+  clock.tick();
+  await running;
+  const job = present((await other.agent.listBackgroundJobs(20))[0], 'the running program');
+  const count: Count = { held: 2, answer: null, holding: new AwaitedList<number>() };
+  const first = gatewayWorkspace(counting(count));
+
+  await askedOnSocket(first, 'req-independent');
+  await count.holding.until(steps => steps.includes(2));
+
+  const constructed = Promise.withResolvers<HarnessOrchestratorAgent>();
+  let returned = false;
+
+  const reactivation = reactivateOrchestratorHarness(first.db, undefined, {
+    world: { aiGateway: answeringGateway('The resumed answer.') },
+    beforeStart: agent => {
+      agent.harnessInstallCatalog(GATEWAY_CATALOG);
+      constructed.resolve(agent);
+    },
+  }).then(workspace => {
+    returned = true;
+
+    return workspace;
+  });
+
+  try {
+    const agent = await constructed.promise;
+
+    await agent.lifecycle.start();
+    await agent.terminalRetryPass();
+    await agent.harnessAgentsIdle();
+    await nextTurn();
+
+    expect({
+      returned,
+      other: (await other.agent.listBackgroundJobs(20))[0]?.status,
+      resumed: await agent.sendState('req-independent'),
+      answers: answersSaying(await storedChat({ agent, db: first.db }), 'The resumed answer.'),
+    }).toEqual({
+      returned: true,
+      other: 'running',
+      resumed: expect.objectContaining({ status: 'settled', outcome: 'completed' }),
+      answers: 1,
+    });
+  } finally {
+    await other.agent.cancelBackgroundJob(job.id);
+    await other.agent.harnessJoinDetachedFibers();
+    await reactivation;
+  }
 });
 
 /** The pane draws no element, so the container and window are the few fields React reads. */

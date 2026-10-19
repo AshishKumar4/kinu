@@ -16,11 +16,13 @@ import type { TimelineEntry } from './timeline';
 
 /** The ledger fields a split reads; every row is kept, so an unread type still has its place in the order. */
 export const LedgerRowSchema = v.looseObject({
-  type: v.string(), runId: v.string(), eventIndex: v.number(),
+  type: v.string(), runId: v.string(), eventIndex: v.number(), timestamp: v.optional(v.string()),
   userMessage: v.optional(v.string()),
   usage: v.optional(v.looseObject({ output: v.optional(v.number()), reasoning: v.optional(v.number()) })),
   durationMs: v.optional(v.number()),
   waitMs: v.optional(v.number()),
+  sentAt: v.optional(v.string()), headersMs: v.optional(v.number()), firstOutputMs: v.optional(v.number()), lastOutputMs: v.optional(v.number()),
+  outcome: v.optional(v.unknown()),
 });
 
 export type LedgerRow = v.InferOutput<typeof LedgerRowSchema>;
@@ -219,4 +221,91 @@ export function buckets(timing: TrialTiming) {
   add(out, 'unattributed', timing.wallMs - Object.values(out).reduce((sum, ms) => sum + ms, 0));
 
   return out;
+}
+
+/** What the deployment's own clock says of a trial's requests to the provider (`model_attempt`), unlike the split above,
+ *  which a client's arrival times stand in for: each answer's headers and first output after its request was sent, its
+ *  generation, and between one request's end and its run's next request (`betweenMs`), the time tools ran (`toolsMs`),
+ *  the time the provider asked it to wait (`waitMs`), and the rest (`otherMs`), the product's own work between steps.
+ *  Tools run side by side and while an answer still streams, so each is the time covered, not a sum. Measurements only. */
+export type AttemptTiming = {
+  attempts: number;
+  outcomes: Record<string, number>;
+  headersMs: number[];
+  firstOutputMs: number[];
+  generationMs: number;
+  betweenMs: number;
+  toolsMs: number;
+  waitMs: number;
+  otherMs: number;
+};
+
+/** A stretch of time, in epoch ms. */
+type Span = { readonly from: number; readonly to: number };
+
+/** How much of `[from, to]` `spans` cover between them. */
+function covered(spans: readonly Span[], from: number, to: number): number {
+  const clipped = spans.map((span) => ({ from: Math.max(span.from, from), to: Math.min(span.to, to) })).filter((span) => span.to > span.from)
+    .sort((left, right) => left.from - right.from);
+
+  let total = 0;
+  let reached = from;
+
+  for (const span of clipped) {
+    if (span.to <= reached) continue;
+    total += span.to - Math.max(span.from, reached);
+    reached = span.to;
+  }
+
+  return total;
+}
+
+export function attemptTiming(ledger: readonly LedgerRow[]): AttemptTiming {
+  const timing: AttemptTiming = { attempts: 0, outcomes: {}, headersMs: [], firstOutputMs: [], generationMs: 0, betweenMs: 0, toolsMs: 0, waitMs: 0, otherMs: 0 };
+  const runs = new Map<string, LedgerRow[]>();
+
+  for (const row of ledger) {
+    const rows = runs.get(row.runId);
+
+    if (rows === undefined) runs.set(row.runId, [row]);
+    else rows.push(row);
+  }
+
+  for (const rows of runs.values()) {
+    const at = (row: LedgerRow): number => Date.parse(row.timestamp ?? row.sentAt ?? '');
+
+    const tools: Span[] = rows.filter((row) => row.type === 'tool_call_end').map((row) => ({ from: at(row) - (row.durationMs ?? 0), to: at(row) }));
+    const waits: Span[] = rows.filter((row) => row.type === 'provider_wait').map((row) => ({ from: at(row), to: at(row) + (row.waitMs ?? 0) }));
+
+    const requests = rows.flatMap((row) => row.type === 'model_attempt' && row.sentAt !== undefined ? [{ row, sent: Date.parse(row.sentAt) }] : [])
+      .sort((left, right) => left.sent - right.sent);
+
+    // From one request's end, when it was told (its stream's close, or its collector letting go), to the next's send:
+    // a request's tail after its last output is the provider's, not the product's.
+    let ended: number | null = null;
+
+    for (const { row, sent } of requests) {
+      timing.attempts += 1;
+      timing.outcomes[String(row.outcome)] = (timing.outcomes[String(row.outcome)] ?? 0) + 1;
+
+      if (row.headersMs !== undefined) timing.headersMs.push(row.headersMs);
+
+      if (row.firstOutputMs !== undefined) timing.firstOutputMs.push(row.firstOutputMs);
+
+      if (row.firstOutputMs !== undefined && row.lastOutputMs !== undefined) timing.generationMs += row.lastOutputMs - row.firstOutputMs;
+
+      if (ended !== null && sent > ended) {
+        const either = covered([...tools, ...waits], ended, sent);
+
+        timing.betweenMs += sent - ended;
+        timing.toolsMs += covered(tools, ended, sent);
+        timing.waitMs += covered(waits, ended, sent);
+        timing.otherMs += sent - ended - either;
+      }
+
+      ended = at(row);
+    }
+  }
+
+  return timing;
 }

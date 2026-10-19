@@ -494,11 +494,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return { expected, settled };
   }
 
-  /** Memory can name `attached` for a replaced container, so every reader settles adoption first. */
+  /** Memory can name `attached` for a replaced container, so every reader settles adoption first. Adoption admits the
+   *  running container on the startup flight and starts none; recovery, which may stop or replace one, stays with the
+   *  startup row, so maintenance that meets a stopped box leaves it stopped (D34). */
   async #resolveAdoption(): Promise<void> {
-    if (this.#flights.hook !== undefined) return;
-
-    if (this.#adoptionPending) await this.#startContainer();
+    if (this.ctx.container?.running !== true || this.#flights.hook !== undefined || !this.#adoptionPending) return;
+    await this.#fly('startup', this.#generation, () => this.#admitExecution());
   }
 
   /** Turnover needs a container answer that refutes the stamped boot id; absent rows prove nothing. */
@@ -828,7 +829,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       await this.configureContainer(wasRunning && (this.#adoptionPending || this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair'));
 
       if (!this.#owns(generation) || this.#closed) return;
-      await this.ctx.blockConcurrencyWhile(() => this.#restoreInStartGate());
+      await this.ctx.blockConcurrencyWhile(() => this.#restoreInStartGate(!wasRunning));
     })();
 
     const admission = { abort: () => cancel.abort(), settled: run };
@@ -922,15 +923,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
 
-  /** Joins a re-entered hook; adopts a settled boot without re-attaching. */
-  async #restoreInStartGate(): Promise<void> {
+  /** Joins a re-entered hook; adopts a settled boot without re-attaching. `started`: this admission started the container. */
+  async #restoreInStartGate(started: boolean): Promise<void> {
     if (this.#closed) {
       this.#trace('startup.hook.closed', { generation: this.#generation });
 
       return;
     }
 
-    await this.#fly('hook', this.#generation, () => this.#runStartHook());
+    await this.#fly('hook', this.#generation, () => this.#runStartHook(started));
   }
 
   /**
@@ -968,7 +969,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** One budget includes adoption, restore, resumption and durable settlement. */
-  async #runStartHook(): Promise<void> {
+  async #runStartHook(started: boolean): Promise<void> {
     const budgetMs = Math.min(this.policy.attachBudgetMs, DEFAULT_DEVBOX_POLICY.attachBudgetMs);
     const budget = openStartBudget(budgetMs, this.startClock);
     let generation = this.#generation;
@@ -991,7 +992,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         if (this.#restoration.phase !== 'unstarted') return;
         generation = this.#generation;
-        const failure = await this.#restoreNow(generation, racedRestoreSteps(budget));
+        const failure = await this.#restoreNow(generation, racedRestoreSteps(budget), started);
 
         if (failure !== undefined) console.error(`[devbox] start refused: ${describe(failure)}`);
       },
@@ -1011,6 +1012,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (clock !== undefined) this.#settleClock(clock);
       this.#invalidateGeneration();
+
+      if (this.#stoppedUnder(started)) return;
 
       if (attached) {
         const reason = `[deadline -> repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
@@ -1121,6 +1124,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #restoreNow(
     generation: number,
     steps: RestoreSteps,
+    started: boolean,
   ): Promise<{ readonly cause: unknown } | undefined> {
     await this.#settle({ phase: 'restoring', where: 'start', since: Date.now() });
 
@@ -1128,7 +1132,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const clock = this.#openClock();
 
     try {
-      return await this.#classifiedRestore(generation, steps);
+      return await this.#classifiedRestore(generation, steps, started);
     } finally {
       this.#settleClock(clock);
     }
@@ -1137,6 +1141,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #classifiedRestore(
     generation: number,
     steps: RestoreSteps,
+    started: boolean,
   ): Promise<{ readonly cause: unknown } | undefined> {
     const claim = await this.#claimRecovery();
 
@@ -1163,7 +1168,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return undefined;
     } catch (error) {
-      await this.#recover(generation, claim, { cause: error });
+      // Fenced as `#recover` is: a superseded attempt clears nothing its successor holds.
+      if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, { cause: error });
+      else if (this.#owns(generation)) this.#invalidateGeneration();
 
       return { cause: error };
     }
@@ -1356,6 +1363,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return;
     }
 
+    if (this.#stoppedUnder(startsContainer)) return;
     const failure = classifyRecovery(failed);
 
     // A start that fails the same way every time is refused once, not re-armed each second: staging 7e411119d's box
@@ -1448,6 +1456,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  or the release of the single-flight entry. */
   #owns(generation: number): boolean {
     return this.#generation === generation;
+  }
+
+  /** An admission that did not start its container ends, wherever that container's stop lands: a retry or a recovery
+   *  would start the container the stop ended (D34), and a refusal would park a box nothing refused. */
+  #stoppedUnder(started: boolean): boolean {
+    return !started && this.ctx.container?.running !== true;
   }
 
   /** Called only on evidence the container identity is gone or going. The bump makes every
@@ -2180,6 +2194,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return yield* attempt('not-ready', async (): Promise<AttachOutcome> => {
         this.#closed = false;
         this.stampInteraction();
+        await this.#resolveAdoption();
 
         if (this.#restoration.phase === 'repair') {
           await this.#repairAttached(this.#generation);
@@ -2207,15 +2222,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(attempt('io', async (): Promise<CheckpointOutcome> => {
       if (this.#quiescing !== undefined) return { kind: 'failed', reason: QUIESCING, bytes: undefined, movedBytes: undefined };
       this.stampInteraction();
-      await this.#healReplacedContainer();
 
       return await this.#checkpoint(kind);
     }));
   }
 
-  /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`). */
+  /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`), and each adopts and
+   *  checks the container it is about to commit as it runs, not as it was asked. */
   #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
+      await this.#healReplacedContainer();
       const pending = this.#flights.startup;
 
       // Waits for the startup to settle rather than racing it against a timer: a timer set here
@@ -2522,7 +2538,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  so the report names the restoration it carries. */
   devboxState(): Promise<DevboxReport> {
     return settle(attempt('io', async () => {
-      if (this.ctx.container?.running === true) await this.#resolveAdoption();
+      await this.#resolveAdoption();
 
       const [supervised, ports, incidents] = await Promise.all([
         this.#procSpecs(),
@@ -2769,6 +2785,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const beat = this.policy.heartbeatSeconds;
       await this.#scheduled(HEARTBEAT_CALLBACK, beat, async () => {
         this.#renewContainer();
+        await this.#resolveAdoption();
 
         if (this.ctx.container?.running !== true) {
           await this.#tick({ running: false, ping: 'skipped', armedNext: false });
@@ -2776,7 +2793,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return null;
         }
 
-        await this.#resolveAdoption();
         const settled = this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
 
         if (!settled) {
