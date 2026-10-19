@@ -282,7 +282,9 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 
 - Laid out as the Workspaces page is: the title, then `Segmented` views and Kinu's `Choice` for the address beside the search box, then the list as a `p-group` beside the reading card.
 - Five views: **Important** (the default), **All**, **Sent**, **Drafts** and **Trash**. The address choice narrows any view to one address. There is no folder tree and no per-agent folder.
-- **A row** reads as Kinu's rows do: who and when, the subject, then the assistant's reason (Important) or the first words.
+- **A row** reads as Kinu's rows do: who and when, the subject, then the assistant's reason (Important) or the first words, as plain secondary text.
+- **One grid:** the views sit over the list and the search and address over the reading card, so the list, the views and the card share edges; the card takes the rest of the width, and on a desktop it reads the newest mail of the view until another is chosen.
+- **No explanatory copy:** labels a person acts on, and nothing that explains them.
 - **The reading card:** the subject, the address and who reads it, the assistant's reason, then the thread as a `p-group`. Earlier messages fold to one line, quoted text folds behind "•••", attachments are Kinu's file chips (`AttachmentChip`), and HTML is sealed.
 - **Drafts** are mail the owner sends as themselves: their own, and replies the assistant drafted for them.
 - **Unverified mail** has no folder of its own. It sits in All with a "Not verified" mark and never wakes an agent.
@@ -296,7 +298,7 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 
 **An agent's mail folds into its Agent tab** in the side panel (owner, 2026-10-19), not a tab of its own.
 
-- The tab gains an "Its mail" `Section` under "Who it is", which now shows the agent's address. The workspace's main agent shows the workspace's address.
+- The tab gains a `Section` labelled "Mail" (id `agent-mail`) right after Profile, whose identity block now shows the agent's address under its name. The workspace's main agent shows the workspace's address. The tab's own sections become Profile, Memory, Evolution and Activity in the UI lane's simplification.
 - The section is there only while the agent has mail, and the Agent tool counts its unread mail. A workspace with no mail shows nothing new.
 - A thread opens in place in the section; "In Mail" opens the Mail page narrowed to that address.
 

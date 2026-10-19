@@ -12,7 +12,7 @@ import type { FileUIPart, UIMessage } from "ai";
 import { Badge, Button } from "@cloudflare/kumo";
 import {
   ArrowBendUpLeftIcon, ArrowSquareOutIcon, ArrowUpRightIcon, BrainIcon, CaretLeftIcon, ChartLineUpIcon, CheckCircleIcon, EnvelopeSimpleIcon,
-  IdentificationCardIcon, ImageBrokenIcon, MagnifyingGlassIcon, NotePencilIcon, PaperclipIcon, PaperPlaneTiltIcon, PencilSimpleIcon, SealCheckIcon,
+  GitBranchIcon, IdentificationCardIcon, MagnifyingGlassIcon, NotePencilIcon, PaperclipIcon, PaperPlaneTiltIcon, PencilSimpleIcon, SealCheckIcon,
   ShieldWarningIcon, SparkleIcon, TrashIcon, TrayIcon, XIcon,
 } from "@phosphor-icons/react";
 import { cardWords, mainPanelAgent, sandboxedHtml, type PanelAgent, type TurnLiveness, type WorkMode } from "@kinu.run/core";
@@ -367,15 +367,9 @@ function Verified({ mail }: { mail: Mail }) {
     : <span data-mail-unverified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 p-meta p-warning"><ShieldWarningIcon size={13} weight="fill" />Not verified</span>;
 }
 
-/** What a mail's arrival did, in the words the chat's pill uses. */
+/** Whom a mail's arrival woke. */
 function wokeLine(mail: Mail): string | null {
-  if (mail.woke === undefined) return null;
-
-  const agent = mail.woke.agent === "Kinu" ? ASSISTANT ?? "Kinu" : mail.woke.agent;
-
-  return mail.woke.as === "owner"
-    ? `Your instruction to ${agent}. Reading, planning and drafting run; anything it sends, creates or changes waits for you`
-    : `${agent} read it and may draft. It can't instruct; anything else waits for you`;
+  return mail.woke === undefined ? null : `Woke ${mail.woke.agent === "Kinu" ? ASSISTANT ?? "Kinu" : mail.woke.agent}`;
 }
 
 /** One thread in a list, as a row of a `p-group`: who, when, the subject, and its first words or what became of it. */
@@ -386,7 +380,6 @@ function MailRow({ thread, open, box, draft = false, onOpen }: { thread: Thread;
   let gist = firstLine(last.text);
 
   if (draft && thread.draft !== undefined) gist = `${thread.draft.by === "you" ? "Your draft" : `${ASSISTANT ?? "Kinu"}'s draft`}: ${firstLine(thread.draft.text)}`;
-  else if (outgoing && last.sent !== undefined && last.sent.by !== "you") gist = `Written by ${last.sent.by}, approved by you`;
 
   return (
     <button type="button" onClick={onOpen} data-mail-thread={thread.id} aria-current={open ? "true" : undefined} className={mailRowCls(open)}>
@@ -416,19 +409,11 @@ function MailRow({ thread, open, box, draft = false, onOpen }: { thread: Thread;
  * measured from outside, so it opens at a height read off the text's length and the reader can drag it taller.
  */
 function SealedHtml({ html }: { html: string }) {
-  const remote = /<img[^>]+src="https?:/iu.test(html);
   const height = Math.min(520, Math.max(220, Math.round(html.replace(/<[^>]+>/gu, "").length * 0.85)));
 
   return (
-    <div className="space-y-2">
-      <div className="resize-y overflow-hidden rounded-lg border p-border bg-white" style={{ height }}>
-        <iframe title="Message" sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(html)} data-mail-sealed className="block h-full w-full" />
-      </div>
-      {remote && (
-        <p data-mail-images-hidden className="flex items-center gap-1.5 p-meta p-text-3">
-          <ImageBrokenIcon size={13} />Images from the web stay hidden, so the sender can't see when you read this.
-        </p>
-      )}
+    <div className="resize-y overflow-hidden rounded-lg border p-border bg-white" style={{ height }}>
+      <iframe title="Message" sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(html)} data-mail-sealed className="block h-full w-full" />
     </div>
   );
 }
@@ -489,18 +474,16 @@ function Message({ mail, box, open, inChat, onToggle }: { mail: Mail; box: Addre
             <Verified mail={mail} />
           </span>
           <span className="block truncate p-meta p-text-3">
-            to {mail.to.join(", ")}{mail.sent !== undefined && mail.sent.by !== "you" && ` · written by ${mail.sent.by}, approved by you`}
+            to {mail.to.join(", ")}
           </span>
         </span>
         <span className="shrink-0 p-meta tabular-nums p-text-3">{mailTime(mail.at)}</span>
       </button>
       {woke !== null && (
-        <p data-mail-woke={mail.woke?.as} className="flex items-start gap-1.5 rounded-md bg-[var(--c-neutral-tint)] px-2.5 py-1.5 p-meta p-text-2">
-          <AgentFaceIcon size={13} className="mt-0.5 shrink-0 p-text-3" />
-          <span>
-            {woke}
-            {!inChat && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}
-          </span>
+        <p data-mail-woke={mail.woke?.as} className="flex items-center gap-1.5 p-meta p-text-3">
+          <AgentFaceIcon size={13} className="shrink-0" />
+          {woke}
+          {!inChat && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}
         </p>
       )}
       {mail.html !== undefined ? <SealedHtml html={mail.html} /> : <Body text={mail.text} />}
@@ -525,7 +508,7 @@ function ReplyBox({ thread, opened, onSend }: { thread: Thread; opened: boolean;
         <Button variant="secondary" size="sm" data-mail-reply onClick={() => setText("")}><ArrowBendUpLeftIcon size={14} />Reply</Button>
         {offered !== undefined && (
           <Button variant="secondary" size="sm" data-mail-open-draft onClick={() => setText(offered.text)}>
-            {offered.by === "you" ? <><NotePencilIcon size={14} />Your draft</> : <><SparkleIcon size={14} weight="fill" className="p-accent" />{ASSISTANT}'s draft</>}
+            <NotePencilIcon size={14} />{offered.by === "you" ? "Your draft" : `${ASSISTANT ?? "Kinu"}'s draft`}
           </Button>
         )}
       </div>
@@ -534,10 +517,7 @@ function ReplyBox({ thread, opened, onSend }: { thread: Thread; opened: boolean;
 
   return (
     <div data-mail-reply-box className="space-y-2">
-      <p className="p-meta p-text-3">
-        From {box.id === "ashish" ? box.address : `${box.address}, as you`}
-        {offered !== undefined && offered.by !== "you" && text === offered.text && ` · ${ASSISTANT ?? ""} wrote this draft; read it before you send it`}
-      </p>
+      <p className="p-meta p-text-3">From {box.address}</p>
       <textarea value={text} onChange={(event) => setText(event.target.value)} rows={9} aria-label="Reply" className={`${inputCls} font-[inherit] leading-6`} />
       <div className="flex gap-2">
         <FilledButton data-mail-send disabled={text.trim() === ""} onClick={() => { onSend(text); setText(null); }}><PaperPlaneTiltIcon size={14} />Send</FilledButton>
@@ -575,19 +555,11 @@ function Reader({ thread, panel, draft = false, onBack, onChange }: {
         </div>
         {!panel && <div className="flex flex-wrap gap-1.5"><Chip mono>{box.address}</Chip><Chip>{readerOf(box)}</Chip></div>}
       </header>
-      {thread.important !== undefined && ASSISTANT !== null && (
-        <p data-mail-why className="flex items-start gap-2 rounded-lg bg-[var(--c-accent-subtle)] px-3 py-2 p-row-text p-text">
-          <SparkleIcon size={14} weight="fill" className="mt-[3px] shrink-0 p-accent" />
-          <span><span className="font-medium">{ASSISTANT}:</span> {thread.important}</span>
-        </p>
-      )}
+      {thread.important !== undefined && ASSISTANT !== null && <p data-mail-why className="p-row-text p-text-2">{thread.important}</p>}
       {!last.verified && (
-        <p data-mail-unverified-banner className="flex items-start gap-2 rounded-lg bg-[var(--c-warning-tint)] px-3 py-2 p-row-text p-text">
-          <ShieldWarningIcon size={15} weight="fill" className="mt-0.5 shrink-0 p-warning" />
-          <span>
-            Not verified: DMARC didn't pass for <b>{last.from.address.split("@")[1]}</b>, so this could be anyone.
-            {last.from.address === OWNER.address ? " It claims to be you. It woke nothing and instructs no one." : " It woke nothing."}
-          </span>
+        <p data-mail-unverified-banner className="flex items-center gap-2 rounded-lg bg-[var(--c-warning-tint)] px-3 py-2 p-row-text p-text">
+          <ShieldWarningIcon size={15} weight="fill" className="shrink-0 p-warning" />
+          {last.from.address === OWNER.address ? "Not verified · claims to be you" : "Not verified"}
         </p>
       )}
       <div className="p-group">
@@ -602,7 +574,6 @@ function Reader({ thread, panel, draft = false, onBack, onChange }: {
           }],
         })} />
       )}
-      {thread.trashed !== undefined && <p className="p-meta p-text-3">In Trash since {mailTime(thread.trashed)}. Trash empties itself after 30 days.</p>}
     </article>
   );
 }
@@ -621,7 +592,6 @@ function Compose({ onClose }: { onClose: () => void }) {
         <input placeholder="To" aria-label="To" className={inputCls} />
         <input placeholder="Subject" aria-label="Subject" className={inputCls} />
         <textarea rows={8} placeholder="Message" aria-label="Message" className={`${inputCls} font-[inherit]`} />
-        {from !== ADDRESSES[0].address && <p className="p-meta p-text-3">Replies come back to {ADDRESSES.find((each) => each.address === from)?.label}.</p>}
       </div>
     </Modal>
   );
@@ -632,10 +602,7 @@ function InstallAssistant({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><FilledButton onClick={onClose}>Install</FilledButton></div>}>
-      <div data-mail-install className="space-y-3 p-row-text p-text-2">
-        <p>Your assistant reads <span className="font-mono p-text">ashish@kinu.run</span>, marks what's important and says why, and drafts replies for you to send.</p>
-        <p>It's a workspace made from the Personal assistant blueprint. Its main agent is called Kinu until you rename it. It sends nothing as you without your approval.</p>
-      </div>
+      <p data-mail-install className="p-row-text p-text-2">Kinu reads <span className="font-mono p-text">ashish@kinu.run</span>, picks what's important, and drafts your replies.</p>
     </Modal>
   );
 }
@@ -662,14 +629,18 @@ function MailPage() {
 
   const scoped = threads.filter((thread) => (address === "all" || thread.box === address) && matches(thread, query));
   const shown = scoped.filter((thread) => inView(thread, view)).sort((a, b) => latest(b) - latest(a));
-  const thread = threads.find((each) => each.id === open) ?? null;
+  const waiting = view === "important" && ASSISTANT === null;
+  const chosen = threads.find((each) => each.id === open) ?? null;
+  const roomy = useMediaWidth(1024);
+  // The reading card is never empty on a desktop: with nothing chosen, it reads the newest of the view.
+  const reading = chosen ?? (roomy && !waiting ? shown[0] ?? null : null);
+  const thread = chosen;
 
   const counts: Partial<Record<View, number>> = {
     important: ASSISTANT === null ? 0 : scoped.filter((each) => inView(each, "important") && each.unread).length,
     drafts: scoped.filter((each) => inView(each, "drafts")).length,
   };
 
-  const waiting = view === "important" && ASSISTANT === null;
 
   const choose = (id: string): void => {
     setOpen(id);
@@ -678,7 +649,7 @@ function MailPage() {
 
   return (
     <div data-mail-page className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-[1120px] px-4 pb-16 pt-6 lg:px-8 lg:pt-8">
+      <div className="w-full px-4 pb-16 pt-6 lg:px-8 lg:pt-8">
         <header className="flex items-center gap-3">
           <EnvelopeSimpleIcon size={22} className="shrink-0 p-text-3" />
           <h1 className="p-display text-2xl">Mail</h1>
@@ -686,52 +657,40 @@ function MailPage() {
             <NotePencilIcon size={15} />Compose
           </FilledButton>
         </header>
-        <div className={`mt-5 flex-wrap items-center gap-2 ${thread === null ? "flex" : "hidden lg:flex"}`}>
-          <div className="max-w-full overflow-x-auto">
+        {/* One grid for the controls and what they act on: views over the list, search and address over the reader. */}
+        <div className="mt-5 grid grid-cols-[minmax(0,1fr)] items-start gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+          <div className={`max-w-full overflow-x-auto ${thread === null ? "flex" : "hidden lg:flex"}`}>
             <Segmented label="Mail views" value={view} onChange={(next) => { setView(next); setOpen(null); }}
               segments={VIEWS.map((id) => choice(id, VIEW_LABEL[id], counts[id] ?? 0))} />
           </div>
-          <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
-            <div className="w-40 shrink-0" data-mail-address>
-              <Choice label="Address" value={address} onChange={setAddress}
-                options={[{ value: "all", label: "All addresses" }, ...ADDRESSES.map((each) => ({ value: each.id, label: each.label }))]} />
-            </div>
-            <label className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
+          <div className={`items-center gap-2 lg:justify-end ${thread === null ? "flex" : "hidden lg:flex"}`}>
+            <label className="relative min-w-0 flex-1 lg:max-w-72">
               <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search mail" aria-label="Search mail" data-mail-search
                 className={`${inputCls} h-[34px] py-0 pl-8`} />
             </label>
+            <div className="w-40 shrink-0" data-mail-address>
+              <Choice label="Address" value={address} onChange={setAddress}
+                options={[{ value: "all", label: "All addresses" }, ...ADDRESSES.map((each) => ({ value: each.id, label: each.label }))]} />
+            </div>
           </div>
-        </div>
-        <div className="mt-5 grid grid-cols-[minmax(0,1fr)] items-start gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
-          <section aria-label={VIEW_LABEL[view]} className={`space-y-2 ${thread === null ? "" : "hidden lg:block"}`}>
-            {view === "important" && ASSISTANT !== null && shown.length > 0 && (
-              <p className="flex items-center gap-1.5 px-1 p-meta p-text-3"><SparkleIcon size={12} weight="fill" className="p-accent" />{ASSISTANT} picked these, and says why</p>
-            )}
+          <section aria-label={VIEW_LABEL[view]} className={thread === null ? "" : "hidden lg:block"}>
             {waiting ? (
-              <div data-mail-no-assistant className="p-card space-y-3 px-5 py-5">
-                <p className="flex items-center gap-2 p-title p-text"><SparkleIcon size={16} weight="fill" className="p-accent" />Important is your assistant's view</p>
-                <p className="p-row-text p-text-2">Install your personal assistant and it reads your mail, marks what matters with a reason, and drafts replies for you.</p>
+              <div data-mail-no-assistant className="p-card flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
+                <p className="p-row-text p-text-2">No assistant yet</p>
                 <FilledButton onClick={() => setInstalling(true)}>Set up your assistant</FilledButton>
               </div>
             ) : (
               <div className="p-group">
                 {shown.map((each) => view === "important"
-                  ? <ImportantMailRow key={each.id} mail={importantOf(each)} assistant={ASSISTANT ?? "Kinu"} open={each.id === open} onOpen={() => choose(each.id)} />
-                  : <MailRow key={each.id} thread={each} open={each.id === open} draft={view === "drafts"} onOpen={() => choose(each.id)}
+                  ? <ImportantMailRow key={each.id} mail={importantOf(each)} open={each.id === reading?.id} onOpen={() => choose(each.id)} />
+                  : <MailRow key={each.id} thread={each} open={each.id === reading?.id} draft={view === "drafts"} onOpen={() => choose(each.id)}
                     box={address === "all" && each.box !== "ashish" ? addressOf(each.box).label : null} />)}
                 {shown.length === 0 && <p className="px-4 py-8 text-center p-row-text p-text-3">Nothing here.</p>}
               </div>
             )}
-            {view === "trash" && <p className="px-1 p-meta p-text-3">Trash empties itself after 30 days.</p>}
           </section>
-          {thread !== null
-            ? <Reader key={`${thread.id}:${view}`} thread={thread} panel={false} draft={view === "drafts"} onBack={() => setOpen(null)} onChange={change} />
-            : (
-              <div className="hidden min-h-[16rem] items-center justify-center rounded-[var(--r-card)] border border-dashed border-[var(--c-dash)] p-row-text p-text-3 lg:flex">
-                Choose a mail to read it.
-              </div>
-            )}
+          {reading !== null && <Reader key={`${reading.id}:${view}`} thread={reading} panel={false} draft={view === "drafts"} onBack={() => setOpen(null)} onChange={change} />}
         </div>
       </div>
       {composing && <Compose onClose={() => setComposing(false)} />}
@@ -752,8 +711,8 @@ const SCOUT: PanelAgent = { ...MAIN, key: "scout", label: "scout", category: "hi
 const BOX_OF = { main: "api-worker", scout: "scout" } as const;
 
 /**
- * The Agent tab for one agent, as `AgentSurface` lays it out, with its mail folded in under "Who it is". The section is
- * there only while the agent has mail; the rest of the tab is shown closed, as the owner left it.
+ * The Agent tab for one agent, as the inspector's simplified tab lays it out: Profile (its identity and address), then
+ * Mail while the agent has any, then Memory, Evolution and Activity, each an icon and a plain label, shown closed here.
  */
 function AgentPanel({ agent, threads, open, onOpen, onChange }: {
   agent: "main" | "scout"; threads: readonly Thread[]; open: string | null; onOpen: (id: string | null) => void; onChange: (next: Thread) => void;
@@ -766,42 +725,38 @@ function AgentPanel({ agent, threads, open, onOpen, onChange }: {
 
   return (
     <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4" data-agent-panel={agent}>
-      <Section id={`mail-who-${agent}`} title="Who it is" icon={<IdentificationCardIcon size={14} className="p-text-2" />}>
-        <div className="space-y-3">
-          <div className="flex items-center gap-3.5">
-            <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl border p-border p-fill">
-              <ChatMascot seed={mascotSeed(WORKSPACE, panelAgent.key)} colour={mascotColour(WORKSPACE, panelAgent.colour)} activity="idle" size={30} />
-            </span>
-            <div className="min-w-0">
-              <div className="p-title truncate p-text">{agent === "main" ? "API Worker" : "scout"}</div>
-              <div className="truncate p-meta p-text-3">{agent === "main" ? "Its own agent · since 12 Oct" : "Hired by main · since 15 Oct"}</div>
-            </div>
+      <Section id="agent-who" title="Profile" icon={<IdentificationCardIcon size={14} className="p-text-2" />}>
+        <div className="flex items-center gap-3.5">
+          <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl border p-border p-fill">
+            <ChatMascot seed={mascotSeed(WORKSPACE, panelAgent.key)} colour={mascotColour(WORKSPACE, panelAgent.colour)} activity="idle" size={30} />
+          </span>
+          <div className="min-w-0">
+            <div className="p-title truncate p-text">{agent === "main" ? "API Worker" : "scout"}</div>
+            <div className="truncate font-mono p-meta p-text-2" data-agent-address>{box.address}</div>
+            <div className="truncate p-meta p-text-3">{agent === "main" ? "Its own agent · since 12 Oct" : "Hired by main · since 15 Oct"}</div>
           </div>
-          <div className="flex flex-wrap gap-1.5"><Chip mono>{box.address}</Chip><Chip>{agent === "main" ? "48 messages" : "12 messages"}</Chip></div>
         </div>
       </Section>
       {mine.length > 0 && (
-        <Section id={`mail-${agent}`} title="Its mail" icon={<EnvelopeSimpleIcon size={14} className="p-text-2" />}
+        <Section id="agent-mail" title="Mail" icon={<EnvelopeSimpleIcon size={14} className="p-text-2" />}
           badge={unread > 0 ? <Badge variant="secondary">{unread}</Badge> : undefined}>
           {thread !== null
             ? <Reader thread={thread} panel onBack={() => onOpen(null)} onChange={onChange} />
             : (
-              <div className="space-y-2">
-                <div className="p-group">
-                  {mine.map((each) => <MailRow key={each.id} thread={each} open={false} box={null} onOpen={() => onOpen(each.id)} />)}
-                </div>
-                <Link to={`/mail?view=all&address=${box.id}`} className="inline-flex items-center gap-1 px-1 p-meta p-text-3 hover:p-text">
-                  In Mail<ArrowUpRightIcon size={11} />
-                </Link>
+              <div className="p-group">
+                {mine.map((each) => <MailRow key={each.id} thread={each} open={false} box={null} onOpen={() => onOpen(each.id)} />)}
               </div>
             )}
         </Section>
       )}
-      <Section id={`mail-knows-${agent}`} title="What it knows" icon={<BrainIcon size={14} className="p-text-2" />} defaultOpen={false}>
-        <p className="p-row-text p-text-3">Its notes and facts.</p>
+      <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />} defaultOpen={false}>
+        <p className="p-row-text p-text-3">Notes and facts.</p>
       </Section>
-      <Section id={`mail-doing-${agent}`} title="How it's doing" icon={<ChartLineUpIcon size={14} className="p-text-2" />} defaultOpen={false}>
-        <p className="p-row-text p-text-3">Its ratings.</p>
+      <Section id="evolution" title="Evolution" icon={<GitBranchIcon size={14} className="p-text-2" />} defaultOpen={false}>
+        <p className="p-row-text p-text-3">Prompt versions.</p>
+      </Section>
+      <Section id="agent-doing" title="Activity" icon={<ChartLineUpIcon size={14} className="p-text-2" />} defaultOpen={false}>
+        <p className="p-row-text p-text-3">Ratings.</p>
       </Section>
     </div>
   );
@@ -815,7 +770,7 @@ function MailPill({ thread, mail, onOpen }: { thread: Thread; mail: Mail; onOpen
 
   return (
     <EventRow icon={EnvelopeSimpleIcon} tone={owner ? "p-accent" : "p-text-3"} label={owner ? "Your mail" : "Mail"}
-      source={owner ? "verified · your instruction" : `${mail.from.name} · can't instruct`}
+      source={owner ? undefined : mail.from.name}
       body={owner ? firstLine(mail.text) : thread.subject} detail={cardWords(quoted(mail.text).own)} state="seen"
       hooks={{ "data-mail-pill": owner ? "owner" : "input" }}
       action={(
@@ -839,7 +794,6 @@ function SendCard({ onAnswer }: { onAnswer: (answer: "sent" | "denied", text: st
           <PaperPlaneTiltIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden /><span>Waiting on you</span>
         </div>
         <MailSendBody send={SCOUT_REPLY} text={text} editing={editing} onText={setText} />
-        <div className="mt-1 p-meta p-text-3">Approving sends exactly this, once · asked 4m ago</div>
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
           <Button size="sm" variant="ghost" onClick={() => onAnswer("denied", text)}><XIcon size={12} weight="bold" aria-hidden />Deny</Button>
           <Button size="sm" variant="secondary" onClick={() => setEditing(!editing)}><PencilSimpleIcon size={12} weight="bold" aria-hidden />{editing ? "Done" : "Edit"}</Button>
@@ -887,7 +841,7 @@ function ChatPane({ agent, threads, onOpenMail, answered, onAnswer }: {
           source={`to ${SCOUT_REPLY.to.join(", ")}`} body={SCOUT_REPLY.subject} detail={cardWords(SCOUT_REPLY.text)} hooks={{ "data-mail-draft-pill": answered ?? "waiting" }}
           badge={answered === null
             ? <span className="shrink-0 rounded-sm px-1 p-meta p-badge-warning">waiting on you</span>
-            : <span className="shrink-0 px-1 p-meta p-text-3">{answered === "sent" ? "approved by you" : "denied"}</span>} />
+            : <span className="shrink-0 px-1 p-meta p-text-3">{answered === "sent" ? "sent" : "denied"}</span>} />
       </>
     );
 
@@ -906,8 +860,9 @@ function ChatPane({ agent, threads, onOpenMail, answered, onAnswer }: {
   );
 }
 
-function useWide(): boolean {
-  const query = "(min-width: 768px)";
+/** Whether the window is at least `px` wide, kept as it resizes. */
+function useMediaWidth(px: number): boolean {
+  const query = `(min-width: ${String(px)}px)`;
   const [wide, setWide] = useState(() => window.matchMedia(query).matches);
 
   useEffect(() => {
@@ -917,7 +872,7 @@ function useWide(): boolean {
     media.addEventListener("change", sync);
 
     return () => media.removeEventListener("change", sync);
-  }, []);
+  }, [query]);
 
   return wide;
 }
@@ -926,7 +881,7 @@ function WorkspaceScene() {
   const { subName } = useParams();
   const agent = subName === "scout" ? "scout" : "main";
   const params = new URLSearchParams(useLocation().search);
-  const wide = useWide();
+  const wide = useMediaWidth(768);
   const { threads, change, read } = useThreads(params.get("thread"));
   const [open, setOpen] = useState<string | null>(params.get("thread"));
   const [pane, setPane] = useState<"chat" | "workspace">(params.get("pane") === "workspace" ? "workspace" : "chat");
