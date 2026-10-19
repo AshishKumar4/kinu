@@ -64,7 +64,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
 
         expect(await chatShows(page, AUDITOR_PANE)).toBe(true);
         // Its task came from Main, so the chat shows it as an event that names the hirer, never as the person's words.
-        expect(await page.$eval(AUDITOR_PANE, (pane) => pane.textContent ?? '')).toMatch(/from Main[\s\S]*Audit the binding of every route/);
+        expect(await page.$eval(AUDITOR_PANE, (pane) => pane.textContent ?? '')).toMatch(/from Main[\s\S]*Audit every route for a read of the old database binding/);
         await page.close();
       });
     });
