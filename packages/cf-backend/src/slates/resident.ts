@@ -61,6 +61,8 @@ export interface SlateLaunchInput {
   readonly app: { readonly port: number } | null;
   /** `workspace`, `__storage` and `__host`, each the host's entrypoint for this slate as its caller. */
   readonly bindings: Readonly<Record<string, Fetcher>>;
+  /** The authored slate's own `env` beside `workspace`: the owner's secrets granted here, for an owner's slate only. */
+  readonly secrets: Readonly<Record<string, string>>;
   /** The caller's explicitly selected network capability; never implicit inheritance. */
   readonly globalOutbound: Fetcher | null;
 }
@@ -105,7 +107,7 @@ const CLASS_BOOT: readonly string[] = [
   '      storage: this.ctx.storage,',
   '      kv: storageProxy(this.env.__storage),',
   '      waitUntil: (work) => this.ctx.waitUntil(work),',
-  '    }, Object.freeze({ workspace: workspaceSurface(this.env.workspace) }));',
+  "    }, Object.freeze({ ...Object.fromEntries(Object.entries(this.env).filter(([, value]) => typeof value === 'string')), workspace: workspaceSurface(this.env.workspace) }));",
   '    // The callable surface: prototype methods between the instance and',
   '    // SlateObject (exclusive) whose name passes the host\'s own method rule.',
   '    // Own properties never appear: a closure assigned in the constructor',
@@ -733,7 +735,8 @@ export class ResidentSlateProcesses {
         mainModule: MAIN_MODULE,
         ...workerCompatibility,
         vfsTextModules: textModules,
-        env: input.bindings,
+        // Secrets first: no secret's name displaces a host binding.
+        env: { ...input.secrets, ...input.bindings },
         globalOutbound: input.globalOutbound,
       };
 

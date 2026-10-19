@@ -2343,6 +2343,7 @@ export abstract class ActorAgent extends Agent<Env> {
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
         turnSurface: () => this.turnSurface(),
+        commandEnvironment: this.account.commandEnvironment,
       }, {
         actor: this.actorHandle(),
         rootActor: true,
@@ -2623,8 +2624,13 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected codemodeLaunch(actor: string | null, as: 'owner' | 'viewer'): (online: boolean) => ProgramLaunch {
     const workspace = this.workspaceName();
+    // A viewer's program holds none of the owner's secrets, and its egress spends none.
+    const owner = as === 'owner';
 
-    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor, asOwner: as === 'owner' } : null });
+    return (online) => codemodeLauncher(
+      { kinuNode: true, egress: online ? { workspace, actor, asOwner: owner, ownerUserId: owner ? this.getOwnerUserId() : null } : null },
+      owner ? () => this.account.commandEnvironment('run') : async () => ({}),
+    );
   }
 
   /**
@@ -3590,6 +3596,8 @@ export abstract class ActorAgent extends Agent<Env> {
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
     const turn = reach.kind === 'workspace' && step.surface !== null ? turnTags(step.surface.item).reason : undefined;
     const model = reach.kind === 'workspace' ? this.promptModelContextFor(step.profile.tier.model) : { id: step.profile.tier.model };
+    // Names and hosts only: a placeholder is the command's to hold, never the model's to read.
+    const secrets = this.account.secretsHeld;
 
     return collectDynamicContext({
       rt: actor.runtime,
@@ -3604,6 +3612,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(activeSkills !== null && activeSkills !== undefined && { activeSkills }),
       memoryTail,
       ...(accountFacts !== undefined && { accountFacts }),
+      ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, reveal }) => ({ name, hosts, reveal })), withheld: secrets.withheld } }),
       ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,

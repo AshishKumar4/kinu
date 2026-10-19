@@ -4,19 +4,16 @@
  * the one door from sandbox code to a Browser Run session: a WebSocket upgrade
  * to {@link BROWSER_GATE_HOST} reaches a session the calling actor opened, or a
  * new Kitesurf browser, and no credential enters the sandbox.
- * Applies `refusedHostname` like `egress/outbound.ts` and `web/url-safety.ts`.
- * redirect:manual so no unjudged destination is followed. Unmeasured residual:
+ * Applies `refusedHostname` like `egress/outbound.ts` and `web/url-safety.ts`, then sends through the one door every
+ * program's request leaves by (`egress/send-out.ts`), where its workspace's secrets are spent. Unmeasured residual:
  * public names resolving to private addresses are not caught here.
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { objectNamed, KITESURF_SESSION_ID, parseWorkspacePreviewLabel, previewHostSuffix, refusedHostname, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
 import { selfPreviewPass } from './viewer-pass';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
-
-/** Loopback throws reach the caller as opaque `internal error`, so failures
- *  travel as responses (codemode-node-shim.ts `createFetch` rethrows). */
-export const EGRESS_FAILURE_HEADER = 'x-kinu-egress-failure';
+import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
+import { EGRESS_FAILURE_HEADER, sendOut, type ContainerEgressEnv } from './egress/send-out';
 
 export interface CodemodeEgressProps {
   readonly workspace: string | null;
@@ -27,6 +24,8 @@ export interface CodemodeEgressProps {
    * the workspace's own previews. Never a share's viewer's: a preview's slate runs as the owner, unbounded by the grant.
    */
   readonly asOwner: boolean;
+  /** The account whose secrets the program may spend for `workspace`; null for a share's viewer's program, which spends none. */
+  readonly ownerUserId: string | null;
 }
 
 /** The host `connectBrowser` dials; the path's last segment is a session id or `kitesurf`. */
@@ -43,7 +42,7 @@ interface BrowserSockets {
   connectSession(sessionId: string): Promise<{ webSocket: { fetch(input: string, init: RequestInit): Promise<Response> } }>;
 }
 
-type EgressEnv = PreviewSuffixEnv & LabelSignerEnv & { readonly BROWSER: BrowserSockets; readonly OrchestratorAgent: BrowserOwners };
+type EgressEnv = PreviewSuffixEnv & LabelSignerEnv & ContainerEgressEnv<unknown> & { readonly BROWSER: BrowserSockets; readonly OrchestratorAgent: BrowserOwners };
 
 /** The path puppeteer asks for a Kitesurf browser, which Browser Run creates on connect. */
 const KITESURF_CONNECT = 'https://browser-run.invalid/v1/devtools/browser?browser=kitesurf';
@@ -118,19 +117,9 @@ async function forwardCodemodeEgress(request: Request, env: EgressEnv, props: Co
     });
   }
 
-  try {
-    return await fetch(new Request(request, {
-      redirect: request.redirect === 'error' ? 'error' : 'manual',
-    }));
-  } catch (cause) {
-    const error = toKinuError({ doing: 'forwarding an eval program\'s request', cause, otherwise: 'unavailable' });
-    diagnostics.failure('egress.upstream_failed', error, { host: url.hostname, seam: 'codemode' });
+  const vault = workspace !== null && props.ownerUserId !== null ? { workspaceName: workspace, ownerUserId: props.ownerUserId } : null;
 
-    return new Response(`Kinu could not complete the request to ${url.hostname} (${error.code}).`, {
-      status: error.code === 'timeout' ? 504 : 502,
-      headers: { [EGRESS_FAILURE_HEADER]: '1' },
-    });
-  }
+  return await settle(sendOut(request, env, vault, undefined));
 }
 
 export class CodemodeEgress extends WorkerEntrypoint<EgressEnv, CodemodeEgressProps> {

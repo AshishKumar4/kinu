@@ -22,10 +22,14 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'credentials.model': 'workspace',
   /** The rest of the credential store (`github`, admin keys) and every write to it. */
   'credentials.other': 'workspace',
-  /** Egress secret vault: add, rotate, revoke, list bindings. */
-  'egress_secrets.manage': 'workspace',
-  /** Resolving an intercepted placeholder to the real secret; the destination and grant check happens here. */
-  'egress_secrets.inject': 'workspace',
+  /** The account's secrets: add, replace, delete, list, and grant them to workspaces. Owner-only: a workspace writing
+   *  this would grant itself the owner's keys. */
+  'secrets.manage': 'owner_only',
+  /** Opening a secret for a request a workspace's egress intercepted. Owner-only: the egress holds the owner capability
+   *  and names the workspace from its sealed props; the workspace itself never opens a placeholder. */
+  'secrets.inject': 'owner_only',
+  /** The calling workspace's own grants: names, hosts, placeholders, and the values its agents may read. */
+  'secrets.read_self': 'workspace',
   /** AI Gateway discovery/selection: account administration, not inference. */
   'ai_gateway.admin': 'workspace',
   /** MCP tool descriptors and dispatch (acts with the owner's credentials). */

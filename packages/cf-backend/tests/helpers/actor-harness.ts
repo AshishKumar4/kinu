@@ -49,7 +49,7 @@ import {
   type WorkMode, type PromptFile, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
-  type EgressSecretSummary,
+  type GrantedSecrets,
 } from '@kinu.run/core';
 import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, joinHarnessFibersOf, mockAgentsSdk, trackHarnessLane } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
@@ -1798,11 +1798,11 @@ export function makeEnv(
 
             return profile === null ? null : { displayName: null, createdAt: 0, lastSeenAt: 0, onboardedAt: null, workspaceCount: 1, ...profile };
           },
-          // No stored egress secrets; `failVault` drives an unreadable vault.
-          listEgressSecrets: async (): Promise<EgressSecretSummary[]> => {
+          // No secret granted here; `failVault` drives an unreadable vault.
+          grantedSecrets: async (): Promise<GrantedSecrets> => {
             if (userPlane?.failVault) throw userPlane.failVault;
 
-            return [];
+            return { granted: [], withheld: 0 };
           },
           // A job holding no device commands: what the hub answers when nothing needs stopping.
           cancelDeviceRequestsForBackgroundJob: async (): Promise<[]> => [],

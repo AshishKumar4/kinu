@@ -1635,6 +1635,19 @@
     "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "onboarded_at INTEGER"
   ],
+  "user_secret_grants@packages/core/src/safety/egress-vault.ts": [
+    "workspace TEXT NOT NULL",
+    "name TEXT NOT NULL",
+    "reveal INTEGER NOT NULL DEFAULT 0 CHECK (reveal IN (0, 1))",
+    "PRIMARY KEY (workspace, name)"
+  ],
+  "user_secrets@packages/core/src/safety/egress-vault.ts": [
+    "name TEXT PRIMARY KEY",
+    "hosts TEXT NOT NULL",
+    "placeholder TEXT NOT NULL UNIQUE",
+    "secret TEXT NOT NULL",
+    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
+  ],
   "user_share_cards@packages/core/src/state/user-schema.ts": [
     "owner_user_id TEXT NOT NULL",
     "workspace TEXT NOT NULL",

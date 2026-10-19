@@ -17,7 +17,7 @@ import { actorNamespaces, createAgentStores, adaptMemory, initWorkspaceSchema, S
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initAgentDataTables, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
-import { codemodeLauncher } from '../../src/codemode-sandbox';
+import { codemodeLauncher, type ProgramLaunch } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
@@ -62,6 +62,12 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
 }
 
 
+
+/** A probe's programs, as its own owner's: online, they reach the network as the probe's agent, holding no secret. */
+function probeLaunch(name: string): (online: boolean) => ProgramLaunch {
+  return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: name, actor: name, asOwner: true, ownerUserId: null } : null }, async () => ({}));
+}
+
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
 }
@@ -87,7 +93,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'binding-probe', actor: 'binding-probe', asOwner: true } : null }), workspace: 'binding-probe',
+      launch: probeLaunch('binding-probe'), workspace: 'binding-probe',
     });
 
     const actor = bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => Effect.void);
@@ -183,7 +189,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'stop-probe', actor: 'stop-probe', asOwner: true } : null }), workspace: 'stop-probe',
+      launch: probeLaunch('stop-probe'), workspace: 'stop-probe',
     });
 
     const actor = bindActorHandle(sql, {
@@ -224,7 +230,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     void sql`INSERT OR IGNORE INTO workspace_identity (id, name) VALUES (${'mode-probe'}, ${'mode-probe'})`;
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'mode-probe', actor: 'mode-probe', asOwner: true } : null }), workspace: 'mode-probe',
+      launch: probeLaunch('mode-probe'), workspace: 'mode-probe',
     });
 
     const actor = new WorkspaceActorDirectory(sql, { workspaceId: 'mode-probe', ownerUserId: '' }).createMain({ name: 'mode-probe' });

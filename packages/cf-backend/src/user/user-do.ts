@@ -11,7 +11,7 @@ import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from '../act
 
 import {
   isEvalAccountEmail, objectNamed,
-  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type EgressSecretSummary, type PutEgressSecretInput, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
+  ownerCaller, type AccessTokenMint, type AccessTokenRecord, DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH, NO_DEVICE_CONNECTED, type Credential, type ExperienceEntry, type ExperienceKind, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, type EgressRequestFacts, type NameOrigin, initUserTables, requireTier, type UserCaller, type WorkspaceCapability, type ResolvedCaller, deviceIdFromSocket, terminalFromSocket, type AuthRequest, type AuthResolution, type EgressInjectionResult, type SecretSummary, type SecretInput, type GrantedSecrets, type DisconnectOutcome, initAccessTokenTable, type GitHubRefreshAnswer, type GitHubRefreshAsk, type MossaicVfs, recoveryBackoffMs, type WorkspaceOverview, type DeviceCheckpointHint, type DeviceExecOutput, type DeviceStatus, type DeviceTier, type DriveListing, type DriveUploadOutcome, type MarkedSkill, type RelayedProvider, type RosterPage, type CredentialSummary, type WorkspaceEntry, type UserProfile, DEVICE_FRAMES, } from '@kinu.run/core';
 
 import { DurableObjectOAuthClientProvider, type AgentMcpOAuthProvider } from 'agents/mcp/do-oauth-client-provider';
 
@@ -48,6 +48,7 @@ import {
 } from './sessions';
 
 import { UserCredentials, type CheckpointedCredential, type CredentialEndpoint, type CodexStatus } from './credentials';
+import { UserSecrets } from './secrets';
 import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
@@ -140,6 +141,8 @@ export class UserDO extends Agent<Env> {
   };
 
   private readonly credentials = new UserCredentials({ ...this.host, setConfig: (caller, key, value) => this.profile.setConfig(caller, key, value) });
+
+  private readonly secrets = new UserSecrets(this.host);
 
   private readonly sessions = new UserSessions({ ...this.host, sql: (query, ...values) => this.sql(query, ...values), accountName: () => this.name, getProfile: (caller) => this.profile.getProfile(caller), workspaceRegistered: (name) => this.workspaces.workspaceRegistered(name) });
 
@@ -484,20 +487,40 @@ export class UserDO extends Agent<Env> {
     return { catalog, credentials };
   }
 
-  listEgressSecrets(caller: UserCaller): Promise<EgressSecretSummary[]> {
-    return this.credentials.listEgressSecrets(caller);
+  listSecrets(caller: UserCaller): Promise<SecretSummary[]> {
+    return this.secrets.listSecrets(caller);
   }
 
-  putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
-    return this.credentials.putEgressSecret(caller, input);
+  putSecrets(caller: UserCaller, entries: readonly SecretInput[], grantTo: readonly string[]): Promise<void> {
+    return this.secrets.putSecrets(caller, entries, grantTo);
   }
 
-  revokeEgressSecret(caller: UserCaller, id: string): ReturnType<UserCredentials['revokeEgressSecret']> {
-    return this.credentials.revokeEgressSecret(caller, id);
+  setSecretHosts(caller: UserCaller, name: string, hosts: readonly string[]): Promise<void> {
+    return this.secrets.setSecretHosts(caller, name, hosts);
   }
 
-  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, grants: readonly ApprovalGrant[]): Promise<EgressInjectionResult> {
-    return this.credentials.resolveEgressInjection(caller, facts, grants);
+  deleteSecret(caller: UserCaller, name: string): Promise<void> {
+    return this.secrets.deleteSecret(caller, name);
+  }
+
+  grantSecret(caller: UserCaller, input: Parameters<UserSecrets['grantSecret']>[1]): Promise<void> {
+    return this.secrets.grantSecret(caller, input);
+  }
+
+  revokeSecretGrant(caller: UserCaller, input: Parameters<UserSecrets['revokeSecretGrant']>[1]): Promise<void> {
+    return this.secrets.revokeSecretGrant(caller, input);
+  }
+
+  grantedSecrets(caller: UserCaller): Promise<GrantedSecrets> {
+    return this.secrets.grantedSecrets(caller);
+  }
+
+  revealedSecrets(caller: UserCaller): Promise<Record<string, string>> {
+    return this.secrets.revealedSecrets(caller);
+  }
+
+  resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
+    return this.secrets.resolveEgressInjection(caller, facts, workspace);
   }
 
   getCredentialEndpoint(caller: UserCaller, key: string): Promise<CredentialEndpoint | null> {

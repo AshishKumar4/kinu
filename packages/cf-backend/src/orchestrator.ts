@@ -207,7 +207,7 @@ import {
   jobRedriveResumeGate, resumableForkRoots,
   type CancelWorkOutcome, type RetryOutcome,
   getAlwaysActiveSkills, getEvolutionConfig, getProviderAccounts, getReasoningEffort,
-  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants, egressGrants,
+  getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
@@ -545,8 +545,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /**
    * The workspace's egress: its commands' and programs' requests and sockets leave through Kinu's, as the sandbox's do,
    * minted with this workspace's owner as it opens, and for a process an agent started, with that agent
-   * (`actingAgent`), so what the egress records names it. Nothing is asked of the vault or the grants here: the egress
-   * asks for both (`egressGrants`) for a request that names a placeholder. A workspace with no owner keeps the isolate's
+   * (`actingAgent`), so what the egress records names it. Nothing is asked of the vault here: the egress asks the
+   * owner's object, which reads this workspace's grants, for a request that names a placeholder. A workspace with no owner keeps the isolate's
    * own network.
    */
   private workspaceEgress(actorId?: string): WorkspaceEgress | undefined {
@@ -1390,6 +1390,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       capabilityToken: () => this.workspaceCapabilityToken(),
       workspaceBox: (shellId) => this.workspaceBox(shellId),
       workspaceServing: () => this.workspaceServing(),
+      commandEnvironment: this.account.commandEnvironment,
       homeHost: () => this.facetHomeHost(),
       homes: this.actorHomes,
       // The root's durable program is always readable because the root is this runtime;
@@ -4025,9 +4026,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  /** The grants that let this workspace's egress spend a vault secret, as they stand. Never `@callable`. */
-  async egressGrants(): Promise<ApprovalGrant[]> {
-    return egressGrants(getShellApprovalGrants(this.config).grants);
+  /** The owner changed this workspace's secrets (`user/secrets.ts`): its commands read them again. Never `@callable`. */
+  async secretsMoved(): Promise<void> {
+    this.account.secretsMoved();
   }
 
   /** By the agent a workspace process acted for, where its egress named one; a container's names nobody. Never `@callable`. */
@@ -5893,6 +5894,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A share's caller carries its viewer through, so what the call reaches inside itself is held to the grant.
       dispatch: (caller, route, context) => this.slateCallDispatch(caller.path, route, caller.workMode, { ...context, ...(caller.share !== undefined && { viewer: true }) }),
       browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),
+      secrets: () => this.account.commandEnvironment('keep'),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),

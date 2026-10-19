@@ -1,9 +1,10 @@
 /**
- * What the owner's account says that a workspace's turns read: its memory, its settings revision, its profile catalog.
- * Each is asked of the owner's user object as this workspace, and the settings are held under their refresh rule.
+ * What the owner's account says that a workspace's turns read: its memory, its settings revision, its profile catalog,
+ * the secrets granted to it. Each is asked of the owner's user object as this workspace, and the settings and grants are
+ * held under their refresh rule.
  */
 import { Effect } from 'effect';
-import type { AccountMemory, AccountProposer, Fact, ProfileCatalogEnvelope, UserCaller } from '@kinu.run/core';
+import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, UserCaller } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
 import type { UserDoRpcMethod } from './rpc-surface';
@@ -69,6 +70,9 @@ export class AccountReads {
 
   private readonly heldCatalog = new HeldRead<ProfileCatalogEnvelope>();
 
+  /** Names, hosts and placeholders only: a value this workspace's agents may read is asked for at each use. */
+  private readonly heldSecrets = new HeldRead<GrantedSecrets>();
+
   constructor(private readonly host: AccountReadsHost) {}
 
   /** One read of the account, as this workspace. */
@@ -122,7 +126,7 @@ export class AccountReads {
    * change made while this workspace rested never reached it.
    */
   async settingsAtOpen(): Promise<void> {
-    const now = await this.ask((stub, caller) => stub.getSettingsRevision(caller));
+    const [now] = await Promise.all([this.ask((stub, caller) => stub.getSettingsRevision(caller)), this.secretsAtOpen()]);
 
     if (this.heldCatalog.current?.version !== now.catalog) this.heldCatalog.drop();
     this.heldRevision.hold(now.credentials);
@@ -131,6 +135,56 @@ export class AccountReads {
   /** The account's credentials revision a turn's open last read; null before one opened in this activation. */
   openedCredentialsRevision(): number | null {
     return this.heldRevision.current ?? null;
+  }
+
+  /** The owner's secrets granted to this workspace, held until the account says they moved (`secretsMoved`). */
+  grantedSecrets(): Promise<GrantedSecrets> {
+    return this.heldSecrets.get(() => this.ask((stub, caller) => stub.grantedSecrets(caller)));
+  }
+
+  /**
+   * The secrets as a command's variables; a workspace with no owner has none. An account that does not answer costs the
+   * command its secrets, never the command: one that needs none runs as it would (8c56762c6), and the next asks again.
+   */
+  readonly commandEnvironment: CommandEnvironment = (use) => settle(Effect.catch(
+    attempt({ doing: "reading this workspace's secrets for a command", otherwise: 'unavailable' }, async (): Promise<Record<string, string>> => {
+      if (!this.host.owned()) return {};
+      const { granted } = await this.grantedSecrets();
+      const placeholders = Object.fromEntries(granted.map((secret) => [secret.name, secret.placeholder]));
+
+      if (use === 'keep' || !granted.some((secret) => secret.reveal)) return placeholders;
+
+      return { ...placeholders, ...await this.ask((stub, caller) => stub.revealedSecrets(caller)) };
+    }),
+    (failure) => Effect.sync(() => {
+      diagnostics.failure('secrets.environment_unread', failure, { workspace: this.host.workspace() });
+
+      return {};
+    }),
+  ));
+
+  /**
+   * Read as a turn opens, so its context names the secrets granted here before any command ran (`secretsHeld`); an
+   * account that does not answer costs the turn that section, never the turn.
+   */
+  private secretsAtOpen(): Promise<void> {
+    if (!this.host.owned()) return Promise.resolve();
+
+    return settle(Effect.catch(attempt({ doing: "reading this workspace's secrets as a turn opens", otherwise: 'unavailable' }, async () => {
+      await this.grantedSecrets();
+    }), (failure) => Effect.sync(() => {
+      diagnostics.failure('secrets.grants_unread', failure, { workspace: this.host.workspace() });
+    })));
+  }
+
+  /** The grants as this workspace last read them, for a step's context; none before a first read answered. */
+  get secretsHeld(): GrantedSecrets | undefined {
+    return this.heldSecrets.current;
+  }
+
+  /** The account changed this workspace's secrets: they are read again at their next need. */
+  secretsMoved(): void {
+    this.heldSecrets.drop();
   }
 
   /** The account's credentials revision as this workspace holds it, read at its first need. */

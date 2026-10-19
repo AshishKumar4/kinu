@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, type EgressRequestFacts, type EgressSecretBinding, type ApprovalGrant, grantedEgressBindings, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, listEgressSecrets, putEgressSecret, resolveEgressInjection, revokeEgressSecret, type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps, type PutEgressSecretInput, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary,
+  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -361,52 +361,6 @@ export class UserCredentials {
     catch (err) {
       throw toKinuError({ doing: `opening the stored headers of MCP server ${serverId}`, cause: err, otherwise: 'bad_input' });
     }
-  }
-
-  /** AAD names this row in this DO so a ciphertext cannot be replayed elsewhere. */
-  private egressVaultDeps(cipher: CredentialCipher): EgressVaultDeps {
-    return {
-      sql: this.host.ctx.storage.sql,
-      cipher,
-      aad: (id) => `${this.host.ctx.id.toString()}:egress:${id}`,
-    };
-  }
-
-  /** The only read-back surface; stored secrets are never returned. */
-  async listEgressSecrets(caller: UserCaller): Promise<EgressSecretSummary[]> {
-    await this.host.requireTier(caller, 'egress_secrets.manage');
-
-    return listEgressSecrets(this.host.ctx.storage.sql);
-  }
-
-  /** The returned `placeholder` is the only thing that may enter the container; rotating an id
-   *  keeps its placeholder. */
-  async putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
-    await this.host.requireTier(caller, 'egress_secrets.manage');
-
-    return putEgressSecret(this.egressVaultDeps(await this.cipher()), input);
-  }
-
-  /** A later request carrying the placeholder is refused rather than forwarded with a dummy. */
-  async revokeEgressSecret(caller: UserCaller, id: string): Promise<{ revoked: boolean }> {
-    await this.host.requireTier(caller, 'egress_secrets.manage');
-
-    return { revoked: revokeEgressSecret(this.host.ctx.storage.sql, id) };
-  }
-
-  /**
-   * `grants` are the workspace's consent, read here against the vault as it stands; this decides destination per
-   * request. The outbound handler presents the owner capability, and asks only for a request that names a placeholder.
-   */
-  async resolveEgressInjection(
-    caller: UserCaller,
-    facts: EgressRequestFacts,
-    grants: readonly ApprovalGrant[],
-  ): Promise<EgressInjectionResult> {
-    await this.host.requireTier(caller, 'egress_secrets.inject');
-    const active = grantedEgressBindings(listEgressSecrets(this.host.ctx.storage.sql), grants);
-
-    return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }
 
   /** The endpoint is not a secret and is absent from listCredentials(); the provider proxy reads it without the login. */

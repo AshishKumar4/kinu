@@ -1,11 +1,11 @@
 /**
- * Egress gate: the container holds random placeholders, never secrets; trusted code substitutes on the way out
- * only toward the bound host, and scrubs secrets from anything coming back. Consent is per binding, not per request.
+ * Egress gate: a workspace holds random placeholders, never secrets; trusted code substitutes on the way out
+ * only toward the secret's hosts, over TLS, and scrubs secrets from anything coming back. Consent is the owner's grant
+ * of a secret to a workspace, read by the vault on every request, never per request.
  */
 
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
-import type { ApprovalGrant } from './approval-gate';
 
 /** Marks a placeholder, so a scan finds one inside any URL or header value and never mistakes a secret for one. */
 export const EGRESS_PLACEHOLDER_PREFIX = 'pxs1_';
@@ -32,39 +32,13 @@ export function findEgressPlaceholders(text: string): string[] {
   return [...seen];
 }
 
-/** One secret bound to one destination, without the secret, so a binding is safe to log, list, or send. */
+/** One secret granted to the asking workspace, without its value, so a binding is safe to log, list, or send. */
 export interface EgressSecretBinding {
-  /** Stable id; also the vocabulary of the owner's grant ({@link EGRESS_SECRET_RULE_PREFIX}). */
-  readonly id: string;
-  readonly label: string;
-  /** Hostname or `*` glob ({@link egressHostMatches}) this secret may be spent on. */
-  readonly host: string;
+  /** The owner's name for it, and the variable it appears as. */
+  readonly name: string;
+  /** Hostnames or `*` globs ({@link egressHostMatches}) it may be sent to. */
+  readonly hosts: readonly string[];
   readonly placeholder: string;
-}
-
-/** A binding's approval is the rule `egress-secret:<id>`, reusing the approval gate's `(rule, executor)` grants. */
-const EGRESS_SECRET_RULE_PREFIX = 'egress-secret:';
-
-/** Executor egress grants are scoped to; the grant writer and the binding filter must agree on this string. */
-const EGRESS_EXECUTOR = 'computer';
-
-/** The grants that let an egress spend a vault secret: what it carries, so the vault can be read when a request asks. */
-export function egressGrants(grants: readonly ApprovalGrant[]): ApprovalGrant[] {
-  return grants
-    .filter((g) => g.executor === EGRESS_EXECUTOR && g.rule.startsWith(EGRESS_SECRET_RULE_PREFIX))
-    .map((g) => ({ rule: g.rule, executor: g.executor }));
-}
-
-/** Bindings `grants` allow; a vaulted binding without a grant is invisible to the container. */
-export function grantedEgressBindings(
-  vault: readonly EgressSecretBinding[],
-  grants: readonly ApprovalGrant[],
-): EgressSecretBinding[] {
-  const approved = new Set(
-    grants.filter((g) => g.executor === EGRESS_EXECUTOR).map((g) => g.rule),
-  );
-
-  return vault.filter((b) => approved.has(`${EGRESS_SECRET_RULE_PREFIX}${b.id}`));
 }
 
 /** Case-insensitive host match; `*` spans any run, pattern anchored at both ends to block suffix tricks. */
@@ -88,9 +62,9 @@ export interface EgressRequestFacts {
   readonly headers: readonly (readonly [name: string, value: string])[];
 }
 
-/** One placeholder to replace; the adapter fetches the secret by `bindingId`, so a plan is safe to log. */
+/** One placeholder to replace; the adapter fetches the secret by `name`, so a plan is safe to log. */
 interface EgressSubstitution {
-  readonly bindingId: string;
+  readonly name: string;
   readonly placeholder: string;
 }
 
@@ -98,25 +72,67 @@ export type EgressPlan =
   | { readonly kind: 'forward'; readonly substitutions: readonly EgressSubstitution[] }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
 
-/** The placeholders a request names, in its URL or any header value: a request naming none is sent on as it is. */
+const BASIC_CREDENTIAL = /^(Basic\s+)((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)\s*$/i;
+
+/**
+ * `user:password` of a Basic credential, which `curl -u` and git over https send base64-encoded, where no scan of the
+ * header text would see a placeholder; null for any other value.
+ */
+function basicCredential(value: string): { readonly scheme: string; readonly decoded: string } | null {
+  const match = BASIC_CREDENTIAL.exec(value);
+
+  if (match === null) return null;
+  const bytes = Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0));
+
+  return { scheme: match[1], decoded: new TextDecoder().decode(bytes) };
+}
+
+function basicValue(scheme: string, decoded: string): string {
+  return `${scheme}${btoa(Array.from(new TextEncoder().encode(decoded), (byte) => String.fromCharCode(byte)).join(''))}`;
+}
+
+/** The placeholders a request names, in its URL or any header value (a Basic credential decoded): a request naming none
+ *  is sent on as it is. */
 export function egressPlaceholdersIn(facts: EgressRequestFacts): Set<string> {
   const present = new Set(findEgressPlaceholders(facts.url));
 
   for (const [, value] of facts.headers) {
-    for (const found of findEgressPlaceholders(value)) present.add(found);
+    for (const found of findEgressPlaceholders(basicCredential(value)?.decoded ?? value)) present.add(found);
   }
 
   return present;
 }
 
+/** A header value as it leaves, and, for a Basic credential, the pair that scrubs its encoded form from the answer. */
+export interface RevealedHeader {
+  readonly value: string;
+  readonly scrub?: ScrubReplacement;
+}
+
 /**
- * Plan one outbound request against approved `active` bindings. A secret travels only over TLS, so the host binding
- * names who reads it and nobody between does. Unknown placeholders are refused; requests without placeholders
- * forward untouched. Bodies are not scanned: a placeholder there leaves unsubstituted.
+ * A header value with each placeholder replaced (inside a Basic credential too), and the pair that scrubs the
+ * encoded form back out of a response: an upstream that echoes the header must not hand the program its decodable secret.
+ */
+export function revealHeader(value: string, reveal: readonly ScrubReplacement[]): RevealedHeader {
+  const basic = basicCredential(value);
+
+  if (basic === null) return { value: scrubText(value, reveal) };
+  const decoded = scrubText(basic.decoded, reveal);
+
+  if (decoded === basic.decoded) return { value };
+  const revealed = basicValue(basic.scheme, decoded);
+
+  return { value: revealed, scrub: { find: revealed.slice(basic.scheme.length), replaceWith: basicValue('', basic.decoded) } };
+}
+
+/**
+ * Plan one outbound request against the secrets granted to its workspace. A secret travels only over TLS, so its hosts
+ * name who reads it and nobody between does. Unknown placeholders are refused; requests without placeholders forward
+ * untouched. Bodies are not scanned: a placeholder there leaves unsubstituted, since a host may store or publish a body.
  */
 export function planEgress(
   facts: EgressRequestFacts,
-  active: readonly EgressSecretBinding[],
+  granted: readonly EgressSecretBinding[],
 ): EgressPlan {
   const present = egressPlaceholdersIn(facts);
 
@@ -133,7 +149,7 @@ export function planEgress(
     };
   }
 
-  const byPlaceholder = new Map(active.map((b) => [b.placeholder, b]));
+  const byPlaceholder = new Map(granted.map((b) => [b.placeholder, b]));
   const substitutions: EgressSubstitution[] = [];
 
   for (const placeholder of present) {
@@ -144,22 +160,21 @@ export function planEgress(
         kind: 'refuse',
         status: 403,
         // Names the placeholder (the container has it), never the secret.
-        reason: 'This request carries a secret placeholder that is not bound to any '
-          + 'approved secret. It was revoked, or it was never granted.',
+        reason: 'This request carries a secret placeholder that is not granted to this workspace. The secret was '
+          + 'deleted, or the owner has not allowed it here (Settings › Secrets).',
       };
     }
 
-    if (!egressHostMatches(binding.host, facts.host)) {
+    if (!binding.hosts.some((host) => egressHostMatches(host, facts.host))) {
       return {
         kind: 'refuse',
         status: 403,
-        reason: `The secret "${binding.label}" is bound to ${binding.host} and this `
-          + `request goes to ${facts.host}. A placeholder is only substituted at the `
-          + 'destination its secret was approved for.',
+        reason: `The secret ${binding.name} may be sent to ${binding.hosts.join(', ')}, and this request goes to `
+          + `${facts.host}. A placeholder is only substituted at the hosts the owner set for its secret.`,
       };
     }
 
-    substitutions.push({ bindingId: binding.id, placeholder });
+    substitutions.push({ name: binding.name, placeholder });
   }
 
   return { kind: 'forward', substitutions };

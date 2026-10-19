@@ -13,7 +13,8 @@ import {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { EGRESS_FAILURE_HEADER, codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
+import { codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
+import { EGRESS_FAILURE_HEADER } from './egress/send-out';
 import { BROWSER_CLIENT_MODULE, browserClientSource } from './browser-prelude';
 
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
@@ -39,7 +40,8 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
     '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
-    `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, missingBuiltins: __kinuBuiltins.missing });`,
+    // The program's own bindings first (the owner's secrets granted here, `process.env` holds them too), never over these.
+    `    const env = Object.freeze({ ...this.env, workspace: ${JSON.stringify(identity.workspace)}, missingBuiltins: __kinuBuiltins.missing });`,
     renderCraftedDefinitions(crafted),
   ].join('\n');
 }
@@ -105,14 +107,16 @@ export interface ProgramLaunch {
 export interface CodemodeLauncherProps {
   readonly kinuNode: boolean;
   readonly egress: CodemodeEgressProps | null;
+  /** The program's bindings, `env.NAME` and `process.env.NAME`: the owner's secrets granted to its workspace. */
+  readonly env: Readonly<Record<string, string>>;
 }
 
 /** Launches in a request of its own, so no program holds a workspace slot (D10). */
 export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: WorkerLoader }, CodemodeLauncherProps> {
   async run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult> {
-    const { kinuNode, egress } = this.ctx.props;
+    const { kinuNode, egress, env } = this.ctx.props;
 
-    const worker = await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode });
+    const worker = await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode, env });
 
     return await worker.execute(`async () => { ${SANDBOX_CONSOLE_PRELUDE}\n return await (\n${normalizeCode(source)}\n)(); }`, providers.map(reachableAsWritten));
   }
@@ -121,24 +125,34 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
   answer(): void {}
 }
 
-/** Each run is counted by the invocation whose work launched it, when that invocation holds its programs (`launched`). */
-export function codemodeLauncher(props: CodemodeLauncherProps): ProgramLaunch {
-  return { run: (source, providers) => launched(exports.CodemodeLauncher({ props }).run(source, providers)) };
+/**
+ * Each run is counted by the invocation whose work launched it, when that invocation holds its programs (`launched`).
+ * `environment` is read for each run, so a secret granted or revoked since is as it stands.
+ */
+export function codemodeLauncher(props: Omit<CodemodeLauncherProps, 'env'>, environment: () => Promise<Readonly<Record<string, string>>>): ProgramLaunch {
+  return { run: async (source, providers) => {
+    const env = await environment();
+
+    return await launched(exports.CodemodeLauncher({ props: { ...props, env } }).run(source, providers));
+  } };
 }
 
 /** A context the platform dropped delivers no answer, this one's included, so a job whose context stops answering
  *  has lost its work's answers too. */
 export async function jobContextAnswers(): Promise<void> {
-  await exports.CodemodeLauncher({ props: { kinuNode: false, egress: null } }).answer();
+  await exports.CodemodeLauncher({ props: { kinuNode: false, egress: null, env: {} } }).answer();
 }
 
 /** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
  *  by the detach window and the platform CPU limit. */
-async function programWorker(input: { readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean }): Promise<DynamicWorkerExecutor> {
+async function programWorker(input: {
+  readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean; readonly env: Readonly<Record<string, string>>;
+}): Promise<DynamicWorkerExecutor> {
   return new DynamicWorkerExecutor({
     loader: input.loader,
     timeout: NO_TIMER_DEADLINE_MS,
     globalOutbound: input.egress,
+    bindings: { ...input.env },
     modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE, [BROWSER_CLIENT_MODULE]: await browserClientSource() } : {},
   });
 }

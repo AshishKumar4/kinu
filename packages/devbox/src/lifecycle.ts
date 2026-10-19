@@ -487,6 +487,8 @@ export interface SupervisedProcessSpec {
   readonly command: string;
   readonly cwd: string | undefined;
   readonly createdAt: number;
+  /** Variables the job runs with, set again on every restart; a caller keeps no secret here, only what may be kept. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** The token is generated once and reused so preview URLs survive restarts verbatim;

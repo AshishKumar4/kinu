@@ -5,6 +5,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
 import {
   agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability, type RuntimeFacts,
+  type SecretsInContext,
 } from '../prompting/volatile-context';
 import type { ActiveRoster, ShownLesson } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
@@ -82,6 +83,8 @@ export interface DynamicContextInput {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
   /** Slates whose latest source does not build, each `id: why`. */
   readonly failingSlates?: () => readonly string[];
+  /** The owner's secrets granted to the workspace, as it last read them. */
+  readonly secrets?: SecretsInContext;
 }
 
 export function subordinateDelegatesOf(
@@ -127,6 +130,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     subordinateDelegates: input.subordinateDelegates?.(),
     approvals: input.approvals?.(),
     failingSlates: input.failingSlates?.(),
+    ...(input.secrets !== undefined && { secrets: input.secrets }),
     missingCapabilities: [
       ...(runnableSandbox(input.tools, profile) === undefined ? [] : input.unavailableMcp ?? []).map(({ server, reason }) => ({
         source: server === null ? 'MCP catalog' : `MCP server "${server}"`, reason,

@@ -103,6 +103,13 @@ export interface DynamicContext {
   missingCapabilities?: readonly MissingCapability[];
   /** Slates whose latest source does not build, each `id: the compiler's words`; the user still sees the last that did. */
   failingSlates?: readonly string[];
+  /** The owner's secrets granted to this workspace, by name and host, never a placeholder or a value; and how many are not. */
+  secrets?: SecretsInContext;
+}
+
+export interface SecretsInContext {
+  readonly granted: readonly { readonly name: string; readonly hosts: readonly string[]; readonly reveal: boolean }[];
+  readonly withheld: number;
 }
 
 /** The search roster as delegates, in the surface's words (`agents({op:'swarm'})`, nodes), never `fork` or
@@ -160,6 +167,7 @@ export interface DynamicContextSources {
   readonly approvals?: ActiveRoster<DynamicApproval>;
    readonly missingCapabilities: readonly MissingCapability[];
    readonly failingSlates?: readonly string[];
+   readonly secrets?: SecretsInContext;
 }
 
 /** Both backends' live state for one step: this alone decides which planes exist; an absent one renders nothing. */
@@ -206,6 +214,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
 
   if (sources.failingSlates !== undefined && sources.failingSlates.length > 0) context.failingSlates = sources.failingSlates;
+
+  if (sources.secrets !== undefined && (sources.secrets.granted.length > 0 || sources.secrets.withheld > 0)) context.secrets = sources.secrets;
 
   if (sources.toolLessons.length > 0) context.toolLessons = sources.toolLessons;
 
@@ -453,6 +463,7 @@ const DYNAMIC_SECTION_TITLES = {
   toolLessons: '## Tool lessons (what earlier turns that struggled with these tools learned)',
   delegation: '## Roles and tiers (what the agents tool\'s `role` and `tier` take)',
   executors: '## Execution status',
+  secrets: '## The owner\'s secrets in this workspace',
   devices: '## Your user\'s machines (the `device` runtime)',
   tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
   jobs: '## Background work still running',
@@ -461,6 +472,21 @@ const DYNAMIC_SECTION_TITLES = {
   missingCapabilities: '## Configured but not available this turn (plan without these, and say so if asked)',
   failingSlates: '## Slates that do not build (the user sees each one\'s last working version until you fix it)',
 } satisfies Record<keyof DynamicContext, string>;
+
+/** A line per granted secret, and one counting the rest: an account's forty secrets cost a workspace granted two, three lines. */
+function secretsSection(secrets: SecretsInContext | undefined): RenderedSection | null {
+  if (secrets === undefined) return null;
+
+  const withheld = secrets.withheld === 0 ? [] : [
+    `${String(secrets.withheld)} more ${secrets.withheld === 1 ? 'is' : 'are'} not allowed here: name the one you need and ask the owner to allow it in Settings › Secrets.`,
+  ];
+
+  return { text: [
+    DYNAMIC_SECTION_TITLES.secrets,
+    ...secrets.granted.map((secret) => `- $${secret.name} → ${secret.hosts.join(', ')}${secret.reveal ? ' (readable: holds the value itself)' : ''}`),
+    ...withheld,
+  ].join('\n') };
+}
 
 /** Each slate whose latest source does not build, in the compiler's words. */
 function failingSlatesSection(failures: readonly string[]) {
@@ -552,6 +578,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
       ...renderExecutionLegend(executors),
     ].join('\n') });
   }
+
+  add('secrets', secretsSection(ctx.secrets));
 
   const fleet = ctx.devices ?? [];
 

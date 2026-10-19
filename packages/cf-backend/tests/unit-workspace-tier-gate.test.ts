@@ -66,23 +66,9 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.other', name: 'checkpointCredentials', run: (u, c) => u.checkpointCredentials(c, 'account') },
   { capability: 'credentials.other', name: 'restoreCredentials', run: (u, c) => u.restoreCredentials(c, 'account', []) },
 
-  // Binding a secret to a host is like storing a credential; unwrapping a placeholder is more privileged still.
-  { capability: 'egress_secrets.manage', name: 'listEgressSecrets', run: (u, c) => u.listEgressSecrets(c) },
-  {
-    capability: 'egress_secrets.manage',
-    name: 'putEgressSecret',
-    run: (u, c) => u.putEgressSecret(c, {
-      id: 'stripe', label: 'Stripe', host: 'api.stripe.com', secret: 'sk_live_probe_value',
-    }),
-  },
-  { capability: 'egress_secrets.manage', name: 'revokeEgressSecret', run: (u, c) => u.revokeEgressSecret(c, 'stripe') },
-  {
-    capability: 'egress_secrets.inject',
-    name: 'resolveEgressInjection',
-    run: (u, c) => u.resolveEgressInjection(
-      c, { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [] }, [],
-    ),
-  },
+  // A workspace reads its own grants (placeholders, and values only where the owner let its agents read them).
+  { capability: 'secrets.read_self', name: 'grantedSecrets', run: (u, c) => u.grantedSecrets(c) },
+  { capability: 'secrets.read_self', name: 'revealedSecrets', run: (u, c) => u.revealedSecrets(c) },
 
   { capability: 'ai_gateway.admin', name: 'listAIGateways', run: (u, c) => u.listAIGateways(c) },
   { capability: 'ai_gateway.admin', name: 'selectAIGateway', run: (u, c) => u.selectAIGateway(c, null) },
@@ -228,6 +214,18 @@ interface OwnerOnlyCall {
  * device consent are `owner_only` capabilities refused before any method runs.
  */
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
+  // A workspace that could add or grant a secret would grant itself the owner's keys; only the egress opens one.
+  { capability: 'secrets.manage', name: 'listSecrets', run: (u, c) => u.listSecrets(c) },
+  { name: 'putSecrets', run: (u, c) => u.putSecrets(c, [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], value: 'sk_live_probe_value' }], []) },
+  { name: 'setSecretHosts', run: (u, c) => u.setSecretHosts(c, 'STRIPE_SECRET_KEY', ['api.stripe.com']) },
+  { name: 'deleteSecret', run: (u, c) => u.deleteSecret(c, 'STRIPE_SECRET_KEY') },
+  { name: 'grantSecret', run: (u, c) => u.grantSecret(c, { name: 'STRIPE_SECRET_KEY', workspace: 'w', reveal: true }) },
+  { name: 'revokeSecretGrant', run: (u, c) => u.revokeSecretGrant(c, { name: 'STRIPE_SECRET_KEY', workspace: 'w' }) },
+  {
+    capability: 'secrets.inject',
+    name: 'resolveEgressInjection',
+    run: (u, c) => u.resolveEgressInjection(c, { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [] }, 'w'),
+  },
   { capability: 'account', name: 'completeOnboarding', run: (u, c) => u.completeOnboarding(c) },
   { capability: 'account', name: 'setDisplayName', run: (u, c) => u.setDisplayName(c, 'Owner') },
   { capability: 'account', name: 'heldRows', run: (u, c) => u.heldRows(c) },

@@ -111,6 +111,8 @@ export interface TestUserDO {
   revokedSessionPushes: string[];
   /** Workspaces the owner's object asked for their first tile, in order. */
   overviewNudges: string[];
+  /** Workspaces told their secrets moved, in order. */
+  secretsMoved: string[];
   consentPrompts: Array<{
     workspace: string;
     method: string;
@@ -300,6 +302,7 @@ interface TestUserEnvironment {
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
       requestOverviewPush(): Promise<void>;
       devicesMoved(): Promise<{ watching: boolean }>;
+      secretsMoved(): Promise<void>;
     };
   };
 }
@@ -365,6 +368,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
   const overviewNudges: string[] = [];
+  const secretsMoved: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const unavailableNotices: TestUserDO['unavailableNotices'] = [];
@@ -629,6 +633,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         async devicesMoved() {
           return { watching: options.deviceRosterMoved === undefined ? false : await options.deviceRosterMoved(name) };
         },
+        async secretsMoved() {
+          secretsMoved.push(name);
+        },
       }),
     },
   };
@@ -667,7 +674,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
-    revokedSessionPushes, overviewNudges,
+    revokedSessionPushes, overviewNudges, secretsMoved,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: async (workspace, consentId, answer) => ({ ok: await registryFor(workspace).resolve(consentId, answer) }),
     consentWakes,

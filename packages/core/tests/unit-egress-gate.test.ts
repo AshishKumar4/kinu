@@ -27,9 +27,8 @@ function placeholder(seed: string): string {
 }
 
 const STRIPE: EgressSecretBinding = {
-  id: 'bind-stripe',
-  label: 'Stripe live key',
-  host: 'api.stripe.com',
+  name: 'STRIPE_SECRET_KEY',
+  hosts: ['api.stripe.com'],
   placeholder: placeholder('a'),
 };
 
@@ -104,7 +103,7 @@ describe('planEgress', () => {
 
     expect(plan).toEqual({
       kind: 'forward',
-      substitutions: [{ bindingId: 'bind-stripe', placeholder: STRIPE.placeholder }],
+      substitutions: [{ name: 'STRIPE_SECRET_KEY', placeholder: STRIPE.placeholder }],
     });
   });
 
@@ -143,6 +142,21 @@ describe('planEgress', () => {
     expect(plan.kind).toBe(kind);
   });
 
+  test('a secret with several hosts is substituted at each of them, and refused at any other', () => {
+    const github: EgressSecretBinding = { name: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], placeholder: placeholder('g') };
+    const at = (host: string) => planEgress({ host, url: `https://${host}/`, headers: [['authorization', `token ${github.placeholder}`]] }, [github]).kind;
+
+    expect([at('api.github.com'), at('github.com'), at('gist.github.com')]).toEqual(['forward', 'forward', 'refuse']);
+  });
+
+  test('a placeholder inside a Basic credential is found, as `curl -u` and git over https send it', () => {
+    const basic = `Basic ${btoa(`x-access-token:${STRIPE.placeholder}`)}`;
+
+    expect(planEgress({ host: 'api.stripe.com', url: 'https://api.stripe.com/', headers: [['authorization', basic]] }, [STRIPE]))
+      .toEqual({ kind: 'forward', substitutions: [{ name: 'STRIPE_SECRET_KEY', placeholder: STRIPE.placeholder }] });
+    expect(planEgress({ host: 'attacker.test', url: 'https://attacker.test/', headers: [['authorization', basic]] }, [STRIPE]).kind).toBe('refuse');
+  });
+
   test('a revoked placeholder is refused, not forwarded as a dummy', () => {
     const plan = planEgress({
       host: 'api.stripe.com',
@@ -168,7 +182,7 @@ describe('planEgress', () => {
 describe('grants are the workspace set, or a subset', () => {
   const root: ApprovalGrant[] = [
     { rule: 'rm-rf', executor: 'computer' },
-    { rule: 'egress-secret:bind-stripe', executor: 'computer' },
+    { rule: 'git-push-force', executor: 'computer' },
   ];
 
   test('a facet that has recorded nothing inherits the whole root set', () => {
@@ -185,7 +199,7 @@ describe('grants are the workspace set, or a subset', () => {
   test('a facet can never hold a grant its root lacks', () => {
     const own = [
       { rule: 'rm-rf', executor: 'computer' },
-      { rule: 'egress-secret:bind-prod-db', executor: 'computer' },
+      { rule: 'drop-database', executor: 'computer' },
       { rule: 'rm-rf', executor: 'device' },
     ];
 
@@ -225,7 +239,7 @@ describe('inherited approval policy', () => {
   });
 
   test('after resolving, the root\'s mode and grants apply', async () => {
-    const grant = { rule: 'egress-secret:bind-stripe', executor: 'computer' };
+    const grant = { rule: 'git-push-force', executor: 'computer' };
     const policy = createInheritedApprovalPolicy(rootSource('allow_all', [grant]).source);
     await policy.resolve?.();
     expect(policy.mode()).toBe('allow_all');

@@ -9,7 +9,7 @@ import { attempt, settle, type DevboxError } from './errors';
 const SUPERVISED_SPEC_PREFIX = 'devbox:proc:';
 
 export type SupervisedStart =
-  | { readonly kind: 'start'; readonly command: string; readonly cwd: string }
+  | { readonly kind: 'start'; readonly command: string; readonly cwd: string; readonly env: Readonly<Record<string, string>> }
   | { readonly kind: 'restore'; readonly spec: SupervisedProcessSpec }
   | { readonly kind: 'native-start'; readonly processId: string; readonly command: string; readonly cwd: string };
 
@@ -119,13 +119,13 @@ export class SupervisedProcesses {
 
         if (!current()) return STALE;
 
-        if (owner === undefined) {
-          known = false;
-          owner = { processId: crypto.randomUUID(), command: request.command, cwd: request.cwd, createdAt: Date.now() };
-          const reserved = owner;
+        if (owner === undefined) known = false;
 
-          yield* attempt('io', () => this.ports.storage.put(`${SUPERVISED_SPEC_PREFIX}${reserved.processId}`, reserved));
-        }
+        // A re-issue keeps its id and takes the variables it was asked with, for this start and every restart after.
+        const reserved: SupervisedProcessSpec = { processId: crypto.randomUUID(), createdAt: Date.now(), ...owner, command: request.command, cwd: request.cwd, env: request.env };
+        owner = reserved;
+
+        yield* attempt('io', () => this.ports.storage.put(`${SUPERVISED_SPEC_PREFIX}${reserved.processId}`, reserved));
       } else {
         const processId = request.kind === 'restore' ? request.spec.processId : request.processId;
 
@@ -162,9 +162,10 @@ export class SupervisedProcesses {
       if (existing !== null && isProcessLive(existing.status)) return { kind: 'started', process: existing };
       const command = request.kind === 'restore' ? request.spec.command : request.command;
       const cwd = request.kind === 'restore' ? request.spec.cwd ?? DEVBOX_WORKDIR : request.cwd;
+      const env = request.kind === 'native-start' ? undefined : owner?.env;
       // An agent's job runs in a terminal session of its own, where a person can watch and answer it (D95).
       const session = request.kind === 'native-start' ? undefined : jobSessionId(processId);
-      const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current, session })));
+      const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current, session, env })));
 
       if (Result.isFailure(started)) {
         if (!current()) return STALE;

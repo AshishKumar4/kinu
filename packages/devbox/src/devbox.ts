@@ -2491,10 +2491,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Durable spec row is written before the process starts and is idempotent on (command, cwd):
    *  a re-issue restarts under the same id; a failed start keeps the row for `stopSupervised`. */
-  async startSupervised(command: string, cwd?: string): Promise<{ processId: string }> {
+  async startSupervised(command: string, cwd?: string, env: Readonly<Record<string, string>> = {}): Promise<{ processId: string }> {
     return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       yield* attempt('io', () => this.ensureReady());
-      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR }));
+      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR, env }));
 
       if (result.kind !== 'started') return yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
       // Its session is listed beside the person's own, by what it runs (D95).

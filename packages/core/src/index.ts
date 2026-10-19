@@ -1484,8 +1484,8 @@ export {
 } from './safety/approval-gate';
 
 export {
-  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, egressGrants,
-  grantedEgressBindings, findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
+  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, revealHeader,
+  findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
   createScrubStream, type EgressSecretBinding, type EgressRequestFacts,
   type ScrubReplacement,
 } from './safety/egress-gate';
@@ -1498,9 +1498,10 @@ export {
 } from './safety/deferred-approval';
 
 export {
-  initEgressVaultTables, listEgressSecrets, putEgressSecret, revokeEgressSecret, resolveEgressInjection,
-  type EgressSecretSummary, type PutEgressSecretInput, type EgressInjection, type EgressInjectionResult,
-  type EgressVaultDeps,
+  initEgressVaultTables, listSecrets, putSecrets, setSecretHosts, deleteSecret, grantSecret, revokeSecretGrant,
+  grantedSecrets, revealedSecrets, resolveEgressInjection,
+  type SecretSummary, type SecretGrant, type SecretInput, type GrantedSecrets, type EgressInjection,
+  type EgressInjectionResult, type EgressVaultDeps,
 } from './safety/egress-vault';
 
 export {
@@ -2572,6 +2573,8 @@ export {
   type HostedNodeHome,
   withHostedNodeExecution,
 } from './execution/node-home';
+
+export { withCommandEnvironment, type CommandEnvironment } from './execution/command-environment';
 
 export {
   objectNamed, type ObjectNamespace,

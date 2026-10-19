@@ -136,6 +136,7 @@ trap : INT
 if [ -f "${SAVED_SESSIONS}/$2/screen" ]; then rm -f "${SAVED_SESSIONS}/$2/running"; sh ${SESSION_RESUME_FILE} "$2"; fi
 while [ ! -e "$dir/piped" ]; do sleep 0.05; done
 printf '\\033[2m$ %s\\033[0m\\n' "$(cat "$dir/command")"
+[ -f "$dir/env" ] && . "$dir/env"
 sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" /bin/bash -c "$(cat "$dir/command")"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
 exec /bin/bash --rcfile ${SESSION_RC_FILE} -i`;
@@ -166,6 +167,7 @@ if [ -n "\${DEVBOX_SESSION:-}" ]; then
 ${RUN_IN_SESSION}
   exit 0
 fi
+[ -f "$dir/env" ] && . "$dir/env"
 setsid sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"`;
 
@@ -278,7 +280,10 @@ export class Processes {
   }
 
   /** With `session`, the job runs in that terminal session, where a person can watch and answer it (D95). */
-  start(command: string, options: { readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string }): Promise<ProcessRecord> {
+  /** `env` is written beside the job and read by its launch, in a session's pane too, which inherits no caller's variables. */
+  start(command: string, options: {
+    readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string; readonly env?: Readonly<Record<string, string>> | undefined;
+  }): Promise<ProcessRecord> {
     if (this.kernel === undefined) return settle(attempt('process', async () => {
       const kernel = await this.incarnation();
 
@@ -306,6 +311,9 @@ export class Processes {
 
       const record = { id: options.processId, command, cwd: options.cwd ?? '/workspace' };
       yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record))));
+      const variables = Object.entries(options.env ?? {}).map(([name, value]) => `export ${name}='${value.replaceAll("'", "'\\''")}'\n`).join('');
+
+      if (variables !== '') yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/env`, variables)));
 
       const env = options.session === undefined ? CONTAINER_ENV : {
         ...CONTAINER_ENV,

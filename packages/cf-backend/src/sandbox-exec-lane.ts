@@ -327,7 +327,7 @@ export function adaptCloudflareSandbox(
       return rows;
     })),
     startSupervisedProcess: (command, opts) =>
-      settle(onContainer(() => handle.startSupervised(command, opts?.cwd))),
+      settle(onContainer(() => handle.startSupervised(command, opts?.cwd, opts?.env))),
     stopSupervisedProcess: (processId) => settle(onContainer(() => handle.stopSupervised(processId))),
     supervisedProcessLogs: (processId, limits) => settle(onContainer(() => handle.supervisedLogs(processId, limits))),
     listSupervisedProcesses: () => settle(onContainer(async () =>

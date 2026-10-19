@@ -9,18 +9,31 @@ import {
   setDiagnosticsSink,
 } from '@kinu.run/core/obs';
 import { exports as workersExports } from 'cloudflare:workers';
-import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
+import { CodemodeEgress } from '../src/codemode-egress';
+import { EGRESS_FAILURE_HEADER } from '../src/egress/send-out';
 import { nimbusPreviewUrl, type PreviewVisit } from '../src/nimbus-route';
 import { PREVIEW_SELF } from '../src/viewer-pass';
 import { workerContext } from './helpers/bindings';
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
+import { jsrpcStub } from './helpers/jsrpc-stub';
+import type { EgressRequestFacts, UserCaller } from '@kinu.run/core';
 import { type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
+
+/** The owner object a program's egress asks for a placeholder; these suites ask it nothing unless they say so. */
+const UNASKED_OWNER = {
+  UserDO: {
+    idFromName: (name: string) => name,
+    get: () => jsrpcStub({ resolveEgressInjection: async (): Promise<never> => { throw new Error('no placeholder was named, so the owner object is not asked'); } }),
+  },
+  ...TEST_USER_ENV,
+};
 
 /** The gate's two bindings, recording what reached them. */
 function browserEnv(owned: ReadonlySet<string>) {
   const reached: string[] = [];
 
   const env = {
+    ...UNASKED_OWNER,
     BROWSER: {
       fetch: async (input: string) => {
         reached.push(`fetch ${input}`);
@@ -45,7 +58,7 @@ function browserEnv(owned: ReadonlySet<string>) {
 }
 
 /** Its fetch override reads no instance state; `WorkerEntrypoint`'s constructor still takes the platform handle whole. */
-const entry = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', asOwner: true } }, browserEnv(new Set()).env);
+const entry = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', asOwner: true, ownerUserId: null } }, browserEnv(new Set()).env);
 
 const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
   entry.fetch(new Request(url, init));
@@ -239,12 +252,60 @@ describe("a program reaches its own workspace's previews, and no other's", () =>
   });
 });
 
+describe("a program spends its workspace's secrets as a command does, and a viewer's program spends none", () => {
+  const SECRET = ['sk_live_', 'codemode0123456789ab'].join('');
+
+  /** The real owner object, holding Stripe's secret for `hello`, behind the egress a program of `hello` uses. */
+  async function egressFor(props: { readonly ownerUserId: string | null; readonly asOwner: boolean }) {
+    const harness = createTestUserDO();
+    const workspace: UserCaller = { workspaceToken: await provisionTestWorkspace(harness, 'hello') };
+    await harness.userDO.putSecrets(await testOwner(), [{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], value: SECRET }], ['hello']);
+    const placeholder = (await harness.userDO.grantedSecrets(workspace)).granted[0]?.placeholder ?? '';
+
+    const env = {
+      ...browserEnv(new Set()).env,
+      UserDO: {
+        idFromName: (name: string) => name,
+        get: () => jsrpcStub({
+          resolveEgressInjection: (caller: UserCaller, facts: EgressRequestFacts, name: string) => harness.userDO.resolveEgressInjection(caller, facts, name),
+        }),
+      },
+    };
+
+    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', ...props } }, env);
+
+    return { placeholder, fetch: (url: string) => egress.fetch(new Request(url, { headers: { authorization: `Bearer ${placeholder}` } })) };
+  }
+
+  test("an owner's program sends the secret to its host, over https only, and to no other host", async () => {
+    const { fetch } = await egressFor({ ownerUserId: '0123456789abcdef0123456789abcdef', asOwner: true });
+
+    expect((await fetch('https://api.stripe.com/v1/charges')).status).toBe(200);
+    const plain = await fetch('http://api.stripe.com/v1/charges');
+    const elsewhere = await fetch('https://collector.example/');
+
+    expect([plain.status, elsewhere.status]).toEqual([403, 403]);
+    // Marked as Kinu's, so the program's `fetch` throws the reason rather than returning a 403 it might ignore.
+    expect(plain.headers.get(EGRESS_FAILURE_HEADER)).toBe('1');
+    expect(await plain.text()).toContain('https://api.stripe.com');
+    expect(attempted.map((sent) => [sent.url, sent.headers.get('authorization')])).toEqual([['https://api.stripe.com/v1/charges', `Bearer ${SECRET}`]]);
+  });
+
+  test("a share's viewer's program, holding the placeholder somehow, sends nothing", async () => {
+    const { fetch } = await egressFor({ ownerUserId: null, asOwner: false });
+    const refused = await fetch('https://api.stripe.com/v1/charges');
+
+    expect(refused.status).toBe(403);
+    expect(attempted).toEqual([]);
+  });
+});
+
 describe('a program reaches a browser session only through the gate, and only one its agent opened', () => {
   const upgrade = { headers: { Upgrade: 'websocket' } };
 
   const gate = (owned: ReadonlySet<string>, actor: string | null) => {
     const { env, reached } = browserEnv(owned);
-    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor, asOwner: true } }, env);
+    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor, asOwner: true, ownerUserId: null } }, env);
 
     return { reached, fetch: (session: string, init?: RequestInit) => egress.fetch(new Request(`https://browser.kinu.invalid/v1/devtools/browser/${session}`, init)) };
   };

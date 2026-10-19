@@ -20,6 +20,7 @@ import { parseInput, projectJsonValue, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import { desktopTools, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop';
+import type { CommandEnvironment } from './command-environment';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
@@ -86,8 +87,8 @@ export interface SandboxHandle {
   unexposePort(port: number): Promise<JsonValue | void>;
   getExposedPorts():
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
-  /** The only kind of background process that survives container sleep. */
-  startSupervisedProcess(command: string, opts?: { cwd?: string }):
+  /** The only kind of background process that survives container sleep; `env` is kept with it and set again on each restart. */
+  startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>> }):
     Promise<{ processId: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
   /** What a supervised job wrote most recently, both streams as its terminal showed them. */
@@ -273,6 +274,8 @@ export interface SandboxExecutorOptions {
   /** The desktop: this agent, as the box tells its drivers apart, and the screen as the box's own constants set it;
    *  without it the computer offers no desktop. */
   readonly desktop?: { readonly driver: string; readonly screen: DesktopScreen };
+  /** The owner's secrets granted to this workspace, as each command's variables; without it a command gets none. */
+  readonly environment?: CommandEnvironment;
 }
 
 /** What every member of the computer's surface works over: its handle (none: not configured), its named shells, and
@@ -282,10 +285,11 @@ interface Computer {
   readonly names: ShellSession;
   readonly shells: MachineShells | undefined;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
+  readonly environment: CommandEnvironment;
 }
 
 /** `computer.exec`. */
-function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
+function execMember({ handle, names, shells, touch, environment }: Computer): ExecutorTool {
   return commandTool(
     'Run a shell command on your computer. '
       + 'BUN IS THE DEFAULT toolchain here (bun 1.3.12 ships in the image): use `bun install`, '
@@ -306,7 +310,7 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
         return { refused: refusalOf(new KinuError('unsupported', 'computer.exec: this runtime keeps no named shells')) };
       }
 
-      const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
+      const place = { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' };
       const reportCwd = reportsCwd({ context: args[1] });
       const { name } = exec;
 
@@ -325,14 +329,15 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
           // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
           // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
           return await names.hold(name, callJob(exec), () => named.run(pinned, async () => {
+            const env = { ...await environment('run'), ...(job !== undefined && { [JOB_STAMP_ENV]: job }) };
+            const call = machineShellCall(command, exec, place, Object.keys(env));
+
             const res = await touch(() => {
               if (signal?.aborted) throw notDispatched();
               // The signal is added only when given, so an adapter can tell "none" from "already fired".
-              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
+              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR, env };
 
               if (signal !== undefined) opts.signal = signal;
-
-              if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
 
               if (output !== undefined) opts.output = call.output(output);
 
@@ -358,7 +363,7 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
 }
 
 /** `computer.startProcess`. */
-function startProcessMember({ handle, touch }: Computer): ExecutorTool {
+function startProcessMember({ handle, touch, environment }: Computer): ExecutorTool {
   return commandTool(
     'Start a SUPERVISED background process in the computer. Supervision records a restart ' +
       'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
@@ -383,10 +388,12 @@ function startProcessMember({ handle, touch }: Computer): ExecutorTool {
       return { call: { text: command, cwd, context: {} }, run: async () => {
         try {
           // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
+          const env = await environment('keep');
+
           const started = await touch(async () => {
             await withSandboxRetry(() => handle.ensureReady());
 
-            return handle.startSupervisedProcess(command, { cwd });
+            return handle.startSupervisedProcess(command, { cwd, env });
           });
 
           return { processId: started.processId };
@@ -521,7 +528,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return { supported: true, url: exposed.url, port, name, route: exposed.route };
   };
 
-  const computer: Computer = { handle, names, shells, touch };
+  const computer: Computer = { handle, names, shells, touch, environment: options.environment ?? (async () => ({})) };
 
   const tools: ExecutorProvider['tools'] = {
     exec: execMember(computer),

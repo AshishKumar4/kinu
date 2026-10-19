@@ -27,7 +27,7 @@ function heldProgram() {
   return {
     started: started.promise,
     release: (answer: string) => { release.resolve(answer); },
-    run: () => codemodeLauncher({ kinuNode: false, egress: null }).run('async () => await held.wait()', providers),
+    run: () => codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})).run('async () => await held.wait()', providers),
   };
 }
 

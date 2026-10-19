@@ -72,6 +72,9 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** Each viewer's own account, where their personal parts' calls run (`part-runs.ts`); absent, no part runs. */
   readonly partConnections?: PartConnections;
   ownerUserId?(): string | null;
+  /** The owner's secrets granted to the workspace, as an owner's slate server holds them: placeholders, since a slate's
+   *  server is started again without asking (`CommandEnvironment` `keep`). */
+  secrets?(): Promise<Readonly<Record<string, string>>>;
   /** The workspace's one queue of actions parked on its owner, where `owner` shares' effects wait (deferred-approval.ts). */
   readonly ownerEffects?: NonNullable<SlateControllerPorts<SlateSource, ResidentSlateProcess>['ownerEffects']>;
   /** What the owner's MCP catalog knows of a connection's tool (share-policy.ts `ToolContract`). */
@@ -630,8 +633,10 @@ export class SlateHost {
     // The shared slates it inherited its bound from are sealed into it as the hop sealed them (`SlateCaller.via`).
     const lineage: SlateLineage = { incarnation: crypto.randomUUID(), generation: this.controller.generation(id), ancestors: { ...caller.via } };
     const actor = unshared ? await this.deps.browserActor(caller) : null;
-    // Shared, it reaches the network as no one: its own preview hosts too.
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: unshared });
+    // Shared, it reaches the network as no one: its own preview hosts too, and it holds and spends none of the owner's secrets.
+    const ownerUserId = unshared ? this.deps.ownerUserId?.() ?? null : null;
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: unshared, ownerUserId });
+    const secrets = unshared ? await this.deps.secrets?.() ?? {} : {};
 
     if (caller.workMode === 'build' && globalOutbound === null) {
       throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
@@ -644,7 +649,7 @@ export class SlateHost {
       bindings[name] = exports.SlateBinding({ props });
     }
 
-    const started = await this.resident.launch({ owner: id, root: source.root, bindings, globalOutbound, app: app === null ? null : { port: app.port } }, image);
+    const started = await this.resident.launch({ owner: id, root: source.root, bindings, secrets, globalOutbound, app: app === null ? null : { port: app.port } }, image);
 
     // Shared or unshared while it started: its network was chosen for what no longer holds, so it never runs as it is.
     if (this.controller.generation(id) !== lineage.generation) {

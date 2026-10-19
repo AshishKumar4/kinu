@@ -252,7 +252,7 @@ export class PersonalParts {
       // a call it makes after is refused (`call`).
       const drawn = yield* Effect.ensuring(Effect.gen({ self: this }, function* () {
         const process = yield* attempt({ doing: `starting ${slate}'s part`, otherwise: 'io' },
-          async () => resident.launch({ owner: slate, root: running.source.root, bindings, globalOutbound: null, app: null }, good.image));
+          async () => resident.launch({ owner: slate, root: running.source.root, bindings, secrets: {}, globalOutbound: null, app: null }, good.image));
 
         return yield* Effect.ensuring(this.called(process, fn, args), Effect.promise(async () => { await process.stop(); }));
       }), Effect.sync(() => { this.runs.delete(id); }));

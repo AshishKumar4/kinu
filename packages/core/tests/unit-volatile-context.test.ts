@@ -481,6 +481,28 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     expect('recoveries' in agentDynamicContext(sources)).toBe(false);
   });
 
+  test("the owner's secrets granted here are named with their hosts; the rest are counted, so forty cost a line", () => {
+    const granted = [
+      { name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], reveal: false },
+      { name: 'DATABASE_PASSWORD', hosts: ['db.example.com'], reveal: true },
+    ];
+
+    const block = present(renderDynamicContextBlock(agentDynamicContext({ ...sources, secrets: { granted, withheld: 38 } })), 'dynamic context block');
+    const all = block.split('\n');
+    const from = all.indexOf("## The owner's secrets in this workspace");
+    const lines = all.slice(from, all.findIndex((line, at) => at > from && (line === '' || line.startsWith('</'))));
+    const section = lines.join('\n');
+
+    expect(lines).toHaveLength(4);
+    expect(section).toContain('$STRIPE_SECRET_KEY → api.stripe.com');
+    expect(section).toContain('$DATABASE_PASSWORD → db.example.com (readable');
+    expect(section).toContain('38 more are not allowed here');
+    expect(section).toContain('Settings › Secrets');
+    expect(block).not.toContain('pxs1_');
+
+    expect('secrets' in agentDynamicContext({ ...sources, secrets: { granted: [], withheld: 0 } })).toBe(false);
+  });
+
   test('an absent plane is omitted, not rendered empty', () => {
     // renderDynamicContextBlock returns null for an empty block; an empty roster must not render headings.
     const ctx = agentDynamicContext(sources);

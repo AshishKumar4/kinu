@@ -1,13 +1,14 @@
 /**
- * Egress secret vault: owner secrets sealed in their own DO with the shared credential cipher, key and rotation.
- * Separate from `user_credentials` because that key spelling carries model-tier reach policy.
- * The container only sees a random placeholder, never derived from the secret; the destination is re-checked
- * per request. Plaintext exists only here and in the outbound handler, outside the container.
+ * The account's secrets: values sealed in the owner's own object with the shared credential cipher, each granted by the
+ * owner to the workspaces that may use it. A workspace only ever holds a random placeholder, never derived from the
+ * value; the grant, the scheme and the host are re-checked here on every request. Plaintext exists only here, in the
+ * outbound handler, and, where the owner turned on reading for a workspace, in that workspace's commands.
  */
 
 import { Effect } from 'effect';
-import { settle } from '../obs/effect';
 import * as v from 'valibot';
+import { settle } from '../obs/effect';
+import { KinuError } from '../obs/index';
 import type { CredentialCipher } from '../credentials/envelope';
 import type { SqlExec } from '../types/primitives';
 import { nanoid } from '../utils/nanoid';
@@ -20,25 +21,40 @@ import {
   type EgressSecretBinding,
 } from './egress-gate';
 
-/** Lands in a rule name and a SQL key, so held to the credential-key shape. */
-const BINDING_ID_RE = /^[a-zA-Z0-9._-]{1,128}$/;
+/** A variable name in every shell and a property in every program; the same shape `parseDotenv` reads. */
+const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
-/** Hostname or `*` glob; a scheme, path, port or whitespace would silently never match. */
-const HOST_PATTERN_RE = /^[a-zA-Z0-9.*_-]{1,253}$/;
+/** A hostname, or one under a domain as `*.example.com`: a wildcard anywhere else (`api.*`, a bare `*`) would let a
+ *  program name a host of its own choosing and have the secret sent there. */
+const HOST_RE = /^(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
-export interface EgressSecretSummary extends EgressSecretBinding {
-  readonly createdAt: number;
+/** A secret as the owner's Settings lists it: never its value or placeholder. */
+export interface SecretSummary {
+  readonly name: string;
+  readonly hosts: readonly string[];
   readonly updatedAt: number;
+  readonly grants: readonly SecretGrant[];
 }
 
-export interface PutEgressSecretInput {
-  readonly id: string;
-  readonly label: string;
-  readonly host: string;
-  readonly secret: string;
+/** The owner's consent for one workspace; `reveal` lets its agents read the value itself. */
+export interface SecretGrant {
+  readonly workspace: string;
+  readonly reveal: boolean;
 }
 
-/** `substitutions` carries plaintext: substitution is positional inside a request this DO does not own. */
+export interface SecretInput {
+  readonly name: string;
+  readonly hosts: readonly string[];
+  readonly value: string;
+}
+
+/** A workspace's own view: what it may use, with placeholders, and how many of the owner's secrets it may not. */
+export interface GrantedSecrets {
+  readonly granted: readonly (EgressSecretBinding & { readonly reveal: boolean })[];
+  readonly withheld: number;
+}
+
+/** `substitutions` carries plaintext: substitution is positional inside a request this object does not own. */
 export type EgressInjectionResult =
   | { readonly kind: 'forward'; readonly substitutions: readonly EgressInjection[] }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
@@ -48,29 +64,32 @@ export interface EgressInjection {
   readonly secret: string;
 }
 
-
-/** `aad` binds a ciphertext to one binding in one user's store. */
+/** `aad` binds a ciphertext to one secret in one user's store. */
 export interface EgressVaultDeps {
   readonly sql: SqlExec;
   readonly cipher: CredentialCipher;
-  readonly aad: (id: string) => string;
+  readonly aad: (name: string) => string;
 }
 
 export function initEgressVaultTables(sql: SqlExec): void {
+  // `placeholder` UNIQUE is load-bearing: a shared placeholder would spend one secret where another was granted.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_egress_secrets (
-      id          TEXT PRIMARY KEY,
-      label       TEXT NOT NULL,
-      host        TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS user_secrets (
+      name        TEXT PRIMARY KEY,
+      hosts       TEXT NOT NULL,
       placeholder TEXT NOT NULL UNIQUE,
       secret      TEXT NOT NULL,
-      created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       updated_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
-  // Placeholder UNIQUE is load-bearing: a shared placeholder would spend one secret where another was approved.
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_egress_secrets_placeholder
-            ON user_egress_secrets (placeholder)`);
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_secret_grants (
+      workspace TEXT NOT NULL,
+      name      TEXT NOT NULL,
+      reveal    INTEGER NOT NULL DEFAULT 0 CHECK (reveal IN (0, 1)),
+      PRIMARY KEY (workspace, name)
+    )
+  `);
 }
 
 /** Independent of the secret by construction. */
@@ -78,136 +97,215 @@ function mintEgressPlaceholder(): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
 }
 
-const EgressSecretRowSchema = v.object({
-  id: v.string(),
-  label: v.string(),
-  host: v.string(),
-  placeholder: v.string(),
-  created_at: v.number(),
-  updated_at: v.number(),
-});
+const SecretRowSchema = v.object({ name: v.string(), hosts: v.string(), updated_at: v.number() });
 
-/** Every binding, no secret material. */
-export function listEgressSecrets(sql: SqlExec): EgressSecretSummary[] {
-  return sql.exec(
-    `SELECT id, label, host, placeholder, created_at, updated_at
-       FROM user_egress_secrets ORDER BY id`,
-  ).toArray().map((row) => {
-    const binding = v.parse(EgressSecretRowSchema, row);
+const GrantRowSchema = v.object({ workspace: v.string(), name: v.string(), reveal: v.number() });
+
+const BindingRowSchema = v.object({ name: v.string(), hosts: v.string(), placeholder: v.string(), reveal: v.number() });
+
+/** Every secret and where it is granted, no secret material. */
+export function listSecrets(sql: SqlExec): SecretSummary[] {
+  const grants = sql.exec(`SELECT workspace, name, reveal FROM user_secret_grants ORDER BY workspace`).toArray()
+    .map((row) => v.parse(GrantRowSchema, row));
+
+  return sql.exec(`SELECT name, hosts, updated_at FROM user_secrets ORDER BY name`).toArray().map((row) => {
+    const secret = v.parse(SecretRowSchema, row);
 
     return {
-      id: binding.id,
-      label: binding.label,
-      host: binding.host,
-      placeholder: binding.placeholder,
-      createdAt: binding.created_at,
-      updatedAt: binding.updated_at,
+      name: secret.name,
+      hosts: secret.hosts.split(' '),
+      updatedAt: secret.updated_at,
+      grants: grants.filter((grant) => grant.name === secret.name).map((grant) => ({ workspace: grant.workspace, reveal: grant.reveal === 1 })),
     };
   });
 }
 
-/** Add or replace a secret. Replacing keeps the placeholder, so rotation needs no container change. */
-export function putEgressSecret(
-  deps: EgressVaultDeps,
-  input: PutEgressSecretInput,
-): Promise<EgressSecretBinding> {
-  return settle(Effect.gen(function* () {
-    if (!BINDING_ID_RE.test(input.id)) {
-      return yield* Effect.die(new Error(`Invalid egress secret id "${input.id}": letters, digits, dot, dash, underscore, up to 128.`));
+function validHosts(name: string, hosts: readonly string[]): Effect.Effect<string, KinuError> {
+  return Effect.gen(function* () {
+    const normalized = [...new Set(hosts.map((host) => host.trim().toLowerCase()).filter((host) => host !== ''))];
+
+    if (normalized.length === 0) return yield* new KinuError('bad_input', `${name} needs at least one host it may be sent to.`);
+    const wrong = normalized.find((host) => !HOST_RE.test(host));
+
+    if (wrong !== undefined) {
+      return yield* new KinuError('bad_input', `"${wrong}" is not a host ${name} can be sent to: write a hostname such as `
+        + 'api.example.com, or *.example.com for every host under a domain, with no scheme, port or path.');
     }
 
-    if (!HOST_PATTERN_RE.test(input.host)) {
-      return yield* Effect.die(new Error(
-        `Invalid egress host "${input.host}": a hostname or a * glob, with no scheme, port, path or space.`,
-      ));
-    }
-
-    if (input.secret.length === 0) return yield* Effect.die(new Error('An egress secret cannot be empty.'));
-
-    if (isEgressPlaceholder(input.secret)) {
-      return yield* Effect.die(new Error('That value is a placeholder, not a secret.'));
-    }
-
-    if (input.label.length === 0 || input.label.length > 200) {
-      return yield* Effect.die(new Error('An egress secret needs a label of 1-200 characters.'));
-    }
-
-    const existing = yield* readOne(PlaceholderRow, deps.sql, `SELECT placeholder FROM user_egress_secrets WHERE id = ?`, input.id);
-    const placeholder = existing ? String(existing.placeholder) : mintEgressPlaceholder();
-    const sealed = yield* Effect.promise(() => deps.cipher.seal(deps.aad(input.id), input.secret));
-    deps.sql.exec(
-      `INSERT INTO user_egress_secrets (id, label, host, placeholder, secret)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         label = excluded.label, host = excluded.host, secret = excluded.secret,
-         updated_at = unixepoch() * 1000`,
-      input.id, input.label, input.host, placeholder, sealed,
-    );
-
-    return { id: input.id, label: input.label, host: input.host, placeholder };
-  }));
+    return normalized.join(' ');
+  });
 }
 
-/** Returns whether a row went away ("revoked" vs "was never there"). */
-export function revokeEgressSecret(sql: SqlExec, id: string): boolean {
-  return sql.exec(`DELETE FROM user_egress_secrets WHERE id = ? RETURNING id`, id).toArray().length > 0;
+function registered(sql: SqlExec, workspaces: readonly string[]): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    for (const workspace of workspaces) {
+      if (sql.exec(`SELECT 1 FROM user_workspaces WHERE name = ?`, workspace).toArray().length === 0) {
+        return yield* new KinuError('missing', `There is no workspace "${workspace}" in this account.`);
+      }
+    }
+  });
 }
 
 /**
- * Decide one intercepted request and open only the secrets it may spend.
- * `active` is the approval gate's consent; this checks destination on every request.
+ * Add or replace secrets, all or none, and grant them to `grantTo` (an existing grant keeps its reading switch).
+ * Replacing keeps the placeholder, so rotation reaches every workspace with nothing to restart. Returns the workspaces
+ * whose secrets moved.
  */
-export function resolveEgressInjection(
-  deps: EgressVaultDeps,
-  facts: EgressRequestFacts,
-  active: readonly EgressSecretBinding[],
-): Promise<EgressInjectionResult> {
+export function putSecrets(deps: EgressVaultDeps, entries: readonly SecretInput[], grantTo: readonly string[]): Promise<string[]> {
   return settle(Effect.gen(function* () {
-    const plan = planEgress(facts, active);
+    if (entries.length === 0) return yield* new KinuError('bad_input', 'Add at least one secret.');
+    const names = new Set<string>();
+    const rows: { name: string; hosts: string }[] = [];
 
-    if (plan.kind === 'refuse') return plan;
-
-    if (plan.substitutions.length === 0) return { kind: 'forward', substitutions: [] };
-
-    const substitutions: EgressInjection[] = [];
-
-    for (const { bindingId, placeholder } of plan.substitutions) {
-      const row = yield* readOne(SecretRow, deps.sql, `SELECT secret FROM user_egress_secrets WHERE id = ?`, bindingId);
-
-      if (!row) {
-        // Revoked since configuration: fail closed rather than forward the dummy.
-        return {
-          kind: 'refuse',
-          status: 403,
-          reason: 'A secret this request needs has been revoked.',
-        };
+    for (const entry of entries) {
+      if (!SECRET_NAME_RE.test(entry.name)) {
+        return yield* new KinuError('bad_input', `"${entry.name}" cannot name a secret: use letters, digits and _, not starting `
+          + 'with a digit, as an environment variable is named.');
       }
 
-      substitutions.push({ placeholder, secret: yield* Effect.promise(() => deps.cipher.open(deps.aad(bindingId), String(row.secret))) });
+      if (names.has(entry.name)) return yield* new KinuError('bad_input', `${entry.name} is listed twice.`);
+      names.add(entry.name);
+
+      if (entry.value.length === 0) return yield* new KinuError('bad_input', `${entry.name} has no value.`);
+
+      if (isEgressPlaceholder(entry.value)) return yield* new KinuError('bad_input', `${entry.name}'s value is a placeholder, not a secret.`);
+      rows.push({ name: entry.name, hosts: yield* validHosts(entry.name, entry.hosts) });
     }
 
-    return { kind: 'forward', substitutions };
+    yield* registered(deps.sql, grantTo);
+    const sealed = yield* Effect.promise(() => Promise.all(entries.map((entry) => deps.cipher.seal(deps.aad(entry.name), entry.value))));
+
+    // No await from here: every row lands in one turn of the object, or none does.
+    for (const [index, row] of rows.entries()) {
+      deps.sql.exec(
+        `INSERT INTO user_secrets (name, hosts, placeholder, secret) VALUES (?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET hosts = excluded.hosts, secret = excluded.secret, updated_at = unixepoch() * 1000`,
+        row.name, row.hosts, mintEgressPlaceholder(), sealed[index],
+      );
+
+      for (const workspace of grantTo) {
+        deps.sql.exec(`INSERT INTO user_secret_grants (workspace, name) VALUES (?, ?) ON CONFLICT DO NOTHING`, workspace, row.name);
+      }
+    }
+
+    return grantedWorkspaces(deps.sql, [...names]);
   }));
 }
 
-const PlaceholderRow = v.object({ placeholder: v.string() });
+/** The workspaces holding any of `names`. */
+function grantedWorkspaces(sql: SqlExec, names: readonly string[]): string[] {
+  const workspaces = new Set<string>();
+
+  for (const name of names) {
+    for (const row of sql.exec(`SELECT workspace FROM user_secret_grants WHERE name = ?`, name).toArray()) {
+      workspaces.add(v.parse(v.object({ workspace: v.string() }), row).workspace);
+    }
+  }
+
+  return [...workspaces];
+}
+
+function known(sql: SqlExec, name: string): Effect.Effect<void, KinuError> {
+  return sql.exec(`SELECT 1 FROM user_secrets WHERE name = ?`, name).toArray().length > 0
+    ? Effect.void
+    : Effect.fail(new KinuError('missing', `There is no secret named ${name}.`));
+}
+
+/** The hosts `name` may be sent to, replaced; returns the workspaces whose secrets moved. */
+export function setSecretHosts(sql: SqlExec, name: string, hosts: readonly string[]): Promise<string[]> {
+  return settle(Effect.gen(function* () {
+    yield* known(sql, name);
+    sql.exec(`UPDATE user_secrets SET hosts = ?, updated_at = unixepoch() * 1000 WHERE name = ?`, yield* validHosts(name, hosts), name);
+
+    return grantedWorkspaces(sql, [name]);
+  }));
+}
+
+/** The secret and every grant of it; returns the workspaces that held it. A later request naming it is refused. */
+export function deleteSecret(sql: SqlExec, name: string): Promise<string[]> {
+  return settle(Effect.gen(function* () {
+    yield* known(sql, name);
+    const held = grantedWorkspaces(sql, [name]);
+    sql.exec(`DELETE FROM user_secret_grants WHERE name = ?`, name);
+    sql.exec(`DELETE FROM user_secrets WHERE name = ?`, name);
+
+    return held;
+  }));
+}
+
+/** Grant `name` to `workspace`, or change whether its agents may read the value. */
+export function grantSecret(sql: SqlExec, input: { readonly name: string; readonly workspace: string; readonly reveal: boolean }): Promise<void> {
+  return settle(Effect.gen(function* () {
+    yield* known(sql, input.name);
+    yield* registered(sql, [input.workspace]);
+    sql.exec(
+      `INSERT INTO user_secret_grants (workspace, name, reveal) VALUES (?, ?, ?)
+       ON CONFLICT(workspace, name) DO UPDATE SET reveal = excluded.reveal`,
+      input.workspace, input.name, input.reveal ? 1 : 0,
+    );
+  }));
+}
+
+/** Whether a grant went away. */
+export function revokeSecretGrant(sql: SqlExec, input: { readonly name: string; readonly workspace: string }): boolean {
+  return sql.exec(`DELETE FROM user_secret_grants WHERE workspace = ? AND name = ? RETURNING name`, input.workspace, input.name).toArray().length > 0;
+}
+
+function bindings(sql: SqlExec, workspace: string): (EgressSecretBinding & { readonly reveal: boolean })[] {
+  return sql.exec(
+    `SELECT s.name, s.hosts, s.placeholder, g.reveal FROM user_secret_grants g JOIN user_secrets s ON s.name = g.name
+      WHERE g.workspace = ? ORDER BY s.name`,
+    workspace,
+  ).toArray().map((row) => {
+    const binding = v.parse(BindingRowSchema, row);
+
+    return { name: binding.name, hosts: binding.hosts.split(' '), placeholder: binding.placeholder, reveal: binding.reveal === 1 };
+  });
+}
+
+export function grantedSecrets(sql: SqlExec, workspace: string): GrantedSecrets {
+  const granted = bindings(sql, workspace);
+  const all = v.parse(v.object({ count: v.number() }), sql.exec(`SELECT count(*) AS count FROM user_secrets`).toArray()[0]).count;
+
+  return { granted, withheld: all - granted.length };
+}
+
+/** The values `workspace`'s agents may read, by name; asked for each command, never kept. */
+export function revealedSecrets(deps: EgressVaultDeps, workspace: string): Promise<Record<string, string>> {
+  return settle(Effect.gen(function* () {
+    const revealed: Record<string, string> = {};
+
+    for (const binding of bindings(deps.sql, workspace)) {
+      if (binding.reveal) revealed[binding.name] = yield* open(deps, binding.name);
+    }
+
+    return revealed;
+  }));
+}
 
 const SecretRow = v.object({ secret: v.string() });
 
-
-function readOne<Schema extends v.GenericSchema>(
-  schema: Schema, sql: SqlExec, query: string, ...values: string[]
-): Effect.Effect<v.InferOutput<Schema> | undefined> {
+function open(deps: EgressVaultDeps, name: string): Effect.Effect<string> {
   return Effect.gen(function* () {
-    const row = sql.exec(query, ...values).toArray()[0];
+    const row = v.parse(SecretRow, deps.sql.exec(`SELECT secret FROM user_secrets WHERE name = ?`, name).toArray()[0]);
 
-    if (row === undefined) return undefined;
-    const parsed = v.safeParse(schema, row);
-
-    if (!parsed.success) {
-      return yield* Effect.die(new Error(`user_egress_secrets row does not match its expected shape: ${query}`));
-    }
-
-    return parsed.output;
+    return yield* Effect.promise(() => deps.cipher.open(deps.aad(name), row.secret));
   });
+}
+
+/**
+ * Decide one intercepted request for `workspace` and open only the secrets it may spend: the owner's grants to that
+ * workspace as they stand, the scheme and the destination, on every request.
+ */
+export function resolveEgressInjection(deps: EgressVaultDeps, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
+  return settle(Effect.gen(function* () {
+    const plan = planEgress(facts, bindings(deps.sql, workspace));
+
+    if (plan.kind === 'refuse') return plan;
+    const substitutions: EgressInjection[] = [];
+
+    for (const { name, placeholder } of plan.substitutions) substitutions.push({ placeholder, secret: yield* open(deps, name) });
+
+    return { kind: 'forward', substitutions };
+  }));
 }
