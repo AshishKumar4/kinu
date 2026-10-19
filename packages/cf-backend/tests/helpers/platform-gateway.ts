@@ -115,6 +115,28 @@ export function wordByWordCompletion(run: RecordedGatewayRun, words: readonly st
   });
 }
 
+/** The gateway's streamed answer, `before` at once and `after` once `rest` settles, as a provider pauses mid-answer. */
+export function pausedCompletion(run: RecordedGatewayRun, before: string, rest: Promise<void>, after: string): Response {
+  if (v.parse(StreamedQuerySchema, run.query).stream !== true) return chatCompletion(run, before + after);
+  const encoder = new TextEncoder();
+
+  const chunk = (delta: Readonly<Record<string, string>>, finish: 'stop' | null): Uint8Array => encoder.encode(`data: ${JSON.stringify({
+    id: 'chatcmpl-harness', created: 0, model: 'harness', object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish }],
+    ...(finish !== null && { usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }),
+  })}\n\n`);
+
+  return new Response(new ReadableStream<Uint8Array>({
+    start: async (controller) => {
+      controller.enqueue(chunk({ role: 'assistant', content: before }, null));
+      await rest;
+      controller.enqueue(chunk({ content: after }, null));
+      controller.enqueue(chunk({}, 'stop'));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+}
+
 /** A tool call the model makes, as the gateway returns it. */
 export interface GatewayToolCall {
   readonly tool: string;
