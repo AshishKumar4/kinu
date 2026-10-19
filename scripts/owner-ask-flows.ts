@@ -81,15 +81,29 @@ export interface TitledChatVerdict {
   readonly continued: boolean;
   /** The chat's tab, once Continue's turn ended. */
   readonly title: string;
+  /** The chat tab's status once the stopped turn settled, and once Continue's did: a stop asks nothing of the owner. */
+  readonly statusAfterStop: string;
+  readonly statusAfterContinue: string;
 }
 
 /** The current chat's tab in the workspace bar, as it reads. */
 const CURRENT_CHAT_TAB = `(document.querySelector('${CHATS} a[aria-current="page"] .p-status-label')?.textContent ?? '').trim()`;
 
+/** The current chat tab's status (`chatActivity`: working, waiting, idle or failed), which a roster frame brings. */
+const CURRENT_CHAT_STATUS = `(document.querySelector('${CHATS} a[aria-current="page"]')?.closest('[data-status]')?.getAttribute('data-status') ?? '')`;
+
+/** The current chat tab's status once its turn has ended: no longer working, and the same on two frames. */
+async function settledChatStatus(page: Page): Promise<string> {
+  await until(page, "the chat tab's status, its turn ended", `!['', 'working'].includes(${CURRENT_CHAT_STATUS})`);
+  await settled(page, CURRENT_CHAT_STATUS);
+
+  return v.parse(v.string(), await page.evaluate(CURRENT_CHAT_STATUS));
+}
+
 const STOP = '#chat button[aria-label="Stop this turn"]';
 
 /**
- * Row (1008-e): a chat is named from its brief, its first words, even when its first turn is stopped and the owner
+ * Rows 1008-e and 1008-d: a chat is named from its brief, its first words, even when its first turn is stopped and the owner
  * then says Continue: the owner's chat was titled "Continue" (2026-10-08). The brief's turn is slow to its first
  * token, so its Stop is there to press.
  */
@@ -107,6 +121,9 @@ export async function chatTitledFromItsBrief(target: FlowTarget): Promise<Titled
     await until(page, "Stop, while the brief's turn runs", `[...document.querySelectorAll(${JSON.stringify(STOP)})].some((button) => button.getClientRects().length > 0)`);
     await page.click(STOP);
     await until(page, "the stopped turn's end, Send offered again", CHAT_IDLE);
+    // Row 1008-d: the owner's interrupted chat stayed marked as wanting them (2026-10-08).
+    const statusAfterStop = await settledChatStatus(page);
+
     await sendAndSettle(page, CONTINUE);
     await until(page, "the chat's tab, named", `${CURRENT_CHAT_TAB} !== ''`);
     await settled(page, CURRENT_CHAT_TAB);
@@ -115,6 +132,8 @@ export async function chatTitledFromItsBrief(target: FlowTarget): Promise<Titled
       stopped: true,
       continued: (await chatText(page)).includes(CONTINUED),
       title: v.parse(v.string(), await page.evaluate(CURRENT_CHAT_TAB)),
+      statusAfterStop,
+      statusAfterContinue: await settledChatStatus(page),
     };
   } finally {
     await removeFlowWorkspace(target, workspace);
