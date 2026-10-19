@@ -966,10 +966,10 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     const listed = await executeSlashCommand(client, '/changelog');
 
     if (listed.kind !== 'changelog') throw new Error(`expected changelog outcome, got ${listed.kind}`);
-    expect(listed.view.unseenCount).toBe(2);
-    const tool = present(listed.view.entries.find((entry) => entry.kind === 'tool'), 'a tool entry');
+    // The crafted tool is the agent's own (W0919-09): the changelog lists the facts it learned, and nothing of the tool.
+    expect(listed.view.unseenCount).toBe(1);
+    expect(JSON.stringify(listed.view.entries)).not.toContain('csv_summarizer');
     const facts = present(listed.view.entries.find((entry) => entry.kind === 'fact'), 'a fact entry');
-    expect(tool.summary).toBe('Created a tool: csv summarizer');
     expect(facts.summary).toBe('Learned 2 things about your environment');
     expect(facts.items?.map((entry) => entry.summary)).toEqual([
       'Your editor is helix',

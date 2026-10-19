@@ -34,7 +34,6 @@ export const TUI_COMPOSER_STEERING_PLACEHOLDER = 'Type to steer the running turn
 /** Shared by the changelog overlay, the console event stream, and the landing page's journal. */
 export const CHANGE_KIND_GLYPH = {
   scaffold: '⟳',
-  tool: '✎',
   fact: '✦',
   gepa: '◬',
   ratings: '✓',
