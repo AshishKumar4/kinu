@@ -203,6 +203,14 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  // A device's screen as its last HELLO reported it (DeviceDesktopSchema, JSON, 1014-t); no row reads as none.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_device_desktops (
+      device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE,
+      desktop   TEXT NOT NULL
+    )
+  `);
+
   // A device whose last HELLO the hub refused for its protocol: its daemon must be updated by hand.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_device_protocol_refusals (

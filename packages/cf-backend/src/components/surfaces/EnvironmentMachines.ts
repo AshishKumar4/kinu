@@ -6,7 +6,8 @@
 import { useCallback, useMemo } from "react";
 import { Effect } from "effect";
 import { attempt, type KinuError } from "@kinu.run/core/obs";
-import { grantDeviceConsent, listDeviceConsents, type DeviceConsent, type DeviceDesktop } from "@/lib/user-api";
+import { grantDeviceConsent, listDeviceConsents, type DeviceConsent } from "@/lib/user-api";
+import type { DeviceDesktop } from "@kinu.run/core";
 import { lastValue, useAsyncResource, type Revalidate } from "@/hooks/use-async-resource";
 import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
 

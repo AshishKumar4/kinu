@@ -29,6 +29,7 @@
     "user_credential_revisions",
     "user_credentials",
     "user_credentials_revision",
+    "user_device_desktops",
     "user_device_protocol_refusals",
     "user_device_retired_tokens",
     "user_device_update_refusals",

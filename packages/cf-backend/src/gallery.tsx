@@ -134,7 +134,7 @@ const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
 
 /**
- * `&pcdesktop=ready|setup|permission|update`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
+ * `&pcdesktop=ready|setup|permission`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
  * `setup` poses a Mac with no compiler for its capture helper, as the daemon names the step.
  */
 const SHELL_PC_DESKTOP: UserDevice["desktop"] = (() => {
@@ -144,7 +144,7 @@ const SHELL_PC_DESKTOP: UserDevice["desktop"] = (() => {
 
   if (state === "setup") return { state, detail: "Install the Command Line Tools (xcode-select --install), then open this tab again." };
 
-  return state === "permission" || state === "update" ? { state } : { state: "none" };
+  return state === "permission" ? { state } : { state: "none" };
 })();
 
 /** The shell's machines under `&env=computer` or `&pc=`, as `listMounts` and the snapshot's executors answer them. */

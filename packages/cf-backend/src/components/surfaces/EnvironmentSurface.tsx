@@ -111,7 +111,7 @@ function machinesOf(mounts: readonly EnvironmentInfo[], account: readonly Accoun
 /** What a machine's Desktop tab shows: its screen at its size, or the step before it; null for no tab. */
 type MachineDesktop =
   | { readonly kind: "screen"; readonly src: string; readonly width: number; readonly height: number }
-  | { readonly kind: "step"; readonly state: "setup" | "permission" | "update"; readonly detail: string | null }
+  | { readonly kind: "step"; readonly state: "setup" | "permission"; readonly detail: string | null }
   | null;
 
 /** The computer's screen; a PC's as its daemon reports it (1014-t); none for the workspace. */
@@ -574,13 +574,9 @@ const DESKTOP_STEPS = {
     title: `Allow screen sharing on ${name}`,
     body: `A prompt on ${name} asks to share its screen with Kinu. Its screen opens here once it is allowed there.`,
   }),
-  update: (name: string) => ({
-    title: `Update Kinu on ${name}`,
-    body: <>Its daemon shares no screen yet. Run <code className="p-annotation whitespace-nowrap">kinu update</code> on it, and its desktop opens here.</>,
-  }),
-} satisfies Record<"setup" | "permission" | "update", (name: string, detail: string | null) => { readonly title: string; readonly body: ReactNode }>;
+} satisfies Record<"setup" | "permission", (name: string, detail: string | null) => { readonly title: string; readonly body: ReactNode }>;
 
-function DesktopStep({ name, state, detail }: { name: string; state: "setup" | "permission" | "update"; detail: string | null }) {
+function DesktopStep({ name, state, detail }: { name: string; state: "setup" | "permission"; detail: string | null }) {
   const { title, body } = DESKTOP_STEPS[state](name, detail);
 
   return <Absence icon={DesktopIcon} title={title}>{body}</Absence>;

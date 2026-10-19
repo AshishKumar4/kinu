@@ -1579,6 +1579,10 @@
     "kind TEXT NOT NULL",
     "value TEXT NOT NULL"
   ],
+  "user_device_desktops@packages/core/src/state/user-schema.ts": [
+    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE",
+    "desktop TEXT NOT NULL"
+  ],
   "user_device_protocol_refusals@packages/core/src/state/user-schema.ts": [
     "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE"
   ],

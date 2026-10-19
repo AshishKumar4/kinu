@@ -111,6 +111,8 @@ const FRAMES = protocol.frames;
 
 const chatgpt = require('./chatgpt.js');
 
+const screen = require('./daemon/screen.js');
+
 const { runToExit } = update;
 
 /** This daemon's own file, as Bun started it. Not `__filename`: a release bundles this file, and the bundler writes the
@@ -219,9 +221,9 @@ const PTY_OUTPUT_FRAME = FRAMES.ptyOutput;
 
 const PTY_EXIT_FRAME = FRAMES.ptyExit;
 
-/** The frames the hub sends a live session. Each names a session this daemon
- *  already opened, so none of them is a way to start work. */
-const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME]);
+/** The frames the hub sends a live session or screen stream. Each names one
+ *  this daemon already opened, so none of them is a way to start work. */
+const LIVE_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, screen.SCREEN_CLOSE_FRAME]);
 
 /**
  * How far behind the socket may fall before live output — a terminal's, or a
@@ -1001,14 +1003,16 @@ function sendLiveFrame(ws, frame) {
 }
 
 /**
- * A frame for a session already open.
+ * A frame for a session or screen stream already open.
  *
  * There is no request id to answer on, so a frame naming a terminal this
  * machine no longer holds is recorded and dropped. That is the ordinary race
  * and not an error: the program exited, and its exit frame is already on its
- * way to the hub that sent this.
+ * way to the hub that sent this. A screen's close names its stream, which is
+ * gone already if this daemon ended it first.
  */
-function handlePtyFrame(msg, ctx) {
+function handleLiveFrame(msg, ctx) {
+  if (msg.type === screen.SCREEN_CLOSE_FRAME) return ctx?.screens?.closed(msg.stream);
   const sessions = ctx && ctx.sessions;
 
   if (!sessions) return log('device.terminal_frame_dropped', msg.type, 'this daemon holds no terminals');
@@ -1333,12 +1337,13 @@ async function relayCall(ws, id, request) {
   }
 }
 
-/** Methods past the file and command set: the provider relay and this machine's ChatGPT sign-in, else
- *  the answer an older hub's newer frame gets. */
-function answerLaterMethod(msg, ws) {
+/** Methods past the file and command set: the provider relay, this machine's screen and its ChatGPT sign-in,
+ *  else the answer an older hub's newer frame gets. */
+function answerLaterMethod(msg, ws, ctx) {
   const { id, method, params } = msg;
 
   if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
+  else if (method === METHODS.screenOpen) rpc(ws, id, screensOf(ctx).open(params[0], ws));
   else if (method === CHATGPT_METHODS.status) rpc(ws, id, chatgptSession.status());
   else if (method === CHATGPT_METHODS.signIn) rpcWhenSettled(ws, id, chatgptSession.signIn());
   else if (method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut({ revoke: params?.[0]?.revoke === true }));
@@ -1378,7 +1383,7 @@ function rpcRequest(msg) {
 }
 
 function handle(msg, ws, ctx) {
-  if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
+  if (LIVE_FRAMES.has(msg.type)) return handleLiveFrame(msg, ctx);
   const request = rpcRequest(msg);
 
   if (request === null) return;
@@ -1471,11 +1476,27 @@ function handle(msg, ws, ctx) {
       const view = viewFromFrame(msg);
       rpcWhenSettled(ws, id, checkpoints.restore(view, params[0], checkpointDirFor(view, params[1]), params[2]));
     } else {
-      answerLaterMethod(msg, ws);
+      answerLaterMethod(msg, ws, ctx);
     }
   } catch (err) {
     rpc(ws, id, null, err);
   }
+}
+
+/** Screen data from the hub, handed to its stream; false when the message is not screen data. */
+function screenDataReceived(data, ctx) {
+  const received = screen.readScreenData(data);
+
+  if (received === null) return false;
+  ctx.screens.receive(received.stream, received.bytes);
+
+  return true;
+}
+
+function screensOf(ctx) {
+  if (!ctx || !ctx.screens) throw new Error('this daemon holds no screens');
+
+  return ctx.screens;
 }
 
 // ── Daemon startup ─────────────────────────────────────────────────────
@@ -1941,6 +1962,9 @@ async function main() {
   // is something a person is watching, so one whose socket is gone has
   // nobody to draw for.
   const sessions = pty.createSessions({ log });
+  // This machine's screen, served only on a stream the hub opens. No system's
+  // screen source ships yet, so every HELLO reports none (1014-t).
+  const screens = screen.createScreens({ source: null, log });
 
   // A signalled daemon terminates without running exit hooks, so the machine
   // would stay claimed by a dead pid until the next daemon reaped it. The
@@ -1954,6 +1978,7 @@ async function main() {
       const ended = sessions.closeAll();
 
       if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
+      screens.closeAll();
       exitWhenQuiet(0);
     });
   }
@@ -1966,6 +1991,7 @@ async function main() {
   const ctx = {
     checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }),
     sessions,
+    screens,
   };
 
   const updater = update.createUpdater({
@@ -2024,6 +2050,7 @@ async function main() {
         const ended = ctx.sessions.closeAll();
 
         if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
+        ctx.screens.closeAll();
         log('device.update_handed_over', `successor connected; pid ${process.pid} exiting`);
         loop.stop();
         exitWhenQuiet(0);
@@ -2047,11 +2074,15 @@ async function main() {
       const ended = ctx.sessions.closeAll();
 
       if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
+      // A screen is drawn for whoever is watching, and the socket was the only way to them.
+      ctx.screens.closeAll();
     },
     dial(ticket) {
       const wsUrl = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
       log('Connecting to', WS_ORIGIN + '/pc/connect');
       const ws = mkWs(wsUrl);
+      // A screen's bytes arrive as binary messages, read in the turn they land.
+      ws.binaryType = 'arraybuffer';
       ws.addEventListener('open', () => {
         log('Connected');
 
@@ -2093,9 +2124,13 @@ async function main() {
             gpu: sandbox.gpuNodes(),
           },
           agentRoot: AGENT_ROOT,
+          desktop: ctx.screens.desktop(),
         }));
       });
       ws.addEventListener('message', (ev) => {
+        // A screen's bytes are the one binary frame the hub sends; every other frame is JSON text.
+        if (typeof ev.data !== 'string' && screenDataReceived(ev.data, ctx)) return;
+
         const payload = ev.data instanceof ArrayBuffer
           ? new TextDecoder().decode(ev.data)
           : String(ev.data);

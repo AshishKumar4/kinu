@@ -10,7 +10,7 @@ import { diagnostics, renderThrownChain, toKinuError, type KinuError } from "@ki
 import type { OrchestratorAgent } from "./orchestrator";
 
 import { objectNamed, err, json } from "@kinu.run/core";
-import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
+import { DEVICE_PTY_MAX_AXIS, DEVICE_SCREEN_PATH, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
@@ -47,7 +47,7 @@ interface DeviceHolderNamespace {
   get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
 }
 
-export type TerminalWorkspace = Pick<OrchestratorAgent, 'prepareTerminal' | 'openDeviceTerminal' | 'fetch'>;
+export type TerminalWorkspace = Pick<OrchestratorAgent, 'prepareTerminal' | 'openDeviceTerminal' | 'openDeviceScreen' | 'fetch'>;
 
 interface TerminalSandbox {
   fetch(request: Request): Promise<Response>;
@@ -129,7 +129,7 @@ interface TerminalCall {
   readonly agentName: string;
   readonly executor: string;
   readonly verb: "attach" | "keepalive" | "reset";
-  /** The desktop (D70) is the container's alone, and attaches as its terminal does. */
+  /** A desktop (D70) attaches as its machine's terminal does: the computer's container, or a PC's daemon (1014-t). */
   readonly surface: "terminal" | "desktop";
   readonly scope: { readonly workspace: string; readonly executor: string };
 }
@@ -156,7 +156,7 @@ function notAnUpgrade({ request, surface }: TerminalCall): Response | null {
 
 /** The shell runs on the owner's machine: the upgrade is handed to the DO holding its outbound socket. */
 async function deviceTerminal(call: TerminalCall): Promise<Response> {
-  const { request, url, deps, scope } = call;
+  const { request, url } = call;
 
   // Guards only: they keep a device request off the container path, which would beat a foreign lease.
   if (call.verb !== "attach") {
@@ -165,6 +165,27 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
     return json({ body: { ok: true } });
   }
 
+  return toDeviceHolder(call, DEVICE_TERMINAL_PATH, (agent) => agent.openDeviceTerminal(paneWindow(url), url.searchParams.get("device") ?? undefined));
+}
+
+/** A PC's screen, as its shell: opened through the workspace, the viewer's upgrade then handed to the DO holding the
+ *  PC's socket (1014-t). */
+async function deviceDesktop(call: TerminalCall, device: string): Promise<Response> {
+  return toDeviceHolder(call, DEVICE_SCREEN_PATH, (agent) => agent.openDeviceScreen(device));
+}
+
+const DEVICE_SURFACE = {
+  terminal: { doing: "opening a terminal on this machine", reaching: "reaching this workspace to open a terminal", event: "terminal" },
+  desktop: { doing: "opening this machine's screen", reaching: "reaching this workspace to open a machine's screen", event: "desktop" },
+} as const;
+
+async function toDeviceHolder(
+  call: TerminalCall,
+  path: string,
+  open: (agent: TerminalWorkspace) => Promise<{ session: string; user: string } | { error: string }>,
+): Promise<Response> {
+  const { request, deps, scope } = call;
+  const surface = DEVICE_SURFACE[call.surface];
   const refused = notAnUpgrade(call);
 
   if (refused !== null) return refused;
@@ -175,26 +196,18 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
     const agent = await readyWorkspace(call, "device");
 
     if (agent instanceof Response) return agent;
-    opened = await agent.openDeviceTerminal(paneWindow(url), url.searchParams.get("device") ?? undefined);
+    opened = await open(agent);
   } catch (cause) {
-    const error = toKinuError({
-      doing: "reaching this workspace to open a terminal",
-      cause,
-      otherwise: "unavailable",
-    });
+    const error = toKinuError({ doing: surface.reaching, cause, otherwise: "unavailable" });
 
-    diagnostics.failure("terminal.device_open_failed", error, scope);
+    diagnostics.failure(`${surface.event}.device_open_failed`, error, scope);
 
     return err(503, renderThrownChain({ cause: error }));
   }
 
   if ("error" in opened) {
     // Already a rendered chain from the RPC's other side, so it rides as the cause.
-    diagnostics.failure("terminal.device_refused", toKinuError({
-      doing: "opening a terminal on this machine",
-      cause: opened.error,
-      otherwise: "unavailable",
-    }), scope);
+    diagnostics.failure(`${surface.event}.device_refused`, toKinuError({ doing: surface.doing, cause: opened.error, otherwise: "unavailable" }), scope);
 
     return err(503, opened.error);
   }
@@ -202,7 +215,7 @@ async function deviceTerminal(call: TerminalCall): Promise<Response> {
   if (request.signal.aborted) return abandonedAttach(call.surface);
   // A WebSocket cannot cross an RPC boundary, but an upgrade request can. The session is single-use.
   const socketUrl = new URL(request.url);
-  socketUrl.pathname = DEVICE_TERMINAL_PATH;
+  socketUrl.pathname = path;
   socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
 
   return objectNamed(deps.UserDO, opened.user).fetch(new Request(socketUrl, request));
@@ -411,6 +424,15 @@ export function terminalRoutes<Bindings extends object>(
   routes.all(`${LITERAL_WORKSPACE}/terminal`, terminal("attach"));
   routes.all(`${LITERAL_WORKSPACE}/terminal/keepalive`, terminal("keepalive"));
   routes.all(`${LITERAL_WORKSPACE}/terminal/reset`, terminal("reset"));
+
+  routes.all(`${LITERAL_WORKSPACE}/devices/:device{[^/%]+}/desktop`, async (c) => {
+    const { name: agentName, request } = c.get('workspace');
+    const scope = { workspace: agentName, executor: DEVICE_EXECUTOR };
+
+    return deviceDesktop({
+      request, url: new URL(request.url), deps: depsFor(c.env), agentName, executor: DEVICE_EXECUTOR, verb: "attach", scope, surface: "desktop",
+    }, c.req.param('device'));
+  });
 
   routes.all(`${LITERAL_WORKSPACE}/desktop`, async (c) => {
     const { name: agentName, request } = c.get('workspace');

@@ -329,6 +329,7 @@ async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, u
 
  return { ok: true as const }; },
         openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
+        openDeviceScreen: async () => { throw new Error('this probe has no device'); },
         fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),
       }),
       resolveSandbox: () => box,
