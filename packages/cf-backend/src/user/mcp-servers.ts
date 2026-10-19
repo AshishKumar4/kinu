@@ -183,6 +183,9 @@ export class UserMcpServers {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
+  /** Servers `redialUnusable` dialled this activation: each once a wake. */
+  private readonly redialled = new Set<string>();
+
   /** MCP tool calls in flight, by the id each caller sent: `userMcp_cancelCall` stops one. */
   private readonly _mcpCalls = new Map<string, McpCallInFlight>();
 
@@ -365,7 +368,7 @@ export class UserMcpServers {
     try {
       await this.joinActivation();
       await this.host.mcp.waitForConnections();
-      await this.redialUnusable();
+      await this.redialUnusable('unusable');
       await this.readMcpToolLists();
     } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
@@ -383,6 +386,7 @@ export class UserMcpServers {
 
     // A failed activation is a storage failure, not per-server; it must not report every server disconnected.
     await this.joinActivation();
+    await this.redialUnusable('unlinked');
     const catalog = this.catalog();
 
     const rows = withCatalog(this.host.sqlx<{ id: string; allowed_tools: string | null; preset_id: McpPresetId | null }>(
@@ -847,15 +851,27 @@ export class UserMcpServers {
       + (reached === 'authenticating' ? ' Sign in to it again in Settings.' : ''));
   }
 
-  /** Every failed or closed connection dialled once more, deduplicated with any dial in flight, and waited for. */
-  private async redialUnusable(): Promise<void> {
+  /**
+   * Each server no call can reach dialled once more, and waited for: a failed or closed one, and one awaiting sign-in
+   * whose link the wake lost (the SDK restores it with a new provider, and a dial authorizes again, minting a link). At
+   * most once a wake, on the warmup or the list a person opens, never on a clock: a dead server costs one dial a wake.
+   * The list redials only the unlinked, so a dead server never holds the settings page.
+   */
+  private async redialUnusable(which: 'unusable' | 'unlinked'): Promise<void> {
+    const started: Promise<void>[] = [];
+
     for (const [serverId, connection] of Object.entries(this.host.mcp.mcpConnections)) {
       const state = observedMcpState(connection);
+      const unlinked = state === 'authenticating' && !connection.options.transport.authProvider?.authUrl;
+      const unusable = unlinked || state === 'failed' || state === 'closed';
 
-      if (state === 'failed' || state === 'closed') this.dial(serverId, () => this.connectAndDiscover(serverId));
+      if (this.redialled.has(serverId) || !(which === 'unlinked' ? unlinked : unusable)) continue;
+      this.redialled.add(serverId);
+      this.dial(serverId, () => this.connectAndDiscover(serverId));
+      started.push(this.dials.get(serverId) ?? Promise.resolve());
     }
 
-    await Promise.all(this.dials.values());
+    await Promise.all(started);
   }
 
   private async connectAndDiscover(serverId: string): Promise<void> {

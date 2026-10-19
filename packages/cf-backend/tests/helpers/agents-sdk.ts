@@ -888,6 +888,14 @@ export function queueMcpAuthUrl(authUrl: string): void {
   pendingMcpAuthUrl = authUrl;
 }
 
+/** Servers that answer 401 until signed in, by id: a dial meets it and authorizing again mints this link, as the SDK's
+ *  `redirectToAuthorization` sets the provider's `authUrl`. */
+const mcpSignInRequired = new Map<string, string>();
+
+export function requireMcpSignIn(id: string, authUrl: string): void {
+  mcpSignInRequired.set(id, authUrl);
+}
+
 let liveMcpManager: { mcpConnections: Record<string, RecordedMcpConnection> } | null = null;
 
 let mcpRestored = 0;
@@ -983,11 +991,11 @@ export function failNextMcpDiscovery(error: Error): void {
 export function seedSdkMcpServer(
   id: string,
   transport: RecordedMcpTransport = {},
-  row: { callbackUrl?: string; clientId?: string | null; name?: string; url?: string } = {},
+  row: { callbackUrl?: string; clientId?: string | null; name?: string; url?: string; authUrl?: string } = {},
 ): void {
   mcpServers.set(id, {
     id, name: row.name ?? id, url: row.url ?? `https://${id}.example/sse`,
-    callbackUrl: row.callbackUrl ?? '', clientId: row.clientId ?? null, authUrl: null, transport,
+    callbackUrl: row.callbackUrl ?? '', clientId: row.clientId ?? null, authUrl: row.authUrl ?? null, transport,
     server_options: encodeSdkServerOptions(transport),
   });
 }
@@ -1092,6 +1100,7 @@ export function resetRecordedMcp(): void {
   mcpDiscoveryFailure = null;
 
   pendingMcpAuthUrl = null;
+  mcpSignInRequired.clear();
   liveMcpManager = null;
   mcpRestored = 0;
   mcpWaited = 0;
@@ -1241,6 +1250,14 @@ class FakeMCPClientManager {
       };
 
       this.mcpConnections[row.id] = connection;
+
+      // A row awaiting sign-in is restored authenticating and not dialled; its provider is new, so holds no link
+      // (`client-fyQrLGkD.js:1703-1706`).
+      if (row.authUrl !== null) {
+        connection.connectionState = 'authenticating';
+        continue;
+      }
+
       this.track(this.restoreDial(connection));
     }
 
@@ -1308,6 +1325,9 @@ class FakeMCPClientManager {
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
 
     const provider = connection.options.transport.authProvider;
+    const signIn = mcpSignInRequired.get(id);
+
+    if (provider !== undefined && signIn !== undefined) provider.authUrl = signIn;
 
     if (provider?.authUrl) {
       connection.connectionState = 'authenticating';

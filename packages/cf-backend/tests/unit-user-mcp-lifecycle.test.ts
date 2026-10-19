@@ -8,7 +8,7 @@ import {
 import {
   closeMcpTransport, holdMcpRestore, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
-  recordedMcpToolCalls, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedConfiguredMcpServer, seedSdkMcpServer, seedUndiscoveredMcpTools,
+  recordedMcpToolCalls, requireMcpSignIn, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedConfiguredMcpServer, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
 import { classifyMcpFailure } from '../src/user/mcp';
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
@@ -298,6 +298,44 @@ describe('the descriptor read is off the connection critical path', () => {
     expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_flaky_go']);
     expect(surface.unavailable).toEqual([]);
     h.close();
+  });
+
+  test('a warmup dials a failed server once a wake, so a dead server costs one dial each time the object wakes', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await seedServer(h, 'srv1', { name: 'dead' });
+    seedMcpTools('srv1', [{ name: 'go', inputSchema: { type: 'object' } }]);
+    liveConnection(h, 'srv1').connectionState = 'failed';
+
+    await h.userDO.userMcp_warmConnections(owner);
+    const dialled = recordedMcpLifecycle().discovered.filter((id) => id === 'srv1').length;
+    liveConnection(h, 'srv1').connectionState = 'failed';
+    await h.userDO.userMcp_warmConnections(owner);
+
+    expect(dialled).toBe(1);
+    expect(recordedMcpLifecycle().discovered.filter((id) => id === 'srv1')).toHaveLength(1);
+    expect(liveConnection(h, 'srv1').connectionState).toBe('failed');
+    h.close();
+  });
+
+  // The SDK restores a server awaiting sign-in as authenticating with a new provider, which holds no link, and the
+  // settings page draws the Authorize link only from it: the account's one way back was to remove the server and add it.
+  test('a server awaiting sign-in when the object wakes lists a fresh Authorize link', async () => {
+    const first = harness();
+    const owner = await testOwner();
+    await first.userDO.userMcp_list(owner);
+    seedConfiguredMcpServer(sqlExec(first.db), 'srv1', { name: 'linear', url: 'https://mcp.linear.example/mcp', transport: 'streamable-http' });
+    seedSdkMcpServer('srv1', { type: 'streamable-http' }, {
+      name: 'linear', url: 'https://mcp.linear.example/mcp', callbackUrl: 'https://kinu.example/api/user/mcp/callback', authUrl: 'https://auth.example/authorize?state=before',
+    });
+
+    const woken = createTestUserDO({ storage: first.db });
+    requireMcpSignIn('srv1', 'https://auth.example/authorize?state=fresh');
+    const [listed] = await woken.userDO.userMcp_list(owner);
+
+    expect(listed).toMatchObject({ status: 'authenticating', authUrl: 'https://auth.example/authorize?state=fresh' });
+    woken.close();
+    first.close();
   });
 
   test('a deferred server contributes no descriptor, so it cannot reach the prompt', async () => {
