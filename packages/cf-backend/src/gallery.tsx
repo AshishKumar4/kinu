@@ -2039,7 +2039,7 @@ function galleryActorId(name: string): string {
   return `actor-${name}`;
 }
 
-const GALLERY_PLAN_MARKDOWN = `# Read the sessions database by its new binding
+const GALLERY_PLAN_MARKDOWN = `# Read the sessions database as \`SESSIONS_DB\`
 
 The api Worker fails every request that opens its database: yesterday's config renamed the D1 binding to \`SESSIONS_DB\`, but \`openDb\` still reads \`env.DB\`. This plan reads the database by its new name everywhere and keeps the health route's response.
 
@@ -2055,9 +2055,10 @@ The api Worker fails every request that opens its database: yesterday's config r
 workers/
 └── api/
     ├── wrangler.jsonc
-    ├── src/db.ts
-    ├── src/routes/webhooks.ts
-    └── test/health.test.ts
+    ├── src/
+    │   ├── db.ts
+    │   └── routes/webhooks.ts
+    └── test/integration/sessions-binding.test.ts
 \`\`\`
 
 ## Implementation
@@ -2103,7 +2104,7 @@ const GALLERY_PLAN_TITLE_NOTE: ReviewAnnotation = {
   author: "Owner",
 };
 
-const GALLERY_PLAN_CODE_PATH = `# Read the sessions database by its new binding
+const GALLERY_PLAN_CODE_PATH = `# Read the sessions database as \`SESSIONS_DB\`
 
 Read the binding in \`workers/api/src/db.ts:12\` by the name the config gives it.
 
@@ -3013,7 +3014,7 @@ const PARKED_ASKS: PendingAction[] = [
 /** The workspace's own plan awaiting review, as the queue lists it beside the work read's plan: `&asks=plan`. */
 const PLAN_ASKS: PendingAction[] = [{
   id: `plan:${WORKSPACE_PAGE_NAME}:${galleryAgentPlan.id}:${String(galleryAgentPlan.revision)}`, kind: "plan_review",
-  title: "Review the plan: Read the sessions database by its new binding", detail: null, at: NOW - 300_000,
+  title: "Review the plan: Read the sessions database as SESSIONS_DB", detail: null, at: NOW - 300_000,
   planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
 }];
 

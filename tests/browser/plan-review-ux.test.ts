@@ -249,9 +249,9 @@ async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Pr
   const page = await openFrame(newPage, origin, { frame: 'workspacepage', mode: 'dark', viewport: { width: 1280, height: 900 } });
   await page.waitForSelector('[data-composer-root]');
   await page.waitForFunction(() => document.querySelectorAll('[data-panel]').length === 2);
-  await openPlanPage(page, 'applyCoupon');
+  await openPlanPage(page, 'sessions database');
   await page.waitForFunction(
-    () => document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent?.includes('applyCoupon') === true,
+    () => document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent?.includes('sessions database') === true,
   );
 
   const before = await page.evaluate(() => {
@@ -401,7 +401,7 @@ async function observeCodePath(newPage: Gallery['newPage'], origin: string): Pro
 
   try {
     await page.waitForSelector('[data-plan-document] [data-block-id]');
-    const path = await page.$('[data-plan-document] code ::-p-text(apply-coupon.ts:42)');
+    const path = await page.$('[data-plan-document] code ::-p-text(db.ts:12)');
 
     if (path === null) throw new Error('the plan rendered no code element holding its file and line');
     const before = await page.evaluate(() => window.galleryRequests?.length ?? 0);
@@ -469,7 +469,7 @@ describe('the plan review document, as a browser lays it out', () => {
       expect(plan.mode).toBe(mode);
       // Viewer renders the promoted h1. Its inline renderer turns the Markdown
       // code span into one `code` element, not literal backticks.
-      expect(plan.title).toBe('Repair the applyCoupon eligibility guard');
+      expect(plan.title).toBe('Read the sessions database as SESSIONS_DB');
       expect(plan.titleCodeCount).toBe(1);
       expect(plan.headingCount).toBe(1);
       expect(plan.titlePx).toBeGreaterThan(plan.sectionPx);
@@ -504,7 +504,7 @@ describe('the plan review document, as a browser lays it out', () => {
   });
 
   test('the real WorkspacePage route keeps the rail over its narrow Work column', () => {
-    expect(observed.workspace.title).toBe('Repair the applyCoupon eligibility guard');
+    expect(observed.workspace.title).toBe('Read the sessions database as SESSIONS_DB');
     // The decision is in reach as the plan opens, however long the plan.
     expect(observed.workspace.footerInView).toBe(true);
     expect(observed.workspace.footerOnTop).toBe(true);
@@ -523,13 +523,13 @@ describe('the plan review document, as a browser lays it out', () => {
     // Promotion moves a block out of the document. Applied to a LATER h1 it
     // silently reorders the plan, which is why it is gated on the first block
     // rather than on the first h1 found.
-    expect(observed.lateHeading.documentH1s).toEqual(['Rejected: map the failure at the edge']);
+    expect(observed.lateHeading.documentH1s).toEqual(['Rejected: bind the database under both names']);
   });
 
   test('an annotated title stays promoted and its anchor still draws', () => {
     // Both promoted and body blocks use Viewer. Splitting their annotations by
     // block keeps the title in the header without stranding its highlight.
-    expect(observed.annotatedHeading.headerTitle).toBe('Repair the applyCoupon eligibility guard');
+    expect(observed.annotatedHeading.headerTitle).toBe('Read the sessions database as SESSIONS_DB');
     expect(observed.annotatedHeading.documentH1s).toEqual([]);
     expect(observed.annotatedHeading.titleHighlights).toBeGreaterThan(0);
   });
@@ -593,7 +593,7 @@ describe('the decision bar fits wherever a plan is read', () => {
           await page.tap('[data-inspector-toggle]');
         }
 
-        await openPlanPage(page, 'applyCoupon');
+        await openPlanPage(page, 'sessions database');
 
         return page;
       };
@@ -651,7 +651,7 @@ describe('a plan review sends nothing of its own', () => {
   // GHSA-238p-pmpm-9mq7 moved KaTeX to 0.18: display math still draws, and with `trust: false` an \href in it stays text.
   test('display math draws through KaTeX, and a link inside it is never a control', () => {
     expect(observed.codePath.math).toMatchObject({ rendered: true, links: 0 });
-    expect(observed.codePath.math.tex).toContain('\\frac{\\text{saved}}');
+    expect(observed.codePath.math.tex).toContain('\\frac{\\text{errors}}');
   });
 });
 
@@ -808,8 +808,8 @@ describe('comment threads', () => {
       const feedback = await page.evaluate(() => document.documentElement.dataset.galleryPlanFeedback ?? '');
 
       // The owner's reply goes back under its comment; a thread with nothing new stays out.
-      expect(feedback.indexOf('Fine; keep the route as it is.')).toBeGreaterThan(feedback.indexOf('Split the route change'));
-      expect(feedback.indexOf('Split the route change')).toBeGreaterThanOrEqual(0);
+      expect(feedback.indexOf('Fine; keep the route as it is.')).toBeGreaterThan(feedback.indexOf('Split the webhook change'));
+      expect(feedback.indexOf('Split the webhook change')).toBeGreaterThanOrEqual(0);
       expect(feedback).not.toContain('gallery-plan-scope');
       await page.close();
     });
@@ -849,7 +849,7 @@ async function chooseMode(page: Page, mode: string): Promise<void> {
 
 /** Opens the workspace's pending plan by its page tab and presses one of its controls; the server then says the plan moved. */
 async function decidePlan(page: Page, control: string, landed: string): Promise<void> {
-  await openPlanPage(page, 'applyCoupon');
+  await openPlanPage(page, 'sessions database');
   await page.$$eval('[data-plan-review-root] button', (buttons, label) => {
     const button = buttons.find((each) => each.textContent?.includes(label));
 
