@@ -10,10 +10,16 @@ export const SLATES_ROOT = '/slates';
 export const UPLOADS_ROOT = '/uploads';
 
 /**
+ * The directory every agent of the workspace reads and writes, for work they share; each home is its own agent's to
+ * write. A workspace root kept like any other, not a temporary area (each agent's `/tmp` is that).
+ */
+export const SCRATCH_ROOT = '/scratch';
+
+/**
  * The workspace's shared roots beside the homes, every agent's: the one list a host settles as group-shared, an archive
  * carries whole, a change-set reviews and a local archive stages.
  */
-export const SHARED_ROOTS: readonly string[] = [SLATES_ROOT, UPLOADS_ROOT];
+export const SHARED_ROOTS: readonly string[] = [SLATES_ROOT, UPLOADS_ROOT, SCRATCH_ROOT];
 
 /** Platform state, not anyone's work: Nimbus runtimes, bindings and images; Kinu agent state. */
 const SYSTEM_MANAGED_DIRECTORIES: ReadonlySet<string> = new Set(['.nimbus', '.kinu']);
