@@ -3,7 +3,7 @@
  * the operator did not type. A signal card and its message are joined by `metadata.signalId`.
  */
 
-import { ADVISOR_SIGNAL_KIND } from '../advisor/review';
+import { ADVISOR_NOTE_METADATA_KEY, ADVISOR_SIGNAL_KIND } from '../advisor/review';
 import { DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity } from '../types/advisor';
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
@@ -13,6 +13,8 @@ import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
 import { promotedSlateIds } from './markdown-links';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
+import { summarizeSystemEvent, type EventSummary } from './event-summary';
+import { DELIVERED_RUN_EVENT } from '../orchestrator/chat-queue';
 
 /** A turn the backend enqueued; `system_event` is any harness event without its own card. */
 export type ClassifiedProgrammaticTurn =
@@ -22,9 +24,11 @@ export type ClassifiedProgrammaticTurn =
   | { kind: "event_drain" }
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number }
-  | { kind: "advisor"; severity: AdvisorSeverity }
+  /** `note` is the review alone, without the header the agent reads it under; null on a row written before it was kept. */
+  | { kind: "advisor"; severity: AdvisorSeverity; note: string | null }
   | { kind: "delegated_task"; from: string }
-  | { kind: "system_event"; event: string };
+  /** Said to a person by its summary, never by the text the agent was given. */
+  | { kind: "system_event"; event: string; summary: EventSummary };
 
 const DELEGATED_FROM_KEY = 'kinuFrom';
 
@@ -36,6 +40,7 @@ export function delegatedTaskMetadata(from: string, mode: string): JsonObject {
 const ProgrammaticMetadataSchema = v.looseObject({
   kinuEvent: v.optional(v.string()),
   advisorSeverity: v.optional(v.string()),
+  [ADVISOR_NOTE_METADATA_KEY]: v.optional(v.string()),
   kind: v.optional(v.string()),
   status: v.optional(v.string()),
   decision: v.optional(v.string()),
@@ -89,17 +94,25 @@ export function classifyProgrammaticTurn(
         decision: cardField(turn.decision, "decided"),
         count: turn.count ?? 1,
       };
+    // A delivered run's text is its hirer's task, as a subordinate task's is.
+    case DELIVERED_RUN_EVENT:
     case "subordinate_task":
       return { kind: "delegated_task", from: cardField(turn[DELEGATED_FROM_KEY], "the hirer") };
     case ADVISOR_SIGNAL_KIND:
       return {
         kind: "advisor",
         severity: isAdvisorSeverity(turn.advisorSeverity) ? turn.advisorSeverity : DEFAULT_ADVISOR_MIN_SEVERITY,
+        note: turn[ADVISOR_NOTE_METADATA_KEY] ?? null,
       };
     case undefined:
     default:
-      return { kind: "system_event", event: cardField(turn.kinuEvent, "system") };
+      return systemEventTurn(cardField(turn.kinuEvent, "system"), row);
   }
+}
+
+/** An event with no card of its own, said by its summary. */
+export function systemEventTurn(event: string, row: { metadata: unknown }): ClassifiedProgrammaticTurn {
+  return { kind: "system_event", event, summary: summarizeSystemEvent(event, row) };
 }
 
 function metadataField<T>(row: { metadata: unknown }, key: string, schema: v.GenericSchema<T>): T | undefined {

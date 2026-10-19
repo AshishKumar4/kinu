@@ -5,7 +5,7 @@
  * proves files the commit does not carry, untracked ones included (scripts/sources.ts
  * reads untracked, non-ignored files into every gate's corpus).
  *
- * A push to main or integration/** is CI's instead (L25): armada proves the pushed commit
+ * A push to main or next-rc is CI's instead (L25): armada proves the pushed commit
  * itself, so neither guard holds it, and every row of armada's verdict must be green.
  *
  * The real hook runs in a scratch repository whose `scripts/ladder.ts` is a stand-in that
@@ -114,13 +114,13 @@ describe('the pre-push hook proves only the commit it pushes', () => {
   });
 });
 
-describe('a push to main or integration/** is proved on armada', () => {
+describe('a push to main or next-rc is proved on armada', () => {
   const answering = (log: string, stored: string, verdictExit: number, runExit = 0) => ({ ARMADA_LOG: log, STORED: stored, VERDICT_EXIT: String(verdictExit), RUN_EXIT: String(runExit) });
 
   test('a commit armada stored green goes through without a run, and the local tier is not run for it', async () => {
     const { repo, head } = await repoWithTwoCommits();
     const log = withArmada(repo);
-    const { status, stdout } = await runHook(repo, head, 'refs/heads/integration/0965', answering(log, '{"rows": []}', 0));
+    const { status, stdout } = await runHook(repo, head, 'refs/heads/next-rc', answering(log, '{"rows": []}', 0));
 
     expect({ status, proved: stdout.includes(`armada already proved ${head} green`), tier: stdout.includes(TIER_RAN), asked: readFileSync(log, 'utf8') })
       .toEqual({ status: 0, proved: true, tier: false, asked: `verdict ${head} --json\n` });
@@ -138,7 +138,7 @@ describe('a push to main or integration/** is proved on armada', () => {
   test.each([[0, 0], [1, 1], [2, 1]])('a commit with no verdict is run on armada, and a run that exits %i lets the push exit %i', async (runExit, pushExit) => {
     const { repo, head } = await repoWithTwoCommits();
     const log = withArmada(repo);
-    const { status } = await runHook(repo, head, 'refs/heads/integration/0965', answering(log, 'null', 2, runExit));
+    const { status } = await runHook(repo, head, 'refs/heads/next-rc', answering(log, 'null', 2, runExit));
 
     expect({ status, asked: readFileSync(log, 'utf8').split('\n').filter(Boolean) }).toEqual({ status: pushExit, asked: [`verdict ${head} --json`, `run ${head}`] });
   });
@@ -158,6 +158,6 @@ describe('a push to main or integration/** is proved on armada', () => {
 
     writeFileSync(join(repo, 'new.ts'), 'export const x = 1;\n');
 
-    expect((await runHook(repo, parent, 'refs/heads/integration/0965', answering(log, '{"rows": []}', 0))).status).toBe(0);
+    expect((await runHook(repo, parent, 'refs/heads/next-rc', answering(log, '{"rows": []}', 0))).status).toBe(0);
   });
 });

@@ -119,7 +119,9 @@ async function run(): Promise<Scenarios> {
      */
     const throughTheControls = async (want: 'dark' | 'light'): Promise<ThemeAudit> => {
       const page = await openShell('dark');
-      const control = '[aria-label="Switch to light mode"]';
+      const control = 'aside [data-mode-toggle]';
+      await page.waitForSelector('aside [data-account-menu]');
+      await page.click('aside [data-account-menu]');
       await page.waitForSelector(control);
       await page.click(control);
 

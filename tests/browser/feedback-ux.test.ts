@@ -1008,19 +1008,12 @@ async function run(): Promise<Observed> {
     await routedPage.setViewport({ width: 1280, height: 900 });
     await serveFeedback(routedPage);
     await routedPage.goto(`${origin}/gallery.html?frame=feedbackrouted`, { waitUntil: 'networkidle0' });
-    // The rail's account row, addressed by the email the profile renders:
-    // waiting for it is waiting for the signed-in state, and the menu holding
-    // Feedback does not exist until that row is clicked.
-    await routedPage.waitForFunction(
-      () => [...document.querySelectorAll('aside button')].some((row) => (row.textContent ?? '').includes('@')),
-    );
-    await routedPage.evaluate(() => {
-      const row = [...document.querySelectorAll<HTMLElement>('aside button')]
-        .find((button) => (button.textContent ?? '').includes('@'));
-
-      if (row === undefined) throw new Error('no account row in the rail');
-      row.click();
-    });
+    // The rail's account menu, opened from its header: the menu holding
+    // Feedback does not exist until it is, and the email it renders is the
+    // signed-in state, waited for before anything is sent.
+    await routedPage.waitForSelector('aside [data-account-menu]');
+    await routedPage.click('aside [data-account-menu]');
+    await routedPage.waitForFunction(() => (document.querySelector('aside [data-account-panel]')?.textContent ?? '').includes('@'));
     await routedPage.waitForSelector('aside [data-feedback-open]');
     const openedFromRail = await routedPage.$('aside [data-feedback-open]') !== null;
 

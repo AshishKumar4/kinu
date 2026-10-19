@@ -10,6 +10,7 @@ import type { PendingConsent } from '../protocol';
 import type { WorkspaceProposal } from '../safety/workspace-proposals';
 import type { AskingAgent } from '../plans/owner-questions';
 import { planTitle } from '../plans/review';
+import { cardWords } from './event-summary';
 import type { OwnerWait, OwnerWaitWatch } from '../types/owner-waits';
 import type { AgentConfigStore } from '../config/store';
 import type { AgentSignal } from '../types/signals';
@@ -127,7 +128,7 @@ function ownerWaitsSignal(watch: OwnerWaitWatch): AgentSignal {
     ? 'Your owner has handled everything that waited on them from you.'
     : `Your owner has handled what you waited on: ${watch.what}`;
 
-  return { kind: OWNER_WAITS_SIGNAL, text, idempotencyKey: `${OWNER_WAITS_SIGNAL}:${watch.id}`, metadata: { key: watch.key } };
+  return { kind: OWNER_WAITS_SIGNAL, text, idempotencyKey: `${OWNER_WAITS_SIGNAL}:${watch.id}`, metadata: { key: watch.key, what: watch.what === null ? null : cardWords(watch.what) } };
 }
 
 /**

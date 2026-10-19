@@ -69,7 +69,7 @@ import type { ContextSelection } from '../session/context';
 import { subordinateTurnContext } from '../subordinates/support';
 import { taskTurnEnding } from '../subordinates/temporary';
 import { SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, type SeenSplice } from '../read-models/background-event';
-import { TaskReminders, TASK_REMINDER_EVENT } from '../tasks/reminder';
+import { TaskReminders, TASK_REMINDER_EVENT, type TaskReminder } from '../tasks/reminder';
 import type { AgentTaskTree } from '../tools/task-store';
 import type { ActiveRoster } from '../types/dynamic-context';
 import { inheritedAsModelMessage } from '../heads/head-inference';
@@ -237,7 +237,7 @@ export interface OwedTerminalEffectsInput {
   readonly answeredDeliveries: ReadonlySet<string>;
   /** At most one continuation is owed. */
   readonly outputContinuation: boolean;
-  readonly taskReminder: { readonly text: string } | null;
+  readonly taskReminder: TaskReminder | null;
 }
 
 /** `seen`: the splices the agent read mid-answer, kept once here; none from a turn whose events re-deliver. `slates`: a
@@ -1627,13 +1627,14 @@ export class ChatSession {
     if ((this.queue[0]?.continuation?.reaskAt ?? null) !== null) this.pump();
   }
 
-  /** Appended, not unshifted, so it verifies final state; kicked because a startup replay has no pump yet. */
-  appendOwedTurn(input: { text: string; idempotencyKey: string; event: string }): void {
+  /** Appended, not unshifted, so it verifies final state; kicked because a startup replay has no pump yet. `metadata`
+   *  is what the person's card says the turn was about, beside its event. */
+  appendOwedTurn(input: { text: string; idempotencyKey: string; event: string; metadata?: JsonObject }): void {
     this.queue.push(tagged({
       text: input.text,
       kind: 'programmatic',
       idempotencyKey: input.idempotencyKey,
-      metadata: { kinuEvent: input.event },
+      metadata: { ...input.metadata, kinuEvent: input.event },
       settle: () => {},
     }));
     this.pump();
