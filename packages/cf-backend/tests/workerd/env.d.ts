@@ -310,6 +310,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   slateExports(input: { workspace: string; owner: string; entry: 'a.js' | 'b.js'; first: boolean }): Promise<string>;
   slateRepair(input: { workspace: string; owner: string; id: string; imports: string; setup: string; repair: string }): Promise<{ before: string; after: string; says: string }>;
   craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; waited: string; approved: string[]; viewer: string }>;
+  viewerApprovedWrite(input: { workspace: string; owner: string; mark: string }): Promise<{ waited: string; approved: string[]; ran: string; marked: string }>;
   sharedRunsOwnTree(input: { owner: string; workspace: string }): Promise<{ unshared: string; shared: string; afterUnshare: string }>;
   editorBatch(input: { owner: string; workspace: string; kind: 'atomic' | 'links' | 'stale' }): Promise<{
     answers: string[]; files: { path: string; text: string; sha256: string }[]; marks: (string | null)[]; outside: string;

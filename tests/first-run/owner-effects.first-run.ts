@@ -39,7 +39,9 @@ const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.n
 
 const SLATE = 'effectshare';
 
-const MARK = `/slates/${SLATE}/mark`;
+// Outside the slate's own tree: a slate's write into its own files is an edit of its code, which releases its process
+// under the very call that made it.
+const MARK = `${SLATE}-mark.txt`;
 
 const WRITE = { slate: SLATE, namespace: 'workspace', member: 'writeFile' };
 
