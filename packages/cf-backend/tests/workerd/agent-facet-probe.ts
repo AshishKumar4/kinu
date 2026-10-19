@@ -25,6 +25,12 @@ export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
 
+/** A chat message's text as a pane draws it. */
+const ChatTextSchema = v.object({
+  role: v.string(),
+  parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
+});
+
 const PROBE_RPC = ['probeLatencies', 'burn', 'markedFacet', 'facetMarks', 'onePlane', 'swarmNode', 'agentFor', 'craftedFromNode', 'swarmJobNode', 'jobWindowArmed', 'outrunJobWindow', 'jobRows', 'taskEvents'];
 
 /** Reads `probe_marks` from whatever facet storage it starts over. */
@@ -267,14 +273,20 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     await this.reclaimSettledExplorationActors();
     const facet = await this.agentFacetOf<AgentFacet>(seat.actor.record.actorId);
     bootId ??= crypto.randomUUID();
+    const retired = this.actorDirectoryStore().retained(seat.actor.record.actorId)?.retiringAt != null;
+    // Its chat as its own store keeps it once it is retired, read as a pane's seed is.
+    const messages: unknown = await facet.history(this.agentSnapshot(seat.actor.record.actorId));
+
+    const chat = v.parse(v.array(ChatTextSchema), messages).map((message) => ({
+      role: message.role, text: message.parts.flatMap((part) => (part.type === 'text' && part.text !== undefined ? [part.text] : [])).join(''),
+    }));
 
     return {
       actorId: seat.actor.record.actorId, home: home.home,
       sameIsolate: (await facet.boot()) === bootId,
       workspaceClaims: this.ctx.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ?', seat.actor.record.actorId).one().n,
       claims: await facet.turns(),
-      retired: this.actorDirectoryStore().retained(seat.actor.record.actorId)?.retiringAt != null,
-      summary: run.report.summary, candidate: run.candidate, reportedItself: run.reportedItself,
+      retired, summary: run.report.summary, candidate: run.candidate, reportedItself: run.reportedItself, chat,
     };
   }
 }

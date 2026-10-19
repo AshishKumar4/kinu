@@ -607,11 +607,9 @@ export async function deliveredRun(
   };
 
   try {
-    // The agent a run is delivered to, a node or a head, is a run actor whose transcript holds no turn: no slates are
-    // stamped on its answer.
+    // The agent a run is delivered to, a node or a head, holds no slates: none is stamped on its answer.
     await driveDeliveredRun(actor, task, {
       prepare,
-      prepareAnswer: (completion) => database.prepareAnswer(completion),
       // Prepared before the commit, spilled if it outgrows a row; kept by it.
       ended: async (report) => {
         const charges = spend.takeCharges();

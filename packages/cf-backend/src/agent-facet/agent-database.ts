@@ -11,7 +11,7 @@ import {
   localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
   type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
-  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
+  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, TurnReports,
   PlanReviewStore, OwnerQuestionStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
@@ -675,21 +675,6 @@ export class AgentDatabase {
     return {
       stalled: recovered.stalled.map((turn) => ({ turnId: announcementOf(turn.claim.turnId), workMode: turn.claim.workMode })),
     };
-  }
-
-  /** A run's answer, prepared: the returned write appends it in the commit that ends the run. Nothing where the transcript
-   *  holds no turn to answer. */
-  async prepareAnswer(completion: NonNullable<HeadReport['canonicalCompletion']>): Promise<() => void> {
-    const transcript = this.transcript();
-
-    if (transcript.newestId() === null) return () => {};
-
-    const entry = await transcript.prepareAssistant({
-      id: crypto.randomUUID(), turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
-      finalText: completion.finalTextReference,
-    });
-
-    return () => { transcript.appendAssistant(entry); };
   }
 
   async history(limit?: number): Promise<UIMessage[]> {
