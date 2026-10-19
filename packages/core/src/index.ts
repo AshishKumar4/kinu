@@ -721,7 +721,7 @@ export { createMemoryCodemodeProvider, serveMemory, type MemoryDeps } from './to
 export { MEMORY } from './operations/memory';
 
 export {
-  nativeTool, nativeToolSchema, codemodeNamespace, nestedMembers, callOperation, listOperations, type OperationCaller, type OperationListing,
+  nativeTool, nativeToolSchema, codemodeNamespace, nestedMembers, type NestedMembers, callOperation, listOperations, type OperationCaller, type OperationListing,
 } from './tools/operation-surfaces';
 
 export {
