@@ -31,6 +31,12 @@ const ScreenCloseSchema = v.object({ type: v.literal(DEVICE_FRAMES.screenClose),
 
 async function connectDevice(harness: TestUserDO, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY }) {
   const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+
+  return { deviceId, token, device: await dialDevice(harness, token, hello) };
+}
+
+/** The daemon's socket, dialled with the device's token, and its HELLO sent. */
+async function dialDevice(harness: TestUserDO, token: string, hello: JsonValue = { ...CAPABLE_HELLO, desktop: READY }) {
   const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
 
   if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
@@ -45,7 +51,7 @@ async function connectDevice(harness: TestUserDO, hello: JsonValue = { ...CAPABL
 
   await harness.userDO.webSocketMessage(device.ws, JSON.stringify(hello));
 
-  return { deviceId, device };
+  return device;
 }
 
 /** Opens the screen as the route does, answering the daemon's side by hand: this socket pair has no far end. */
@@ -85,11 +91,11 @@ async function attachViewer(harness: TestUserDO, session: string) {
 async function granted() {
   const harness = createTestUserDO();
   const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Screen workspace');
-  const { deviceId, device } = await connectDevice(harness);
+  const { deviceId, token, device } = await connectDevice(harness);
 
   harness.grantDevice(WORKSPACE, deviceId);
 
-  return { harness, workspace, deviceId, device };
+  return { harness, workspace, deviceId, token, device };
 }
 
 function text(bytes: Uint8Array | undefined): string {
@@ -157,6 +163,26 @@ describe("a PC's screen through the owner's account", () => {
 
     for (const frame of screenDataFrames(stream + 1, new Uint8Array([1, 2, 3]))) await harness.userDO.webSocketMessage(device.ws, frame);
     expect(device.sent.slice(sent).map((raw) => v.parse(ScreenCloseSchema, JSON.parse(raw)))).toEqual([{ type: DEVICE_FRAMES.screenClose, stream: stream + 1 }]);
+
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test("a PC reconnecting ends its old connection's viewers; the old socket's late close spares the new one's", async () => {
+    const { harness, workspace, deviceId, token, device } = await granted();
+    const old = await openScreen(harness, device, workspace, deviceId);
+    const oldViewer = present((await attachViewer(harness, old.session)).viewer, 'the old viewer');
+
+    // The daemon restarts: its new socket says HELLO before the old one's close reaches this object.
+    const fresh = await dialDevice(harness, token);
+
+    expect(oldViewer.closed()).toEqual({ code: 1000, reason: 'the PC reconnected; open the Desktop tab again' });
+
+    const current = await openScreen(harness, fresh, workspace, deviceId);
+    const viewer = present((await attachViewer(harness, current.session)).viewer, 'the new viewer');
+
+    await harness.userDO.webSocketClose(device.ws, 1001, 'replaced', true);
+    expect(viewer.closed()).toBeNull();
 
     await harness.joinFibers();
     harness.close();

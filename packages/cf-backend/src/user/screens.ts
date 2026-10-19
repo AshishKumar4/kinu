@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { nanoid, type UserCaller, DeviceScreenHub, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
+import { nanoid, type UserCaller, DeviceScreenHub, DEVICE_FRAMES, DEVICE_METHOD, NO_DEVICE_CONNECTED } from '@kinu.run/core';
 import { attemptInItsWords, authoredRefusal, diagnostics, renderThrownChain, settle, settleSync, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserDevices } from './devices';
@@ -14,6 +14,8 @@ const ScreenCloseFrameSchema = v.object({
 
 /** Control round-trip timeout, not the screen's life: the daemon answers once its capture runs. */
 const SCREEN_OPEN_TIMEOUT_MS = 15_000;
+
+const SCREEN_RECONNECTED = 'the PC reconnected; open the Desktop tab again';
 
 /** RFB over WebSocket names this subprotocol; a browser that asked for it refuses an upgrade that does not echo it. */
 const RFB_SUBPROTOCOL = 'binary';
@@ -58,6 +60,18 @@ export class UserScreens {
         return new Response(null, init);
       },
     })));
+  }
+
+  /** A device socket served its HELLO: every screen open on the device was opened on an earlier socket, whose daemon
+   *  ended its streams with it. */
+  deviceConnected(deviceId: string): void {
+    this._screens.endDevice(deviceId, SCREEN_RECONNECTED);
+  }
+
+  /** A device socket closed. A replacement already live owns the device's screens now, and a late close from the socket
+   *  it replaced leaves them be. */
+  deviceClosed(deviceId: string): void {
+    if (this.host.devices._devices.liveSocket(deviceId) === null) this._screens.endDevice(deviceId, NO_DEVICE_CONNECTED);
   }
 
   /** True when the frame was the machine closing a stream (so skip the RPC correlator). */

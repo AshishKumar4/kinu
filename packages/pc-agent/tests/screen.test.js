@@ -36,6 +36,7 @@ function fakeWs() {
   return {
     binary,
     json,
+    bufferedAmount: 0,
     send(data) {
       if (typeof data === 'string') json.push(JSON.parse(data));
       else binary.push(Buffer.from(data));
@@ -349,6 +350,34 @@ describe('the daemon serves its screen as RFB', () => {
     // A raw frame goes as Tight, deflated: KasmVNC's own Raw decoder draws a rectangle's first rows down the screen.
     expect({ encoding: band.encoding, control: band.control, first: [...band.rgb.subarray(0, 6)], bytes: band.rgb.byteLength })
       .toEqual({ encoding: ENCODINGS.tight, control: 0x01, first: [0x10, 0x20, 0x30, 0x10, 0x20, 0x30], bytes: 24 });
+  });
+
+  test('one message holding many update requests is answered once, and an update waits while the socket is behind', async () => {
+    const source = fixedSource({ width: 4, height: 2, colour: { r: 1, g: 2, b: 3 } });
+    const viewer = await handshake({ source });
+
+    viewer.viewer(Buffer.concat(Array.from({ length: 50 }, () => updateRequest({ incremental: false, width: 4, height: 2 }))));
+    expect(readUpdate(viewer.next()).length).toBe(1);
+
+    viewer.ws.bufferedAmount = 9 * 1024 * 1024;
+    viewer.viewer(updateRequest({ incremental: false, width: 4, height: 2 }));
+    expect(viewer.next().byteLength).toBe(0);
+
+    viewer.ws.bufferedAmount = 0;
+    viewer.timers.fire();
+    expect(readUpdate(viewer.next()).length).toBe(1);
+  });
+
+  test('a JPEG frame past what Tight can carry closes the stream in words', async () => {
+    const source = fixedSource({ width: 4, height: 2, colour: { r: 0, g: 0, b: 0 } });
+    const viewer = await handshake({ source, encodings: [ENCODINGS.tight, ENCODINGS.raw] });
+
+    viewer.viewer(updateRequest({ incremental: false, width: 4, height: 2 }));
+    viewer.next();
+    viewer.viewer(updateRequest({ incremental: true, width: 4, height: 2 }));
+    source.drawJpeg({ width: 4, height: 2 }, Buffer.alloc(0x400000));
+
+    expect(viewer.ws.json.at(-1)).toEqual({ type: protocol.frames.screenClose, stream: STREAM, reason: "a frame of the PC's screen is 4194304 bytes, past the 4194303 Tight carries" });
   });
 
   test('a viewer speaking another RFB version is refused in words, and nothing is captured', async () => {

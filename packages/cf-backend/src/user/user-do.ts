@@ -1128,6 +1128,7 @@ export class UserDO extends Agent<Env> {
       }
 
       this.devices.recordDeviceHello(deviceId, hello.output);
+      this.screens.deviceConnected(deviceId);
       // Sent before the first wait, in the turn the HELLO arrived on its socket.
       const frame = this.devices.deviceUpdateFrame(deviceId, hello.output);
 
@@ -1189,7 +1190,7 @@ export class UserDO extends Agent<Env> {
       this.terminals._terminals.endPane(session, NO_DEVICE_CONNECTED);
     }
 
-    this.screens._screens.endDevice(deviceId, NO_DEVICE_CONNECTED);
+    this.screens.deviceClosed(deviceId);
 
     await this.devices.devicesMoved();
   }

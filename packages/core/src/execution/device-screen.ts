@@ -188,6 +188,8 @@ export class DeviceScreenHub {
 
   /** The stream's bytes to its viewer; held until it attaches. A stream nobody holds is closed on the device. */
   toViewer(device: string, stream: number, bytes: Uint8Array): void {
+    // A frame with no bytes carries nothing to hold or send, and holding it would grow a list the byte bound never sees.
+    if (bytes.byteLength === 0) return;
     const viewer = this.viewerSocket(device, stream);
 
     if (viewer) {
@@ -205,6 +207,8 @@ export class DeviceScreenHub {
       return;
     }
 
+    // An ended stream's late bytes have no viewer coming for them.
+    if (pending.ended !== null) return;
     pending.held.push(bytes.slice());
     pending.heldBytes += bytes.byteLength;
 

@@ -43,6 +43,16 @@ const TIGHT_BASIC_RESET = 0x01;
 /** Tight sends fewer bytes than this uncompressed. */
 const TIGHT_MIN_TO_COMPRESS = 12;
 
+/** Tight's compact length carries 22 bits: a JPEG past this cannot be sent as one rectangle. */
+const TIGHT_MAX_LENGTH = 0x3fffff;
+
+/** Past this many bytes queued on the socket, the next update waits: RFB's pacing bounds updates a viewer asks for, not
+ *  how many requests one message from it can hold. */
+const SCREEN_BACKLOG_MAX_BYTES = 8 * 1024 * 1024;
+
+/** How soon an update that waited on the socket's backlog looks again. */
+const SCREEN_BACKLOG_RETRY_MS = 50;
+
 /** A raw frame goes as Tight a band of rows at a time, each band's pixels at most this many bytes before deflating, so
  *  every band's compressed length fits Tight's three-byte length. */
 const TIGHT_BAND_BYTES = 256 * 1024;
@@ -264,7 +274,7 @@ function rawPixels(frame, format) {
  * viewer finishes its handshake, and its frames go out one per update the viewer
  * asks for, so a slow tunnel slows the frame rate rather than filling memory.
  */
-function createRfbSession({ source, send, end, log }) {
+function createRfbSession({ source, send, end, log, backlogged, later }) {
   let pending = Buffer.alloc(0);
   let phase = 'version';
   let format = SERVER_FORMAT;
@@ -278,6 +288,7 @@ function createRfbSession({ source, send, end, log }) {
   let kasm = false;
   let sentSerial = -1;
   let asked = null;
+  let retrying = false;
   let ended = false;
 
   /** @param {unknown} error */
@@ -313,6 +324,8 @@ function createRfbSession({ source, send, end, log }) {
 
     if (frame.jpeg) {
       if (!encodings.has(ENCODING.tight)) return stop("this viewer can't draw the PC's screen: it lacks Tight encoding");
+
+      if (frame.jpeg.byteLength > TIGHT_MAX_LENGTH) return stop(`a frame of the PC's screen is ${frame.jpeg.byteLength} bytes, past the ${TIGHT_MAX_LENGTH} Tight carries`);
       parts.push(rectHead(frame, ENCODING.tight), Buffer.from([TIGHT_JPEG]), compactLength(frame.jpeg.byteLength), Buffer.from(frame.jpeg));
       rects += 1;
     } else if (encodings.has(ENCODING.tight) && tightPixels(format)) {
@@ -335,10 +348,25 @@ function createRfbSession({ source, send, end, log }) {
     send(Buffer.concat([head, ...parts, ...(lastRect ? [rectHead({ width: 0, height: 0 }, ENCODING.lastRect)] : [])]));
   }
 
+  /** Answers what the viewer asked for, once: every request read since the last update is one ask, a full one if any
+   *  was, and it waits while the socket is behind. */
   function maybeUpdate() {
     if (ended || asked === null || latest === null) return;
 
     if (asked.incremental && latest.serial === sentSerial) return;
+
+    if (backlogged()) {
+      if (!retrying) {
+        retrying = true;
+        later(() => {
+          retrying = false;
+          maybeUpdate();
+        });
+      }
+
+      return;
+    }
+
     asked = null;
     sendUpdate(latest);
   }
@@ -369,6 +397,7 @@ function createRfbSession({ source, send, end, log }) {
     send(Buffer.concat([init, pixelFormatBytes(SERVER_FORMAT), nameLength, name]));
     phase = 'normal';
     parse();
+    maybeUpdate();
   }
 
   /** The length of the client message at the front of `pending`: null until all of it has arrived, -1 for a type no
@@ -393,8 +422,7 @@ function createRfbSession({ source, send, end, log }) {
     } else if (type === MESSAGE.setEncodings) {
       encodings = new Set(Array.from({ length: message.readUInt16BE(2) }, (_, at) => message.readInt32BE(4 + at * 4)));
     } else if (type === MESSAGE.updateRequest) {
-      asked = { incremental: message[1] !== 0 };
-      maybeUpdate();
+      asked = { incremental: (asked?.incremental ?? true) && message[1] !== 0 };
     } else if (type === MESSAGE.key) {
       screen.key(message[1] !== 0, message.readUInt32BE(4));
     } else if (type === MESSAGE.pointer) {
@@ -460,6 +488,7 @@ function createRfbSession({ source, send, end, log }) {
 
       if (pending.byteLength > PENDING_MAX_BYTES) return stop('the viewer sent more than a screen viewer sends');
       parse();
+      maybeUpdate();
     },
     stop,
   };
@@ -515,6 +544,8 @@ function createScreens({ source, log, after = afterTimer }) {
       const session = createRfbSession({
         source,
         log,
+        backlogged: () => Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > SCREEN_BACKLOG_MAX_BYTES,
+        later: (fn) => after(SCREEN_BACKLOG_RETRY_MS, fn),
         send(bytes) {
           if (ended) return;
 
