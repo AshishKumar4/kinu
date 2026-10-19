@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "exec" | "execStream" | "killExec" | "releaseExec" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest" | "desktop" | "releaseDesktop">;
+  | "stopSupervised" | "listSupervised" | "supervisedLogs" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest" | "desktop" | "releaseDesktop">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -329,6 +329,7 @@ export function adaptCloudflareSandbox(
     startSupervisedProcess: (command, opts) =>
       settle(onContainer(() => handle.startSupervised(command, opts?.cwd))),
     stopSupervisedProcess: (processId) => settle(onContainer(() => handle.stopSupervised(processId))),
+    supervisedProcessLogs: (processId, limits) => settle(onContainer(() => handle.supervisedLogs(processId, limits))),
     listSupervisedProcesses: () => settle(onContainer(async () =>
       (await handle.listSupervised()).map(row => ({
         processId: row.processId, pid: row.pid, status: row.status,

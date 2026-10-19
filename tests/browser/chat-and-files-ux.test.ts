@@ -32,7 +32,8 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { executorLabel, FILES_PAGE_ENTRIES, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
+import { settled as framesSettled } from '../../scripts/browser-page';
+import { ADVISOR_HEADER, executorLabel, FILES_PAGE_ENTRIES, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_TEXT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { evidenceDir, present } from '@kinu.run/test-utils';
 
 
@@ -71,9 +72,10 @@ interface ChatRow {
   readonly userBubbles: number;
   /** The generic harness-event card's event name, or null when there is none. */
   readonly systemEvent: string | null;
-  /** The card body clipped to one line — "collapsed by default", measured as
-   *  content that does not fit rather than as a class name. */
-  readonly folded: boolean;
+  /** All the card says, its words and its controls'. */
+  readonly said: string;
+  /** Opened by the person: its control says so. */
+  readonly open: boolean;
 }
 
 /** One Exploration run-node row, as the browser drew it. */
@@ -167,16 +169,16 @@ const ABORTED_NODE = 'lv005';
 async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
   return page.$$eval('[data-chat-row]', (rows) => {
     const measured: Record<string, {
-      userBubbles: number; systemEvent: string | null; folded: boolean;
+      userBubbles: number; systemEvent: string | null; said: string; open: boolean;
     }> = {};
 
     for (const row of rows) {
       const card = row.querySelector('[data-system-event]');
-      const body = card?.querySelector('.truncate, .whitespace-pre-wrap') ?? null;
       measured[row.getAttribute('data-chat-row') ?? ''] = {
         userBubbles: row.querySelectorAll('.p-user-bubble').length,
         systemEvent: card?.getAttribute('data-system-event') ?? null,
-        folded: body === null ? false : body.scrollWidth > body.clientWidth,
+        said: card?.textContent ?? '',
+        open: (card?.querySelector('[aria-expanded="true"]') ?? null) !== null,
       };
     }
 
@@ -862,12 +864,14 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     expect(gate.systemEvent).toBe('completion_gate');
   });
 
-  test('the harness\'s words are folded away, and open when asked', () => {
-    // Collapsed by default is a measurement here, not a class name: the body
-    // holds more than it shows. Clicking it makes the row taller and stops it
-    // overflowing, which is the difference between folded and truncated.
-    expect(observed.chat[UNSTAMPED_FORK_ROW].folded).toBe(true);
-    expect(observed.forkInterruptedAfterClick.folded).toBe(false);
+  test('the harness\'s words never show, folded or opened: the card says what happened', () => {
+    // What the agent was handed is written for the model, in its terms; the
+    // person reads what happened, from the event's fields, whether the card is
+    // folded or opened.
+    const handed = 'still marked running from an activation that has ended';
+    expect(observed.chat[UNSTAMPED_FORK_ROW].said).not.toContain(handed);
+    expect(observed.forkInterruptedAfterClick.open).toBe(true);
+    expect(observed.forkInterruptedAfterClick.said).not.toContain(handed);
   });
 
   test('an event kind that HAS a card keeps it — the fallback did not swallow them', () => {
@@ -1114,9 +1118,13 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       await page.waitForFunction(
         () => !(document.querySelector('aside')?.textContent ?? '').includes('loading...'),
       );
+      // The account shows in the sidebar's account menu, which opens from its head.
+      await page.click('aside [data-account-menu]');
+      await page.waitForSelector('aside [data-account-panel]');
+      await page.waitForFunction(() => !(document.querySelector('aside [data-account-panel]')?.textContent ?? '').includes('Loading'));
 
       const shell = await page.evaluate(() => ({
-        footer: document.querySelector('aside')?.textContent ?? '',
+        account: document.querySelector('aside [data-account-panel]')?.textContent ?? '',
         chatShown: (document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0) > 0,
         chatWidth: Math.round(document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0),
         composerWidth: Math.round(document.querySelector('[data-composer-root] > .p-composer')?.getBoundingClientRect().width ?? 0),
@@ -1125,8 +1133,8 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       }));
 
       await page.close();
-      expect(shell.footer).not.toContain('Could not load your profile');
-      expect(shell.footer).toContain('@');
+      expect(shell.account).not.toContain('Could not load your profile');
+      expect(shell.account).toContain('@');
       expect(shell.chatShown).toBe(true);
       expect(shell.composerWidth).toBe(shell.chatWidth);
       expect(shell.headerSettings).toBe(1);
@@ -1309,6 +1317,31 @@ function readProvenance(page: Page) {
     height: row.getBoundingClientRect().height,
   }])));
 }
+
+/** Each provenance row said by its summary (gallery.tsx SYSTEM_EVENT_ROWS), by words only the text it handed the agent has. */
+const HANDED = new Map([
+  ['event-task-reminder', 'system-reminder'],
+  ['event-task-reminder-kept', 'system-reminder'],
+  ['event-continuation', OUTPUT_CONTINUATION_TEXT.slice(0, 40)],
+  ['event-overflow', OVERFLOW_RETRY_TEXT.slice(0, 40)],
+  ['event-gate', 'a mechanical gate'],
+  ['event-consent', 'Re-issue the approved commands'],
+  ['event-proposal', 'Your owner approved'],
+  ['event-proposal-declined', 'Your owner declined'],
+  ['event-sandbox', 'Incident id'],
+  ['event-plan-approved', 'approved-plan'],
+  ['event-plan-feedback', 'submit_plan'],
+  ['event-slate', 'streams to slate'],
+  ['event-waits', 'Your owner has handled'],
+  ['event-take', 'parallel branch'],
+  ['event-fork', 'still marked running'],
+  ['event-unknown', 'only the agent should read'],
+  ['invented', 'Something new happened'],
+  ['harness', 'The tree is clean'],
+  ['adv-nit', ADVISOR_HEADER.slice(0, 60)],
+  ['adv-concern', ADVISOR_HEADER.slice(0, 60)],
+  ['adv-blocker', ADVISOR_HEADER.slice(0, 60)],
+]);
 
 /** The loose cards in the workspace's thread, each by its state and the briefs it lists. */
 function threadCards(page: Page): Promise<{ state: string | null; briefs: string[] }[]> {
@@ -1539,6 +1572,35 @@ describe('whose words a turn is', () => {
     });
   });
 
+  test('an event with no card of its own says what happened, never the words the agent was handed', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 900, height: 2400 });
+      await page.goto(`${origin}/gallery.html?frame=provenance`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-chat-row="event-task-reminder"] [data-system-event]');
+      const folded = await readProvenance(page);
+
+      await page.$$eval('[data-system-event] button[aria-expanded="false"]', (buttons) => {
+        for (const button of buttons) if (button instanceof HTMLElement) button.click();
+      });
+      await page.waitForFunction(() => document.querySelector('[data-system-event] button[aria-expanded="false"]') === null);
+      const opened = await readProvenance(page);
+
+      for (const [id, handed] of HANDED) {
+        for (const rows of [folded, opened]) {
+          const row = present(rows[id], `the ${id} row`);
+          expect([id, row.card, row.text.includes(handed)]).toEqual([id, true, false]);
+        }
+      }
+
+      // The owner's reminder names its open task, from the task's title kept beside the reminder.
+      expect(present(folded['event-task-reminder'], 'the reminder row').text).toContain('Store the full export in account-level memory');
+      // An advisor row written before its note was kept still reads its note.
+      expect(present(opened['adv-blocker'], 'the blocker row').text).toContain('Roll the worker first');
+      await page.close();
+    });
+  });
+
   test('a signal keeps one card from delivery to the agent, a re-delivery reuses it, and an undelivered one leaves', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
@@ -1662,11 +1724,12 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
   });
 
   /**
-   * Stop gives the next Send its own turn, but only once the stop's cancel has come back; the stopped send landing
-   * late never frees a newer turn; and a send the transport fails frees the next one. A press the latch refuses is
-   * not lost: it goes to the running turn.
+   * Stop gives the next Send its own turn, but only once the stop's cancel has come back and the stopped send has
+   * landed: until then the composer stays on the Stop, and words typed go to the running turn. A send the transport
+   * fails frees the next one. (A stopped send landing after a newer turn took the latch cannot happen from here now;
+   * the latch's own fence against it is unit-send-admission's.)
    */
-  test('a stopped or failed send frees the next turn, and a stale one never frees a newer turn', async () => {
+  test('a stopped or failed send frees the next turn, once the stopped one has landed', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
@@ -1688,61 +1751,48 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
           .some((reached) => reached.includes(said)), {}, words);
       };
 
-      const stopHeld = async () => {
-        await page.evaluate(() => { document.documentElement.dataset.galleryCancelHeld = '1'; });
-        await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
-        await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
-      };
-
       const settleSend = (at: number, failed = false) => page.evaluate((detail) => {
         window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail }));
       }, { at, failed });
-
-      const releaseCancel = () => page.evaluate(() => {
-        document.documentElement.dataset.galleryCancelHeld = '0';
-        window.dispatchEvent(new Event('gallery:release-cancel'));
-      });
 
       await press('Send', 'first turn');
       expect(await counts()).toEqual({ turns: 1, toRunning: [] });
       await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
 
-      // Stopped, with its cancel still out: the turn still holds, so a Send goes to it.
-      await stopHeld();
-      await press('Send', 'during the stop');
+      // Stopped, with its cancel still out: the composer stays on the Stop, and words typed go to the running turn.
+      await page.evaluate(() => { document.documentElement.dataset.galleryCancelHeld = '1'; });
+      await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]:disabled');
+      await press('Steer the running turn', 'during the stop');
       expect(await counts()).toEqual({ turns: 1, toRunning: ['during the stop'] });
 
-      await releaseCancel();
-      await page.waitForFunction(() => document.querySelector('[data-composer-root] button[aria-label="Send"]') !== null);
+      // The cancel comes back and the stopped send lands: Send returns, and opens a turn of its own.
+      await page.evaluate(() => {
+        document.documentElement.dataset.galleryCancelHeld = '0';
+        window.dispatchEvent(new Event('gallery:release-cancel'));
+      });
+      await settleSend(0);
+      await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
       await press('Send', 'second turn');
       expect((await counts()).turns).toBe(2);
       await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
 
-      // The first send lands now, after the second took the latch: the second still holds it.
-      await settleSend(0);
-      await stopHeld();
-      await press('Send', 'after the stale landing');
-      expect(await counts()).toEqual({ turns: 2, toRunning: ['during the stop', 'after the stale landing'] });
-
-      await releaseCancel();
-      await press('Send', 'third turn');
-      expect((await counts()).turns).toBe(3);
-      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
-
-      // The transport fails the third: the next Send opens a turn of its own.
-      await settleSend(2, true);
+      // The transport fails the second: the next Send opens a turn of its own.
+      await settleSend(1, true);
       await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
       await press('Send', 'after the failure');
-      expect(await counts()).toEqual({ turns: 4, toRunning: ['during the stop', 'after the stale landing'] });
+      expect(await counts()).toEqual({ turns: 3, toRunning: ['during the stop'] });
       await page.close();
     });
   });
 
   /**
    * A Stop that reached the agent before an opening's words did hands them back (2026-10-18): they return to the draft
-   * under the Stop's own notice, as a steer's do, and no failure shows. An opening no Stop touched is read where it ran.
+   * under the Stop's own notice, as a steer's do, and no failure shows. Send waits for that: offered before, a Continue
+   * pressed at once ran without the brief the Stop was about to hand back (1008-e, staging rc20). An opening no Stop
+   * touched is read where it ran.
    */
-  test('words a Stop handed back before the agent read them return to the draft, and no failure shows', async () => {
+  test('words a Stop handed back before the agent read them are in the draft when Send returns, and no failure shows', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
@@ -1762,14 +1812,33 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
       await page.type('[data-composer-root] textarea', 'words the Stop handed back');
       await page.click('[data-composer-root] button[aria-label="Send"]');
       await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+
+      // The composer as it stands the moment Send is drawn again, read in the commit that draws it.
+      const whenSendReturns = page.evaluate(() => new Promise((seen) => {
+        const root = document.querySelector('[data-composer-root]');
+
+        if (root === null) throw new Error('no composer');
+
+        const observer = new MutationObserver(() => {
+          if (root.querySelector('button[aria-label="Send"]') === null) return;
+          observer.disconnect();
+          seen({
+            draft: root.querySelector<HTMLTextAreaElement>('textarea')?.value ?? '',
+            notices: [...root.querySelectorAll('[data-notice]')].map((notice) => notice.getAttribute('data-notice')),
+          });
+        });
+
+        observer.observe(root, { subtree: true, childList: true, attributes: true });
+      }));
+
       await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
-      await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
-      expect(await composer()).toEqual({ draft: '', notices: [] });
+      // The stopped request is still out: the composer stays on the Stop.
+      await framesSettled(page, `document.querySelector('[data-composer-root] button[aria-label="Send"]') === null`);
+      expect(await page.evaluate(() => document.querySelector('[data-composer-root] button[aria-label="Send"]') === null)).toBe(true);
 
       // The stopped request ends; the agent's record says no turn read the words.
       await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail: { at: 0 } })); });
-      await page.waitForFunction(() => document.querySelector('[data-composer-root] [data-notice]') !== null);
-      expect(await composer()).toEqual({ draft: 'words the Stop handed back', notices: ['info'] });
+      expect(await whenSendReturns).toEqual({ draft: 'words the Stop handed back', notices: ['info'] });
 
       // Sent again and left to run, they are read where they ran: nothing returns.
       await page.evaluate(() => { document.documentElement.dataset.galleryHandedBack = '0'; });

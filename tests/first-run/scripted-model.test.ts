@@ -15,6 +15,7 @@ import {
   RELAY_MISSION, STANDBY_MISSION, TREE_ASK, TREE_DEEP_WORD, delegationDismissAsk, sayWordMission,
 } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
+import { SCRIPTED_MCP_PATH, SCRIPTED_MCP_TOOL, SessionAnswerSchema } from '../../scripts/scripted-mcp';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
@@ -22,7 +23,7 @@ import {
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_EXECUTED, HIRE_PARKED_COMMAND, HIRE_RAN, HOME_ASK, HOME_BRIEF, HOME_REPORTED, JOB_ASK, JOB_COMMAND,
   JOB_STARTED, PARKED_COMMANDS,
 } from '../../scripts/flows-script';
-import { COMPUTER } from '../../packages/core/src/operations/executors';
+import { machineOperations } from '../../packages/core/src/operations/executors';
 import { wakeText } from '../../packages/core/src/jobs/runner';
 import type { BackgroundJob } from '../../packages/core/src/types/jobs';
 import { generateText, streamText } from 'ai';
@@ -122,6 +123,48 @@ describe('the deployed tiers\' Worker answers a Tavily search', () => {
     expect(body.results.every((result) => result.url.startsWith('https://'))).toBe(true);
     expect((await worker.fetch(asked(search, '{}'), ENV)).status).toBe(400);
     expect((await worker.fetch(new Request(search, { method: 'POST', body: '{}' }), ENV)).status).toBe(401);
+  });
+});
+
+// The MCP server the mcp-reconnect case connects, through the Worker behind its key: a session opens, a call that
+// ends the session carrying it is answered 404 and runs nothing, and the same call on a new session is served.
+describe('the deployed tiers\' Worker serves an MCP server whose sessions end on cue', () => {
+  const MCP = `https://scripted-model.kinu.run${SCRIPTED_MCP_PATH}`;
+
+  const rpc = async (body: JsonObject, session?: string) => await worker.fetch(new Request(MCP, {
+    method: 'POST', body: JSON.stringify(body),
+    headers: { authorization: `Bearer ${KEY}`, 'content-type': 'application/json', ...(session !== undefined && { 'mcp-session-id': session }) },
+  }), ENV);
+
+  const opened = async (): Promise<string> => (await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })).headers.get('mcp-session-id') ?? '';
+
+  const call = async (session: string, args: JsonObject) => await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: SCRIPTED_MCP_TOOL, arguments: args } }, session);
+
+  const served = async (response: Response): Promise<string> => {
+    const text = v.parse(v.object({ result: v.object({ content: v.tuple([v.object({ type: v.literal('text'), text: v.string() })]) }) }), await response.json()).result.content[0].text;
+
+    return v.parse(v.pipe(v.string(), v.parseJson(), SessionAnswerSchema), text).session;
+  };
+
+  test('a session is served until a call ends it; that call is answered 404 and is served on the next session', async () => {
+    const first = await opened();
+    const listed = v.parse(v.object({ result: v.object({ tools: v.array(v.object({ name: v.string() })) }) }), await (await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/list' }, first)).json());
+    const again = await served(await call(first, {}));
+    const ended = await call(first, { end: first });
+    const next = await opened();
+    const retried = await served(await call(next, { end: first }));
+
+    expect({ tools: listed.result.tools.map((tool) => tool.name), again, ended: [ended.status, await ended.text()], fresh: next !== first, retried })
+      .toEqual({ tools: [SCRIPTED_MCP_TOOL], again: first, ended: [404, ''], fresh: true, retried: next });
+  });
+
+  test('a request naming no session it issued is refused, a stream is not offered, and nothing answers without the key', async () => {
+    const unnamed = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: SCRIPTED_MCP_TOOL, arguments: {} } });
+    const forged = await call('not-issued-here', {});
+    const streamed = await worker.fetch(new Request(MCP, { headers: { authorization: `Bearer ${KEY}` } }), ENV);
+    const keyless = await worker.fetch(new Request(MCP, { method: 'POST', body: '{}' }), ENV);
+
+    expect([unnamed.status, forged.status, streamed.status, keyless.status]).toEqual([400, 400, 405, 401]);
   });
 });
 
@@ -368,12 +411,12 @@ async function reply(messages: readonly JsonObject[], offered: readonly string[]
 }
 
 /** The conversation after a turn that hired one helper, which answered at once that the helper is working. */
-function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly agent: string; readonly mission: string }): JsonObject[] {
+function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly agent: string; readonly message: string }): JsonObject[] {
   return [
     { role: 'user', content: ask },
     { role: 'assistant', content: 'Calling agents.', tool_calls: [{
       id: hired.id, type: 'function',
-      function: { name: 'agents', arguments: JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', mission: hired.mission }) },
+      function: { name: 'agents', arguments: JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', message: hired.message }) },
     }] },
     { role: 'tool', tool_call_id: hired.id, content: JSON.stringify({ status: 'working', agent: hired.agent, lifetime: 'task', role: 'task' }) },
     { role: 'assistant', content: 'WAITING' },
@@ -407,10 +450,10 @@ describe("the agent-job row's job", () => {
   test("is started by a program the computer's own surface takes, and is called started only once it is", async () => {
     const started: JsonValue[] = [];
 
-    const computer = codemodeNamespace('computer', 'the computer', [{ op: COMPUTER.startProcess, run: async (input) => {
+    const computer = codemodeNamespace('computer', 'the computer', [{ op: machineOperations('computer').process_long.startProcess, run: async (input) => {
       started.push(input);
 
-      return { value: JSON.stringify({ processId: 'job-1', restartable: true }) };
+      return { value: { processId: 'job-1' } };
     } }]);
 
     const call = present((await reply([{ role: 'user', content: JOB_ASK }], ['eval'])).tool_calls?.[0], 'the job call');
@@ -424,9 +467,9 @@ describe("the agent-job row's job", () => {
       { role: 'tool', tool_call_id: 'call_job', content: result },
     ], ['eval'])).content;
 
-    expect({ started, ran }).toEqual({ started: [{ command: JOB_COMMAND }], ran: JSON.stringify({ processId: 'job-1', restartable: true }) });
-    // As the eval tool answers it: the program's value, a JSON string, inside the tool's own JSON.
-    expect(await answered(JSON.stringify({ result: JSON.stringify({ processId: 'job-1', restartable: true }) }))).toBe(JOB_STARTED);
+    expect({ started, ran }).toEqual({ started: [{ command: JOB_COMMAND }], ran: { processId: 'job-1' } });
+    // As the eval tool answers it: the program's value inside the tool's own JSON.
+    expect(await answered(JSON.stringify({ result: { processId: 'job-1' } }))).toBe(JOB_STARTED);
     expect(await answered(JSON.stringify({ success: false, reason: 'bad_input', error: 'refused' }))).not.toBe(JOB_STARTED);
   });
 
@@ -476,7 +519,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     const report = answerArrives(agent, HOME_BRIEF, `HOME ${home}`);
 
     const messages = [
-      ...hiredAndWaiting(HOME_ASK, { id: 'call_home', agent, mission: HOME_BRIEF }),
+      ...hiredAndWaiting(HOME_ASK, { id: 'call_home', agent, message: HOME_BRIEF }),
       { role: 'user', content: report },
     ];
 
@@ -490,7 +533,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     const mission = sayWordMission(DELEGATION_WORD);
 
     const messages = [
-      ...hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', mission }),
+      ...hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', message: mission }),
       { role: 'user', content: answerArrives('ask-task-ymhu3n', mission, DELEGATION_WORD) },
     ];
 
@@ -501,11 +544,11 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
     const hired = await reply([{ role: 'user', content: RELAY_MISSION }]);
 
     expect(hired.tool_calls?.map((made) => made.function.arguments)).toEqual([
-      JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', mission: sayWordMission(TREE_DEEP_WORD) }),
+      JSON.stringify({ op: 'hire', lifetime: 'task', role: 'task', message: sayWordMission(TREE_DEEP_WORD) }),
     ]);
 
     const messages = [
-      ...hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', mission: sayWordMission(TREE_DEEP_WORD) }),
+      ...hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', message: sayWordMission(TREE_DEEP_WORD) }),
       { role: 'user', content: answerArrives('ask-task-deep01', sayWordMission(TREE_DEEP_WORD), TREE_DEEP_WORD) },
     ];
 
@@ -514,7 +557,7 @@ describe('the first-run scripts answer the turn a helper\'s answer opens', () =>
 
   test('the tree root answers each arrival with the word it carries', async () => {
     const messages = [
-      ...hiredAndWaiting(TREE_ASK, { id: 'call_relay', agent: 'ask-task-relay1', mission: RELAY_MISSION }),
+      ...hiredAndWaiting(TREE_ASK, { id: 'call_relay', agent: 'ask-task-relay1', message: RELAY_MISSION }),
       { role: 'user', content: answerArrives('ask-task-relay1', RELAY_MISSION, TREE_DEEP_WORD) },
     ];
 
@@ -549,7 +592,7 @@ describe('a report that lands in a turn at work is not the ask that turn answers
 
   test('a word that lands in the turn that hired its helper is relayed there', async () => {
     const mission = sayWordMission(DELEGATION_WORD);
-    const hired = hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', mission }).slice(0, -1);
+    const hired = hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', message: mission }).slice(0, -1);
     const word = reported('ask-task-ymhu3n', mission, DELEGATION_WORD, 'completed').midTurnText;
 
     expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(`HIRED ${DELEGATION_WORD}`);
@@ -557,7 +600,7 @@ describe('a report that lands in a turn at work is not the ask that turn answers
 
   test('the relay relays the word that lands in the turn that hired its helper', async () => {
     const mission = sayWordMission(TREE_DEEP_WORD);
-    const hired = hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', mission }).slice(0, -1);
+    const hired = hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', message: mission }).slice(0, -1);
     const word = reported('ask-task-deep01', mission, TREE_DEEP_WORD, 'completed').midTurnText;
 
     expect((await reply([...hired, { role: 'user', content: word }])).content).toBe(TREE_DEEP_WORD);

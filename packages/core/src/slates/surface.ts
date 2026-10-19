@@ -11,12 +11,30 @@ import { isSlateMethodName } from './rpc';
 import { SLATE_READ_MODELS, type SlateReadModel } from './read-models';
 import { grantAdmits } from './capability-graph';
 import { AGENT_ASK_MEMBER, AI_RUN_MEMBER, AI_STREAM_MEMBER, slateAddressImpact, slateOwnerOnly } from './members';
+import { retiredMember } from '../operations/retired';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
+import { MACHINE_FILES } from '../operations/executors';
 
-/** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.readFile` is in a program. */
+/** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.listTools` is in a program. */
 const WORKSPACE_EXECUTOR = 'workspace';
+
+/** The executors a slate reaches whose files are a member group (`computer.fs.read`). */
+const MACHINES: readonly string[] = [WORKSPACE_EXECUTOR, 'computer', 'device'];
+
+/**
+ * A path as it names a member: a machine's files group joins its member, as `fs.read` is one member of a machine
+ * (`['computer', 'fs', 'read']`, or the workspace's own `['fs', 'read']`). A slate or MCP server named `fs` keeps its
+ * own three-part address.
+ */
+function memberPath(path: readonly string[]): readonly string[] {
+  const [first, second, third] = path;
+
+  if (path.length === 2 && first === MACHINE_FILES) return [`${MACHINE_FILES}.${second ?? ''}`];
+
+  return path.length === 3 && first !== undefined && MACHINES.includes(first) && second === MACHINE_FILES ? [first, `${MACHINE_FILES}.${third ?? ''}`] : path;
+}
 
 /**
  * What only the agent does, never a page it shows: delegating, steering itself, reporting, making tools and changing
@@ -46,10 +64,17 @@ export const SLATE_DRIVEN_MEMBERS: readonly string[] = Object.keys(WEB_SANDBOX_I
 
 export type SlateCallRequest = v.InferOutput<typeof SlateCallRequestSchema>;
 
+/**
+ * The host's record of one request into a slate's process: issued by the host to that one process (`incarnation`),
+ * under the sharing of each slate on its way as it was then (`generations`), and naming whom it is for. It lends no
+ * authority of its own (shared-server.ts): it only says whose a call is.
+ */
 export interface SlateInvocation {
   readonly id: string;
   readonly chain: readonly string[];
   readonly viewer?: SlateViewer;
+  readonly incarnation: string;
+  readonly generations: Readonly<Record<string, number>>;
 }
 
 export interface SlateViewer {
@@ -196,14 +221,16 @@ function rest(namespace: string, names: readonly string[], count: number): Effec
 
 /** What a path names: its last name is the member, the rest its namespace. */
 export function slateCallAddress(path: readonly string[]): SlateAddress {
-  const named = path.length === 1 ? [WORKSPACE_EXECUTOR, ...path] : path;
+  const member = memberPath(path);
+  const named = member.length === 1 ? [WORKSPACE_EXECUTOR, ...member] : member;
 
   return { namespace: named.slice(0, -1).join('.'), member: named.at(-1) ?? '' };
 }
 
 /** The route a path names, before what it reaches is checked. */
 function route(id: string, request: SlateCallRequest, chain: readonly string[]): Effect.Effect<SlateRoute, KinuError> {
-  const [namespace, ...names] = request.path.length === 1 ? [WORKSPACE_EXECUTOR, ...request.path] : request.path;
+  const member = memberPath(request.path);
+  const [namespace, ...names] = member.length === 1 ? [WORKSPACE_EXECUTOR, ...member] : member;
   const { args } = request;
 
   return Effect.flatMap(rest(namespace, names, namespace === 'mcp' || namespace === 'slates' ? 2 : 1), ([first, second]): Effect.Effect<SlateRoute, KinuError> => {
@@ -230,6 +257,10 @@ function routed(id: string, request: SlateCallRequest, chain: readonly string[])
   // A malformed path is told its shape first; a well-formed one reaches only what the catalog puts on the surface.
   // The list names eval namespaces; `agent.send` and the rest of the surface's own are routed above it.
   return Effect.flatMap(route(id, request, chain), (found) => {
+    const retired = retiredMember(address.namespace, address.member);
+
+    // A slate kept since a member left the surface is told what replaced it.
+    if (retired !== null) return Effect.fail(new KinuError('bad_input', retired));
     const impact = slateAddressImpact(address);
 
     if (impact === null || (found.kind === 'namespace' && !slateReaches(address))) return Effect.fail(refused);

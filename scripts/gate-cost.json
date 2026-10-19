@@ -831,18 +831,6 @@
       "loadAtStart": 0.24,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
-      "machine": "linux x64, AMD EPYC (8 threads)",
-      "wallSeconds": 122.94,
-      "cpuSeconds": 134.79,
-      "peakRssMb": 1507.97,
-      "peakRunnable": 17,
-      "peakCpuThreads": 4.49,
-      "meanThreads": 1.1,
-      "samples": 488,
-      "loadAtStart": 0.74,
-      "exit": 0
-    },
     "bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 5.63,
@@ -1131,15 +1119,39 @@
       "loadAtStart": 0.51,
       "exit": 0
     },
+    "bun scripts/verified-secret-scan.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
+      "wallSeconds": 32.84,
+      "cpuSeconds": 74.03,
+      "peakRssMb": 832.85,
+      "peakRunnable": 7,
+      "peakCpuThreads": 3.67,
+      "meanThreads": 2.25,
+      "samples": 168,
+      "loadAtStart": 0.08,
+      "exit": 0
+    },
+    "bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/verified-secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
+      "wallSeconds": 140.97,
+      "cpuSeconds": 160.1,
+      "peakRssMb": 1563.18,
+      "peakRunnable": 14,
+      "peakCpuThreads": 3.82,
+      "meanThreads": 1.14,
+      "samples": 555,
+      "loadAtStart": 1.46,
+      "exit": 0
+    },
     "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
-      "wallSeconds": 61.41,
-      "cpuSeconds": 44.7,
-      "peakRssMb": 568.24,
-      "peakRunnable": 4,
-      "peakCpuThreads": 3.57,
-      "meanThreads": 0.73,
-      "samples": 280,
-      "loadAtStart": 2.22,
+      "wallSeconds": 81,
+      "cpuSeconds": 44.97,
+      "peakRssMb": 555.21,
+      "peakRunnable": 12,
+      "peakCpuThreads": 3.15,
+      "meanThreads": 0.56,
+      "samples": 356,
+      "loadAtStart": 3.56,
       "exit": 0,
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
     }

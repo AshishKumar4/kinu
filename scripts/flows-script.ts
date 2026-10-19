@@ -351,7 +351,7 @@ function homeAnswer(request: ScriptedRequest, latest: string): ScriptedAnswer | 
   if (latest.includes(HOME_ASK)) {
     const hired = request.turn.find((call) => call.name === 'agents');
 
-    if (hired === undefined) return { toolCall: { name: 'agents', arguments: { op: 'hire', role: 'task', mission: HOME_BRIEF } } };
+    if (hired === undefined) return { toolCall: { name: 'agents', arguments: { op: 'hire', role: 'task', message: HOME_BRIEF } } };
 
     return { text: `${HIRED} ${/"name"\s*:\s*"([^"]+)"/u.exec(hired.result)?.[1] ?? `nobody: ${hired.result.slice(0, 200)}`}` };
   }

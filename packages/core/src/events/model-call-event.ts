@@ -9,6 +9,14 @@ import type { RunEventInput } from './types';
  * The only place the `model_call` row is built. `usage` is always present (`{}` = unmeasured).
  * `usd` is set only when `report.spec === effectiveSpec`; a report without `spec` never prices.
  */
+/**
+ * A model call as whoever made it records it: priced at the rate its account's catalog gives the very model it called
+ * (the turn's own, or one warmed for it), unpriced when the catalog has none. Every model call is priced here.
+ */
+export function pricedModelCallEvent(report: ModelCallReport, catalog: { pricing(spec?: string): ModelPricing | null }): Extract<RunEventInput, { type: 'model_call' }> {
+  return buildModelCallEvent(report, { effectiveSpec: report.spec ?? null, pricing: report.spec === undefined ? null : catalog.pricing(report.spec) });
+}
+
 export function buildModelCallEvent(report: ModelCallReport, opts: {
   readonly effectiveSpec: string | null;
   /** Null until the catalog lookup lands: unpriced. */

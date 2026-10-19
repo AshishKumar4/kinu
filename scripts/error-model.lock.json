@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-15",
+  "measuredAt": "2026-10-19",
   "counts": {
     "packages/cf-backend/src/activation-gate.ts#throw": 1,
     "packages/cf-backend/src/actor-agent.ts#catch": 6,
@@ -151,9 +151,9 @@
     "packages/core/src/delegation/agents-tool.ts#throw": 18,
     "packages/core/src/evolution/engine.ts#catch": 2,
     "packages/core/src/evolution/engine.ts#throw": 1,
-    "packages/core/src/execution/nimbus.ts#catch": 12,
+    "packages/core/src/execution/nimbus.ts#catch": 7,
     "packages/core/src/execution/nimbus.ts#throw": 4,
-    "packages/core/src/execution/sandbox.ts#catch": 13,
+    "packages/core/src/execution/sandbox.ts#catch": 7,
     "packages/core/src/execution/sandbox.ts#error-class": 1,
     "packages/core/src/execution/sandbox.ts#throw": 12,
     "packages/core/src/experience/actions.ts#catch": 1,

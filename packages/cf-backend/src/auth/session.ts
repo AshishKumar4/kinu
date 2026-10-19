@@ -72,7 +72,19 @@ export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv, SignI
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];
 
 export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Promise<AuthIdentity> {
-  return settle(Effect.gen(function* () {
+  return settle(Effect.flatMap(sessionIdentity(request, env), (identity) => identity === null
+    ? Effect.die(new AuthError(401, readSessionToken(request) ? 'Kinu session expired. Sign in again.' : 'No Kinu session in request'))
+    : Effect.succeed(identity)));
+}
+
+/** The request's person, or null where it holds no session or an expired one: a page anyone may open reads this. */
+export function requestIdentity<Id>(request: Request, env: AuthEnv<Id>): Promise<AuthIdentity | null> {
+  return settle(sessionIdentity(request, env));
+}
+
+/** The session's identity; null for none or an expired one. Every other failure dies as its `AuthError`. */
+function sessionIdentity<Id>(request: Request, env: AuthEnv<Id>): Effect.Effect<AuthIdentity | null> {
+  return Effect.gen(function* () {
     const sessionToken = readSessionToken(request);
 
     if (sessionToken) {
@@ -90,9 +102,7 @@ export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Pro
         return Effect.die(new AuthError(503, e.message, { cause: e }));
       });
 
-      if (identity) return identity;
-
-      return yield* Effect.die(new AuthError(401, 'Kinu session expired. Sign in again.'));
+      return identity ?? null;
     }
 
     const devEmail = yield* devIdentityEmail(request, env);
@@ -105,8 +115,8 @@ export function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Pro
       return yield* Effect.die(new AuthError(500, 'Browser auth is not configured (AUTH_KV binding missing)'));
     }
 
-    return yield* Effect.die(new AuthError(401, 'No Kinu session in request'));
-  }));
+    return null;
+  });
 }
 
 /**

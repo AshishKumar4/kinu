@@ -1,40 +1,52 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
-import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
-import { initWorkspaceActorTable, WorkspaceActorDirectory, whenActorTakesInput } from '../src/identity/workspace-actors';
+import { WorkspaceActorDirectory, whenActorTakesInput } from '../src/identity/workspace-actors';
 import { explorationActorKey } from '../src/identity/actor-key';
 import { actorHomeName } from '../src/vfs/agent-home';
 import type { SqlExecutor } from '../src/types/primitives';
-import { initAgentConfigTable } from '../src/config/store';
-import { initCodemodeStateTable } from '../src/identity/program-state';
+import { createAppDataStore } from '../src/tools/db-codemode';
+import { RunEventRecorder } from '../src/events/recorder';
+import type { ActorHandle } from '../src/identity/actor-handle';
+import { initWorkspaceSchema } from '../src/state/workspace-schema';
+import { makeSqlExec } from './helpers';
+
+const SCRATCH = { name: 'scratch', scope: 'private', columns: [{ name: 'key', type: 'text', primaryKey: true }, { name: 'value', type: 'json' }] } as const;
 
 function workspace(id: string, owner: string) {
   const database = createTestSql();
-  database.execRaw(WORKSPACE_IDENTITY_DDL);
+  initWorkspaceSchema({ execRaw: database.execRaw, sql: database.sql, exec: makeSqlExec(database.db), transactionSync: (write) => database.db.transaction(write)() });
   void database.sql`INSERT INTO workspace_identity (id,name,owner_user_id) VALUES (${id}, ${id}, ${owner})`;
-  initWorkspaceActorTable(database.execRaw);
-  initAgentConfigTable(database.execRaw);
-  initCodemodeStateTable(database.execRaw);
 
-  return { ...database, directory: new WorkspaceActorDirectory(database.sql, { workspaceId: id, ownerUserId: owner }) };
+  return {
+    ...database, directory: new WorkspaceActorDirectory(database.sql, { workspaceId: id, ownerUserId: owner }),
+    store: (actor: ActorHandle) => createAppDataStore({
+      sql: database.sql, actor, transactionSync: (write) => database.db.transaction(write)(),
+      events: () => new RunEventRecorder(database.sql, actor), runId: () => 'actor-scratch',
+    }),
+  };
 }
 
 describe('one workspace actor directory', () => {
-  test('main and two actors keep colliding config and program keys separate in one SQLite', () => {
-    const { directory } = workspace('workspace', 'owner');
+  test('main and two actors keep colliding config and private table rows separate in one SQLite', () => {
+    const { directory, store } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const left = directory.create({ parent: main, name: 'left', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
     const right = directory.create({ parent: main, name: 'right', origin: 'agent', lifetime: 'task', creationId: crypto.randomUUID() });
     main.config.setModel('model/main'); left.config.setModel('model/left'); right.config.setModel('model/right');
-    main.programState.set('key', { value: 'main' }); left.programState.set('key', { value: 'left' }); right.programState.set('key', { value: 'right' });
+    store(main).createTable(SCRATCH);
+
+    for (const [actor, value] of [[main, 'main'], [left, 'left'], [right, 'right']] as const) {
+      store(actor).apply({ op: 'insert', table: 'scratch', rows: [{ key: 'key', value: { value } }] });
+    }
+
     expect([main.config.getModel(), left.config.getModel(), right.config.getModel()]).toEqual(['model/main', 'model/left', 'model/right']);
-    expect([main.programState.get('key'), left.programState.get('key'), right.programState.get('key')]).toEqual([{ value: 'main' }, { value: 'left' }, { value: 'right' }]);
+    expect([main, left, right].map((actor) => store(actor).select('scratch')[0]?.value)).toEqual([{ value: 'main' }, { value: 'left' }, { value: 'right' }]);
     expect(left.config.countClosedTurnWindow()).toBe(1);
     expect(left.config.countClosedTurnWindow()).toBe(2);
     expect(right.config.countClosedTurnWindow()).toBe(1);
-    left.programState.delete('key'); left.config.delete('model');
-    expect(left.programState.list()).toEqual([]);
-    expect(right.programState.list()).toEqual(['key']);
+    store(left).apply({ op: 'delete', table: 'scratch', where: { key: 'key' } }); left.config.delete('model');
+    expect(store(left).select('scratch')).toEqual([]);
+    expect(store(right).select('scratch')).toEqual([{ key: 'key', value: { value: 'right' } }]);
     expect(right.config.getModel()).toBe('model/right');
   });
   test('same child name under two parents resolves to distinct actors', () => {
@@ -105,14 +117,15 @@ describe('one workspace actor directory', () => {
     expect(() => new WorkspaceActorDirectory(first.sql, { workspaceId: 'first', ownerUserId: 'foreign' })).toThrow(expect.objectContaining({ code: 'denied' }));
   });
   test('retirement survives a wake and holds the alias until deletion completes', () => {
-    const { directory, sql } = workspace('workspace', 'owner');
+    const { directory, sql, store } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const { reference } = directory.apply(main, [], { action: 'register', name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
     const old = directory.open(reference.actorId);
     const config = old.config;
-    const state = old.programState;
+    const scratch = store(old);
     config.setModel('model/old');
-    state.set('key', 'old');
+    scratch.createTable(SCRATCH);
+    scratch.apply({ op: 'insert', table: 'scratch', rows: [{ key: 'key', value: 'old' }] });
     expect(() => directory.create({ parent: main, name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
     directory.apply(main, [], { action: 'retire', name: 'researcher', reference });
     const cold = new WorkspaceActorDirectory(sql, { workspaceId: 'workspace', ownerUserId: 'owner' });
@@ -121,13 +134,13 @@ describe('one workspace actor directory', () => {
     if (!pending) throw new Error('The interrupted deletion was lost.');
     expect(() => cold.create({ parent: cold.main(), name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
     expect(() => config.setModel('model/replay')).toThrow(expect.objectContaining({ code: 'missing' }));
-    expect(() => state.set('key', 'replay')).toThrow(expect.objectContaining({ code: 'missing' }));
+    expect(() => scratch.apply({ op: 'insert', table: 'scratch', rows: [{ key: 'key', value: 'replay' }] })).toThrow(expect.objectContaining({ code: 'missing' }));
     expect(cold.apply(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference }).state).toBe('retiring');
     cold.apply(pending.caller, pending.parentPath, { action: 'release', name: pending.name, reference: pending.reference });
     const replacement = cold.create({ parent: cold.main(), name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
     expect(replacement.actorId).not.toBe(reference.actorId);
     expect(replacement.config.getModel()).toBeNull();
-    expect(replacement.programState.get('key')).toBeNull();
+    expect(store(replacement).select('scratch')).toEqual([]);
     expect(cold.apply(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference }).state).toBe('deleted');
     cold.apply(pending.caller, pending.parentPath, { action: 'release', name: pending.name, reference });
     expect(cold.resolveChild(cold.main(), 'researcher')?.actorId).toBe(replacement.actorId);

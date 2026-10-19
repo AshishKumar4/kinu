@@ -5,13 +5,13 @@ import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, readSubordinateInspection,
-  drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
+  chatMediaPath, chatSeed, drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
   localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
   type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
-  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
+  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, TurnReports,
   PlanReviewStore, OwnerQuestionStore, AgentSequence, TurnFactsStore, type PlanReview, type TurnFacts,
@@ -24,6 +24,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, type Repair } from '@kinu.run/core';
+import type { MediaRef, MediaUrl, StoredImage } from '@kinu.run/core';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
 
@@ -486,7 +487,25 @@ export class AgentDatabase {
   }
 
   async historyPage(page: PositionPageRequest): Promise<ChatHistoryPage> {
-    return await getChatHistoryPage(this.readable().transcript, page);
+    return await getChatHistoryPage(this.readable().transcript, page, this.mediaUrl());
+  }
+
+  /** What a tab is sent of this chat as it connects or a turn ends: its newest page. */
+  async seed(): Promise<UIMessage[]> {
+    return await chatSeed(this.readable().transcript, this.mediaUrl());
+  }
+
+  /** The image a page of this chat named, when an entry of this chat carries it. */
+  async media(ref: MediaRef): Promise<StoredImage | null> {
+    return await this.readable().transcript.media(ref);
+  }
+
+  /** Each image this chat's pages name, addressed under its workspace by this agent. */
+  private mediaUrl(): MediaUrl {
+    const workspace = this.current().workspaceName;
+    const { actorId } = this.reference();
+
+    return (ref) => chatMediaPath(workspace, actorId, ref);
   }
 
   /** An answer's text parts and the mode its agent last ran in; null when the id names no answer of this agent's. */
@@ -677,30 +696,14 @@ export class AgentDatabase {
     };
   }
 
-  /** A run's answer, prepared: the returned write appends it in the commit that ends the run. Nothing where the transcript
-   *  holds no turn to answer. */
-  async prepareAnswer(completion: NonNullable<HeadReport['canonicalCompletion']>): Promise<() => void> {
-    const transcript = this.transcript();
 
-    if (transcript.newestId() === null) return () => {};
-
-    const entry = await transcript.prepareAssistant({
-      id: crypto.randomUUID(), turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
-      finalText: completion.finalTextReference,
-    });
-
-    return () => { transcript.appendAssistant(entry); };
-  }
-
-  async history(limit?: number): Promise<UIMessage[]> {
-    return await this.readable().transcript.history(limit);
-  }
-
-  /** Or reserved and not yet written. */
-  admitted(id: string): boolean {
+  /** Of `ids`, in order, those this agent holds neither as a row of its chat nor as a send it reserved and has not written. */
+  unseen(ids: readonly string[]): string[] {
     const { actor, transcript } = this.readable();
+    const written = transcript.holding(ids);
+    const reserved = new PendingSendStore(this.sql, actor.actorId).holding(ids);
 
-    return transcript.has(id) || new PendingSendStore(this.sql, actor.actorId).has(id);
+    return ids.filter((id) => !written.has(id) && !reserved.has(id));
   }
 
   /** What a turn has told its hirer, kept as its tools answered: only ever more. */

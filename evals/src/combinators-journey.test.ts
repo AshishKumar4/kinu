@@ -183,7 +183,7 @@ function desk(defect?: Defect) {
       }
 
       if (request.view === 'history') return Promise.resolve({ view: 'history', page: { status: 'end', items: [{
-        id: runId, position: 0, role: 'user', turnId: runId, runId, content: userMessage, createdAt: startedAt,
+        id: runId, position: 0, role: 'user', turnId: runId, runId, content: userMessage, parts: [{ type: 'text', text: userMessage }], createdAt: startedAt,
       }] } });
 
       if (request.view === 'events') return Promise.resolve({ view: 'events', page: { status: 'end', items: [{

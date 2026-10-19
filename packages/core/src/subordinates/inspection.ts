@@ -3,6 +3,7 @@ import { JsonObjectSchema } from '../utils/json';
 import { RunEventRecorder, RunEventSchema, RUN_EVENT_LIMIT_MAX } from '../events/recorder';
 import { getRunSummaries } from '../read-models/runs';
 import { getChatHistoryPage } from '../read-models/status';
+import { keptMediaName } from '../session/chat-media';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { pageSchema, positionPageSchema, PositionPageRequestSchema, SeekCursorSchema, type Page, type PageRequest } from '../session/page';
 import { ChatHistoryEntrySchema } from '../types/chat';
@@ -136,7 +137,7 @@ export async function readSubordinateInspection(
     }
 
     case 'history':
-      return { view: 'history', path, page: await getChatHistoryPage(transcriptFor(actor), request.page) };
+      return { view: 'history', path, page: await getChatHistoryPage(transcriptFor(actor), request.page, keptMediaName) };
     case 'runs':
       return { view: 'runs', path, page: getRunSummaries(new RunEventRecorder(sql, actor), request.page.cursor, request.page.limit) };
     case 'events': {

@@ -104,10 +104,17 @@ async function settledChatStatus(page: Page): Promise<string> {
 
 const STOP = '#chat button[aria-label="Stop this turn"]';
 
+/** Whether the new chat's agent holds the brief in its own chat: its turn took it, as its first words. Stop is drawn
+ *  from the send, before that: a Stop then hands the brief back unread (staging rc20, 2026-10-19: every Stop came
+ *  about 100 ms after the brief reached the agent and before its turn's first step). */
+const BRIEF_TAKEN = `((at) => at === null ? false : fetch(\`/agents/orchestrator-agent/\${at[1]}/actor/\${at[2]}/get-messages\`)
+  .then((answer) => (answer.ok ? answer.text() : ''))
+  .then((stored) => stored.includes(${JSON.stringify(INTERRUPTED_BRIEF)})))(/^\\/workspace\\/([^/]+)\\/agents\\/([^/]+)/.exec(location.pathname))`;
+
 /**
  * Rows 1008-e and 1008-d: a chat is named from its brief, its first words, even when its first turn is stopped and the owner
  * then says Continue: the owner's chat was titled "Continue" (2026-10-08). The brief's turn is slow to its first
- * token, so its Stop is there to press.
+ * token, so its Stop is there to press once the turn has taken the brief.
  */
 export async function chatTitledFromItsBrief(target: FlowTarget): Promise<TitledChatVerdict> {
   const workspace = await createFlowWorkspace(target, 'titled-chat');
@@ -120,6 +127,7 @@ export async function chatTitledFromItsBrief(target: FlowTarget): Promise<Titled
     await page.type('[data-new-chat] textarea', INTERRUPTED_BRIEF);
     await page.click('[data-new-chat] button[type="submit"]');
     await until(page, "the new chat's page", `location.pathname.includes('/agents/')`);
+    await waitOn(page, "the brief, taken by its turn", page.waitForFunction(BRIEF_TAKEN, { polling: 250 }));
     await until(page, "Stop, while the brief's turn runs", `[...document.querySelectorAll(${JSON.stringify(STOP)})].some((button) => button.getClientRects().length > 0)`);
     await page.click(STOP);
     await until(page, "the stopped turn's end, Send offered again", CHAT_IDLE);

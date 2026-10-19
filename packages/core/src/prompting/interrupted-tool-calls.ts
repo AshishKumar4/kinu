@@ -42,13 +42,24 @@ export function trailingUnpairedCalls(history: readonly ModelMessage[], toolName
     ? [{ toolCallId: part.toolCallId, input: part.input }] : []);
 }
 
-/** Every call in the history that no `tool-result` answers, `providerExecuted` ones skipped as the SDK skips them. */
+/** Every call in the history that no `tool-result` answers, `providerExecuted` ones skipped as the SDK skips them.
+ *  Asked each step of the whole history: what it builds beyond the scan is one id per answer. */
 export function unpairedToolCalls(messages: readonly ModelMessage[]): LostCallQuery[] {
   const parts = toolPairingParts<ModelPart>(messages);
-  const answered = new Set(parts.flatMap(({ role, part }) => role === 'tool' && part.type === 'tool-result' ? [part.toolCallId] : []));
+  const answered = new Set<string>();
+  const unpaired: LostCallQuery[] = [];
 
-  return parts.flatMap(({ role, part }) => role === 'assistant' && part.type === 'tool-call' && part.providerExecuted !== true && !answered.has(part.toolCallId)
-    ? [{ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input }] : []);
+  for (const { role, part } of parts) {
+    if (role === 'tool' && part.type === 'tool-result') answered.add(part.toolCallId);
+  }
+
+  for (const { role, part } of parts) {
+    if (role === 'assistant' && part.type === 'tool-call' && part.providerExecuted !== true && !answered.has(part.toolCallId)) {
+      unpaired.push({ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input });
+    }
+  }
+
+  return unpaired;
 }
 
 /**

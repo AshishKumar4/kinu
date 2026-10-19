@@ -575,30 +575,28 @@ function shortSha(ref: string): string {
   return Bun.spawnSync(['git', 'rev-parse', '--short=9', ref]).stdout.toString().trim();
 }
 
-/** A file as the candidate commit holds it: the worktree's may say what no uploaded build does. */
-function atCandidate(path: string): string {
-  const shown = Bun.spawnSync(['git', 'show', `HEAD:${path}`]);
+/** A file as a commit of `repo` holds it: the worktree's may say what no uploaded build does. */
+function fileAt(repo: string, commit: string, path: string): string {
+  const shown = Bun.spawnSync(['git', 'show', `${commit}:${path}`], { cwd: repo });
 
-  if (shown.exitCode !== 0) throw new Error(`HEAD carries no ${path}: ${shown.stderr.toString().trim()}`);
+  if (shown.exitCode !== 0) throw new Error(`${commit} carries no ${path}: ${shown.stderr.toString().trim()}`);
 
   return shown.stdout.toString();
 }
 
-/** What each repair does to each table that changed since `from`: the plan's verdicts. */
-function releaseVerdicts(from: string) {
-  const fromLock = Bun.spawnSync(['git', 'show', `${from}:scripts/schema-genesis.lock.json`]);
-
-  if (fromLock.exitCode !== 0) throw new Error(`${from} carries no scripts/schema-genesis.lock.json in this checkout: ${fromLock.stderr.toString().trim()}`);
-  const before = readGenesisLockText(fromLock.stdout.toString());
-  const after = readGenesisLockText(atCandidate('scripts/schema-genesis.lock.json'));
-  const classes = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(atCandidate('scripts/schema-classes.json')));
+/** What each repair does to each table that changed from `from` to the candidate `repo` holds at HEAD: the plan's verdicts. */
+export function releaseVerdicts(from: string, repo = process.cwd()) {
+  const candidate = (path: string) => fileAt(repo, 'HEAD', path);
+  const before = readGenesisLockText(fileAt(repo, from, 'scripts/schema-genesis.lock.json'));
+  const after = readGenesisLockText(candidate('scripts/schema-genesis.lock.json'));
+  const classes = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(candidate('scripts/schema-classes.json')));
   const lockDiff = changedTables(before, after);
   // The lock keeps every genesis it held, so a table retired since `from` may still be in both: its retired list says so.
   const retiredAt = (text: string) => v.parse(v.array(v.string()), JSON.parse(text));
-  const servedRetired = Bun.spawnSync(['git', 'show', `${from}:scripts/schema-retired.json`]);
+  const servedRetired = Bun.spawnSync(['git', 'show', `${from}:scripts/schema-retired.json`], { cwd: repo });
   const wasRetired = servedRetired.exitCode === 0 ? retiredAt(servedRetired.stdout.toString()) : [];
 
-  const retired = retiredAt(atCandidate('scripts/schema-retired.json'))
+  const retired = retiredAt(candidate('scripts/schema-retired.json'))
     .filter((table) => !wasRetired.includes(table) && !lockDiff.changed.some((entry) => entry.table === table))
     .map((table) => ({ table, change: 'removed' as const }));
 
@@ -608,8 +606,10 @@ function releaseVerdicts(from: string) {
 
   const verdicts = changed.map((table) => {
     const file = declared(table.table);
+    // A retired table's declaring file is gone from the candidate: the build it is retired from declared it.
+    const source = file === undefined ? null : fileAt(repo, table.change === 'removed' ? from : 'HEAD', file);
 
-    return verdictOf(table, { from: before, to: after, classes, regenerable: file === undefined ? null : regenerableIn(atCandidate(file), table.table) });
+    return verdictOf(table, { from: before, to: after, classes, regenerable: source === null ? null : regenerableIn(source, table.table) });
   });
 
   return { changed, added, verdicts };

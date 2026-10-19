@@ -1,6 +1,6 @@
 import {
   objectNamed,
-  LimitCache, baseCredentialKey, limitReadable, readAccountUsage,
+  LimitCache, baseCredentialKey, limitReadable, mergeAccountSpend, readAccountUsage,
   type AccountUsage, type ObjectNamespace, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -17,7 +17,7 @@ const LIMITS = new Map<string, LimitCache>();
 
 export async function readUserAccountUsage<Id>(input: {
   readonly env: AccountUsageEnv<Id>;
-  readonly userDO: Pick<UserDO, 'listActiveWorkspaces' | 'listCredentials' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay'>;
+  readonly userDO: Pick<UserDO, 'listActiveWorkspaces' | 'listCredentials' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'>;
   readonly owner: UserCaller;
   readonly userId: string;
   readonly refresh?: boolean;
@@ -37,7 +37,7 @@ export async function readUserAccountUsage<Id>(input: {
   // Codex's limits are read where its calls go: through the connected machine.
   const codex = deviceRouteFetch({ provider: 'codex', hub: userDO, caller: async () => owner });
 
-  const [usage, live] = await Promise.all([
+  const [usage, live, rooms] = await Promise.all([
     readAccountUsage(workspaces.map(({ name }) => ({
       name,
       read: () => objectNamed(env.OrchestratorAgent, name).accountSpend(),
@@ -47,7 +47,9 @@ export async function readUserAccountUsage<Id>(input: {
       headers: () => userDO.getAuthHeaders(owner, key),
       ...(baseCredentialKey(key) === 'codex.oauth' && { fetch: codex }),
     })), { refresh: input.refresh === true }),
+    // Its own AI in other people's slates: spent by this account, so counted here as its workspaces' calls are.
+    userDO.slateAiSpend(owner),
   ]);
 
-  return { ...usage, limits: live.limits, limitsUnread: live.limitsUnread };
+  return { ...usage, accounts: mergeAccountSpend([usage.accounts, rooms]), limits: live.limits, limitsUnread: live.limitsUnread };
 }

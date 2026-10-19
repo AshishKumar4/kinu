@@ -8,10 +8,9 @@ import type { Operation } from '../operations/operation';
 import { AGENT } from '../operations/agent';
 import { AGENTS_IMPACTS, AGENTS_SLATE } from '../operations/agents';
 import { DB } from '../operations/db';
-import { COMPUTER, DEVICE, PARENT, WORKSPACE } from '../operations/executors';
+import { COMPUTER, DEVICE, machineFileOperations, machineOperations, PARENT, WORKSPACE } from '../operations/executors';
 import { FILE } from '../operations/file';
 import { MEMORY } from '../operations/memory';
-import { STATE } from '../operations/state';
 import { TASKS } from '../operations/tasks';
 import { WEB, WEB_SANDBOX_IMPACTS } from '../operations/web';
 
@@ -27,10 +26,16 @@ export const AGENT_ASK_MEMBER = 'ask';
 /** A tool call's chip: whether it only looked. */
 export type ActionEffect = 'read' | 'mutate';
 
+/** A machine's own members, with every member a machine may share (`machineOperations`, `machineFileOperations`):
+ *  what any machine declares. */
+const machine = (ns: string, own: Readonly<Record<string, Operation>>): Readonly<Record<string, Operation>> => Object.assign(
+  {}, ...Object.values<Readonly<Record<string, Operation>>>(machineOperations(ns)), machineFileOperations(ns), own,
+);
+
 /** Every eval namespace the catalog declares, each operation by its name. */
 const DECLARED = new Map(Object.entries({
-  memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, state: STATE, agent: AGENT,
-  workspace: WORKSPACE, computer: COMPUTER, device: DEVICE, parent: PARENT,
+  memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, agent: AGENT,
+  workspace: machine('workspace', WORKSPACE), computer: machine('computer', COMPUTER), device: machine('device', DEVICE), parent: machine('parent', PARENT),
 }).map(([namespace, ops]) => [namespace, new Map(Object.values<Operation>(ops).map((op) => [op.name, op]))]));
 
 const impacts = (ops: Readonly<Record<string, Operation>>): Readonly<Record<string, Impact>> => Object.fromEntries(

@@ -122,7 +122,7 @@ export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
 /** Sized from the host's table, which the computer executor reports; the current size is volatile, so absent. `blind`:
  *  the turn's model takes no images, so it cannot see the desktop. */
 export const COMPUTER_EXECUTOR_LINE = definePromptSection(
-  "executors/sandbox",
+  "executors/computer",
   "{{#if sized}}{{defaultSize}}{{sizes}}{{/if}}{{#if blind}}{{/if}}",
   computerExecutorLine.trimEnd(),
 );
@@ -149,7 +149,7 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasComputer}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if answersPerson}}{{/if}}{{#if hasHire}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{scratch}}{{workspaceRoot}}{{#if hasFolder}}{{/if}}{{#if hasComputer}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}{{#if answersPerson}}{{/if}}{{#if hasHire}}{{/if}}",
   executorsSection.trimEnd(),
 );
 

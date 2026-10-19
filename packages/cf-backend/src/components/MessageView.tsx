@@ -35,7 +35,7 @@ import {
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SignalCard } from "@kinu.run/core";
-import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, turnFailure, turnFailureFacts } from "@kinu.run/core";
+import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, systemEventTurn, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import { StatusDot } from "@/components/ui/Status";
@@ -543,7 +543,7 @@ export const MessageView = memo(function MessageView({
   }
 
   if (message.role === "system") {
-    return <ProgrammaticTurnCard turn={{ kind: "system_event", event: "system" }}
+    return <ProgrammaticTurnCard turn={systemEventTurn("system", { metadata: null })}
       text={rowText(message)} state={signalState ?? "seen"} count={repeats} />;
   }
 

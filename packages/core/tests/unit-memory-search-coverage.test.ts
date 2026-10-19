@@ -1,3 +1,4 @@
+import { serveMemory } from '../src/tools/memory-operations';
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import {
@@ -59,10 +60,10 @@ describe('memory search coverage across backend capabilities', () => {
       
       const native = toolExecute<MemoryCall, unknown>(buildBuiltinTools({ rt, vectorStore, conversations: conversationsFor(rt) }).memory);
 
-      const provider = createMemoryCodemodeProvider(() => ({
+      const provider = createMemoryCodemodeProvider(serveMemory(() => ({
         memory: rt.memory, actor: rt.actor, vectorStore,
         conversations: conversationsFor(rt),
-      }));
+      })));
 
       const search = provider.tools.search;
 
@@ -94,10 +95,10 @@ describe('memory search coverage across backend capabilities', () => {
 
       expect(result.hits).toEqual([expect.stringMatching(/^fact: every-tool_probe: .*ok/u)]);
 
-      const provider = createMemoryCodemodeProvider(() => ({
+      const provider = createMemoryCodemodeProvider(serveMemory(() => ({
         memory: rt.memory, actor: rt.actor, vectorStore, facts,
         conversations: conversationsFor(rt),
-      }));
+      })));
 
       const search = provider.tools.search;
 

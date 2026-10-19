@@ -8,7 +8,7 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  BlueprintForkSchema, JsonValueSchema, PublishedBlueprintSchema, SharedLibrarySchema, SlateCapabilityGraphSchema,
+  BlueprintForkSchema, JsonValueSchema, PublishedBlueprintSchema, SharedLibrarySchema, SlateReachSchema,
 } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
@@ -68,7 +68,7 @@ cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
   async hello() { return { ok: true }; }
-  async manifest() { return await this.env.workspace.readFile("/slates/${SLATE}/package.json"); }
+  async manifest() { return await this.env.workspace.fs.text("/slates/${SLATE}/package.json"); }
   async docs() { return await this.env.workspace.mcp["${mcpName}"].search_cloudflare_documentation({ query: "Cloudflare Durable Objects storage" }); }
   async fetch() { return new Response("fork-probe-ok"); }
 }
@@ -169,7 +169,7 @@ END`));
           const docs = v.safeParse(Answered, await forked.slateOp({ op: 'call', id: fork.slate, method: 'docs', args: [] }));
           const answer = v.safeParse(McpAnswer, docs.success ? docs.output.value : null);
 
-          const forkGraph = v.parse(SlateCapabilityGraphSchema, v.parse(Answered,
+          const forkGraph = v.parse(SlateReachSchema, v.parse(Answered,
             await forked.slateOp({ op: 'graph', id: fork.slate })).value);
 
           const reached = forkGraph.namespaces.find((row) => row.namespace === `mcp.${mcpName}`);

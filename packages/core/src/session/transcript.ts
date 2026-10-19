@@ -15,6 +15,8 @@ import type { Page, PositionCursor, PositionPageRequest } from './page';
 import type { ContextSelection } from './context';
 import { isServerCompaction } from '../providers/server-compaction';
 import { PLATFORM_CATALOG } from '../platform-catalog';
+import { attachmentImage, imagesIn, walkImages, type MediaRef, type MediaUrl, type StoredImage } from './chat-media';
+import { utf8Bytes } from '../utils/text';
 
 const outputUtf8 = new TextEncoder();
 
@@ -67,6 +69,21 @@ function withParts(rows: readonly EntryWithPartRow[]): ConversationEntry[] {
   return entries;
 }
 
+/** The most rows one drawn page reads; its bytes usually end it first. */
+const DRAWN_PAGE_ROWS = 200;
+
+export interface DrawnPageRequest extends PositionPageRequest {
+  /** The page ends before the entry that would take it past this many bytes, the newest always in. */
+  readonly bytes: number;
+  readonly media: MediaUrl;
+}
+
+/** An entry as the chat draws it; null when its content is spilled to a file this reader has no plane for. */
+export interface DrawnEntry {
+  readonly entry: ConversationEntry;
+  readonly message: UIMessage | null;
+}
+
 export interface ConversationProjection {
   readonly id: string;
   readonly position: number;
@@ -110,13 +127,72 @@ function answeredTexts(parts: readonly JsonObject[], answer: string): number[] {
   return covered;
 }
 
-function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role']): JsonObject[] {
+/** Names the images of the part at an index: its place among them in, its address out. */
+type PartMedia = (part: number) => (index: number) => string;
+
+const ContentOutputSchema = v.object({ type: v.literal('content'), value: v.array(JsonObjectSchema) });
+
+/** A tool result as its card draws it, each image an address. One handed to the model as content with images is drawn
+ *  as its tool's carrier, its text and its images, as the tool answered it. */
+function drawnOutput(output: JsonObject, name: (index: number) => string): JsonValue {
+  const value = output.value ?? output;
+  const drawn = walkImages(value, (_image, index) => name(index));
+  const content = v.safeParse(ContentOutputSchema, output);
+
+  if (!content.success || imagesIn(value).length === 0) return drawn;
+  const items = v.parse(v.array(JsonObjectSchema), drawn);
+  const text = items.flatMap((item) => (item.type === 'text' && v.is(v.string(), item.text) ? [item.text] : [])).join('\n');
+  const images = items.flatMap((item) => (item.type === 'file' && v.is(v.string(), item.url) ? [{ mediaType: item.mediaType ?? 'image/png', url: item.url }] : []));
+
+  return { type: 'kinu/images', output: text, images };
+}
+
+/** The address an attachment already has, when it is not its bytes: a web URL or a path. */
+function heldAddress(carrier: JsonValue | undefined): string | null {
+  const url = v.safeParse(v.object({ $url: v.string() }), carrier);
+
+  if (url.success) return url.output.$url;
+
+  return v.is(v.string(), carrier) && /^(https?:|\/)/u.test(carrier) ? carrier : null;
+}
+
+/** A stored attachment as the chat draws it: the address it already has, its own address when `name` mints one, or its
+ *  bytes inline as a data URL. */
+function drawnAttachment(part: JsonObject, name: ((index: number) => string) | undefined): JsonObject {
+  const carrier = part.data ?? part.image;
+  const mediaType = v.is(v.string(), part.mediaType) ? part.mediaType : 'application/octet-stream';
+  const held = heldAddress(carrier);
+  const binary = v.safeParse(v.object({ $binary: v.string() }), carrier);
+  const string = v.safeParse(v.string(), carrier);
+  let url: string;
+
+  if (held !== null) url = held;
+  else if (name !== undefined) url = name(0);
+  else if (binary.success) url = `data:${mediaType};base64,${binary.output.$binary}`;
+  else if (string.success) url = string.output.startsWith('data:') ? string.output : `data:${mediaType};base64,${string.output}`;
+  else throw new KinuError('io', 'stored attachment has no native data carrier');
+
+  return { type: 'file', mediaType, url, ...(part.filename !== undefined && { filename: part.filename }) };
+}
+
+/** A tool result settles the call it answers, which its entry drew before it. */
+function settleCall(call: JsonObject | undefined, part: JsonObject, name: ((index: number) => string) | undefined): void {
+  if (call === undefined) throw new KinuError('io', 'public tool result has no call in its entry');
+  const output = v.parse(JsonObjectSchema, part.output);
+  call.state = output.type === 'error-text' || output.type === 'error-json' ? 'output-error' : 'output-available';
+
+  if (call.state === 'output-error') call.errorText = v.is(v.string(), output.value) ? output.value : JSON.stringify(output.value);
+  else call.output = name === undefined ? output.value ?? output : drawnOutput(output, name);
+}
+
+function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'], media?: PartMedia): JsonObject[] {
   const projected: JsonObject[] = [];
   const calls = new Map<string, JsonObject>();
 
-  for (const part of parts) {
+  for (const [at, part] of parts.entries()) {
     // The provider's compaction summary is for the model, not the owner.
     if (isServerCompaction(part.providerOptions)) continue;
+    const name = media?.(at);
 
     if (part.type === 'tool-call') {
       const id = v.parse(v.string(), part.toolCallId);
@@ -124,31 +200,9 @@ function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'
       calls.set(id, call);
       projected.push(call);
     } else if (part.type === 'tool-result') {
-      const id = v.parse(v.string(), part.toolCallId);
-      const call = calls.get(id);
-
-      if (call === undefined) throw new KinuError('io', 'public tool result has no call in its entry');
-      const output = v.parse(JsonObjectSchema, part.output);
-      call.state = output.type === 'error-text' || output.type === 'error-json' ? 'output-error' : 'output-available';
-
-      if (call.state === 'output-error') call.errorText = v.is(v.string(), output.value) ? output.value : JSON.stringify(output.value);
-      else call.output = output.value ?? output;
+      settleCall(calls.get(v.parse(v.string(), part.toolCallId)), part, name);
     } else if (part.type === 'file' || part.type === 'image') {
-      const carrier = part.data ?? part.image;
-      const string = v.safeParse(v.string(), carrier);
-      const url = v.safeParse(v.object({ $url: v.string() }), carrier);
-      const binary = v.safeParse(v.object({ $binary: v.string() }), carrier);
-      const mediaType = v.is(v.string(), part.mediaType) ? part.mediaType : 'application/octet-stream';
-      let address: string;
-
-      if (url.success) address = url.output.$url;
-      else if (binary.success) address = `data:${mediaType};base64,${binary.output.$binary}`;
-      else if (string.success) address = /^(https?:|data:|\/)/u.test(string.output) ? string.output : `data:${mediaType};base64,${string.output}`;
-      else throw new KinuError('io', 'stored attachment has no native data carrier');
-      const file: JsonObject = { type: 'file', mediaType, url: address };
-
-      if (part.filename !== undefined) file.filename = part.filename;
-      projected.push(file);
+      projected.push(drawnAttachment(part, name));
     } else {
       const { providerOptions, ...value } = part;
 
@@ -292,6 +346,14 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`.length > 0;
   }
 
+  /** Which of `ids` name an entry of this chat, in one statement however many are asked. */
+  holding(ids: readonly string[]): ReadonlySet<string> {
+    this.actor.assertCurrent();
+
+    return new Set(this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}
+      AND id IN (SELECT value FROM json_each(${JSON.stringify(ids)}))`.map((row) => row.id));
+  }
+
   /** The one read of the chat's newest entry: its id, and its position, which is the chat's length less one. */
   private newest(): { readonly id: string; readonly position: number } | undefined {
     this.actor.assertCurrent();
@@ -387,15 +449,87 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return parts;
   }
 
-  async history(limit = 10_000): Promise<UIMessage[]> {
-    const messages: UIMessage[] = [];
+  /**
+   * The newest entries before `cursor`, oldest first, as the chat draws them, each image an address `media` mints: at
+   * most `limit`, and no more than `bytes` once the newest is in. The chat's seed and its scroll-back both read this.
+   */
+  async drawnPage(request: DrawnPageRequest): Promise<Page<DrawnEntry, PositionCursor>> {
+    this.actor.assertCurrent();
+    const rows = Math.min(Math.max(1, Math.floor(request.limit ?? DRAWN_PAGE_ROWS)), DRAWN_PAGE_ROWS);
+    // One past the page, so a row left over says there is more.
+    const read = this.entriesBefore(request.cursor?.before ?? Number.MAX_SAFE_INTEGER, rows + 1);
+    const page = read.slice(0, rows);
 
-    const entries = this.entries(limit);
-    const parts = await this.messages.materializePartsOf([...new Set(entries.flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
+    // The page's messages in one read, as many entries as it holds.
+    const parts = await this.messages.materializePartsOf([...new Set(page.filter((entry) => !this.unreadable(entry))
+      .flatMap((entry) => entry.parts.map((part) => part.messageId)))]);
 
-    for (const entry of entries) messages.push(await this.materializeEntry(entry, parts));
+    const items: DrawnEntry[] = [];
+    let bytes = 0;
 
-    return messages;
+    for (const entry of page) {
+      const drawn = await this.drawnEntry(entry, request.media, parts);
+      const size = drawn.message === null ? 0 : utf8Bytes(JSON.stringify(drawn.message));
+
+      if (items.length > 0 && bytes + size > request.bytes) break;
+      items.push(drawn);
+      bytes += size;
+    }
+
+    const oldest = items.at(-1)?.entry.position;
+    const shown = [...items].reverse();
+
+    return oldest !== undefined && items.length < read.length ? { status: 'more', items: shown, next: { before: oldest } } : { status: 'end', items: shown };
+  }
+
+  /** The image `ref` names, when an entry of this chat carries it. */
+  async media(ref: MediaRef): Promise<StoredImage | null> {
+    this.actor.assertCurrent();
+
+    const kept = this.sql<{ x: number }>`SELECT 1 AS x FROM conversation_entry_parts WHERE actor_id=${this.actor.actorId}
+      AND session_id=${this.sessionId} AND message_id=${ref.messageId} AND part_no=${ref.partNo} LIMIT 1`;
+
+    if (kept.length === 0) return null;
+    const part = (await this.messages.materializeParts({ messageId: ref.messageId })).find((stored) => stored.partNo === ref.partNo)?.value;
+
+    if (part === undefined) return null;
+
+    if (part.type === 'file' || part.type === 'image') return ref.index === 0 ? attachmentImage(await this.payloads.resolveMedia(part)) : null;
+
+    if (part.type !== 'tool-result') return null;
+    const output = v.parse(JsonObjectSchema, part.output);
+
+    return imagesIn(output.value ?? output)[ref.index] ?? null;
+  }
+
+  /** The newest `limit` entries before `position`, newest first, tool rows skipped, with their parts. */
+  private entriesBefore(position: number, limit: number): readonly ConversationEntry[] {
+    const { actorId } = this.actor;
+
+    return withParts(this.sql<EntryWithPartRow>`WITH newest AS (SELECT id,position FROM conversation_entries
+        WHERE actor_id=${actorId} AND session_id=${this.sessionId} AND position < ${position} AND role != 'tool'
+        ORDER BY position DESC LIMIT ${limit})
+      SELECT e.id,e.position,e.role,e.turn_id,e.run_id,e.recorded_at,e.metadata_json,e.metadata_path,
+        e.context_id,e.context_revision,p.message_id,p.part_no,p.text_start,p.text_length
+      FROM newest CROSS JOIN conversation_entries e ON e.actor_id=${actorId} AND e.session_id=${this.sessionId} AND e.id=newest.id
+      LEFT JOIN conversation_entry_parts p ON p.actor_id=e.actor_id AND p.session_id=e.session_id AND p.entry_id=e.id
+      ORDER BY e.position DESC, p.position`);
+  }
+
+  /** Whether an entry's content is spilled to a file this reader has no plane for. */
+  private unreadable(entry: ConversationEntry): boolean {
+    return !this.payloads.readsFiles && ((entry.metadata !== null && entry.metadata.path !== null)
+      || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)));
+  }
+
+  private async drawnEntry(entry: ConversationEntry, media: MediaUrl, parts: Map<string, readonly StoredPart[]>): Promise<DrawnEntry> {
+    if (this.unreadable(entry)) return { entry, message: null };
+
+    return { entry, message: await this.materializeEntry(entry, parts, (at) => (index) => {
+      const ref = entry.parts[at];
+
+      return media({ messageId: ref?.messageId ?? '', partNo: ref?.partNo ?? 0, index });
+    }) };
   }
 
   /** Entries and their messages in one statement each, however many entries. */
@@ -456,11 +590,15 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return entry === null ? null : this.materializeEntry(entry);
   }
 
-  private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>): Promise<UIMessage> {
+  /** With `media`, each image is drawn as its address and no image's bytes are read; without, inline. */
+  private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>, media?: PartMedia): Promise<UIMessage> {
       const parts: JsonObject[] = [];
 
-      for (const part of await this.parts(entry.parts, cache)) parts.push(part.type === 'file' || part.type === 'image' ? await this.payloads.resolveMedia(part) : part);
-      const projected = drawnParts(parts, entry.role);
+      for (const part of await this.parts(entry.parts, cache)) {
+        parts.push((part.type === 'file' || part.type === 'image') && media === undefined ? await this.payloads.resolveMedia(part) : part);
+      }
+
+      const projected = drawnParts(parts, entry.role, media);
       const message: StoredUiMessage = { id: entry.id, role: entry.role, parts: projected };
 
       if (entry.metadata !== null) message.metadata = await this.payloads.read(entry.metadata);

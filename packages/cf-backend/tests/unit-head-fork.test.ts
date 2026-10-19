@@ -12,6 +12,8 @@ import type { KinuDevbox } from "../src/kinu-devbox";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
 import type { CFRuntime } from '../src/runtime';
 import * as v from 'valibot';
+import { fileNamespaceFor } from '../../core/tests/helpers';
+import { present } from '@kinu.run/test-utils';
 
 mockAgentsSdk();
 
@@ -88,7 +90,7 @@ describe('a head forks its parent workspace', () => {
     const { rt } = await hostedHead({ 'repo/README.md': '# cloned project' });
 
     const workspace = workspacePlane(rt);
-    expect(await workspace.tools.readFile.execute('/home/main/repo/README.md')).toBe('# cloned project');
+    expect(await present(fileNamespaceFor(rt, workspace).tools['fs.text'], 'workspace.fs.text').execute('/home/main/repo/README.md')).toBe('# cloned project');
     // No `parent` executor: the head reads the workspace tree directly instead of forwarding over Durable Object RPC.
     expect(rt.executionRouter?.listExecutors().map((executor) => executor.name))
       .not.toContain('parent');
@@ -98,11 +100,11 @@ describe('a head forks its parent workspace', () => {
     const { rt } = await hostedHead({ 'repo/src/index.ts': 'x', 'repo/package.json': '{}' });
 
     const names = v.parse(
-      v.array(v.string()),
-      await workspacePlane(rt).tools.readdir.execute('/home/main/repo'),
+      v.object({ entries: v.array(v.string()) }),
+      await present(fileNamespaceFor(rt, workspacePlane(rt)).tools['fs.list'], 'workspace.fs.list').execute('/home/main/repo'),
     );
 
-    expect(names.sort()).toEqual(['package.json', 'src']);
+    expect(names.entries.sort()).toEqual(['package.json', 'src']);
   });
 
   test("searching the workspace is one real shell call in the head's own shell", async () => {
@@ -161,7 +163,7 @@ describe('a head forks its parent workspace', () => {
     const { rt, home, workspace } = await hostedHead({ 'repo/parser.ts': 'one\ntwo\n' });
     const plane = workspacePlane(rt);
 
-    expect(await plane.tools.readFile.execute('/home/main/repo/parser.ts')).toBe('one\ntwo\n');
+    expect(await present(fileNamespaceFor(rt, plane).tools['fs.text'], 'workspace.fs.text').execute('/home/main/repo/parser.ts')).toBe('one\ntwo\n');
     await writeText(rt.storage.vfs, `${home}/notes.md`, 'visible');
     expect(await workspace.agent.readWorkspaceFile(`${home}/notes.md`))
       .toEqual(new TextEncoder().encode('visible'));

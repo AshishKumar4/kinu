@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import {
-  ASK_OWNER_DESCRIPTION, ASK_OWNER_TOOL, BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
+  ASK_OWNER_DESCRIPTION, ASK_OWNER_TOOL, BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowAdmittedSurface, narrowToolSurface,
   type ToolSurfaceNarrowing,
 } from './registry';
 import { TaskListStore } from './task-store';
@@ -19,16 +19,17 @@ import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { withEffectReceipt, type EffectClaimDeps } from './effect-claim';
 import { codemodeInputSchema } from './sandbox-contract';
 import { serveReport, type ReportDeps } from './report-operations';
-import { createFileTool } from './file-operations';
+import { createFileTool, type FileDeps } from './file-operations';
+import { serveStores, type ServedStores, type StoreDeps } from './actor-stores';
 import { serveShell } from './shell-operations';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
 import { selectInjectableCraftedTools, type CraftedToolSource } from './crafted-executor';
 import { TurnEscalationLedger } from '../execution/escalation';
-import { serveMemory } from './memory-operations';
+import type { MemoryDeps } from './memory-operations';
 import { declaredOperationTool, nativeTool, operationInputSchema, operationTool } from './operation-surfaces';
-import { serveTasks, type RoleSwitch } from './tasks-operations';
+import type { RoleSwitch } from './tasks-operations';
 import type { WebSearchProvider } from '../web/index';
 import { serveWeb } from './web-operations';
 import type { ReplyToCommentToolDeps, SubmitPlanToolDeps } from '../types/plans';
@@ -55,6 +56,10 @@ export interface CodemodeSurface {
   readonly external: () => ToolSet;
   /** Where a program's relative paths start, its `process.cwd()`: the runtime's own (`PathPlanes.cwd`). */
   readonly cwd: string;
+  /** Where the native `report` reaches, on a turn its hirer drives: a program's `report.send` reaches the same. */
+  readonly report?: ReportDeps;
+  /** The file, memory and task operations its native tools run: a program's named members are these same ones. */
+  readonly stores: ServedStores;
 }
 
 /** Core has no codegen; each backend supplies its factory. `reach` is the namespaces the allowed tools reach, for a
@@ -77,14 +82,45 @@ function askOwnerTool() {
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}),
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet,
+  held: { readonly report?: ReportDeps; readonly stores: ServedStores },
 ): CodemodeSurface {
-  return {
+  const surface: CodemodeSurface = {
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     external: () => withCheckedInputs(external()),
     cwd: rt.planes.cwd,
+    stores: held.stores,
   };
+
+  return held.report === undefined ? surface : { ...surface, report: held.report };
+}
+
+/** What an actor's builtins read its stores from. */
+export type BuiltinStoreInputs = Pick<BuiltinToolDeps, 'rt' | 'conversations' | 'vectorStore' | 'facts' | 'account' | 'fileLedger' | 'contextBudget' | 'slateBuild' | 'roleSwitch'>;
+
+/**
+ * The stores an actor's builtins run over, from its tool deps: its file plane on the turn's ledger and budget, its
+ * memory (the account's only beside its facts), and its task list. The one reading of them for its native tools and,
+ * through those tools' served set, its programs.
+ */
+export function builtinStoreDeps(deps: BuiltinStoreInputs): StoreDeps {
+  const { rt, facts } = deps;
+  const account = facts === undefined ? undefined : deps.account;
+
+  const files: FileDeps = {
+    vfs: rt.toolFiles, home: rt.storage.home, ledger: deps.fileLedger ?? new TurnFileLedger(), budget: deps.contextBudget ?? new TurnContextBudget(),
+    memory: rt.memory, planes: rt.planes, ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
+  };
+
+  const memory: MemoryDeps = {
+    memory: rt.memory, vectorStore: deps.vectorStore, ...(facts !== undefined && { facts }), ...(account !== undefined && { account }), actor: rt.actor,
+    conversations: deps.conversations,
+  };
+
+  const list = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
+
+  return { files: () => files, memory: () => memory, tasks: () => ({ list, config: rt.actor.config, roleSwitch: deps.roleSwitch ?? null }) };
 }
 
 import type { SlateCallResult } from '../slates/rpc';
@@ -125,11 +161,13 @@ export interface BuiltinToolDeps {
 }
 
 
-export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
+/** `served`: the store operations a caller serves its programs too, so its native tools are those same ones; absent,
+ *  served from `deps` here. */
+export function buildBuiltinTools(deps: BuiltinToolDeps, served?: ServedStores): ToolSet {
   const { rt } = deps;
-  const memory = rt.memory;
 
   const budget = deps.contextBudget ?? new TurnContextBudget();
+  const stores = served ?? serveStores(builtinStoreDeps({ ...deps, contextBudget: budget }));
   const escalations = deps.escalations ?? new TurnEscalationLedger();
   // `diagnostics`, not console: the host decides the sink (obs/log.ts).
   const logger = deps.logger ?? diagnostics;
@@ -156,24 +194,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     shell: rt.shell, router: rt.executionRouter, files: rt.storage, budget, escalations, logger,
   }));
 
-  const files = {
-    vfs: rt.toolFiles, home: rt.storage.home, ledger: deps.fileLedger ?? new TurnFileLedger(), budget, memory, planes: rt.planes,
-    ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
-  };
+  // The same operations as `file.*`, `memory.*` and `tasks.*` in a program.
+  tools.file = createFileTool(stores.file, stores.deps.files());
 
-  tools.file = createFileTool(files);
+  const { facts, account } = stores.deps.memory();
 
-  // The same operations as `memory.*` in a program.
-  const facts = deps.facts;
-
-  const account = facts === undefined ? undefined : deps.account;
-
-  tools.memory = nativeTool(renderToolSchemaDescription(memoryToolSpec(facts !== undefined, account !== undefined)), serveMemory(() => ({
-    memory, vectorStore: deps.vectorStore, ...(facts !== undefined && { facts }), ...(account !== undefined && { account }), actor: rt.actor, conversations: deps.conversations,
-  })));
-
-  const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
-  tools.tasks = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.tasks, serveTasks(taskList, rt.actor.config, deps.roleSwitch));
+  tools.memory = nativeTool(renderToolSchemaDescription(memoryToolSpec(facts !== undefined, account !== undefined)), stores.memory.account);
+  tools.tasks = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.tasks, stores.tasks);
 
   if (deps.webSearch) {
     tools.web = withClampedToolResult(nativeTool(BUILTIN_TOOL_DESCRIPTIONS.web, serveWeb({ provider: deps.webSearch, files: rt.storage })),
@@ -236,12 +263,15 @@ export function ownerLaneDeclarations(lane: { readonly submitPlan: boolean; read
 function installCodemode(
   surface: ToolSet,
   build: CodemodeBuilder,
-  deps: BuiltinToolDeps & { readonly allowed?: readonly string[] },
+  deps: BuiltinToolDeps & { readonly allowed?: readonly string[]; readonly admitted?: readonly string[] },
+  stores: ServedStores,
 ): void {
   const { rt } = deps;
-  // `eval` reaches only the namespaces the allowed tools reach.
+  // `eval` reaches only the namespaces the surface's own tools reach: its admitted builtins, then its allowed list.
+  const reach = deps.admitted === undefined ? narrowToolSurface(deps.allowed) : narrowAdmittedSurface(deps.admitted, deps.allowed);
+
   surface.eval = withCheckedInput('eval', build(
-    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external), narrowToolSurface(deps.allowed),
+    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external ?? (() => ({})), { ...deps.report !== undefined && { report: deps.report }, stores }), reach,
   ));
 }
 
@@ -259,10 +289,29 @@ export interface ToolSurfaceDeps extends BuiltinToolDeps {
   /** Claimed inside the Plan check, so a refused call claims nothing. */
   effectClaims?: EffectClaimDeps;
   wrapFinished?: (finished: ToolSet) => ToolSet;
+  /** The store operations this surface projects, served by its caller so its other projections (a slate's call, a
+   *  scaffold's machines) run the same ones; absent, served here from these deps. */
+  served?: ServedStores;
 }
 
-export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
-  const built = buildBuiltinTools(deps.workMode === 'plan' ? { ...deps, workMode: 'build' } : deps);
+/** A surface's tools and the store operations they run, served once for both. */
+export interface ServedTools {
+  readonly tools: ToolSet;
+  readonly stores: ServedStores;
+}
+
+/** The store operations a surface's deps serve: `served` when its caller holds them, else served once from the deps. */
+export function surfaceStores(deps: BuiltinStoreInputs & { readonly served?: ServedStores }): ServedStores {
+  return deps.served ?? serveStores(builtinStoreDeps(deps));
+}
+
+export function buildToolSurface(surfaceDeps: ToolSurfaceDeps): ToolSet {
+  // Served once: the native tools and a program's named members are projections of this one set, and every native
+  // tool accounts into the read ledger and budget it does.
+  const stores = surfaceStores(surfaceDeps);
+  const { ledger, budget } = stores.deps.files();
+  const deps: ToolSurfaceDeps = { ...surfaceDeps, fileLedger: ledger, contextBudget: budget };
+  const built = buildBuiltinTools(deps.workMode === 'plan' ? { ...deps, workMode: 'build' } : deps, stores);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
   const merged = deps.extra === undefined ? narrowed : { ...narrowed, ...withCheckedInputs(deps.extra) };
   const wrapped = deps.wrapCalls === undefined ? merged : deps.wrapCalls(merged);
@@ -272,7 +321,7 @@ export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
     ? wrapped
     : Object.fromEntries(Object.entries(wrapped).filter(([name]) => allow.has(name)));
 
-  if (deps.codemode !== undefined && 'eval' in surface) installCodemode(surface, deps.codemode, deps);
+  if (deps.codemode !== undefined && 'eval' in surface) installCodemode(surface, deps.codemode, deps, stores);
 
   const finished = deps.post === undefined ? surface : { ...surface, ...withCheckedInputs(deps.post) };
   const modeBound = toolsInWorkMode(deps.workMode ?? 'build', deps.effectClaims === undefined ? finished : withEffectReceipt(finished, deps.effectClaims));

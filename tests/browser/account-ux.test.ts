@@ -125,7 +125,7 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   // The filter tabs sit in the control row. One create action is in reach, the sidebar's or, on a phone, the page's.
   const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.getAttribute('data-segment')));
   expect(tabs).toEqual(['all', 'needs', 'working', 'idle']);
-  expect(await page.$$eval(':is(a, button)', (controls) => controls.filter((control) => control.textContent?.trim() === 'New workspace'
+  expect(await page.$$eval(':is(aside, main) :is(a, button)', (controls) => controls.filter((control) => (control.getAttribute('aria-label') ?? control.textContent?.trim()) === 'New workspace'
     && control instanceof HTMLElement && control.offsetParent !== null).length)).toBe(1);
 
   if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
@@ -781,18 +781,17 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ href: a.getAttribute('href'), current: a.getAttribute('aria-current') })));
 
-              // Account settings is reached from the gear at the foot of the
-              // rail, so the nav carries no row of its own for it.
-              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/devices', '/drive', '/plugins', '/workspaces']);
+              // Account settings is reached from the account menu at the head
+              // of the rail, so the nav carries no row of its own for it.
+              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/devices', '/drive', '/gallery', '/plugins', '/workspaces']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
-              // The rail's own furniture is untouched around it: the roster
-              // eyebrow above the rows, the account row at the foot. (The New
-              // workspace button is absent on the home route by design.)
+              // The rail's own furniture is untouched around it: the account
+              // menu at its head, the roster eyebrow above the rows.
               const rail = await home.evaluate(() => document.querySelector('aside')?.innerText ?? '');
               expect(rail).toContain('WORKSPACES');
               expect(rail).toContain('Storefront');
-              expect(rail).toContain('ashish@example.com');
+              expect(await home.$('aside [data-account-menu]')).not.toBeNull();
               
 
               // The row under the pointer is painted too, but never as the open row: not its ground, not its ink,
@@ -1060,6 +1059,9 @@ describe('Settings → Memory', () => {
         await page.keyboard.type('Ada');
         await page.$$eval('button', (buttons) => buttons.find((button) => button.textContent?.trim() === 'Save')?.click());
         await page.waitForFunction(() => document.documentElement.dataset.galleryProfilePatches === '1');
+        // Saved once the name can be edited again: the account takes the answer in that render. Save alone is disabled
+        // from the press, while the patch is out, so a read then saw the old name (tier, b69e13df2: "Owner").
+        await page.waitForSelector('input[aria-label="Your name"]:not(:disabled)');
         await page.waitForFunction(() => [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Save')?.disabled === true);
         // The saved profile is the account's answer: nothing reads it again, and every reader holds it at once.
         expect(await reads()).toBe(before);

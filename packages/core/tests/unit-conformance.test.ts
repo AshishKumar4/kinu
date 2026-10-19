@@ -96,7 +96,7 @@ describe('phantomCallables', () => {
   });
   test('accepts real tools, namespaced calls under a wired root, and prose', () => {
     const callables = new Set<string>([...BUILTIN_TOOLS, 'workspace.*']);
-    const text = 'call workspace.readdir("/x"), then eval(...), and run (verb) it';
+    const text = 'call workspace.fs.list("/x"), then eval(...), and run (verb) it';
     expect(phantomCallables(text, callables)).toEqual([]);
   });
   test('a single-word tool is a phantom on a root that did not wire it', () => {

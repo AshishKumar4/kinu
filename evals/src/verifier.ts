@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { ephemeralSlateId, JsonValueSchema, projectJsonValue, slateUiSegments, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
+import { ephemeralSlateId, JsonValueSchema, projectJsonValue, rowText, slateUiSegments, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicMessage, PublicSlateListing, PublicSwarmRun, WorkBoard } from './session';
 import { browserOwner, openPreviewAsOwner, type WorkspaceWeb } from './workspace-roster';
@@ -113,7 +113,7 @@ export async function rosterOf(session: Inspecting): Promise<(RosterHelper & { l
 /** Full assignments from the actor's canonical conversation, keyed only by the run that stored them: a run's first entry
  *  that is not its answer, `system` as a hirer's brief projects and `user` as a person's words do. */
 async function briefsOf(session: Inspecting, address: HelperAddress): Promise<ReadonlyMap<string, string>> {
-  const briefs = new Map<string, { position: number; content: string }>();
+  const briefs = new Map<string, { position: number; role: string; parts: readonly { readonly type?: unknown; readonly text?: unknown }[] }>();
 
   for (let cursor: { before: number } | undefined; ;) {
     const answer = await session.inspect({ ...address, path: [...address.path], view: 'history', page: cursor === undefined ? {} : { cursor } });
@@ -127,7 +127,7 @@ async function briefsOf(session: Inspecting, address: HelperAddress): Promise<Re
       if (opening === undefined || entry.position < opening.position) briefs.set(entry.runId, entry);
     }
 
-    if (answer.page.status === 'end') return new Map([...briefs].map(([runId, entry]) => [runId, entry.content]));
+    if (answer.page.status === 'end') return new Map([...briefs].map(([runId, entry]) => [runId, rowText(entry)]));
     cursor = answer.page.next;
   }
 }

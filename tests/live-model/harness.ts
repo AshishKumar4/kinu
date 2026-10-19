@@ -13,13 +13,12 @@ import type {
   ProviderCatalogSnapshot, ToolCallRecord, JsonObject, JsonValue, ToolOutcome,
 } from '../../packages/core/src/index';
 import { compactToolCall } from '../../packages/core/src/evolution/tool-call-record';
-import { TurnFileLedger } from '../../packages/core/src/vfs/file-ledger';
 import {
   artifactOverrides, currentArtifacts, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, createFactsStore,
-  actorNamespaces, SURFACE_POLICY, TurnContextBudget, type SurfaceActor,
+  actorNamespaces, SURFACE_POLICY, type ServedStores, type SurfaceActor,
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
-  projectJsonValue, failedToolOutcome, TaskListStore,
+  projectJsonValue, failedToolOutcome,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
   WORKSPACE_RUN_ID, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
 } from '../../packages/core/src/index';
@@ -120,8 +119,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const { rt, model, llm } = deps;
   const sql = rt.storage.sql;
   const facts = createFactsStore(sql, rt.actor);
-  const taskList = new TaskListStore(sql, rt.actor, <T>(write: () => T) => rt.storage.transactionSync(write));
-  const config = rt.actor.config;
 
   const webSearch = createDefaultWebSearchProvider({
     fetch: globalThis.fetch.bind(globalThis), browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch.bind(globalThis) }),
@@ -141,7 +138,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     model: () => model,
     reportModelCall: liveModelCallSink(sql, rt.actor),
     // A node's eval as the CLI session builds it.
-    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch, () => ({ files: new TurnFileLedger(), context: new TurnContextBudget() })),
+    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch),
     webSearch,
     hostNode: () => Promise.reject(new Error(
       'this eval surface builds tools without a session, so it cannot seat a swarm node; '
@@ -154,25 +151,23 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
 
   const conversations = rt.stores.conversationSearch;
 
-  // Eval's namespaces as the CLI session builds them (`actorNamespaces`): no browser session in this process.
-  const surface: SurfaceActor = {
+  // Eval's namespaces as the CLI session builds them (`actorNamespaces`), over the store operations its native tools
+  // run: no browser session in this process.
+  const surface = (stores: ServedStores): SurfaceActor => ({
     executors: () => rt.executionRouter?.getProviders() ?? [],
     web: { search: webSearch, files: rt.storage, browser: null },
-    memory: () => ({ memory: rt.memory, facts, actor: rt.actor, conversations, vectorStore: null }),
-    files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
-    tasks: () => ({ list: taskList, config, roleSwitch: null }),
+    stores,
     db: rt.stores.appData,
-    programState: rt.actor.programState,
     agents: () => agents,
     self: null,
     ownerWaits: null,
-  };
+  });
 
   // No session takes a wake here, so its calls run inline: the raw surface, over a runner nothing detaches into.
   const { raw: tools } = buildActorTools({
     rt,
     conversations,
-    codemode: createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: actorNamespaces(surface, SURFACE_POLICY.program) }),
+    codemode: (codemode) => createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: actorNamespaces(surface(codemode.stores), SURFACE_POLICY.program) })(codemode),
     agents,
     // No session stream persists this harness's calls, so none is waited for.
     effectClaims: { sql, actor: rt.actor, execution: () => ({ turnId: WORKSPACE_RUN_ID, runId: WORKSPACE_RUN_ID }) },

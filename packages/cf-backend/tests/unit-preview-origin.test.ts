@@ -19,7 +19,7 @@ import {
   APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
-import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
+import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
 import { crossSiteRejection } from '../src/auth/session';
 import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
@@ -1104,6 +1104,26 @@ describe('the app document policy', () => {
     });
   });
 
+  // A personal part's frame sits in the slate's page, on its preview host, under the app page at the top
+  // (docs/SLATE-SHARING-NIMBUS.md §3). CSP checks every ancestor, so that route alone admits the app's own origin and
+  // preview hosts; every other app page stays unframeable.
+  test('a part frame is framed by preview hosts under the app alone, and no other app page by anyone', () => {
+    const framing = (path: string, previewOrigin: string | null) => {
+      const res = withAppSecurityHeaders(new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }), new URL(`${APP}${path}`), previewOrigin);
+
+      return { frame: res.headers.get('x-frame-options'), ancestors: /frame-ancestors [^;]*/.exec(res.headers.get('content-security-policy') ?? '')?.[0] };
+    };
+
+    expect(framing('/s/acme/board/parts/notes', `https://*.${SUFFIX}`)).toEqual({ frame: null, ancestors: `frame-ancestors 'self' https://*.${SUFFIX}` });
+    expect(framing('/s/acme/a-room%2Fcard/parts/notes', `https://*.${SUFFIX}`)).toEqual({ frame: null, ancestors: `frame-ancestors 'self' https://*.${SUFFIX}` });
+    // No preview host, nothing to frame it: it stays as every page is.
+    expect(framing('/s/acme/board/parts/notes', null)).toEqual({ frame: 'DENY', ancestors: "frame-ancestors 'none'" });
+
+    for (const path of ['/s/acme/board', '/s/acme/board/parts', '/s/acme/board/parts/notes/more', '/workspace/acme', '/shared/live/acme/share-1']) {
+      expect(framing(path, `https://*.${SUFFIX}`)).toEqual({ frame: 'DENY', ancestors: "frame-ancestors 'none'" });
+    }
+  });
+
   test('non-document responses are left alone', () => {
     const json = new Response('{}', { headers: { 'content-type': 'application/json' } });
     expect(withAppSecurityHeaders(json, new URL(APP), null)).toBe(json);
@@ -1171,7 +1191,9 @@ const PUBLIC_API = [
   `${DEPLOY_API}/`, // the deploy door's run key
   '/api/health', // the build stamp
   '/api/shared/blueprint/', // a signed blueprint id
+  LIVE_SHARE_OPEN_PATH, // a public share opens signed out; a named one reads its session itself, the cross-site rule with it
   '/api/workspaces/:name/webhook/', // a signed delivery URL
+  '/api/gallery', // read by anyone; a star or report reads its session itself
 ];
 
 describe('worker wiring', () => {

@@ -6,7 +6,7 @@
 import { DynamicWorkerExecutor, sanitizeToolName } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
-  explainSandboxError, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
+  explainSandboxError, nestedMembers, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
   NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
@@ -35,12 +35,11 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     `    const __kinu = await import(${JSON.stringify(`./${KINU_NODE_MODULE_NAME}`)});`,
     '    const __kinuWorkspace = typeof workspace === "undefined" ? null : workspace;',
     '    __kinu.bindSlates(__kinuWorkspace);',
-    '    const __kinuState = typeof state === "undefined" ? null : state;',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
     `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
     '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
-    `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, state: __kinuState, missingBuiltins: __kinuBuiltins.missing });`,
+    `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, missingBuiltins: __kinuBuiltins.missing });`,
     renderCraftedDefinitions(crafted),
   ].join('\n');
 }
@@ -80,10 +79,18 @@ type ProgramResult = Awaited<ReturnType<DynamicWorkerExecutor['execute']>>;
  */
 function reachableAsWritten(provider: ResolvedProvider): ResolvedProvider {
   const ns = provider.name;
+  const registered = (name: string): string => `${ns}[${JSON.stringify(sanitizeToolName(name))}]`;
 
-  const lines = [`    ${ns}.then = undefined;`, ...Object.keys(provider.fns)
-    .filter((name) => sanitizeToolName(name) !== name)
-    .map((name) => `    ${ns}[${JSON.stringify(name)}] = ${ns}[${JSON.stringify(sanitizeToolName(name))}];`)];
+  // A member group (`fs.read`) is an object of its members, each the member the vendor registered.
+  const held = Object.entries(nestedMembers(Object.fromEntries(Object.keys(provider.fns).map((name) => [name, name]))));
+
+  const lines = [`    ${ns}.then = undefined;`];
+
+  for (const [name, member] of held) {
+    if (typeof member !== 'string') {
+      lines.push(`    ${ns}[${JSON.stringify(name)}] = Object.freeze({ ${Object.entries(member).map(([inner, full]) => `${JSON.stringify(inner)}: ${registered(full)}`).join(', ')} });`);
+    } else if (sanitizeToolName(name) !== name) lines.push(`    ${ns}[${JSON.stringify(name)}] = ${registered(name)};`);
+  }
 
   if (ns === 'workspace' && Object.hasOwn(provider.fns, 'createTool')) lines.push(`    ${SANDBOX_CREATE_TOOL_PRELUDE}`);
 

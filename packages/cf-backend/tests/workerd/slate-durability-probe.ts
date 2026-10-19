@@ -12,17 +12,20 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
 import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
-import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH } from '@kinu.run/core';
-import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
+import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH, sha256Hex, SharedSlateFilesSchema, type SlateFileChange } from '@kinu.run/core';
+import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
+import { initSlateBuildTable, initSlateLiveShareTables, initSlateUsageTable, ROOT_SLATE_CALLER, serverAuthority, SlateBuilds, SlateController, SlateFiles, WorkspaceSlateContentStore } from '@kinu.run/core/slates';
+import { SlateId } from '@agent-core/core/slates';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { pictureKey, picturePrefix } from '../../src/slates/pictures';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { ownerCaller } from '@kinu.run/core';
+import { ownerCaller, parseSlateProject, slateAuthority } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
+import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
-import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import type { JsonValue } from '@kinu.run/core';
@@ -61,10 +64,18 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
     Reflect.deleteProperty(this, 'wakeOnce');
+    Reflect.deleteProperty(this, 'approveWaitingEffects');
     sealRpcSurface(this, [
       ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates', 'wakeOnce',
+      'failingSlates', 'wakeOnce', 'approveWaitingEffects',
     ]);
+  }
+
+  /** The owner, on the stack: approves every action waiting there, as the asks' Approve does. Answers what it approved. */
+  async approveWaitingEffects(): Promise<string[]> {
+    const waiting = (await this.listDeferredApprovals()).filter((action) => action.status === 'queued').map((action) => action.id);
+
+    return (await this.decideDeferredApprovals(waiting, 'approved')).decided;
   }
 
   /** The platform's alarm delivery, which runs whichever of Nimbus's tasks are due. */
@@ -121,20 +132,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null, asOwner: true } : null }), workspace: this.name,
     });
 
-    const unreached = (): never => { throw new Error('this probe reaches no memory, files or tasks'); };
-
-    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}), {
+    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}, () => ({}), { stores: this.surfaceActor('build').stores }), {
       reach: narrowToolSurface(undefined),
-      // As a confined copy's programs run: state, tables, web and executors, with no memory, files or tasks to reach.
-      namespaces: (executor) => actorNamespaces({
-        executors: () => this.rt.executionRouter?.getProviders() ?? [],
-        web: {
-          search: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }), files: this.rt.storage,
-          browser: { sessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} }, prelude: BROWSER_PRELUDE },
-        },
-        memory: unreached, files: unreached, tasks: unreached,
-        db: this.stores.appData, programState: this.rt.actor.programState, agents: null, self: null, ownerWaits: null,
-      }, SURFACE_POLICY.confined, { executor }),
+      // As the workspace agent's own programs run.
+      namespaces: (executor) => actorNamespaces(this.surfaceActor('build'), SURFACE_POLICY.program, { executor }),
     });
 
     const execute = toolsInWorkMode('build', { eval: eval_ }).eval?.execute;
@@ -194,7 +195,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
   'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
-  | 'wakeOnce'>;
+  | 'wakeOnce' | 'approveWaitingEffects'> & Pick<ProductionOrchestrator, 'setLiveShareMode'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
  *  the fixture read. */
@@ -249,12 +250,29 @@ const HELPER = [
   'async (input) => {',
   '  let browsers = null;',
   '  try { browsers = await web.browsers({}); } catch {}',
-  '  const wrote = await workspace.writeFile("ran-by.txt", input.who);',
-  '  return { browsers, wrote, read: await workspace.readFile("ran-by.txt") };',
+  '  const wrote = await workspace.fs.write("ran-by.txt", input.who);',
+  '  return { browsers, wrote, read: await workspace.fs.text("ran-by.txt") };',
   '}',
 ].join('\n');
 
 /** A slate whose class runs the crafted tool: as its `run` method for a program, as its page for a visitor. */
+/** The board an editor changes: one method saying which version of it runs. */
+const BOARD = (version: string) => [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  `  async version() { return "${version}"; }`,
+  '}',
+].join('\n');
+
+/** An editor's change that reaches for the owner's file outside the slate: the build must not find it. */
+const REACHING = [
+  'import { SlateObject } from "kinu:slate";',
+  'import { SECRET } from "../notes/secret";',
+  'export class Slate extends SlateObject {',
+  '  async version() { return SECRET; }',
+  '}',
+].join('\n');
+
 const RUNNER = [
   'import { SlateObject } from "kinu:slate";',
   'export class Slate extends SlateObject {',
@@ -263,7 +281,7 @@ const RUNNER = [
   '}',
 ].join('\n');
 
-const SharedValueSchema = v.object({ share: v.object({ handle: v.string() }) });
+const SharedValueSchema = v.object({ share: v.object({ id: v.string(), handle: v.string() }) });
 
 const LILT_GOOD = 'export default function App() { return <p data-words>lilt-good</p>; }';
 
@@ -289,6 +307,8 @@ interface SlateBuildSeen {
 
 const GraphValueSchema = v.object({
   namespaces: v.array(v.object({ namespace: v.string(), members: v.array(v.object({ member: v.string(), impact: v.string() })) })),
+  /** The revision the reach is read at, which "my access" is approved for. */
+  revision: v.nullable(v.string()),
 });
 
 /** Every call names the workspace, so nothing the test holds pins this object across
@@ -405,7 +425,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
    * The owner's program makes the crafted tool `helper`, then runs it through the `runner` slate's class; the slate is
    * shared granting the tool alone, and a consented viewer opens its page, which runs the tool too.
    */
-  async craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; viewer: string }> {
+  async craftedToolUnderShare(input: { workspace: string; owner: string }): Promise<{ owner: string; reached: string[]; waited: string; approved: string[]; viewer: string }> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
@@ -418,18 +438,423 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     if (!graph.ok) throw new Error(`slate graph refused: ${graph.reason}: ${graph.error}`);
 
-    const reached = v.parse(GraphValueSchema, graph.value).namespaces
-      .flatMap((row) => row.members.map((member) => `${row.namespace}.${member.member}:${member.impact}`));
-
-    const shared = await owned.slateAs(ROOT_SLATE_CALLER, {
-      op: 'share', id: 'runner', visibility: 'public', approved: [{ slate: 'runner', namespace: 'tools', member: 'helper' }],
-    });
+    const reach = v.parse(GraphValueSchema, graph.value);
+    const reached = reach.namespaces.flatMap((row) => row.members.map((member) => `${row.namespace}.${member.member}:${member.impact}`));
+    const members = [{ slate: 'runner', namespace: 'tools', member: 'helper' }];
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'runner', visibility: 'public', approved: members });
 
     if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
-    const { handle } = v.parse(SharedValueSchema, shared.value).share;
-    const page = await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/');
+    const { id, handle } = v.parse(SharedValueSchema, shared.value).share;
+    // On "my access": the owner approves the helper's reach at the revision the runner runs.
+    const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision: reach.revision ?? '', approved: members });
 
-    return { owner, reached, viewer: await page.text() };
+    if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
+    const page = async () => (await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/')).text();
+    // The viewer's run of the helper acts on the owner's access: it waits for the owner, who approves it on the stack.
+    const waited = await page();
+    const approved = await target.approveWaitingEffects();
+
+    return { owner, reached, waited, approved, viewer: await page() };
+  }
+
+  /**
+   * A slate whose own call writes a file inside its own tree, called by its owner's program twice: what each call
+   * answered, and the file as it stands after.
+   */
+  async selfEditCalls(input: { workspace: string; owner: string }): Promise<{ first: string; second: string; file: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/notebook/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Notebook' } }));
+    await this.writeSlateFile(target, '/slates/notebook/server.ts', [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  async note(text) { await this.env.workspace.fs.write("/slates/notebook/note.txt", text); return "noted " + text; }',
+      '}',
+    ].join('\n'));
+
+    const call = async (text: string): Promise<string> => {
+      try {
+        return await target.runProgram(`return await workspace.slates.notebook.note(${JSON.stringify(text)});`);
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    const first = await call('one');
+    const second = await call('two');
+
+    return { first, second, file: JSON.stringify(await target.executeInExecutor('workspace', 'cat /slates/notebook/note.txt')) };
+  }
+
+  /**
+   * A public share on its owner's access whose one acting member is approved: a signed-out visitor's write through the
+   * share's own host (a Cap'n Web batch, as the visitor's page sends it) waits for the owner, who approves it on their
+   * stack; then the same write again. `mark` is where the write lands. What each write answered, and what was written.
+   */
+  async viewerApprovedWrite(input: { workspace: string; owner: string; mark: string }): Promise<{ waited: string; approved: string[]; ran: string; marked: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/effects/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Effects' } }));
+    await this.writeSlateFile(target, '/slates/effects/server.ts', [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      `  async mark() { return await this.env.workspace.fs.write(${JSON.stringify(input.mark)}, "visitor"); }`,
+      '}',
+    ].join('\n'));
+    // A share is cut from what the owner's own calls reached: run the write once, then take the owner's mark back.
+    await target.runProgram('return await workspace.slates.effects.mark();');
+    await target.executeInExecutor('workspace', `rm -f ${input.mark}`);
+    const owned = workspaceOwner(this.env, input.workspace);
+    const write = [{ slate: 'effects', namespace: 'workspace', member: 'fs.write' }];
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'effects', visibility: 'public', approved: write });
+
+    if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
+    const { id, handle } = v.parse(SharedValueSchema, shared.value).share;
+    const graph = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'effects' });
+    const revision = graph.ok ? v.parse(GraphValueSchema, graph.value).revision ?? '' : '';
+    const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision, approved: write });
+
+    if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
+
+    // The visitor's page: a Cap'n Web batch to the share's host, admitted past its consent.
+    const visit = async (): Promise<string> => {
+      const stub = slateBatchStub<{ mark: () => Promise<JsonValue> }>(
+        { request: (request) => target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, request, '/__rpc') }, 'ignored',
+      );
+
+      try {
+        return JSON.stringify(await stub.mark());
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      } finally {
+        stub[Symbol.dispose]();
+      }
+    };
+
+    const waited = await visit();
+    const approved = await target.approveWaitingEffects();
+    const ran = await visit();
+    // Read as the owner's workspace executor reads it, where the first-run row reads it.
+    const marked = JSON.stringify(await target.executeInExecutor('workspace', `cat ${input.mark} 2>&1 || echo NO-MARK`));
+
+    return { waited, approved, ran, marked };
+  }
+
+  /**
+   * Editors (docs/SLATE-SHARING-NIMBUS.md §2): the owner's board is shared on their access with one person to edit it
+   * and one to use it, each in a workspace of their own; each asks through their own workspace, which names them.
+   */
+  async editorsEdit(input: { owner: string; workspace: string; editor: string; user: string }): Promise<{
+    files: string; edited: string; runs: string; afterEdit: string | null; afterOwnBuild: string | null; reapproved: string | null;
+    reached: string; runsAfter: string; filesAfter: string; afterRefused: string | null; used: string; revoked: string;
+  }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/board/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Board' } }));
+    await this.writeSlateFile(target, '/slates/board/server.ts', BOARD('v1'));
+    // The owner's file outside the board: another of their slates' trees, which the board's share gives no one.
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Notes' } }));
+    await this.writeSlateFile(target, '/slates/notes/secret.ts', 'export const SECRET = "the owner\'s secret";');
+    const owned = workspaceOwner(this.env, input.workspace);
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'board', visibility: 'users', approved: [] });
+
+    if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
+    const { id } = v.parse(SharedValueSchema, shared.value).share;
+
+    const people = await owned.shareLiveWith(id, [
+      { userId: input.editor, email: `${input.editor}@probe.test`, role: 'edit' }, { userId: input.user, email: `${input.user}@probe.test`, role: 'use' },
+    ]);
+
+    if (!people.ok) throw new Error(`adding people refused: ${people.reason}: ${people.error}`);
+    // Built as shared, then on the owner's access at that revision.
+    await target.runProgram('return await workspace.slates.board.version();');
+
+    const approve = async () => {
+      const graph = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'graph', id: 'board' });
+      const revision = graph.ok ? v.parse(GraphValueSchema, graph.value).revision ?? '' : '';
+      const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision, approved: [] });
+
+      if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
+    };
+
+    const approvedAt = async (column: 'grantRevision' | 'editedBy' = 'grantRevision') => {
+      const listed = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
+
+      return listed.ok ? v.parse(v.array(v.object({ id: v.string(), grantRevision: v.nullable(v.string()), editedBy: v.nullable(v.string()) })), listed.value).find((share) => share.id === id)?.[column] ?? null : null;
+    };
+
+    await approve();
+    const editorTarget = await this.workspaceTarget(`${input.workspace}-editor`);
+    const userTarget = await this.workspaceTarget(`${input.workspace}-user`);
+
+    for (const [person, at] of [[input.editor, editorTarget], [input.user, userTarget]] as const) {
+      await this.claimWorkspace(at, `${input.workspace}-${person === input.editor ? 'editor' : 'user'}`, person);
+      await this.env.UserDO.get(this.env.UserDO.idFromName(person)).ensureProfile(await ownerCaller(this.env), `${person}@probe.test`);
+    }
+
+    // What the program was answered, a refusal included, in its words.
+    const ask = async (at: SlateTarget, call: string): Promise<string> => {
+      try {
+        return await at.runProgram(`return await workspace.slates.${call};`);
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    const change = (text: string, before = `${BOARD('v3')}\n`) => JSON.stringify({ 'server.ts': { text, base: sha256Hex(before) } });
+    const files = await ask(editorTarget, `$sharedFiles(${JSON.stringify(input.workspace)}, "board")`);
+    const edited = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('v2'), BOARD('v1'))})`);
+    const runs = await target.runProgram('return await workspace.slates.board.version();');
+    const afterEdit = await approvedAt('editedBy');
+
+    // The owner's own change after it builds: the reach the editor's change suspended stays suspended.
+    await target.executeInExecutor('workspace', `cat > /slates/board/server.ts <<'END'\n${BOARD('v3')}\nEND`);
+    const ownBuild = await target.runProgram('return await workspace.slates.board.version();');
+
+    if (!ownBuild.includes('v3')) throw new Error(`the owner's change did not run: ${ownBuild}`);
+    const afterOwnBuild = await approvedAt('editedBy');
+
+    await approve();
+    const reapproved = await approvedAt();
+    const reached = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(REACHING)})`);
+    const runsAfter = await target.runProgram('return await workspace.slates.board.version();');
+    const filesAfter = await ask(editorTarget, `$sharedFiles(${JSON.stringify(input.workspace)}, "board")`);
+    const afterRefused = await approvedAt();
+    const used = await ask(userTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('mine'))})`);
+
+    await owned.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: id });
+    const revoked = await ask(editorTarget, `$sharedEdit(${JSON.stringify(input.workspace)}, "board", ${change(BOARD('late'))})`);
+
+    return { files, edited, runs, afterEdit, afterOwnBuild, reapproved, reached, runsAfter, filesAfter, afterRefused, used, revoked };
+  }
+
+  /**
+   * A slate of the owner's that imports another slate's file: the owner's own preview runs it; shared, it runs only as
+   * its own tree builds, so the image built before it was shared never reaches anyone it is shared with.
+   */
+  async sharedRunsOwnTree(input: { owner: string; workspace: string }): Promise<{ unshared: string; shared: string; afterUnshare: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+
+    const run = async (): Promise<string> => {
+      try {
+        return await target.runProgram('return await workspace.slates.reacher.version();');
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Notes' } }));
+    await this.writeSlateFile(target, '/slates/notes/secret.ts', 'export const SECRET = "the owner\'s secret";');
+    await this.writeSlateFile(target, '/slates/reacher/package.json', JSON.stringify({ main: 'server.ts', slate: { title: 'Reacher' } }));
+    await this.writeSlateFile(target, '/slates/reacher/server.ts', REACHING);
+    const unshared = await run();
+    const owned = workspaceOwner(this.env, input.workspace);
+    const made = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'reacher', visibility: 'public', approved: [] });
+
+    if (!made.ok) throw new Error(`slate share refused: ${made.reason}: ${made.error}`);
+    const shared = await run();
+
+    await owned.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: v.parse(SharedValueSchema, made.value).share.id });
+
+    return { unshared, shared, afterUnshare: await run() };
+  }
+
+  /** Actual editor RPCs over a real workspace: each refused batch must leave both source and provenance untouched. */
+  async editorBatch(input: { owner: string; workspace: string; kind: 'atomic' | 'links' | 'stale' }): Promise<{
+    answers: string[]; files: { path: string; text: string; sha256: string }[]; marks: (string | null)[]; outside: string;
+  }> {
+    const target = await this.workspaceTarget(input.workspace);
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/board/package.json', JSON.stringify({ main: 'server.ts' }));
+    await this.writeSlateFile(target, '/slates/board/server.ts', BOARD('v1'));
+    await this.writeSlateFile(target, '/slates/board/a.ts', 'before-a');
+    await this.writeSlateFile(target, '/slates/board/b.ts', 'before-b');
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({}));
+    await this.writeSlateFile(target, '/slates/notes/secret.ts', 'outside-private');
+    const owned = workspaceOwner(this.env, input.workspace);
+    const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'board', visibility: 'users', approved: [] });
+
+    if (!shared.ok) throw new Error(shared.error);
+    const { id } = v.parse(SharedValueSchema, shared.value).share;
+    const editor = { userId: `${input.owner}-editor`, email: 'pat@probe.test' };
+    await owned.shareLiveWith(id, [{ ...editor, role: 'edit' }]);
+    await target.runProgram('return await workspace.slates.board.version();');
+    const changes: SlateFileChange[] = [];
+
+    if (input.kind === 'atomic') {
+      await target.executeInExecutor('workspace', 'chmod 444 /slates/board/b.ts');
+      changes.push({ 'a.ts': { text: 'after-a', base: sha256Hex('before-a') }, 'b.ts': { text: 'after-b', base: sha256Hex('before-b') } });
+    } else if (input.kind === 'links') {
+      await target.executeInExecutor('workspace', 'ln -s /slates/notes/secret.ts /slates/board/notes.md\nln -s /slates/notes /slates/board/linked');
+      changes.push({ 'notes.md': { text: 'stolen', base: sha256Hex('outside-private') } }, { 'linked/secret.ts': { text: 'stolen', base: sha256Hex('outside-private') } });
+    } else {
+      changes.push({ 'a.ts': { text: 'after-a', base: sha256Hex('before-a') }, 'b.ts': { text: 'stale-overwrite', base: sha256Hex('stale-b') } });
+    }
+
+    const answers: string[] = [];
+    const marks: (string | null)[] = [];
+
+    for (const change of changes) {
+      const answer = await owned.editSlateAs('board', editor, change);
+      answers.push(JSON.stringify(answer));
+      const listed = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
+      marks.push(listed.ok ? v.parse(v.array(v.object({ id: v.string(), editedBy: v.nullable(v.string()) })), listed.value).find((row) => row.id === id)?.editedBy ?? null : 'listing failed');
+    }
+
+    const read = await owned.slateFilesFor('board', editor);
+
+    if (!read.ok) throw new Error(read.error);
+
+    return {
+      answers, files: v.parse(SharedSlateFilesSchema, read.value).files, marks,
+      outside: await target.runProgram('return await workspace.fs.text("/slates/notes/secret.ts");'),
+    };
+  }
+
+  /** A raw HTML browser entry must cross exactly the same resolved tree boundary as an esbuild import. */
+  async sharedHtmlScope(input: { owner: string; workspace: string; manifestLink?: boolean }): Promise<{ before: string; shared: string }> {
+    const target = await this.workspaceTarget(input.workspace);
+    await this.claimWorkspace(target, input.workspace, input.owner);
+    await this.writeSlateFile(target, '/slates/notes/package.json', JSON.stringify({}));
+    await this.writeSlateFile(target, '/slates/notes/private.html', '<!doctype html><p>private-html-from-another-slate</p>');
+    await this.writeSlateFile(target, '/slates/page/package.json', JSON.stringify({ browser: 'linked.html' }));
+    await target.executeInExecutor('workspace', 'ln -s /slates/notes/private.html /slates/page/linked.html');
+
+    if (input.manifestLink) {
+      await this.writeSlateFile(target, '/slates/notes/private-package.json', JSON.stringify({ browser: 'linked.html' }));
+      await target.executeInExecutor('workspace', 'rm /slates/page/package.json\nln -s /slates/notes/private-package.json /slates/page/package.json');
+    }
+
+    const page = async (): Promise<string> => {
+      try {
+        const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'page' });
+
+        if (!preview.ok) return JSON.stringify(preview);
+        const { url } = v.parse(PreviewValueSchema, preview.value);
+        const response = await this.drivePreview(url);
+
+        return response.body;
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    const before = await page();
+    const shared = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'page', visibility: 'public', approved: [] });
+
+    if (!shared.ok) throw new Error(shared.error);
+
+    return { before, shared: await page() };
+  }
+
+  /** Hold the graph await while a real editor batch commits, reproducing the own-to-owner R0 approval race. */
+  async editorFence(latest = false): Promise<{
+    pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+  }> {
+    const { sql } = this.ctx.storage;
+    const raw = (ddl: string) => { sql.exec(ddl); };
+
+    initSlateLiveShareTables(raw);
+    initSlateBuildTable(raw);
+    initSlateUsageTable(raw);
+    raw(`CREATE TABLE IF NOT EXISTS slate_file_manifest (
+      slate_id TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, mtime_ms INTEGER NOT NULL,
+      ino INTEGER NOT NULL, content TEXT NOT NULL, recorded_at INTEGER NOT NULL, PRIMARY KEY (slate_id, path)
+    )`);
+    const bundle = createWorkspace({ sql, transactions: this.ctx, generation: workspaceGenerationStorage(sql) });
+    const session = await bundle.session();
+    const files = session.vfs.as(CRED_SESSION_USER);
+    files.mkdir('/slates/board', { recursive: true });
+    files.writeFile('/slates/board/server.ts', 'r0');
+    const builds = new SlateBuilds(sql);
+    const ready = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let waiting = true;
+
+    const controller = new SlateController({
+      workspace: 'fence-probe', sql, builds, transaction: (body) => this.ctx.storage.transactionSync(body), session: async () => session,
+      catalog: async () => {
+        if (waiting) {
+          ready.resolve();
+          await release.promise;
+        }
+
+        return { mcp: [], slates: ['board'] };
+      },
+      shareEntry: () => null,
+      apps: { ensure: async () => ({ port: 3100, capability: 'test' }), remove: async () => ({ removed: true, port: 3100 }), url: async () => ({ url: 'https://example.test' }), owners: async () => new Map() },
+      resolve: async () => ({ kind: 'files' as const, root: '/slates/board', project: parseSlateProject({ main: 'server.ts' }) }), digest: async () => 'source',
+      build: async () => ({ modules: {}, inputs: [] }),
+      launch: async () => ({ id: 'test', port: null, methods: [], isRunning: async () => true, stop: async () => {} }),
+      call: async () => ({ ok: true, value: null }),
+    });
+
+    const content = session.vfs.withTransaction(() => new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL)));
+    const source = new SlateFiles(files, content, sql, (body) => session.vfs.withTransaction(body));
+    const labels = new Map<string, string>();
+    const labelOf = (key: string | null): string | null => key === null ? null : labels.get(key) ?? key;
+
+    const revision = (label: string): string => {
+      const digest = source.transaction(() => source.capture(new SlateId('board')).digest.value);
+      const key = `${digest}:tree:${label}`;
+      labels.set(key, label);
+      builds.built('board', slateAuthority(ROOT_SLATE_CALLER.cred), key, { modules: {}, inputs: [], scope: 'tree' });
+
+      return key;
+    };
+
+    const share = controller.live.add({ id: 'fence', slate: 'board', visibility: 'users', handle: '0123456789', grant: { slates: ['board'], members: [] } });
+    const initial = revision('r0');
+    const approval = controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: initial, approved: [] });
+    await ready.promise;
+    const written = await controller.writeShared('board', { 'server.ts': { text: 'r1', base: sha256Hex('r0') } }, 'pat');
+
+    if (!written.ok) throw new Error(written.error);
+    waiting = false;
+    release.resolve();
+    const pending = await approval;
+    const afterPendingMode = controller.live.get(share.id)?.mode ?? null;
+    const first = revision('r1');
+
+    if (latest) {
+      // R1 built, but is not approved. R2 now lands while the good build still says R1.
+      const second = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
+
+      if (!second.ok) throw new Error(second.error);
+      const revisionBefore = labelOf(controller.live.editMark('board')?.revisionBefore ?? null);
+      const firstBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: first, approved: [] });
+      const mode = controller.live.get(share.id)?.mode ?? null;
+      const secondBuilt = revision('r2');
+      const secondBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: secondBuilt, approved: [] });
+
+      return {
+        pending: JSON.stringify(firstBuildApproval), afterPendingMode: mode, revisionBefore,
+        approved: secondBuildApproval.ok, cleared: controller.live.editMark('board') === null,
+        lending: serverAuthority(controller.live.authoritiesOf('board'), secondBuilt).kind,
+        afterOwnerBuild: null, stopped: 'none',
+      };
+    }
+
+    const approved = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: first, approved: [] });
+    const cleared = controller.live.editMark('board') === null;
+    const lending = serverAuthority(controller.live.authoritiesOf('board'), first).kind;
+    const later = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
+
+    if (!later.ok) throw new Error(later.error);
+    revision('r2');
+    const current = revision('r3');
+    const after = controller.live.get(share.id);
+
+    return {
+      pending: JSON.stringify(pending), afterPendingMode, approved: approved.ok, cleared, lending,
+      afterOwnerBuild: after === undefined ? null : { grantRevision: labelOf(after.grantRevision), editedBy: after.editedBy },
+      stopped: serverAuthority(controller.live.authoritiesOf('board'), current).kind, revisionBefore: labelOf(controller.live.editMark('board')?.revisionBefore ?? null),
+    };
   }
 
   async previewTabs(workspace: string): Promise<{ ports: { port: number; name: string | null }[]; slates: { id: string; title: string; port: number | null }[] }> {
@@ -437,7 +862,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * The agent writes the `lilt` slate through its own `workspace.writeFile`, reading each file first as an agent must:
+   * The agent writes the `lilt` slate through its own `workspace.fs.write`, reading each file first as an agent must:
    * `client.tsx` that builds, then one that does not. `phase` names which: `good`, `broken`, then `fixed`; each answers
    * the write's own answer, what the preview says, what its client bundle serves, and what the next step is told.
    */
@@ -446,15 +871,15 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     if (input.phase === 'good') {
       await this.claimWorkspace(target, input.workspace, input.owner);
-      await target.runProgram(`return await workspace.writeFile("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
+      await target.runProgram(`return await workspace.fs.write("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
     }
 
     const source = { good: LILT_GOOD, broken: LILT_BROKEN, fixed: LILT_FIXED, served: null }[input.phase];
 
     const wrote = source === null ? null : await target.runProgram([
       'const path = "/slates/lilt/client.tsx";',
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(source)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(source)});`,
     ].join('\n'));
 
     const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'lilt' });
@@ -489,8 +914,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     await target.runProgram([
       'const path = "/home/main/word.ts";',
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
     ].join('\n'));
 
     const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'imports', method: 'word' });
@@ -508,8 +933,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     const write = (path: string, text: string) => target.runProgram([
       `const path = ${JSON.stringify(path)};`,
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(text)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(text)});`,
     ].join('\n'));
 
     if (input.first) {

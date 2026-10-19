@@ -632,20 +632,29 @@ export const PLATFORM_CATALOG = {
     limit: { value: 32 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'wire',
-    evidence: 'inferred',
-    provenance: '~/Nimbus/packages/worker/src/constants.ts:67-70',
-    date: '2026-07-24',
+    evidence: 'observed-in-production',
+    provenance: 'staging 667f96316, evals pilot d8b53e373 trial 2: '
+      + 'kinu/tmp/evals-lane/pilot-d8b53e373/trials/2/evals/evals-minecraft-1792378577427/'
+      + 'opencode-go-muse-spark-1-3-contributor/product/minecraft-trial-1/transcript.md:8',
+    date: '2026-10-19',
     trigger: 'structured-clone size of an RPC argument or return value > 32 MiB',
-    onBreach: 'the call fails at the boundary before the receiver runs',
-    observable: [],
+    onBreach: 'the call fails at the boundary before the receiver runs, and its caller gets the error',
+    observable: [
+      {
+        context: "a workspace's GET .../get-messages, which read its agent's whole chat back over the facet RPC (500)",
+        message: 'Serialized RPC arguments or return values are limited to 32MiB, but the size of this value was: 70107941 bytes',
+      },
+    ],
+    measurements: [
+      { scenario: "a 341-step computer-use chat returned whole by its agent's facet, its screenshots inline", value: 70_107_941, unit: 'bytes' },
+    ],
     firstPartySignal: true,
     notes:
-      'A SECOND UNSOURCED NUMBER. Nimbus states "the platform limit is 32 MiB" and cites '
-      + 'nothing; Cloudflare publishes 32 MiB only for RECEIVED WEBSOCKET MESSAGES '
-      + '(websocket.message_bytes), and the RPC lifecycle docs give no size at all. The two '
-      + 'may be the same underlying cap or may be unrelated. Nimbus operates at 28 MiB '
-      + '(facet.rpc_payload_budget) to leave structured-clone metadata headroom, so the real '
-      + 'ceiling has never been touched. Top probe candidate.',
+      'Touched on staging 2026-10-19: the runtime refused a 70 MB return value in its own words, the facet path\'s figure '
+      + '(do.facet.rpc_bytes) for an ordinary call. Nimbus states the same number uncited and operates at 28 MiB '
+      + '(facet.rpc_payload_budget); Cloudflare publishes 32 MiB only for received WebSocket messages '
+      + '(websocket.message_bytes). A chat now crosses as byte-bounded pages, each image an address fetched alone '
+      + '(session/chat-media.ts, CHAT_PAGE_BYTES), so no read of it grows with its length.',
     conflictsWith: ['websocket.message_bytes'],
   },
 
@@ -982,7 +991,32 @@ export const PLATFORM_CATALOG = {
       + 'reasons; nothing in this repo checks.',
   },
 
-  'do.sqlite.columns_per_table': {
+  'do.sqlite.like_pattern_bytes': {
+    subject: 'Maximum length of a LIKE or GLOB pattern in a SQLite-backed Durable Object',
+    limit: { value: 50, unit: 'bytes' },
+    origin: 'platform',
+    bounds: 'query',
+    evidence: 'proven-by-probe',
+    provenance:
+      'packages/cf-backend/tests/workerd/text-search.test.ts:12 under workerd; on staging (kinu-staging 5c522f12d, '
+      + '2026-10-19), GET /api/gallery?q=<n bytes> with one listing indexed',
+    date: '2026-10-19',
+    trigger: 'a LIKE or GLOB whose pattern exceeds 50 bytes, evaluated against at least one row',
+    onBreach: 'the whole statement is refused, not answered; a table with no rows to compare answers nothing and no error',
+    observable: [{ context: 'thrown by sql.exec() on the first row compared', message: 'LIKE or GLOB pattern too complex: SQLITE_ERROR' }],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: "a search's `%q%` pattern answered (q = 48 bytes)", value: 50, unit: 'bytes' },
+      { scenario: "a search's `%q%` pattern refused, 500 (q = 49 bytes)", value: 51, unit: 'bytes' },
+    ],
+    notes:
+      'The documented D1 limit (https://developers.cloudflare.com/d1/platform/limits/) holds for Durable Object SQLite too, '
+      + 'and workerd applies it locally, unlike bun:sqlite (50,000). Kinu matches text by instr over lower() '
+      + '(packages/core/src/utils/text-match.ts), never a pattern; what still takes a pattern is the database tool\'s '
+      + '`like` operator, whose caller writes the pattern and is answered this refusal.',
+  },
+
+    'do.sqlite.columns_per_table': {
     subject: 'Maximum columns per table in a SQLite-backed Durable Object',
     limit: { value: 100, unit: 'count' },
     origin: 'platform',

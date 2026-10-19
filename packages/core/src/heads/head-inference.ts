@@ -2,6 +2,7 @@
 // strategy/node-agent.ts). Every turn is a claimed actor turn on `ActorSession`.
 // Inherited context: docs/EXPLORATION.md "Inherited context".
 
+import type { ServedStores } from '../tools/actor-stores';
 import { operationTool } from '../tools/operation-surfaces';
 import { defineOperation, serve } from '../operations/operation';
 import { type ToolSet, type ModelMessage, type StepResult } from 'ai';
@@ -234,6 +235,9 @@ export interface HeadInferenceDeps {
   compaction: { readonly state: CompactionTriggerReader & CompactionTriggerState; readonly key: string };
   /** Accumulator tools plus the backend's scratch tools; the caller controls the surface. */
   tools: ToolSet;
+  /** The store operations `tools` run, which its programs and scaffold run too; null in an agent's isolate, whose tools
+   *  and programs the workspace runs. */
+  stores: ServedStores | null;
   /** In place of its role's section; it must name the file plane the tools reach. */
   brief?: (callable: readonly string[]) => string;
   capture: HeadCapture;
@@ -283,7 +287,7 @@ function runTurnSources(deps: HeadInferenceDeps, gate: MissionGate | undefined, 
   return {
     ...deps.sources,
     ...(gate !== undefined && { budget: { guard, debit: (tokens: number, opts: Parameters<SpendGate['debit']>[1]) => { gate.debit(tokens, opts); } } }),
-    toolset: () => deps.tools,
+    toolset: () => ({ tools: deps.tools, stores: deps.stores }),
     externalTools: async () => ({}),
     wiredToolNames: () => Object.keys(deps.tools).filter((name) => !BUILTIN_TOOL_NAMES.has(name)),
     codemodeCapabilities: () => [],
@@ -341,7 +345,7 @@ function settleRunContext(deps: HeadInferenceDeps, turn: {
 }
 
 /** The seat supplies the compaction state where the actor lives, and runs it on the actor's session. */
-export type RunInference = Omit<HeadInferenceDeps, 'compaction' | 'actor'> & { readonly actor: SeatedActor };
+export type RunInference = Omit<HeadInferenceDeps, 'compaction' | 'actor' | 'stores'> & { readonly actor: SeatedActor; readonly stores: ServedStores };
 
 interface HeadOutcome {
   status: HeadReport['status'];

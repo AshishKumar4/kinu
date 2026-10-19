@@ -32,6 +32,7 @@ const FIRST_TABLE = {
   workspace: 'workspace_capability',
   agent: 'workspace_actors',
   local: 'workspace_identity',
+  control: 'cp_users',
 } as const satisfies Record<SchemaClass, string>;
 
 /** What a database says of itself, read once (and, for an unstamped one, whether its class made it). */

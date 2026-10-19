@@ -229,6 +229,15 @@ export const END_TREE = `end_tree() {
   done
 }`;
 
+/** A job's most recent output, as its terminal showed it, colours stripped: `$2` lines, then at most `$3` bytes when set.
+ *  Exit 3 when no job has the directory. */
+const LOGS = `dir=$1; lines=$2; bytes=$3
+[ -f "$dir/process.json" ] || exit 3
+cat "$dir/stdout.log" "$dir/stderr.log" 2>/dev/null | tr -d '\\r' | sed 's/\\x1b\\[[0-9;?]*[a-zA-Z]//g' | tail -n "$lines" | if [ "$bytes" -gt 0 ]; then tail -c "$bytes"; else cat; fi`;
+
+/** Lines a log read answers when the caller names none. */
+const LOG_LINES = 200;
+
 const directory = (id: string) => attemptSync('invalid-input', () => `${ROOT}/${v.parse(IdSchema, id)}`);
 
 export class Processes {
@@ -345,6 +354,19 @@ export class Processes {
       const dirs = yield* Effect.forEach(listed.success, entry => directory(entry.name));
 
       return yield* this.#status(dirs);
+    }));
+  }
+
+  /** What job `id` wrote most recently (D95: one log for both streams in a session). */
+  logs(id: string, limits: { readonly lines?: number | undefined; readonly bytes?: number | undefined }): Promise<string> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const dir = yield* directory(id);
+      const ran = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', LOGS, 'devbox-logs', dir, String(limits.lines ?? LOG_LINES), String(limits.bytes ?? 0)]));
+      const output = yield* attempt('process', () => ran.output());
+
+      if (output.exitCode === 3) return yield* Effect.fail(new DevboxError('missing', `no process ${id}`));
+
+      return new TextDecoder().decode(output.stdout);
     }));
   }
 

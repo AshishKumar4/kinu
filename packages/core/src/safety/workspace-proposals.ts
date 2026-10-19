@@ -194,7 +194,7 @@ export class WorkspaceProposals {
         yield* Effect.promise(() => deps.inbox.send({
           kind: WORKSPACE_PROPOSAL_SIGNAL,
           text: `Your owner declined the workspace you proposed, "${taken.name}". Nothing was created.`,
-          metadata: { proposal: id, decision: 'declined' },
+          metadata: { proposal: id, decision: 'declined', name: taken.name },
         }));
 
         return { ...taken, status: 'declined' as const, workspace: null, error: null };
@@ -216,7 +216,7 @@ export class WorkspaceProposals {
         yield* Effect.promise(() => deps.inbox.send({
           kind: WORKSPACE_PROPOSAL_SIGNAL,
           text: `Your owner approved the workspace "${taken.name}", but creating it failed: ${error}. Nothing was created.`,
-          metadata: { proposal: id, decision: 'failed' },
+          metadata: { proposal: id, decision: 'failed', name: taken.name },
         }));
 
         return { ...taken, status: 'failed' as const, workspace: null, error };
@@ -230,7 +230,7 @@ export class WorkspaceProposals {
       yield* Effect.promise(() => deps.inbox.send({
         kind: WORKSPACE_PROPOSAL_SIGNAL,
         text: `Your owner approved the workspace "${taken.name}". It exists now, and its first turn acts on the brief. Its link: ${url}`,
-        metadata: { proposal: id, decision: 'created', workspace, url },
+        metadata: { proposal: id, decision: 'created', name: taken.name, workspace, url },
       }));
 
       return { ...taken, status: 'created' as const, workspace, error: null };

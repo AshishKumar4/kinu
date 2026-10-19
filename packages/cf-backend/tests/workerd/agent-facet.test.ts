@@ -22,6 +22,7 @@ const SwarmFacetSchema = v.object({
   actorId: v.string(), home: v.string(), sameIsolate: v.boolean(), workspaceClaims: v.number(),
   claims: v.array(v.object({ actorId: v.string(), turnId: v.string(), outcome: v.nullable(v.string()), programKind: v.string() })),
   retired: v.boolean(), summary: v.string(), candidate: v.string(), reportedItself: v.boolean(),
+  chat: v.array(v.object({ role: v.string(), text: v.string() })),
 });
 
 it('a swarm node runs its inherited loop and keeps its completed claim in its own facet', async () => {
@@ -35,6 +36,11 @@ it('a swarm node runs its inherited loop and keeps its completed claim in its ow
   expect(seen.candidate).toBe(seen.home);
   expect(seen.reportedItself).toBe(true);
   expect(seen.retired).toBe(true);
+  // Its chat is in the canonical store as every agent's is: what it was asked, whole, and what it answered.
+  expect(seen.chat).toEqual([
+    { role: 'user', text: 'Report the working directory from the inherited loop.' },
+    { role: 'assistant', text: expect.stringContaining(CHILD_ANSWER) },
+  ]);
 });
 
 it("a tool main crafted is callable from a swarm node's eval, and main's score retires it there too", async () => {

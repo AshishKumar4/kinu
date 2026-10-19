@@ -20,7 +20,7 @@ async function hostedHead(model: LanguageModel) {
   const { rt, testSql } = createTestRuntime();
   const { actor, runId, sources } = await hostedSeatsOver({ rt, db: testSql.db, model: () => model }).seat('head-envelope', 'swarm');
 
-  return { actor, runId, sources, compaction: fixtureCompaction() };
+  return { actor, runId, sources, compaction: fixtureCompaction(), stores: null };
 }
 
 describe('deriveChildBudget', () => {

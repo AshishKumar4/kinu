@@ -6,6 +6,7 @@ import {
 import type { ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
 import { isSlateMethodName } from '../src/slates/rpc';
+import { retiredMembersOf } from '../src/operations/retired';
 
 const call = (path: string[], args: JsonValue[] = [], chain: string[] = []) => routeSlateCall({
   id: 'notes', request: { path, args, invocation: null }, chain,
@@ -26,12 +27,12 @@ test('Slate bridge forwards only public method names and names its invocation', 
 });
 
 test('a path names its namespace and member, a lone name the workspace executor\'s', () => {
-  expect(slateCallAddress(['readFile'])).toEqual({ namespace: 'workspace', member: 'readFile' });
+  expect(slateCallAddress(['fs', 'text'])).toEqual({ namespace: 'workspace', member: 'fs.text' });
   expect(slateCallAddress(['memory', 'recall'])).toEqual({ namespace: 'memory', member: 'recall' });
   expect(slateCallAddress(['mcp', 'github', 'read_issue'])).toEqual({ namespace: 'mcp.github', member: 'read_issue' });
-  expect(call(['readFile'], ['/a'])).toEqual({
-    route: { kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/a'] },
-    address: { namespace: 'workspace', member: 'readFile' }, impact: 'observe',
+  expect(call(['fs', 'text'], ['/a'])).toEqual({
+    route: { kind: 'namespace', namespace: 'workspace', member: 'fs.text', args: ['/a'] },
+    address: { namespace: 'workspace', member: 'fs.text' }, impact: 'observe',
   });
   expect(call(['memory', 'remember'], ['k', 'v'])).toMatchObject({ address: { namespace: 'memory', member: 'remember' }, impact: 'mutate' });
   expect(() => call(['mcp', 'github'])).toThrow('workspace.mcp.<name>.<member>');
@@ -51,10 +52,35 @@ test('a call into another slate appends the caller and refuses a repeat as a cyc
   expect(call(['slates', 'other', 'addItem'], [], deep)).toMatchObject({ route: { kind: 'app', id: 'other', chain: [...deep, 'notes'] } });
 });
 
+test('slate fs paths route to flat machine members and the workspace shorthand', () => {
+  expect(slateCallAddress(['computer', 'fs', 'read'])).toEqual({ namespace: 'computer', member: 'fs.read' });
+  expect(call(['computer', 'fs', 'read'], ['/x'])).toEqual({
+    route: { kind: 'namespace', namespace: 'computer', member: 'fs.read', args: ['/x'] },
+    address: { namespace: 'computer', member: 'fs.read' }, impact: 'observe',
+  });
+  expect(slateCallAddress(['fs', 'text'])).toEqual({ namespace: 'workspace', member: 'fs.text' });
+  expect(call(['fs', 'text'], ['notes.md'])).toEqual({
+    route: { kind: 'namespace', namespace: 'workspace', member: 'fs.text', args: ['notes.md'] },
+    address: { namespace: 'workspace', member: 'fs.text' }, impact: 'observe',
+  });
+});
+
+test('a slate or MCP server named fs keeps its three-part address', () => {
+  expect(slateCallAddress(['slates', 'fs', 'read'])).toEqual({ namespace: 'slates.fs', member: 'read' });
+  expect(call(['slates', 'fs', 'read'], ['notes'])).toMatchObject({
+    route: { kind: 'app', id: 'fs', method: 'read', args: ['notes'], chain: ['notes'] },
+    address: { namespace: 'slates.fs', member: 'read' },
+  });
+  expect(slateCallAddress(['mcp', 'fs', 'read'])).toEqual({ namespace: 'mcp.fs', member: 'read' });
+  expect(call(['mcp', 'fs', 'read'], [{ path: '/x' }])).toMatchObject({
+    route: { kind: 'mcp', server: 'fs', tool: 'read', args: { path: '/x' } },
+  });
+});
+
 test('a lineage comes from the host record, never from the caller', () => {
   const invocations = new Map<string, SlateInvocation>([
-    ['live', { id: 'notes', chain: ['root'] }],
-    ['other-slate', { id: 'shelf', chain: [] }],
+    ['live', { id: 'notes', chain: ['root'], incarnation: 'p1', generations: {} }],
+    ['other-slate', { id: 'shelf', chain: [], incarnation: 'p1', generations: {} }],
   ]);
 
   const resolve = (invocation: string | null) => issuedSlateInvocation({ invocations, id: 'notes', invocation })?.chain ?? [];
@@ -111,11 +137,11 @@ const viewer: SlateViewer = { share: 's1', subject: 'user:u7', request: 41 };
 const viewerGrant: ShareGrant = {
   slates: ['issues', 'digest'],
   members: [
-    { slate: 'issues', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+    { slate: 'issues', namespace: 'workspace', member: 'fs.text', impact: 'observe' },
     { slate: 'issues', namespace: 'mcp.github', member: 'read_issue', impact: 'observe' },
     { slate: 'issues', namespace: 'mcp.github', member: 'create_issue', impact: 'externalSend' },
     { slate: 'issues', namespace: 'agent', member: 'send', impact: 'externalSend' },
-    { slate: 'digest', namespace: 'workspace', member: 'readFile', impact: 'observe' },
+    { slate: 'digest', namespace: 'workspace', member: 'fs.text', impact: 'observe' },
   ],
 };
 
@@ -126,13 +152,13 @@ const viewerCall = (path: string[], args: JsonValue[] = []) => routeViewerCall({
 test('a viewer call refuses what the owner call refuses, then what the grant does not name', () => {
   expect(() => viewerCall(['agents', 'hire'])).toThrow("agents.hire runs only in its owner's own slate, never for a share's viewer");
   expect(() => viewerCall(['agents', 'list'])).toThrow("agents.list runs only in its owner's own slate, never for a share's viewer");
-  expect(() => viewerCall(['writeFile'], ['/a', 'x'])).toThrow('Slate issues does not grant workspace.writeFile to viewers');
+  expect(() => viewerCall(['fs', 'write'], ['/a', 'x'])).toThrow('Slate issues does not grant workspace.fs.write to viewers');
 });
 
 test('a granted member routes with the impact the grant admits', () => {
-  expect(viewerCall(['readFile'], ['/a'])).toEqual({
-    route: { kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/a'] },
-    address: { namespace: 'workspace', member: 'readFile' }, impact: 'observe',
+  expect(viewerCall(['fs', 'text'], ['/a'])).toEqual({
+    route: { kind: 'namespace', namespace: 'workspace', member: 'fs.text', args: ['/a'] },
+    address: { namespace: 'workspace', member: 'fs.text' }, impact: 'observe',
   });
   // An observing MCP grant is held to tools its server marks read-only, by the actor that calls it.
   expect(viewerCall(['mcp', 'github', 'read_issue'], [{ n: 1 }])).toMatchObject({
@@ -153,12 +179,18 @@ test('a call into another slate admits only slates the grant walks', () => {
 
 test('issuedSlateInvocation returns the viewer the host recorded', () => {
   const invocations = new Map<string, SlateInvocation>([
-    ['shared', { id: 'issues', chain: ['root'], viewer }],
-    ['plain', { id: 'issues', chain: ['root'] }],
+    ['shared', { id: 'issues', chain: ['root'], viewer, incarnation: 'p1', generations: {} }],
+    ['plain', { id: 'issues', chain: ['root'], incarnation: 'p1', generations: {} }],
   ]);
 
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'shared' }))
-    .toEqual({ id: 'issues', chain: ['root'], viewer });
-  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'plain' })).toEqual({ id: 'issues', chain: ['root'] });
+    .toEqual({ id: 'issues', chain: ['root'], viewer, incarnation: 'p1', generations: {} });
+  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'plain' })).toEqual({ id: 'issues', chain: ['root'], incarnation: 'p1', generations: {} });
   expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: null })).toBeNull();
+});
+
+test('a slate calling a member taken off the surface is told what replaced it', () => {
+  for (const namespace of ['workspace', 'computer', 'device', 'parent']) {
+    for (const { member, told } of retiredMembersOf(namespace)) expect(() => call(namespace === 'workspace' ? [member] : [namespace, member])).toThrow(told);
+  }
 });

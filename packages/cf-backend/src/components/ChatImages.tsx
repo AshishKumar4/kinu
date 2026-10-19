@@ -33,10 +33,13 @@ type Picture =
   | { readonly kind: "data"; readonly key: string; readonly label: string; readonly src: string }
   | { readonly kind: "web"; readonly key: string; readonly url: string; readonly host: string };
 
+/** An image as a live turn streams it (its bytes) or as a page draws it (its address, `chat-media.ts`). */
+const ToolImageSchema = v.union([v.object({ mediaType: v.string(), data: v.string() }), v.object({ mediaType: v.string(), url: v.string() })]);
+
 const ToolImagesSchema = v.object({
   type: v.literal("kinu/images"),
   output: v.unknown(),
-  images: v.array(v.object({ mediaType: v.string(), data: v.string() })),
+  images: v.array(ToolImageSchema),
 });
 
 const SavedSchema = v.looseObject({ path: v.string() });
@@ -69,10 +72,11 @@ function toolPictures(output: ToolOutput, at: ChatImageSource): Picture[] {
 
   if (saved.length > 0) return saved;
 
-  return output.images.map((image, index) => ({
-    kind: "data", key: `data:${String(index)}:${image.data.slice(0, 32)}`, label: `Image ${String(index + 1)}`,
-    src: `data:${image.mediaType};base64,${image.data}`,
-  }));
+  return output.images.map((image, index) => {
+    const src = "url" in image ? image.url : `data:${image.mediaType};base64,${image.data}`;
+
+    return { kind: "data", key: `data:${String(index)}:${src.slice(0, 96)}`, label: `Image ${String(index + 1)}`, src };
+  });
 }
 
 function pictureSrc(picture: Picture, at: ChatImageSource): string {

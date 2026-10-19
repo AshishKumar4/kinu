@@ -50,10 +50,5 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
     execution.startProcess = (command, options) => startProcess(command, optionsFor(options));
   }
 
-  if (box.runCode) {
-    const runCode = box.runCode;
-    execution.runCode = (code, options) => runCode(code, optionsFor(options));
-  }
-
   return execution;
 }

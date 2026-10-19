@@ -8,6 +8,7 @@ import {
 import { RECENT_WORKSPACES, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 import { PromptCard } from "@/components/workspaces/PromptCard";
+import { WORKSPACE_MISSION_ID } from "@/components/workspaces/NewWorkspaceButton";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 
@@ -36,7 +37,7 @@ export default function HomePage() {
         </header>
 
         <PromptCard
-          id="workspace-mission"
+          id={WORKSPACE_MISSION_ID}
           label={MISSION_LABEL}
           placeholder={MISSION_PLACEHOLDER}
           action="Create workspace"

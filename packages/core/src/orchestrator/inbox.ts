@@ -199,6 +199,12 @@ export class PendingSendStore {
       SELECT id FROM pending_steers WHERE actor_id = ${this.actorId} AND id = ${id}`.length > 0;
   }
 
+  /** Which of `ids` this actor still owes a send under, in one statement however many are asked. */
+  holding(ids: readonly string[]): ReadonlySet<string> {
+    return new Set(this.sql<{ id: string }>`SELECT id FROM pending_steers
+      WHERE actor_id = ${this.actorId} AND id IN (SELECT value FROM json_each(${JSON.stringify(ids)}))`.map((row) => row.id));
+  }
+
   /** Attachments in send order, restored so a restart keeps acknowledged files. */
   files(steerId: string): PromptFile[] {
     return this.sql<{ filename: string; media_type: string; url: string }>`

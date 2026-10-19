@@ -9,6 +9,7 @@ import { AgentFacet as ShippedAgentFacet } from '../../src/agent-facet/agent-fac
 import { meterInPlace, type OperationCost, type SqlMeter } from './sql-meter';
 import { Crossings, type PhasedCrossings } from './crossings';
 import { claimFences } from '@kinu.run/core';
+import { SCREENS, screenData, screenEntry } from './two-turn-shapes';
 
 /** The calls the workspace makes into main's isolate while the meter runs: one phase, since a turn's steps run under the
  *  one grant it holds while its budget lasts (`step-pacer.ts`), and nothing else is called into it per step. */
@@ -74,6 +75,44 @@ export class AgentFacet extends ShippedAgentFacet {
 
   /** `entries` into `actorId`'s conversation, as its store records them; their text is short enough to need no files. */
   async seedChat(actorId: string, entries: readonly SeededEntry[]): Promise<void> {
+    const history = this.historyOf(actorId);
+
+    for (const entry of entries) {
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, {
+        id: entry.id, origin: entry.origin, message: { role: entry.role, content: entry.content },
+        ...(entry.metadata !== undefined && { metadata: entry.metadata }),
+      });
+    }
+  }
+
+  /** An ask, then {@link SCREENS} answers that each took a screenshot of the computer, as a computer-use turn keeps them:
+   *  a tool result handed to the model with its image. Each answer is short enough to stay in its row; all together are
+   *  past what one crossing carries. */
+  async seedScreens(actorId: string): Promise<void> {
+    const history = this.historyOf(actorId);
+
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'screens-ask', origin: 'input', message: { role: 'user', content: 'Play the level through.' } });
+
+    for (let index = 0; index < SCREENS; index += 1) {
+      const call = `screen-${String(index)}`;
+
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, {
+        id: screenEntry(index), origin: 'output',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool-call' as const, toolCallId: call, toolName: 'computer', input: { op: 'screen' } },
+            {
+              type: 'tool-result' as const, toolCallId: call, toolName: 'computer',
+              output: { type: 'content' as const, value: [{ type: 'text' as const, text: `screen ${String(index)}` }, { type: 'file' as const, data: { type: 'data' as const, data: screenData(index) }, mediaType: 'image/png' }] },
+            },
+          ],
+        },
+      });
+    }
+  }
+
+  private historyOf(actorId: string): SessionHistory {
     const sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
       this.ctx.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
 
@@ -82,17 +121,10 @@ export class AgentFacet extends ShippedAgentFacet {
     if (identity === undefined) throw new Error('the agent database holds no workspace identity yet');
     const actor = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id }).open(actorId);
 
-    const history = new SessionHistory({
+    return new SessionHistory({
       sql, actor, transactionSync: (write) => this.ctx.storage.transactionSync(write),
       files: async () => { throw new Error('a seeded entry is short enough to need no files'); },
       claims: claimFences(sql, actor),
     });
-
-    for (const entry of entries) {
-      await seedTranscriptEntry(history, CHAT_SESSION_ID, {
-        id: entry.id, origin: entry.origin, message: { role: entry.role, content: entry.content },
-        ...(entry.metadata !== undefined && { metadata: entry.metadata }),
-      });
-    }
   }
 }

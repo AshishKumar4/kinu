@@ -167,7 +167,7 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
       }
 
       if (model.nest && steps === HELPER_STEPS) {
-        const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { op: 'hire', role: 'task', lifetime: 'task', mission: 'SUB-HELPER: answer done.' } };
+        const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { op: 'hire', role: 'task', lifetime: 'task', message: 'SUB-HELPER: answer done.' } };
 
         return `data: ${JSON.stringify({ response: '', tool_calls: [hire] })}\n\n${USAGE}data: [DONE]\n\n`;
       }
@@ -190,7 +190,7 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
 
     const calls = hiring
       ? Array.from({ length: model.hires }, (_, at) => ({ id: `hire-${String(model.calls)}-${String(at)}`, name: 'agents',
-        arguments: { op: 'hire', role: 'task', lifetime: 'task', mission: `Helper ${String(at)}: write one page, then stop.` } }))
+        arguments: { op: 'hire', role: 'task', lifetime: 'task', message: `Helper ${String(at)}: write one page, then stop.` } }))
       : [];
 
     return `data: ${JSON.stringify(calls.length > 0 ? { response: '', tool_calls: calls } : { response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;

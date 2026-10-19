@@ -112,7 +112,7 @@ export const slate = new Proxy(Object.create(null), {
 
 /** A slate's one surface, as a program reaches its namespaces: workspace.memory.search(query),
  *  workspace.mcp.github.list_issues({ state: "open" }), workspace.agent.send({ text }). The workspace executor's own
- *  members sit at the top too, so workspace.readFile(path) reads as it does in a program. */
+ *  members sit at the top too, so workspace.fs.text(path) reads as it does in a program. */
 function surface(path) {
   return new Proxy(function () {}, {
     apply(_fn, _self, args) { return session().$workspace(path, args); },

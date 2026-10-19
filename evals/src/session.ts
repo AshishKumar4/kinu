@@ -42,8 +42,8 @@
  *               composer's `sendLanding` asks it: the workspace's record says
  *               where the words landed, `mid-turn` (the running turn read them)
  *               or `turn` (they ran as a turn of their own).
- *   history     `GET /agents/<slug>/<name>/get-messages`, the SDK's transport
- *               endpoint the pane is seeded from (agent-routing.ts:24-40).
+ *   history     `getChatHistoryPage`, walked back to the start as the pane
+ *               scrolls: `get-messages` answers only the newest page.
  *   events      `GET /api/workspaces/<name>/runs` then
  *               `…/runs/<runId>/events?since=&limit=` (run-events-routes.ts:82,
  *               :104). WALKED, both ways: runs are cursored and the events read
@@ -107,7 +107,7 @@ import { helperAddress, ROOT, type HelperAddress } from './helper-address';
 
 import {
   EVAL_WORKSPACE_BEAT_MS, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
-  RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, renderSoulMarkdown, rowText, CommandResultSchema,
+  RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, renderSoulMarkdown, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
   type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, betaSwarms,
@@ -118,7 +118,7 @@ import {
   type PublicResponseFrame, type PublicSendResult, type PublicTurn, type PublicTurnRecorder, type SocketPayload,
 } from './session-protocol';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
-import { recordedAnswer } from '../../packages/cli/src/agent-client';
+import { readConversation, recordedAnswer } from '../../packages/cli/src/agent-client';
 import {
   absorbingRunId, compareRunEventOrder, DeploymentAnswer, evalNameSlug, evalTargetVerdict,
   evalWorkspaceName, INFRA_FAILURE_MARKER, infraBoundary, liveModelTarget, resolveEvalBackend,
@@ -544,19 +544,6 @@ export type PublicViewedFile = v.InferOutput<typeof ViewedFileSchema>;
 
 /** One page of the conversation as `getChatHistoryPage` answers it: each entry names its turn. */
 const HistoryPageSchema = positionPageSchema(ChatHistoryEntrySchema);
-
-/** The SDK's message rows as `get-messages` serves them. Narrowed to what a
- *  trajectory asserts on — who spoke, and the text they said — because the parts
- *  array also carries tool and reasoning parts this projection does not read. */
-const HistorySchema = v.array(v.object({
-  id: v.optional(v.string()),
-  role: v.string(),
-  parts: v.optional(v.array(v.object({
-    type: v.string(),
-    text: v.optional(v.string()),
-  }))),
-  metadata: v.optional(v.record(v.string(), JsonValueSchema)),
-}));
 
 /** One durable message, as the web pane's seed carries it. */
 export interface PublicMessage {
@@ -1493,26 +1480,15 @@ export class KinuPublicSession {
     return v.parse(WorkspaceSnapshotSchema, answer).status;
   }
 
+  /** The whole conversation, oldest first, walked back page by page as the pane scrolls: `get-messages` answers only
+   *  its newest page, and a long computer-use chat is far past one. */
   async history(): Promise<readonly PublicMessage[]> {
-    const rows = await this.boundary(
-      `GET ${this.input.origin}/agents/.../get-messages`,
-      async () => {
-        const response = await fetch(
-          `${this.input.origin}/agents/${ORCHESTRATOR_AGENT_SLUG}/`
-          + `${encodeURIComponent(this.workspace)}/get-messages`,
-          { headers: webHeaders(this.input.identity) },
-        );
-
-        return v.parse(HistorySchema, await readJson(response, 'read the chat history'));
-      },
-    );
+    const rows = await this.boundary(`getChatHistoryPage on ${this.input.origin}/${this.workspace}, walked to the start`, () => readConversation((request) => this.historyPage(request)));
 
     return rows.map((row) => {
       const spliceStep = v.safeParse(v.number(), row.metadata?.[STEER_STEP_METADATA_KEY]);
 
-      const message: PublicMessage = {
-        ...(row.id !== undefined && { id: row.id }), role: row.role, text: rowText({ role: row.role, parts: row.parts ?? [] }),
-      };
+      const message: PublicMessage = { id: row.id, role: row.role, text: row.content };
 
       // SAFETY: `v.number()` above already proved the metadata value is a
       // number — the splice step is a field the row either carries or lacks.
@@ -1953,12 +1929,15 @@ export class KinuPublicSession {
       return;
     }
 
-    const page = async (request: PositionPageRequest) => v.parse(HistoryPageSchema, await this.rpc('getChatHistoryPage', [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }]));
-
-    turn.recorder.finish(await recordedAnswer(page, state.turnId), state.outcome !== 'completed' && state.outcome !== 'aborted');
+    turn.recorder.finish(await recordedAnswer((request) => this.historyPage(request), state.turnId), state.outcome !== 'completed' && state.outcome !== 'aborted');
     const done = turn.recorder.settled();
 
     if (done !== null) turn.resolve(done);
+  }
+
+  /** One page of the conversation, as the pane scrolls back to it. */
+  private async historyPage(request: PositionPageRequest): Promise<v.InferOutput<typeof HistoryPageSchema>> {
+    return v.parse(HistoryPageSchema, await this.rpc('getChatHistoryPage', [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }]));
   }
 
   /** Asked again on each redial while sockets drop; a refusal, or a redial that fails, ends the asking. */

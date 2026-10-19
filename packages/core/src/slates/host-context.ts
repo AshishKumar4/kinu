@@ -77,6 +77,17 @@ export function slateFrameSrc(url: string, context: SlateHostContext): string {
   return base.toString();
 }
 
+/**
+ * What of a request to a share's host its viewer exchange keeps where it sends its visitor on: the host context the
+ * slate's page was framed with (`?kinu=`), as a query, or ''. A ticket or consent exchange that dropped it would land the
+ * slate's page knowing no app to answer to or frame its parts from.
+ */
+export function keptSlateContext(url: URL): string {
+  const context = url.searchParams.get(SLATE_QUERY_PARAM);
+
+  return context === null ? '' : new URLSearchParams({ [SLATE_QUERY_PARAM]: context }).toString();
+}
+
 /** Any other href renders as ordinary markdown. */
 export function slateLinkId(href: string): string | null {
   if (!href.startsWith('slate://')) return null;

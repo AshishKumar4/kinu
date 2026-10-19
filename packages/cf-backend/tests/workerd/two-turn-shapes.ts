@@ -106,7 +106,46 @@ export const QueuedConversationSchema = v.object({
 
 export type QueuedConversation = v.InferOutput<typeof QueuedConversationSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt' | 'rwake' | 'twin' | 'notes' | 'notes-refused' | 'claims' | 'replies' | 'stranded' | 'agent-work' | 'agent-slate' | 'page-modes' | 'terminal-cut' | 'terminal-stuck' | 'close' | 'kill' | 'screens';
+
+/** A long computer-use session's screenshots: past the 32 MiB a facet RPC carries all together (staging 2026-10-19,
+ *  70 MB), each in an answer of its own short enough to stay in its row. */
+export const SCREENS = 72;
+
+export const SCREEN_CHARS = 512 * 1024;
+
+/** Every screenshot's base64 opens with this: a page or seed holding it carries an image's bytes. */
+export const SCREEN_MARK = 'iVBORw0KGgoScreen';
+
+/** The entry that took screenshot `index`. */
+export const screenEntry = (index: number): string => `screens-played-${String(index)}`;
+
+/** Screenshot `index`'s base64, distinct from every other. */
+export function screenData(index: number): string {
+  const head = `${SCREEN_MARK}${String(index)}x`;
+
+  return `${head}${'A'.repeat(SCREEN_CHARS - head.length)}`;
+}
+
+/** A screenshot chat as each of its readers met it. */
+export const ScreenshotChatSchema = v.object({
+  /** The `get-messages` seed: its status, its bytes, and whether any screenshot's bytes rode in it. */
+  seed: v.object({ status: v.number(), bytes: v.number(), inline: v.boolean() }),
+  /** Every page walked back to the start: the ids, oldest first, each page's bytes, and any screenshot's bytes in one. */
+  walk: v.object({ ids: v.array(v.string()), pageBytes: v.array(v.number()), inline: v.boolean() }),
+  /** The first screenshot's address, fetched alone. */
+  media: v.nullable(v.object({ status: v.number(), type: v.nullable(v.string()), bytes: v.number() })),
+});
+
+export type ScreenshotChat = v.InferOutput<typeof ScreenshotChatSchema>;
+
+/** The page walk a probe workspace makes inside itself, and the first image address it met. */
+export interface ChatPagesWalk {
+  readonly ids: string[];
+  readonly pageBytes: number[];
+  readonly inline: boolean;
+  readonly media: string | null;
+}
 
 /** A durable `pending_steers` row; `turn_id` is null when reserved before a turn opens. */
 export const PendingSteerSchema = v.object({

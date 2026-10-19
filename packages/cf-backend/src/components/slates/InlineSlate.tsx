@@ -6,7 +6,7 @@ import type { SlateCallResult } from "@kinu.run/core";
 import {
   buildSlateHostContext, isPreviewUrl, isSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_THEME_TOKENS,
-  SlateFrameMessageSchema, SLATE_UI_ATTRIBUTE,
+  SlateFrameMessageSchema, SLATE_UI_ATTRIBUTE, type SlateHostContext,
 } from "@kinu.run/core";
 import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
@@ -15,6 +15,7 @@ import { SlateInlineContext, SlatePreviews } from "./context";
 import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { WorkspacePartHost } from "@/hooks/use-part-host";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -66,6 +67,22 @@ function readThemeTokens() {
 
 const browserOrigin = (): string =>
   'window' in globalThis && window.location !== undefined ? window.location.origin : '';
+
+/**
+ * What a slate's page is framed with (`?kinu=`), read off this page now: its theme and tokens, the frame's width, how it
+ * is shown, and this page's origin, the one a slate answers to and frames its parts from (`useHostContext().origin`).
+ */
+export function useSlateHostContext(display: 'inline' | 'pane', width: number): SlateHostContext {
+  const theme = useTheme();
+
+  return useMemo(() => buildSlateHostContext({
+    theme: theme.mode,
+    variables: 'document' in globalThis ? readThemeTokens() : {},
+    width,
+    display,
+    origin: browserOrigin(),
+  }), [theme.mode, theme.name, width, display]);
+}
 
 /** In the chat, a preview folds behind a later one of its slate, and while the panel shows it. */
 export function ChatSlates({ shownInPanel, children }: { shownInPanel: string | null; children: ReactNode }) {
@@ -270,20 +287,13 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   reloadKey?: number;
   onReady?: () => void;
 }) {
-  const theme = useTheme();
   const { attach, size } = useElementSize();
   const [preview, setPreview] = useState<SlatePreview | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
 
   // The iframe src snapshots this once via `contextRef`; later values go over postMessage.
-  const context = useMemo(() => buildSlateHostContext({
-    theme: theme.mode,
-    variables: 'document' in globalThis ? readThemeTokens() : {},
-    width: size.w,
-    display,
-    origin: browserOrigin(),
-  }), [theme.mode, theme.name, size.w, display]);
+  const context = useSlateHostContext(display, size.w);
 
   const contextRef = useRef(context);
   contextRef.current = context;
@@ -345,6 +355,8 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   const save = useMemo(() => (block === undefined ? undefined : async () => rpc("slate", [{ op: 'save', page: id }])), [block, rpc, id]);
 
   const notice = preview?.broken === undefined ? null : <BrokenNotice title={preview.title ?? id} />;
+  // The owner's own preview runs its personal parts as the owner, one host to a preview.
+  const decision = <WorkspacePartHost slate={id} titled={preview} slateFrame={frame} />;
   let content: ReactNode = null;
 
   if (src !== null) {
@@ -373,6 +385,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
     return (
       <div className="p-pane gap-2">
         {notice}
+        {decision}
         {refusal !== null && (
           <div className="p-notice-danger rounded-lg px-3 py-2 text-xs">
             <p className="break-words m-0">{refusal}</p>
@@ -394,6 +407,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
   return (
     <SlateCard id={id} block={block} measure={attach} save={save}>
       {notice}
+      {decision}
       {refusal !== null && (
         <span className="block p-notice-danger px-3 py-2 text-xs">
           <span className="block break-words m-0">{refusal}</span>

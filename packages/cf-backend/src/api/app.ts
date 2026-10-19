@@ -17,10 +17,13 @@ import { aiProxyRoutes } from '../user/ai-proxy';
 import { webSearchRoutes } from '../user/web-search-route';
 import { providerProxyRoutes } from '../user/provider-proxy';
 import { accountRoutes } from '../user/account-routes';
+import { consentRoutes } from '../slates/consent-routes';
 import { userRoutes } from '../user/routes';
 import { deployRoutes } from '../deploy/routes';
 import { updatesRoutes } from '../updates/routes';
 import { sharedPublicRoutes, sharedRoutes } from '../shared/routes';
+import { galleryRoutes } from '../gallery/routes';
+import { partRoutes } from '../slates/part-routes';
 import { driveRoutes } from '../drive/routes';
 import { feedbackRoutes } from '../feedback/routes';
 import { clientErrorRoutes } from '../client-error/route';
@@ -63,6 +66,8 @@ app.get('/api/health', async (c) => healthResponse(c.req.raw, c.env));
 
 mount(sharedPublicRoutes);
 
+mount(galleryRoutes);
+
 // Unanswered public paths are the app shell's.
 app.all('/api/health', async (c) => serveApp(c.req.raw, c.env));
 
@@ -89,11 +94,15 @@ mount(controlRoutes);
 // Ahead of userRoutes: owner_only account methods.
 mount(accountRoutes);
 
+mount(consentRoutes);
+
 mount(builtinAccountRoutes);
 
 mount(userRoutes);
 
 mount(sharedRoutes);
+
+mount(partRoutes);
 
 mount(driveRoutes);
 

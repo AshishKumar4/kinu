@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestActors, testActorHandle, type TestActors } from '@kinu.run/test-utils';
+import { createTestActors, present, testActorHandle, type TestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import {
@@ -19,6 +19,30 @@ import { sqlStorageOver } from '../src/identity/inline-primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { RunEvent } from '../src/events/types';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
+import { explainSandboxError } from '../src/tools/sandbox-errors';
+
+test('the retired state recipe creates usable private scratch and replaces a row by batch', async () => {
+  const w = world();
+
+  try {
+    const recipe = present(/db\.createTable\(\{[^}]+\}\)/u.exec(explainSandboxError('state is not defined'))?.[0], 'the state successor recipe');
+    const provider = createDbCodemodeProvider(w.store(w.a), { private: true });
+    const db = Object.fromEntries(Object.entries(provider.tools).map(([name, member]) => [name, member.execute]));
+
+    const run = new Function('db', 'name', 'columns', `return (async () => {
+      await ${recipe};
+      await db.insert(name, [{ key: "draft", value: 1 }]);
+      await db.batch([
+        { op: "delete", table: name, where: { key: "draft" } },
+        { op: "insert", table: name, rows: [{ key: "draft", value: 2 }] }
+      ]);
+      return { rows: await db.select(name), scope: (await db.schema(name)).scope };
+    })();`);
+
+    expect(await run(db, 'scratch', [{ name: 'key', type: 'text', primaryKey: true }, { name: 'value', type: 'json' }]))
+      .toEqual({ rows: [{ key: 'draft', value: 2 }], scope: 'private' });
+  } finally { w.close(); }
+});
 
 /** `PRAGMA table_info`, narrowed to the key assertion's columns. */
 interface World {
@@ -680,8 +704,7 @@ describe('role and Plan authority', () => {
     expect(narrowToolSurface(['eval']).allowsNamespace('db')).toBe(false);
     expect(narrowToolSurface(['eval', 'db']).allowsNamespace('db')).toBe(true);
     expect(narrowToolSurface(undefined).allowsNamespace('db')).toBe(true);
-    expect(narrowToolSurface(['eval']).narrowProviders([{ name: 'db' }, { name: 'state' }]))
-      .toEqual([{ name: 'state' }]);
+    expect(narrowToolSurface(['eval']).narrowProviders([{ name: 'db' }])).toEqual([]);
   });
 
   test('Plan writes its own research state and is denied the workspace\'s', async () => {
@@ -689,7 +712,7 @@ describe('role and Plan authority', () => {
 
     try {
       const store = w.store(w.a);
-      const provider = providersInWorkMode('plan', [createDbCodemodeProvider(store)]);
+      const provider = providersInWorkMode('plan', [createDbCodemodeProvider(store, { private: true })]);
       const db = provider[0]?.tools;
 
       if (db === undefined) throw new Error('no db namespace');
@@ -728,7 +751,7 @@ describe('role and Plan authority', () => {
 
     try {
       const store = w.store(w.a);
-      const db = createDbCodemodeProvider(store).tools;
+      const db = createDbCodemodeProvider(store, { private: true }).tools;
       expect(await db.select.execute('conversation_entries')).toMatchObject({ reason: 'missing' });
       expect(await db.select.execute('session_messages')).toMatchObject({ reason: 'missing' });
       expect(await db.createTable.execute({ name: 'x', scope: 'actor', columns: [] }))

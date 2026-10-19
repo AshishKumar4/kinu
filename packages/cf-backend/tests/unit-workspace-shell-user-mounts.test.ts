@@ -36,37 +36,26 @@ async function withDevice() {
 
   const runtime = main.actor.runtime;
   present(runtime.executionRouter, 'the main actor\u2019s executors').register(device);
-  const tools = present(runtime.executionRouter?.getProvider('workspace'), 'the workspace executor').tools;
 
-  return { shell: present(runtime.shell, 'the main actor\u2019s shell'), tools, files: project.vfs };
+  return { shell: present(runtime.shell, 'the main actor\u2019s shell'), files: project.vfs };
 }
 
 const ASKED = { error: expect.stringContaining('rm-recursive') };
 
 // The stateless shell: a name keeps its directory, read back from the shell itself, and is judged from there.
 test('a name that went into /pc is judged there until it comes back; nothing else follows it there', async () => {
-  const { shell, tools, files } = await withDevice();
+  const { shell, files } = await withDevice();
   const work = { name: 'work' };
 
   expect(await shell.exec('cd /pc/proj', work)).toMatchObject({ exitCode: 0, finalCwd: '/pc/proj' });
   expect((await shell.exec('rm -rf build', work)).refusal).toMatchObject(ASKED);
 
-  // An unnamed call, a process and a shell program start at home, not where the name is.
+  // An unnamed call starts at home, not where the name is.
   const own = await shell.exec('mkdir -p scratch && rm -rf scratch');
   expect({ refusal: own.refusal, exitCode: own.exitCode }).toEqual({ refusal: undefined, exitCode: 0 });
-  expect(await tools.runCode?.execute('mkdir -p scratch && rm -rf scratch', { language: 'shell' })).toBe('(no output)');
 
   expect((await shell.exec('cd ~', work)).exitCode).toBe(0);
   const back = await shell.exec('mkdir -p scratch && rm -rf scratch', work);
   expect({ refusal: back.refusal, exitCode: back.exitCode }).toEqual({ refusal: undefined, exitCode: 0 });
-  expect(await filesIn(files)).toEqual(['/proj/kept.txt']);
-});
-
-test('a shell program\u2019s `cd` into /pc lasts only that program', async () => {
-  const { shell, tools, files } = await withDevice();
-
-  expect(await tools.runCode?.execute('cd /pc/proj', { language: 'shell' })).toBe('(no output)');
-  const own = await shell.exec('mkdir -p scratch && rm -rf scratch');
-  expect({ refusal: own.refusal, exitCode: own.exitCode, cwd: own.cwd }).toEqual({ refusal: undefined, exitCode: 0, cwd: WORKSPACE_ROOT });
   expect(await filesIn(files)).toEqual(['/proj/kept.txt']);
 });

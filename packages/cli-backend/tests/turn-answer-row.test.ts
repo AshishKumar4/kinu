@@ -8,6 +8,7 @@ import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } fr
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
+import { chatSeed, keptMediaName } from '@kinu.run/core';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -101,7 +102,7 @@ async function rowsOf(session: OpenedSession, role: 'user' | 'assistant'): Promi
 async function drawnTexts(session: OpenedSession): Promise<string[][]> {
   const transcript = readSessionTranscript(makeSql(session.db), session.rt.actor, CHAT_SESSION_ID, () => Promise.resolve(session.rt.storage.vfs));
 
-  return (await transcript.history()).filter((message) => message.role === 'assistant')
+  return (await chatSeed(transcript, keptMediaName)).filter((message) => message.role === 'assistant')
     .map((message) => message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []));
 }
 

@@ -6,6 +6,8 @@ import { KinuError } from '../src/obs/error';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { turnFailure } from '../src/read-models/background-event';
 import { sessionFixture } from './helpers-session';
+import { chatSeed } from '../src/read-models/status';
+import { keptMediaName } from '../src/session/chat-media';
 
 const model = scriptedTurnModel({ doGenerate: async () => ({
   content: [{ type: 'text', text: 'planned' }],
@@ -28,7 +30,7 @@ test.each([
 
   try {
     await fixture.chat.send('plan the quarterly offsite', { id: 'q-1' });
-    const [question, answer, ...after] = await fixture.actor.stores.history.transcript(CHAT_SESSION_ID).history();
+    const [question, answer, ...after] = await chatSeed(fixture.actor.stores.history.transcript(CHAT_SESSION_ID), keptMediaName);
 
     expect([question?.id, answer?.role, answer?.parts, after]).toEqual(['q-1', 'assistant', [], []]);
     expect(turnFailure({ metadata: answer?.metadata })).toContain(cause);

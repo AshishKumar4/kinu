@@ -269,6 +269,9 @@ function workflows(): readonly Workflow[] {
 
 const WORKFLOW_FILES = workflows();
 
+/** The bodies a non-vacuous read must find: one at least in a corpus that holds a workflow, none in an empty one. */
+const SOME_BODY = Math.min(1, WORKFLOW_FILES.length);
+
 /** Every step in every job, flattened, with where it came from and the `env`
  *  maps it sees, innermost first. */
 function steps(): readonly { file: string; job: string; step: v.InferOutput<typeof StepSchema>; envs: readonly Env[] }[] {
@@ -412,9 +415,10 @@ describe('the workflow readers see what GitHub and the shell run', () => {
 
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
-    // GitHub keeps one: the secret scan (CI, Lean, evals and the nightly sweeps run on armada).
+    // GitHub runs nothing: CI, Lean, evals, the nightly sweeps and both secret scans run on armada. A workflow added
+    // here is read by every test below.
     expect(WORKFLOW_FILES.map((workflow) => workflow.file).sort((a, b) => a.localeCompare(b)), 'the workflow corpus changed')
-      .toEqual(['.github/workflows/security-scan.yml']);
+      .toEqual([]);
     // Named, not counted. These hold every credential in the repository, and
     // the assertions below are only worth anything if they are still these.
     expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([]);
@@ -454,7 +458,7 @@ describe('the workflows that publish and measure this product', () => {
       expect(splicesEventData(step.run, envs), `${file}#${job} lets event data decide what runs`).toBe(false);
     }
 
-    expect(bodies, 'no workflow runs a shell body').toBeGreaterThan(0);
+    expect(bodies, 'no workflow runs a shell body').toBeGreaterThanOrEqual(SOME_BODY);
   });
 
   test('no workflow pipes a remote script into a shell', () => {
@@ -466,7 +470,7 @@ describe('the workflows that publish and measure this product', () => {
       expect(runsDownload(parseShell(step.run)), `${file}#${job} pipes a download into a shell`).toBe(false);
     }
 
-    expect(bodies, 'no workflow runs a shell body').toBeGreaterThan(0);
+    expect(bodies, 'no workflow runs a shell body').toBeGreaterThanOrEqual(SOME_BODY);
   });
 
   test('the Lean toolchain is checksum-verified before it executes', () => {
@@ -479,6 +483,14 @@ describe('the workflows that publish and measure this product', () => {
     // ordering that makes the checksum worth anything.
     expect(body.indexOf('sha256sum --check --strict')).toBeGreaterThan(0);
     expect(body.indexOf('sha256sum --check --strict')).toBeLessThan(body.indexOf('elan-init'));
+  });
+
+  test('the TruffleHog binary is checksum-verified before it is unpacked or runs', () => {
+    const body = readRepositoryFile(REPO_ROOT, ARMADA_SETUP);
+
+    expect(body).toContain('trufflesecurity/trufflehog/releases/download/');
+    expect(body.indexOf('sha256sum --check --strict')).toBeGreaterThan(0);
+    expect(body.indexOf('sha256sum --check --strict')).toBeLessThan(body.indexOf('tar -xzf "$trufflehog_work'));
   });
 
   // One Bun everywhere this repository runs one: an older one, or a moving `canary`, is how a synchronous spawn kept
@@ -524,7 +536,7 @@ describe('the workflows that publish and measure this product', () => {
         .toBe(true);
     }
 
-    expect(pinned, 'no workflow uses an action').toBeGreaterThan(0);
+    expect(pinned, 'no workflow uses an action').toBeGreaterThanOrEqual(SOME_BODY);
   });
 });
 

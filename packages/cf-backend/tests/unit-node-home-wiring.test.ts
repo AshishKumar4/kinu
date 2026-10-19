@@ -371,11 +371,6 @@ describe('hosted node execution', () => {
           process: { pid: 1, command, argv: [command], cwd: '/', state: 'running', exitCode: null, startTime: 0, endTime: null, longRunning: true, attachedTty: false },
         };
       },
-      runCode: async (code, options) => {
-        nimbus.calls.push({ command: code, options: options ?? {} });
-
-        return { command: code, success: true, exitCode: 0, stdout: '', stderr: '', duration: 0, timestamp: 0 };
-      },
     };
 
     const execution = withHostedNodeExecution(base, HOSTED_NODE);
@@ -384,12 +379,11 @@ describe('hosted node execution', () => {
 
     await execution.exec('exec', { cred: attacker, cwd: '/outside', env: { HOME: '/outside' } });
     await execution.startProcess?.('process', { cred: attacker });
-    await execution.runCode?.('code', { cred: attacker });
 
-    expect(nimbus.calls).toHaveLength(3);
+    expect(nimbus.calls).toHaveLength(2);
     expect(nimbus.calls.every(({ options }) => options.cred === HOSTED_NODE.cred)).toBe(true);
     expect(nimbus.calls[1]?.options.cwd).toBe(HOSTED_NODE.home);
-    expect(nimbus.calls[2]?.options.env)
+    expect(nimbus.calls[1]?.options.env)
       .toEqual({ HOME: HOSTED_NODE.home, TMPDIR: HOSTED_NODE.tmp });
   });
 });

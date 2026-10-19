@@ -8,7 +8,6 @@ import type { ExecutionRouter } from '../execution/types';
 import type { DeviceTransport } from '../execution/device-tunnel-executor';
 import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
-import type { TurnFileLedger } from '../vfs/file-ledger';
 import type { PathPlanes } from '../vfs/resolve';
 import type { VfsMountRouting } from '../vfs/mounts';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -55,7 +54,6 @@ export interface AgentRuntime {
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
   /** Read lazily by the router, so native `file` and codemode `workspace.*` share one
    *  read-before-write history. */
-  setTurnFileLedgerProvider?: (provider: (() => TurnFileLedger | undefined) | null) => void;
   /** Called once as the actor leaves the host. */
   release?(): void;
 }

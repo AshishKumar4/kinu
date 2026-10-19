@@ -10,15 +10,21 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareCreatedSchema,
+  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
+  LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
+  type LiveShareRecord, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
-import type { AuthIdentity } from '../auth/session';
+import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
+import type { OrchestratorAgent } from '../orchestrator';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
+
+/** The owner's workspace, once the app host proved it is theirs. */
+type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slatePreapprovals' | 'withdrawSlatePreapproval' | 'slateAs'>;
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */
 const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
@@ -50,6 +56,8 @@ const NOT_FOUND = 'No such blueprint';
 
 /** Public half: before the session gate; answers nothing but page data. */
 export const sharedPublicRoutes = new Hono<FamilyEnv<Env, object>>();
+
+sharedPublicRoutes.post(LIVE_SHARE_OPEN_PATH, async (c) => crossSiteRejection(c.req.raw) ?? openLive(c.req.raw, c.env, await requestIdentity(c.req.raw, c.env)));
 
 sharedPublicRoutes.get('/api/shared/blueprint/:id', async (c) => {
   const id = decodeURIComponent(rawParam(c, 'id'));
@@ -106,7 +114,28 @@ sharedRoutes.post('/api/shared/live', async (c) => shareLive(c.req.raw, c.env, c
 
 sharedRoutes.post('/api/shared/revoke', async (c) => revoke(c.req.raw, c.env, c.get('identity')));
 
-sharedRoutes.post('/api/shared/live/open', async (c) => openLive(c.req.raw, c.env, c.get('identity')));
+// Its mode set, or its reach approved again at the slate's revision now.
+sharedRoutes.post(LIVE_SHARE_MODE_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareModeBodySchema,
+  usage: "{ workspace, share, mode: 'own' } or { workspace, share, mode: 'owner', approved, revision }",
+}, async (owned, body) => owned.setLiveShareMode(body)));
+
+// Listed in the Gallery with its card's words, or taken off it.
+sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareListingBodySchema,
+  usage: '{ workspace, share, listed: true, line, category } or { workspace, share, listed: false }',
+}, async (owned, body) => owned.setLiveShareListing(body)));
+
+// A slate's standing approvals that stand now, as its share sheet lists them beside the reach.
+sharedRoutes.post(LIVE_SHARE_PREAPPROVALS_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: SlatePreapprovalsBodySchema, usage: '{ workspace, slate }',
+}, async (owned, body) => owned.slatePreapprovals(body.slate)));
+
+// One taken back, from every share of its slate.
+sharedRoutes.post(LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: SlatePreapprovalWithdrawSchema, usage: '{ workspace, slate, namespace, member, root }',
+}, async (owned, body) => owned.withdrawSlatePreapproval(body)));
+
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
   const userDO = objectNamed(env.UserDO, identity.userId);
@@ -239,22 +268,20 @@ async function blueprintBundle(env: Env, id: string) {
   return workspaceOwner(env, address.workspace).blueprintBundle(address.share);
 }
 
-const LiveShareBody = v.object({
-  workspace: v.string(),
-  slate: v.string(),
-  visibility: v.picklist(['users', 'public']),
-  emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
-  approved: v.optional(v.array(v.strictObject({ slate: v.string(), namespace: v.string(), member: v.string() }))),
-  fork: v.optional(v.boolean()),
-});
-
 const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 
 /** `emails` names users on a `users` share; `approved` is the mutating grant the dialog checked. */
 async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
-  const body = await safeJson(request, LiveShareBody);
+  const body = await safeJson(request, LiveShareBodySchema);
 
-  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved?, fork? }');
+  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, editors?, approved?, fork?, mode?, revision?, start? }');
+
+  if (body.visibility === 'public' && (body.editors ?? []).length > 0) return err(400, 'A link anyone may open adds no one to edit: share it with the people who edit it');
+
+  if (body.mode === 'owner' && body.revision === undefined) return err(400, 'Sharing on your access names the revision whose reach you reviewed');
+
+  // A copy made now has no revision anyone reviewed: it is shared on each viewer's own access, and turned later.
+  if (body.mode === 'owner' && body.start === 'empty') return err(400, "A copy that starts empty is shared on each viewer's own access first: turn on your access once it has run");
   const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
 
   if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
@@ -262,19 +289,23 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   const owned = claim.success;
 
   const created = await owned.slateAs(ROOT_SLATE_CALLER, {
-    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork,
+    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [], fork: body.fork, start: body.start,
   });
 
   if (!created.ok) return err(ERROR_STATUS[created.reason], created.error);
 
   const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
-  const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
+  const owning = await ownerMode(owned, { workspace: body.workspace, share, body });
+
+  if (owning instanceof Response) return owning;
+  const editors = new Set((body.editors ?? []).map((email) => email.toLowerCase()));
+  const emails = [...new Set([...body.emails ?? [], ...editors].map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
   const writes: Array<{ readonly listing?: 'pending' }> = [created];
   // Answered as it stands once the people it names are recorded, so the answer names them.
-  let answered = share;
+  let answered = owning;
 
   if (share.visibility === 'users' && emails.length > 0) {
-    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email })));
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await accountIdFor(env, email), email, role: editors.has(email) ? 'edit' as const : 'use' as const })));
     const recorded = await owned.shareLiveWith(share.id, named);
 
     if (!recorded.ok) return err(409, recorded.error);
@@ -283,6 +314,39 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity): Pr
   }
 
   return json({ body: { share: answered, url, ...listed(...writes) } }, { status: 201 });
+}
+
+/**
+ * A share made on its owner's access: made in `own` mode, which grants nothing, then turned to `owner` over the reach the
+ * owner reviewed (docs/SLATE-SHARING-NIMBUS.md §2). Where that refuses (the slate changed since), the share is revoked
+ * again, so nothing is left shared other than as asked. The share as it stands, or the refusal.
+ */
+async function ownerMode(owned: OwnedWorkspace, made: { workspace: string; share: LiveShareRecord; body: LiveShareBody }): Promise<LiveShareRecord | Response> {
+  const { body, share } = made;
+
+  if (body.mode !== 'owner' || body.revision === undefined) return share;
+  const set = await owned.setLiveShareMode({ workspace: made.workspace, share: share.id, mode: 'owner', revision: body.revision, approved: body.approved ?? [] });
+
+  if (set.ok) return set.value;
+  await owned.slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: share.id });
+
+  return err(ERROR_STATUS[set.reason], set.error);
+}
+
+/** Its owner's word on one of their live shares, from their share sheet: answered with the share as it stands after. */
+async function shareChange<Schema extends v.GenericSchema<unknown, { readonly workspace: string }>, Answer>(
+  input: { readonly request: Request; readonly env: Env; readonly identity: AuthIdentity; readonly schema: Schema; readonly usage: string },
+  change: (owned: OwnedWorkspace, body: v.InferOutput<Schema>) => Promise<SlateAnswer<Answer>>,
+): Promise<Response> {
+  const body = await safeJson(input.request, input.schema);
+
+  if (!body) return err(400, `Body must be ${input.usage}`);
+  const claim = await claimOwnedWorkspace(input.env, input.identity.userId, body.workspace);
+
+  if (Result.isFailure(claim)) return err(claim.failure.status, claim.failure.error);
+  const set = await change(claim.success, body);
+
+  return set.ok ? json({ body: set.value }) : err(ERROR_STATUS[set.reason], set.error);
 }
 
 /** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */
@@ -300,21 +364,28 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
   return json({ body: { ...v.parse(v.record(v.string(), v.unknown()), revoked.value), ...listed(revoked) } });
 }
 
-async function openLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+/**
+ * Where the app's page for a share frames it (`LiveSharePage`, the share's one link): a public share answers anyone,
+ * signed in or not; one that names people answers them, with their signed entry, and its owner. A named share asks no
+ * one signed out for more than to sign in, and says nothing of itself to anyone else.
+ */
+async function openLive(request: Request, env: Env, identity: AuthIdentity | null): Promise<Response> {
   const body = await safeJson(request, LiveIdBody);
 
   if (!body) return err(400, 'Body must be { workspace, share }');
-  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share);
+  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share, identity?.userId ?? null);
 
-  if (!reading.ok) return err(404, NOT_FOUND);
+  if (reading.ok && !reading.value.admits && identity === null) return err(401, 'Sign in to open this share');
 
-  const { handle, visibility } = reading.value.record;
+  if (!reading.ok || !reading.value.admits) return err(404, NOT_FOUND);
 
-  const url = visibility === 'public'
+  const { handle, visibility, slate } = reading.value.record;
+
+  const url = identity === null || visibility === 'public'
     ? await slateShareUrl(env, body.workspace, handle)
     : await viewerEntryUrl(env, body.workspace, handle, identity.userId);
 
   if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 
-  return json({ body: { url } });
+  return json({ body: { url, slate, title: reading.value.title } satisfies LiveShareOpen });
 }

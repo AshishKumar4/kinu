@@ -48,7 +48,7 @@ test('a blueprint carries the included tree and its requirements, and admits wit
     }));
     owner.usage.set('issues', [
       { namespace: 'mcp.github', member: 'read_issue' }, { namespace: 'mcp.github', member: 'create_issue' },
-      { namespace: 'slates.other', member: 'count' }, { namespace: 'workspace', member: 'readFile' },
+      { namespace: 'slates.other', member: 'count' }, { namespace: 'workspace', member: 'fs.text' },
     ]);
     owner.vfs.writeFile(root + '/src/server.ts', 'export default { fetch() { return new Response("issues"); } };');
     owner.vfs.writeFile(root + '/data/cache.json', '{"stale":true}');

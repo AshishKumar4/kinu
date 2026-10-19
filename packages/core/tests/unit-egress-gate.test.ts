@@ -20,7 +20,8 @@ import {
   type ShellApprovalPolicy, wordsOnly,
 } from '../src/index';
 
-/** A placeholder of the real shape: prefix + 43 base64url characters. */
+/** A placeholder the scanner reads: prefix + 43 characters of its base64url grammar. The vault mints a subset of that
+ *  grammar, lowercase letters and digits (`unit-egress-vault.test.ts`). */
 function placeholder(seed: string): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${seed.repeat(43).slice(0, 43)}`;
 }

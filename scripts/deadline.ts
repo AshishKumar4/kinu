@@ -43,6 +43,7 @@ import { appendFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tolerate } from '@kinu.run/core/obs';
+import { reportingEnv } from '../packages/test-utils/src/ambient-env';
 import { processStartTicks } from './process-owner';
 import { procFile, procStat } from './proc';
 
@@ -377,7 +378,8 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
     stdout: 'pipe',
     stderr: 'pipe',
     detached: true,
-    env: { ...(run.env ?? process.env), [RUN_MARK]: mark, [SILENCE_NOTICE_ENV]: notice },
+    // A gate that runs `bun test` reports every test whoever runs the ladder (`AGENT_MODE_ENV`).
+    env: { ...reportingEnv(run.env ?? process.env), [RUN_MARK]: mark, [SILENCE_NOTICE_ENV]: notice },
   });
 
   const signalGroup = (signal: NodeJS.Signals): void => {

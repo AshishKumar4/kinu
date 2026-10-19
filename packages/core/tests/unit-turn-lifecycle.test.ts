@@ -75,7 +75,7 @@ describe('openTurnRun / closeTurnRun', () => {
     acc.recordToolCall({
       toolCallId: 'fixture-1',
       toolName: 'eval',
-      input: { code: `await workspace.readFile('/${SPILL_DIRS.toolOutput}/abc.log')` },
+      input: { code: `await workspace.fs.text('/${SPILL_DIRS.toolOutput}/abc.log')` },
       success: true,
       output: 'ok',
     });

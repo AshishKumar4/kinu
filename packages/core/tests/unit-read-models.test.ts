@@ -5,7 +5,7 @@ import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.j
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { jsonSchema, tool, type ToolSet } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
 
 import { createMemoryVfs, seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-utils';
 import {
@@ -24,11 +24,12 @@ import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
+import { keptMediaName } from '../src/session/chat-media';
 import { SessionHistory } from '../src/session/history';
 import { stampTurnAuthor } from '../src/types/turn-metadata';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
-import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { CHAT_PAGE_BYTES, CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { PositionPageRequestSchema, type PositionCursor } from '../src/session/page';
 import { getWorkspaceDiff, resetWorkspaceBaseline } from '../src/read-models/workspace-diff';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -45,6 +46,7 @@ import {
 import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views';
 import type { JsonValue } from '../src/utils/json';
 import { claimFences } from '../src/orchestrator/actor-claims';
+import { rowText } from '../src/utils/ui-message';
 
 function workspace() {
   const db = new Database(':memory:');
@@ -92,7 +94,7 @@ async function walkTranscript(transcript: SessionTranscriptReader, limit: number
   let cursor: PositionCursor | undefined;
 
   for (;;) {
-    const page = await getChatHistoryPage(transcript, { limit, cursor });
+    const page = await getChatHistoryPage(transcript, { limit, cursor }, keptMediaName);
     ids.unshift(...page.items.map((m) => m.id));
 
     if (page.status === 'end') return ids;
@@ -345,9 +347,9 @@ describe('agent status', () => {
     const recorded = transcript.read('a');
 
     if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
-    expect(await getChatHistoryPage(transcript)).toEqual({
+    expect(await getChatHistoryPage(transcript, {}, keptMediaName)).toEqual({
       status: 'end',
-      items: [{ id: 'a', position: 0, role: 'user', turnId: recorded.turnId, runId: recorded.runId, content: 'hello', createdAt: recorded.recordedAt }],
+      items: [{ id: 'a', position: 0, role: 'user', turnId: recorded.turnId, runId: recorded.runId, parts: [{ type: 'text', text: 'hel' }, { type: 'text', text: 'lo' }], createdAt: recorded.recordedAt }],
     });
     w.db.close();
   });
@@ -370,9 +372,9 @@ describe('agent status', () => {
     const recorded = transcript.read(id);
 
     if (recorded === null) throw new Error('the harness notice must be in the transcript');
-    expect((await getChatHistoryPage(transcript)).items).toEqual([{
+    expect((await getChatHistoryPage(transcript, {}, keptMediaName)).items).toEqual([{
       id, position: 0, role: 'system', turnId: id, runId: recorded.runId,
-      content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
+      parts: [{ type: 'text', text: '9 head(s) across 1 fork run(s)…' }], createdAt: recorded.recordedAt,
       metadata: { kinuEvent: 'fork_interrupted', heads: 9, kinuAuthor: 'harness' },
     }]);
     w.db.close();
@@ -388,7 +390,7 @@ describe('agent status', () => {
 
     transcript.appendUser(await transcript.prepareUser({ id, turnId: id, runId, message }));
 
-    expect((await getChatHistoryPage(transcript)).items).toMatchObject([{ runId, content }]);
+    expect((await getChatHistoryPage(transcript, {}, keptMediaName)).items.map((item) => ({ runId: item.runId, content: rowText(item) }))).toEqual([{ runId, content }]);
     w.db.close();
   });
 
@@ -399,16 +401,16 @@ describe('agent status', () => {
     const { history, transcript } = chatStore(w);
     await seedTranscript(history, transcriptOf(10));
 
-    const newest = await getChatHistoryPage(transcript, { limit: 3 });
+    const newest = await getChatHistoryPage(transcript, { limit: 3 }, keptMediaName);
 
     expect(newest).toMatchObject({ status: 'more', next: { before: 7 } });
     expect(newest.items.map((m) => [m.id, m.position])).toEqual([['m8', 7], ['m9', 8], ['m10', 9]]);
 
-    const top = await getChatHistoryPage(transcript, { limit: 3, cursor: { before: 3 } });
+    const top = await getChatHistoryPage(transcript, { limit: 3, cursor: { before: 3 } }, keptMediaName);
 
     expect(top.status).toBe('end');
     expect(top.items.map((m) => [m.id, m.position])).toEqual([['m1', 0], ['m2', 1], ['m3', 2]]);
-    expect((await getChatHistoryPage(transcript, { limit: 2, cursor: { before: 6 } })).items.map((m) => m.position)).toEqual([4, 5]);
+    expect((await getChatHistoryPage(transcript, { limit: 2, cursor: { before: 6 } }, keptMediaName)).items.map((m) => m.position)).toEqual([4, 5]);
     w.db.close();
   });
 
@@ -426,9 +428,9 @@ describe('agent status', () => {
     const { history, transcript } = chatStore(w);
     await seedTranscript(history, transcriptOf(4));
 
-    expect((await getChatHistoryPage(transcript, { limit: 9 })).status).toBe('end');
-    expect(await getChatHistoryPage(transcript, { limit: 2 })).toMatchObject({ status: 'more', next: { before: 2 } });
-    expect((await getChatHistoryPage(transcript, { limit: 4 })).status).toBe('end');
+    expect((await getChatHistoryPage(transcript, { limit: 9 }, keptMediaName)).status).toBe('end');
+    expect(await getChatHistoryPage(transcript, { limit: 2 }, keptMediaName)).toMatchObject({ status: 'more', next: { before: 2 } });
+    expect((await getChatHistoryPage(transcript, { limit: 4 }, keptMediaName)).status).toBe('end');
     w.db.close();
   });
 
@@ -439,7 +441,7 @@ describe('agent status', () => {
     const { history, transcript } = chatStore(w);
     await seedTranscript(history, transcriptOf(10));
 
-    const first = await getChatHistoryPage(transcript, { limit: 4 });
+    const first = await getChatHistoryPage(transcript, { limit: 4 }, keptMediaName);
     expect(first).toMatchObject({ status: 'more' });
 
     if (first.status !== 'more') throw new Error('unreachable');
@@ -447,7 +449,7 @@ describe('agent status', () => {
 
     await seedTranscript(history, [{ id: 'm11', role: 'assistant', content: 'live arrival' }]);
 
-    const second = await getChatHistoryPage(transcript, { limit: 4, cursor: first.next });
+    const second = await getChatHistoryPage(transcript, { limit: 4, cursor: first.next }, keptMediaName);
     expect(second.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5', 'm6']);
 
     // No duplicate, no gap (m6 directly before m7), and the newer arrival never leaks in.
@@ -483,15 +485,23 @@ describe('agent status', () => {
       { id: 'm3', role: 'user', content: 'after' },
     ]);
 
-    const shown = (page: ChatHistoryPage) =>
-      page.items.map(({ id, content, unavailable }) => ({ id, content: content.length, unavailable }));
+    // Walked to the start: a page ends before an entry that would take it past its bytes.
+    const shown = async (reader: SessionTranscriptReader) => {
+      const rows: ChatHistoryPage['items'][number][] = [];
 
-    expect(shown(await getChatHistoryPage(transcript))).toEqual([
+      for (let page = await getChatHistoryPage(reader, {}, keptMediaName); ; page = await getChatHistoryPage(reader, { cursor: page.next }, keptMediaName)) {
+        rows.unshift(...page.items);
+
+        if (page.status === 'end') return rows.map((row) => ({ id: row.id, content: rowText(row).length, unavailable: row.unavailable }));
+      }
+    };
+
+    expect(await shown(transcript)).toEqual([
       { id: 'm1', content: 6, unavailable: undefined },
       { id: 'm2', content: spilled.length, unavailable: undefined },
       { id: 'm3', content: 5, unavailable: undefined },
     ]);
-    expect(shown(await getChatHistoryPage(readSessionTranscript(w.sql, w.actor, CHAT_SESSION_ID, null)))).toEqual([
+    expect(await shown(readSessionTranscript(w.sql, w.actor, CHAT_SESSION_ID, null))).toEqual([
       { id: 'm1', content: 6, unavailable: undefined },
       { id: 'm2', content: 0, unavailable: true },
       { id: 'm3', content: 5, unavailable: undefined },
@@ -641,10 +651,11 @@ describe('executor file plane', () => {
     const project = await getExecutorFiles(router(files), 'workspace', '/home/main/proj');
     const projectShown = await getExecutorFiles(router(files), 'workspace', '/home/main/proj', { hidden: true });
 
-    // The namespace's `/` holds the machine's own (`usr`, `tmp`, `proc`…) beside the workspace's places.
-    expect(names(root)).toEqual(['computer', 'home', 'pc', 'slates', 'uploads']);
+    // The namespace's `/` holds the machine's own (`usr`, `tmp`, `proc`…) beside the workspace's places, the shared
+    // `scratch` among them.
+    expect(names(root)).toEqual(['computer', 'home', 'pc', 'scratch', 'slates', 'uploads']);
     expect(shown.entries?.filter((entry) => entry.hidden === true).map((entry) => entry.name)).toEqual(expect.arrayContaining(['usr', 'tmp', 'etc']));
-    expect(shown.entries?.filter((entry) => entry.hidden !== true).map((entry) => entry.name).sort()).toEqual(['computer', 'home', 'pc', 'slates', 'uploads']);
+    expect(shown.entries?.filter((entry) => entry.hidden !== true).map((entry) => entry.name).sort()).toEqual(['computer', 'home', 'pc', 'scratch', 'slates', 'uploads']);
     // Below a root a project's `tmp` is its own; its dotfile waits to be asked for.
     expect(names(project)).toEqual(['tmp']);
     expect(projectShown.entries?.find((entry) => entry.name === '.env')).toEqual(expect.objectContaining({ hidden: true }));
@@ -891,5 +902,97 @@ describe('changelog view', () => {
     expect(after.seenAt).toBe(seenAt);
     expect(after.unseenCount).toBe(0);
     db.close();
+  });
+});
+
+/** A computer-use turn's screenshots, as its tool results keep them: each the model was handed as content. */
+function screenshotTurn(id: string, shots: readonly string[]) {
+  return {
+    id, origin: 'output',
+    message: {
+      role: 'assistant',
+      content: shots.flatMap((data, index) => [
+        { type: 'tool-call' as const, toolCallId: `${id}-${String(index)}`, toolName: 'computer', input: { op: 'screen' } },
+        {
+          type: 'tool-result' as const, toolCallId: `${id}-${String(index)}`, toolName: 'computer',
+          output: { type: 'content' as const, value: [{ type: 'text' as const, text: `screen ${String(index)}` }, { type: 'file' as const, data: { type: 'data' as const, data }, mediaType: 'image/png' }] },
+        },
+      ]),
+    } satisfies ModelMessage,
+  } as const;
+}
+
+/** A distinct base64 image of `bytes` characters. */
+const shot = (mark: string, bytes: number): string => `iVBOR${mark}${'A'.repeat(bytes - 5 - mark.length)}`;
+
+/** Every page from the newest back to the start, and each page's JSON. */
+async function walkDrawn(transcript: SessionTranscriptReader): Promise<{ ids: string[]; pages: string[] }> {
+  const ids: string[] = [];
+  const pages: string[] = [];
+
+  for (let page = await getChatHistoryPage(transcript, {}, JSON.stringify); ; page = await getChatHistoryPage(transcript, { cursor: page.next }, JSON.stringify)) {
+    ids.unshift(...page.items.map((entry) => entry.id));
+    pages.push(JSON.stringify(page.items));
+
+    if (page.status === 'end') return { ids, pages };
+  }
+}
+
+describe("a chat's pages", () => {
+  // Staging 2026-10-19: a 341-step computer-use session's chat was one 70 MB read, past the 32 MiB a facet RPC carries.
+  test('a long run of screenshots crosses as addresses, each page within its bytes, and walked back every entry once', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const shots = Array.from({ length: 24 }, (_, index) => shot(`shot${String(index)}x`, 512 * 1024));
+
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'ask', origin: 'input', message: { role: 'user', content: 'Play the level through.' } });
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, screenshotTurn('played', shots));
+
+    for (let index = 0; index < 6; index += 1) {
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `long-${String(index)}`, origin: 'input', message: { role: 'user', content: 'w'.repeat(400 * 1024) } });
+    }
+
+    const { ids, pages } = await walkDrawn(transcript);
+
+    expect(ids).toEqual(['ask', 'played', ...Array.from({ length: 6 }, (_, index) => `long-${String(index)}`)]);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.filter((page) => new TextEncoder().encode(page).length > CHAT_PAGE_BYTES)).toEqual([]);
+    expect(pages.filter((page) => shots.some((data) => page.includes(data.slice(0, 16))))).toEqual([]);
+    w.db.close();
+  });
+
+  test('an address reads back the image it names, and names nothing outside this chat', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const shots = [shot('first', 4096), shot('second', 4096)];
+
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, screenshotTurn('played', shots));
+    const page = await getChatHistoryPage(transcript, {}, JSON.stringify);
+    const urls = JSON.stringify(page.items).match(/\{\\"messageId[^}]*\}/gu) ?? [];
+    const refs = urls.map((url) => v.parse(v.object({ messageId: v.string(), partNo: v.number(), index: v.number() }), JSON.parse(JSON.parse(`"${url}"`))));
+
+    expect(await Promise.all(refs.map(async (ref) => (await transcript.media(ref))?.data))).toEqual(shots);
+    expect(await transcript.media({ ...present(refs[0], 'the first address'), index: 1 })).toBeNull();
+    expect(await transcript.media({ ...present(refs[0], 'the first address'), messageId: 'another-chat' })).toBeNull();
+    w.db.close();
+  });
+
+  test("a person's attached picture crosses as an address and reads back whole", async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+    const picture = shot('attached', 64 * 1024);
+
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
+      id: 'asked', origin: 'input',
+      message: { role: 'user', content: [{ type: 'text', text: 'What is in this?' }, { type: 'file', data: picture, mediaType: 'image/png', filename: 'level.png' }] },
+    });
+
+    const [entry] = (await getChatHistoryPage(transcript, {}, JSON.stringify)).items;
+    const file = present(entry?.parts.find((part) => part.type === 'file'), 'the attached file part');
+    const ref = v.parse(v.object({ messageId: v.string(), partNo: v.number(), index: v.number() }), JSON.parse(v.parse(v.string(), file.url)));
+
+    expect(JSON.stringify(entry)).not.toContain(picture.slice(0, 16));
+    expect((await transcript.media(ref))?.data).toBe(picture);
+    w.db.close();
   });
 });

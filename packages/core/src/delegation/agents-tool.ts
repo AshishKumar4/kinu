@@ -398,7 +398,7 @@ interface SwarmFields {
 /** A new helper's fields, as `agents.hire` admits them. */
 interface HireFields {
   readonly role: RoleId;
-  readonly mission: string;
+  readonly message: string;
   readonly name?: string;
   /** Explicit, else the role's default tier. */
   readonly tier?: TierId;
@@ -852,7 +852,7 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
     const request: TemporaryRunRequest = {
       role: delegatedTask.resolved.role.id,
       roleLabel: fields.role,
-      task: fields.mission,
+      task: fields.message,
       mode,
     };
 
@@ -869,7 +869,7 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
 
   const request: Parameters<TeamToolDeps['spawn']>[0] = {
     role: delegated.resolved.role.id,
-    mission: fields.mission,
+    mission: fields.message,
     mode,
   };
 

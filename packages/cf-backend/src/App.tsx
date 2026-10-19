@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet, matchPath, useLocation, useParams } from "react-router-dom";
 import { Suspense, type ReactNode } from "react";
 import Layout from "./components/layout";
+import GalleryShell from "./components/gallery/GalleryShell";
 import HomePage from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -29,6 +30,10 @@ const WelcomePage = lazyRoute(() => import("./pages/WelcomePage"));
 
 const DrivePage = lazyRoute(() => import("./pages/DrivePage"));
 
+const GalleryPage = lazyRoute(() => import("./pages/GalleryPage"));
+
+const GallerySlatePage = lazyRoute(() => import("./pages/GallerySlatePage"));
+
 const WorkspacesPage = lazyRoute(() => import("./pages/WorkspacesPage"));
 
 const PluginsPage = lazyRoute(() => import("./pages/PluginsPage"));
@@ -37,9 +42,15 @@ const DevicesPage = lazyRoute(() => import("./pages/DevicesPage"));
 
 const BlueprintPage = lazyRoute(() => import("./pages/BlueprintPage"));
 
-// An awaited import, which `gate:wired` reads as the page's one reference.
+// Awaited imports, which `gate:wired` reads as each page's one reference.
 const LiveSharePage = lazyRoute(async () => {
   const { default: page } = await import("./pages/LiveSharePage");
+
+  return { default: page };
+});
+
+const PartFramePage = lazyRoute(async () => {
+  const { default: page } = await import("./pages/PartFramePage");
 
   return { default: page };
 });
@@ -122,10 +133,17 @@ export default function App() {
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
           </Route>
         </Route>
+        {/* Public discovery: the app's shell signed in, a bar with Sign in signed out (GalleryShell). */}
+        <Route element={<GalleryShell />}>
+          <Route path={APP_ROUTES.gallery} element={<Page label="gallery"><GalleryPage /></Page>} />
+          <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
+        </Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
         <Route path={APP_ROUTES.sharedBlueprint} element={<Page label="blueprint"><BlueprintPage /></Page>} />
         {/* Outside onboarding too: a person a share names enters it before setting anything up. */}
         <Route path={APP_ROUTES.sharedLive} element={<Page label="shared-live"><LiveSharePage /></Page>} />
+        {/* One personal part of a shared slate, in the app's own frame inside the slate's page. */}
+        <Route path={APP_ROUTES.liveSlatePart} element={<Page label="live-slate-part"><PartFramePage /></Page>} />
         <Route path={APP_ROUTES.deploy} element={<Page label="deploy"><DeployPage /></Page>} />
       </Routes>
     </BrowserRouter>

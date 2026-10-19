@@ -14,19 +14,19 @@ import {
   reviewCommand, gateExec, wordsOnly,
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
-import { makeSql, makeExecRaw, createTestRuntime, createTestActor } from './helpers';
+import { makeSql, makeExecRaw, createTestRuntime, createTestActor, fileNamespaceFor } from './helpers';
 
 interface HeadReportIndex {
   [headId: string]: HeadReport;
 }
 
 describe('v2 e2e: workspace executor via createInlineExecutor', () => {
-  test('writeFile + readFile + exec round-trip through ExecutorProvider tools', async () => {
+  test('fs.write + fs.text + exec round-trip through the workspace namespace', async () => {
     const { rt } = createTestRuntime();
 
     const provider = createInlineExecutor({
       filesOwner: 'agent',
-      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, craftStore: rt.craftStore,
       shell: { exec: async (cmd) => cmd.includes('echo hi')
         ? { stdout: 'hi\n', stderr: '', exitCode: 0 }
         : { stdout: '', stderr: '', exitCode: 0 } },
@@ -37,8 +37,9 @@ describe('v2 e2e: workspace executor via createInlineExecutor', () => {
     expect(provider.kind).toBe('workspace');
     expect(provider.capabilities.has('shell')).toBe(true);
 
-    await provider.tools.writeFile.execute('a.txt', 'hello');
-    expect(await provider.tools.readFile.execute('a.txt')).toBe('hello');
+    const namespace = fileNamespaceFor(rt, provider);
+    await present(namespace.tools['fs.write'], 'workspace.fs.write').execute('a.txt', 'hello');
+    expect(await present(namespace.tools['fs.text'], 'workspace.fs.text').execute('a.txt')).toBe('hello');
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi\n');
   });
 });

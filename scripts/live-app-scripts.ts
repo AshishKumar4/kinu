@@ -282,7 +282,7 @@ function slateUiPage(name: string, words: string): string {
   const reach = name !== 'first' ? '' : [
     '<p id="read"></p><button id="send">Send</button><script type="module">',
     'import { workspace } from "kinu:slate";',
-    `document.getElementById("read").textContent = await workspace.readFile(${JSON.stringify(SLATE_UI_FILE.path)});`,
+    `document.getElementById("read").textContent = await workspace.fs.text(${JSON.stringify(SLATE_UI_FILE.path)});`,
     `document.getElementById("send").onclick = () => workspace.agent.send({ text: ${JSON.stringify(SLATE_UI_SENT)} });`,
     '</script>',
   ].join('');
@@ -322,12 +322,30 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
 
 /* ── Stop, then a send ─────────────────────────────────────────────────── */
 
-/** The stop-then-send row's asks, numbered per attempt: one stopped as it opens, its call held until the row is done,
- *  then a follow-up sent as the Stop leaves, answered at once. */
+/** The stop-then-send row's asks, numbered per attempt. One tab's turn runs, its call held until its attempt is done;
+ *  the other tab sends words the agent owes that turn, a Stop hands them back unread, then the sender follows up. */
 export const STOPPED_ASK = 'Stop probe: wait before the first word';
 
 /** What the stopped ask's turn would answer: a page drawing it ran a message its Stop had stopped. */
 export const STOPPED_ANSWER = 'The stopped ask answered.';
+
+/** Words sent as the stopped ask's turn runs, which its Stop hands back before any step reads them. */
+export const HANDED_BACK_ASK = 'Stop probe: words the Stop hands back';
+
+/** The stop-then-send row's model side: each attempt's running turn, held at its first call, and every request that
+ *  carried words a Stop had handed back, which no request may. */
+export class StopProbe {
+  held = heldCall();
+
+  readonly heardBack: string[] = [];
+
+  /** The next attempt's running turn's call, held. */
+  next(): HeldCall {
+    this.held = heldCall();
+
+    return this.held;
+  }
+}
 
 export const FOLLOW_UP_ASK = 'Stop probe: the follow-up';
 
@@ -339,16 +357,21 @@ export const OPENING_ASK = 'New chat probe: wait before the first word.';
 export const OPENING_ANSWER = 'Opened after the wait.';
 
 /** The stop-then-send and new-chat rows' turns, or null for any other request. */
-export function stopProbeTurn(request: ScriptedRequest, stopped: HeldCall, opening: HeldCall): ScriptedAnswer | null {
+export function stopProbeTurn(request: ScriptedRequest, stop: StopProbe, opening: HeldCall): ScriptedAnswer | null {
   const last = request.userTexts.at(-1) ?? '';
 
   if (request.available.length === 0) return null;
+  const heardBack = request.userTexts.filter((text) => text.includes(HANDED_BACK_ASK));
+
+  stop.heardBack.push(...heardBack);
 
   if (last.includes(FOLLOW_UP_ASK)) return { text: `${FOLLOW_UP_ANSWER}${last.slice(last.indexOf(FOLLOW_UP_ASK) + FOLLOW_UP_ASK.length)}.` };
 
   const held = (text: string, call: HeldCall): ScriptedAnswer => ({ text, pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: call.hold() } });
 
-  if (last.includes(STOPPED_ASK)) return held(STOPPED_ANSWER, stopped);
+  if (last.includes(STOPPED_ASK)) return held(STOPPED_ANSWER, stop.held);
+
+  if (heardBack.length > 0) return { text: 'Done.' };
 
   return last.includes(OPENING_ASK) ? held(OPENING_ANSWER, opening) : null;
 }

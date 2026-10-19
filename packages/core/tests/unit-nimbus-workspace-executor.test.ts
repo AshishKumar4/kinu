@@ -1,3 +1,4 @@
+import { retiredField, retiredMember } from '../src/operations/retired';
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -13,7 +14,6 @@ import { DefaultExecutionRouter } from '../src/execution/router';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import type { SQLQueryBindings } from 'bun:sqlite';
 import type { SqlValue } from '@nimbus-sh/core';
-import type { ExecutorToolResult } from '../src/execution/types';
 import { present } from '@kinu.run/test-utils';
 import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 import { CommandResultSchema } from '../src/execution/exec-result';
@@ -23,10 +23,6 @@ import { namespaceDeclaration } from '../src/tools/operation-surfaces';
 /** An executor's namespace as the model reads it. */
 const declared = (provider: Parameters<typeof executorNamespace>[0]): string => namespaceDeclaration(provider.name, executorNamespace(provider).declarations ?? {});
 
-
-function toolText(result: ExecutorToolResult): string {
-  return v.parse(v.string(), result);
-}
 
 function fakeBox() {
   const files = new Map<string, Uint8Array>();
@@ -82,7 +78,6 @@ describe('hosted Nimbus workspace provider', () => {
       inline: {
         vfs,
         shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory,
         craftStore: rt.craftStore,
         sql: rt.storage.sql,
       },
@@ -91,7 +86,7 @@ describe('hosted Nimbus workspace provider', () => {
     expect(provider.name).toBe('workspace');
     expect(provider.kind).toBe('workspace');
     expect(declared(provider)).toContain('declare const workspace');
-    expect(declared(provider)).toContain('runCode(');
+    expect(declared(provider)).toContain('createTool(');
     const router = new DefaultExecutionRouter({ mode: () => 'allow_all' });
     router.register(provider);
     expect(router.getProviders().map((entry) => entry.name)).toEqual(['workspace']);
@@ -108,13 +103,10 @@ describe('hosted Nimbus workspace provider', () => {
     });
     expect(await provider.tools.exec.execute('cat /home/main/proof.txt')).toBe('same bytes');
 
-    const started = toolText(await provider.tools.startProcess.execute('node server.js'));
-    expect(started).toContain('pid=41');
-    expect(started).toContain('workspace.logs(41)');
-    expect(started).not.toContain('nimbus.');
-    expect(await provider.tools.logs.execute(41)).toContain('ready');
-    expect(await provider.tools.exposePort.execute(4321))
-      .toBe('https://4321.example.test\nverified: a request to this URL reaches the server on port 4321');
+    const started = v.parse(v.object({ processId: v.string() }), await provider.tools.startProcess.execute('node server.js'));
+    expect(await provider.tools.logs.execute(started.processId)).toContain('ready');
+    expect(await present(executorNamespace(provider).tools.exposePort, 'workspace.exposePort').execute(4321))
+      .toEqual({ port: 4321, url: 'https://4321.example.test', route: { reached: true } });
     expect(await provider.exposePort(4321)).toEqual({
       supported: true,
       port: 4321,
@@ -130,7 +122,6 @@ describe('hosted Nimbus workspace provider', () => {
     const inline = {
       vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }),
       shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-      memory: rt.memory,
       craftStore: rt.craftStore,
       sql: rt.storage.sql,
     };
@@ -165,7 +156,7 @@ describe('hosted Nimbus workspace provider', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
 
@@ -230,16 +221,17 @@ describe('hosted Nimbus workspace provider', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
 
     await expect(provider.listExposedPorts()).rejects.toMatchObject({
       name: 'KinuError[unsupported]', code: 'unsupported', message: expect.stringContaining(reason),
     });
-    expect(JSON.parse(toolText(await provider.tools.listPorts.execute()))).toEqual([
-      { port: 4321, unavailable: reason },
-    ]);
+    // A program asks the same contract, so it is told the same reason, never an empty list.
+    expect(await present(executorNamespace(provider).tools.listPorts, 'workspace.listPorts').execute()).toMatchObject({
+      success: false, reason: 'unsupported', error: expect.stringContaining(reason),
+    });
   });
 
   test('a port with a URL still lists, and one the host merely could not price is dropped', async () => {
@@ -256,7 +248,7 @@ describe('hosted Nimbus workspace provider', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
 
@@ -275,7 +267,7 @@ describe('the workspace process and port surface', () => {
       box,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
-        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+        craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
   }
@@ -289,7 +281,7 @@ describe('the workspace process and port surface', () => {
     expect(refusal).toMatchObject({ success: false, reason: 'io' });
   });
 
-  test("a program's workspace.logs(pid, { lines, bytes }) reads the process with both limits", async () => {
+  test("a program's workspace.logs(processId, { lines, bytes }) reads the process with both limits", async () => {
     const box = fakeBox();
     const asked: unknown[] = [];
 
@@ -304,8 +296,34 @@ describe('the workspace process and port surface', () => {
 
     const workspace = executorNamespace(blockedProvider(box)).tools;
 
-    await present(workspace.logs, 'workspace.logs').execute(41, { lines: 20, bytes: 4096 });
+    await present(workspace.logs, 'workspace.logs').execute('41', { lines: 20, bytes: 4096 });
     expect(asked).toEqual([{ lines: 20, bytes: 4096 }]);
+  });
+
+  test('a program calling a member taken off the workspace is told what replaced it', async () => {
+    const workspace = executorNamespace(blockedProvider(fakeBox())).tools;
+
+    expect(await present(workspace.killProcess, 'workspace.killProcess').execute('41')).toMatchObject({
+      success: false, reason: 'bad_input', error: expect.stringContaining(retiredMember('workspace', 'killProcess') ?? 'a retired member'),
+    });
+  });
+
+  test('a program passing a retired option is told what replaced it, and nothing starts', async () => {
+    const box = fakeBox();
+    let started = 0;
+
+    box.startProcess = async () => {
+      started += 1;
+
+      throw new Error('a refused call must not start');
+    };
+
+    const workspace = executorNamespace(blockedProvider(box)).tools;
+
+    expect(await present(workspace.startProcess, 'workspace.startProcess').execute('node server.js', { env: { PORT: '4100' } })).toMatchObject({
+      success: false, reason: 'bad_input', error: expect.stringContaining(retiredField('workspace.startProcess', 'env') ?? 'a retired field'),
+    });
+    expect(started).toBe(0);
   });
 
   test('a port without a listener refuses rather than advertising a working preview', async () => {
@@ -316,7 +334,9 @@ describe('the workspace process and port surface', () => {
       list: async () => [],
     };
     const provider = blockedProvider(box);
-    expect(await provider.tools.exposePort.execute(8789)).toMatchObject({ reason: 'unsupported' });
+
+    // The caller acts on the reason: start the server, then expose it.
+    expect(await present(executorNamespace(provider).tools.exposePort, 'workspace.exposePort').execute(8789)).toMatchObject({ reason: 'bad_input' });
     const direct = await provider.exposePort(8789);
     expect(direct).toMatchObject({
       supported: false,
@@ -331,7 +351,7 @@ describe('the workspace process and port surface', () => {
       unexpose: async () => ({ ok: true }),
       list: async () => [],
     };
-    expect(await blockedProvider(box).tools.exposePort.execute(8789)).toMatchObject({ reason: 'io' });
+    expect(await present(executorNamespace(blockedProvider(box)).tools.exposePort, 'workspace.exposePort').execute(8789)).toMatchObject({ reason: 'io' });
   });
 });
 

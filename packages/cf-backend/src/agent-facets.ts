@@ -7,7 +7,7 @@ import type { ForkConversationPlan, ForkConversationSection, ForkConversationSou
 import type { CacheWarmArm, ContextEditor, ContextTree, ConversationRecall, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, ModelCallReport, ModelOperationEvent } from '@kinu.run/core';
+import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, ModelCallReport } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, diagnostics, KinuError, relayedLine, settle, toKinuError } from '@kinu.run/core/obs';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -203,7 +203,6 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.open(() => this.answers.paceStep(bound, profile), bound, 'executes'); }
   answerMetadata(close: TurnBound, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(close, narration), close); }
   reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }
-  reportModelOperation(event: ModelOperationEvent) { return this.open(() => this.answers.reportModelOperation(event)); }
   prepareChat(request: ChatTurnRequest) { return this.open(() => this.answers.prepareChat(request)); }
   scaffold() { return this.open(() => this.answers.scaffold()); }
   chatEvent(event: SessionEvent) { return this.open(() => this.answers.chatEvent(event)); }

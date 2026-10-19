@@ -15,9 +15,10 @@ for (const kind of kinds) {
 
     const listed = await workspace.agent.listOperations(caller);
 
-    expect(listed.map((operation) => operation.id)).toContain('state.get');
-    await workspace.agent.callOperation(caller, 'state.set', { key: 'generic', value: 'operation' }, { callId: 'generic-write' });
-    expect((await workspace.agent.callOperation(caller, 'state.get', { key: 'generic' }, { callId: 'generic-read' })).value).toBe('operation');
+    expect(listed.map((operation) => operation.id)).toContain('db.select');
+    await workspace.agent.callOperation(caller, 'db.createTable', { spec: { name: 'seat_private', scope: 'private', columns: [{ name: 'value', type: 'text' }] } }, { callId: 'generic-create' });
+    await workspace.agent.callOperation(caller, 'db.insert', { table: 'seat_private', rows: [{ value: 'operation' }] }, { callId: 'generic-write' });
+    expect((await workspace.agent.callOperation(caller, 'db.select', { table: 'seat_private' }, { callId: 'generic-read' })).value).toEqual([{ value: 'operation' }]);
 
     const context = { nested: () => {} };
 

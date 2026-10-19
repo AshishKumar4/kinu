@@ -18,8 +18,6 @@ import { nimbusSessionFiles } from '../src/execution/nimbus';
 import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { createWorkspaceBundle } from './helpers';
 import { nativeFileRead, sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
-import { createParentWorkspaceVfs } from '../src/execution/parent';
-import { shellQuote } from '../src/utils/shell';
 import {
   agentCred,
   agentHome,
@@ -345,33 +343,6 @@ const cases: Case[] = [
     make: () => deviceFiles(deviceTransport(new MemFs()), {
       consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     }), path: (s) => `/conf/${s}` },
-  { name: 'parent workspace file view',
-    make: () => {
-      const workspace = createWorkspaceBundle(new Database(':memory:'));
-      const files = workspace.vfs;
-
-      return createParentWorkspaceVfs({
-        read: async (path) => files.readFile(path),
-        write: async (input) => {
-          if (input.kind === 'file') return Promise.resolve(files.writeFile(input.path, input.data)).then(() => null);
-
-          const options = input.recursive ? '-p ' : '';
-          const made = await workspaceShell(workspace).exec(`mkdir ${options}${shellQuote(input.path)}`);
-
-          if (made.exitCode !== 0) throw new VfsError('EIO', made.stderr, input.path);
-
-          return null;
-        },
-        list: async (path) => files.readdir(path),
-        stat: async (path, options) => files.stat(path, options),
-        delete: async (path) => {
-          await files.unlink(path);
-
-          return null;
-        },
-        exec: async () => { throw new Error('this fixture drives the parent file plane, not its shell'); },
-      });
-    }, path: (path) => `conf/${path}` },
   { name: 'mounted workspace file view',
     make: () => {
       const workspace = createWorkspaceBundle(new Database(':memory:')).vfs;

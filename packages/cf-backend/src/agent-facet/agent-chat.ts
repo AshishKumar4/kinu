@@ -1,7 +1,7 @@
 /** An agent's chat in its own isolate (D9), the workspace agent's included. */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
-  CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TRANSCRIPT_WINDOW, TerminalTransitions,
+  CHAT_SESSION_ID, ChatSession, EventLog, PendingSendStore, RECOVERY_BACKOFF_CEILING_MS, TerminalTransitions,
   PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane, answerDrawsPages,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
@@ -19,7 +19,7 @@ import { serialQueue } from '@kinu.run/agent-utils';
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { WorkspaceClient } from './workspace-rpc';
-import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, type FacetModels, type LiveTurn, type TurnBound } from './agent-turn';
+import { FacetSpend, answerMetadataOf, deliveredRun, facetTurnSources, facetTurnTools, modelOperations, type FacetModels, type LiveTurn, type TurnBound } from './agent-turn';
 
 /** The words reach the room on the turn's own stream, and a turn's end on its own call. */
 const ROOM_EVENTS: ReadonlySet<SessionEvent['type']> = new Set(['turn-start', 'step-cut', 'error', 'broadcast', 'history-reverted']);
@@ -131,7 +131,7 @@ export class FacetChat {
 
             return this.charged().then(async () => {
               // Its room is sent the transcript's newest messages with its end: they are this isolate's to read.
-              const window = await deps.database.history(TRANSCRIPT_WINDOW);
+              const window = await deps.database.seed();
 
               await workspace.turnEnded(event, deps.database.figures(), deps.database.takeActivity(), window);
             });
@@ -236,7 +236,8 @@ export class FacetChat {
     return await assembleActorTurn({
       ...bundle,
       ...(mission !== null && { budget: mission }),
-      toolset: () => tools,
+      // Its tools are the workspace's, run there, and so is its scaffold's program.
+      toolset: () => ({ tools, stores: null }),
       externalTools: async () => ({}),
       // A measure between turns binds nothing: no turn is open to bind it to.
       settle: async (profile, inputs) => {
@@ -614,7 +615,7 @@ export class FacetChat {
 
     if (metadata === null) return;
     await transcript.amendMetadata(messageId, metadata);
-    await workspace.answerAmended(await database.history(TRANSCRIPT_WINDOW));
+    await workspace.answerAmended(await database.seed());
   }
 
   /** The stand-in lands first, as every actor's does: the model's name may be refused. The workspace plans the title. */
@@ -644,7 +645,7 @@ export class FacetChat {
     const { routed } = sources.models;
 
     return await suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
-      llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: this.spend.operations }, system),
+      llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: modelOperations(actor, WORKSPACE_RUN_ID) }, system),
       ...(routed !== undefined && { attemptOf: (spec: string) => routed.attemptFor(spec) }),
     }, prompt), mission);
   }

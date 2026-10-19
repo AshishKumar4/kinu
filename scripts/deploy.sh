@@ -504,7 +504,7 @@ echo ""
 stop_phase preflight
 mark preflight
 
-# CI's verdict for this exact revision, which armada stored when its push to integration/** or main was proved
+# CI's verdict for this exact revision, which armada stored when its push to next-rc or main was proved
 # (L25): every row of it goes into the report, and a red or missing one ends the deploy before anything is built.
 # A promotion takes staging's record instead, which only a deploy past this gate wrote.
 if [ "$KINU_PROMOTE" != "1" ]; then

@@ -1,4 +1,4 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Root arm only: non-root kinds are covered in `tests/unit-loop-contract.test.ts`. The root drives Think's
  * own loop, and this is the only proof the selected program actually ran; do not delete as a duplicate.
@@ -82,4 +82,23 @@ test('the loop\'s stop halts new selected-program effects', async () => {
 
   if (run === undefined) throw new Error('the stopped turn left no run');
   expect((await agent.getRunEvents(run.runId)).find((event) => event.type === 'run_end')).toMatchObject({ reason: 'aborted' });
+});
+
+test("the root's program reads through its machines' fs on the turn's own ledger: its file tool may then replace the file", async () => {
+  const harness = orchestratorHarness();
+  const { agent } = harness;
+  agent.modelFactory = () => oneTextTurn('default inference');
+  await agent.onStart();
+  await writeText(workspaceFiles(agent), '/home/main/notes.md', 'first\n');
+  await selectProgram(harness, `async function run() {
+    const read = await workspace.fs.text('/home/main/notes.md');
+    await host.callTool('file', { op: 'write', path: '/home/main/notes.md', content: 'the program wrote\\n' });
+    await host.emit({ type: "text_delta", text: "read:" + read });
+  }`, 'read then write');
+
+  const result = await chatSessionTurns(agent).run('Run the program.');
+
+  expect(result.status).toBe('completed');
+  expect(JSON.stringify(result.message)).toContain('read:first');
+  expect(await readText(workspaceFiles(agent), '/home/main/notes.md')).toBe('the program wrote\n');
 });

@@ -42,7 +42,7 @@ async function workspaceSources(): Promise<TurnAssemblySources> {
       ...sources.models,
       catalog: { window: (spec) => known(spec ?? SMALL).window, windowFor: async (spec) => known(spec).window, warm: async () => {}, acceptedMedia: (spec) => new Set(known(spec ?? SMALL).media), callsTools: () => undefined },
     },
-    toolset: () => ({}),
+    toolset: () => ({ tools: {}, stores: null }),
     externalTools: async () => ({}),
     wiredToolNames: () => [],
     codemodeCapabilities: () => [],
@@ -52,7 +52,7 @@ async function workspaceSources(): Promise<TurnAssemblySources> {
 test('a turn on the tier its bundle was read for is served on that model with its own window and media', async () => {
   const workspace = await workspaceSources();
   const bundle = await materializeTurnSources(workspace, { userText: '', workMode: 'build', explicitTier: 'deep' });
-  const isolate = { ...turnSourcesFromBundle(bundle, workspace), toolset: () => ({}), externalTools: async () => ({}) };
+  const isolate = { ...turnSourcesFromBundle(bundle, workspace), toolset: () => ({ tools: {}, stores: null }), externalTools: async () => ({}) };
   const { window, execution } = await assembleActorTurn(isolate, { userText: '', workMode: 'build', explicitTier: 'deep' });
 
   expect({ model: execution.chat.modelSpec, window, media: [...execution.chat.attachments?.accepts ?? []] })
@@ -62,7 +62,7 @@ test('a turn on the tier its bundle was read for is served on that model with it
 test('a turn on a tier its bundle was not read for is refused, not given another model\'s window', async () => {
   const workspace = await workspaceSources();
   const bundle = await materializeTurnSources(workspace, { userText: '', workMode: 'build' });
-  const isolate = { ...turnSourcesFromBundle(bundle, workspace), toolset: () => ({}), externalTools: async () => ({}) };
+  const isolate = { ...turnSourcesFromBundle(bundle, workspace), toolset: () => ({ tools: {}, stores: null }), externalTools: async () => ({}) };
 
   await expect(assembleActorTurn(isolate, { userText: '', workMode: 'build', explicitTier: 'deep' })).rejects.toMatchObject({ code: 'missing' });
 });

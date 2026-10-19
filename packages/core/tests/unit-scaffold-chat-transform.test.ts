@@ -6,7 +6,7 @@ import type { ScaffoldRunOptions } from '../src/scaffold/executor';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import { decodeJsonValue, type JsonObject, type JsonValue } from '../src/utils/json';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, servedStoresFor } from './helpers';
 
 /** Sandbox semantics: provider namespaces visible as globals. */
 function evalExecutor(): Executor {
@@ -60,7 +60,7 @@ async function selected(version: number, scaffoldCode: string,
   const program = await prepareActorProgram({ runtime: rt, mode: 'build', version });
 
   const run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'> = {
-    rt, task: 'the task',
+    rt, task: 'the task', stores: servedStoresFor(rt),
     llmStream: () => { throw new Error('this fixture must not start a model'); },
   };
 

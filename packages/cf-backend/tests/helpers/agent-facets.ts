@@ -770,7 +770,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
           return await host().reportModelCall(report);
         },
-        reportModelOperation: (event) => host().reportModelOperation(event),
       };
 
       const env: AgentFacetEnv = {
@@ -924,7 +923,8 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     deliverAdvice: (...args) => settle(through(() => isolate.deliverAdvice(...args))),
     step: (...args) => settle(through(() => isolate.step(...args))),
     frozen: (...args) => settle(through(() => isolate.frozen(...args))),
-    history: (...args) => settle(through(() => isolate.history(...args))),
+    seed: (...args) => settle(through(() => isolate.seed(...args))),
+    media: (...args) => settle(through(() => isolate.media(...args))),
     historyPage: (...args) => settle(through(() => isolate.historyPage(...args))),
     messageCount: (...args) => settle(through(() => isolate.messageCount(...args))),
     inspect: (...args) => settle(through(() => isolate.inspect(...args))),
@@ -937,7 +937,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     searchConversations: (...args) => settle(through(() => isolate.searchConversations(...args))),
     scrollConversation: (...args) => settle(through(() => isolate.scrollConversation(...args))),
     browseConversations: (...args) => settle(through(() => isolate.browseConversations(...args))),
-    admitted: (...args) => settle(through(() => isolate.admitted(...args))),
+    unseen: (...args) => settle(through(() => isolate.unseen(...args))),
     interrupt: (...args) => settle(through(() => isolate.interrupt(...args))),
     recover: (...args) => settle(through(() => isolate.recover(...args))),
     outOfMemory: (...args) => settle(through(() => isolate.outOfMemory(...args))),

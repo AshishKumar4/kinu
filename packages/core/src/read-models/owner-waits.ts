@@ -5,11 +5,12 @@
  * here: the owner's account holds it, and the workspace is never told when it is decided.
  */
 import type { DeferredApproval } from '../safety/deferred-approval';
-import { boundWriteOf } from '../safety/bound-write';
+import { approvalKindOf, type ApprovalKind } from '../safety/approval-kind';
 import type { PendingConsent } from '../protocol';
 import type { WorkspaceProposal } from '../safety/workspace-proposals';
 import type { AskingAgent } from '../plans/owner-questions';
 import { planTitle } from '../plans/review';
+import { cardWords } from './event-summary';
 import type { OwnerWait, OwnerWaitWatch } from '../types/owner-waits';
 import type { AgentConfigStore } from '../config/store';
 import type { AgentSignal } from '../types/signals';
@@ -39,11 +40,11 @@ export interface OwnerWaitSources {
 /** Every row that waits on the owner, newest first, each with whose it is. */
 export function ownerWaits(sources: OwnerWaitSources): ScopedOwnerWait[] {
   const commands = sources.deferred.filter((action) => action.status === 'queued').map((action): ScopedOwnerWait => {
-    const write = boundWriteOf(action.command);
+    const parked = approvalKindOf(action);
 
     return {
       raisedBy: action.actor,
-      wait: { key: `action:${action.id}`, kind: write === null ? 'command' : 'write', what: write === null ? action.command : write.path, since: action.requestedAt, askedBy: sources.nameOf(action.actor) },
+      wait: { key: `action:${action.id}`, kind: parked.kind === 'write' ? 'write' : 'command', what: waitText(parked), since: action.requestedAt, askedBy: sources.nameOf(action.actor) },
     };
   });
 
@@ -127,7 +128,7 @@ function ownerWaitsSignal(watch: OwnerWaitWatch): AgentSignal {
     ? 'Your owner has handled everything that waited on them from you.'
     : `Your owner has handled what you waited on: ${watch.what}`;
 
-  return { kind: OWNER_WAITS_SIGNAL, text, idempotencyKey: `${OWNER_WAITS_SIGNAL}:${watch.id}`, metadata: { key: watch.key } };
+  return { kind: OWNER_WAITS_SIGNAL, text, idempotencyKey: `${OWNER_WAITS_SIGNAL}:${watch.id}`, metadata: { key: watch.key, what: watch.what === null ? null : cardWords(watch.what) } };
 }
 
 /**
@@ -162,4 +163,13 @@ export function wakeMetOwnerWaits(input: {
 
     return stillArmed;
   });
+}
+
+/** What a parked action is, in words: a write's file, a shared slate's effect as what it would do, or the command. */
+function waitText(parked: ApprovalKind): string {
+  switch (parked.kind) {
+    case 'write': return parked.write.path;
+    case 'slate-effect': return `slate ${parked.effect.slate}: ${parked.effect.tool} on ${parked.effect.server}`;
+    case 'command': return parked.command;
+  }
 }

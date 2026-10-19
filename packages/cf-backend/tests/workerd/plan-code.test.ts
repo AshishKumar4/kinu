@@ -18,13 +18,14 @@ it('hosted Plan analysis reads files and keeps research state without writes or 
   const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName('plan-analysis'));
 
   const planned = await root.code('plan', [
-    "const text = await workspace.readFile('plan-data.txt');",
-    "const write = await workspace.writeFile('plan-data.txt', 'changed');",
-    'await state.set("analysis", [3, 1, 2].sort());',
+    "const text = await workspace.fs.text('plan-data.txt');",
+    "const write = await workspace.fs.write('plan-data.txt', 'changed');",
+    'await db.createTable({ name: "analysis", scope: "private", columns: [{ name: "value", type: "json" }] });',
+    'await db.insert("analysis", [{ value: [3, 1, 2].sort() }]);',
     'let network;',
     'try { await globalThis.fetch("https://network.example.test/"); network = { blocked: false }; }',
     'catch (cause) { if (!(cause instanceof Error)) throw cause; network = { blocked: true, error: cause.message }; }',
-    'return { text, write, analysis: await state.get("analysis"), network };',
+    'return { text, write, analysis: (await db.select("analysis"))[0].value, network };',
   ].join('\n'));
 
   expect(planned.file).toBe('original');
@@ -33,11 +34,12 @@ it('hosted Plan analysis reads files and keeps research state without writes or 
   } });
 
   const built = await root.code('build', [
-    "await workspace.writeFile('plan-data.txt', 'changed');",
+    "await workspace.fs.text('plan-data.txt');",
+    "await workspace.fs.write('plan-data.txt', 'changed');",
     'return await (await fetch("https://network.example.test/")).text();',
   ].join('\n'));
 
-  expect(built.file).toBe('changed');
+  expect(built.file, built.answer).toBe('changed');
   expect(JSON.parse(built.answer)).toMatchObject({ result: 'network allowed' });
 });
 

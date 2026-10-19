@@ -16,7 +16,7 @@ import {
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
-import { censusOf, type Repair, type StoreCensus } from '@kinu.run/core';
+import { censusOf, type MediaRef, type Repair, type StoreCensus, type StoredImage } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -116,7 +116,10 @@ export interface AgentFacetCalls {
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). `dynamic`: the live
    *  block on the profile the step's pace bound, its turn's first. */
   step(turnId: string, dynamic: DynamicContext | null): Promise<void>;
-  history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
+  /** This chat's newest page, as a tab is sent it on connecting or a turn's end. */
+  seed(snapshot: AgentSnapshot): Promise<UIMessage[]>;
+  /** One image a page of this chat named; each crosses alone, never inside a page. */
+  media(snapshot: AgentSnapshot, ref: MediaRef): Promise<StoredImage | null>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   messageCount(snapshot: AgentSnapshot): Promise<number>;
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
@@ -130,7 +133,7 @@ export interface AgentFacetCalls {
   searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
   scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
   browseConversations(snapshot: AgentSnapshot, limit?: number): Promise<ConversationSummary[]>;
-  admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
+  unseen(snapshot: AgentSnapshot, ids: readonly string[]): Promise<string[]>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
   /** The platform reported its isolate out of memory at `diedAt`. */
@@ -464,8 +467,12 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     await this.pacer.grant(turnId, dynamic);
   }
 
-  async history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]> {
-    return await this.open(snapshot).history(limit);
+  async seed(snapshot: AgentSnapshot): Promise<UIMessage[]> {
+    return await this.open(snapshot).seed();
+  }
+
+  async media(snapshot: AgentSnapshot, ref: MediaRef): Promise<StoredImage | null> {
+    return await this.open(snapshot).media(ref);
   }
 
   async historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage> {
@@ -520,8 +527,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).spend(steps);
   }
 
-  async admitted(snapshot: AgentSnapshot, id: string): Promise<boolean> {
-    return this.open(snapshot).admitted(id);
+  async unseen(snapshot: AgentSnapshot, ids: readonly string[]): Promise<string[]> {
+    return this.open(snapshot).unseen(ids);
   }
 
   /** Stops one run its workspace delivered: queued, it never runs; running, its chat aborts it. */

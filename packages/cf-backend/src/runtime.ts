@@ -34,7 +34,7 @@ import { DESKTOP_SIZE, WATCH_SHEET } from "@kinu.run/devbox/desktop";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from "./computer-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
-import { previewHostSuffix, scopedTurnSurface } from "@kinu.run/core";
+import { previewHostSuffix } from "@kinu.run/core";
 import { createDecisionPort } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
@@ -224,7 +224,6 @@ export interface CFRuntimeHooks {
      *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
-  slateBuild?: (slate: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A computer port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
@@ -390,13 +389,9 @@ export function createCFRuntime(
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell, planes,
+      vfs: toolFiles, files: agentFileVfs, craftStore, shell, planes,
       sql,
-      // The turn whose call runs the program, every agent's alike; outside one the provider keeps a private ledger.
-      ledger: () => scopedTurnSurface()?.ledgers.files,
-      budget: () => scopedTurnSurface()?.ledgers.context,
       slate: hooks.slate,
-      slateBuild: hooks.slateBuild,
     },
   }));
   const previewSuffix = previewHostSuffix(env) ?? undefined;

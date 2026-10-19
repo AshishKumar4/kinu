@@ -6,6 +6,7 @@ import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runne
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { initEventsHubTables } from '../src/events/hub/index';
 import { getChatHistoryPage } from '../src/read-models/status';
+import { keptMediaName } from '../src/session/chat-media';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../src/utils/ui-message';
@@ -16,6 +17,7 @@ import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { hostDeliveries, seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
 import { claimFences } from '../src/orchestrator/actor-claims';
+import { rowText } from '../src/utils/ui-message';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -142,7 +144,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const { runner } = activation(ws.db);
     await runner.wake(JOB);
 
-    const history = (await getChatHistoryPage(chatStore(ws.db).transcript)).items;
+    const history = (await getChatHistoryPage(chatStore(ws.db).transcript, {}, keptMediaName)).items;
     expect(history).toHaveLength(1);
     expect(history[0].role).toBe('system');
 
@@ -163,9 +165,9 @@ describe('a settled background job announces itself once, and not as the owner',
     });
 
     // forkCandidates' predicate (`role === 'user'`).
-    const pivots = (await getChatHistoryPage(owner.transcript)).items
+    const pivots = (await getChatHistoryPage(owner.transcript, {}, keptMediaName)).items
       .filter((row) => row.role === 'user')
-      .map((row) => row.content);
+      .map((row) => rowText(row));
 
     expect(pivots).toEqual(['find me a domain']);
   });
@@ -194,7 +196,7 @@ describe('a settled background job announces itself once, and not as the owner',
       text: '23 head(s) across 6 fork run(s) were still marked running…',
     });
 
-    const history = (await getChatHistoryPage(chatStore(ws.db).transcript)).items;
+    const history = (await getChatHistoryPage(chatStore(ws.db).transcript, {}, keptMediaName)).items;
     expect(history.map((row) => row.role)).toEqual(['system']);
   });
 
@@ -218,7 +220,7 @@ describe('a settled background job announces itself once, and not as the owner',
       },
     }));
 
-    const history = (await getChatHistoryPage(store.transcript)).items;
+    const history = (await getChatHistoryPage(store.transcript, {}, keptMediaName)).items;
     expect(history).toHaveLength(1);
     expect(history[0].role).toBe('system');
     expect(history[0].metadata).toMatchObject({ kinuEvent: 'background_job', jobId: JOB });

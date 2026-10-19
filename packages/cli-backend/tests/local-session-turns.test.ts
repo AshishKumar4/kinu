@@ -18,6 +18,7 @@ import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, } from './helpers/local-session';
+import { keptMediaName } from '@kinu.run/core';
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
@@ -825,7 +826,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
       [TURN_AUTHOR_METADATA_KEY]: 'harness',
     });
 
-    const page = await getChatHistoryPage(rt.stores.history.transcript(CHAT_SESSION_ID));
+    const page = await getChatHistoryPage(rt.stores.history.transcript(CHAT_SESSION_ID), {}, keptMediaName);
     expect(page.items.some((entry) => entry.role === 'user')).toBe(false);
     const wake = present(page.items.find((entry) => entry.id === expectedId), 'the wake entry in the paged read');
     expect(wake.role).toBe('system');
