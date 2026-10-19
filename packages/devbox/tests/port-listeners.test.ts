@@ -134,3 +134,55 @@ describe("a port's listener", () => {
     expect(container.startOptions.length).toBe(starts);
   });
 });
+
+// Staging 2620e7c05, 2026-10-19: a job's server outlived the workspace's restart in the box's container, and the new
+// activation failed its job. The box names the processes still running under a job's stamp, so the job is picked up.
+describe("a job's processes", () => {
+  test('are the ones running under its stamp, and none once they exit', async () => {
+    const { box } = harness(TestBox, undefined, localExec);
+    await box.devboxStartup();
+    const cwd = mkdtempSync(join(root, 'stamped-'));
+    const fifos = ['kept', 'other'].map((name) => join(cwd, name));
+
+    for (const fifo of fifos) await runToExit(['mkfifo', fifo]);
+    const [kept = '', other = ''] = fifos;
+
+    // Each says it started through its fifo, then becomes the sleep that carries its stamp.
+    const ran = [
+      box.exec(`echo started > ${kept}; exec sleep 600`, { cwd, execId: 'job', env: { [STAMP]: 'bgjob-kept' } }),
+      box.exec(`echo started > ${other}; exec sleep 600`, { cwd, execId: 'other', env: { [STAMP]: 'bgjob-other' } }),
+    ];
+
+    const pids = async (job: string): Promise<readonly number[]> => {
+      const running = await box.stampedProcesses(STAMP, job);
+
+      if (running === null) throw new Error('the box is running, yet its stamped read answered as if it were down');
+
+      return running;
+    };
+
+    try {
+      await Promise.all(fifos.map(async (fifo) => await Bun.file(fifo).text()));
+      expect({ kept: (await pids('bgjob-kept')).length > 0, other: (await pids('bgjob-other')).length > 0, none: await pids('bgjob-none') })
+        .toEqual({ kept: true, other: true, none: [] });
+
+      // Its tree ended, the job has no process left; the other job's still runs.
+      await box.killExec('job');
+      await Promise.allSettled([ran[0]]);
+      expect({ kept: await pids('bgjob-kept'), other: (await pids('bgjob-other')).length > 0 }).toEqual({ kept: [], other: true });
+    } finally {
+      for (const execId of ['job', 'other']) await box.killExec(execId);
+      await Promise.allSettled(ran);
+    }
+  });
+
+  test('a box that is not running answers null, and the read does not start it', async () => {
+    const { box, container } = harness(TestBox, undefined, localExec);
+    await box.devboxStartup();
+    await container.stop();
+    const starts = container.startOptions.length;
+
+    expect(await box.stampedProcesses(STAMP, 'bgjob-kept')).toBeNull();
+    expect(container.startOptions.length).toBe(starts);
+  });
+});

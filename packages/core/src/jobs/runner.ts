@@ -20,7 +20,7 @@ import { fmtSpan } from '../utils/format';
 import { executorLabel } from '../read-models/executors';
 import { programIntent } from '../tools/tool-call-summary';
 import { raceAbort } from '@kinu.run/agent-utils';
-import { Effect, Exit } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 
 /** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice, so a job a new activation finds
  *  running was cut off by the restart, whatever the platform's reason. */
@@ -28,6 +28,11 @@ const EVICTION_INTERRUPT_ERROR = 'the workspace restarted before it finished';
 
 /** Why a job its resumer cannot re-drive ends where it was cut off. */
 const NOT_RESUMABLE = 'this kind of work cannot pick up where it left off';
+
+/** What a job whose processes outlived the workspace's restart answers once they end: what they wrote went to the
+ *  activation that started them, and how they ended no one recorded. */
+const OUTLIVED_RESULT = 'Its processes kept running through a restart of the workspace and have now ended. What they '
+  + 'wrote and how they exited were not kept: check what they leave behind (files, a port, a process) before relying on it.';
 
 /** What an attempt stopped by a cancel or a recovery is told; whoever stopped it decides the job. */
 const ATTEMPT_STOPPED = 'the job was stopped before its work ended';
@@ -137,6 +142,10 @@ export interface BackgroundJobRunnerDeps {
   onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   /** Absent: evicted running jobs are failed. */
   resume?: JobResumer;
+  /** Whether a job this activation did not start still runs where it ran: a command whose processes the box kept
+   *  through the workspace's restart. Such a job is not failed; it is watched, running, until they end. Absent: no
+   *  job's work outlives its activation. */
+  stillRunning?: (job: BackgroundJob) => Promise<boolean>;
   /** Absent: bounded terminals settle with nothing. Never throws into the fiber. */
   harvest?: JobHarvester;
   /** Wake at `atMs` to retry a deferred attempt; absent when no later activation exists. */
@@ -155,7 +164,7 @@ export interface BackgroundJobRunnerDeps {
 
 /** The workspace's half of every job runner in it. */
 export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutput'>>
-  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder' | 'drivenHere' | 'alive'>;
+  & Pick<BackgroundJobRunnerDeps, 'onDetached' | 'onCancelled' | 'onSettled' | 'clock' | 'holder' | 'drivenHere' | 'alive' | 'stillRunning'>;
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
@@ -195,7 +204,7 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
 /** By outcome; `inline` carries the result to an agent without `agent.jobResult`. */
 export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent'): string {
   const generation = job.epoch > 0
-    ? ` (generation ${String(job.epoch + 1)}: it was interrupted and re-driven)`
+    ? ` (generation ${String(job.epoch + 1)}: it was interrupted and picked up again)`
     : '';
 
   if (job.status === 'completed') {
@@ -906,9 +915,68 @@ export class BackgroundJobRunner {
       return { state: 'redriven', job };
     }
 
+    if (await this.outlived(job)) return this.reattach(job);
+
     await this.settleBounded(jobId, job.epoch, NOT_RESUMABLE);
 
     return { state: 'none' };
+  }
+
+  /** Whether `job`'s work outlived the restart; a read that fails leaves it to end as one that cannot pick up. */
+  private async outlived(job: BackgroundJob): Promise<boolean> {
+    const stillRunning = this.deps.stillRunning;
+
+    if (stillRunning === undefined) return false;
+    const doing = "reading whether a background job's processes outlived the restart";
+    const read = await hold(attempted({ doing, otherwise: 'unavailable' }, () => stillRunning(job)));
+
+    if (Exit.isSuccess(read)) return read.value;
+    diagnostics.failure('jobs.liveness_read_failed', toKinuError({ doing, cause: Cause.squash(read.cause), otherwise: 'unavailable' }),
+      { jobId: job.id, kind: job.kind });
+
+    return false;
+  }
+
+  /** Taken under a new epoch, so the attempt the restart cut off can write nothing, and watched until its work ends. */
+  private reattach(job: BackgroundJob): JobRecoveryOutcome {
+    const reclaim = () => this.deps.store.reclaim(job.id, job.epoch, Date.now());
+    const claim = this.deps.holder?.take(job.id, reclaim) ?? reclaim();
+
+    if (claim === 'held') return { state: 'held', job };
+
+    if (!claim) return { state: 'none' };
+    diagnostics.event('jobs.reattached', { jobId: job.id, kind: job.kind, attempts: claim.epoch });
+    this.deps.logActivity?.('bg_job_reattached', `${job.kind} -> ${job.id}: its processes outlived the restart`);
+    const controller = new AbortController();
+
+    this.drive(job.id, controller);
+    this.runToSettlement(job.id, job.kind, () => this.untilEnded(job, controller.signal));
+
+    return { state: 'redriven', job };
+  }
+
+  /** Asked again each probe until its processes are gone; a stop ends the wait, and the attempt's race answers it. */
+  private async untilEnded(job: BackgroundJob, signal: AbortSignal): Promise<string> {
+    const clock = this.deps.clock ?? REAL_CLOCK;
+    const stillRunning = this.deps.stillRunning;
+
+    while (!signal.aborted && stillRunning !== undefined && await stillRunning(job)) {
+      await new Promise<void>((resolve) => {
+        const stop = (): void => {
+          disarm();
+          resolve();
+        };
+
+        const disarm = clock.after(JOB_PROBE_MS, () => {
+          signal.removeEventListener('abort', stop);
+          resolve();
+        });
+
+        signal.addEventListener('abort', stop, { once: true });
+      });
+    }
+
+    return OUTLIVED_RESULT;
   }
 
   /** Whether `resume` re-drives `job`. One whose input cannot be read is tried, so its attempt fails with that read's
