@@ -145,6 +145,44 @@ describe("a Linux PC's screen source", () => {
     expect(await ended.promise).toBe('the screen stream failed: PipeWire went away');
   });
 
+  test('unsharing while the prompt is up ends the share, keeps nothing, and the PC reads as shareable', async () => {
+    const home = scratchDir('linux-screen-unshare');
+    const log = path.join(home, 'helper.log');
+    const { made, file } = source({ probe: { ok: true }, share: 'waits', log }, home);
+
+    await made.probe();
+    const sharing = made.share();
+
+    await untilWritten(log, 'asking');
+    fs.rmSync(file, { force: true });
+    await made.reread();
+
+    expect({ shared: await sharing, file: fs.existsSync(file), desktop: made.desktop() }).toEqual({
+      shared: { ok: false, why: 'sharing was turned off while the prompt was up' }, file: false, desktop: { state: 'setup', detail: expect.any(String) },
+    });
+  });
+
+  test("a share the portal allows but keeps no token for is not kept, and says why", async () => {
+    const { made } = source({ probe: { ok: true }, share: 'allow', token: '', width: 1280, height: 800 });
+
+    await made.probe();
+
+    expect({ shared: await made.share(), desktop: made.desktop().state }).toEqual({
+      shared: { ok: false, why: 'this desktop allowed sharing once but keeps no share to restore, so each open would ask again' }, desktop: 'setup',
+    });
+  });
+
+  test('a restore the person at the PC refuses revokes the share, and the PC reads as shareable', async () => {
+    const home = scratchDir('linux-screen-revoked');
+    const { made, file, changes } = source({ probe: { ok: true }, accepts: 'another', log: path.join(home, 'helper.log') }, home);
+
+    await made.probe();
+    fs.writeFileSync(file, JSON.stringify({ token: 'tok-1', width: 4, height: 2 }));
+    await expect(made.open({ onFrame: () => {}, onEnd: () => {} })).rejects.toThrow('sharing was not allowed on this PC');
+
+    expect({ desktop: made.desktop().state, changes: changes.slice(1) }).toEqual({ desktop: 'setup', changes: ['permission', 'setup'] });
+  });
+
   test('a PC never shared opens nothing, and says how to share it', () => {
     const { made } = source({});
 

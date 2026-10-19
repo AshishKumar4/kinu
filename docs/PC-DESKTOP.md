@@ -22,8 +22,8 @@ A PC the workspace holds is a machine in the Environment column, like the comput
   - A PC with no screen to share (no graphical session, or sharing never turned on) has no Desktop tab at all.
 
 The device reports which of these applies in each `hello` (`DeviceDesktopSchema`,
-`packages/core/src/execution/device-desktop.ts`), and again on the same socket whenever it changes, so `kinu desktop
-share` shows at once. The hub holds it on the device's live socket, as it holds the device's being online, so nothing of it is stored: an offline
+`packages/core/src/execution/device-desktop.ts`), and in a DESKTOP frame on the same socket whenever it changes, so
+`kinu desktop share` shows at once (a second HELLO would read as a new connection and end the panes it carries). The hub holds it on the device's live socket, as it holds the device's being online, so nothing of it is stored: an offline
 PC has no screen to open. The client reads it from the device's roster row (`desktop`). A daemon older than the screen speaks device protocol 3, which
 the hub serves nothing on: it is pushed the update, as every daemon a protocol behind is.
 
@@ -84,7 +84,8 @@ Where the daemon's screen comes from depends on the system:
   - Input becomes the portal's `NotifyPointerMotionAbsolute`, `NotifyPointerButton`, `NotifyPointerAxisDiscrete` and
     `NotifyKeyboardKeysym`.
   - `kinu desktop share` writes its request to `desktop.json` beside `device.json` and signals the daemon (SIGUSR1),
-    which asks in the portal's prompt and keeps the token there at 0600. Kinu's own directory is invisible to every
+    which asks in the portal's prompt and keeps the token there at 0600. A share the portal allows without a token to
+    restore is not kept, and a restore the person at the PC refuses revokes it. Kinu's own directory is invisible to every
     sandbox, so no agent reads it. The daemon asks, not the command, so the token and every later restore belong to
     one process's app identity. `kinu desktop unshare` removes the file and ends any open stream.
   - **none**: no Python with PyGObject, no `pipewiresrc`, or no portal with a monitor to share (no graphical session),

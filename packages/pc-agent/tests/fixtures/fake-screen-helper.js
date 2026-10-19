@@ -1,6 +1,7 @@
 // The Linux screen helper's protocol, played without a desktop (linux-screen.test.js). argv: the mode, then what
-// to do, as JSON: `probe` answers `probe`; `share` allows, or refuses; `serve` accepts one token, hands back
-// `next`, draws `frames`, writes each line it is sent to `log`, and fails with `fail` after them when told to.
+// to do, as JSON: `probe` answers `probe`; `share` allows, refuses, or `waits` on its prompt until it is killed;
+// `serve` accepts one token, hands back `next`, draws `frames`, writes each line it is sent to `log`, and fails
+// with `fail` after them when told to.
 'use strict';
 
 const fs = require('node:fs');
@@ -34,7 +35,10 @@ if (mode === 'probe') {
 } else if (mode === 'share') {
   say({ type: 'asking' });
 
-  if (told.share === 'refuse') {
+  if (told.share === 'waits') {
+    fs.appendFileSync(told.log, 'asking\n');
+    process.stdin.resume();
+  } else if (told.share === 'refuse') {
     say({ type: 'failed', why: 'sharing was not allowed on this PC' });
     process.exitCode = 3;
   } else {

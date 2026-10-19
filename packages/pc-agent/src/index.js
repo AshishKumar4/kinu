@@ -2051,13 +2051,14 @@ async function main() {
   const sessions = pty.createSessions({ log });
   // This machine's screen, served only on a stream the hub opens (1014-t):
   // Linux's comes from the desktop portal once `kinu desktop share` was
-  // allowed; macOS has none yet. Each change to what it reports is a fresh
-  // HELLO on the live socket, which the hub reads as the screen's state.
-  const screenSource = os.platform() === 'linux' ? createLinuxSource({ home: DEVICE_HOME, log, onChange: () => resendHello() }) : null;
+  // allowed; macOS has none yet. Each change to what it reports goes to the
+  // hub as a DESKTOP frame on the live socket: a second HELLO would read as a
+  // new connection, and end the panes this one carries.
+  const screenSource = os.platform() === 'linux' ? createLinuxSource({ home: DEVICE_HOME, log, onChange: () => sendDesktop() }) : null;
   const screens = screen.createScreens({ source: screenSource, log });
   let liveSocket = null;
 
-  /** What this daemon tells the hub it is, on each socket and whenever its screen changes. */
+  /** What this daemon tells the hub it is, once on each socket. */
   function helloFrame() {
     return {
       type: FRAMES.hello, protocolVersion: protocol.version, features: Object.keys(protocol.methods),
@@ -2090,14 +2091,14 @@ async function main() {
     };
   }
 
-  /** The HELLO again on the socket the hub holds, so the screen state it reads is this one. */
-  function resendHello() {
+  /** The screen's state, as the HELLO reports it, to the socket the hub holds. */
+  function sendDesktop() {
     if (liveSocket === null || liveSocket.readyState !== 1) return;
 
     try {
-      liveSocket.send(JSON.stringify(helloFrame()));
+      liveSocket.send(JSON.stringify({ type: FRAMES.desktop, desktop: screens.desktop() }));
     } catch (err) {
-      log('device.hello_unsent', err instanceof Error ? err.message : String(err));
+      log('device.desktop_unsent', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -2122,6 +2123,8 @@ async function main() {
 
       if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
       screens.closeAll();
+      // Its helpers too, a share waiting on the portal's prompt included: none outlives the daemon.
+      screenSource?.dispose();
       exitWhenQuiet(0);
     });
   }

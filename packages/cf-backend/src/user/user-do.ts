@@ -1218,6 +1218,8 @@ export class UserDO extends Agent<Env> {
     if (this.terminals.handleTerminalFrame(deviceId, data)) return;
 
     if (this.screens.handleScreenFrame(deviceId, data)) return;
+
+    if (this.devices.handleDesktopFrame(deviceId, data)) return;
     this.devices._devices.handleMessage(deviceId, data);
   }
 

@@ -128,7 +128,7 @@ def start(restore):
         fail('the desktop portal started no screen (%d)' % code)
     node, properties = results['streams'][0]
     width, height = properties.get('size', (0, 0))
-    return session, node, width, height, results.get('restore_token', restore)
+    return session, node, width, height, results.get('restore_token', '')
 
 
 def serve(session, node, logical, commands):
@@ -231,6 +231,12 @@ const HELPER_GRACE_MS = 5_000;
 
 const SHARE_STEP = 'Share this PC\'s screen once: run `kinu desktop share` on it, and allow it in the prompt there.';
 
+/** The portal's Start allowed, but handed back no restore token: every open would ask the person at the PC again. */
+const NOT_KEPT = 'this desktop allowed sharing once but keeps no share to restore, so each open would ask again';
+
+/** The helper's exit when the person at the PC refused, in the portal's prompt. */
+const REFUSED_EXIT = 3;
+
 /** evdev's codes for RFB's first three buttons: left, middle, right. */
 const BUTTONS = [0x110, 0x112, 0x111];
 
@@ -298,11 +304,18 @@ function createLinuxSource({
   let probed = { ok: false, why: 'not probed yet' };
   let asking = false;
   let sharing = null;
+  // Every helper running, so none outlives `dispose`; and the share's generation, which unsharing ends, so a helper
+  // that answers after it keeps nothing.
+  const helpers = new Set();
+  let generation = 0;
 
   /** One helper run: its process, and its records as they come. */
   function run(mode, { onEvent, onFrame = () => {} }) {
     const child = spawn(command(mode), { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
     const said = [];
+
+    helpers.add(child);
+    child.exited.finally(() => helpers.delete(child));
 
     const records = readRecords(child.stdout, (kind, bytes) => {
       if (kind === RECORD.frame) return onFrame(bytes);
@@ -403,25 +416,39 @@ function createLinuxSource({
       return probed;
     },
 
-    /** `kinu desktop share`'s signal: a request in desktop.json shares, and no file stops sharing. */
+    /** `kinu desktop share`'s signal: a request in desktop.json shares, and no file stops sharing, a share still
+     *  waiting on the portal's prompt and every served screen included. */
     async reread() {
       const shared = readShared(file);
 
       if (shared?.request === 'share') return await this.share();
+
+      if (shared === null) this.dispose();
       onChange();
 
       return { ok: tokenOf(shared) !== null, why: '' };
     },
 
+    /** Ends every helper; what any of them answers after this is not kept. */
+    dispose() {
+      generation += 1;
+
+      for (const child of helpers) child.kill();
+    },
+
     /** Asks the person at the PC, in the portal's prompt, to allow sharing; keeps the token it hands back. */
     share() {
       if (sharing !== null) return sharing;
+      const at = generation;
+      let kept = false;
 
       const helper = run('share', {
         onEvent: (event) => {
           if (event.type === 'asking') setAsking(true);
 
-          if (event.type === 'ready') writeShared(file, { token: event.token, width: event.width, height: event.height, sharedAt: Date.now() });
+          if (event.type !== 'ready' || event.token === '' || generation !== at) return;
+          writeShared(file, { token: event.token, width: event.width, height: event.height, sharedAt: Date.now() });
+          kept = true;
         },
       });
 
@@ -429,12 +456,16 @@ function createLinuxSource({
 
       sharing = helper.exited.then(({ code, why }) => {
         cancel();
-        const ok = code === 0 && tokenOf(readShared(file)) !== null;
 
-        if (!ok) writeShared(file, { failed: why, at: Date.now() });
-        log(ok ? 'device.screen_shared' : 'device.screen_share_failed', ok ? '' : why);
+        // Unshared while the prompt was up: nothing is kept, and nothing is said in desktop.json, which is gone.
+        if (generation !== at) return { ok: false, why: 'sharing was turned off while the prompt was up' };
+        const ok = code === 0 && kept;
+        const said = code === 0 && !kept ? NOT_KEPT : why;
 
-        return { ok, why: ok ? '' : why };
+        if (!ok) writeShared(file, { failed: said, at: Date.now() });
+        log(ok ? 'device.screen_shared' : 'device.screen_share_failed', ok ? '' : said);
+
+        return { ok, why: ok ? '' : said };
       }).finally(() => {
         sharing = null;
         setAsking(false);
@@ -448,6 +479,7 @@ function createLinuxSource({
       const shared = tokenOf(readShared(file));
 
       if (shared === null) throw new Error(`this PC's screen is not shared: ${SHARE_STEP}`);
+      const at = generation;
       let serial = 0;
       let mask = 0;
       let screen = null;
@@ -456,10 +488,24 @@ function createLinuxSource({
       return new Promise((resolve, reject) => {
         const helper = run('serve', {
           onEvent: (event) => {
+            // The portal no longer honours the token and asks the person at the PC again.
+            if (event.type === 'asking') return setAsking(true);
+
             if (event.type !== 'ready' || screen !== null) return;
             cancelStart();
-            // Each start hands back the token the next one restores with.
-            writeShared(file, { ...shared, token: event.token, width: event.width, height: event.height });
+            setAsking(false);
+
+            if (generation !== at) {
+              stop(helper.child);
+
+              return reject(new Error('sharing was turned off while the screen opened'));
+            }
+
+            // Each start spends the token and hands back the one the next restores with; none means the next would
+            // ask again, so the PC reads as shareable, not shared, once this screen closes.
+            writeShared(file, event.token === '' ? { failed: NOT_KEPT, at: Date.now() } : { ...shared, token: event.token, width: event.width, height: event.height });
+
+            if (event.token === '') onChange();
 
             screen = {
               width: event.width,
@@ -491,8 +537,15 @@ function createLinuxSource({
         });
 
         send(helper.child, `${shared.token}\n`);
-        helper.exited.then(({ why }) => {
+        helper.exited.then(({ code, why }) => {
           cancelStart();
+          // Refused when the portal asked again: the share is revoked, and the PC reads as shareable.
+          const revoked = screen === null && code === REFUSED_EXIT && generation === at;
+
+          if (revoked) writeShared(file, { failed: why, at: Date.now() });
+
+          if (asking) setAsking(false);
+          else if (revoked) onChange();
 
           if (screen === null) reject(new Error(why));
           else if (!closed) onEnd(why);

@@ -3,7 +3,7 @@ import { objectNamed, DeviceDesktopSchema, DeviceHelloSchema, DeviceUpdateHelloS
 import {
   type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
-import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserObjectHost } from './user-host';
 import { SingleUseTickets } from './single-use-tickets';
@@ -146,6 +146,9 @@ function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & P
     gpu: v.parse(v.array(v.string()), JSON.parse(row?.sandbox_gpu ?? '[]')),
   };
 }
+
+/** A device's screen, changed since its HELLO (1014-t); narrowed as the HELLO's is. */
+const DesktopFrameSchema = v.object({ type: v.literal(DEVICE_FRAMES.desktop), desktop: v.looseObject({ state: v.string() }) });
 
 /** A HELLO's screen as the roster shows it; one this hub cannot read is none, and recorded. */
 function desktopFromHello(deviceId: string, reported: v.InferOutput<typeof DeviceHelloSchema>['desktop']): DeviceDesktop {
@@ -320,6 +323,16 @@ export class UserDevices {
   }
 
   /** Record a daemon's HELLO: every field is this boot's, and overwrites the last. */
+  /** True when the frame was the device's screen changing (DESKTOP): held on its socket as its HELLO's is. */
+  handleDesktopFrame(deviceId: string, data: string): boolean {
+    const frame = v.safeParse(DesktopFrameSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+
+    if (!frame.success) return false;
+    this._devices.holdDesktop(deviceId, desktopFromHello(deviceId, frame.output.desktop));
+
+    return true;
+  }
+
   recordDeviceHello(deviceId: string, hello: v.InferOutput<typeof DeviceHelloSchema>): void {
     const agentRoot = absolutePathOrNull(hello.agentRoot);
     const verdict = sandboxVerdictFromHello(hello, agentRoot);
