@@ -1,13 +1,13 @@
 # Execution layer architecture
 
 > Source of truth: `packages/core/src/execution/` and backend runtime assembly.
-> Symbols and paths re-checked against the tree on 2026-09-22. The rule in
-> "When to leave the workspace for the container" is normative;
-> `core/src/execution/sandbox.ts` sends the model back to it.
+> Symbols and paths re-checked against the tree on 2026-09-22; the program
+> surface (machine members, `<machine>.fs`, retired members) on 2026-10-19. The
+> rule in "When to leave the workspace for the container" is normative.
 
 ## One workspace, optional environments
 
-Every workspace has its own space and the computer it works on. On Cloudflare the own space is Nimbus, held as a library over the owning Durable Object's own `ctx.storage.sql`; the computer is the devbox (`/computer`) and the owner's devices (`/pc/<name>`). On the CLI everything is real files: the own space is a real directory beside the agent's database (`~/.kinu/<workspace>/`, laid out as the cloud tree: `home/<agent>`, `slates/`), and the computer is this machine, starting in the folder the workspace belongs to; Nimbus over `bun:sqlite` holds only the agent's state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Every workspace has its own space and the computer it works on. On Cloudflare the own space is Nimbus, held as a library over the owning Durable Object's own `ctx.storage.sql`; the computer is the devbox (`/computer`) and the owner's devices (`/pc/<name>`). On the CLI everything is real files: the own space is a real directory beside the agent's database (`~/.kinu/<workspace>/`, laid out as the cloud tree: `home/<agent>`, `slates/`), and the computer is this machine, starting in the folder the workspace belongs to; Nimbus over `bun:sqlite` holds only the agent's state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool and `file.*`, default `shell`, `Storage.vfs`, and `workspace.fs.*` all address the same paths and bytes.
 
 One resolver reads every written path on both backends (`core/src/vfs/resolve.ts`). `vfs://` is the one tree an agent sees, and every other prefix is an alias for a subtree of it, one row each in `PATH_PREFIXES`: on the cloud `local://` is `vfs://` itself, `computer://` is `vfs://computer` and a machine's `<name>://` is `vfs://pc/<name>`; locally `vfs://` is the own space (`~/.kinu/<workspace>/`) and `local://` is `vfs://local`, the folder. A runtime's `PathPlanes` holds its backend's rows and where each subtree sits on its machine (`cloudPlanes`, `localPlanes`); resolving, printing (the shortest prefix), chat links, the shell's refusal, the prompt's prefix line and the names a machine may not take all read them, so a new or rewired prefix is one row. There is no `pc://`. A plain absolute path is the machine's own, a relative one starts where the agent works (its home on the cloud, the folder locally), and `~` is the shell's `HOME`. In chat each reference is a link: the web opens it in Files (`?file=<reference>` lands there too); the TUI opens a local workspace's as the file itself and a cloud workspace's on that Files page (`core/src/read-models/file-links.ts`). A live machine's `<name>://` links on both, from the device fleet's `mounts`: the web reads them with the executors, and the CLI's cloud client on connect and whenever the executors move.
 
@@ -32,12 +32,11 @@ kinds: workspace, computer, device and parent. Nimbus implements the workspace t
 Cloudflare registers no `parent`; only a CLI head does.
 
 `ParentWorkspaceHandle` (`core/src/execution/parent.ts`) is the parent
-interface. The hosted file half uses Durable Object RPC through
-`ACTOR_AGENT_RPC_SURFACE` (`cf-backend/src/rpc-surface.ts`):
-`readWorkspaceFile`, `statWorkspaceFile`, `writeWorkspaceFile`,
-`listWorkspaceFiles`, `deleteWorkspaceFile`. `execWorkspaceCommand` appears
-on no surface list, so `sealRpcSurface` shadows it and a stub-holder cannot
-call it. The Environment surface labels this `Parent workspace`
+interface: its shell alone, `exec(command)`. A fork's files are the folder it
+shares with its parent, read through `file`, so `parent` has no `fs`.
+`execWorkspaceCommand` appears on no surface list, so `sealRpcSurface`
+(`cf-backend/src/rpc-surface.ts`) shadows it and a stub-holder cannot call it.
+The Environment surface labels this `Parent workspace`
 (`core/src/read-models/executors.ts`).
 
 The mount table (`core/src/vfs/mounts.ts`, `EXECUTOR_MOUNTS`) exposes the
@@ -81,7 +80,7 @@ stable `name` and `kind`, capabilities and `unmeasuredCapabilities`, measured
 `files` VFS, and optional port operations. `isAvailable()` and `getStatus()`
 must be cheap. Neither provisions anything.
 
-`ExecutionRouter` (`core/src/execution/router.ts`) registers providers, reports
+`ExecutionRouter` (`core/src/execution/types.ts`, implemented by `DefaultExecutionRouter` in `core/src/execution/router.ts`) registers providers, reports
 status, and gives codemode only available providers. Explicit `runtime` plus
 namespace is the routing decision. `register()` applies `gateProviderExec`
 (`core/src/execution/approval.ts`), so `shell` and `<name>.exec()` share approval.
@@ -89,8 +88,27 @@ namespace is the routing decision. `register()` applies `gateProviderExec`
 `startProcess` is gated here.
 
 Which native tools also have a codemode namespace is declared in `TOOL_REACH`
-(`core/src/tools/registry.ts`): `shell` and `file` own none and are reached
-inside `eval` through `workspace`.
+(`core/src/tools/registry.ts`): `shell` owns none and is reached inside `eval`
+as each machine's `exec`; `file` owns `file`.
+
+A machine's members come from its declared capabilities, one name and one shape
+on every machine (`machineOperations`, `core/src/operations/executors.ts`):
+`shell` admits `exec(command, { cwd?, name?, parts? })`; `process_long` admits
+`startProcess(command, { cwd? })`, `stopProcess(processId)`, `listProcesses()`
+and `logs(processId, { lines?, bytes? })`; `net_inbound` admits
+`exposePort(port, { name? })`, `unexposePort(port)` and `listPorts()`, which
+answer the provider's own `PortExposureResult` and `ExposedPortInfo`. A machine
+with a root in the file plane (`ExecutorProviderSurface.fileRoot`) also has
+`fs`: the seven `file` operations in its own paths, a relative one from its
+home and a `..` above its root held there, each run as the `file` operation on
+the plane path, so the ledger and the approval gates are the plane's
+(`machineFiles`, `core/src/tools/executor-operations.ts`). The workspace,
+computer and each device have one; `parent` has none. Every `device` member
+also takes `{ device? }`. Code runs through `exec` (`node -e`, `python3 -c`,
+`ruby -e`, TypeScript as a `.ts` file run with `node`), and a runtime installs
+the first time a command names it. A removed member or field is refused with
+its successor named (`core/src/operations/retired.ts`), never run under its old
+name.
 
 Every namespace member returns its value or a branchable refusal object; a
 program receives it as `{ success: false, reason, error, execution?: { exitCode } }`,
@@ -105,9 +123,9 @@ Native invocations use the SDK error channel. For example, native `shell`
 returns successful text but raises a classified `KinuError` for an operation
 failure, keeping observed exit metadata. The explicit namespace adapters
 return typed operation refusals as values so authored code can branch on them.
-A codemode program that handles such a value and returns normally succeeds.
-An unhandled program exception fails. Neither returned JSON nor stdout
-decides invocation status.
+A codemode program that handles such a value and returns normally succeeds;
+one that returns the refusal fails with its reason. An unhandled program
+exception fails. Stdout never decides invocation status.
 
 Native MCP invocations use the MCP envelope's declared `isError` flag. A true
 flag raises `McpToolError` with the original protocol response kept.
@@ -139,8 +157,9 @@ command outcome authored code can branch on; `src/server.ts` always exports
 `AgentRuntime.executionRouter` serves tools and UI. `storage.vfs` is the
 canonical VFS plus mounts. Memory indexing, fork snapshots and identity
 provisioning use the base tree only. Services that touch workspace bytes must
-never cross into a device or container. Agent-facing `file` and `workspace.*`
-follow the same rule.
+never cross into a device or container. An agent's own `file.*` and
+`<machine>.fs.*` do cross the mounts, as the agent asked, under the plane's
+approval gates and each device's consent.
 
 `EXECUTOR_CAPABILITIES` (`core/src/execution/types.ts`) is ordered by runnable
 code, tooling, filesystem and network reach, then process rights. The order
@@ -156,28 +175,30 @@ backend label.
 ## Workspace, container, device, parent
 
 `createNimbusWorkspaceExecutor()` gives Cloudflare one Nimbus session for
-files, POSIX shell, code and runtime execution, processes, and ports. `shell`,
+files, POSIX shell, code execution, processes, and ports. `shell`,
 `file`, and codemode share a read-before-write ledger and approval policy.
 Actors share files and processes but each keeps its own `shellId` across
 reconstruction. The key is `agent:<name>` for the main actor
 (`ActorAgent.shellId()`, `cf-backend/src/actor-agent.ts`) and
-`<kind>:<storage-key>` for every hosted logical actor
-(`hostedActorShellId(record)`, `cf-backend/src/actor-hosting.ts`, one function
-for all four kinds). It is keyed on the immutable storage key, not the
+`subordinate:<storage-key>` or `run:<storage-key>` for every hosted logical
+actor (`hostedActorPlacement(record)`, `cf-backend/src/actor-hosting.ts`, one
+function for every kind). It is keyed on the immutable storage key, not the
 registered name, because a rename must not move an actor's cwd and exported
 environment, and two actors that briefly share a name across a retirement must
 not share shell state. The same key owns the state subtree
 (`.kinu/agents/<storage-key>/`) and the promoted-loop path inside it, so one
 actor means one subtree and one program. The shell key is per actor, not per
 database: every actor's rows live in the one workspace SQLite, so the shell id
-is what keeps their mutable shell state apart. `HostedWorkspace.box(shellId)`
-(`cf-backend/src/workspace-host.ts`) caches one box per key and passes it to
-`exec`, `startProcess`, and `runCode`.
+is what keeps their mutable shell state apart. `workspaceBox`
+(`cf-backend/src/workspace-host.ts`) keys each named shell by the actor's scope
+and the name, so two actors' names never meet, and passes it to `exec`,
+`execStream` and `startProcess`. A call with no `name` is a fresh shell in its
+`cwd`.
 
 The CLI implements the same contract locally. A CLI session with a parent
-relay has no plan-review surface: it refuses Plan turns
-(`planTurnRefusal`, `cli-backend/src/local-session.ts`) and is never handed
-`submit_plan`. It never exposes a partial Plan toolset.
+relay has no plan-review surface (`planReviewSurface`,
+`cli-backend/src/local-session.ts`): it is never handed `submit_plan`, and a
+Plan turn reports its plan to its parent.
 
 `computer` is hosted-only Linux, implemented by `KinuDevbox`
 (`cf-backend/src/kinu-devbox.ts`), a `Devbox` from `@kinu.run/devbox`. It is
@@ -372,7 +393,7 @@ Nimbus snapshot of its store taken at each review, `diffs:<actor>:<id>`, whose
 diff visits only the paths written since (`core/src/read-models/workspace-diff.ts`).
 A read never advances that baseline; the review before it is kept for Undo.
 
-Preview discovery asks `workspace`, `computer` and `device` for ports
+Preview discovery asks `workspace` and `computer` for ports
 (`cf-backend/src/hooks/use-workspace-reads.ts`). A transport failure keeps the last
 result with an error; a successful empty result removes stale previews
 (`reconcilePreviewPorts`, `core/src/preview/preview-ports.ts`).
@@ -393,14 +414,14 @@ no containment. The remaining checks limit the longer blast radius that
 persistence creates. `SURFACE_CRITERIA` in `core/src/safety/misevolution.ts`
 owns this split, and `core/src/tools/inline-executor.ts` applies it.
 
-Plan mode keeps ordinary tools but removes Release structurally: `release` is
-codemode-only (`TOOL_REACH`). `SUBMIT_PLAN_TOOL` (`core/src/tools/registry.ts`,
+Plan mode keeps ordinary tools and refuses each operation Plan does not admit
+(`core/src/execution/work-mode.ts`). `SUBMIT_PLAN_TOOL` (`core/src/tools/registry.ts`,
 added by `buildBuiltinTools`) is wired on an owner's root turn in either mode, and
 `REPLY_TO_COMMENT_TOOL` only while a review the owner sent back awaits answers.
 `WorkMode` (`plan` or `build`) propagates to delegation, jobs, and exploration.
 A job's wake carries `kinuMode: job.workMode` (`core/src/jobs/runner.ts`), and
-`workModeForTurnMetadata` (`core/src/prompting/surface.ts`) reads it, so a
-wake cannot weaken Plan to build. Plan heads and subordinates report research
+`turnTags` (`core/src/types/turn-metadata.ts`) reads it, so a wake cannot
+weaken Plan to build. Plan heads and subordinates report research
 to their parent. Swarm sets `executionPolicy` to `judge-only` in Plan
 mode, spending no executor call (`core/src/strategy/swarm-scoring.ts`).
 
@@ -412,5 +433,9 @@ Register once in backend runtime assembly. Test files, shell state, process
 lifecycle, previews, reconstruction, teardown, errors, and the absence of
 silent fallback. Update the existing prompt, status, and UI source of truth,
 never a second provider list. The core workspace factory is the extension point;
-Cloudflare registers one Nimbus-backed workspace environment. Computer directory listing
-is `readdir({ path? })` on both its runtime and declared surfaces; no `listFiles` alias remains.
+Cloudflare registers one Nimbus-backed workspace environment. A provider gets
+its shared members from its declared capabilities and its `fs` from
+`fileRoot`; only what no other machine has (the workspace's `createTool`, the
+computer's `rest` and desktop) is declared for its namespace, in
+`core/src/operations/executors.ts` and the `DECLARED` table of
+`core/src/tools/executor-operations.ts`.

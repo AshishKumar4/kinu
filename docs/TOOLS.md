@@ -2,24 +2,25 @@
 
 `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` lists eight native
 tools. Each is a standing choice the model weighs every turn, so a longer list
-lowers selection accuracy. `buildBuiltinTools` builds one set for both backends.
-`eval`, `shell`, `file`, `memory`, and `tasks` are always present; `agents`,
-`web`, and `report` need wired deps. Subordinates get `report` and no `peers`,
-so answering an inbound agent message event (`msg` with `event_id`) is not on
-their surface. Crafted tools are called as `tools.<name>(args)` inside `eval`.
+lowers selection accuracy. `buildBuiltinTools` (`tools/builtins.ts`) builds one
+set for both backends. `eval`, `shell`, `file`, `memory`, and `tasks` are always
+present; `agents`, `web`, and `report` need wired deps. A native call names its
+operation with `op`. Inside `eval`, `tools.<name>(input)` calls any tool with its
+native input, and a native tool's operations are also its namespace's members
+(`memory.note(text)`): both run one served operation.
 
 ## Top-level tools
 
 | Tool | Purpose |
 |------|---------|
-| `eval` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `web.*`, `agent.*`, `db.*`, `state.*`, and `tools.<name>` |
+| `eval` | The codemode sandbox. The model writes JavaScript against `tools.<name>`, `file.*`, `memory.*`, `tasks.*`, `agents.*`, `report.*`, `web.*`, `agent.*`, `db.*`, and each machine's namespace (`workspace.*`, `computer.*`, `device.*`, `parent.*`) |
 | `shell` | One shell command in one selected runtime |
 | `file` | The file plane, over the same workspace filesystem every other surface addresses: `read`, `write`, `edit`, `list`, `stat`, `search` |
-| `agents` | Delegation: `swarm \| hire \| msg \| list \| dismiss` |
-| `memory` | Durable state: `save \| search` prose notes, `remember \| recall \| forget` keyed facts, `conversations` to search or browse this agent's past conversation |
-| `tasks` | The agent's task list and active role: `add` titles (with a `parent` for subtasks), `update` one item's status or note, `list` it back, `mode` to set or read the role. One row per item in `agent_tasks`; open items render into the live context block every step and into the Tasks tab |
+| `agents` | Delegation: `swarm \| hire \| assign \| hireWorkspace \| message \| reply \| list \| dismiss` (`AGENTS_OPS`), each offered only where its wiring is |
+| `memory` | Durable memory: `note` saves prose and `search` ranks notes and facts; `remember \| recall \| forget` keyed facts; `searchConversations \| readConversation \| listConversations` read this agent's past conversations |
+| `tasks` | The agent's task list and active role: `add` titles (with a `parent` for subtasks), `update` one item's status, `note` it, `list` it back, `role` reads the active role and `switchRole` changes it. One row per item in `agent_tasks`; open items render into the live context block every step and into the Tasks tab |
 | `web` | `search` returns ranked results (title, url, snippet, date); `fetch` returns one URL as markdown, and with `render: true` loads it in Browser Run first (quick action `content`, then Kinu's converter); `screenshot` saves a PNG under `screenshots/` and shows it to a model that takes images: inside the tool result on Anthropic Messages and OpenAI Responses, in a user message right after the tool results on Chat Completions; a model without image input gets a note in its place. Rendering and screenshots run on Kitesurf unless `engine: 'chrome'`; the CLI reaches Browser Run with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`, and refuses naming them without. Search is the deployment's own, Cloudflare's Web Search API on Ceramic.ai's index (`$0.25` per 1,000 requests, billed to the platform account's AI Gateway credits), through the AI binding on a Worker and through the signed-in account's `/api/user/web/search` from the CLI; a stored `tavily` credential wins, at `https://api.tavily.com` or at the credential's own `baseURL` (a bearer credential's optional endpoint, for a proxy). With neither, search refuses saying so. Key-less DuckDuckGo was removed: from Workers in six regions it answered results to 3 of 72 queries (2026-10-17). In eval, `web.openBrowser` opens a Chrome session kept across programs until closed or idle 20 min, with a Live View link, and `web.connectBrowser` drives it with @cloudflare/puppeteer through `CodemodeEgress`, which admits only the agent that opened it; `connectBrowser('kitesurf')` starts a browser that ends with its program. `web.pageTools`/`web.callPageTool` list and run a page's WebMCP tools (Kitesurf, or Chrome opened with `lab: true`). Hosted only; the CLI refuses sessions |
-| `report` | A subordinate's progress back to its orchestrator: `progress \| completed \| blocked` |
+| `report` | A hire's report to whoever assigned the work: `status` is `progress`, `completed` or `blocked`, with `content` and, where the destination takes them, the `concerns`, `deviations`, `findings` and `open_work` lists. Programs call `report.send(status, content, options?)` |
 
 `submit_plan`, `reply_to_comment` and `ask_owner` are not among the eight:
 they are the owner's lane, and `ownerLaneTools` builds each only where core's
@@ -38,33 +39,32 @@ behaves. Some rows:
 ```ts
 eval:    { native: true,  codemode: null,        replay: 'claimed' } // native only; it is the sandbox
 shell:   { native: true,  codemode: 'workspace', replay: 'claimed' } // native, plus a namespace it does not own
+file:    { native: true,  codemode: 'file',      replay: 'claimed' } // both surfaces
 web:     { native: true,  codemode: 'web',       replay: 'safe' }    // both surfaces
-report:  { native: true,  codemode: 'report',    replay: 'claimed' } // both surfaces
 db:      { native: false, codemode: 'db',        replay: 'claimed' } // codemode only
 ```
 
 The codemode-only rows are `agent`, `db`, and `slate` (which reaches
-`workspace`). `codemode` is a namespace name, not a boolean. `shell`, `file`,
-and `slate` use the shared `workspace` namespace, so they own none. A
-capability owns a namespace when `codemode` equals its key. `replay` is `safe`
-when rerunning a call cannot do anything twice; `claimed` calls go through the
-effect claim (`tools/effect-claim.ts`). A name the table does not declare, such
-as an MCP tool, is `claimed`.
+`workspace`). `codemode` is a namespace name, not a boolean. `shell` and `slate`
+use the `workspace` namespace, so they own none. A capability owns a namespace
+when `codemode` equals its key. `replay` is `safe` when rerunning a call cannot
+do anything twice; `claimed` calls go through the effect claim
+(`tools/effect-claim.ts`). A name the table does not declare, such as an MCP
+tool, is `claimed`.
 
-Four readers keep the declaration authoritative:
+Readers keep the declaration authoritative:
 
 | Reader | What it uses the declaration for |
 | --- | --- |
 | `BuiltinToolName` (a derived type) | `BUILTIN_TOOL_SPECS` / `BUILTIN_TOOL_DESCRIPTIONS` cannot compile without an entry for a newly native capability, and `BUILTIN_TOOLS` cannot list one the declaration does not call native |
-| every `*-codemode.ts` factory | takes its provider `name` from the table, so a namespace cannot exist for a capability the table gives none, and cannot be spelled differently. Deleting `report`'s namespace from the table makes `report-codemode.ts` fail to compile |
 | `explainSandboxError` | tells the model where a capability is when it uses a native tool name inside the sandbox. It reads the table instead of hardcoding names |
 | `getToolDescriptions` (cf) | reports `exposure` and `wired` to the Tools panel instead of guessing `nativeNames.has(name) ? 'native' : 'codemode'` |
 
 Reach says what a surface exposes. Deps say what an actor gets. An orchestrator
 is the `report` sink and has `report` on neither surface; the `nativeNames`
 guess would have shown it as codemode-only.
-`packages/core/tests/unit-tool-reach.test.ts` pins the eight names and checks
-that every declared namespace has a real factory.
+`packages/core/tests/unit-tools.test.ts` checks each native tool against
+`BUILTIN_TOOLS` and codemode-only reach against the declaration.
 
 `skills` is not on the standing list. Every skill loads from the
 read-only `/skills` view as `/skills/<name>/SKILL.md` (`skills/view.ts`): a
@@ -75,9 +75,8 @@ only a user's `/name` or an operator pin loads a body at turn start.
 
 | Call | What it makes |
 | --- | --- |
-| `workspace.createTool(name, description, code)` | a reusable crafted tool, callable from the next `eval` call in the same turn |
+| `workspace.createTool(name, description, code)` | a reusable crafted tool, callable as `tools.<name>(args)` from the next `eval` call |
 | `workspace.slates.<id>.<method>(...args)` | a call to an authored slate's class method; `$`-named members preview, list, commit, fork, restore or remove slates |
-| `workspace.editFile(path, edits)` | an exact-match edit, with the same gate and, where the backend shares a turn ledger, the same read-before-write state as the native `file` tool's `edit` action |
 
 ## Plan authority
 
@@ -91,8 +90,8 @@ In Plan, native `file` read/list/stat/search and declared provider reads stay
 usable. Write and edit, process/package/port operations and authored
 slate execution need Build. Slate `list` and `history` are inspection;
 `commit`, `fork`, `restore`, `preview`, and `call` are not. A Build preview that
-already runs keeps the authority it was started with. Research memory, task and
-state records, evidence and reports, and `submit_plan` stay available.
+already runs keeps the authority it was started with. Research memory, tasks,
+`db` records, evidence and reports, and `submit_plan` stay available.
 Temporary research children inherit Plan. Persistent hire/dismiss, and search
 configurations that measure, publish, or apply project changes, need Build.
 
@@ -117,11 +116,26 @@ queue and no new persisted format.
 
 ## file: the file plane
 
-`FILE_TOOL_ACTIONS` is `read`, `write`, `edit`, `list`, `stat`, and `search`.
-`file`, workspace `shell`, and `workspace.*` all address `rt.storage.vfs`. On
-hosted, the actor DO owns its Nimbus workspace. On CLI, it is this machine's
-files: the workspace's folder, and its own space at `~/.kinu/<workspace>/`.
-Containers and devices keep separate files, mounted at `/computer` and `/pc`.
+`FILE` (`operations/file.ts`) declares `read`, `text`, `write`, `edit`, `list`,
+`stat`, and `search`. The native `file` tool serves six of them; `text`, the
+whole file as one string, is for programs, which hold the value
+(`createFileTool`, `tools/file-operations.ts`). `file.*`, every machine's
+`fs.*`, and the workspace `shell` address one file plane: on hosted, the
+actor's Nimbus workspace; on CLI, this machine's files, the workspace's folder
+and its own space at `~/.kinu/<workspace>/`. The computer and devices keep
+separate files, mounted at `/computer` and `/pc/<name>`.
+
+`<machine>.fs.*` is the same seven operations in that machine's own paths, on
+`workspace`, `computer` and `device` (`device` takes `{device?}`), and not on
+`parent`: the folder a hire shares with its parent is among its own files, read
+through `file` (`machineFileOperations`, `operations/executors.ts`). An absolute path is the
+machine's own, a relative one starts at its home, and a `..` that would climb
+above the machine's root is held there (`onMachine`,
+`tools/executor-operations.ts`). Each call becomes the `file` operation on the
+plane path (`/computer/...`, `/pc/<name>/...`), so the ledger and the approval
+gates are one: a read through either spelling lets an edit through the other.
+The workspace's root is the plane's own, so `workspace.fs` and `file` are one
+operation under two names.
 
 ### Why it exists
 
@@ -142,17 +156,17 @@ checkout, and the run has no recorded date.
 | Exact match | `old_text` must occur in the file exactly once. Absent: fail. Repeated: fail, with the occurrence count and an instruction to widen the anchor. Occurrences are counted at every position, overlapping ones included, so `aa` in `aaa` is ambiguous, not a silent first match. Nothing is written on failure. |
 | Atomic batches | Every edit in a call matches the file as it was read, never a sibling edit's result; offsets are applied back to front. One bad anchor applies none of them. Overlapping edits are refused by name. |
 | Read before write | `edit`, and `write` over an existing file, are refused unless the file has been read, and refused again (`stale`) if it changed after that read. The refusal names the exact call to make next. Authorization is keyed on the content digest, so a different spelling of the same path is not refused, and a write authorizes the edits that follow it. |
-| Seen depth | How much was read matters. A capped or paged read authorizes an `edit`, where the anchor must still be present exactly once, but not a `write` that would discard lines the model never saw. Coverage is the contiguous prefix the turn has paged through, which is the shape the read's own `offset=N` hint produces, so paging to the end earns the overwrite. A line a read cuts at 2,000 characters was not seen: the prefix stops before it and no later read passes it. `workspace.readFile` inside `eval` hands the program the whole file and earns the overwrite, and the refusal names it. An edit moves the covered prefix with its replacements: authored text counts as seen, but deleting read lines does not cover unseen lines that move up, and joining a read line to an unread one leaves the joined line unread. |
+| Seen depth | How much was read matters. A capped or paged read authorizes an `edit`, where the anchor must still be present exactly once, but not a `write` that would discard lines the model never saw. Coverage is the contiguous prefix the turn has paged through, which is the shape the read's own `offset=N` hint produces, so paging to the end earns the overwrite. A line a read cuts at 2,000 characters was not seen: the prefix stops before it and no later read passes it. `file.text` inside `eval` hands the program the whole file and earns the overwrite, and the refusal names it. An edit moves the covered prefix with its replacements: authored text counts as seen, but deleting read lines does not cover unseen lines that move up, and joining a read line to an unread one leaves the joined line unread. |
 | Asks before replacing the user's files | A change on `/pc` or `/shared`, or outside a CLI workspace's directory, goes through `approveFileAccess` (`core/src/safety/approval-gate.ts`) under the shell's approval mode and grants; a new file on `/pc` or `/shared` is free. With nobody to answer, a hosted overwrite parks bound to its bytes (`file write <path> sha256:<new> over sha256:<old>`): approving writes those bytes unless the file changed meanwhile, `reviewParkedWrite` shows the diff, and the bytes are deleted once the row is decided. The CLI asks and never parks. A read asks only when it looks like a secret, as `cat` would. |
-| No silent truncation | A truncated `read` names the offset that continues it, and no read returns a bare empty string. An empty file says so, an offset past the end says so, and a single line too large to show hands over the `workspace.readFile`-inside-`eval` recipe. A trailing newline ends the last line instead of creating a phantom one, so the offsets it returns always resolve. Reads count against the same per-turn budget as every other tool result (`context-budget.ts`). |
-| Nothing invisible | A BOM is stripped from what the read shows, so the first line can be copied back as `old_text` and match. An edit preserves it. The ledger and the streaming scanner use the same BOM-free text identity as `workspace.readFile`, so reading through either surface authorizes the same content. |
+| No silent truncation | A truncated `read` names the offset that continues it, and no read returns a bare empty string. An empty file says so, an offset past the end says so, and a single line too large to show hands over the `file.text`-inside-`eval` recipe. A trailing newline ends the last line instead of creating a phantom one, so the offsets it returns always resolve. Reads count against the same per-turn budget as every other tool result (`context-budget.ts`). |
+| Nothing invisible | A BOM is stripped from what the read shows, so the first line can be copied back as `old_text` and match. An edit preserves it. The ledger and the streaming scanner use the same BOM-free text identity as `file.text`, so reading through either surface authorizes the same content. |
 | Faithful round trip | Matching runs on LF text with the BOM stripped, so an anchor typed with `\n` matches a CRLF file. The splice lands on the original string at mapped indices, so a file with mixed endings keeps every ending outside the replaced span. Only the inserted text takes the file's ending. |
 | Gradable outcome | Every attempt is counted by outcome in the turn's `TurnFileLedger`, and the settle path writes one `file_edit` run event per turn: `attempts` and `applied` (calls), `failures` by reason, `recoveredPaths` and `abandonedPaths` (paths, because recovery belongs to a file, not a call). |
 
-Reads carry no line numbers, so models copy the file text itself. The pi fuzzy
-editor normalizes NFKC, smart quotes, dashes, and `trimEnd`, then rewrites the
-whole file, so one smart quote can rewrite unrelated lines. This tool refuses a
-miss instead.
+A read numbers each line: its number, a tab, then the line. `old_text` is the
+text after the tab. The pi fuzzy editor normalizes NFKC, smart quotes, dashes,
+and `trimEnd`, then rewrites the whole file, so one smart quote can rewrite
+unrelated lines. This tool refuses a miss instead.
 
 Kinu does not use `hashline`, the oh-my-pi edit DSL (`can1357/oh-my-pi`, the
 hard fork of pi, not upstream). Its always-on prompt of about 6 KB teaches a
@@ -162,13 +176,13 @@ gains concentrate on weak models.
 ## agents: delegation
 
 `agents` combines the three deps groups `AgentsToolDeps` names: `swarm`,
-`team`, and `peers`. There is no `think` group; `think` survives only as a
-stored run-event tool name, which `read-models/timeline.ts` maps to the `mcts`
-timeline kind. `hire`'s `lifetime` decides whether the helper persists. `swarm`
-measures candidates and settles into this turn. `AGENTS_TOOL_NOTES` in
-`registry.ts` holds the notes the `agents` schema description renders; the
-prompt's `## Delegation` section (`prompts/delegation-section.md`) lists the
-actions the actor holds.
+`team`, and `peers`. Each operation is declared in
+`delegation/agents-operations.ts` and offered only where its wiring is
+(`agentsActionsFor`, `delegation/agents-tool.ts`). `hire`'s `lifetime` decides
+whether the helper persists. A `swarm` on a live session runs in the background
+and its result wakes the caller. The `agents` notes are
+`BUILTIN_TOOL_SPECS.agents.notes` in `registry.ts`; the prompt's `## Delegation`
+section (`prompts/delegation-section.md`) names the operations the actor holds.
 
 Until 2026-08-17, leading with serial work made uncertainty classify as serial.
 The prompt doctrine converted 0% of eligible turns where a mechanical nudge in
@@ -177,56 +191,56 @@ steers a turn toward delegating. `turn-steering.ts` keeps only its three
 loop-detection steers: `repeated_call`, `repeated_failure`, `no_progress`.
 
 1. One bounded question uses `agents({op:'hire', lifetime:'task', role, message})`.
-   The call creates a full agent for the question, returns its answer as the
-   tool result, and archives the row, keeping its transcript. Name oversize
-   material by workspace path in the message, so the bytes reach that agent and
-   never the caller.
+   The call starts a full agent for the question and returns at once; its
+   answer arrives later as a message that opens the caller's next turn, and the
+   row is archived with its transcript. Name oversize material by workspace
+   path in the message, so the bytes reach that agent and never the caller.
 2. `swarm` fixes a search through `preset`, `objective`, and `depth`.
    Registered verifiers score verify-scored candidates. Nodes are full agents.
    See [EXPLORATION.md](./EXPLORATION.md).
 3. `hire` without `lifetime` (or with `lifetime:'durable'`) starts a persistent
-   subordinate. With `context:'fresh'` (the default) it starts from its role and
-   message; `context:'inherit'` also hands it the caller's recent turns.
+   subordinate. With `context:'fresh'` (the default) it starts from its role,
+   the message, and a digest of the caller's recent messages;
+   `context:'inherit'` also hands it the caller's recent turns.
 
 A swarm derives its answer shape from `score` and `advance`, never `settle`.
-`score:"verify"` uses a registered verifier. `score:"judge"` uses `samples`
-under `JUDGE_MARGINALISATION_MIN`. `score:"none"` returns unranked candidates.
-Only measured search needs `objective`.
+`score:"verify"` uses a registered verifier. `score:"judge"` on a tree advance
+needs at least `JUDGE_MARGINALISATION_MIN` `samples`. `score:"none"` returns
+unranked candidates. Only measured search needs `objective`.
 
 `fork` is gone. Its 2 to 6 caller-written briefs became measured search
-candidates, and the five-action picklist rejects it. MCTS folded into swarm
-(2026-09-27): swarm's tree search is the one search engine.
+candidates. MCTS folded into swarm (2026-09-27): swarm's tree search is the one
+search engine.
 
-Which of the five actions an actor holds follows from the deps its backend
-wires. `agentsActionsFor` is the one gate, read by the tool's action enum, the
-prompt's `## Delegation` section, and the `agents.*` sandbox namespace:
+Which operations an actor holds follows from the deps its backend wires.
+`agentsActionsFor` is the one gate, read by the native tool's schema, the
+prompt's `## Delegation` section, and the `agents.*` namespace:
 
-| Action | The deps that put it on the surface |
+| Operation | The deps that put it on the surface |
 |---|---|
-| `swarm` | `swarm`: a model to expand with and a workspace to measure in |
-| `hire`, `msg`, `list` | `team` or `peers` |
-| `dismiss` | `team` |
+| `swarm` | `swarm` (a model to expand with and a workspace to measure in), and the account's swarms beta on |
+| `hire`, `dismiss` | `team`, below the delegation depth cap |
+| `assign`, `message`, `list` | `team` below the cap, or `peers` |
+| `hireWorkspace`, `reply` | `peers` |
 
 `lifetime` is gated one level finer, on `team.temporary`. With no port to run a
-task hire on, the field is in neither the JSON Schema nor the sandbox
+task hire on, the field is in neither the JSON Schema nor the program
 declaration, so it is absent from the schema rather than refused at call time.
-`scope` and `event_id` are gated the same way on `peers`.
-
-`hire`, `msg`, and `list` take a target name:
+`topic` is gated the same way on `peers`, and `deliverable` on `team`.
 
 - A hired subordinate is a logical actor of the workspace object, with a full
-  turn loop and a shared Nimbus session. `hire` with `role` takes a role and
-  message; `hire` naming an existing `agent` hands it the workstream, with
-  `deliverable` optional. `msg` adds a note. `dismiss` archives unless
-  `keep_history: false`.
-- A peer is another of the owner's workspaces, reached over EventsHub. `hire`
-  naming a peer waits until abort or a peer event. `msg` does not wait. `msg`
-  with `event_id` answers an inbound agent message event and cannot be combined
-  with `agent`. `hire` with `scope:'workspace'` creates or reuses a specialist
-  workspace.
-- `report` is subordinate-only, native and `report.*`, and uses
-  `ReportToolDeps.report`. Turn answers relay automatically, so `report`
-  carries milestones.
+  turn loop and a shared Nimbus session. `hire` takes a `role` and a `message`,
+  with an optional new `name`. `assign` hands an existing `agent` its next
+  workstream, with `deliverable` optional. `message` sends a note without a
+  workstream. `dismiss` archives unless `keepHistory: false`.
+- A peer is another of the owner's workspaces, reached over EventsHub.
+  `assign` to a peer waits until abort or the peer's reply. `message` does not
+  wait. `reply` answers an inbound agent message by its `eventId`.
+  `hireWorkspace` creates or reuses a specialist workspace from its `mission`,
+  sends it `message`, and waits for the result.
+- `report` belongs to an actor someone assigned work to, native and
+  `report.send`, through `ReportDeps.report`. Turn answers relay automatically,
+  so `report` carries milestones.
 
 Owners read retained subordinate history through the workspace RPC
 `inspectSubordinate`. This read is separate from model delegation and does not
@@ -251,7 +265,8 @@ The native tool and every `agents.*` member parse a call against it, and the
 parsed fields reach `dispatchAgentsCall` as they are, under the operation's
 name: the dispatcher's field types are checked against those declarations at
 compile time, and nothing renames or remaps them. An unknown field fails and
-names the field.
+names the field; a retired one (`hire`'s `mission`) names its successor
+(`operations/retired.ts`).
 
 | Operation | Fields |
 |---|---|
@@ -265,7 +280,7 @@ names the field.
 | `dismiss` | `agent`, `keepHistory` |
 
 `verify` is `{kind, spec}` inside `objective`. The runner enforces `depth`,
-`branches`, `budget_usd`, and `budget_tokens`, with no iteration or wall-clock
+`branches`, `budgetUsd`, and `budgetTokens`, with no iteration or wall-clock
 cap. `models` routes each node to its own model spec round-robin by slot,
 through the same resolver a `tier` names. On 2026-08-19 the field was kept
 because it was wired back in instead of left unread: an unresolvable spec is
@@ -281,14 +296,9 @@ the dispatcher reads only the fields that declaration admitted.
 has already dispatched and no model can correct it. It logs
 `agents.resume.fields_dropped` instead of failing the replay.
 
-Stored `settle`, or `kind:'think'` with a non-`heads` strategy, becomes
-`{action:'swarm', preset:'ideate', task}`. Such rows lack the metric, unit,
-direction, and verifier a measured search needs. Swarm has no judge ranking
-for them, so the lost ranking is logged as `settlement`.
-
 ### Delivery
 
-A `hire` handed to an existing subordinate, and `msg`, never block on a busy
+`assign` to an existing subordinate, and `message`, never block on a busy
 target. Both return the three fields `renderHandoff` builds:
 
 | Field | Meaning |
@@ -297,40 +307,103 @@ target. Both return the three fields `renderHandoff` builds:
 | `delivery` | `starts_now` (the target was idle; the drain starts a turn) or `queued` (the target was busy or the event was already admitted, so it waits for its own Plan/Build-homogeneous turn) |
 | `subordinate_phase` | `{busy, lastActivityAt, workingOn}`: what the target was doing when the message arrived |
 
-The hire path adds `status: working` and the `ASSIGN_NOTES` sentence for its
-`delivery`. `msg` adds `status: delivered | queued`. `msg` with `event_id`
-answers through `peers.reply` and returns that transport's result instead. A
-`hire` naming a peer is the one call here that waits, as above. The host stamps
-the Plan/Build mode, and the shared drain queues the next serialized turn with
-it.
+`assign` adds `status: working` and the `ASSIGN_NOTES` sentence for its
+`delivery`. `message` to a subordinate adds `status: delivered | queued`; to a
+peer it returns that transport's result. `reply` answers through
+`peers.reply` and returns its result. `assign` to a peer, and `hireWorkspace`,
+are the calls here that wait, as above. The host stamps the Plan/Build mode,
+and the shared drain queues the next serialized turn with it.
 
 ## eval: codemode
 
-`eval` runs JavaScript in an isolated sandbox. Cloudflare starts a child Worker
-through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
-`createNodeCodemodeToolFactory`. Both bind the namespaces below.
+`eval` runs JavaScript in an isolated sandbox. Cloudflare starts a program
+Worker through `LOADER` (`KinuSandboxExecutor`, `cf-backend/src/codemode-sandbox.ts`,
+built by `createCodemodeToolFactory`). The CLI evaluates in-process through
+`createNodeCodemodeToolFactory`. Both bind the same namespaces: `tools`
+(`toolsNamespace`, `tools/sandbox-contract.ts`), the actor's own namespaces
+(`actorNamespaces`, `delegation/actor-surface.ts`), and one namespace per
+machine (`executorNamespace`, `tools/executor-operations.ts`).
+
+A member takes its required fields positionally, then one object of options:
+`agents.hire(role, message, { lifetime: 'task' })`, `file.list(path, { offset })`.
+`tools.<name>(input)` takes a tool's native input instead, `op` included. Any
+call can resolve to a `Refusal`, `{ success: false, reason, error }`; returning
+one fails the program with that reason. `describe('db')` returns a namespace's
+full TypeScript declarations, `describe('db.select')` one member's, and
+`describe()` all of them (`programDeclarations`, `registry.ts`).
+
+### What each caller reaches
+
+`SURFACE_POLICY` (`delegation/actor-surface.ts`) is the one table:
+
+| Caller | Reaches |
+|---|---|
+| An actor's own program: main's, a hire's, a head's or a swarm node's | `file`, `memory` (the account's scope where it is wired), `tasks`, `db` with its `private` tables, `agent`, `web` with browser sessions, each machine; `agents` where its native `agents` is wired, and `report` where its native `report` is |
+| A slate's call, or a crafted tool a slate runs | the same less `agents`, the account and `private` tables; a share's viewer drives no browser |
+| The owner's own slate | a slate's reach, plus `agents` |
+
+### Machines
+
+Each machine's members come from its declared capabilities
+(`machineOperations`, `operations/executors.ts`), one name and one shape on
+every machine:
+
+| Member | Answers | Admitted by |
+|---|---|---|
+| `exec(command, { cwd?, name?, parts? })` | the output as text, or `{ stdout, stderr, exitCode }` with `parts` | `shell` |
+| `startProcess(command, { cwd? })` | `{ processId }` | `process_long` |
+| `stopProcess(processId)` | `{ stopped }` | `process_long` |
+| `listProcesses()` | `[{ processId, pid?, status, restartable?, command, session?, waiting? }]` | `process_long` |
+| `logs(processId, { lines?, bytes? })` | text | `process_long` |
+| `exposePort(port, { name? })` | `{ port, url, name?, route }` | `net_inbound` |
+| `unexposePort(port)` | `null` | `net_inbound` |
+| `listPorts()` | `[{ port, url, name?, status }]` | `net_inbound` |
+| `fs.read`, `fs.text`, `fs.write`, `fs.edit`, `fs.list`, `fs.stat`, `fs.search` | as `file.*` | a root in the file plane |
+
+Every `device` member also takes `{ device? }`. A variable a process needs goes
+at the head of its command (`PORT=4100 node server.js`).
+
+- The hosted workspace has all of them, plus `createTool`, `listTools` and
+  `slates`.
+- The CLI workspace has `exec` and `fs`, plus `createTool`, `listTools` and
+  `slates`; it declares no `process_long` or `net_inbound`.
+- The computer has all of them, plus `resize(size)` where it has sizes,
+  `rest(answer)`, and the eight desktop members (`screenshot`, `watch`,
+  `click`, `type`, `key`, `scroll`, `move`, `drag`) where it has a screen.
+- A device has `exec` and `fs`.
+- `parent` has `exec` alone, in the parent's own paths.
+
+Code runs through `exec`: `node -e '...'`, `python3 -c '...'`, `ruby -e '...'`.
+TypeScript does not parse in `node -e`; write it to a `.ts` file and run
+`node file.ts`. A runtime installs the first time a command names it. Measured
+2026-10-19 on staging `667f96316`: from a fresh workspace, `exec` gave the same
+output `runCode` gave in each of its five languages, and installed Python and
+Ruby on first use (`runcode-probe.md` in the surface plan's folder). An
+interpreter handed its program as text (`python3 -c`, `node -e`, a heredoc)
+over the user's files asks once, on `exec` as on `shell`
+(`safety/command-review.ts`).
+
+A removed member is refused with its successor named, never run under its old
+name. `operations/retired.ts` is the one table: `workspace.readFile`,
+`writeFile`, `readdir` and `exists` (now `workspace.fs.text`, `write`, `list`
+and `stat`), `workspace.killProcess` (`stopProcess`), `workspace.runCode`,
+`installRuntime` and `listRuntimes` (`exec`), the machines' `readdir`, `exists`
+and `computer.deleteFile`, `parent.readdir` and `exists` (`file.*`), the `state`
+namespace (a `private` `db` table), `agents.hire`'s `mission` (`message`), and
+`workspace.startProcess`'s `env` and `timeoutMs`.
 
 ### workspace.*
 
-| API | Signature | What it does |
-|-----|-----------|-------------|
-| `workspace.readFile` | `(path: string) → string` | Read from the canonical workspace VFS |
-| `workspace.writeFile` | `(path: string, content: string) → string \| {error}` | Write to the canonical workspace VFS (creates parents; overwrites need a prior read) |
-| `workspace.editFile` | `(path: string, edits: [{old_text, new_text}]) → {ok, applied} \| {error}` | Exact-match edit, through the same dispatcher (`createFileDispatcher`) and gate as the native `file` tool's `edit` action |
-| `workspace.readdir` | `(path: string) → string[]` | List directory entries |
-| `workspace.exists` | `(path: string) → boolean` | Check whether a path exists |
-| `workspace.exec` | `(command: string, options?: {cwd, name}) → string` | Run a POSIX shell command (cat, grep, find, sed, ls, etc.): a fresh shell in `cwd` or the home, unless `name` keeps one |
-| `workspace.searchMemory` | `(query: string) → results` | FTS5 search over long-term memory |
-| `workspace.saveNote` | `(content: string) → "ok"` | Append a note to MEMORY.md with FTS indexing |
-| `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
-| `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create or update a crafted tool in CraftStore. Callable as `tools.<name>(args)` from the next `eval` call in the same turn, because the sandbox that created it is already built |
-| `workspace.slates` | `.<id>.<method>(...args)`, `.<id>.$preview()`, `.$list()`, … | Present when slates are wired; see below |
+| Member | What it does |
+|-----|-------------|
+| `workspace.listTools()` | Crafted tools with their EMA scores |
+| `workspace.createTool(name, description, code)` | Create or update a crafted tool; answers `{ name, action }`. Callable as `tools.<name>(args)` from the next `eval` call, because the sandbox that created it is already built |
+| `workspace.slates` | `.<id>.<method>(...args)`, `.<id>.$preview()`, `.$list()`, ...; present when slates are wired, see below |
 
-`createInlineExecutor` registers `workspace` in `ExecutionRouter`. Native
-`file` and `workspace.*` share its `TurnFileLedger` read-before-write state.
-Workspace skills are written at `WORKSPACE_SKILLS_DIR` (`/home/main/skills`) on
-that VFS. In an `eval` program, `process.cwd()` is the workspace root, and the
-`fs` shim resolves a relative path against it.
+In an `eval` program, `process.cwd()` is the workspace root, and
+`require('fs/promises')` keeps Node's names over `workspace.fs`, resolving a
+relative path against it. Workspace skills are written at
+`WORKSPACE_SKILLS_DIR` (`/home/main/skills`).
 
 ### Slates
 
@@ -361,27 +434,33 @@ a new slate. The removed `agents` action `fork` ran caller-written briefs (see
 *agents: delegation*). The `forkAgent` RPC clones a whole agent at a message
 and is the UI's fork-chat.
 
-### Projected native tools
+### Native tools as namespaces
 
-| Namespace | Members | Shared with |
+| Namespace | Members | Served by |
 |---|---|---|
-| `memory.*` | `save`, `search`, `conversations`, and (when a FactsStore is wired) `remember`/`recall`/`forget` | `createMemoryDispatcher` (`tools/memory-tool.ts`) |
-| `tasks.*` | `add`, `update`, `list`, `mode` | `createTasksDispatcher` over the same `TaskListStore` instance (`tools/tasks-tool.ts`) |
-| `report.*` | `send(status, content, handoff?)` | the native `report` tool's `ReportToolDeps.report` |
+| `file.*` | `read`, `text`, `write`, `edit`, `list`, `stat`, `search` | `serveFile` (`tools/file-operations.ts`), on the native tool's ledger |
+| `memory.*` | `note`, `search`, `searchConversations`, `readConversation`, `listConversations`, and (with a FactsStore) `remember`, `recall`, `forget`; a write takes `scope: 'account'` and a read names its scope where the account is wired | `serveMemory` (`tools/memory-operations.ts`) |
+| `tasks.*` | `add`, `update`, `note`, `list`, `role`, `switchRole` | `serveTasks` (`tools/tasks-operations.ts`) |
+| `agents.*` | the operations `agentsActionsFor` offers | `createAgentsCodemodeProvider` (`delegation/agents-operations.ts`) |
+| `report.*` | `send(status, content, options?)` | `serveReport` (`tools/report-operations.ts`) |
+| `web.*` | `search`, `fetch`, `screenshot`, and the browser sessions | `serveWeb` (`tools/web-operations.ts`) |
 
-These project onto their native dispatchers. `memory.*` and `tasks.*` are always
-present. `report.*` is subordinate-only.
+Each is the same served operation as the native tool's, so the schema, the
+checks and the ledger are one. `report.*` exists where a parent drives the
+turn.
 
 ### Crafted tools
 
 `CRAFTED_TOOL_NAMESPACE` (`types/codemode.ts`) is `tools`. It is the one
-namespace every tool is callable in, native builtins and crafted tools alike,
-on every backend. There is no second spelling and no alias.
+namespace every tool is callable in: native tools with their native input,
+crafted, MCP and extension tools, and a head's own tools. A native tool's
+namespace member is the same operation under a second name, never a second
+implementation.
 
 | Backend | How `tools.<name>` becomes callable |
 |---|---|
-| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and each native tool's own schema is its declaration |
-| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools defined ahead of the program by the same `renderCraftedDefinitions` the Cloudflare prelude uses. `buildActorTools` builds the sandbox last, over the finished surface, so `tools` binds every tool the actor holds |
+| Cloudflare | `toolsNamespace` over the actor's tools (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched, crafted tools are defined by the `tools` provider's prelude (`renderToolsPrelude`, `renderCraftedDefinitions`), and each native tool's own schema is its input |
+| CLI | the same `toolsNamespace` among the evaluated function's parameters (`packages/cli-backend/src/codemode-tool-factory.ts`), crafted tools defined ahead of the program by the same `renderCraftedDefinitions` |
 
 Both re-read the crafted set per call, so a tool saved one program earlier is
 callable now. A native tool used as a bare identifier gets an explanation, not
@@ -402,8 +481,7 @@ workflow DSL, graph engine, and step store.
 
 ```javascript
 // Inside eval: a workflow is code.
-const settled = await Promise.all(areas.map((area) => agents.swarm({
-  task: `review ${area}`,
+const settled = await Promise.all(areas.map((area) => agents.swarm(`review ${area}`, {
   preset: "ideate",
 })));
 return settled
@@ -412,60 +490,56 @@ return settled
 ```
 
 `createAgentsCodemodeProvider` routes through `dispatchAgentsCall`.
-`agentsActionsFor(deps)` governs it and the native enum by the rule above, so a
-member exists exactly when the operation does. A workspace orchestrator wires
-`swarm`, `team`, and `peers` and gets all eight. A head gets none of the three,
-so `buildActorTools` does not add the tool and the namespace has no members.
-`forkAgent` is never projected. A sandboxed search cannot resume safely, so use
-the native tool for durable work.
+`agentsActionsFor(deps)` governs it and the native schema by the rule above, so a
+member exists exactly when the operation does. A program's `agents` uses the
+same deps as its actor's native `agents`, where that is wired. A spent mission
+budget is the call's value, for the program to branch on. A sandboxed search
+cannot resume safely, so use the native tool for durable work.
 
-### No fallback, shared description, and preamble
+### No fallback, and one description
 
 Cloudflare requires `LOADER`. The CLI requires `createNodeCodemodeToolFactory`.
 Without either, `eval` returns "not configured" instead of falling back to
 `new Function()`, which fails in a V8 isolate.
 
-`renderCodemodeDescription(typeBlock)` gives both backends the registry spec,
-sandbox facts, and declarations. Cloudflare substitutes `{{types}}`; the CLI
-joins the declared `types`. Neither writes its own text. A description written
-by a backend reaches the model without the spec, leaves out live namespaces,
-and names `codemode.<name>` calls the dispatcher throws on. A declaration whose
-prose disagrees with its arguments is how an object argument arrives as
+`renderCodemodeDescription(providers, substrate)` (`registry.ts`) composes the
+`eval` description for both backends: the registry spec, the substrate, then
+each namespace with what it is for and its members' call forms. Full
+declarations are left out and read on demand through `describe`. A declaration
+whose prose disagrees with its arguments is how an object argument arrives as
 `"[object Object]"`.
 
-Crafted tools are defined by the `tools` provider prelude
-(`renderToolsPrelude`, `cf-backend/src/codemode-sandbox.ts`), one guarded
-definition per tool, before the model's program runs. A program is a
-Node-style script: statements at the top level, `await` anywhere, `return` for
-the result. `packages/cf-backend/tests/workerd/codemode-sandbox.test.ts` runs
-it under workerd: `require('fs/promises')` over the workspace, `state.*`, a
-crafted tool calling another, a broken crafted row breaking only its own name,
-and `fetch` through the egress entrypoint.
+A program is a Node-style script: statements at the top level, `await`
+anywhere, `return` for the result. `packages/cf-backend/tests/workerd/codemode-sandbox.test.ts`
+runs it under workerd: `require('fs/promises')` over the workspace, a `private`
+`db` table across programs, a crafted tool calling another, a broken crafted row
+breaking only its own name, and `fetch` through the egress entrypoint.
 
-## file: action reference
+## file: operation reference
 
 ```
-file { action: "read",   path, offset?, limit? } → the content, or a marker naming the next offset
-file { action: "list",   path }                  → the directory's entries
-file { action: "stat",   path }                  → { path, size, mtimeMs, isDir }
-file { action: "search", path, query }           → { path, matches, truncated? }
-file { action: "edit",   path, edits: [{ old_text, new_text }] }
-                                                 → { ok, path, reference, applied: [{ line, removed_lines, added_lines }] }
-                                                 → or { error } naming exactly what was wrong
-file { action: "write",  path, content }         → { ok, path, reference, bytes, action: "created" | "replaced" }
+file { op: "read",   path, offset?, limit? } → numbered lines with a footer naming the next offset, or an image
+file { op: "list",   path, offset? }         → { path, entries, truncated?: { shown, total, next } }
+file { op: "stat",   path }                  → { path, size, mtimeMs, isDir }
+file { op: "search", path, query }           → { path, matches: [{ line, text }], truncated?: { shown, total } }
+file { op: "edit",   path, edits: [{ old_text, new_text }] }
+                                             → { path, reference, checked, applied: [{ line, removedLines, addedLines }], undo?, build? }
+file { op: "write",  path, content }         → { path, reference, checked, bytes, action: "created" | "replaced", undo?, build? }
+file.text(path)                              → the whole file as a string (programs only)
 ```
 
-`search` finds literal text in one file and returns matching lines with line
-numbers. `file_edit` records `not_found`, `ambiguous`, `empty_anchor`,
-`overlap`, `no_change`, `unread`, `stale`, `missing`, and `io`. Missing
-`new_text` is refused; `""` deletes. `file-edit.ts` is pure string math, and
-`file-ledger.ts` holds turn state. The `file-plane` layergate injects faults
-into exact edits and clipped reads.
+A failure is a classified refusal naming exactly what was wrong. `search` finds
+literal text in one file and returns matching lines with line numbers.
+`file_edit` records `not_found`, `ambiguous`, `empty_anchor`, `overlap`,
+`no_change`, `unread`, `stale`, `missing`, and `io`. Missing `new_text` is
+refused; `""` deletes. `file-edit.ts` is pure string math, and `file-ledger.ts`
+holds turn state. The `file-plane` layergate injects faults into exact edits and
+clipped reads.
 
 ## shell: shell command
 
 `shell` is the Nimbus POSIX shell over the same files as `file` and
-`workspace.*`. It has pipelines, redirects, variables, loops, and the "~95
+`workspace.fs`. It has pipelines, redirects, variables, loops, and the "~95
 coreutils" the executor advertises (`packages/core/src/tools/inline-executor.ts`);
 that number is the executor's claim, not a count. Live executor status defines
 what hosted execution can do. Local execution uses the workspace process.
@@ -473,9 +547,8 @@ what hosted execution can do. Local execution uses the workspace process.
 `runtime` accepts `workspace`, `computer`, or a device by the nickname the live
 prompt lists, and defaults to `workspace`. `computer` and each device have
 separate files; each device mounts at `/pc/<name>`. `ExecutionRouter` has no
-fallback: an absent runtime returns `runtime_not_provisioned`. Relative paths
-resolve against `WORKSPACE_ROOT`, `/home/main`. Containers receive
-`/workspace`.
+fallback: an absent runtime returns `runtime_not_provisioned`. A relative path
+resolves against the directory the command starts in.
 
 Every call is a fresh shell. It starts in `cwd`, else the agent's home (a
 container's `/workspace`, a device's `~`), and a `cd` or `export` lasts only
@@ -544,28 +617,22 @@ if it would retire every tool. Surviving tools are called as
 ## Why eight tools
 
 Eight standing choices matter more than a short description. `skills` stays
-reachable through `workspace.*`. Filesystem work
-uses `file` or `eval`. Delegation uses `agents`. No shell command replaces
-`agents` or the exact-match checks in `file`.
+reachable through `/skills`. Filesystem work uses `file` or `eval`. Delegation
+uses `agents`. No shell command replaces `agents` or the exact-match checks in
+`file`.
 
 The native schema was 11,823 description characters, about 2,956 tokens at
 chars/4, measured 2026-08-19. `agents` used 4,805 characters, `tasks` 1,704,
 and `file` 1,331. That is larger than the earlier surface: on 2026-08-12 the
 eight names measured 9,034 chars against 10,201 for the prior ten, and later
 docstring work put the eight above both. The count fell; the description did
-not.
+not. These figures predate the operation catalog; the native schema's size on
+the current surface is unmeasured.
 
-Declared codemode `types`, measured 2026-08-19:
-
-| namespace | members | chars | tokens at chars/4 |
-|---|---:|---:|---:|
-| `memory.*` (with a FactsStore) | 6 | 1,118 | 280 |
-| `memory.*` (notes only) | 3 | 628 | 157 |
-| `tasks.*` | 4 | 988 | 247 |
-| `report.*` | 1 | 382 | 96 |
-
-`memory.*`, `tasks.*`, and `report.*` add
-to the native text. Crafted tools keep the top-level total flat.
+The `eval` description lists each namespace's call forms and leaves the full
+declarations to `describe`. On `a71c3efaf` (2026-10-17) it rendered 4,527
+characters and 95 call forms; its size on the current surface is unmeasured.
+Crafted tools keep the top-level total flat.
 
 `tasks` stays separate from `memory`: memory is for later retrieval, tasks hold
 the active plan. Folding them together would add `titles`, `parent`, `id`,
