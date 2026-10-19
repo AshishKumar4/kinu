@@ -346,8 +346,16 @@ export const SCREENSHOT_TURN = { steps: 450, imageBytes: 200_000, distinct: 40, 
  *  context (5df419bdd), 35.4 to 45.8 MB and 3.0 to 3.1 s. The bound catches one screenshot in fifty held again. */
 export const SCREENSHOT_LIVE_GROWTH_BOUND_BYTES = 20_000_000;
 
-/** The last window's CPU over the first's, in main's isolate: 1.99 on 814a4ca80, 1.03 on 5df419bdd (above). */
-export const SCREENSHOT_CPU_GROWTH_BOUND = 1.5;
+/** The CPU of main's isolate in the last three windows over that in the first three, each the middle of its three: one
+ *  window alone read 0.78 to 1.52 over 36 runs once the turn was flat (2026-10-19: the tier on ba1e766a5 failed at 1.52
+ *  on a busy host), the middle of three 0.97 to 1.33, mean 1.10, deviation 0.08. The bound is that mean and four
+ *  deviations; 814a4ca80, every screenshot held, read 1.75, and the turn with only its room and codec cut 1.52. */
+export const SCREENSHOT_CPU_GROWTH_BOUND = 1.42;
+
+/** The middle of three windows' CPU, so one window a busy host slowed reads as noise, not as growth. */
+function middleCpu(windows: readonly ScreenshotWindow[]): number {
+  return [...windows].map((each) => each.mainCpuMs).sort((a, b) => a - b)[Math.floor(windows.length / 2)] ?? 0;
+}
 
 /** The workspace's isolate's live heap at the turn's last window beyond its first: its chat room held every relayed
  *  screenshot, 39.8 MB of its 78.5 MB live at step 150 on 814a4ca80 (a snapshot's retainers), and its peak used went 105.3
@@ -806,8 +814,10 @@ function screenshotFindings(turn: ScreenshotTurn): string[] {
     out.push(`the screenshot turn holds ${mb(last.mainLive - first.mainLive)} more live in ${ISOLATE_NAMES.main} at step ${String(last.through)} than at ${String(first.through)}, over ${mb(SCREENSHOT_LIVE_GROWTH_BOUND_BYTES)}`);
   }
 
-  if (last.mainCpuMs > first.mainCpuMs * SCREENSHOT_CPU_GROWTH_BOUND) {
-    out.push(`the screenshot turn's last ${String(SCREENSHOT_TURN.window)} steps take ${(last.mainCpuMs / first.mainCpuMs).toFixed(2)} times its first's CPU in ${ISOLATE_NAMES.main}, over ${String(SCREENSHOT_CPU_GROWTH_BOUND)}`);
+  const growth = middleCpu(turn.windows.slice(-3)) / middleCpu(turn.windows.slice(0, 3));
+
+  if (growth > SCREENSHOT_CPU_GROWTH_BOUND) {
+    out.push(`the screenshot turn's last three windows take ${growth.toFixed(2)} times its first three's CPU in ${ISOLATE_NAMES.main}, over ${String(SCREENSHOT_CPU_GROWTH_BOUND)}`);
   }
 
   if (last.workspaceLive - first.workspaceLive > SCREENSHOT_WORKSPACE_GROWTH_BOUND_BYTES) {
