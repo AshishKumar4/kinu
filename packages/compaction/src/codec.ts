@@ -13,12 +13,6 @@ import type {
   ToolResultPart,
   UserModelMessage,
 } from 'ai';
-import {
-  assistantModelMessageSchema,
-  modelMessageSchema,
-  toolModelMessageSchema,
-  userModelMessageSchema,
-} from 'ai';
 import { binaryReplacer, CHARS_PER_TOKEN, fnv1a64, UNPRICED_MEDIA_TOKENS } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -780,24 +774,33 @@ function isStoredToolPairHandle<Value>(value: Value): value is Value & StoredToo
   return parsed.success && parsed.output[TOOL_PAIR_HANDLE] === true;
 }
 
+/**
+ * A handle is the codec's own: `encode` set each from a typed message or part, so its shape is enough to tell which. Each
+ * check parsed the whole value against the SDK's message schema, and `decode` checks every message of the history, each
+ * step: a 150-step screenshot turn's codec allocated 369 of its agent isolate's 893 MB a window of 50 steps (#103).
+ */
+const NativeMessageHandle = v.looseObject({ role: v.picklist(['system', 'user', 'assistant', 'tool']), content: v.union([v.string(), v.array(v.unknown())]) });
+
+const NativePartHandle = v.looseObject({ type: v.string() });
+
 function isModelMessageGroup<Value>(value: Value): value is Value & ModelMessage[] {
-  return Array.isArray(value) && value.every((message) => modelMessageSchema.safeParse(message).success);
+  return Array.isArray(value) && value.every((message) => isModelMessage(message));
 }
 
 function isModelMessage<Value>(value: Value): value is Value & ModelMessage {
-  return modelMessageSchema.safeParse(value).success;
+  return v.is(NativeMessageHandle, value);
 }
 
 function isAssistantPart<Value>(value: Value): value is Value & AssistantPart {
-  return assistantModelMessageSchema.safeParse({ role: 'assistant', content: [value] }).success;
+  return !isModelMessage(value) && v.is(NativePartHandle, value);
 }
 
 function isUserPart<Value>(value: Value): value is Value & UserPart {
-  return userModelMessageSchema.safeParse({ role: 'user', content: [value] }).success;
+  return !isModelMessage(value) && v.is(NativePartHandle, value);
 }
 
 function isToolPart<Value>(value: Value): value is Value & ToolPart {
-  return toolModelMessageSchema.safeParse({ role: 'tool', content: [value] }).success;
+  return !isModelMessage(value) && v.is(NativePartHandle, value) && (value.type === 'tool-result' || value.type === 'tool-approval-response');
 }
 
 function isNativeHandle<Value>(value: Value): value is Value & NativeHandle {
