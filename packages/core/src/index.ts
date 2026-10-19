@@ -2166,6 +2166,8 @@ export { clockTime, fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, t
 
 export { ownedStream, relayedAnswer } from './utils/relayed-answer';
 
+export { pulledThrough } from './utils/pulled-stream';
+
 export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
 
 export {

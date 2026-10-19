@@ -266,14 +266,6 @@ function heldCredentials(workspace: AgentWorkspace): CredentialBroker {
   return { client, held, revision: null };
 }
 
-function lines(chunks: ReadableStream<UIMessageChunk>): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-
-  return chunks.pipeThrough(new TransformStream<UIMessageChunk, Uint8Array>({
-    transform: (chunk, controller) => { controller.enqueue(encoder.encode(`${JSON.stringify(chunk)}\n`)); },
-  }));
-}
-
 function workspaceTools(
   workspace: AgentWorkspace,
   prepared: PreparedAgentTurn,
@@ -365,7 +357,7 @@ export type FacetModels = (deps: Omit<AgentProviderDeps, 'env'>) => AgentProvide
 /** A turn's provider waits, told on the answer stream its words already cross to the room (AGENTS.md Waste), so a wait
  *  costs no call of its own. One while no answer streams (its compaction's, its title's) is the ledger's alone. */
 class TurnWaits {
-  private told: ReadableStreamDefaultController<UIMessageChunk> | null = null;
+  private told: ((chunk: UIMessageChunk) => void) | null = null;
 
   constructor(private readonly actor: HostedActor, private readonly runId: string) {}
 
@@ -373,19 +365,22 @@ class TurnWaits {
     settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
       this.actor.stores.eventRecorder.emit(this.runId, { type: 'provider_wait', ...info });
     }, { provider: info.provider });
-    this.told?.enqueue({ type: PROVIDER_WAIT_PART, data: info, transient: true });
+    this.told?.({ type: PROVIDER_WAIT_PART, data: info, transient: true });
   };
 
-  around(chunks: ReadableStream<UIMessageChunk>): ReadableStream<UIMessageChunk> {
+  /** The answer's chunks as the lines its workspace relays, one a line, with the provider's waits told among them. */
+  lines(chunks: ReadableStream<UIMessageChunk>): ReadableStream<Uint8Array> {
     const answer = chunks.getReader();
+    const encoder = new TextEncoder();
+    const line = (chunk: UIMessageChunk): Uint8Array => encoder.encode(`${JSON.stringify(chunk)}\n`);
 
-    return new ReadableStream<UIMessageChunk>({
-      start: (controller) => { this.told = controller; },
+    return new ReadableStream<Uint8Array>({
+      start: (controller) => { this.told = (chunk) => { controller.enqueue(line(chunk)); }; },
       pull: async (controller) => {
         const next = await answer.read();
 
         if (!next.done) {
-          controller.enqueue(next.value);
+          controller.enqueue(line(next.value));
 
           return;
         }
@@ -455,7 +450,7 @@ export function facetTurnSources(turn: {
     models: { normalize: (spec) => registry.normalizeSpecSync(spec), resolve: (spec) => registry.resolveModel(spec, affinity), routed: routedModelReads(registry) },
     scaffoldSpend: { source: 'scaffold', report: spend.report, operations },
     operations,
-    observeStream: (chunks) => settle(liveRelay(turn.turnId, () => turn.workspace.observe(lines(waits.around(chunks))))),
+    observeStream: (chunks) => settle(liveRelay(turn.turnId, () => turn.workspace.observe(waits.lines(chunks)))),
     paceStep: async (signal) => {
       const profile = unbound;
 

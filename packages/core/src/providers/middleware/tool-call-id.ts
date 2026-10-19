@@ -2,6 +2,7 @@
 import type { LanguageModelV4Content, LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import { generateId, type LanguageModelMiddleware } from 'ai';
 import { toolCallIdFor } from '../tool-call-id';
+import { pulledThrough } from '../../utils/pulled-stream';
 
 type Rekey = (id: string) => string;
 
@@ -18,13 +19,7 @@ export function toolCallIdMiddleware(): LanguageModelMiddleware {
       const result = await doStream();
       const rekey = responseKeys();
 
-      const rekeying = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
-        transform(part, controller) {
-          controller.enqueue(rekeyedPart(part, rekey));
-        },
-      });
-
-      return { ...result, stream: result.stream.pipeThrough(rekeying) };
+      return { ...result, stream: pulledThrough(result.stream, (part) => rekeyedPart(part, rekey)) };
     },
   };
 }

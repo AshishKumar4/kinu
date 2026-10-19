@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
-  "files": 3475,
-  "functions": 91287,
+  "files": 3491,
+  "functions": 91770,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -315,10 +315,6 @@
     },
     {
       "key": "packages/compaction/src/extension.ts#compactionExtension>transformContext",
-      "complexity": 26
-    },
-    {
-      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
       "complexity": 26
     },
     {

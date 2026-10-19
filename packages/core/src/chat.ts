@@ -48,6 +48,7 @@ import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
 import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, serverCompactor, sinceLatestCompaction } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
+import { ChatRelay } from './chat-relay';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
 import * as v from 'valibot';
@@ -323,22 +324,6 @@ const DEAD_STREAM = 'Model stream ended without output: the provider stream term
   + '(no finish reason, no content). The turn did not complete.';
 
 /** One provider call's state, as the SDK's stream drains into it via {@link ProviderCall.consume}. */
-/** The provider's compaction summary is for the model: the stream the owner sees leaves it out. */
-function withoutServerSummaries(stream: ReadableStream<UIMessageChunk>): ReadableStream<UIMessageChunk> {
-  const summaries = new Set<string>();
-
-  return stream.pipeThrough(new TransformStream<UIMessageChunk, UIMessageChunk>({
-    transform(chunk, controller) {
-      if (chunk.type === 'text-start' && isServerCompaction(chunk.providerMetadata)) summaries.add(chunk.id);
-
-      if ((chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end') && summaries.has(chunk.id)) return;
-
-      if (chunk.type === 'custom' && isServerCompaction(chunk.providerMetadata)) return;
-      controller.enqueue(chunk);
-    },
-  }));
-}
-
 class ProviderCall {
   /** Set by `onAbort`, or by the drain when the provider threw the abort reason first. */
   interrupted = false;
@@ -1094,13 +1079,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       },
     });
 
-    // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
-    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })));
+    // Fed from this loop's own reads, as each part is read; awaited in the tail.
+    const relay = new ChatRelay(opts.observeStream, { tools: attempt.tools, describe: describeProviderError });
 
     let drained = false;
 
     try {
       for await (const chunk of result.stream) {
+        relay.push(chunk);
         const event = call.consume(chunk);
 
         if (event !== null) {
@@ -1115,6 +1101,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       drained = true;
     } catch (err) {
+      relay.end({ error: err });
+
       // The signal is authoritative: a provider may throw its abort reason before `onAbort` runs.
       if (opts.signal?.aborted) call.interrupted = true;
       else if (APICallError.isInstance(err)) call.failed({ cause: err });
@@ -1126,10 +1114,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       let completed = false;
 
       call.stoppedReading();
+      relay.end();
 
       try {
         if (!drained && call.streamError === undefined && call.stepFailure === null) consumer.abort();
-        await observed;
+        await relay.observed;
         completed = drained && !call.interrupted && call.streamError === undefined;
       } finally {
         // A failed seal is not permission to commit its partial rows on a second attempt.
