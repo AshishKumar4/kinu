@@ -1085,7 +1085,7 @@ requirements:
       - The fixture checks the containment classifier, uncontained-read verdicts and changed-payload or changed-URL approval keys, not the semantic ToolReach premise or remote egress behavior
       - Viewer-account routing, an exact and honest approval prompt, delegated dispatch, Workers and Nimbus isolation and adversarial workerd replays remain runtime evidence
   PR-SHARE-NIMBUS-009:
-    statement: Every launch-relevant sharing change and its generation fence are one step, so an admitted minted lineage retains its launch's sharing projection and owner egress or browser authority only while unshared, stale launches restart, and splitting the change from its fence admits a stale-owner call.
+    statement: Every launch-relevant sharing change and its generation fence are one step; minted lineages seal their slate and all inherited shared ancestors, inheritance preserves those seals through every hop, and a sharing change permanently refuses every descendant binding and nested admission with or without a request record. Admitted lineages retain launch sharing, stale launches restart, and both a split fence and an own-generation-only descendant admit stale owner authority.
     status: proved-and-refined
     theorems:
       - Kinu.SharingNimbus.Fence.every_sharing_change_advances_its_fence_in_the_same_step
@@ -1101,19 +1101,35 @@ requirements:
       - Kinu.SharingNimbus.Fence.a_ready_launch_still_has_the_sharing_it_chose
       - Kinu.SharingNimbus.Fence.splitting_a_share_change_from_its_fence_admits_stale_owner_authority
       - Kinu.SharingNimbus.Fence.the_atomic_share_change_refuses_the_same_stale_binding
+      - Kinu.SharingNimbus.Fence.an_admitted_binding_keeps_every_ancestor_fence
+      - Kinu.SharingNimbus.Fence.inheritance_keeps_every_ancestor_and_its_sealed_generation
+      - Kinu.SharingNimbus.Fence.a_new_shared_ancestor_is_sealed_at_its_current_generation
+      - Kinu.SharingNimbus.Fence.inheritance_is_transitive
+      - Kinu.SharingNimbus.Fence.a_changed_ancestor_permanently_refuses_every_descendant
+      - Kinu.SharingNimbus.Fence.a_changed_ancestor_fences_every_process_below_every_hop
+      - Kinu.SharingNimbus.Fence.every_nested_admission_has_current_lineage
+      - Kinu.SharingNimbus.Fence.a_changed_slate_permanently_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_changed_ancestor_permanently_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_foreign_invocation_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_stale_invocation_fence_refuses_every_nested_admission
+      - Kinu.SharingNimbus.Fence.a_binding_that_seals_only_itself_admits_revoked_ancestor_owner_authority
+      - Kinu.SharingNimbus.Fence.the_inherited_seal_refuses_the_same_stale_owner_call
     tsRefs:
       - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.add
       - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.revoke
       - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.setAuthority
       - packages/core/src/slates/live-shares.ts#SlateLiveShareStore.generation
       - packages/core/src/slates/shared-server.ts#SharedServers.lineage
+      - packages/core/src/slates/shared-server.ts#SharedServers.within
+      - packages/core/src/slates/caller.ts#SlateCaller
     refinement:
       - lean/fixtures/share-fence-cases.json :: packages/core/tests/refinement-share-fence.test.ts
     remainingEvidence:
       - The launch-sharing projection records share identities, liveness and modes; unchanged-mode grant and grantRevision edits do not move this fence and must still be re-weighed by the server gate at each send
-      - The fixture replays immediate post-write observations, stale process and chain generations, foreign incarnations, live and repeated revokes, mode and grant-only edits, listing, users and preapproval operations against SQLite and SharedServers.lineage
+      - The fixture replays immediate post-write observations, transitive ancestor seals, non-refreshing inheritance after re-sharing, stale process, ancestor and request-chain generations, foreign incarnations, live and repeated revokes, mode and grant-only edits, listing, users and preapproval operations against SQLite and SharedServers.lineage
+      - Nested observing-member cases compare fenced and unfenced SharedServers.within and beyond, including calls that current sharing weighs as unbounded after the last ancestor share is revoked; approval spending for effects and arbitrary crafted-tool execution are not modeled here
       - Owner-mode fixture transitions explicitly clear the Gallery listing first, satisfying the existing SQLite constraint; failed duplicate inserts and other database-constraint failures are not modeled as successful sharing changes
       - The atomic state machine has no yield between a launch-relevant sharing mutation and its fence; the split model is a kernel-checked counterexample, not a claim to exercise the Workers scheduler exhaustively
-      - beginLaunch and finishLaunch abstract launch-time egress and browser choices and stale-attempt restart; actual Nimbus launch, teardown, binding minting and restart are not driven by this fixture and need adversarial workerd launch interleavings
+      - beginLaunch and finishLaunch abstract own-slate launch-time egress and browser choices and stale-attempt restart; inherited seals and their preservation are modeled, but actual host caller.via propagation, Nimbus launch, teardown, binding minting and restart are not driven by this fixture and need adversarial workerd launch interleavings
       - Host-issued lineage and invocation records are trusted inputs, not caller-supplied authority; incarnation freshness, invalidation across object restarts and per-call checks immediately before dispatch remain runtime evidence
       - Generations are unbounded naturals in the proof and sampled exact JavaScript integers in replay; numerical wraparound, persistent epochs across object lives and already dispatched remote work are outside the model

@@ -448,9 +448,23 @@ def exec : Store → List Event → Store
 
 def isShared (store : Store) (slate : String) : Bool := (launchSharing (store slate).shares).any (·.live)
 
+/-- The host's caller.via map: existing entries retain their sealed generations. -/
+abbrev Ancestors := List (String × Nat)
+
+def inheritAncestors (store : Store) (via : Ancestors) (chain : List String) : Ancestors :=
+  via ++ ((chain.eraseDups.filter fun slate =>
+    isShared store slate && !(via.any fun entry => entry.1 == slate)).map fun slate =>
+      (slate, (store slate).generation))
+
+/-- Any number of callee hops, each capturing the sharing live at that hop. -/
+def inheritPath : Ancestors → List (Store × List String) → Ancestors
+  | via, [] => via
+  | via, (store, chain) :: rest => inheritPath (inheritAncestors store via chain) rest
+
 structure Lineage where
   incarnation : String
   generation : Nat
+  ancestors : Ancestors := []
   deriving DecidableEq, BEq, Inhabited
 
 structure Invocation where
@@ -462,10 +476,35 @@ structure Invocation where
     refuses. The host, not a caller, must mint bindings and invocation records. -/
 def lineage (store : Store) (slate : String) (token : Lineage) (record : Option Invocation) : Bool :=
   token.generation == (store slate).generation &&
+    (token.ancestors.all fun (name, generation) => (store name).generation == generation) &&
     match record with
     | none => true
     | some issued => issued.incarnation == token.incarnation &&
         issued.generations.all fun (name, generation) => (store name).generation == generation
+
+inductive Weighing where
+  | unbounded | bounded | refused
+  deriving DecidableEq, BEq, Inhabited
+
+def authorityAdmits (authority : ServerAuthority) (call : GrantMember) : Bool :=
+  match authority with
+  | .owner => true
+  | .none => false
+  | .grant grant => grant.members.any fun member => memberKey member == memberKey call
+
+/-- The observing-member projection of SharedServers.weigh; effects' approval
+    spending is separate from the nested reach check in within/beyond. -/
+def weighNested (store : Store) (chain : List String) (call : GrantMember) (revision : String) : Weighing :=
+  let authorities := (chain ++ [call.slate]).map fun slate =>
+    serverAuthority (((store slate).shares.filter (·.live)).map (·.authority)) revision
+  if authorities.all (· == .owner) then .unbounded
+  else if authorities.all (authorityAdmits · call) then .bounded else .refused
+
+/-- A captured fence is checked before weighing every member reached inside a
+    running tool, even if current sharing would now weigh it as unbounded. -/
+def nestedAdmission (store : Store) (token : Lineage) (record : Option Invocation)
+    (chain : List String) (call : GrantMember) (revision : String) : Bool :=
+  if lineage store call.slate token record then weighNested store chain call revision != .refused else false
 
 structure Launch where
   slate : String
@@ -476,8 +515,8 @@ structure Launch where
   deriving DecidableEq, BEq, Inhabited
 
 /-- These choices precede asynchronous launch work and travel with the binding. -/
-def beginLaunch (store : Store) (slate incarnation : String) : Launch :=
-  ⟨slate, ⟨incarnation, (store slate).generation⟩, launchSharing (store slate).shares,
+def beginLaunch (store : Store) (slate incarnation : String) (ancestors : Ancestors := []) : Launch :=
+  ⟨slate, ⟨incarnation, (store slate).generation, ancestors⟩, launchSharing (store slate).shares,
     !(isShared store slate), !(isShared store slate)⟩
 
 inductive LaunchResult where
@@ -489,7 +528,7 @@ inductive LaunchResult where
     its egress and browser actor afresh, not from the obsolete attempt. -/
 def finishLaunch (store : Store) (launch : Launch) (replacementIncarnation : String) : LaunchResult :=
   if launch.lineage.generation = (store launch.slate).generation then .ready launch
-  else .restart (beginLaunch store launch.slate replacementIncarnation)
+  else .restart (beginLaunch store launch.slate replacementIncarnation launch.lineage.ancestors)
 
 namespace Split
 
@@ -529,6 +568,19 @@ def witnessLaunch : Launch := beginLaunch emptyStore "board" "before-sharing"
 
 def splitWitness : Split.State := Split.exec {} [
   .change "board" [witnessShare], .call witnessLaunch none, .fence "board"]
+
+/-- Before the fix, an inherited process sealed only its own slate, losing the
+    ancestor that bounded an owner's request through a shared slate. -/
+def ancestorWitnessStore : Store := step emptyStore (.add "board" witnessShare)
+
+def ancestorWitnessRevoked : Store := step ancestorWitnessStore (.revoke "board" witnessShare.id)
+
+def ancestorWitnessCall : GrantMember := ⟨"aux", "mcp.GitHub", "read", "observe"⟩
+
+def unsealedDescendant : Launch := beginLaunch ancestorWitnessStore "aux" "unsealed"
+
+def sealedDescendant : Launch := beginLaunch ancestorWitnessStore "aux" "sealed"
+  (inheritAncestors ancestorWitnessStore [] ["board"])
 
 end Fence
 

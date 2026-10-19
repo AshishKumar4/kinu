@@ -541,7 +541,86 @@ private theorem admitted_lineage_has_the_current_generation (store : Store) (sla
     (token : Lineage) (record : Option Invocation) (admitted : lineage store slate token record = true) :
     token.generation = (store slate).generation := by
   simp only [lineage, Bool.and_eq_true, beq_iff_eq] at admitted
-  exact admitted.1
+  exact admitted.1.1
+
+theorem an_admitted_binding_keeps_every_ancestor_fence (store : Store) (slate : String)
+    (token : Lineage) (record : Option Invocation) (admitted : lineage store slate token record = true) :
+    ∀ entry ∈ token.ancestors, (store entry.1).generation = entry.2 := by
+  simp only [lineage, Bool.and_eq_true, beq_iff_eq, List.all_eq_true] at admitted
+  exact admitted.1.2
+
+theorem inheritance_keeps_every_ancestor_and_its_sealed_generation (store : Store)
+    (via : Ancestors) (chain : List String) (entry : String × Nat) (sealed : entry ∈ via) :
+    entry ∈ inheritAncestors store via chain := by
+  exact List.mem_append.mpr (Or.inl sealed)
+
+private theorem eraseDups_keeps_members (names seen : List String) (name : String) :
+    name ∈ List.eraseDups.loop names seen ↔ name ∈ names ∨ name ∈ seen := by
+  induction names generalizing seen with
+  | nil => simp [List.eraseDups.loop]
+  | cons first rest ih =>
+    cases present : seen.elem first with
+    | false =>
+      simp only [List.eraseDups.loop, present, ih, List.mem_cons]
+      simp only [or_assoc, or_left_comm]
+    | true =>
+      have held := List.mem_of_elem_eq_true present
+      simp only [List.eraseDups.loop, present, ih, List.mem_cons]
+      constructor
+      · intro member
+        exact member.imp Or.inr id
+      · rintro ((same | member) | member)
+        · exact Or.inr (same ▸ held)
+        · exact Or.inl member
+        · exact Or.inr member
+
+theorem a_new_shared_ancestor_is_sealed_at_its_current_generation (store : Store)
+    (via : Ancestors) (chain : List String) (ancestor : String) (member : ancestor ∈ chain)
+    (shared : isShared store ancestor = true) (new : via.any (fun entry => entry.1 == ancestor) = false) :
+    (ancestor, (store ancestor).generation) ∈ inheritAncestors store via chain := by
+  apply List.mem_append.mpr
+  right
+  apply List.mem_map.mpr
+  exact ⟨ancestor, by simp [List.eraseDups, eraseDups_keeps_members, member, shared, new], rfl⟩
+
+theorem inheritance_is_transitive (via : Ancestors) (hops : List (Store × List String))
+    (entry : String × Nat) (sealed : entry ∈ via) : entry ∈ inheritPath via hops := by
+  induction hops generalizing via with
+  | nil => exact sealed
+  | cons hop rest ih =>
+    exact ih (inheritAncestors hop.1 via hop.2)
+      (inheritance_keeps_every_ancestor_and_its_sealed_generation hop.1 via hop.2 entry sealed)
+
+private theorem a_stale_ancestor_refuses_a_binding (store : Store) (slate : String)
+    (token : Lineage) (record : Option Invocation) (ancestor : String) (generation : Nat)
+    (sealed : (ancestor, generation) ∈ token.ancestors)
+    (stale : generation ≠ (store ancestor).generation) : lineage store slate token record = false := by
+  cases admitted : lineage store slate token record with
+  | false => rfl
+  | true =>
+    exact False.elim (stale ((an_admitted_binding_keeps_every_ancestor_fence store slate token record
+      admitted (ancestor, generation) sealed).symm))
+
+theorem a_changed_ancestor_permanently_refuses_every_descendant (store : Store) (event : Event)
+    (history : List Event) (slate ancestor : String) (token : Lineage) (record : Option Invocation)
+    (generation : Nat) (sealed : (ancestor, generation) ∈ token.ancestors)
+    (not_future : generation ≤ (store ancestor).generation)
+    (changed : launchSharing (step store event ancestor).shares ≠ launchSharing (store ancestor).shares) :
+    lineage (exec (step store event) history) slate token record = false := by
+  have advanced := every_sharing_change_advances_its_fence_in_the_same_step store event ancestor changed
+  have later := a_sharing_generation_never_returns (step store event) history ancestor
+  apply a_stale_ancestor_refuses_a_binding _ slate token record ancestor generation sealed
+  omega
+
+theorem a_changed_ancestor_fences_every_process_below_every_hop (store : Store) (event : Event)
+    (history : List Event) (via : Ancestors) (hops : List (Store × List String))
+    (slate ancestor incarnation : String) (ownGeneration generation : Nat) (record : Option Invocation)
+    (sealed : (ancestor, generation) ∈ via) (not_future : generation ≤ (store ancestor).generation)
+    (changed : launchSharing (step store event ancestor).shares ≠ launchSharing (store ancestor).shares) :
+    lineage (exec (step store event) history) slate
+      ⟨incarnation, ownGeneration, inheritPath via hops⟩ record = false := by
+  exact a_changed_ancestor_permanently_refuses_every_descendant store event history slate ancestor _ record generation
+    (inheritance_is_transitive via hops (ancestor, generation) sealed) not_future changed
 
 theorem an_admitted_binding_keeps_its_launch_sharing (store : Store) (history : List Event)
     (slate incarnation : String) (record : Option Invocation)
@@ -579,12 +658,55 @@ theorem another_incarnation_cannot_reuse_an_invocation (store : Store) (slate : 
     lineage store slate token (some record) = false := by
   simp [lineage, different]
 
+theorem every_nested_admission_has_current_lineage (store : Store) (token : Lineage)
+    (record : Option Invocation) (chain : List String) (call : GrantMember) (revision : String)
+    (admitted : nestedAdmission store token record chain call revision = true) :
+    lineage store call.slate token record = true := by
+  cases current : lineage store call.slate token record <;> simp_all [nestedAdmission]
+
+theorem a_changed_slate_permanently_refuses_every_nested_admission (store : Store) (event : Event)
+    (history : List Event) (token : Lineage) (record : Option Invocation) (chain : List String)
+    (call : GrantMember) (revision : String) (not_future : token.generation ≤ (store call.slate).generation)
+    (changed : launchSharing (step store event call.slate).shares ≠ launchSharing (store call.slate).shares) :
+    nestedAdmission (exec (step store event) history) token record chain call revision = false := by
+  have advanced := every_sharing_change_advances_its_fence_in_the_same_step store event call.slate changed
+  have later := a_sharing_generation_never_returns (step store event) history call.slate
+  have different : token.generation ≠ (exec (step store event) history call.slate).generation := by omega
+  simp [nestedAdmission, lineage, different]
+
+theorem a_changed_ancestor_permanently_refuses_every_nested_admission (store : Store) (event : Event)
+    (history : List Event) (ancestor : String) (token : Lineage) (record : Option Invocation)
+    (chain : List String) (call : GrantMember) (revision : String) (generation : Nat)
+    (sealed : (ancestor, generation) ∈ token.ancestors) (not_future : generation ≤ (store ancestor).generation)
+    (changed : launchSharing (step store event ancestor).shares ≠ launchSharing (store ancestor).shares) :
+    nestedAdmission (exec (step store event) history) token record chain call revision = false := by
+  have refused := a_changed_ancestor_permanently_refuses_every_descendant store event history call.slate ancestor
+    token record generation sealed not_future changed
+  simp [nestedAdmission, refused]
+
+theorem a_foreign_invocation_refuses_every_nested_admission (store : Store) (token : Lineage)
+    (record : Invocation) (chain : List String) (call : GrantMember) (revision : String)
+    (different : record.incarnation ≠ token.incarnation) :
+    nestedAdmission store token (some record) chain call revision = false := by
+  simp [nestedAdmission, another_incarnation_cannot_reuse_an_invocation store call.slate token record different]
+
+theorem a_stale_invocation_fence_refuses_every_nested_admission (store : Store) (token : Lineage)
+    (record : Invocation) (chain : List String) (call : GrantMember) (revision : String)
+    (entry : String × Nat) (sealed : entry ∈ record.generations) (stale : (store entry.1).generation ≠ entry.2) :
+    nestedAdmission store token (some record) chain call revision = false := by
+  cases admitted : nestedAdmission store token (some record) chain call revision with
+  | false => rfl
+  | true =>
+    have current := every_nested_admission_has_current_lineage store token (some record) chain call revision admitted
+    exact False.elim (stale ((an_invocation_keeps_its_incarnation_and_every_chain_fence store call.slate token record current).2
+      entry sealed))
+
 theorem a_stale_launch_is_restarted_with_current_sharing (store : Store) (launch : Launch)
     (incarnation : String) (moved : launch.lineage.generation ≠ (store launch.slate).generation) :
-    finishLaunch store launch incarnation = .restart (beginLaunch store launch.slate incarnation) ∧
-    (beginLaunch store launch.slate incarnation).sharing = launchSharing (store launch.slate).shares ∧
-    (beginLaunch store launch.slate incarnation).ownerEgress = !(isShared store launch.slate) ∧
-    (beginLaunch store launch.slate incarnation).ownerBrowser = !(isShared store launch.slate) := by
+    finishLaunch store launch incarnation = .restart (beginLaunch store launch.slate incarnation launch.lineage.ancestors) ∧
+    (beginLaunch store launch.slate incarnation launch.lineage.ancestors).sharing = launchSharing (store launch.slate).shares ∧
+    (beginLaunch store launch.slate incarnation launch.lineage.ancestors).ownerEgress = !(isShared store launch.slate) ∧
+    (beginLaunch store launch.slate incarnation launch.lineage.ancestors).ownerBrowser = !(isShared store launch.slate) := by
   exact ⟨by simp [finishLaunch, moved], rfl, rfl, rfl⟩
 
 theorem a_ready_launch_still_has_the_sharing_it_chose (store : Store) (history : List Event)
@@ -607,6 +729,20 @@ theorem the_atomic_share_change_refuses_the_same_stale_binding :
     finishLaunch (step emptyStore (.add "board" witnessShare)) witnessLaunch "after-sharing" =
       .restart (beginLaunch (step emptyStore (.add "board" witnessShare)) "board" "after-sharing") := by
   decide
+
+theorem a_binding_that_seals_only_itself_admits_revoked_ancestor_owner_authority :
+    isShared ancestorWitnessStore "board" = true ∧ isShared ancestorWitnessRevoked "board" = false ∧
+    lineage ancestorWitnessRevoked "aux" unsealedDescendant.lineage none = true ∧
+    weighNested ancestorWitnessRevoked ["board"] ancestorWitnessCall "r1" = .unbounded ∧
+    nestedAdmission ancestorWitnessRevoked unsealedDescendant.lineage none ["board"] ancestorWitnessCall "r1" = true := by
+  decide
+
+theorem the_inherited_seal_refuses_the_same_stale_owner_call (record : Option Invocation) :
+    lineage ancestorWitnessRevoked "aux" sealedDescendant.lineage record = false ∧
+    nestedAdmission ancestorWitnessRevoked sealedDescendant.lineage record ["board"] ancestorWitnessCall "r1" = false := by
+  have refused := a_stale_ancestor_refuses_a_binding ancestorWitnessRevoked "aux" sealedDescendant.lineage record
+    "board" 1 (by decide) (by decide)
+  exact ⟨refused, by simp [nestedAdmission, ancestorWitnessCall, refused]⟩
 
 end Fence
 
