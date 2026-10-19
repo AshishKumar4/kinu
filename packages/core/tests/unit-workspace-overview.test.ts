@@ -27,10 +27,10 @@ const EMPTY: WorkspaceOverviewInputs = {
 };
 
 describe('buildWorkspaceOverview', () => {
-  test('every row the queue holds waits on the owner, a skill held for approval among them', () => {
+  test('every row the queue holds waits on the owner, a scaffold held for promotion among them', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,
-      pendingActions: [action('deferred_action'), action('plan_review'), action('change_approval')],
+      pendingActions: [action('deferred_action'), action('plan_review'), action('scaffold_version')],
     });
 
     expect(overview.decisionsWaiting).toBe(3);

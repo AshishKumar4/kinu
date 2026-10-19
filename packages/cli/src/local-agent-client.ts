@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
-import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementListing, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
+import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementListing, RefinementRequestView, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
@@ -395,14 +395,6 @@ export class LocalAgentClient implements AgentClient {
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
     return this.session.requestRefinement(opts);
-  }
-
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    return this.session.decideRefinement(input);
-  }
-
-  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return this.session.showRefinement(requestId, routeIndex);
   }
 
   async latestTakes() {

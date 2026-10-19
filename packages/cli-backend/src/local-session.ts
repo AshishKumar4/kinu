@@ -88,10 +88,8 @@ import { ActorSession, type ActorTurnLease,
   type ProposerOutcome, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type EvolutionStatus,
-  decideRefinementRoute, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
-  showRefinementRoute, type RefinementLaneStep,
-  type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult,
+  activateDreamSkills, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
+  type RefinementLaneStep,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
   latestAlternateTakeSet,
@@ -997,7 +995,7 @@ export class LocalAgentSession {
 
   /** Revert one changelog entry; invalidates model-bound state so a retired tool disappears. */
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore, events: this.eventRecorder }, id);
+    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore, events: this.eventRecorder, skills: this.refinementDeps }, id);
 
     if (result.ok) this.invalidateModelState();
 
@@ -1673,8 +1671,11 @@ export class LocalAgentSession {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
 
     // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
-    // No warming lane keeps a local conversation's cache.
-    this.turnArtifacts = artifactOverrides(turnArtifacts(this.rt.storage.sql, this.rt.actor, openingCacheCold(opening, null)));
+    // No warming lane keeps a local conversation's cache. A dream's skills land at the same turns.
+    const cold = openingCacheCold(opening, null);
+    this.turnArtifacts = artifactOverrides(turnArtifacts(this.rt.storage.sql, this.rt.actor, cold));
+
+    if (cold) await activateDreamSkills(this.refinementDeps);
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
@@ -2164,6 +2165,7 @@ export class LocalAgentSession {
       facts: this.factsStore,
       approvals: this.instructionApprovals,
       refiner: this.teamDeps?.temporary ?? null,
+      skillsVfs: this.rt.ownFiles,
     };
   }
 
@@ -2199,21 +2201,6 @@ export class LocalAgentSession {
     await this.runRefinementLane();
 
     return this.listRefinements(1).requests[0] ?? view;
-  }
-
-  /** The owner decides one staged edit. Never reachable from a tool surface. */
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    const result = await decideRefinementRoute(this.refinementDeps, input);
-
-    // A promoted skill changes the next prompt and tool surface.
-    if (result.ok) this.invalidateModelState();
-
-    return result;
-  }
-
-  /** The whole staged file plus the digest a decision must quote back. Never truncated: it is the approval surface. */
-  showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return showRefinementRoute(this.refinementDeps, { requestId, routeIndex });
   }
 
   listRefinements(limit = 20) {

@@ -5705,11 +5705,6 @@ const PENDING_ACTIONS: PendingAction[] = [
     title: "Scaffold v8 is waiting to be promoted or rolled back",
     detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
   },
-  {
-    id: "change-approvals", kind: "change_approval", at: NOW - 10e5,
-    title: "A skill the agent wrote waits for your approval",
-    detail: null,
-  },
 ];
 
 const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "plan_review");

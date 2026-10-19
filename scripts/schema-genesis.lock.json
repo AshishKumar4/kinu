@@ -960,6 +960,7 @@
     "path TEXT NOT NULL",
     "digest TEXT NOT NULL",
     "decision TEXT NOT NULL CHECK (decision IN ('approved', 'revoked'))",
+    "origin TEXT NOT NULL DEFAULT 'owner' CHECK (origin IN ('owner', 'dream'))",
     "PRIMARY KEY (actor_id, scope, path)"
   ],
   "kinu_agent_identity@packages/core/src/vfs/agent-home.ts": [

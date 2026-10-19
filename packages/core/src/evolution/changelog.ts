@@ -16,10 +16,11 @@ import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents
 import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
 import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
+import { revertDreamSkill } from './refinement-skill';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
-  type RefinementDisposition, type RefinementStage, type RefinementTrigger,
+  type RefinementDeps, type RefinementDisposition, type RefinementStage, type RefinementTrigger,
 } from './refinement';
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
@@ -42,7 +43,9 @@ export type ChangelogRevertAction =
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] }
   /** `<artifactId>@<version>`; versions are numbered per artifact. */
-  | { type: 'artifact_revert'; target: string };
+  | { type: 'artifact_revert'; target: string }
+  /** `<requestId>#<routeIndex>`: a dream's skill, staged or in effect. */
+  | { type: 'skill_revert'; target: string };
 
 export interface ChangelogEntry {
   /** Derived from the source ledger row; safe for revert-by-id. */
@@ -56,11 +59,6 @@ export interface ChangelogEntry {
   /** Only when a real revert path exists and the change is still in effect. */
   revert?: ChangelogRevertAction;
   scaffoldVersion?: number;
-  /**
-   * Only on a skill route still `pending_owner_approval`, so decided rows never
-   * offer the action. Surfaces fetch bytes via `showRefinement` and pass back its digest.
-   */
-  decision?: { requestId: string; routeIndex: number };
   /** A run that moved nothing (a refused refinement); excluded by `changesOnly`. */
   noChange?: boolean;
   /** Child rows of an aggregate card. */
@@ -73,6 +71,7 @@ const ChangelogRevertActionSchema: v.GenericSchema<ChangelogRevertAction> = v.va
   v.object({ type: v.literal('fact_forget'), target: v.string() }),
   v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
   v.object({ type: v.literal('artifact_revert'), target: v.string() }),
+  v.object({ type: v.literal('skill_revert'), target: v.string() }),
 ]);
 
 /** A changelog entry as a client reads it over the wire, its aggregate's rows within it. */
@@ -84,7 +83,6 @@ export const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() =
   evidence: v.string(),
   revert: v.optional(ChangelogRevertActionSchema),
   scaffoldVersion: v.optional(v.number()),
-  decision: v.optional(v.object({ requestId: v.string(), routeIndex: v.number() })),
   noChange: v.optional(v.boolean()),
   items: v.optional(v.array(ChangelogEntrySchema)),
 }));
@@ -306,7 +304,6 @@ const REFINEMENT_STAGE_PROSE = {
 const REFINEMENT_DISPOSITION_PROSE = {
   applied: 'in effect now',
   staged: 'takes effect after the next pause',
-  pending_owner_approval: 'staged, waiting for your approval',
   refused: 'refused by a gate',
   rejected: 'rejected by you',
 } satisfies Record<RefinementDisposition, string>;
@@ -328,7 +325,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
     const turns = `${String(request.turnIds.length)} rated turn${request.turnIds.length === 1 ? '' : 's'}`;
 
     const items: ChangelogEntry[] = request.routes.map((route, index) => {
-      // An excerpt; the full file comes only from `showRefinement`.
+      // An excerpt; a skill in effect is read whole at its path.
       const edit = request.proposal?.edits[index];
 
       const source = edit?.kind === 'prompt_section' || edit?.kind === 'tool_description' || edit?.kind === 'skill'
@@ -350,17 +347,16 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
               : source}`),
       };
 
-      // Only while the decision is still owed.
-      if (route.disposition === 'pending_owner_approval' && route.kind === 'skill') {
-        item.decision = { requestId: request.id, routeIndex: index };
-      }
-
       if (route.disposition === 'applied' && route.kind === 'fact') {
         item.revert = { type: 'fact_forget', target: route.target };
       }
 
       if (route.disposition === 'staged' && route.owner === 'artifact_versions') {
         item.revert = { type: 'artifact_revert', target: route.target };
+      }
+
+      if (route.disposition === 'staged' && route.kind === 'skill' && request.stage !== 'rolled_back') {
+        item.revert = { type: 'skill_revert', target: `${request.id}#${String(index)}` };
       }
 
       return item;
@@ -486,20 +482,12 @@ export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenA
   return listUnseenChangelog(sql, actor, seenAt).length;
 }
 
-/**
- * The changes that wait on the owner: a skill the agent wrote for itself, held until they approve it. Everything else
- * in the journal it did by itself and only records (facts learned, turns rated, a tuning run, wording staged or
- * reworded, a refinement applied or refused), so none of it is a request (the owner, 2026-10-16). A pending scaffold
- * is the queue's own row.
- */
-export function awaitingTheOwner(entries: readonly ChangelogEntry[]): ChangelogEntry[] {
-  return entries.flatMap((entry) => [...(entry.decision === undefined ? [] : [entry]), ...awaitingTheOwner(entry.items ?? [])]);
-}
-
 export interface ChangelogRevertContext {
   rt: AgentRuntime;
   facts: FactsStore;
   events: ScaffoldDecisionEvents;
+  /** The trust authority and skills plane a dream's skill lives in; absent, its revert is refused and says so. */
+  skills?: Pick<RefinementDeps, 'approvals' | 'skillsVfs'>;
 }
 
 export interface ChangelogRevertResult {
@@ -598,6 +586,18 @@ function changelogRevert(ctx: ChangelogRevertContext, action: ChangelogRevertAct
         if (at <= 0 || !Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid artifact target: ${action.target}` };
 
         return revertArtifactVersion(ctx.rt.storage.sql, ctx.rt.actor, action.target.slice(0, at), version);
+      }
+
+      case 'skill_revert': {
+        const at = action.target.lastIndexOf('#');
+        const routeIndex = Number(action.target.slice(at + 1));
+
+        if (at <= 0 || !Number.isInteger(routeIndex) || routeIndex < 0) return { ok: false, error: `invalid skill target: ${action.target}` };
+
+        if (ctx.skills === undefined) return { ok: false, error: 'this host wires no trust authority, so no skill can be reverted here' };
+        const skills = ctx.skills;
+
+        return yield* Effect.promise(() => revertDreamSkill(ctx.rt, skills, { requestId: action.target.slice(0, at), routeIndex }));
       }
 
       case 'fact_forget': {

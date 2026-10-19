@@ -8,7 +8,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type * as acorn from 'acorn';
 import { childrenOf, constantString, isNameOnly, parseEvolvedCode, type PlacedNode } from './evolved-code';
 
-export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
+export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import' | 'skill';
 
 export interface MisevolutionViolation {
   ok: false;
@@ -102,6 +102,8 @@ const SURFACE_CRITERIA: Readonly<Record<MisevolutionSurface, readonly string[]>>
   craft: ['network-egress', ...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
   import: ['network-egress', ...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
   craft_tool: [...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
+  // A dream's skill is a procedure in prose, which may name the network its steps use, as a crafted tool's code may.
+  skill: [...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
 });
 
 function tokensOf(text: string, keeps: (char: string) => boolean): string[] {

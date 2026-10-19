@@ -1,8 +1,10 @@
 /** How the agent changes itself, as the owner sees and overrules it. */
 import { expect, setSystemTime } from 'bun:test';
 import * as v from 'valibot';
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import {
-  CHAT_SESSION_ID, PlanReviewStore, recordBranchTakeSet, sectionArtifact, stageArtifact,
+  CHAT_SESSION_ID, PlanReviewStore, createRefinementStore, instructionDigest, recordBranchTakeSet, refinementStagingPath,
+  sectionArtifact, stageArtifact, workspaceSkillPath,
 } from '@kinu.run/core';
 import type { SharedBackend } from '../backend';
 import { PROMPT_SECTIONS } from '../../../../core/src/prompting/section-templates';
@@ -73,6 +75,49 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       expect(prefixOf('fourth')).toBe(prefixOf('third'));
       // The owner's revert is the one move that does not wait.
       expect(prefixOf('fifth')).toBe(prefixOf('first'));
+    },
+  },
+  {
+    title: 'a dream\'s skill joins the skills index only at a turn whose cache is cold; the owner\'s revert removes it at once',
+    async run({ surface, sql, actor, files, requests }) {
+      const skill = '---\nname: terse-replies\ndescription: Answer in one short line when the owner asks a yes-or-no question.\n---\nOne line.\n';
+      const target = workspaceSkillPath('terse-replies');
+      const store = createRefinementStore(sql, actor);
+
+      const prefixOf = (text: string): string => {
+        const request = requests().find((asked) => JSON.stringify(asked.prompt.at(-1)?.content).includes(`"${text}"`));
+
+        if (request === undefined) throw new Error(`no request answered '${text}'`);
+
+        return JSON.stringify(request.prompt.filter((message) => message.role === 'system'));
+      };
+
+      const pause = () => { setSystemTime(new Date(Date.now() + 3 * 60 * 60_000)); };
+
+      try {
+        await surface.send('first');
+        // A dream's accepted skill, as its route leaves it: staged where no prompt reads it.
+        const { request } = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: ['turn-dreamt'] });
+        await writeText(files, refinementStagingPath(request.id, 'terse-replies'), skill);
+        store.advance(request.id, 'requested', 'evaluating', {
+          routes: [{ kind: 'skill', owner: 'instruction_approvals', target, disposition: 'staged', digest: instructionDigest(skill), reason: 'r' }],
+        });
+        await surface.send('second');
+        pause();
+        await surface.send('third');
+        await surface.send('fourth');
+        expect(await surface.revertChangelogEntry(`refinement:${request.id}:0`)).toEqual({ ok: true, detail: `removed ${target} and revoked its trust` });
+        await surface.send('fifth');
+      } finally {
+        setSystemTime();
+      }
+
+      expect(prefixOf('second')).toBe(prefixOf('first'));
+      expect(prefixOf('second')).not.toContain('**terse-replies**');
+      expect(prefixOf('third')).toContain('**terse-replies**');
+      expect(prefixOf('fourth')).toBe(prefixOf('third'));
+      expect(prefixOf('fifth')).not.toContain('**terse-replies**');
+      expect(await exists(files, target)).toBe(false);
     },
   },
   {
@@ -197,7 +242,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a refinement with no rated turns is refused on the record, and an unknown one decides nothing',
+    title: 'a refinement with no rated turns is refused on the record',
     async run({ surface }) {
       expect(await surface.listRefinements(5)).toMatchObject({
         requests: [], debt: { owed: false, summary: 'no new rated turns since the last dream' },
@@ -210,11 +255,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       });
       expect((await surface.listRefinements(5)).requests.map((listed) => [listed.id, listed.stage]))
         .toEqual([[request.id, 'refused']]);
-
-      expect(await surface.showRefinement('refine-nope', 0)).toEqual({ ok: false, error: 'no refinement refine-nope' });
-      expect(await surface.decideRefinement({
-        requestId: 'refine-nope', routeIndex: 0, expectedDigest: 'digest-nobody-showed', decision: 'reject',
-      })).toEqual({ ok: false, error: 'no refinement refine-nope' });
     },
   },
 ];

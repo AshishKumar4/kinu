@@ -97,9 +97,6 @@ export const AGENT_RPC_ACCESS = {
   // Spends child-agent inference and writes user preferences into memory: the owner's call.
   requestRefinement: 'interactive',
   listRefinements: 'interactive',
-  // Grants staged bytes system placement, like `approveInstruction`.
-  decideRefinement: 'interactive',
-  showRefinement: 'interactive',
   createSubordinateAgent: 'interactive',
   renameSubordinateAgent: 'interactive',
   renameMainChat: 'interactive',

@@ -5,6 +5,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 // activation, not clock; the row carries its pass's claim token so a revoked pass stops before
 // its next owner write.
 
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
@@ -146,11 +147,11 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
 };
 
 /**
- * Pending states differ: a fact is live now, a section or tool text is staged for the next cold turn, a skill awaits the owner.
- * `refused` is a deterministic gate; `rejected` is the owner declining.
+ * A fact is live now; a section, tool text or skill is staged for the next cold turn. `refused` is a deterministic gate
+ * or the dream's reviewer; `rejected` is the owner declining, by reverting.
  */
 const REFINEMENT_DISPOSITIONS = [
-  'applied', 'staged', 'pending_owner_approval', 'refused', 'rejected',
+  'applied', 'staged', 'refused', 'rejected',
 ] as const;
 
 export type RefinementDisposition = (typeof REFINEMENT_DISPOSITIONS)[number];
@@ -162,8 +163,10 @@ export interface RefinementDeps {
   readonly facts: FactsStore;
   /** null: no roster substrate; requests stay `requested` for a host that can run them. */
   readonly refiner?: TemporaryAgentPort | null;
-  /** Absent means no owner surface; a skill edit says so. */
+  /** Absent means no trust authority; a skill edit is refused and says so. */
   readonly approvals?: InstructionApprovalStore;
+  /** The plane the turn's skills index reads, where a dream's skill lands and stages. */
+  readonly skillsVfs: VFS;
 }
 
 const RefinementRouteSchema = v.object({
@@ -234,7 +237,7 @@ export interface RefinementRequest {
   readonly updatedAt: number;
 }
 
-/** Omits proposal bodies: `showRefinement` is the one gated endpoint for staged files. */
+/** Omits proposal bodies; the changelog shows an excerpt of each. */
 export interface RefinementRequestView {
   readonly id: string;
   readonly trigger: RefinementTrigger;

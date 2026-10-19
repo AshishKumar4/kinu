@@ -8,9 +8,9 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 //
 // The refiner is a temporary agent (`agents.ask`) with no write authority: it
 // returns prose, this module parses it, and every write is made here against a
-// named owner. Nothing here promotes: sections are staged for the next cold turn,
-// skills wait for owner approval, subagent specs are refused, and facts must be
-// backed by the user's own sentence in the reviewed turns.
+// named owner. Nothing here promotes: sections, tool texts and skills are staged for
+// the next cold turn, subagent specs are refused, and facts must be backed by the
+// user's own sentence in the reviewed turns.
 
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
@@ -30,7 +30,7 @@ import {
   type RefinementTrigger, type SettleRefinementPatch,
 } from './refinement';
 import { PROMPT_SECTIONS } from '../prompting/section-templates';
-import { routeSkill, settleSkillApproval } from './refinement-skill';
+import { routeSkill, settleDreamSkill, skillRefusal } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
@@ -451,8 +451,12 @@ function scoreEdits(
           return 'refused' in scored ? { edit, note: '', refused: scored.refused } : { edit, note: scored.detail, artifact: scored.evidence };
         }
 
-        case 'skill':
-          return { edit, note: `a skill file of ${String(Buffer.byteLength(change.source, 'utf8'))} bytes` };
+        case 'skill': {
+          const refused = skillRefusal(deps, change.source);
+
+          return refused === null ? { edit, note: `a skill file of ${String(Buffer.byteLength(change.source, 'utf8'))} bytes` } : { edit, note: '', refused };
+        }
+
         case 'subagent_spec':
           return { edit, note: '', refused: SUBAGENT_SPEC_REFUSAL };
       }
@@ -635,8 +639,8 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     'quote is not in the trajectory is refused:',
     factLines,
     '',
-    'Skill files (`skill`): workspace instruction bytes. A proposed skill stays unverified and',
-    'carries no tool policy until the owner approves its exact digest.',
+    'Skill files (`skill`): a procedure the agent follows when its description matches the work. An accepted',
+    'skill becomes trusted at the next turn whose prompt cache is cold, and the owner can revert it.',
     '',
     'Subordinate specs (`subagent_spec`): a subordinate\'s role and spec belong to that agent\'s',
     'own config and there is no writable proposal authority for them. Propose one only to record',
@@ -990,7 +994,7 @@ async function settleRoutes(
   let rejected = 0;
   let pending = 0;
   const blocked: string[] = [];
-  // Facts and approved skills have no owner-side pending state left to read.
+  // Facts have no pending state left to read.
   const alreadyApplied = request.routes.filter((route) => route.disposition === 'applied').length;
   // Owner rejections are distinct from gate refusals (see REFINEMENT_DISPOSITIONS).
   rejected = request.routes.filter((route) => route.disposition === 'rejected').length;
@@ -1005,8 +1009,8 @@ async function settleRoutes(
       continue;
     }
 
-    if (route.disposition === 'pending_owner_approval' && route.kind === 'skill') {
-      const settled = await settleSkillApproval(deps, request, route);
+    if (route.disposition === 'staged' && route.kind === 'skill') {
+      const settled = await settleDreamSkill(deps, request, route);
 
       if (settled.state === 'pending') {
         pending += 1;
@@ -1021,13 +1025,12 @@ async function settleRoutes(
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
 
   if (pending > 0) {
-    // From `gated` this is a real transition into the owners' hands.
-    const waiting = `${String(pending)} proposal${pending === 1 ? '' : 's'} awaiting their owners`
+    const waiting = `${String(pending)} edit${pending === 1 ? '' : 's'} waiting for a turn whose prompt cache is cold`
       + (blocked.length > 0 ? ` · ${blocked.join(' · ')}` : '');
 
     if (request.stage === 'evaluating') {
       // No transition, but record a blocked promotion's reason in place so it
-      // is not hidden behind "awaiting their owners".
+      // is not hidden behind the wait.
       if (blocked.length === 0 || request.detail === waiting) return null;
       store.record(request.id, 'evaluating', { detail: waiting });
 
@@ -1049,7 +1052,7 @@ async function settleRoutes(
 
   if (alreadyApplied > 0) {
     parts.push(`${String(alreadyApplied)} edit${alreadyApplied === 1 ? '' : 's'} in effect: `
-      + "preferences from the user's own words, and skills you approved");
+      + "preferences from the user's own words");
   }
 
   if (rolledBack > 0) {

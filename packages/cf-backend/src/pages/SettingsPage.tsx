@@ -438,6 +438,10 @@ const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
   none: "not decided",
 };
 
+function decisionWord(row: InstructionSourceRow): string {
+  return row.byDream ? "added by a dream" : DECISION_WORD[row.decision];
+}
+
 /** Approval binds the exact bytes: any later edit stops matching the digest and drops the file back to reference material. */
 function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -520,7 +524,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
         <div className="space-y-1">
           {rows.map((row) => {
             const opened = open?.path === row.path ? open : null;
-            const state = row.reason === undefined ? DECISION_WORD[row.decision] : `not readable: ${row.reason}`;
+            const state = row.reason === undefined ? decisionWord(row) : `not readable: ${row.reason}`;
             const followed = row.decision === "approved";
             const readWord = opened === null ? "Read" : "Hide";
 

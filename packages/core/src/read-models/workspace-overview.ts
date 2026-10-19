@@ -71,7 +71,7 @@ function activityOf(working: boolean, unfinished: boolean): WorkspaceOverview['a
 }
 
 export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): WorkspaceOverview {
-  // Every row the queue holds is a decision: what the agent did by itself never reaches it (`awaitingTheOwner`).
+  // Every row the queue holds is a decision: what the agent did by itself never reaches it.
   const decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0) + inputs.openQuestions
     + inputs.pendingActions.length;
 

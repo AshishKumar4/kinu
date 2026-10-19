@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import { renderChangelogText } from '../src/tui/index';
 import {
-  awaitingTheOwner, buildChangelog, countUnseenChangelog,
+  buildChangelog, countUnseenChangelog,
   revertChangelogEntryById,
   initScaffoldTables, initTurnRatingTables,
   initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
@@ -59,33 +59,6 @@ function rate(rt: AgentRuntime, input: Partial<RecordTurnRatingInput> & Pick<Rec
     turnId: crypto.randomUUID(), corrected: input.score <= 2 ? 1 : 0, wrong: null, request: 'q', answer: 'a', ...input,
   });
 }
-
-describe('what waits on the owner', () => {
-  test('what the agent did by itself waits on no one: facts learned, turns rated, a tuning run', () => {
-    const { rt, facts } = setup();
-
-    facts.upsert('computer.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
-    rate(rt, { score: 4, source: 'model' });
-    const runId = startGepaRun(rt.storage.sql, rt.actor, { target: 'scaffold' });
-
-    finishGepaRun(rt.storage.sql, rt.actor, {
-      runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1', metricCalls: 12, iterations: 3,
-    });
-
-    const entries = buildChangelog(rt.storage.sql, rt.actor);
-
-    expect(entries.map((entry) => entry.kind).sort()).toEqual(['fact', 'gepa', 'ratings']);
-    expect(awaitingTheOwner(entries)).toEqual([]);
-  });
-
-  test('a skill held for the owner\'s approval waits on them, wherever in the journal it sits', () => {
-    const held = { id: 'refinement:r1:0', kind: 'refinement', at: 2, summary: 'Staged a skill: brevity', evidence: '', decision: { requestId: 'r1', routeIndex: 0 } } as const;
-    const applied = { id: 'refinement:r1:1', kind: 'refinement', at: 2, summary: 'Learned: answers run one line', evidence: '' } as const;
-
-    expect(awaitingTheOwner([{ id: 'refinement:r1', kind: 'refinement', at: 2, summary: 'A refinement', evidence: '', items: [applied, held] }]))
-      .toEqual([held]);
-  });
-});
 
 describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('a scaffold proposal entry waits for the owner\'s decision', async () => {
@@ -408,8 +381,7 @@ describe('unseen-count logic (the badge)', () => {
     expect(countUnseenChangelog(sql, actor, 0)).toBe(buildChangelog(sql, actor, { limit: 30 }).length);
   });
 
-  /** A first rating is new to the owner but asks nothing of them. */
-  test('the first rated turn of a fresh workspace is new in the journal, with nothing to decide', () => {
+  test('the first rated turn of a fresh workspace is new in the journal', () => {
     const { rt } = setup();
     rate(rt, { score: 4.5, source: 'model', request: 'hi', answer: 'hello' });
 
@@ -417,7 +389,6 @@ describe('unseen-count logic (the badge)', () => {
 
     expect(countUnseenChangelog(rt.storage.sql, rt.actor, 0)).toBe(1);
     expect(entries.map((entry) => entry.kind)).toEqual(['ratings']);
-    expect(awaitingTheOwner(entries)).toEqual([]);
   });
 });
 

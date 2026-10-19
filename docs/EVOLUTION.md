@@ -228,60 +228,45 @@ Every transition is `WHERE stage = <from>`, so a duplicate delivery writes nothi
 | `fact` | `agent_facts` (`FactsStore.upsert`) | Applied immediately, and only when the refiner quotes the user substantively. A judge of recorded turns cannot weigh a preference, so the user's own words stand in as the evidence. The quote must be at least 20 characters and 4 words (a fragment like "one line" matches almost any conversation), and must appear in a user message or follow-up, never in the agent's own response. The accepted quote rides the route into the changelog. |
 | `prompt_section` | `artifact_versions` (`scoreAuthoredEdit`) | Takes the proposer's pre-live tests: the static checks, then the judge-only comparison over the request's low-rated turns and the regression set. An edit that passes and that the reviewer accepts is staged, with the numbers it was measured at; only a turn whose prompt cache is cold makes it current. With no low-rated turn among the request's, it is refused. |
 | `tool_description` | `artifact_versions` (`scoreAuthoredEdit`) | A built-in tool's description, or its input fields' descriptions as one JSON object (`part: 'schema'`), measured, reviewed and staged as a section is. Field text must keep exactly the fields it had. The dreamer's brief lists each tool's texts with their sizes, and the reviewer's size budget counts tool texts with the sections. |
-| `skill` | staged under `.kinu/`, promoted into the workspace VFS by `instruction_approvals` | Stages the bytes at `.kinu/refinement/<requestId>/<name>.md`, which nothing that builds a prompt reads. The owner's approval promotes them. Refuses a non-canonical path, a built-in's name, an unparsable file, a final path that already exists, and any standing approval or revocation for that path. |
+| `skill` | staged under `.kinu/`, trusted at a cold turn by `instruction_approvals` (origin `dream`) | Refused before review when unparsable, named for a built-in, or vetoed by the misevolution gate's `skill` surface. Accepted, the bytes stage at `.kinu/refinement/<requestId>/<name>.md`, which nothing that builds a prompt reads; the next cold turn writes the trust row and then the file. Refuses a non-canonical path, a final path that already exists, and any trust row or revocation for that path. |
 | `subagent_spec` | none | Refused by name. A subordinate's role and spec belong to that agent's own config, which a workspace reads and never writes. The finding is recorded; no mirror store is created. |
 
 A proposal at `account` scope is refused. No authority reachable from a workspace database can write account-wide state, and narrowing it to one workspace would apply a preference where the owner did not ask for it.
 
-### A staged skill influences nothing until the owner promotes it
+### A dream's skill moves the prompt only at a cold turn
 
-Writing the file to `/home/main/skills/<name>/SKILL.md` and relying on content-addressed trust to hold it `unverified` leaks, as the second review found. Trust decides placement and tool policy, not visibility: `discoverSkills` walks that directory every turn, so the file's front matter enters the skills index and its body renders in the unverified reference tier. The model reads it, and a proposal that changes what the next turn reads has already been applied.
+Writing the file to `/home/main/skills/<name>/SKILL.md` and relying on content-addressed trust to hold it `unverified` leaks. Trust decides placement and tool policy, not visibility: `discoverSkills` walks that directory every turn, so the file's front matter enters the skills index and its body renders in the unverified reference tier. The skills index is in the prompt prefix, so a file written at a warm turn would break the cache, as a section would.
 
-So the bytes go to `refinementStagingPath(requestId, name)` under `.kinu/`, the same internal root as `SPILL_DIRS` and `EVENT_CONTENT_DIR`. Neither `discoverSkills` nor `gatherApprovableInstructions` walks it, so the staged file has zero influence. The request row stays the only record of the proposal; no second store exists.
+So the bytes go to `refinementStagingPath(requestId, name)` under `.kinu/`, which neither `discoverSkills` nor `gatherApprovableInstructions` walks. The route reads `staged`. At a turn whose prompt cache is cold, before its skills are read, `activateDreamSkills` writes the trust row (origin `dream`) and then the file; each host calls it beside `turnArtifacts`, the cloud only for the workspace agent's own turn, since the skills root is the workspace's. The lane never writes the skills root: it only reads where each skill stands.
 
-The whole path (staging, showing, deciding, promoting) lives in `core/src/evolution/refinement-skill.ts`.
+The whole path (staging, activation, settling, reverting) lives in `core/src/evolution/refinement-skill.ts`.
 
-### Read it, then decide
+### The activation order, and why nothing half-lands
 
-`showRefinementRoute` returns the whole file and the digest of its current bytes, never an excerpt. Everything else in this flow is bounded because it is for scanning, but this is the approval surface, and a truncated one asks for a decision about bytes the decider could not see. A skill file needs no ceiling of this module's own: it is bounded by what bounds every skill file, the turn's admission allocation, which defers an oversize body rather than rejecting it.
+1. the path must have no trust row, or one approving these exact bytes; a revoked or moved row is left for the lane to roll back;
+2. write the `InstructionApproval` for the final path and digest, origin `dream`;
+3. the final path must be absent, or already hold these exact bytes; the staged bytes must still hash to the reviewed digest;
+4. copy the staged bytes onto the final path, read them back, verify the digest, and only then delete the staging.
 
-The digest is a token. `decideRefinementRoute` takes `{ requestId, routeIndex, expectedDigest, decision }` and refuses any other digest. Between reading and deciding, the request can be re-driven, the routes re-ordered, and the staging rewritten. Each of those changes the digest and none changes the index, so a decision is always about bytes, never about a list position.
+Step 4's read-back guards against a partial or transformed write, which would leave a trusted file nobody reviewed. Verifying before the unlink means the staging outlives every failure, so the next cold turn retries. A crash between 2 and 4 leaves a trust row for a file that does not exist; nothing discovers a path with no file, so the window is inert.
 
-Surfaces: `/refine show <n> <edit>` prints the file and the two commands to paste back; `/refine approve|reject <n> <edit> <digest>` decides. The CF `showRefinement` and `decideRefinement` callables are both gated `interactive`. None of it is on any model-facing tool surface, because this is the act that turns proposed bytes into system instructions.
-
-A decision is offered only while it is owed. `ChangelogEntry.decision` is present exactly while the route is `pending_owner_approval`, so a decided row stops advertising an action the backend would refuse. `showRefinementRoute` and `decideRefinementRoute` also refuse unless the request is `gated` or `evaluating`.
-
-### The approval order, and why nothing half-lands
-
-1. the route must be decidable and the digest must be the one shown;
-2. the staged bytes must still hash to that digest;
-3. the final path must be absent, or already hold these exact bytes;
-4. write the `InstructionApproval` for the final path and digest;
-5. copy the staged bytes onto the final path, read them back, verify the digest, and only then delete the staging.
-
-Step 5's read-back guards against a partial or transformed write. Such a write would leave a file that discovery admits and the trust row vouches for, whose content is not what the owner approved: a trusted skill nobody wrote. Verifying before the unlink means the staging outlives every failure, so the promotion can always be retried and is never half-done.
-
-A crash between 3 and 4 leaves an approval for a file that does not exist. Nothing discovers a path with no file, so the window is inert, and the next settle completes the promotion. The file appears already trusted and is never briefly live but unverified. The reverse order would have exactly that window.
-
-Every reachable state is correct or recoverable, and `promoteStagedSkill` is idempotent, so whoever looks next repairs it:
-
-| state | what happens |
+| state | what happens at the next cold turn |
 |---|---|
-| trust row, no file, staging present | copied and verified now |
-| trust row, right file, staging present | staging deleted now |
+| trust row, no file, staging present | copied and verified |
+| trust row, right file, staging present | staging deleted |
 | trust row, right file, no staging | done |
-| trust row, **wrong** file | refused, staging kept, collision surfaced on the request detail. Never overwritten |
+| trust row, **wrong** file | refused, staging kept, the collision on the request detail. Never overwritten |
 | trust row, no file, no staging | refused; the bytes are gone and cannot be invented |
 
-The promotion is copy, verify, unlink rather than a rename, because core's `VFS` (`types/primitives.ts`) offers no rename and every backend implements that narrow interface. The guarantee comes from the order plus the read-back, not from an atomic move.
+The promotion is copy, verify, unlink rather than a rename, because core's `VFS` offers no rename.
 
-A resumed plan never re-routes a decided edit. Re-routing a skill the owner already approved or rejected would replace their answer with a fresh `pending_owner_approval`, asking again about bytes they had settled and, after an approval, silently undoing a promotion that happened.
+### The owner reverts
 
-Staging is discarded on every path that ends it: approval (after the read-back), rejection, revocation, and a trust row that moved to different bytes.
+A dream's skill, staged or in effect, carries `skill_revert` on its changelog card. The revert revokes the path's trust, removes the file while it still holds the dream's bytes (a file the owner has since rewritten stays, untrusted), discards the staging, and marks the route `rejected`. The revocation stands, so no later dream proposes that path again. `rejected` stays distinct from `refused`: a refusal is a gate or the dream's reviewer; a rejection is the owner.
 
-Rejecting deletes the staging and settles the request `rolled_back`. `rejected` is its own disposition, distinct from `refused`. A refusal is a gate working as designed; a rejection is the owner declining bytes they were shown. A rate that mixed them would measure the gates and the person as one signal.
+A resumed plan never re-routes an applied or rejected edit.
 
-Settlement is derived, never notified. The lane reads `listPromptSectionVersions` for a section verdict and `InstructionApprovalStore.get` for a skill's, comparing the stored decision's digest against the route's. Approved for this digest counts as applied; revoked, or a moved digest, counts as rolled back; no row at all stays pending, with no clock on the owner.
+Settlement is derived, never notified. The lane reads the artifact versions for a section's or tool text's verdict and `InstructionApprovalStore.get` plus the file for a skill's. Trusted for this digest with the file in place counts as applied; revoked, or a moved digest, counts as rolled back; no row stays pending until a cold turn comes, with no clock.
 
 The settle scan covers `gated` and `evaluating`. `gated` is where a hard kill lands: `plan` routes the edits, advances to `gated`, and settles in the same pass, so a process killed between those two steps leaves a row with every owner write done and nothing watching it.
 

@@ -4,7 +4,7 @@ import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import {
-  awaitingTheOwner, buildChangelog, ChangelogEntrySchema, countUnseenChangelog, type ChangelogEntry,
+  buildChangelog, ChangelogEntrySchema, countUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog';
 import { boundedInt } from '../utils/bounds';
 import type { EvolutionEngine } from '../evolution/engine';
@@ -53,11 +53,6 @@ export function getEvolutionChangelog(
     unseenCount: countUnseenChangelog(sql, actor, seenAt),
     seenAt,
   };
-}
-
-/** The needs-you row for the journal is built from this: the entries that wait on the owner, seen or not, newest first. */
-export function getChangesAwaitingTheOwner(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[] {
-  return awaitingTheOwner(buildChangelog(sql, actor, { limit: MAX_CHANGELOG_LIMIT }));
 }
 
 /** Zeroes the unseen badge. */

@@ -240,7 +240,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  awaitingTheOwner, buildChangelog, countUnseenChangelog,
+  buildChangelog, countUnseenChangelog,
   revertChangelogEntryById, ChangelogEntrySchema, ChangelogRevertResultSchema,
   type ChangelogEntry, type ChangelogEntryKind,
   type ChangelogRevertResult,
@@ -1857,11 +1857,7 @@ export {
   listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
-export {
-  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute, RefinementDecisionResultSchema, StagedSkillResultSchema,
-  type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult, type StagedSkillView,
-} from './evolution/refinement-skill';
+export { activateDreamSkills } from './evolution/refinement-skill';
 
 export {
   runGepa,
@@ -2123,7 +2119,7 @@ export {
 export { isAdvisorSeverity } from './types/advisor';
 
 export {
-  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 
 export { EvolutionChangelogViewSchema, type EvolutionChangelogView } from './read-models/evolution-views';

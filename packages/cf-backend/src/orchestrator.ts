@@ -133,9 +133,8 @@ import {
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
-  decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
-  type RefinementListing, type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult,
+  activateDreamSkills, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
+  type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
   type ProposerOutcome, type ScaffoldDecisionResult,
@@ -211,7 +210,7 @@ import {
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
-  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -1639,7 +1638,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const resolved = await this.surfaceProfile(actor, turn, opened);
 
     // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
-    const overrides = artifactOverrides(turnArtifacts(runtime.storage.sql, actor.handle, lane.opening?.cacheCold ?? false));
+    const cold = lane.opening?.cacheCold ?? false;
+    const overrides = artifactOverrides(turnArtifacts(runtime.storage.sql, actor.handle, cold));
+
+    // A dream's skills land in the workspace's skills root, which every turn's index reads, so only this agent's own
+    // cold turn writes them.
+    if (cold && actor.handle.actorId === this.rt.actor.actorId) await activateDreamSkills(this.refinementDeps);
     const reports: SubordinateReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
@@ -4873,13 +4877,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private pendingActions(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): PendingAction[] {
-    const awaiting = getChangesAwaitingTheOwner(this.boundSql, this.rt.actor);
-
     return buildPendingActions({
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
       workspaceProposals: this.proposals.open(),
-      changeApprovals: { count: awaiting.length, latestAt: awaiting[0]?.at ?? Date.now() },
       // Each agent's plans are its own isolate's (main's included).
       pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
     });
@@ -4920,7 +4921,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Id-addressed against a fresh digest so a shifted list cannot revert the wrong row. */
   @callable()
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    return await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder }, id);
+    return await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder, skills: this.refinementDeps }, id);
   }
 
   /** Claimed take sets keyed by their turn's assistant message id. */
@@ -7196,24 +7197,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       async () => { await refinementPass(this.refinementDeps); }, { workspace: this.name }));
 
     return view;
-  }
-
-  /**
-   * Owner decision on one staged edit; the only path by which a proposed skill becomes trusted.
-   * `interactive` in the RPC gate and absent from model-facing tools, so agent bytes cannot self-authorise.
-   */
-  @callable()
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    return await decideRefinementRoute(this.refinementDeps, input);
-  }
-
-  /**
-   * The whole staged file for one edit plus the digest a decision must quote back.
-   * `interactive`: carries proposed instruction bytes. Never truncated; the modal renders it.
-   */
-  @callable()
-  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return showRefinementRoute(this.refinementDeps, { requestId, routeIndex });
   }
 
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */

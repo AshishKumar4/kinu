@@ -20,10 +20,16 @@ export type InstructionDecision = 'approved' | 'revoked';
 
 const DECISION = v.picklist(['approved', 'revoked']);
 
+/** Who granted it: the owner, or a dream that wrote the skill for itself, which the owner can revert. */
+export type InstructionOrigin = 'owner' | 'dream';
+
+const ORIGIN = v.picklist(['owner', 'dream']);
+
 export interface InstructionApproval {
   readonly path: string;
   readonly digest: string;
   readonly decision: InstructionDecision;
+  readonly origin: InstructionOrigin;
 }
 
 /** SHA-256 (not fnv1a64: the adversary writes the file). `v` guards the shape against silent format drift. */
@@ -38,6 +44,7 @@ export function initInstructionApprovalsTable(execRaw: RawSqlExec): void {
     path     TEXT NOT NULL,
     digest   TEXT NOT NULL,
     decision TEXT NOT NULL CHECK (decision IN ('approved', 'revoked')),
+    origin   TEXT NOT NULL DEFAULT 'owner' CHECK (origin IN ('owner', 'dream')),
     PRIMARY KEY (actor_id, scope, path)
   )`);
 }
@@ -46,16 +53,19 @@ interface Row {
   path: string;
   digest: string;
   decision: string;
+  origin: string;
 }
 
 function toApproval(row: Row): InstructionApproval {
   const decision = v.safeParse(DECISION, row.decision);
+  const origin = v.safeParse(ORIGIN, row.origin);
 
   return {
     path: row.path,
     digest: row.digest,
     // An unparsable decision is a corrupt row; read it as `revoked` to fail closed.
     decision: decision.success ? decision.output : 'revoked',
+    origin: origin.success ? origin.output : 'owner',
   };
 }
 
@@ -95,7 +105,7 @@ export class InstructionApprovalStore {
     this.actor.assertCurrent();
 
     const rows = this.sql<Row>`
-      SELECT path, digest, decision FROM instruction_approvals
+      SELECT path, digest, decision, origin FROM instruction_approvals
       WHERE actor_id = ${this.actorId} AND scope = ${this.scope} AND path = ${path} LIMIT 1`;
 
     return rows[0] ? toApproval(rows[0]) : null;
@@ -108,29 +118,29 @@ export class InstructionApprovalStore {
   }
 
   /** Re-approving a changed file moves the digest. */
-  approve(path: string, digest: string): void {
+  approve(path: string, digest: string, origin: InstructionOrigin = 'owner'): void {
     this.actor.assertCurrent();
     void this.sql`
-      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
-      VALUES (${this.actorId}, ${this.scope}, ${path}, ${digest}, 'approved')
+      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision, origin)
+      VALUES (${this.actorId}, ${this.scope}, ${path}, ${digest}, 'approved', ${origin})
       ON CONFLICT (actor_id, scope, path)
-        DO UPDATE SET digest = ${digest}, decision = 'approved'`;
+        DO UPDATE SET digest = ${digest}, decision = 'approved', origin = ${origin}`;
   }
 
-  /** The row stays, holding the refusal; only a fresh approval re-grants. */
+  /** The row stays, holding the refusal; only a fresh approval re-grants. A revocation is always the owner's. */
   revoke(path: string): void {
     this.actor.assertCurrent();
     void this.sql`
-      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
-      VALUES (${this.actorId}, ${this.scope}, ${path}, '', 'revoked')
-      ON CONFLICT (actor_id, scope, path) DO UPDATE SET decision = 'revoked'`;
+      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision, origin)
+      VALUES (${this.actorId}, ${this.scope}, ${path}, '', 'revoked', 'owner')
+      ON CONFLICT (actor_id, scope, path) DO UPDATE SET decision = 'revoked', origin = 'owner'`;
   }
 
   list(): InstructionApproval[] {
     this.actor.assertCurrent();
 
     return this.sql<Row>`
-      SELECT path, digest, decision FROM instruction_approvals
+      SELECT path, digest, decision, origin FROM instruction_approvals
       WHERE actor_id = ${this.actorId} AND scope = ${this.scope} ORDER BY path`.map(toApproval);
   }
 }

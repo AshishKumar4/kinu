@@ -55,7 +55,7 @@ type SameCall =
   | 'latestAlternateTakes' | 'pickAlternateTake'
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
-  | 'listRefinements' | 'showRefinement' | 'decideRefinement'
+  | 'listRefinements'
   | 'revertConversation' | 'clearConversation' | 'runOptimization' | 'branchTurn' | 'sendState' | 'awaitSend';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
@@ -236,9 +236,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
       planFileRestore: (dir, id) => agent.planFileRestore(dir, id),
       restoreFileCheckpoint: (dir, id) => agent.restoreFileCheckpoint(dir, id),
       listRefinements: (limit) => agent.listRefinements(limit),
-      showRefinement: (requestId, routeIndex) => agent.showRefinement(requestId, routeIndex),
       requestRefinement: (opts) => agent.requestRefinement(opts),
-      decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
       clearConversation: () => agent.clearConversation(),
       runOptimization: (target) => agent.runOptimization(target),
@@ -387,9 +385,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       planFileRestore: (dir, id) => session.planFileRestore(dir, id),
       restoreFileCheckpoint: (dir, id) => session.restoreFileCheckpoint(dir, id),
       listRefinements: async (limit) => session.listRefinements(limit),
-      showRefinement: (requestId, routeIndex) => session.showRefinement(requestId, routeIndex),
       requestRefinement: (opts) => session.requestRefinement(opts),
-      decideRefinement: (input) => session.decideRefinement(input),
       revertConversation: (entryId) => session.revertConversation(entryId),
       // The clear's answer is the emptied request's measure, which cf records instead of returning.
       clearConversation: async () => { await session.clearConversation(); },
