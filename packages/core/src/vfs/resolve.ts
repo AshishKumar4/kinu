@@ -181,9 +181,9 @@ export function addressingHint(planes: PathPlanes, written?: string): string {
   const references = referencePrefixes(planes).map((prefix) => `\`${prefix}://\``);
   const reading = [`a relative path starts at \`${planes.cwd}\` and \`~\` is \`${planes.home}\``, `${andList(references)} name this workspace's planes`];
 
-  const landed = written === undefined ? Effect.succeed('') : Effect.match(resolvedPath(written, planes), {
-    onFailure: (refused) => refused.message,
-    onSuccess: (at) => andList([`\`${written}\` is \`${at.absolute}\` here`, ...prefixedReadings(written, at.absolute, planes)]),
+  const landed = written === undefined ? Effect.succeed('') : Effect.matchEffect(resolvedPath(written, planes), {
+    onFailure: (refused) => Effect.succeed(refused.message),
+    onSuccess: (at) => Effect.map(prefixedReadings(written, at.absolute, planes), (readings) => andList([`\`${written}\` is \`${at.absolute}\` here`, ...readings])),
   });
 
   return settleSync(Effect.map(landed, (where) => [...(where === '' ? [] : [where]), ...reading].join('; ')));
@@ -194,27 +194,29 @@ export function addressingHint(planes: PathPlanes, written?: string): string {
  * `skills/x` meant `vfs://skills/x`, and a computer's `/workspace/app` is `computer://workspace/app`. Text only; none
  * is looked up.
  */
-function prefixedReadings(written: string, landed: string, planes: PathPlanes): string[] {
-  if (written === '~' || written.startsWith('~/')) return [];
+function prefixedReadings(written: string, landed: string, planes: PathPlanes): Effect.Effect<string[]> {
+  if (written === '~' || written.startsWith('~/')) return Effect.succeed([]);
   const rest = written.replace(/^(?:\.?\/)+/u, '');
-  const named = new Set([landed]);
+  const rows = planes.prefixes.filter((row) => row.prefix !== DEVICE_PREFIX);
 
-  return planes.prefixes.flatMap((row) => {
-    if (row.prefix === DEVICE_PREFIX) return [];
+  const readings = Effect.forEach(rows, (row) => {
     const reference = `${row.prefix}://${rest}`;
 
-    return settleSync(Effect.match(vfsPath(row.prefix, rest, planes, reference), {
-      onFailure: () => [],
-      onSuccess: (vfs) => {
-        const at = onMachine(vfs, planes);
-        const view = planes.views.find((name) => holds(`/${name}`, vfs));
+    return Effect.match(vfsPath(row.prefix, rest, planes, reference), {
+      onFailure: () => null,
+      onSuccess: (vfs) => ({ reference, at: onMachine(vfs, planes), view: planes.views.find((name) => holds(`/${name}`, vfs)) }),
+    });
+  });
 
-        if (named.has(at)) return [];
-        named.add(at);
+  return Effect.map(readings, (read) => {
+    const named = new Set([landed]);
 
-        return [view === undefined ? `\`${reference}\` is \`${at}\`` : `\`${reference}\` is in the ${view} view`];
-      },
-    }));
+    return read.flatMap((reading) => {
+      if (reading === null || named.has(reading.at)) return [];
+      named.add(reading.at);
+
+      return [reading.view === undefined ? `\`${reading.reference}\` is \`${reading.at}\`` : `\`${reading.reference}\` is in the ${reading.view} view`];
+    });
   });
 }
 
