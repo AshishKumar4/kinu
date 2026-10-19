@@ -989,6 +989,95 @@ describe('daemon device path confinement', () => {
     expect(refused).toBeGreaterThan(0);
   });
 
+  // L111 #2, the macOS half: a listing that held the directory but read its names by its path again, keeping those the
+  // held directory also has, told a command which of the names it planted a swapped-in private directory shares: a
+  // listing showing only some of them. Every listing shows all the planted names or none of them, and no private one.
+  // (Mid-rename the view's realpath can judge a sibling inside the root, the directory aside or the project itself,
+  // measured with Bun 1.4.3: those listings are of directories this frame may read, and hold no planted name.)
+  test('a listing tells a command nothing of a private directory it swaps in for the checked one', async () => {
+    const root = scratchDir('daemon-list-planted');
+    const project = path.join(root, 'project');
+    const inner = path.join(project, 'inner');
+    const outside = path.join(root, 'private');
+    const planted = ['guess-1.md', 'guess-2.md', 'guess-3.md', 'guess-4.md'];
+
+    fs.mkdirSync(inner, { recursive: true });
+    fs.mkdirSync(outside);
+
+    for (const name of planted) fs.writeFileSync(path.join(inner, name), 'planted');
+    // The private directory holds one of the guesses, and a name of its own.
+    fs.writeFileSync(path.join(outside, 'guess-3.md'), 'private');
+    fs.writeFileSync(path.join(outside, 'payroll.xlsx'), 'private');
+    const shown = {};
+    let refused = 0;
+
+    const swapper = Bun.spawn({
+      cmd: [process.execPath, '-e', SWAPPER],
+      env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+
+    try {
+      await swapper.stdout.getReader().read();
+
+      for (let attempt = 0; attempt < 2000; attempt += 1) {
+        const ws = fakeWs();
+
+        handle({ id: 'list-race', method: 'listFiles', sandbox: scoped([project]), params: [inner] }, ws, {});
+        const answer = await ws.response('list-race');
+
+        if (answer.error !== undefined) refused += 1;
+        else {
+          const names = answer.result.map((entry) => entry.name).sort((a, b) => a.localeCompare(b)).join(' ');
+
+          shown[names] = (shown[names] ?? 0) + 1;
+        }
+      }
+    } finally {
+      swapper.kill();
+      await swapper.exited;
+    }
+
+    const whole = planted.join(' ');
+
+    const told = Object.keys(shown).filter((names) => names.includes('payroll.xlsx')
+      || (names !== whole && planted.some((name) => names.split(' ').includes(name))));
+
+    expect({ told, whole: (shown[whole] ?? 0) > 0 }).toEqual({ told: [], whole: true });
+    expect(swapper.signalCode).toBe('SIGTERM');
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  // A libc that cannot be bound lists nothing another way: the listing is refused, saying why.
+  test('a listing is refused, not read by its path, when the descriptor cannot be enumerated', async () => {
+    const project = scratchDir('daemon-list-unbound');
+    const ws = fakeWs();
+    const held = require('../src/daemon/held.js');
+
+    const failing = held.heldModule((name) => {
+      if (name === 'bun:ffi') throw new Error('no libc binding here');
+
+      return require(name);
+    });
+
+    fs.writeFileSync(path.join(project, 'a.txt'), 'a');
+
+    const refusal = (() => {
+      try {
+        failing.atJudged({ raw: false }, project, {}, (at) => at.list((entries) => entries));
+
+        return null;
+      } catch (cause) {
+        return { code: cause.code, said: cause.message.includes('cannot list') };
+      }
+    })();
+
+    handle({ id: 'listed', method: 'listFiles', sandbox: scoped([project]), params: [project] }, ws, {});
+    expect({ refusal, listed: (await ws.response('listed')).result.map((entry) => entry.name) }).toEqual({ refusal: { code: 'ENOTSUP', said: true }, listed: ['a.txt'] });
+  });
+
   // L111 #2's review: a stat walked from / threw when a directory of its path was missing, where an absent path is null.
   test('a stat of a path whose directory is not there yet answers null, followed or not', async () => {
     const project = scratchDir('daemon-stat-missing');
