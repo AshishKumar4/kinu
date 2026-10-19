@@ -1208,6 +1208,42 @@ describe('the browser plane names its own credential', () => {
   });
 });
 
+// Staging 5c522f12d, 2026-10-19: the office task's chart check dropped a longer log over the seeded one and every trial
+// on both models was refused 412, because since e5e3fa8af an overwrite names the revision it replaces.
+test('a file dropped over one already there replaces exactly the revision the conflict names, as the Files upload does', async () => {
+  const puts: (string | null)[] = [];
+  const held = { revision: 'gen-1:66', bytes: 'old' };
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch: async (request) => {
+      const match = request.headers.get('if-match');
+
+      puts.push(match);
+
+      if (match === null || match !== JSON.stringify(held.revision)) {
+        return Response.json({ error: 'This file changed after you opened it.', revision: held.revision }, { status: 412 });
+      }
+
+      held.bytes = await request.text();
+
+      return Response.json({ ok: true, revision: 'gen-1:67' });
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'file-write probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.writeFile('logs/api.jsonl', 'new');
+    expect(held.bytes).toBe('new');
+    expect(puts).toEqual([null, JSON.stringify('gen-1:66')]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test('an explicitly missing file is an oracle miss; a failed answer is the build\'s, a relayed platform failure is not', async () => {
   let status = 404;
   let rpcError = 'the workspace has no snapshot';
