@@ -70,8 +70,8 @@ END
 cat > /slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.workspace.exists("/slates") }; }
-  async mutate() { return await this.env.workspace.writeFile("/slates/${SLATE}/mark", "x"); }
+  async probe() { return { exists: (await this.env.workspace.fs.stat("/slates")).isDir === true }; }
+  async mutate() { return await this.env.workspace.fs.write("/slates/${SLATE}/mark", "x"); }
   async fetch() { return new Response("cut-share-probe-ok"); }
 }
 END
@@ -81,7 +81,7 @@ END
 cat > /slates/${CONTROL_SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
-  async probe() { return { exists: await this.env.workspace.exists("/slates") }; }
+  async probe() { return { exists: (await this.env.workspace.fs.stat("/slates")).isDir === true }; }
   async ctrl() { return await this.env.workspace.agents.message("x"); }
   async fetch() { return new Response("cut-agent-probe-ok"); }
 }
@@ -169,8 +169,8 @@ END`));
         });
         goals.push({
           what: 'audit-records-admission',
-          reached: audit.some((row) => row.calls.some((call) => call.member === 'exists' && call.impact === 'observe' && call.ok === true))
-            && audit.some((row) => row.calls.some((call) => call.member === 'writeFile' && call.ok === false)),
+          reached: audit.some((row) => row.calls.some((call) => call.member === 'fs.stat' && call.impact === 'observe' && call.ok === true))
+            && audit.some((row) => row.calls.some((call) => call.member === 'fs.write' && call.ok === false)),
           detail: JSON.stringify(audit.map((row) => row.calls)),
         });
 

@@ -40,7 +40,7 @@ export interface ExecutorTool {
 export type CommandTool = ExecutorTool & Required<Pick<ExecutorTool, 'prepare'>>;
 
 /** The members the approval gate holds: each must say what it runs. */
-export const COMMAND_MEMBERS = ['exec', 'startProcess', 'runCode'] as const;
+export const COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 
 /** A command member whose `execute` is its own reading run, so there is no second way to read a call. */
 export function commandTool(
@@ -134,8 +134,10 @@ export interface ExecutorStatus {
   mounts?: string[];
 }
 
-/** What a program reaches of an executor: its members, and the status that sizes `computer.resize`. */
-export type ExecutorProviderSurface = Pick<ExecutorProvider, 'name' | 'tools' | 'positionalArgs' | 'getStatus'>;
+/** What a program reaches of an executor: its members, the capabilities that admit its machine members, its port
+ *  contract, and the status that sizes `computer.resize`. */
+export type ExecutorProviderSurface = Pick<ExecutorProvider,
+  'name' | 'tools' | 'positionalArgs' | 'getStatus' | 'capabilities' | 'exposePort' | 'unexposePort' | 'listExposedPorts' | 'fileRoot'>;
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
 export interface ExecutorProvider {
@@ -154,6 +156,12 @@ export interface ExecutorProvider {
    * (`/pc/<name>`) opens on its roster with no segment, else on that machine's home.
    */
   homeDir(segment?: string): Promise<string>;
+
+  /**
+   * Where this machine's own files sit in the actor's file plane, and the home its relative paths start at; absent for
+   * a machine with no root there. `device` picks one of several machines, by name, as every device member does.
+   */
+  fileRoot?(device?: string): Promise<{ readonly root: string; readonly home?: string }>;
 
   readonly capabilities: ReadonlySet<ExecutorCapability>;
 

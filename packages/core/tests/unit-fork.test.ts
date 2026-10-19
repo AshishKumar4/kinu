@@ -3,6 +3,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
  *  session writers, and carried by the production frame stream into the production receiver. */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { adaptMemory, forkTransferFrames, readForkLineage, readSoul, type ForkFrameReply, actorHomeName } from '../src/index';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
@@ -34,6 +35,35 @@ async function plane(ws: TestWorkspace) {
 }
 
 describe('a workspace fork', () => {
+  test('copies actor and workspace tables and rows but no private table', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'fork without scratch state' });
+    const data = appDataOf(src);
+
+    for (const scope of ['actor', 'workspace', 'private'] as const) {
+      const name = `${scope}_notes`;
+      data.createTable({ name, scope, columns: [{ name: 'note', type: 'text' }] });
+      data.apply({ op: 'insert', table: name, rows: [{ note: scope }] });
+    }
+
+    expect(data.fork.tables().map(({ declaration }) => v.parse(v.object({ name: v.string() }), JSON.parse(declaration)).name).sort())
+      .toEqual(['actor_notes', 'workspace_notes']);
+    expect(data.fork.page('actor_notes', null, 10).rows).toEqual([{ note: 'actor' }]);
+    expect(data.fork.page('workspace_notes', null, 10).rows).toEqual([{ note: 'workspace' }]);
+
+    await forkInto(src, tgt, { untilMessageId: 'm1' });
+    const landed = appDataOf(tgt);
+
+    expect(landed.listTables().map(({ name }) => name).sort()).toEqual(['actor_notes', 'workspace_notes']);
+    expect(landed.select('actor_notes')).toEqual([{ note: 'actor' }]);
+    expect(landed.select('workspace_notes')).toEqual([{ note: 'workspace' }]);
+    expect(() => landed.schema('private_notes')).toThrow(expect.objectContaining({ code: 'missing' }));
+    expect(tgt.sql`SELECT name FROM sqlite_master WHERE name = 'app_private_notes'`).toEqual([]);
+    expect(data.select('private_notes')).toEqual([{ note: 'private' }]);
+  });
+
   test('an unrelated hire cannot inherit access through a reused source uid', async () => {
     const src = fresh();
     const tgt = fresh();

@@ -47,6 +47,7 @@ test('a successful tool call records the value it returned, and a text tool reco
 
     try {
       await actor.session.execute(lease, {
+        stores: null,
         task: 'Write the notes.', loopVersion: await actor.runtime.identity.scaffold.version(),
         chat: { modelSpec: 'test/model', model, system: 'Write.', tools }, extensions: [],
         dynamic: () => ({ factsBlock: '' }),
@@ -110,6 +111,7 @@ test('a narrated multi-step turn answers with its final step, whatever it stream
       const streamed: string[] = [];
 
       const result = await actor.session.execute(lease, {
+        stores: null,
         task: 'Run the test and reply with only PASS or FAIL.', loopVersion: await actor.runtime.identity.scaffold.version(),
         chat: { modelSpec: 'test/model', model, system: 'Answer.', tools }, extensions: [],
         dynamic: () => ({ factsBlock: '' }),

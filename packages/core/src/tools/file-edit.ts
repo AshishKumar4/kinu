@@ -299,7 +299,7 @@ export function formatFileSlice(
   if (shown.length === 0) {
     // A cap smaller than one line: show its head and name the readFile-in-eval recipe.
     const line = range.lines[0] ?? { text: '', chars: 0 };
-    const tail = `is ${String(line.chars)} chars and does not fit the ${String(opts.maxChars)}-char cap; read or slice it with workspace.readFile inside eval]`;
+    const tail = `is ${String(line.chars)} chars and does not fit the ${String(opts.maxChars)}-char cap; read or slice it with file.text inside eval]`;
     const refusal = affordable(`\n\n[line ${String(first)} of ${opts.path} ${tail}`, `\n\n[line ${String(first)} ${tail}`);
     const head = line.text.slice(0, headEnd(line.text, Math.max(0, opts.maxChars - refusal.length)));
 

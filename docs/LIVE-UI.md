@@ -127,9 +127,9 @@ Contract: `packages/core/src/slates/rpc.ts`. Hosted dispatch lives in
 
 Every slate gets one surface, `workspace`: the server calls it as
 `this.env.workspace.<namespace>.<member>(...args)` from inside a method, and a
-page imports it from `kinu:slate`. A path of one name is the workspace
-executor's own member, so `workspace.readFile(path)` reads as it does in a
-program. Each call passes one of the calling actor's own capabilities, under
+page imports it from `kinu:slate`. A path that names no other namespace is the
+workspace executor's own member, so `workspace.fs.text(path)` reads as it does
+in a program. Each call passes one of the calling actor's own capabilities, under
 that actor's existing gates. The workspace root acts as the session user with
 the root providers. A hosted actor (a subordinate, a head, a swarm node) acts as
 its own provisioned uid with its own role-narrowed providers, and has no `mcp`,

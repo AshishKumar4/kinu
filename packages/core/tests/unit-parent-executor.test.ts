@@ -1,34 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { answerParentRpc, createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { createTestRuntime } from './helpers';
+import { present } from '@kinu.run/test-utils';
 
 function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
-    read: async (path: string) => {
-      calls.push(`read:${path}`);
-
-      return new TextEncoder().encode('hi');
-    },
-    write: async (input) => {
-      calls.push(`write:${input.kind}:${input.path}`);
-
-      return null;
-    },
-    list: async (path: string) => {
-      calls.push(`list:${path}`);
-
-      return [];
-    },
-    stat: async (path: string) => {
-      calls.push(`stat:${path}`);
-
-      return null;
-    },
-    delete: async (path: string) => {
-      calls.push(`delete:${path}`);
-
-      return null;
-    },
     exec: async (command: string) => {
       calls.push(`exec:${command}`);
 
@@ -38,13 +16,6 @@ function parentHandle(calls: string[]): ParentWorkspaceHandle {
 }
 
 describe('parent executor input validation', () => {
-  test('exists with no path refuses instead of stating "undefined" is absent', async () => {
-    const calls: string[] = [];
-    const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(await parent.tools.exists.execute(undefined)).toMatchObject({ reason: 'bad_input' });
-    expect(calls).toEqual([]);
-  });
-
   test('exec with no command refuses instead of running "undefined"', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
@@ -53,13 +24,27 @@ describe('parent executor input validation', () => {
     expect(calls).toEqual([]);
   });
 
-  test('readdir with a non-string path refuses, while no path still lists the root', async () => {
+  test('exec forwards a shell search to the parent workspace', async () => {
     const calls: string[] = [];
     const parent = createParentExecutor({ handle: parentHandle(calls) });
-    expect(await parent.tools.readdir.execute(123)).toMatchObject({ reason: 'bad_input' });
-    expect(calls).toEqual([]);
-    await parent.tools.readdir.execute(undefined);
-    expect(calls).toEqual(['list:.']);
+    expect(await parent.tools.exec.execute('find . -name notes.md')).toBe('ok');
+    expect(calls).toEqual(['exec:find . -name notes.md']);
+  });
+
+  test('a missing cwd runs none of a multi-command parent script', async () => {
+    const { rt } = createTestRuntime();
+    const shell = present(rt.shell, 'the real parent shell');
+    const parent = createParentExecutor({ handle: { exec: (command) => shell.exec(command) } });
+    const command = 'pwd; echo x > f';
+
+    await parent.tools.exec.execute(command, { cwd: rt.storage.home });
+    expect(await readText(rt.storage.vfs, 'f')).toBe('x\n');
+    await rt.storage.vfs.unlink('f');
+
+    const answer = await parent.tools.exec.execute(command, { cwd: `${rt.storage.home}/missing-parent-cwd`, parts: true });
+
+    expect(answer).toMatchObject({ stdout: '', exitCode: 1 });
+    expect(await exists(rt.storage.vfs, 'f')).toBe(false);
   });
 });
 

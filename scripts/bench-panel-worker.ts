@@ -170,7 +170,6 @@ async function main(): Promise<void> {
 
       return { ...seat, sources: { ...seat.sources, models: { ...seat.sources.models, normalize: (spec) => spec, resolve: member } } };
     },
-    ledgers: (actor) => seating.runLedgers(actor),
     // The analyst synthesises the panel, through the same routed policy both
     // backends use rather than a second merge path this instrument maintains.
     profile: async () => analystProfile(),

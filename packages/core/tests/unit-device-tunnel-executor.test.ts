@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
+import { createDeviceTunnelExecutor, deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import type { DeviceStatus } from '../src/execution/device-status';
 import type { JsonValue } from '../src/utils/json';
 import { DEVICE_ERRORS, deviceFailure } from '../src/execution/device-protocol';
@@ -127,14 +127,17 @@ describe('createDeviceTunnelExecutor', () => {
     const files = filesOf(provider);
     const read = await failureOf(readText(files, '/etc/passwd'));
     const write = await failureOf(writeText(files, '/tmp/out', 'x'));
-    const exists = await provider.tools.exists.execute('/root/.ssh/id_ed25519');
+    const stat = await failureOf(Promise.resolve(files.stat('/root/.ssh/id_ed25519')));
 
-    for (const answer of [read, write]) expect(answer).toContain('outside the consented device directory');
-    expect(exists).toMatchObject({ error: expect.stringContaining('outside the consented device directory') });
+    for (const answer of [read, write, stat]) expect(answer).toContain('outside the consented device directory');
 
     // Above the consent, a listing holds only the next step toward it, answered without the machine.
-    expect(await provider.tools.readdir.execute('/')).toEqual(['home']);
-    expect(await provider.tools.readdir.execute('/home/dev')).toEqual(['project']);
+    const native = deviceFiles(t, {
+      consentedRoot: async () => '/home/dev/project', deviceHome: async () => '/home/dev', scope: async () => 'root',
+    });
+
+    expect((await native.readdir('/')).map(({ name }) => name)).toEqual(['home']);
+    expect((await native.readdir('/home/dev')).map(({ name }) => name)).toEqual(['project']);
 
     expect(t.calls).toEqual([]);
     expect(await readText(files, '/home/dev/project/readme.md')).toBe('contents');
@@ -159,10 +162,10 @@ describe('createDeviceTunnelExecutor', () => {
 
     // Every file call refuses without asking the machine anything, above all no `exec`.
     for (const answer of [
-      await provider.tools.readdir.execute('/home/dev'),
-      await provider.tools.exists.execute('/home/dev/.kinu/config.json'),
+      await failureOf(Promise.resolve(filesOf(provider).readdir('/home/dev'))),
+      await failureOf(Promise.resolve(filesOf(provider).stat('/home/dev/.kinu/config.json'))),
     ]) {
-      expect(answer).toMatchObject({ error: expect.stringContaining('reported no consented directory') });
+      expect(answer).toContain('reported no consented directory');
     }
 
     for (const answer of [await failureOf(readText(filesOf(provider), '/home/dev/notes.md')), await failureOf(writeText(filesOf(provider), '/home/dev/x', 'y'))]) {
@@ -240,8 +243,8 @@ describe('createDeviceTunnelExecutor', () => {
 
     await readText(filesOf(provider), path);
     await writeText(filesOf(provider), path, 'hello');
-    await provider.tools.readdir.execute(path);
-    await provider.tools.exists.execute(path);
+    await filesOf(provider).readdir(path);
+    await filesOf(provider).stat(path);
 
     expect(t.calls.some((call) => call.method === 'exec')).toBe(false);
     expect(t.calls.every((call) => call.params[0] === path)).toBe(true);
@@ -357,28 +360,22 @@ describe('createDeviceTunnelExecutor', () => {
     });
   });
 
-  test('a read that could not reach the device never answers `false`', async () => {
+  test('a stat that could not reach the device never asserts absence', async () => {
     const t = staticTransport({}, async () => {
       throw new Error('permission denied');
     });
 
-    const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
-
-    // `false` would claim the path is absent; an unreachable read is a different fact.
-    expect(answer).not.toBe(false);
-    expect(answer).toMatchObject({ reason: 'io' });
+    await expect(Promise.resolve(filesOf(createDeviceTunnelExecutor(t)).stat('/tmp/a'))).rejects.toMatchObject({ code: 'io' });
   });
 
-  test('an unanswered or string-valued exists RPC never asserts absence', async () => {
+  test('an unanswered or string-valued stat RPC never asserts absence', async () => {
     for (const wire of [undefined, 'false']) {
       const t = staticTransport(
         {},
         async () => wire,
       );
 
-      const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
-      expect(answer).not.toBe(false);
-      expect(answer).toMatchObject({ reason: 'io' });
+      await expect(Promise.resolve(filesOf(createDeviceTunnelExecutor(t)).stat('/tmp/a'))).rejects.toMatchObject({ code: 'EIO' });
     }
   });
 

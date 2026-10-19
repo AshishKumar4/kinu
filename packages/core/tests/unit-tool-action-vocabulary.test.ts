@@ -47,7 +47,8 @@ const SURFACES: readonly DispatchSurface[] = [
     build: (rt) => buildBuiltinTools({ rt, report: { report: async () => ({ ok: true }) }, conversations: conversationsFor(rt) }),
   },
   {
-    tool: 'file', field: 'op', vocabulary: Object.keys(FILE),
+    // Whole-file text is for programs; the native tool reads a bounded window.
+    tool: 'file', field: 'op', vocabulary: Object.keys(FILE).filter((member) => member !== 'text'),
     build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
 ];

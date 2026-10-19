@@ -46,7 +46,7 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
-import { ACTIVITY_SURFACE, type SurfaceKind } from "@kinu.run/core";
+import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
@@ -3038,7 +3038,7 @@ const EFFECT_ASKS: PendingAction[] = [
 
 const EFFECTS_ASKS: PendingAction[] = [
   ...EFFECT_ASKS,
-  effectAsk({ id: "effect-notes", tool: "writeFile", server: "workspace", root: {}, payload: { path: "notes/triage.md" }, at: NOW - 50_000 }),
+  effectAsk({ id: "effect-notes", tool: "fs.write", server: "workspace", root: {}, payload: { path: "notes/triage.md" }, at: NOW - 50_000 }),
 ];
 
 const ASK_SETS = new Map([
@@ -5719,8 +5719,8 @@ const SHARE_GRAPH: SlateReach = {
       { member: "create_issue", impact: "externalSend", risk: RISK("Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there.") },
     ] },
     { slate: "issue-triage", namespace: "workspace", title: "workspace", members: [
-      { member: "readFile", impact: "observe", risk: NO_RISK },
-      { member: "writeFile", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
+      { member: "fs.text", impact: "observe", risk: NO_RISK },
+      { member: "fs.write", impact: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
     ] },
     { slate: "issue-triage", namespace: "memory", title: "memory", members: [
       { member: "recall", impact: "observe", risk: NO_RISK },
@@ -5736,7 +5736,7 @@ const SHARE_GRAPH: SlateReach = {
       { member: "summary", impact: "observe", risk: NO_RISK },
     ] },
     { slate: "digest", namespace: "workspace", title: "workspace", members: [
-      { member: "readFile", impact: "observe", risk: NO_RISK },
+      { member: "fs.text", impact: "observe", risk: NO_RISK },
     ] },
   ],
 };
@@ -5745,10 +5745,10 @@ const LIVE_SHARE: LiveShareRecord = {
   id: "live-board-1", slate: "issue-triage", visibility: "public", handle: "3f9a1c7e02",
   grant: { slates: ["issue-triage", "digest"], members: [
     { slate: "issue-triage", namespace: "mcp.github", member: "read_issue", impact: "observe" },
-    { slate: "issue-triage", namespace: "workspace", member: "readFile", impact: "observe" },
+    { slate: "issue-triage", namespace: "workspace", member: "fs.text", impact: "observe" },
     { slate: "issue-triage", namespace: "memory", member: "recall", impact: "observe" },
     { slate: "issue-triage", namespace: "slates.digest", member: "summary", impact: "observe" },
-    { slate: "digest", namespace: "workspace", member: "readFile", impact: "observe" },
+    { slate: "digest", namespace: "workspace", member: "fs.text", impact: "observe" },
   ] },
   // Approved at r1; the slate is at r2 now, so it is stopped until the owner approves the new reach.
   createdAt: NOW - 864e5, revokedAt: null, users: [], editors: [], mode: "owner", grantRevision: "r1", editedBy: null, stale: true, gallery: null,
@@ -5763,7 +5763,7 @@ const TEAM_SHARE: LiveShareRecord = {
 /** The owner's "Always for this slate" answers at the slate's revision now: a GitHub change on one org, and a file write. */
 const STANDING: SharePreapproval[] = [
   { slate: "issue-triage", namespace: "mcp.github", member: "create_issue", root: { org: "acme" }, revision: "r2" },
-  { slate: "issue-triage", namespace: "workspace", member: "writeFile", root: {}, revision: "r2" },
+  { slate: "issue-triage", namespace: "workspace", member: "fs.write", root: {}, revision: "r2" },
 ];
 
 /** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
@@ -5925,6 +5925,14 @@ function WorkFrame() {
   const jobs = streaming ? [building, ...lane.jobs] : lane.jobs;
   // Work opens a plan on its own page and the Work tab returns, as the workspace's column does.
   const [surface, setSurface] = useState<SurfaceKind>("Work");
+  // `&presence=late`: the tabs' presence comes only once `__presenceArrives` is called, from a timer as a socket's
+  // answer comes, not from a press.
+  const late = params.get("presence") === "late";
+  const [presence, setPresence] = useState<TabPresence | undefined>(late ? undefined : { explorations: true, work: true });
+
+  useEffect(() => {
+    Object.assign(window, { __presenceArrives: (arrived: TabPresence) => { setTimeout(() => { setPresence(arrived); }, 0); } });
+  }, []);
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -5935,7 +5943,7 @@ function WorkFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={jobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={lane.queue}
-          tabPresence={{ explorations: true, work: true }}
+          tabPresence={presence} presencePending={presence === undefined}
           rpc={workspaceRpc(lane.rpc)}
         />
       </div>

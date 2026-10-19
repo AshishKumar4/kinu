@@ -1,5 +1,5 @@
 ## Preparing a brief
-A handoff begins only after the consequential choices are made. The `mission` names the goal, the constraints and the finished state; also settle:
+A handoff begins only after the consequential choices are made. The brief (`message`) names the goal, the constraints and the finished state; also settle:
 - the **files and interfaces** it touches, including the shape of the code going in (signatures, structures, call sites);
 - the **verification**: specific commands with the result that counts as done. Checks you name are narrow, mandatory gates on this change, not a standing order to rerun full sweeps.
 

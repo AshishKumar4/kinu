@@ -32,6 +32,7 @@ export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-t
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
   type RunTurnSources, type TurnSourcesBundle, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
+  type TurnTools,
 } from './orchestrator/turn-assembly';
 
 export {
@@ -64,7 +65,7 @@ export type {
 
 export { inTurnSurface, scopedTurnSurface, TurnSurface } from './orchestrator/main-turn-surface';
 
-export { turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
+export { standingFileLedger, turnLedgers, type TurnLedgers } from './orchestrator/turn-accumulator';
 
 // Records that keyed work happened, kept after its row is retired.
 export {
@@ -546,15 +547,12 @@ export {
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
 
-export { createStateCodemodeProvider } from './tools/state-operations';
 
 export { executorNamespace } from './tools/executor-operations';
 
 export { DB, type AppColumnType } from './operations/db';
 
-export { STATE } from './operations/state';
 
-export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
 
 export {
   APP_TABLE_SCOPES, APP_MUTATIONS,
@@ -685,11 +683,17 @@ export {
 
 export {
   buildBuiltinTools,
+  builtinStoreDeps,
+  surfaceStores,
+  type ServedTools,
+  type BuiltinStoreInputs,
   ownerLaneTools, ownerLaneDeclarations,
   codemodeSurface,
   type BuiltinToolDeps,
   type CodemodeBuilder, type CodemodeSurface,
 } from './tools/builtins';
+
+export { serveStores, type ServedStores, type StoreDeps } from './tools/actor-stores';
 
 // An actor surface is buildBuiltinTools plus `agents`; see delegation/actor-tools.ts.
 export {
@@ -719,7 +723,7 @@ export { createMemoryCodemodeProvider, serveMemory, type MemoryDeps } from './to
 export { MEMORY } from './operations/memory';
 
 export {
-  nativeTool, nativeToolSchema, codemodeNamespace, callOperation, listOperations, type OperationCaller, type OperationListing,
+  nativeTool, nativeToolSchema, codemodeNamespace, nestedMembers, type NestedMembers, callOperation, listOperations, type OperationCaller, type OperationListing,
 } from './tools/operation-surfaces';
 
 export {
@@ -1092,7 +1096,7 @@ export {
 } from './execution/command-call';
 
 export {
-  commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './execution/exec-result';
 
 export {
@@ -1104,7 +1108,7 @@ export {
 } from './execution/escalation';
 
 export {
-  answerParentRpc, createParentExecutor, createParentWorkspaceVfs, type ParentWorkspaceHandle, type ParentExecResult,
+  answerParentRpc, createParentExecutor, type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcWrite,
 } from './execution/parent';
 

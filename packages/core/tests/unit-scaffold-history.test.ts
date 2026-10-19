@@ -9,7 +9,7 @@ import {
 } from '../src/orchestrator/scaffold-host';
 import type { Executor } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
-import { createTestRuntime } from './helpers';
+import { createTestRuntime, servedStoresFor } from './helpers';
 
 function conversation(n: number): ModelMessage[] {
   return Array.from({ length: n }, (_, i): ModelMessage => ({
@@ -192,7 +192,7 @@ describe('the sandbox bridge', () => {
 
     rt.executor = executor;
     await runScaffold({
-      rt, task: 'anything', emit: () => undefined, llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
+      rt, stores: servedStoresFor(rt), task: 'anything', emit: () => undefined, llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       scaffoldCodeOverride: 'async function run() {}',
       ...opts,
     });

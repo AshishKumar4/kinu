@@ -22,6 +22,7 @@ import { openWorkspaceCLI } from '../src/open';
 import { compactedScreenshots, screenshot } from '../../compaction/tests/helpers';
 import { RELEASE_SIGNING_PUBLIC_KEY_ENV } from '@kinu.run/core';
 import { DAEMON_PREDECESSOR_ENV, PROVIDER_KEY_ENV, SESSION_CREDENTIAL_ENV } from '../../core/src/cli/command-env';
+import { fileNamespaceFor } from '../../core/tests/helpers';
 
 /** Every name Kinu reads a credential or its own setting from, as the declaring modules name them. */
 const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
@@ -249,7 +250,7 @@ describe('addressing the bound directory', () => {
     expect(await refusalOf(() => rt.storage.vfs.readdir(`${WORKSPACE_ROOT}/notes`))).toBe('ENOENT');
   });
 
-  /** The agent's `file` tool and codemode's `workspace.writeFile`, with a user who answers `answer`. */
+  /** The agent's `file` tool and codemode's `workspace.fs.write`, with a user who answers `answer`. */
   function agentTools(rt: CLIRuntime, answer: () => ShellApprovalOutcome | null) {
     const asked: string[] = [];
 
@@ -260,9 +261,9 @@ describe('addressing the bound directory', () => {
     });
 
     const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: rt.stores.conversationSearch }).file, 'the file tool'));
-    const writeFile = present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor').tools.writeFile;
+    const writeFile = fileNamespaceFor(rt, present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor')).tools['fs.write'];
 
-    return { file, writeFile: (path: string, content: string) => present(writeFile, 'workspace.writeFile').execute(path, content), asked };
+    return { file, writeFile: (path: string, content: string) => present(writeFile, 'workspace.fs.write').execute(path, content), asked };
   }
 
   test('a relative path that climbs out of the directory is a host path outside it, and its write waits for the user', async () => {

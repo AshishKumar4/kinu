@@ -20,11 +20,12 @@ async function evalTool() {
 test("eval lists a namespace's members as call forms, and a program reads one's declaration with describe", async () => {
   const program = await evalTool();
   const run = toolExecute<{ code: string }, { result: JsonValue }>(program);
-  const { result } = await run({ code: "// read state's declarations\nreturn [describe('state.get'), describe('state')]" });
+  const { result } = await run({ code: "// read db's declarations\nreturn [describe('db.select'), describe('db')]" });
   const [member, namespace] = v.parse(v.tuple([v.string(), v.string()]), result);
 
-  expect(member).toContain('get');
-  expect(namespace).toContain('state');
+  expect(member).toContain('select');
+  expect(namespace).toContain('db');
+  expect(namespace).toContain('private');
 });
 
 test('describe names the namespaces it has when asked for one it does not', async () => {

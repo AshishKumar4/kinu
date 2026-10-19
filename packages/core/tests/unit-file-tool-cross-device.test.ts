@@ -9,7 +9,7 @@ import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { withApprovalGatedFiles } from '../src/execution/approval';
 import { createInlineExecutor } from '../src/tools/inline-executor';
-import { executorNamespace } from '../src/tools/executor-operations';
+
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import { createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
 import type { ShellApprovalPolicy } from '../src/safety/approval-gate';
@@ -19,7 +19,7 @@ type FileToolInput = JsonObject & { readonly op: string };
 import { isJsonObject, type JsonValue, type JsonObject } from '../src/utils/json';
 import { sha256Hex } from '../src/safety/argument-digest';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
-import { createTestRuntime, conversationsFor } from './helpers';
+import { createTestRuntime, conversationsFor, fileNamespaceFor } from './helpers';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
@@ -101,16 +101,16 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = fa
   });
 
   if (tools.file === undefined) throw new Error('No file tool');
-  const { memory, craftStore } = rt;
+  const { craftStore } = rt;
   const shell = present(rt.shell, 'the workspace shell');
-  const workspace = createInlineExecutor({ vfs: toolFiles, files: plane, memory, craftStore, shell, filesOwner: 'agent' });
-  const writeFile = workspace.tools.writeFile;
+  const workspace = fileNamespaceFor({ ...rt, toolFiles }, createInlineExecutor({ vfs: toolFiles, files: plane, craftStore, shell, filesOwner: 'agent' }));
+  const writeFile = workspace.tools['fs.write'];
 
-  if (writeFile === undefined) throw new Error('No workspace.writeFile');
+  if (writeFile === undefined) throw new Error('No workspace.fs.write');
 
   return {
     transport, file: toolExecute<FileToolInput, JsonValue>(tools.file),
-    readFile: (path: string) => workspace.tools.readFile?.execute(path),
+    readFile: (path: string) => workspace.tools['fs.text']?.execute(path),
     writeFile: (path: string, content: string) => writeFile.execute(path, content),
   };
 }
@@ -162,19 +162,21 @@ describe('a file on another machine', () => {
       .toMatchObject({ undo });
 
     await readFile('/pc/ashish@studio/home/notes.md');
-    expect(await writeFile('/pc/ashish@studio/home/notes.md', 'moved again')).toContain(undo);
+    expect(await writeFile('/pc/ashish@studio/home/notes.md', 'moved again')).toMatchObject({ undo });
   });
 });
 
-// One path for every file plane: the workspace's `file` and `workspace.readFile/writeFile`, over the gated plane where
-// each machine and the sandbox are mounted, carry the prior-read ledger and the approval gate. An executor's own
-// file members would be a second path past both.
+// One path for every file plane: the workspace's `file` and `workspace.fs`, over the gated plane where
+// each machine and the sandbox are mounted, carry the prior-read ledger and the approval gate. Machine aliases use
+// those same served operations; the parent still has only its shell.
 describe('a program reaches another plane\'s files', () => {
   const unused = async (): Promise<never> => { throw new Error('not reached'); };
 
-  const parentHandle: ParentWorkspaceHandle = { read: unused, write: unused, list: unused, stat: unused, delete: unused, exec: unused };
+  const parentHandle: ParentWorkspaceHandle = { exec: unused };
 
-  test('only through the workspace\'s files: the machine, the sandbox and the parent offer no read or write of their own', () => {
+  test('device and computer expose the served fs group, while parent exposes no file group', () => {
+    const { rt } = createTestRuntime();
+
     const providers = [
       createDeviceTunnelExecutor(fleet({ success: true }), { consentedRoot: async () => '/', deviceHome: async () => '/home', scope: async () => 'unconfined' }),
       createSandboxExecutor(),
@@ -182,17 +184,19 @@ describe('a program reaches another plane\'s files', () => {
     ];
 
     const ownFileMembers = providers.map((provider) => {
-      const members = Object.keys(executorNamespace(provider).declarations ?? {});
+      const members = Object.keys(fileNamespaceFor(rt, provider).declarations ?? {});
 
-      return [provider.name, members.filter((member) => member === 'readFile' || member === 'writeFile')];
+      return [provider.name, members.filter((member) => member.startsWith('fs.'))];
     });
 
-    expect(ownFileMembers).toEqual([['device', []], ['computer', []], ['parent', []]]);
+    const fileMembers = ['fs.read', 'fs.text', 'fs.edit', 'fs.write', 'fs.list', 'fs.stat', 'fs.search'];
+
+    expect(ownFileMembers).toEqual([['device', fileMembers], ['computer', fileMembers], ['parent', []]]);
   });
 
   test('and a secret on the machine is refused there as the file tool refuses it', async () => {
     const { readFile } = fileToolOverTheFleet({ success: true }, true, DENY_ALL);
 
-    await expect(readFile('/pc/ashish@studio/home/.env')).rejects.toMatchObject({ code: 'denied' });
+    expect(await readFile('/pc/ashish@studio/home/.env')).toMatchObject({ success: false, reason: 'denied' });
   });
 });

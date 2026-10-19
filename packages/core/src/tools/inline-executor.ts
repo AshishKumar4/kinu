@@ -1,5 +1,5 @@
-import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
-/** InlineExecutor: the `workspace.*` codemode provider over its workspace's files, shell, memory and craft store. */
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+/** InlineExecutor: the `workspace.*` codemode provider over its workspace's shell, craft store and slates. */
 
 import * as v from 'valibot';
 import { commandTool, type ExecutorProvider, type ExecutorCapability, type PortAnsweringExecutor, type ResourceLimits } from '../execution/types';
@@ -7,13 +7,13 @@ import { shellCall } from '../execution/command-call';
 import { nimbusSession, type NimbusSessionOpts } from '../execution/nimbus';
 import type { FilesOwner } from '../safety/command-review';
 import type { ShellSession } from '../execution/shell-session';
-import type { Memory, ShellExecResult, SqlExecutor } from '../types/primitives';
+import type { ShellExecResult, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { withVfsErrorHint } from '../vfs/errno';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
-import { commandResult, existsTool } from '../execution/exec-result';
+import { commandAnswer, ExecPartsSchema } from '../execution/exec-result';
 import { shellExecOptions } from '../execution/shell-session';
 import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
@@ -23,34 +23,13 @@ import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/m
 import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
 import { currentWorkMode } from '../execution/work-mode';
 import { TOOL_REACH } from './registry';
-import { serveFile } from './file-operations';
-import { TurnFileLedger } from '../vfs/file-ledger';
-import { branchableToolCall } from './outcome';
-import { TurnContextBudget } from '../context-budget';
 import { parseInput, type JsonValue } from '../utils/json';
 import { addressingHint, cloudPlanes, type PathPlanes } from '../vfs/resolve';
 import type { VfsMountRouting } from '../vfs/mounts';
-import { SlateBuildNoteSchema } from '../operations/file';
 
 const StringSchema = v.string();
 
 /** `exec`'s options asking for the command's own output, not the text built from it. */
-const PartsSchema = v.object({ parts: v.literal(true) });
-
-const OptionalPathSchema = v.optional(v.string());
-
-const FileWriteSuccessSchema = v.object({
-  path: v.string(),
-  bytes: v.number(),
-  action: v.picklist(['created', 'replaced']),
-  undo: v.optional(v.string()),
-  build: v.optional(SlateBuildNoteSchema),
-});
-
-/** A written slate file's build, as a line of the answer. */
-function buildLine(build: v.InferOutput<typeof SlateBuildNoteSchema>): string {
-  return build.builds ? `The slate ${build.slate} builds.` : `The slate ${build.slate} does not build; the user still sees its last working version:\n${build.error ?? ''}`;
-}
 
 interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<ShellExecResult>;
@@ -65,7 +44,6 @@ export interface InlineExecutorDeps {
   planes?: PathPlanes;
   /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
   files?: VFS;
-  memory: Memory;
   craftStore: CraftStore;
   shell: ShellExec;
   /** The declaration the host gated `shell` under. */
@@ -76,19 +54,12 @@ export interface InlineExecutorDeps {
   sql?: SqlExecutor;
   /** Present exactly when `sql` is: vetoes land in actor-scoped `evolution_events`. */
   actor?: ActorHandle;
-  /** The turn's read-before-write ledger, shared with the native `file` tool; a thunk, as it resets per turn.
-   *  Undefined: a private one. */
-  ledger?: () => TurnFileLedger | undefined;
-  /** Shared like `ledger`; required by the shared dispatcher's deps shape. */
-  budget?: () => TurnContextBudget | undefined;
   /** Toolchain capabilities the shell can reach beyond coreutils, declared by the host. */
   toolchain?: readonly ExecutorCapability[];
   /** Capabilities the host can neither claim nor rule out; declared, since an omission reads as a measured absence. */
   unmeasured?: readonly ExecutorCapability[];
   /** The owning workspace's slate operations; absent when this backend has no slate host. */
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
-  /** Whether a slate still builds, for the write a program makes into one; a check, never a preview. */
-  slateBuild?: (slate: string) => Promise<SlateCallResult>;
 }
 
 /** A path `workspace.*` found nothing at, or a directory it read as a file, says how paths are read here
@@ -119,84 +90,16 @@ const CREATE_TOOL_CONTRACT = 'Save a crafted tool, callable as `tools.<name>(arg
   + '`tools.<name>(args)`; `require`, `import` and `eval` are refused.';
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
-  const { vfs, memory, craftStore, shell, sql, actor, resourceLimits } = deps;
-  // Fallback for callers with no turn-scoped ledger; stable for this executor's lifetime.
-  const fallbackLedger = new TurnFileLedger();
-  const fallbackBudget = new TurnContextBudget();
-  const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
-  const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
+  const { vfs, craftStore, shell, sql, actor, resourceLimits } = deps;
 
   // One place for where paths land and where the shell starts: its home, as files list from it too.
   const home = deps.home ?? WORKSPACE_ROOT;
   const planes = deps.planes ?? cloudPlanes(home);
 
-  // The native `file` tool's write, on the same ledger read live per call.
-  const fileWrite = serveFile(() => ({
-    vfs, home, planes, ledger: currentLedger(), budget: currentBudget(), memory,
-    ...(deps.slateBuild !== undefined && { slateBuild: deps.slateBuild }),
-  })).write;
-
   const tools: ExecutorProvider['tools'] = {
-    readFile: {
-      planAllowed: true,
-      description: 'Read a file from the agent workspace. Returns content as string.',
-      execute: async (...args: unknown[]) => {
-        const p = parseInput(StringSchema, { value: args[0] });
-
-        if (p === undefined) {
-          return refusalOf(new KinuError('bad_input', 'workspace.readFile: path must be a string'));
-        }
-
-        const content = await readText(vfs, p);
-        const text = v.parse(v.string(), content);
-        // The caller now has the whole file, so a later `file` edit on this path is not blind.
-        currentLedger().observeWhole(p, text);
-
-        return text;
-      },
-    },
-
-    writeFile: {
-      description: 'Write content to a file. Creates a new file immediately; replacing an existing file requires readFile first. Creates parent directories automatically.',
-      execute: async (...args: unknown[]) => {
-        const p = parseInput(StringSchema, { value: args[0] });
-        const text = parseInput(StringSchema, { value: args[1] });
-
-        if (p === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: path must be a string'));
-
-        if (text === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: content must be a string'));
-        const result = await branchableToolCall(async () => (await fileWrite.run({ path: p, content: text }, { callId: 'workspace.writeFile' })).value);
-        const success = v.safeParse(FileWriteSuccessSchema, result);
-
-        if (!success.success) return result;
-        const { bytes, path, undo, build } = success.output;
-
-        return [`Written ${bytes} bytes to ${path}`, ...(undo === undefined ? [] : [undo]), ...(build === undefined ? [] : [buildLine(build)])].join('\n');
-      },
-    },
-
-    readdir: {
-      planAllowed: true,
-      description: 'List entries in a directory.',
-      execute: async (...args: unknown[]) => {
-        const path = parseInput(OptionalPathSchema, { value: args[0] });
-
-        // Nothing was read, so do not report empty (AGENTS.md: empty read ≠ failed read).
-        if (args[0] !== undefined && path === undefined) {
-          return refusalOf(new KinuError('bad_input', 'workspace.readdir: path must be a string'));
-        }
-
-        // A path that is absent or blank names the workspace root.
-        return Promise.resolve(vfs.readdir(path === undefined || path === '' ? '/' : path)).then(entries => entries.map(({ name }) => name));
-      },
-    },
-
-    exists: existsTool(vfs, { description: 'Check if a path exists.', operation: 'workspace.exists' }),
-
-
     // The workspace shell is gated itself (`withApprovalGatedShell`), on this same reading of the options.
     exec: commandTool(
-      'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
+      'Run a command in the workspace shell, over the SAME files `workspace.fs` reads and writes. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops and variables; each call starts fresh in `cwd` (default: your home) '
         + 'unless it names a shell, which keeps its directory and exported variables. '
         + 'Pass `parts: true` among the options to get `{ stdout, stderr, exitCode }` as the command wrote them, instead of the text. '
@@ -206,18 +109,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
         if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string')) };
         const options = shellExecOptions({ value: args[1] });
-        const parts = v.is(PartsSchema, args[1]);
 
         return {
           call: shellCall(command, options, { stdin: true }),
-          run: async () => {
-            const outcome = await shell.exec(command, options);
-
-            // A program reads what the command wrote; the text the model is shown is built from it, never parsed back.
-            return parts && outcome.refusal === undefined
-              ? { stdout: outcome.stdout, stderr: outcome.stderr, exitCode: outcome.exitCode }
-              : commandResult(outcome);
-          },
+          run: async () => commandAnswer(await shell.exec(command, options), v.is(ExecPartsSchema, args[1]), false),
         };
       },
     ),
@@ -379,6 +274,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     kind: 'workspace',
     files: deps.files ?? vfs,
     homeDir: async () => planes.cwd,
+    // The plane's own root: a relative path starts where the file plane starts it.
+    fileRoot: async () => ({ root: '' }),
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
     ]),

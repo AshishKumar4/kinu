@@ -146,7 +146,7 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
       if (hiring.length === 1) return Response.json(TOO_LONG, { status: 400 });
       called.hire = true;
 
-      return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: HIRE_BRIEF } }, 'hire_0');
+      return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', message: HIRE_BRIEF } }, 'hire_0');
     }
 
     return chatCompletion(run, hiring.length === 0 ? ANSWER : 'Done.');

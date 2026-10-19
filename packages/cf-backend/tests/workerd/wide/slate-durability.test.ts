@@ -81,13 +81,15 @@ it('an edit that breaks a slate\'s build ships nothing: the agent is told where,
 
   const good = await subject().slateBuild({ ...at, phase: 'good' });
 
-  expect(good.wrote).toContain('The slate lilt builds.');
+  expect(JSON.parse(good.wrote ?? 'null')).toMatchObject({ result: { build: { slate: 'lilt', builds: true } } });
   expect([good.preview, good.serves, good.told]).toEqual(['builds', 'lilt-good', []]);
 
   // The write that breaks it answers with the compiler's file and line, and the user is still served the build before it.
   const broken = await subject().slateBuild({ ...at, phase: 'broken' });
 
-  expect(broken.wrote).toMatch(/does not build[\s\S]*client\.tsx:\d+:\d+[\s\S]*Adjacent JSX elements/);
+  expect(JSON.parse(broken.wrote ?? 'null')).toMatchObject({ result: { build: {
+    slate: 'lilt', builds: false, error: expect.stringMatching(/client\.tsx:\d+:\d+[\s\S]*Adjacent JSX elements/),
+  } } });
   expect(broken.preview).toContain('Adjacent JSX elements');
   expect(broken.serves).toBe('lilt-good');
   expect(broken.told).toEqual([expect.stringMatching(/^lilt: [\s\S]*Adjacent JSX elements/)]);

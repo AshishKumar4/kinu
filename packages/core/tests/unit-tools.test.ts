@@ -1,13 +1,17 @@
 /** Unit tests for the canonical tool surface. `skills` is not a BuiltinToolDeps field. */
 
+import { createFileCodemodeProvider } from '../src/tools/file-operations';
+import { buildToolSurface, type CodemodeSurface } from '../src/tools/builtins';
+import { serveMemory } from '../src/tools/memory-operations';
 import { describe, test, expect } from 'bun:test';
-import { toolExecute, createRecordingLogger } from '@kinu.run/test-utils';
-import { asSchema } from 'ai';
+import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
+import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
+import { createTestRuntime, conversationsFor, actorJobsFor, servedStoresFor } from './helpers';
 import { programCodemode } from './helpers-program';
 import {
-  narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
+  narrowToolSurface, codemodeCapabilitiesFor, codemodeSurface, TOOL_REACH,
+  nestedMembers,
   buildActorTools,
   buildBuiltinTools,
   BUILTIN_TOOLS,
@@ -28,6 +32,17 @@ import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
+
+test('codemodeSurface carries the store operations and report its native tools hold', () => {
+  const { rt } = createTestRuntime();
+  const stores = servedStoresFor(rt);
+  const report: ReportDeps = { report: async () => ({ delivered: true }) };
+  const surface = codemodeSurface(rt, {}, () => ({}), { stores, report });
+
+  expect(surface.stores).toBe(stores);
+  expect(surface.report).toBe(report);
+  expect(codemodeSurface(rt, {}, () => ({}), { stores }).report).toBeUndefined();
+});
 
 interface CircularValue {
   self?: CircularValue;
@@ -259,10 +274,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     
 
-    const provider = createMemoryCodemodeProvider(() => ({
+    const provider = createMemoryCodemodeProvider(serveMemory(() => ({
       memory: rt.memory, actor: rt.actor,
       conversations: conversationsFor(rt),
-    }));
+    })));
 
     // No facts wired: remember/recall/forget are absent, as in the native tool.
     expect(Object.keys(provider.tools).sort()).toEqual(['listConversations', 'note', 'readConversation', 'search', 'searchConversations']);
@@ -276,10 +291,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     
     const { store, facts } = factsOverMap();
 
-    const provider = createMemoryCodemodeProvider(() => ({
+    const provider = createMemoryCodemodeProvider(serveMemory(() => ({
       memory: rt.memory, actor: rt.actor, facts,
       conversations: conversationsFor(rt),
-    }));
+    })));
 
     expect(Object.keys(provider.tools)).toContain('remember');
     await codemodeExecute(provider, 'remember')('user.tz', 'UTC', { confidence: 0.9 });
@@ -578,9 +593,9 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   function sandboxOver(providers: readonly CodemodeProvider[]): (code: string) => Promise<string> {
     const names = providers.map((p) => p.name);
 
-    const values = providers.map((p) => Object.fromEntries(
+    const values = providers.map((p) => nestedMembers(Object.fromEntries(
       Object.entries(p.tools).map(([member, entry]) => [member, entry.execute]),
-    ));
+    )));
 
     return async (code) => {
       const fn = new Function(...names, `return (async () => { ${code} })()`);
@@ -595,7 +610,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
       provider('agents', 'swarm', 'delegated'),
       provider('memory', 'save', 'remembered'),
       provider('tasks', 'add', 'listed'),
-      provider('workspace', 'readFile', 'bytes'),
+      provider('workspace', 'fs.text', 'bytes'),
     ];
 
     const narrowed = narrowToolSurface(RESTRICTED).narrowProviders(providers);
@@ -604,7 +619,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     expect(await run('return typeof agents;')).toBe('undefined');
     expect(await run('return typeof memory;')).toBe('undefined');
     expect(await run('return typeof tasks;')).toBe('undefined');
-    expect(await run('return await workspace.readFile();')).toBe('bytes');
+    expect(await run('return await workspace.fs.text();')).toBe('bytes');
   });
 
   test('an unnarrowed actor reaches every namespace it was given', async () => {
@@ -612,4 +627,33 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     const run = sandboxOver(narrowToolSurface(undefined).narrowProviders(providers));
     expect(await run('return await agents.swarm();')).toBe('delegated');
   });
+});
+
+test("a surface's native tools and its programs' named members run one served set, on one read ledger", async () => {
+  const { rt } = createTestRuntime();
+
+  await rt.toolFiles.writeFile('/home/main/a.md', new TextEncoder().encode('first a\n'));
+  await rt.toolFiles.writeFile('/home/main/b.md', new TextEncoder().encode('first b\n'));
+  const held: CodemodeSurface[] = [];
+
+  const built = buildToolSurface({
+    rt, conversations: conversationsFor(rt),
+    codemode: (surface) => {
+      held.push(surface);
+
+      return tool({ inputSchema: jsonSchema({}), execute: async () => null });
+    },
+  });
+
+  const surface = present(held[0], "the surface's eval");
+  const native = toolExecute<JsonObject, JsonValue>(present(built.file, 'the native file tool'));
+  const named = createFileCodemodeProvider(surface.stores.file);
+
+  // Its `tools.file` is the native tool itself, and its `file.*` the operations that tool runs.
+  expect(surface.native.file).toBe(built.file);
+  // A read through either spelling lets a write through the other.
+  await native({ op: 'read', path: '/home/main/a.md' });
+  expect(await codemodeExecute(named, 'write')('/home/main/a.md', 'named wrote\n')).toMatchObject({ action: 'replaced' });
+  expect(await codemodeExecute(named, 'text')('/home/main/b.md')).toBe('first b\n');
+  expect(await native({ op: 'write', path: '/home/main/b.md', content: 'native wrote\n' })).toMatchObject({ action: 'replaced' });
 });

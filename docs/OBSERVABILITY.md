@@ -739,9 +739,9 @@ the same typed failures through the SDK.
 4. The misevolution veto returned `{ ok: false, error }` without `reason`, so
    the census filed a working gate as `broke`.
 
-`nimbus.listPorts` without a port API, `computer.exists` and `device.exists` on a
-failed call, and `workspace.readdir` on failure each refuse with a class
-instead of returning an empty or false value.
+A port member with no port API, `<machine>.fs.stat` on a missing path, and
+`<machine>.fs.list` on failure each refuse with a class instead of returning an
+empty or false value.
 
 Without observed execution metadata, `refused` holds `bad_input`, `denied`,
 `unsupported` and the file plane's refusal verdicts. `runtimeMissing` holds

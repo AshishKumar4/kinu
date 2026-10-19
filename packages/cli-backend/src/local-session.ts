@@ -74,7 +74,7 @@ import { ActorSession, type ActorTurnLease,
   createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
-  agentRoleSwitch,
+  agentRoleSwitch, builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
   REPORT_TOOL, turnLane, turnReach, type ReportDeps, type TurnLane, type TurnReach,
   type MissionGovernor,
   observeSystemPromptHash,
@@ -128,7 +128,7 @@ import { ActorSession, type ActorTurnLease,
   recordModelOperations, type ModelOperationSink,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   defaultLoopOrigin,
-  type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type TurnLedgers, type WriteObserver,
+  type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
@@ -573,7 +573,6 @@ export class LocalAgentSession {
       spend: { report: (report) => this.modelCallSink(report) },
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
-    this.rt.setTurnFileLedgerProvider?.(() => this.actorSession.orchestrator.acc.ledgers.files);
     // The runtime's judge/fast/reflection seams predate this session; a runtime holds one sink.
     this.rt.setModelCallSink?.(this.modelCallSink);
     this.rt.setModelOperations?.(this.modelOperations);
@@ -2139,17 +2138,23 @@ export class LocalAgentSession {
       rt: this.rt,
       events: this.eventRecorder,
       sql: this.rt.storage.sql,
-      surface: (task, context, callScope) => createScaffoldCandidateSurface({
-        rt: this.rt,
-        compose: () => this.composeNextRequest(),
-        profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
-        bindModel: spec => this.modelResolver?.resolveModel(spec, this.affinity()) ?? this.defaultModel('scaffold model lane'),
-        modelContext: spec => this.modelCatalog.contextFor(spec),
-        tools: () => this.rolloutTools(callScope ?? currentOperationProfile(this.rt.actor)?.turnId ?? WORKSPACE_RUN_ID),
-        callScope,
-        history: this.makeScaffoldHistory(),
-        spend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
-      }, task, context),
+      surface: (task, context, callScope) => {
+        // One set for the run: each request's tools project it, and so do its machines.
+        const stores = serveStores(builtinStoreDeps(this.storeInputs()));
+
+        return createScaffoldCandidateSurface({
+          rt: this.rt,
+          compose: () => this.composeNextRequest(),
+          profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
+          bindModel: spec => this.modelResolver?.resolveModel(spec, this.affinity()) ?? this.defaultModel('scaffold model lane'),
+          modelContext: spec => this.modelCatalog.contextFor(spec),
+          tools: () => this.rolloutTools(callScope ?? currentOperationProfile(this.rt.actor)?.turnId ?? WORKSPACE_RUN_ID, stores),
+          stores,
+          callScope,
+          history: this.makeScaffoldHistory(),
+          spend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+        }, task, context);
+      },
     };
   }
 
@@ -2328,7 +2333,7 @@ export class LocalAgentSession {
       reportNodeDelta: () => this.publishHeadStream,
       model: () => this.cachedModel ?? this.defaultModel("an agents swarm"),
       reportModelCall: this.modelCallSink,
-      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider(), () => this.runLedgers(actor)),
+      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider()),
       webSearch: this.getWebSearchProvider(),
       originContext: async () => this.actorSession.history,
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
@@ -2533,41 +2538,34 @@ export class LocalAgentSession {
   }
 
   /** One list for both the turn resolver and the tool builder, so they cannot disagree. A hire's programs reach its own
-   *  planes only (`SURFACE_POLICY.confined`): no delegation, lifecycle or role switch of the workspace's. */
-  private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
+   *  planes and delegate as its native `agents` does; no lifecycle or role switch of the workspace's. */
+  private codemodeProviders(mode: WorkMode, served?: ServedStores): CodemodeProvider[] {
     const report = this.reportGateOpen() ? this.reportDeps : null;
     const reported = report === null ? {} : { report: () => report };
+    // A program runs the store operations its native tools run; naming what a role reaches needs none in hand.
+    const stores = served ?? serveStores(builtinStoreDeps(this.storeInputs()));
 
-    if (this.actorReach.kind === 'workspace') return actorNamespaces(this.surfaceActor(mode), SURFACE_POLICY.program, reported);
-    const acc = this.actorSession.orchestrator.acc;
+    if (this.actorReach.kind === 'workspace') return actorNamespaces(this.surfaceActor(mode, stores), SURFACE_POLICY.program, reported);
 
     // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
     return actorNamespaces(hostedSurfaceActor(this.seat, {
       web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
-      conversations: this.ownConversations(), vectorStore: null, ledgers: () => acc.ledgers,
+      stores,
       // A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none.
       ownerWaits: isSubordinateOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
-    }), SURFACE_POLICY.confined, reported);
+      agents: () => this.agentsToolDeps(mode),
+    }), SURFACE_POLICY.program, reported);
   }
 
   /** This session's actor as its namespaces are built over it (`actorNamespaces`); it delegates in `mode`. */
-  private surfaceActor(mode: WorkMode): SurfaceActor {
+  private surfaceActor(mode: WorkMode, stores: ServedStores): SurfaceActor {
     return {
       executors: () => this.rt.executionRouter?.getProviders() ?? [],
       // A program here runs in this process, which holds no Browser Run socket client, so no browser sessions.
       web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
-      memory: () => ({
-        memory: this.rt.memory, facts: this.factsStore, actor: this.rt.actor, conversations: this.ownConversations(), vectorStore: null,
-      }),
-      files: () => ({
-        vfs: this.rt.toolFiles, home: this.rt.storage.home, planes: this.rt.planes, memory: this.rt.memory,
-        ledger: this.actorSession.orchestrator.acc.ledgers.files, budget: this.actorSession.orchestrator.acc.ledgers.context,
-      }),
-      // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
-      tasks: () => ({ list: this.taskList, config: this.config, roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
+      stores,
       // Plan scoping follows the resolved table scope, read from the live invocation.
       db: this.stores.appData,
-      programState: this.rt.actor.programState,
       agents: () => this.agentsToolDeps(mode),
       self: agentSelfHost({
         rt: this.rt,
@@ -2600,18 +2598,7 @@ export class LocalAgentSession {
       journal: () => this.headJournal,
       publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
-      ledgers: (actor) => this.runLedgers(actor),
     };
-  }
-
-  /** A run actor's turn ledgers: its session's, which runs its turn in this process while it is hosted. Public beside
-   *  `hostHead`, for a caller seating heads through this session. */
-  runLedgers(actor: SeatedActor): TurnLedgers {
-    const hosted = this.actorHost.hosted(actor.reference);
-
-    if (hosted === null) return settleSync(Effect.fail(new KinuError('missing', `${actor.record.name} is not hosted, so it runs no program`)));
-
-    return hosted.session.orchestrator.acc.ledgers;
   }
 
   /**
@@ -2799,9 +2786,15 @@ export class LocalAgentSession {
   }
 
   private buildToolSets(): void {
+    // Both modes project one served set, on the turn's ledgers.
+    let served: ServedStores | undefined;
+
     for (const mode of ['build', 'plan'] as const) {
       // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
-      this.toolSets[mode] = buildActorTools(this.actorToolsetDeps(mode, () => this.turnExecution()));
+      const built = buildActorTools({ ...this.actorToolsetDeps(mode, () => this.turnExecution()), ...(served !== undefined && { served }) });
+
+      served = built.stores;
+      this.toolSets[mode] = built;
     }
 
     this.activateToolMode(this.actorSession.workMode);
@@ -2816,24 +2809,35 @@ export class LocalAgentSession {
     return currentOperationProfile(this.rt.actor) ?? { turnId: this.chat.currentTurnId ?? WORKSPACE_RUN_ID, runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID };
   }
 
+  /** What this session's builtins read its stores from (`builtinStoreDeps`): the turn's ledgers live on its accumulator. */
+  private storeInputs(): BuiltinStoreInputs {
+    const { ledgers } = this.actorSession.orchestrator.acc;
+
+    return {
+      rt: this.rt,
+      conversations: this.ownConversations(),
+      vectorStore: null,
+      facts: this.factsStore,
+      // Budget state lives on the accumulator so this model-lifetime toolset reads the live turn.
+      contextBudget: ledgers.context,
+      fileLedger: ledgers.files,
+      ...(this.actorReach.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
+    };
+  }
+
   /** Tool deps with the effect-claim execution as an argument; it decides what a replay dedupes against. */
   private actorToolsetDeps(mode: WorkMode, execution: () => ReceiptExecution): ActorToolsetDeps {
     const deps: ActorToolsetDeps = {
-      rt: this.rt,
+      ...this.storeInputs(),
       workMode: mode,
-      conversations: this.ownConversations(),
       effectClaims: {
         sql: this.rt.storage.sql, actor: this.rt.actor, execution,
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
         transaction: (body) => this.rt.storage.transactionSync(body),
       },
       // Shell approval lives at the execution seam (execution/approval.ts), not per toolset.
-      // Budget state lives on the accumulator so this model-lifetime toolset reads the live turn.
-      contextBudget: this.actorSession.orchestrator.acc.ledgers.context,
-      fileLedger: this.actorSession.orchestrator.acc.ledgers.files,
       escalations: this.actorSession.orchestrator.acc.ledgers.escalations,
       craft: this.actorSession.orchestrator.acc.ledgers.craft,
-      vectorStore: null,
       ...(this.actorReach.kind === 'workspace' && { external: () => this.turnExternalTools }),
       codemode: (surface) => {
         // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
@@ -2844,11 +2848,9 @@ export class LocalAgentSession {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
 
-        return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode), reach: narrowing })({ ...surface, native });
+        return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode, surface.stores), reach: narrowing })({ ...surface, native });
       },
       agents: this.agentsToolDeps(mode),
-      ...(this.actorReach.kind === 'workspace' && { roleSwitch: agentRoleSwitch(() => this.actorSession.profileInputs?.envelope ?? null) }),
-      facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },
     };
@@ -2871,16 +2873,20 @@ export class LocalAgentSession {
 
   /** Raw tools with the effect-claim id pinned to the rollout, so a live run and a replay claim the
    *  same call once. Raw because backgrounding would key work to the ambient turn. */
-  private rolloutTools(callScope: string): ToolSet {
-    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => ({ turnId: callScope, runId: callScope }))).raw;
+  /** A rollout's tools in the mode it runs in now, projecting the run's one served set. */
+  private rolloutTools(callScope: string, served: ServedStores): ToolSet {
+    const mode = currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build';
+
+    return buildActorTools({ ...this.actorToolsetDeps(mode, () => ({ turnId: callScope, runId: callScope })), served }).raw;
   }
 
   private activateToolMode(mode: WorkMode): void {
     this.tools = this.toolSurface(mode);
   }
 
-  /** The tool set this turn's gates (`report`, `submit_plan`, `reply_to_comment`) build; rebuilt when they moved, never re-resolving a model. */
-  private turnToolSet(mode: WorkMode): ToolSet {
+  /** The tool set this turn's gates (`report`, `submit_plan`, `reply_to_comment`) build, and the store operations it
+   *  runs; rebuilt when they moved, never re-resolving a model. */
+  private turnToolSet(mode: WorkMode): TurnTools {
     const gates = `${String(this.reportGateOpen())}:${String(this.planSubmissionOpen('build'))}:${String(this.planReviewSurface())}:${String(this.planReplyOpen())}`;
 
     if (this.toolSets[mode] === undefined || this.toolSetGates !== gates) {
@@ -2888,17 +2894,23 @@ export class LocalAgentSession {
       this.toolSetGates = gates;
     }
 
-    return this.toolSurface(mode);
+    const surface = this.ownToolsets(mode);
+
+    return { tools: surface.turn, stores: surface.stores };
   }
 
   private toolSetGates: string | null = null;
 
   private toolSurface(mode: WorkMode): ToolSet {
+    return this.ownToolsets(mode).turn;
+  }
+
+  private ownToolsets(mode: WorkMode): ActorToolsets {
     const surface = this.toolSets[mode];
 
     if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
 
-    return surface.turn;
+    return surface;
   }
 }
 

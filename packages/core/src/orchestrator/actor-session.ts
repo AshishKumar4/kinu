@@ -1,3 +1,4 @@
+import type { ServedStores } from '../tools/actor-stores';
 import type { ModelMessage, ToolSet } from 'ai';
 
 import * as v from 'valibot';
@@ -118,6 +119,9 @@ export interface ActorExecutionInput {
   readonly resumedSteps?: number;
   readonly resumedUsage?: Usage;
   readonly resumedMidStep?: boolean;
+  /** The store operations `chat.tools` run, which its scaffold's machines run too; null where this session holds no
+   *  machine (an agent's isolate, whose programs run on the workspace). */
+  readonly stores: ServedStores | null;
 }
 
 const RequestCacheSchema = v.looseObject({ cache: v.optional(PromptCacheRouteSchema) });
@@ -911,7 +915,7 @@ export class ActorSession {
 
     return operationProfileStream(startActorTurn({
       runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
-      program, scaffoldSpend: input.scaffoldSpend,
+      program, scaffoldSpend: input.scaffoldSpend, stores: input.stores,
       assertActive: input.assertActive,
       scaffoldStreamOptions: input.scaffoldStreamOptions,
       chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,

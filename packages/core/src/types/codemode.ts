@@ -36,8 +36,8 @@ export const CRAFTED_TOOL_NAMESPACE = 'tools';
 
 /** A crafted tool body, as its declaration, its parse refusal and its veto all describe it. */
 export const CRAFTED_TOOL_BODY = 'one async function, not an eval script (no top-level `return`): '
-  + '`async (args) => JSON.parse(await workspace.readFile(args.path))`';
+  + '`async (args) => JSON.parse(await workspace.fs.text(args.path))`';
 
 /** How a program, or a tool body, reaches the workspace's files. */
-export const WORKSPACE_FILE_BINDINGS = 'read a file with `await workspace.readFile(path)` and write one with '
-  + '`await workspace.writeFile(path, content)`';
+export const WORKSPACE_FILE_BINDINGS = 'read a file with `await workspace.fs.text(path)` and write one with '
+  + '`await workspace.fs.write(path, content)`';

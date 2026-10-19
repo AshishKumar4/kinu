@@ -7,7 +7,7 @@ import type { EvalPart } from '../src/task';
  *  command that writes, moves, removes or installs. Inspection (reads, searches, `ls`, `git log`) passes. */
 const MUTATES = new Map([
   ['file', /"op":"(write|edit|delete|remove|rename|move|mkdir)"/],
-  ['eval', /\b(file|workspace)\.(write|edit|writeFile|editFile|delete|remove|rename|move|mkdir)\(|slates[.[][^\n]*\$(create|write|save)\(/],
+  ['eval', /\b(file|fs)\.(write|edit|delete|remove|rename|move|mkdir)\(|slates[.[][^\n]*\$(create|write|save)\(/],
   ['shell', /(^|[^0-9&>])>(?!&)(?!\s*\/dev\/null)|\b(tee|touch|mkdir|cp|mv|rm|install)\b|sed -i|\bgit (add|commit|apply)\b|\b(npm|bun|pnpm|yarn) (i|add|install)\b/],
 ]);
 

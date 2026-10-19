@@ -137,7 +137,7 @@
   ],
   "agent_data_tables@packages/core/src/tools/db-codemode.ts": [
     "name TEXT PRIMARY KEY",
-    "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace'))",
+    "scope TEXT NOT NULL CHECK(scope IN ('actor','workspace','private'))",
     "columns TEXT NOT NULL",
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL"

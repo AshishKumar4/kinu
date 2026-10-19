@@ -17,7 +17,7 @@ import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { present, toolExecute, workspaceShell } from '@kinu.run/test-utils';
 import { renderThrownChain } from '../src/obs/index';
-import { createTestRuntime, createWorkspaceBundle, conversationsFor } from './helpers';
+import { createTestRuntime, createWorkspaceBundle, conversationsFor, fileNamespaceFor } from './helpers';
 import type { JsonValue } from '../src/utils/json';
 
 /** What a file call that failed says, or null when it did not fail. */
@@ -98,6 +98,13 @@ function onRig(path: JsonValue | undefined): boolean {
   return named === '/home/rig' || named.startsWith('/home/rig/');
 }
 
+function fleetNamespace(provider: ReturnType<typeof createDeviceTunnelExecutor>) {
+  const { rt } = createTestRuntime();
+  const plane = withMountTable(rt.toolFiles, standardMounts((name) => name === 'device' ? provider : undefined));
+
+  return fileNamespaceFor(rt, provider, { vfs: plane });
+}
+
 describe('the device fleet at the executor surface', () => {
   test('a command addressed to one machine reaches THAT machine and no other', async () => {
     const t = fleetTransport([STUDIO, RIG]);
@@ -160,13 +167,34 @@ describe('the device fleet at the executor surface', () => {
     const t = fleetTransport([STUDIO, RIG]);
     const provider = createDeviceTunnelExecutor(t);
     const files = present(provider.files, 'the machines\' files');
+    const namespace = fleetNamespace(provider);
 
     expect(await readText(files, '/mrwhite@rig/etc/hosts')).toBe('bytes of dev-rig');
-    expect(await provider.tools.readdir.execute('/home', { device: 'mrwhite@rig' })).toEqual(['entry-of-dev-rig']);
-    expect(await provider.tools.exists.execute('/home', { device: 'ashish@studio' })).toBe(true);
+    expect(await present(namespace.tools['fs.list'], 'device.fs.list').execute('/home', { device: 'mrwhite@rig' })).toMatchObject({ entries: ['entry-of-dev-rig'] });
+    expect(await present(namespace.tools['fs.stat'], 'device.fs.stat').execute('/home', { device: 'ashish@studio' })).toMatchObject({ path: '/pc/ashish@studio/home', isDir: false });
     await writeText(files, '/ashish@studio/tmp/x', 'y');
 
     expect(t.sent.find((frame) => frame.method === 'writeFile')?.deviceId).toBe('dev-studio');
+  });
+
+  test('device.fs refuses an unnamed read on two live machines and names both choices', async () => {
+    const t = fleetTransport([STUDIO, RIG, SPARE]);
+    const namespace = fleetNamespace(createDeviceTunnelExecutor(t));
+    const answer = await present(namespace.tools['fs.text'], 'device.fs.text').execute('/etc/hosts');
+
+    expect(answer).toMatchObject({ success: false, reason: 'bad_input', error: deviceFleetAsk([STUDIO, RIG, SPARE]) });
+    expect(t.sent).toEqual([]);
+  });
+
+  test('device.fs selects the named machine under its own /pc segment', async () => {
+    const t = fleetTransport([STUDIO, RIG]);
+    const namespace = fleetNamespace(createDeviceTunnelExecutor(t));
+
+    expect(await present(namespace.tools['fs.text'], 'device.fs.text').execute('/etc/hosts', { device: 'mrwhite@rig' })).toBe('bytes of dev-rig');
+    expect(await present(namespace.tools['fs.stat'], 'device.fs.stat').execute('/etc/hosts', { device: 'ashish@studio' }))
+      .toMatchObject({ path: '/pc/ashish@studio/etc/hosts', size: 3 });
+    expect(t.sent.filter((frame) => frame.method === 'readRange').map((frame) => [frame.params[0], frame.deviceId]))
+      .toEqual([['/etc/hosts', 'dev-rig']]);
   });
 
   test('a snapshot that has not described the fleet gates nothing, exactly as before', async () => {

@@ -67,6 +67,6 @@ export function serveTasks(taskList: TaskListStore, config: AgentConfigStore, ro
 }
 
 /** `tasks.*` for programs and slates, over the native tool's stores. */
-export function createTasksCodemodeProvider(taskList: TaskListStore, config: AgentConfigStore, roleSwitch?: RoleSwitch): CodemodeProvider {
-  return codemodeNamespace('tasks', 'Your task list, and your active role.', serveTasks(taskList, config, roleSwitch));
+export function createTasksCodemodeProvider(served: readonly Served[]): CodemodeProvider {
+  return codemodeNamespace('tasks', 'Your task list, and your active role.', served);
 }

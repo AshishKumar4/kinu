@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
+import { settled as framesSettled } from '../../scripts/browser-page';
 import { ADVISOR_HEADER, executorLabel, FILES_PAGE_ENTRIES, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_TEXT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { evidenceDir, present } from '@kinu.run/test-utils';
 
@@ -1723,11 +1724,12 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
   });
 
   /**
-   * Stop gives the next Send its own turn, but only once the stop's cancel has come back; the stopped send landing
-   * late never frees a newer turn; and a send the transport fails frees the next one. A press the latch refuses is
-   * not lost: it goes to the running turn.
+   * Stop gives the next Send its own turn, but only once the stop's cancel has come back and the stopped send has
+   * landed: until then the composer stays on the Stop, and words typed go to the running turn. A send the transport
+   * fails frees the next one. (A stopped send landing after a newer turn took the latch cannot happen from here now;
+   * the latch's own fence against it is unit-send-admission's.)
    */
-  test('a stopped or failed send frees the next turn, and a stale one never frees a newer turn', async () => {
+  test('a stopped or failed send frees the next turn, once the stopped one has landed', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
@@ -1749,61 +1751,48 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
           .some((reached) => reached.includes(said)), {}, words);
       };
 
-      const stopHeld = async () => {
-        await page.evaluate(() => { document.documentElement.dataset.galleryCancelHeld = '1'; });
-        await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
-        await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
-      };
-
       const settleSend = (at: number, failed = false) => page.evaluate((detail) => {
         window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail }));
       }, { at, failed });
-
-      const releaseCancel = () => page.evaluate(() => {
-        document.documentElement.dataset.galleryCancelHeld = '0';
-        window.dispatchEvent(new Event('gallery:release-cancel'));
-      });
 
       await press('Send', 'first turn');
       expect(await counts()).toEqual({ turns: 1, toRunning: [] });
       await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
 
-      // Stopped, with its cancel still out: the turn still holds, so a Send goes to it.
-      await stopHeld();
-      await press('Send', 'during the stop');
+      // Stopped, with its cancel still out: the composer stays on the Stop, and words typed go to the running turn.
+      await page.evaluate(() => { document.documentElement.dataset.galleryCancelHeld = '1'; });
+      await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]:disabled');
+      await press('Steer the running turn', 'during the stop');
       expect(await counts()).toEqual({ turns: 1, toRunning: ['during the stop'] });
 
-      await releaseCancel();
-      await page.waitForFunction(() => document.querySelector('[data-composer-root] button[aria-label="Send"]') !== null);
+      // The cancel comes back and the stopped send lands: Send returns, and opens a turn of its own.
+      await page.evaluate(() => {
+        document.documentElement.dataset.galleryCancelHeld = '0';
+        window.dispatchEvent(new Event('gallery:release-cancel'));
+      });
+      await settleSend(0);
+      await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
       await press('Send', 'second turn');
       expect((await counts()).turns).toBe(2);
       await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
 
-      // The first send lands now, after the second took the latch: the second still holds it.
-      await settleSend(0);
-      await stopHeld();
-      await press('Send', 'after the stale landing');
-      expect(await counts()).toEqual({ turns: 2, toRunning: ['during the stop', 'after the stale landing'] });
-
-      await releaseCancel();
-      await press('Send', 'third turn');
-      expect((await counts()).turns).toBe(3);
-      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
-
-      // The transport fails the third: the next Send opens a turn of its own.
-      await settleSend(2, true);
+      // The transport fails the second: the next Send opens a turn of its own.
+      await settleSend(1, true);
       await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
       await press('Send', 'after the failure');
-      expect(await counts()).toEqual({ turns: 4, toRunning: ['during the stop', 'after the stale landing'] });
+      expect(await counts()).toEqual({ turns: 3, toRunning: ['during the stop'] });
       await page.close();
     });
   });
 
   /**
    * A Stop that reached the agent before an opening's words did hands them back (2026-10-18): they return to the draft
-   * under the Stop's own notice, as a steer's do, and no failure shows. An opening no Stop touched is read where it ran.
+   * under the Stop's own notice, as a steer's do, and no failure shows. Send waits for that: offered before, a Continue
+   * pressed at once ran without the brief the Stop was about to hand back (1008-e, staging rc20). An opening no Stop
+   * touched is read where it ran.
    */
-  test('words a Stop handed back before the agent read them return to the draft, and no failure shows', async () => {
+  test('words a Stop handed back before the agent read them are in the draft when Send returns, and no failure shows', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
@@ -1823,14 +1812,33 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
       await page.type('[data-composer-root] textarea', 'words the Stop handed back');
       await page.click('[data-composer-root] button[aria-label="Send"]');
       await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+
+      // The composer as it stands the moment Send is drawn again, read in the commit that draws it.
+      const whenSendReturns = page.evaluate(() => new Promise((seen) => {
+        const root = document.querySelector('[data-composer-root]');
+
+        if (root === null) throw new Error('no composer');
+
+        const observer = new MutationObserver(() => {
+          if (root.querySelector('button[aria-label="Send"]') === null) return;
+          observer.disconnect();
+          seen({
+            draft: root.querySelector<HTMLTextAreaElement>('textarea')?.value ?? '',
+            notices: [...root.querySelectorAll('[data-notice]')].map((notice) => notice.getAttribute('data-notice')),
+          });
+        });
+
+        observer.observe(root, { subtree: true, childList: true, attributes: true });
+      }));
+
       await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
-      await page.waitForSelector('[data-composer-root] button[aria-label="Send"]');
-      expect(await composer()).toEqual({ draft: '', notices: [] });
+      // The stopped request is still out: the composer stays on the Stop.
+      await framesSettled(page, `document.querySelector('[data-composer-root] button[aria-label="Send"]') === null`);
+      expect(await page.evaluate(() => document.querySelector('[data-composer-root] button[aria-label="Send"]') === null)).toBe(true);
 
       // The stopped request ends; the agent's record says no turn read the words.
       await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail: { at: 0 } })); });
-      await page.waitForFunction(() => document.querySelector('[data-composer-root] [data-notice]') !== null);
-      expect(await composer()).toEqual({ draft: 'words the Stop handed back', notices: ['info'] });
+      expect(await whenSendReturns).toEqual({ draft: 'words the Stop handed back', notices: ['info'] });
 
       // Sent again and left to run, they are read where they ran: nothing returns.
       await page.evaluate(() => { document.documentElement.dataset.galleryHandedBack = '0'; });

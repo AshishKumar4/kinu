@@ -1,16 +1,87 @@
 // TurnAccumulator: per-turn accounting behind `AgentOrchestrator.acc`.
+import type { CodemodeProvider } from '../src/types/codemode';
+import type { AgentRuntime } from '../src/types/agent-runtime';
+import * as v from 'valibot';
 import { compactToolCall } from '../src/evolution/tool-call-record';
 import { fnv1a64 } from '../src/utils/fnv1a';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { standingFileLedger, TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { MissionGovernor } from '../src/mission-budget';
 import type { Usage } from '../src/usage';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestRuntime, fileNamespaceOver } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { FAILURE_WITHOUT_ERROR } from '../src/events/types';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
 import { createCompletedTurnStore, initCompletedTurnTable } from '../src/evolution/session-window';
+
+import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { TurnContextBudget } from '../src/context-budget';
+
+/** `file.*` as a slate's calls take it: over the runtime's standing ledger, asked for again on every call. */
+function standingFiles(rt: AgentRuntime): CodemodeProvider {
+  return fileNamespaceOver(() => ({
+    vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: standingFileLedger(rt), budget: new TurnContextBudget(),
+  }));
+}
+
+test("a read through an actor's standing ledger authorizes the write after it, however many other files it has read", async () => {
+  const written: string[] = [];
+
+  for (const others of [0, 1, 255, 256, 400]) {
+    const { rt } = createTestRuntime();
+    const file = standingFiles(rt);
+
+    for (let at = 0; at < others; at++) await rt.toolFiles.writeFile(`/home/main/notes/${String(at)}.md`, new TextEncoder().encode(`note ${String(at)}\n`));
+    await rt.toolFiles.writeFile('/home/main/plan.md', new TextEncoder().encode('plan\n'));
+
+    for (let at = 0; at < others; at++) await file.tools.text?.execute(`/home/main/notes/${String(at)}.md`);
+    await file.tools.text?.execute('/home/main/plan.md');
+    written.push(v.parse(v.object({ action: v.string() }), await file.tools.write?.execute('/home/main/plan.md', 'plan, revised\n')).action);
+  }
+
+  expect(written).toEqual(['replaced', 'replaced', 'replaced', 'replaced', 'replaced']);
+});
+
+test("a runtime owns its standing ledger: a read through another runtime's lets no write here", async () => {
+  const { rt: one } = createTestRuntime();
+  const { rt: other } = createTestRuntime();
+
+  await one.toolFiles.writeFile('/home/main/plan.md', new TextEncoder().encode('plan\n'));
+  await other.toolFiles.writeFile('/home/main/plan.md', new TextEncoder().encode('plan\n'));
+  await standingFiles(one).tools.text?.execute('/home/main/plan.md');
+  expect(await standingFiles(other).tools.write?.execute('/home/main/plan.md', 'blind\n')).toMatchObject({ success: false, reason: 'unread' });
+});
+
+describe('a file ledger keeps what each path last showed', () => {
+  test('a newer read of a path retires the content it showed before', () => {
+    const ledger = new TurnFileLedger();
+
+    ledger.observeWhole('/home/main/a.md', 'first');
+    ledger.observeWhole('/home/main/a.md', 'second');
+    // The path moved on: what it held before is no longer what this ledger saw there.
+    expect(ledger.seenState('/home/main/a.md', 'first', 'whole').state).toBe('stale');
+    expect(ledger.seenState('/home/main/a.md', 'second', 'whole').state).toBe('seen');
+  });
+
+  test('content another spelling of the file still shows is kept', () => {
+    const ledger = new TurnFileLedger();
+
+    ledger.observeWhole('/home/main/a.md', 'same');
+    ledger.observeWhole('a.md', 'same');
+    ledger.observeWhole('/home/main/a.md', 'changed');
+    expect(ledger.seenState('a.md', 'same', 'whole').state).toBe('seen');
+  });
+
+  test('an edit carries what was read of the file to its edited content', () => {
+    const ledger = new TurnFileLedger();
+
+    ledger.observeWhole('/home/main/a.md', 'one\ntwo\n');
+    ledger.observeEdited('/home/main/a.md', 'one\ntwo\n', { content: 'one\n2\n', spans: [{ start: 4, end: 7, inserted: 2 }] });
+    expect(ledger.seenState('/home/main/a.md', 'one\n2\n', 'whole').state).toBe('seen');
+    expect(ledger.seenState('/home/main/a.md', 'one\ntwo\n', 'whole').state).toBe('stale');
+  });
+});
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {

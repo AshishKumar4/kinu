@@ -1,3 +1,4 @@
+import { fileToolOver } from './helpers';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { sha256Hex } from '../src/safety/argument-digest';
 /**
@@ -8,12 +9,19 @@ import { sha256Hex } from '../src/safety/argument-digest';
 
 import { describe, test, expect } from 'bun:test';
 import { present, toolExecute } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 import { executorNamespace } from '../src/tools/executor-operations';
+import { FILE } from '../src/operations/file';
+import type { ExecutorCapability, ExecutorProviderSurface } from '../src/execution/types';
+import { namespaceDeclaration } from '../src/tools/operation-surfaces';
+import { renderCodemodeDescription } from '../src/index';
 import { TurnContextBudget } from '../src/context-budget';
 import { createSandboxExecutor, sandboxFiles, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
 import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
-import { createFileTool } from '../src/tools/file-operations';
+import { MemoryVFS } from '@nimbus-sh/core/vfs/memory.js';
+import { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
+import { serveFile, type FileDeps } from '../src/tools/file-operations';
 
 type FileToolInput = JsonObject & { readonly op: string };
 
@@ -21,7 +29,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { bytesToBase64 } from '../src/utils/base64';
 
-import type { JsonValue, JsonObject } from '../src/utils/json';
+import { JsonValueSchema, type JsonValue, type JsonObject } from '../src/utils/json';
 import type { VfsDigestWrite } from '../src/types/primitives';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -200,12 +208,15 @@ function rig(fs: ContainerFs) {
 	const mounted = withMountTable(basePlane(), standardMounts((name) =>
 		name === 'computer' ? executor : undefined));
 
-	const file = toolExecute<FileToolInput, JsonValue>(createFileTool({
+	const deps = {
 		home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT),
 		vfs: mounted, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
-	}));
+	};
 
-	return { executor, mounted, file };
+	const file = toolExecute<FileToolInput, JsonValue>(fileToolOver(deps));
+	const namespace = executorNamespace(executor, serveFile(() => deps));
+
+	return { executor, mounted, file, namespace };
 }
 
 describe('the file tool across the /computer mount', () => {
@@ -296,35 +307,33 @@ describe('a digest-checked write to the sandbox', () => {
 
 describe('the codemode sandbox namespace', () => {
   test('the listing has one name on the declared and runtime surfaces', () => {
-    const { executor } = rig(new ContainerFs());
-    const namespace = executorNamespace(executor);
+    const { executor, namespace } = rig(new ContainerFs());
 
     expect(executor.tools['listFiles']).toBeUndefined();
     expect(namespace.tools['listFiles']).toBeUndefined();
-    expect(namespace.tools['readdir']).toBeDefined();
-    expect(namespace.declarations).toHaveProperty('readdir');
+    expect(namespace.tools['fs.list']).toBeDefined();
+    expect(namespace.declarations).toHaveProperty(['fs.list']);
     expect(namespace.declarations).not.toHaveProperty('listFiles');
   });
 
-	test("a program's readdir({ path: '' }), readdir({ path: '.' }) and readdir() list the working directory — the mount's /workspace view", async () => {
+	test("computer.fs.list('.') and computer.fs.list('./') list the machine's home", async () => {
 		const fs = new ContainerFs();
-		const { executor, file } = rig(fs);
+		const { namespace, file } = rig(fs);
 
 		await file({ op: 'write', path: '/computer/workspace/a.mjs', content: 'a\n' });
 
-		const readDirectory = present(executorNamespace(executor).tools.readdir, 'computer.readdir');
+		const readDirectory = present(namespace.tools['fs.list'], 'computer.fs.list');
 
-		const [empty, dot, absent] = await Promise.all([
-			readDirectory.execute({ path: '' }), readDirectory.execute({ path: '.' }), readDirectory.execute(),
+		const [trailing, dot] = await Promise.all([
+			readDirectory.execute('./'), readDirectory.execute('.'),
 		]);
 
-		for (const listing of [empty, dot, absent]) {
-			expect(listing).toContain('- a.mjs');
+		for (const listing of [trailing, dot]) {
+			expect(listing).toMatchObject({ entries: ['a.mjs'] });
 		}
 
-		expect(empty).toBe(dot);
 		expect(fs.calls).toEqual([
-			`listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`,
+			`listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`,
 		]);
 
 		const root = await file({ op: 'list', path: '/computer/workspace' });
@@ -332,14 +341,131 @@ describe('the codemode sandbox namespace', () => {
 		expect(root).toMatchObject({ path: '/computer/workspace', entries: ['a.mjs'] });
 	});
 
-	test("a program's readdir({ path: '' }) lists the working directory, as listFiles does", async () => {
+	test('computer.fs.list refuses a missing path before touching the machine', async () => {
 		const fs = new ContainerFs();
-		const { executor, file } = rig(fs);
+		const { namespace } = rig(fs);
+		expect(await present(namespace.tools['fs.list'], 'computer.fs.list').execute()).toMatchObject({ success: false, reason: 'bad_input' });
+		expect(fs.calls).toEqual([]);
+	});
 
-		await file({ op: 'write', path: '/computer/workspace/a.mjs', content: 'a\n' });
+	test('computer.fs reads its root and home, and refuses a path spelled above its root', async () => {
+		const fs = new ContainerFs();
 
-		const readdir = present(executorNamespace(executor).tools.readdir, 'computer.readdir');
+		for (const [path, body] of [['/x', 'root bytes'], ['/workspace/relative.md', 'home bytes'], ['/etc/hosts', 'machine hosts']]) {
+			fs.files.set(path, new TextEncoder().encode(body));
+		}
 
-		expect(await readdir.execute({ path: '' })).toContain('- a.mjs');
+		fs.dirs.add('/etc');
+		const { namespace } = rig(fs);
+
+		expect(await present(namespace.tools['fs.read'], 'computer.fs.read').execute('/x')).toContain('root bytes');
+		expect(await present(namespace.tools['fs.text'], 'computer.fs.text').execute('relative.md')).toBe('home bytes');
+		expect(await present(namespace.tools['fs.text'], 'computer.fs.text').execute('/../etc/hosts')).toMatchObject({ success: false, reason: 'denied' });
+		expect(fs.calls.some((call) => call.includes('hosts'))).toBe(false);
+	});
+
+	test('computer.fs and file share reads, writes and edits in both directions', async () => {
+		const fs = new ContainerFs();
+
+		for (const path of ['/x', '/edit', '/write-back', '/edit-back']) {
+			fs.files.set(path, new TextEncoder().encode('original bytes'));
+		}
+
+		const { namespace, file } = rig(fs);
+		const read = present(namespace.tools['fs.read'], 'computer.fs.read');
+		const write = present(namespace.tools['fs.write'], 'computer.fs.write');
+		const edit = present(namespace.tools['fs.edit'], 'computer.fs.edit');
+
+		await expect(file({ op: 'write', path: '/computer/x', content: 'blind' })).rejects.toMatchObject({ verdict: 'unread' });
+		await read.execute('/x');
+		expect(await file({ op: 'write', path: '/computer/x', content: 'changed bytes' })).toMatchObject({ action: 'replaced' });
+		await read.execute('/edit');
+		expect(await file({ op: 'edit', path: '/computer/edit', edits: [{ old_text: 'original', new_text: 'edited' }] })).toMatchObject({ path: '/computer/edit' });
+		await file({ op: 'read', path: '/computer/write-back' });
+		expect(await write.execute('/write-back', 'back through fs')).toMatchObject({ action: 'replaced' });
+		await file({ op: 'read', path: '/computer/edit-back' });
+		expect(await edit.execute('/edit-back', [{ old_text: 'original', new_text: 'again' }])).toMatchObject({ path: '/computer/edit-back' });
+		expect(new TextDecoder().decode(fs.files.get('/x'))).toBe('changed bytes');
+		expect(new TextDecoder().decode(fs.files.get('/edit'))).toBe('edited bytes');
+		expect(new TextDecoder().decode(fs.files.get('/write-back'))).toBe('back through fs');
+		expect(new TextDecoder().decode(fs.files.get('/edit-back'))).toBe('again bytes');
+	});
+
+	test('machine declarations group fs while the description shows fs.read call forms', () => {
+		const { namespace } = rig(new ContainerFs());
+		const declaration = namespaceDeclaration(namespace.name, namespace.declarations ?? {});
+		expect(declaration).toContain('fs: {');
+		expect(declaration).toContain('read(');
+		expect(declaration).not.toContain('fs.read(');
+		expect(renderCodemodeDescription([namespace])).toContain('fs.read(');
 	});
 });
+
+describe("a machine path reaches the plane as written; one spelled above the machine's root is refused", () => {
+	const cases = [
+		{ name: 'relative with home', home: '/workspace', path: 'x', expected: '/computer/workspace/x' },
+		{ name: "relative without home starts at the machine's root", home: undefined, path: 'x', expected: '/computer/x' },
+		{ name: 'trailing slash', home: '/workspace/', path: 'dir/', expected: '/computer/workspace/dir/' },
+		{ name: 'absolute trailing slash', home: undefined, path: '/dir/', expected: '/computer/dir/' },
+		{ name: 'a parent inside the machine is left to its walk', home: undefined, path: '/a/b/../x', expected: '/computer/a/b/../x' },
+		{ name: 'a relative parent is left to its walk', home: '/workspace', path: '../etc/x', expected: '/computer/workspace/../etc/x' },
+		{ name: 'dot component', home: undefined, path: '/a/./x', expected: '/computer/a/./x' },
+		{ name: 'dot relative to home', home: '/workspace', path: '.', expected: '/computer/workspace/.' },
+		{ name: 'dot without home', home: undefined, path: '.', expected: '/computer/.' },
+		{ name: 'the root', home: undefined, path: '/', expected: '/computer/' },
+	];
+
+	/** The plane path `computer.fs.stat(path)` asks of the file operations, or what refused it. */
+	const asked = async (home: string | undefined, path: string): Promise<string | JsonValue> => {
+		const paths: string[] = [];
+
+		const files = { stat: { op: FILE.stat, run: async (input: JsonValue) => {
+			paths.push(v.parse(v.object({ path: v.string() }), input).path);
+
+			return { value: { path: '', size: 0, mtimeMs: 0, isDir: false } };
+		} } };
+
+		const provider = {
+			name: 'computer', tools: {}, positionalArgs: true, capabilities: new Set<ExecutorCapability>(),
+			fileRoot: async () => (home === undefined ? { root: '/computer' } : { root: '/computer', home }),
+		} satisfies ExecutorProviderSurface;
+
+		const answered = await executorNamespace(provider, files).tools['fs.stat']?.execute(path);
+
+		return paths[0] ?? v.parse(JsonValueSchema, answered);
+	};
+
+	for (const each of cases) {
+		test(each.name, async () => { expect(await asked(each.home, each.path)).toBe(each.expected); });
+	}
+
+	// No guess at where a link leads: a spelling that climbs above the machine's root is refused, never rewritten.
+	for (const [home, path] of [[undefined, '/a/../../x'], [undefined, '/../etc/hosts'], ['/workspace', '../../x'], [undefined, '..']] as const) {
+		test(`${path} from ${home ?? '/'} is refused`, async () => {
+			expect(await asked(home, path)).toMatchObject({ success: false, reason: 'denied', error: expect.stringContaining('above') });
+		});
+	}
+});
+
+test("workspace.fs and file reach the same file through a link and the parents after it, as the plane walks them", async () => {
+	const tree = new CompositeVFS(new MemoryVFS());
+
+	await tree.mkdir('/home/main/deep/inner', { recursive: true });
+	await tree.writeFile('/home/main/target.txt', new TextEncoder().encode('target\n'));
+	await tree.symlink('/home/main/deep/inner', '/home/main/link');
+
+	// The workspace's plane over that tree as the cloud's is: the namespace walks every path, after a link as open(2) does.
+	const vfs = withMountTable({ namespace: async () => tree, home: '/home/main' }, []);
+	const deps: FileDeps = { vfs, home: '/home/main', planes: cloudPlanes('/home/main'), ledger: new TurnFileLedger(), budget: new TurnContextBudget() };
+	const files = serveFile(() => deps);
+
+	const workspace = {
+		name: 'workspace', tools: {}, positionalArgs: true, capabilities: new Set<ExecutorCapability>(), fileRoot: async () => ({ root: '' }),
+	} satisfies ExecutorProviderSurface;
+
+	const through = '/home/main/link/../../../../home/main/target.txt';
+
+	expect(await files.text.run({ path: through }, { callId: 'file-text' })).toMatchObject({ value: 'target\n' });
+	expect(await present(executorNamespace(workspace, files).tools['fs.text'], 'workspace.fs.text').execute(through)).toBe('target\n');
+});
+

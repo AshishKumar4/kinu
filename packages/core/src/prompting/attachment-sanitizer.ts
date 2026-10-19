@@ -202,7 +202,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
   });
 
   return `[Pasted text (${bytes.length} bytes) saved to ${path} (read or slice it with your file tools; ` +
-    `oversize: name ${path} in the mission of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
+    `oversize: name ${path} in the message of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
 }
 
 /** Sized without decoding: base64 is ~4/3 of the bytes; remote URLs have no local payload. */

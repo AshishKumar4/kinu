@@ -17,7 +17,7 @@ type Owner = ReturnType<typeof orchestratorHarness>;
 /** What the slate reaches, as its owner runs it: each call is recorded where the host routes it, whatever it answers. */
 async function exerciseIssuesSlate(owner: Owner): Promise<void> {
   for (const [path, args] of [
-    [['mcp', 'github', 'read_issue'], [{}]], [['readFile'], ['/slates/issues/src/server.ts']], [['memory', 'recall'], ['seen']], [['slates', 'other', 'summary'], []],
+    [['mcp', 'github', 'read_issue'], [{}]], [['fs', 'text'], ['/slates/issues/src/server.ts']], [['memory', 'recall'], ['seen']], [['slates', 'other', 'summary'], []],
   ] as const) {
     await owner.agent.slateCallAs({ caller: ROOT_SLATE_CALLER, id: 'issues', name: 'workspace', lineage: UNSHARED }, { path: [...path], args: [...args], invocation: null });
   }

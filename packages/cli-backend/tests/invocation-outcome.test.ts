@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { isStepCount } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, freshServedStores } from '@kinu.run/test-utils';
 import {
   ExtensionHost, runChat, TurnAccumulator,
   type CodemodeProvider, type ChatEvent,
@@ -27,7 +27,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   });
 
   const tool = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: providers })({
-    cwd: WORKSPACE_ROOT,
+    cwd: WORKSPACE_ROOT, stores: freshServedStores(),
     native: {}, external: () => ({}), craftedTools: () => [],
   });
 

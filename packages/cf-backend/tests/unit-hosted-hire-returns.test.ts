@@ -44,7 +44,7 @@ function leafHire(answered: Promise<void>, asked: () => void) {
     if (opening.includes('Leaf done.')) return chatCompletion(run, 'Middle relays Leaf done.');
 
     return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: 'Leaf task.' } }, 'call_leaf')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Leaf task.' } }, 'call_leaf')
       : chatCompletion(run, 'Middle waits.');
   };
 }
@@ -119,7 +119,7 @@ test("a helper whose turn ends with its hire still working is released, and no d
 test('a hire whose facet cannot load reports its named failure to its hirer', async () => {
   const gateway = stubAiBinding((run) => openingOf(run).includes('[subordinate_report]') || toolResults(run) > 0
     ? chatCompletion(run, 'Root received the failure.')
-    : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: 'Unloadable task.' } }, 'call_unloadable'));
+    : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Unloadable task.' } }, 'call_unloadable'));
 
   const workspace = gatewayWorkspace(gateway);
 
@@ -147,7 +147,7 @@ test("a durable hire whose turn fails delivers its failure to its hirer as a mes
     if (opening.includes('Durable task.')) return new Response('', { status: 400 });
 
     if (toolResults(run) === 0 && opening.includes('Middle task.') && !opening.includes('failed')) {
-      return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable');
+      return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', message: 'Durable task.' } }, 'call_durable');
     }
 
     return chatCompletion(run, 'Middle noted.');
@@ -177,7 +177,7 @@ test("a Stop reaches the agent a stopped helper hired, and wakes no one", async 
     }
 
     return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', message: 'Durable task.' } }, 'call_durable')
       : chatCompletion(run, 'Middle waits.');
   });
 
@@ -215,7 +215,7 @@ test("a task agent does not settle while more input is queued for it: its answer
     if (opening.includes('answer')) return chatCompletion(run, 'Root noted.');
 
     return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', mission: 'Helper brief.' } }, 'call_helper')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Helper brief.' } }, 'call_helper')
       : chatCompletion(run, 'Root waits.');
   });
 
@@ -256,7 +256,7 @@ test("an agent the owner added keeps its own Stop: a root Stop skips it, and its
     }
 
     return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', message: 'Durable task.' } }, 'call_durable')
       : chatCompletion(run, 'Added agent waits.');
   });
 
@@ -296,7 +296,7 @@ test("archiving an agent the owner added retires the durable agent it hired", as
     }
 
     return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', message: 'Durable task.' } }, 'call_durable')
       : chatCompletion(run, 'Added agent waits.');
   });
 
@@ -338,7 +338,7 @@ test("a Stop discards the input already queued for a descendant it interrupts", 
     }
 
     return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', mission: 'Durable task.' } }, 'call_durable')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', message: 'Durable task.' } }, 'call_durable')
       : chatCompletion(run, 'Middle waits.');
   });
 

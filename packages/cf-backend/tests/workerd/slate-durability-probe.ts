@@ -13,7 +13,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
 import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
 import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH, sha256Hex, SharedSlateFilesSchema, type SlateFileChange } from '@kinu.run/core';
-import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, createDefaultWebSearchProvider, toolsInWorkMode } from '@kinu.run/core';
+import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
 import { initSlateBuildTable, initSlateLiveShareTables, initSlateUsageTable, ROOT_SLATE_CALLER, serverAuthority, SlateBuilds, SlateController, SlateFiles, WorkspaceSlateContentStore } from '@kinu.run/core/slates';
@@ -26,7 +26,6 @@ import { ownerCaller, parseSlateProject, slateAuthority } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
-import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { actorNamespaces, SURFACE_POLICY } from '@kinu.run/core';
 import { codemodeLauncher } from '../../src/codemode-sandbox';
 import type { JsonValue } from '@kinu.run/core';
@@ -133,20 +132,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null, asOwner: true } : null }), workspace: this.name,
     });
 
-    const unreached = (): never => { throw new Error('this probe reaches no memory, files or tasks'); };
-
-    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}), {
+    const eval_ = factory.toolFor(codemodeSurface(this.rt, {}, () => ({}), { stores: this.surfaceActor('build').stores }), {
       reach: narrowToolSurface(undefined),
-      // As a confined copy's programs run: state, tables, web and executors, with no memory, files or tasks to reach.
-      namespaces: (executor) => actorNamespaces({
-        executors: () => this.rt.executionRouter?.getProviders() ?? [],
-        web: {
-          search: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }), files: this.rt.storage,
-          browser: { sessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} }, prelude: BROWSER_PRELUDE },
-        },
-        memory: unreached, files: unreached, tasks: unreached,
-        db: this.stores.appData, programState: this.rt.actor.programState, agents: null, self: null, ownerWaits: null,
-      }, SURFACE_POLICY.confined, { executor }),
+      // As the workspace agent's own programs run.
+      namespaces: (executor) => actorNamespaces(this.surfaceActor('build'), SURFACE_POLICY.program, { executor }),
     });
 
     const execute = toolsInWorkMode('build', { eval: eval_ }).eval?.execute;
@@ -261,8 +250,8 @@ const HELPER = [
   'async (input) => {',
   '  let browsers = null;',
   '  try { browsers = await web.browsers({}); } catch {}',
-  '  const wrote = await workspace.writeFile("ran-by.txt", input.who);',
-  '  return { browsers, wrote, read: await workspace.readFile("ran-by.txt") };',
+  '  const wrote = await workspace.fs.write("ran-by.txt", input.who);',
+  '  return { browsers, wrote, read: await workspace.fs.text("ran-by.txt") };',
   '}',
 ].join('\n');
 
@@ -480,7 +469,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     await this.writeSlateFile(target, '/slates/notebook/server.ts', [
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
-      '  async note(text) { await this.env.workspace.writeFile("/slates/notebook/note.txt", text); return "noted " + text; }',
+      '  async note(text) { await this.env.workspace.fs.write("/slates/notebook/note.txt", text); return "noted " + text; }',
       '}',
     ].join('\n'));
 
@@ -511,14 +500,14 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     await this.writeSlateFile(target, '/slates/effects/server.ts', [
       'import { SlateObject } from "kinu:slate";',
       'export class Slate extends SlateObject {',
-      `  async mark() { return await this.env.workspace.writeFile(${JSON.stringify(input.mark)}, "visitor"); }`,
+      `  async mark() { return await this.env.workspace.fs.write(${JSON.stringify(input.mark)}, "visitor"); }`,
       '}',
     ].join('\n'));
     // A share is cut from what the owner's own calls reached: run the write once, then take the owner's mark back.
     await target.runProgram('return await workspace.slates.effects.mark();');
     await target.executeInExecutor('workspace', `rm -f ${input.mark}`);
     const owned = workspaceOwner(this.env, input.workspace);
-    const write = [{ slate: 'effects', namespace: 'workspace', member: 'writeFile' }];
+    const write = [{ slate: 'effects', namespace: 'workspace', member: 'fs.write' }];
     const shared = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'share', id: 'effects', visibility: 'public', approved: write });
 
     if (!shared.ok) throw new Error(`slate share refused: ${shared.reason}: ${shared.error}`);
@@ -722,7 +711,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     return {
       answers, files: v.parse(SharedSlateFilesSchema, read.value).files, marks,
-      outside: await target.runProgram('return await workspace.readFile("/slates/notes/secret.ts");'),
+      outside: await target.runProgram('return await workspace.fs.text("/slates/notes/secret.ts");'),
     };
   }
 
@@ -873,7 +862,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * The agent writes the `lilt` slate through its own `workspace.writeFile`, reading each file first as an agent must:
+   * The agent writes the `lilt` slate through its own `workspace.fs.write`, reading each file first as an agent must:
    * `client.tsx` that builds, then one that does not. `phase` names which: `good`, `broken`, then `fixed`; each answers
    * the write's own answer, what the preview says, what its client bundle serves, and what the next step is told.
    */
@@ -882,15 +871,15 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     if (input.phase === 'good') {
       await this.claimWorkspace(target, input.workspace, input.owner);
-      await target.runProgram(`return await workspace.writeFile("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
+      await target.runProgram(`return await workspace.fs.write("/slates/lilt/package.json", ${JSON.stringify(JSON.stringify({ browser: 'client.tsx', slate: { title: 'Lilt' } }))});`);
     }
 
     const source = { good: LILT_GOOD, broken: LILT_BROKEN, fixed: LILT_FIXED, served: null }[input.phase];
 
     const wrote = source === null ? null : await target.runProgram([
       'const path = "/slates/lilt/client.tsx";',
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(source)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(source)});`,
     ].join('\n'));
 
     const preview = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'preview', id: 'lilt' });
@@ -925,8 +914,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     await target.runProgram([
       'const path = "/home/main/word.ts";',
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(`export const word = ${JSON.stringify(input.word)};\n`)});`,
     ].join('\n'));
 
     const called = await workspaceOwner(this.env, input.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'call', id: 'imports', method: 'word' });
@@ -944,8 +933,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
     const write = (path: string, text: string) => target.runProgram([
       `const path = ${JSON.stringify(path)};`,
-      'if (await workspace.exists(path)) await workspace.readFile(path);',
-      `return await workspace.writeFile(path, ${JSON.stringify(text)});`,
+      'const status = await workspace.fs.stat(path); if (status.success !== false) await workspace.fs.text(path);',
+      `return await workspace.fs.write(path, ${JSON.stringify(text)});`,
     ].join('\n'));
 
     if (input.first) {

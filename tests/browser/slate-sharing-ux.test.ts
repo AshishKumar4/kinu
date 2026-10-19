@@ -140,7 +140,7 @@ describe('slate sharing surfaces', () => {
             // What the owner answered "Always for this slate" to is listed by what it reaches, on its root, and taken back
             // from every share of the slate in one press, sent as the list named it.
             expect(await live.$$eval('[data-share-always-entry]', (rows) => rows.map((row) => row.getAttribute('data-share-always-entry'))))
-              .toEqual(['issue-triage/mcp.github.create_issue', 'issue-triage/workspace.writeFile']);
+              .toEqual(['issue-triage/mcp.github.create_issue', 'issue-triage/workspace.fs.write']);
             const standing = await live.$eval('[data-share-always]', (element) => element.textContent ?? '');
             expect(standing).toContain('GitHub');
             expect(standing).toContain('acme');
@@ -148,7 +148,7 @@ describe('slate sharing surfaces', () => {
             await live.waitForFunction(() => document.querySelector('[data-share-always-entry="issue-triage/mcp.github.create_issue"]') === null);
             expect(JSON.parse(await live.$eval('html', (root) => root.getAttribute('data-gallery-withdrawn')) ?? 'null'))
               .toEqual({ slate: 'issue-triage', namespace: 'mcp.github', member: 'create_issue', root: { org: 'acme' } });
-            expect(await live.$('[data-share-always-entry="issue-triage/workspace.writeFile"]')).not.toBeNull();
+            expect(await live.$('[data-share-always-entry="issue-triage/workspace.fs.write"]')).not.toBeNull();
 
             // A share on the owner's access whose code changed is stopped; the owner sees its reach again, then approves it
             // at the slate's revision now.

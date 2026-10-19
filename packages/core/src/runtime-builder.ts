@@ -6,7 +6,6 @@ import type { SqlExecutor, RawSqlExec, Memory, Identity, LLM, Executor, Schedule
 import type { AgentRuntime, CraftStore, RequestShellApproval } from './types/agent-runtime';
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
-import type { TurnFileLedger } from './vfs/file-ledger';
 import type { PathPlanes } from './vfs/resolve';
 import { createScaffoldSurface } from './scaffold/surface';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
@@ -46,7 +45,6 @@ export interface RuntimeComponents {
   checkpoints?: FileCheckpoints;
   /** Only a backend with a live interactive surface (the CLI's ACP channel) supplies this. */
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
-  setTurnFileLedgerProvider?: (provider: (() => TurnFileLedger | undefined) | null) => void;
 }
 
 /** Lanes are derived getters but callers assign them; an assignment pins and wins over routing thereafter. */
@@ -98,6 +96,5 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     shell: components.shell,
     checkpoints: components.checkpoints,
     setShellApprovalChannel: components.setShellApprovalChannel,
-    setTurnFileLedgerProvider: components.setTurnFileLedgerProvider,
   };
 }

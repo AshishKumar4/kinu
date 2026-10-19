@@ -1,6 +1,7 @@
 /** The scaffold evolution control plane: backend-neutral drivers over the evolution primitives. A backend
  *  supplies only a {@link ScaffoldSurface}. */
 
+import type { ServedStores } from '../tools/actor-stores';
 import type { ModelMessage } from 'ai';
 
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -33,6 +34,8 @@ export interface ScaffoldSurface {
   readonly history?: ScaffoldRunOptions['history'];
   /** Absent means a scaffold that delegates gets the documented error. */
   readonly defaultInference?: ScaffoldRunOptions['defaultInference'];
+  /** The store operations its tools run, which the run's machines run too. */
+  readonly stores: ServedStores;
 }
 
 /** The conversation a candidate's default loop replays. Empty means the backend
@@ -67,6 +70,7 @@ function scaffoldRunOptions(
     callTool: surface.callTool,
     history: surface.history,
     defaultInference: surface.defaultInference,
+    stores: surface.stores,
     ...extra,
   };
 }

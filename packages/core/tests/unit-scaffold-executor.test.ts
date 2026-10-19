@@ -1,15 +1,22 @@
 /** runScaffold with a mock Executor that runs the scaffold's `shell` body and emits canned events. */
 
+import { createFileTool } from '../src/tools/file-operations';
+import { serveStores } from '../src/tools/actor-stores';
+import { builtinStoreDeps } from '../src/tools/builtins';
 import { describe, test, expect } from 'bun:test';
 import {
-  runScaffold,
+  runScaffold, scaffoldProviders,
   type ScaffoldEvent,
   type ScaffoldEmitFn,
 } from '../src/scaffold/executor';
 import type { ChatEvent } from '../src/chat';
 import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import type { JsonObject } from '../src/utils/json';
-import { createTestRuntime } from './helpers';
+import { conversationsFor, createTestRuntime, servedStoresFor } from './helpers';
+import { createInlineExecutor } from '../src/tools/inline-executor';
+import { DefaultExecutionRouter } from '../src/execution/router';
+
+import { present, toolExecute } from '@kinu.run/test-utils';
 
 function makeRtWithMockedExecutor(execute: Executor['execute']) {
   const { rt } = createTestRuntime();
@@ -34,6 +41,59 @@ async function* asyncOf(...items: ChatEvent[]): AsyncIterable<ChatEvent> {
 }
 
 describe('runScaffold', () => {
+  test("a scaffold's workspace.fs runs its turn's own file operations: one ledger, and the slate check a write makes", async () => {
+    const { rt } = createTestRuntime();
+    const built: string[] = [];
+
+    // The turn's one served set, as its tools hold it.
+    const stores = serveStores(builtinStoreDeps({
+      rt, conversations: conversationsFor(rt), vectorStore: null,
+      slateBuild: async (slate) => {
+        built.push(slate);
+
+        return { ok: true, value: null };
+      },
+    }));
+
+    await rt.toolFiles.writeFile('/home/main/notes.md', new TextEncoder().encode('first\n'));
+    rt.identity.scaffold.read = async () => 'async function run() {}';
+    const router = new DefaultExecutionRouter();
+
+    router.register(createInlineExecutor({ vfs: rt.toolFiles, craftStore: rt.craftStore, shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) }, filesOwner: 'agent' }));
+    rt.executionRouter = router;
+
+    rt.executor = {
+      languages: ['javascript'],
+      execute: async (_code, providers) => {
+        if (!Array.isArray(providers)) throw new Error('expected resolved providers');
+        const fs = present(providers.find((provider) => provider.name === 'workspace'), 'the workspace namespace').fns;
+
+        expect(await present(fs['fs.text'], 'workspace.fs.text')('/home/main/notes.md')).toBe('first\n');
+        await present(fs['fs.write'], 'workspace.fs.write')('/slates/app/page.html', '<p>hi</p>');
+
+        return { result: undefined };
+      },
+    };
+
+    await runScaffold({ rt, task: 'x', emit: () => {}, llmStream: () => asyncOf(), stores });
+    // The turn's native file tool, over the same set: the scaffold's read lets it replace the file.
+    const file = createFileTool(stores.file, stores.deps.files());
+
+    expect(await toolExecute(file)({ op: 'write', path: '/home/main/notes.md', content: 'second\n' })).toMatchObject({ action: 'replaced' });
+    expect(built).toEqual(['app']);
+  });
+
+  test("a scaffold on a runtime holding machines without its tools' store operations is a defect, not a fresh set", async () => {
+    const { rt } = createTestRuntime();
+    const router = new DefaultExecutionRouter();
+
+    router.register(createInlineExecutor({ vfs: rt.toolFiles, craftStore: rt.craftStore, shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) }, filesOwner: 'agent' }));
+    rt.executionRouter = router;
+
+    expect(() => scaffoldProviders(rt, { stores: null }, 'build')).toThrow('without the store operations');
+    expect(scaffoldProviders(createTestRuntime().rt, { stores: null }, 'build')).toEqual([]);
+  });
+
   test('forwards emits through to the emit callback', async () => {
     const events: ScaffoldEvent[] = [];
     const emit: ScaffoldEmitFn = (e) => { events.push(e); };
@@ -50,7 +110,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => 'async function run() { /* mocked */ }';
 
     const result = await runScaffold({
-      rt, task: 'sample',
+      rt, stores: servedStoresFor(rt), task: 'sample',
       emit,
       llmStream: () => asyncOf(),
     });
@@ -67,7 +127,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     const result = await runScaffold({
-      rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
+      rt, stores: servedStoresFor(rt), task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
     });
 
     expect(result.ok).toBe(false);
@@ -81,7 +141,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => '   ';
 
     const result = await runScaffold({
-      rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
+      rt, stores: servedStoresFor(rt), task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
     });
 
     expect(result.ok).toBe(false);
@@ -100,7 +160,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     const result = await runScaffold({
-      rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
+      rt, stores: servedStoresFor(rt), task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
     });
 
     expect(result.ok).toBe(true);
@@ -121,7 +181,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => 'CURRENT SCAFFOLD';
 
     await runScaffold({
-      rt, task: 'x',
+      rt, stores: servedStoresFor(rt), task: 'x',
       emit: (e) => { events.push(e); },
       llmStream: () => asyncOf(),
       scaffoldCodeOverride: 'PENDING SCAFFOLD',
@@ -144,7 +204,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     const result = await runScaffold({
-      rt, task: 'x',
+      rt, stores: servedStoresFor(rt), task: 'x',
       emit: () => undefined,
       llmStream: () => asyncOf(),
       callTool: async (name, args) => {
@@ -170,7 +230,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     await runScaffold({
-      rt, task: 'x',
+      rt, stores: servedStoresFor(rt), task: 'x',
       emit: (e) => { events.push(e); },
       llmStream: () => asyncOf({ type: 'text-delta', delta: 'one ' }, { type: 'text-delta', delta: 'two ' }, { type: 'text-delta', delta: 'three' }),
     });
@@ -197,7 +257,7 @@ describe('runScaffold', () => {
 
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
-    await runScaffold({ rt, task: 'x', emit: () => undefined, llmStream: () => {
+    await runScaffold({ rt, stores: servedStoresFor(rt), task: 'x', emit: () => undefined, llmStream: () => {
       calls++;
 
       return asyncOf({ type: 'text-delta', delta: 'answered' });
@@ -224,7 +284,7 @@ describe('runScaffold', () => {
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     const run = runScaffold({
-      rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
+      rt, stores: servedStoresFor(rt), task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
     });
 
     // No elapsed deadline races the run.
@@ -259,7 +319,7 @@ describe('runScaffold', () => {
     });
 
     const result = await runScaffold({
-      rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
+      rt, stores: servedStoresFor(rt), task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
       scaffoldCodeOverride: `async function* run(rt, task) { throw new Error('boom'); }`,
     });
 

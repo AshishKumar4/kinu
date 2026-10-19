@@ -26,10 +26,3 @@ it("an account's roster finds a workspace by its whole title, however long", asy
 
   expect(await probe().rosterSearch(title, 'QUARTERLY PLANNING')).toEqual({ found: [title] });
 });
-
-it("an agent program's state lists its keys under a prefix however long, and no other", async () => {
-  const key = `${'reports/2026/q4/platform-team/'.repeat(2)}summary`;
-
-  expect(await probe().programStateList(key, key.slice(0, 60))).toEqual({ found: [key] });
-  expect(await probe().programStateList(key, `${key.slice(0, 59)}X`)).toEqual({ found: [] });
-});

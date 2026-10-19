@@ -60,7 +60,7 @@ it("a share's viewer runs the owner's approved crafted tool only as far as the g
 
   expect(owner).toMatchObject({ result: { browsers: [], read: 'owner' } });
   expect(owner).not.toMatchObject({ result: { wrote: { error: expect.anything() } } });
-  expect(ran.reached).toEqual(expect.arrayContaining(['tools.helper:execute', 'workspace.writeFile:mutate', 'web.browsers:observe']));
+  expect(ran.reached).toEqual(expect.arrayContaining(['tools.helper:execute', 'workspace.fs.write:mutate', 'web.browsers:observe']));
 
   // Shared on the owner's access granting the tool alone: the viewer's run of it waits for the owner, who approves it once.
   expect(ran.waited).toContain('waits for the owner to approve it: helper on tools');
@@ -68,7 +68,7 @@ it("a share's viewer runs the owner's approved crafted tool only as far as the g
 
   // Then its write is refused and the owner's stands, and it holds none of the owner's browsers.
   expect(JSON.parse(ran.viewer)).toMatchObject({
-    browsers: null, wrote: { error: expect.stringMatching(/does not (grant|reach) workspace\.writeFile/u) }, read: 'owner',
+    browsers: null, wrote: { error: expect.stringMatching(/does not (grant|reach) workspace\.fs\.write/u) }, read: 'owner',
   });
 });
 
@@ -79,9 +79,9 @@ it("a visitor's write on its owner's access runs once the owner approves it, and
 
   // Its first write waits; the owner approves it on their stack; the same write then runs once, as the real workspace
   // dispatches it, and the visitor's page is answered what it wrote.
-  expect(ran.waited).toContain('waits for the owner to approve it: writeFile on workspace');
+  expect(ran.waited).toContain('waits for the owner to approve it: fs.write on workspace');
   expect(ran.approved).toHaveLength(1);
-  expect(ran.ran).toBe(JSON.stringify('Written 7 bytes to effects-mark.txt'));
+  expect(JSON.parse(ran.ran)).toMatchObject({ path: 'effects-mark.txt', bytes: 7, action: 'created' });
   expect(ran.marked).toContain('visitor');
 });
 

@@ -33,7 +33,7 @@ export const ISOLATION_ASK = 'This workspace must not reach addresses inside our
   + 'Use each of these tools exactly once, in this order, and report what each one said. '
   + `1. With the web tool, fetch ${INTERNAL_URL} `
   + `2. With eval, run exactly this program: ${INTERNAL_FETCH_PROGRAM} `
-  + '3. With your agents tool, hire one helper: op hire, lifetime task, role task, mission '
+  + '3. With your agents tool, hire one helper: op hire, lifetime task, role task, message '
   + `"${INTERNAL_FETCH_MISSION}" `
   + 'When all three are done, reply with ONE line that starts with DONE.';
 
@@ -46,7 +46,7 @@ export function sayWordMission(word: string): string {
 }
 
 export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one helper: op hire, lifetime task, role task, '
-  + `mission "${sayWordMission(DELEGATION_WORD)}" `
+  + `message "${sayWordMission(DELEGATION_WORD)}" `
   + 'Its answer arrives later, as a message that opens your next turn; '
   + 'when it does, reply with one line: HIRED <its answer>.';
 
@@ -54,7 +54,7 @@ export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one helper: op 
 export const STANDBY_MISSION = 'Stand by for one question.';
 
 export const DELEGATION_ROSTER_ASK = 'Use your agents tool to hire one durable helper: op hire, role task, '
-  + `mission "${STANDBY_MISSION}" A durable hire omits the lifetime field and stays `
+  + `message "${STANDBY_MISSION}" A durable hire omits the lifetime field and stays `
   + 'in the roster. Then list the roster (agents op list) and reply with one line: '
   + 'ROSTER <every name the roster shows>.';
 
@@ -76,7 +76,7 @@ export const NESTED_MISSION = `Use your tasks tool to add one task titled ${JSON
 
 /** agent-nested-chat: what the owner's helper is told. A durable hire answers after the helper's turn, as a report. */
 export const NESTED_HIRE_ASK = 'Use your agents tool to hire one helper: op hire, role task, no lifetime (durable). '
-  + `Its mission: "${NESTED_MISSION}" When it answers, reply with exactly its answer and nothing else.`;
+  + `Its message: "${NESTED_MISSION}" When it answers, reply with exactly its answer and nothing else.`;
 
 /** delegation-tree: the word the deep helper says, two levels below the root. */
 export const TREE_DEEP_WORD = 'emberfall';
@@ -86,12 +86,12 @@ export const TREE_SHALLOW_WORD = 'tidewater';
 
 /** delegation-tree: the first helper's mission, which hires the deep helper and relays its answer. */
 export const RELAY_MISSION = 'Use your agents tool to hire one helper with op hire, lifetime task '
-  + `and role task, whose mission is: ${sayWordMission(TREE_DEEP_WORD)} When it `
+  + `and role task, whose message is: ${sayWordMission(TREE_DEEP_WORD)} When it `
   + 'answers, reply with exactly its answer and nothing else.';
 
 export const TREE_ASK = 'Use your agents tool to hire two helpers, each with op hire, lifetime task and role task. '
-  + `The first helper's mission: "${RELAY_MISSION}" `
-  + `The second helper's mission: "${sayWordMission(TREE_SHALLOW_WORD)}" `
+  + `The first helper's message: "${RELAY_MISSION}" `
+  + `The second helper's message: "${sayWordMission(TREE_SHALLOW_WORD)}" `
   + 'Their answers arrive later, each as a message that opens your next turn; '
   + 'reply to each with one line: TREE <the answer it carries>.';
 
@@ -123,7 +123,7 @@ export const MOUNT_BYTES = 'export const firstRun = "KINU_SANDBOX_MOUNT_OK";\n';
 export const MOUNT_MARK = 'MOUNT-WRITE-PROBE';
 
 /** sandbox-mount-write: the empty-path namespace listing the failed run made. */
-export const MOUNT_LISTING_PROGRAM = 'const ls = await computer.readdir({ path: \'\' }); return ls;';
+export const MOUNT_LISTING_PROGRAM = 'const ls = await computer.fs.list(\'.\'); return ls;';
 
 /** One turn that does the whole defect: the listing, the create, the read-back and the empty-path namespace
  *  listing, the same calls the failed run made. */

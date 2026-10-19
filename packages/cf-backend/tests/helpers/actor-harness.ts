@@ -26,7 +26,7 @@ import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
 import type { PictureBucket } from '../../src/slates/pictures';
 import { isWorkMode, turnTags, type UserProfile } from '@kinu.run/core';
-import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, createParentWorkspaceVfs, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
+import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { present, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
@@ -632,7 +632,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   protected override actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
     // The requested mode is the message's, never the operation a role bound over it.
     if (this._suppliedTools !== null && reach.actor.kind === 'workspace' && mode === turnTags({ metadata: this.turnUserMetadata() }).mode) {
-      return { turn: this._suppliedTools, raw: this._suppliedTools };
+      // The supplied tools run none of the actor's stores; its programs and machines still run the actor's own set.
+      return { turn: this._suppliedTools, raw: this._suppliedTools, stores: super.actorTools(actor, reach, mode, scope).stores };
     }
 
     return super.actorTools(actor, reach, mode, scope);
@@ -774,17 +775,16 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
 }
 
-/** The workspace's files as a fork reaches them: core's parent adapter over the object's public
- *  workspace RPC, so a suite reads and writes the object's own file plane through a door it has. */
+/** The workspace's public file RPCs, adapted only for test setup and inspection. */
 export function workspaceFiles(agent: HarnessOrchestratorAgent): VFS {
-  return createParentWorkspaceVfs({
-    read: (path) => agent.readWorkspaceFile(path),
-    write: (input) => agent.writeWorkspaceFile(input),
-    list: (path) => agent.listWorkspaceFiles(path),
-    stat: (path) => agent.statWorkspaceFile(path),
-    delete: (path) => agent.deleteWorkspaceFile(path),
-    exec: (command) => agent.execWorkspaceCommand(command),
-  });
+  return {
+    readFile: (path) => agent.readWorkspaceFile(path),
+    writeFile: async (path, data) => { await agent.writeWorkspaceFile({ kind: 'file', path, data }); },
+    readdir: (path) => agent.listWorkspaceFiles(path),
+    stat: (path, options) => agent.statWorkspaceFile(path, options),
+    mkdir: async (path, options) => { await agent.writeWorkspaceFile({ kind: 'directory', path, recursive: options?.recursive ?? false }); },
+    unlink: async (path) => { await agent.deleteWorkspaceFile(path); },
+  };
 }
 
 /** One event-loop turn, with no duration: queued I/O callbacks and detached continuations run first. */

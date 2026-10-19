@@ -4,6 +4,7 @@
  * background keeps calling while the next one runs; its calls arrive over RPC, outside its async context. The
  * programs here are launched by a stand-in that holds each one open and makes its calls as RPC would.
  */
+import { freshServedStores } from '@kinu.run/test-utils';
 import { expect, test } from 'bun:test';
 import type { ToolExecutionOptions } from 'ai';
 import {
@@ -97,7 +98,7 @@ test("an older program's late desktop calls carry its own stop and background st
   const { launch, running } = heldPrograms();
   const desk = desktopBox();
   const factory = createCodemodeToolFactory({ launch: () => launch, workspace: 'main' });
-  const surface: CodemodeSurface = { native: {}, craftedTools: () => [], external: () => ({}), cwd: '/home/user' };
+  const surface: CodemodeSurface = { native: {}, craftedTools: () => [], external: () => ({}), cwd: '/home/user', stores: freshServedStores() };
   const computer = createSandboxExecutor(desk.box, { desktop: { driver: 'main', screen: SCREEN } });
   const scope: CodemodeScope = { namespaces: (executor) => [executorNamespace(executor(computer))], reach: narrowToolSurface(undefined) };
   const { execute } = factory.toolFor(surface, scope);

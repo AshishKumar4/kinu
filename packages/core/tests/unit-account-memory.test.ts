@@ -3,7 +3,9 @@
  * written only by proposal; a slate's memory never names the account. The facts store keeps importance, veracity and
  * who wrote each value, with every value a key held. Recall ranks with mnemopi's lexical rules (lexical-recall.ts).
  */
+import { serveStores } from '../src/tools/actor-stores';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { createMemoryVfs, createTestFactsStore, createTestRuntime } from '@kinu.run/test-utils';
 import {
   accountProposals, actorNamespaces, callOperation, initEffectTombstoneTable, initFactsTable, initSleepTimeUpdatesTable, listOperations, renderFactsBlock,
@@ -156,14 +158,15 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
   return {
     executors: () => [],
     web: { search: { search: unreached, fetch: unreached, render: unreached, screenshot: unreached }, files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: null },
-    memory: () => ({
+    stores: serveStores({
+      memory: () => ({
       memory: rt.memory, facts: stores.facts, actor: rt.actor, conversations: conversationsFor(rt), vectorStore: null,
       ...(account !== undefined && { account }),
     }),
-    files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
-    tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+      files: () => ({ vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: new TurnFileLedger(), budget: new TurnContextBudget() }),
+      tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+    }),
     db: stores.appData,
-    programState: rt.actor.programState,
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,
     ownerWaits: null,
@@ -217,6 +220,19 @@ describe("an agent's memory where the account is wired", () => {
       slateToolForViewer: scopeOf(wired, 'slateToolForViewer'),
       unwired: scopeOf(actorWith(undefined), 'program'),
     }).toEqual({ program: [true, true], slate: [false, false], ownerSlate: [false, false], slateToolForViewer: [false, false], unwired: [false, false] });
+  });
+
+  test('where no account is wired, no answer names a scope', async () => {
+    const actor = actorWith(undefined);
+
+    expect(await call(actor, 'memory.remember', { key: 'build_cmd', value: 'bun run build' })).toEqual({ key: 'build_cmd' });
+    expect(await call(actor, 'memory.recall', { key: 'build_cmd' }))
+      .toEqual({ key: 'build_cmd', value: 'bun run build', confidence: 1, source: expect.any(String), lastObservedAt: expect.any(Number) });
+
+    const found = v.parse(v.object({ hits: v.array(v.record(v.string(), v.unknown())) }), await call(actor, 'memory.search', { query: 'build command' }));
+
+    expect(found.hits.length).toBeGreaterThan(0);
+    expect(found.hits.filter((hit) => 'scope' in hit)).toEqual([]);
   });
 });
 

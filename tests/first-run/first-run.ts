@@ -51,7 +51,8 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { REAL_CLOCK } from '../../packages/core/src/index';
+import { REAL_CLOCK, type EvalAccount } from '../../packages/core/src/index';
+import { EVAL_ACCOUNT_ENV } from '../../packages/test-utils/src/eval-identity';
 import {
   createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow, scoreToolOutcomes, toolOutcomes,
   projectRunEventProvenance, publishRunRecord,
@@ -132,8 +133,8 @@ const TRANSCRIPTS = join(
  * module at import so the reason is printed on the line above the skip rather
  * than inside a test nobody ran.
  */
-export function firstRunPlan(suite: string): PublicSessionPlan | null {
-  const resolution = resolvePublicSessionPlan(suite, EVAL_MODELS[FIRST_RUN_TIER]);
+export function firstRunPlan(suite: string, account?: EvalAccount): PublicSessionPlan | null {
+  const resolution = resolvePublicSessionPlan(suite, EVAL_MODELS[FIRST_RUN_TIER], account === undefined ? process.env : { ...process.env, [EVAL_ACCOUNT_ENV]: account });
 
   if (resolution.kind === 'unavailable') {
     console.warn(`[skip] ${suite} — ${resolution.remedy}`);
@@ -172,9 +173,10 @@ export function firstRunCaseId(moduleUrl: string): string {
  * tip over the substrate's 63-character sandbox-id cap, which CREATES fine and
  * then cannot be torn down. One short word keeps the attribution (the suite
  * slug says which tier, the record says which case) and every name short.
+ * `account`: an eval account of the case's own, for a case that writes what the tier's account shares with every row.
  */
-export function firstRunCasePlan(suite: string, subject: string): PublicSessionPlan | null {
-  const plan = firstRunPlan(suite);
+export function firstRunCasePlan(suite: string, subject: string, account?: EvalAccount): PublicSessionPlan | null {
+  const plan = firstRunPlan(suite, account);
 
   if (plan === null) return null;
 

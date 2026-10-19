@@ -236,7 +236,8 @@ export class FacetChat {
     return await assembleActorTurn({
       ...bundle,
       ...(mission !== null && { budget: mission }),
-      toolset: () => tools,
+      // Its tools are the workspace's, run there, and so is its scaffold's program.
+      toolset: () => ({ tools, stores: null }),
       externalTools: async () => ({}),
       // A measure between turns binds nothing: no turn is open to bind it to.
       settle: async (profile, inputs) => {

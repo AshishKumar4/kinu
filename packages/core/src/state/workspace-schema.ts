@@ -11,7 +11,6 @@ import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primiti
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { initActorDdl, initWorkspaceOwnershipTables } from '../identity/schema';
-import { initCodemodeStateTable } from '../identity/program-state';
 import { initSearchTables } from '../mcts/schemas';
 import { initScaffoldTables } from '../scaffold/schemas';
 import { initSlateShareTables } from '../slates/shares';
@@ -59,7 +58,6 @@ function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   initScaffoldTables(execRaw);
   // Workspace-wide by design: role eligibility filters the tool surface, not storage (PRODUCT-SPEC.md:371).
   initCraftedToolsTables(sql);
-  initCodemodeStateTable(execRaw);
 }
 
 export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {

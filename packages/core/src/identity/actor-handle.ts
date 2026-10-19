@@ -3,7 +3,6 @@ import type { Effect } from 'effect';
 import type { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { createAgentConfigStore, type AgentConfigStore } from '../config/store';
-import { createProgramStateStore, type ProgramStateStore } from './program-state';
 import type { SqlExecutor } from '../types/primitives';
 
 export const ActorReferenceSchema = v.strictObject({
@@ -29,16 +28,14 @@ export function sameActorReference(left: ActorReference, right: ActorReference):
 }
 
 export interface ActorHandle extends ActorIdentity {
-  /** The getters' own validation, run before acting without `config` or `programState`. */
+  /** The getter's own validation, run before acting without `config`. */
   readonly assertCurrent: () => void;
   readonly config: AgentConfigStore;
-  readonly programState: ProgramStateStore;
 }
 
 /** Bind an identity to physical storage without exposing its SQL. */
 export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, validate: () => Effect.Effect<void, KinuError>): ActorHandle {
   let config: AgentConfigStore | undefined;
-  let programState: ProgramStateStore | undefined;
 
   const handle: ActorHandle = Object.freeze({
     ...identity,
@@ -47,11 +44,6 @@ export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, valid
       handle.assertCurrent();
 
       return config ??= createAgentConfigStore(sql, identity.actorId, handle.assertCurrent);
-    },
-    get programState() {
-      handle.assertCurrent();
-
-      return programState ??= createProgramStateStore(sql, identity.actorId, handle.assertCurrent);
     },
   });
 

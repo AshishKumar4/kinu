@@ -8,7 +8,14 @@
  * owner's account default, which User settings writes through
  * `/api/user/config/sandbox_size`; this row writes a size there, sees the
  * workspace's Environment card read it, sizes this workspace's stopped box
- * apart from it, and puts the account's own choice back. This row does each of those over the workspace's own
+ * apart from it, and puts the account's own choice back.
+ *
+ * ITS OWN ACCOUNT. The default size is the account's, read by every computer it
+ * starts: run as `scripted`, this row's probe sized the computers of the product
+ * flows running beside it, and a run cut off before its restore left `scripted`
+ * at Small for good, so computer-sessions picked the size it already ran at and
+ * waited for a restart that never came (staging rc20, 2026-10-19). It runs as
+ * `settings`, which no other row acts as. This row does each of those over the workspace's own
  * socket, with the RPCs the page calls, and reads every write back the way
  * the page hydrates it.
  *
@@ -42,7 +49,7 @@ const DEFECT: FirstRunDefect = {
     + 'and never stored leaves `soul-persisted` missed.',
 };
 
-const PLAN = firstRunCasePlan(SUITE, 'settings');
+const PLAN = firstRunCasePlan(SUITE, 'settings', 'settings');
 
 const liveTest = test.skipIf(PLAN === null);
 
@@ -183,6 +190,7 @@ async function sandboxSizeSubgoals(socket: PublicSocket, account: ReturnType<typ
   const chosen = await read(socket, SandboxSizeSchema, 'resizeComputer', [own]);
   const cleared = await read(socket, SandboxSizeSchema, 'resizeComputer', [null]);
   const restored = await account.write(prior ?? 'medium');
+  const after = await account.read();
 
   return [
     {
@@ -201,7 +209,11 @@ async function sandboxSizeSubgoals(socket: PublicSocket, account: ReturnType<typ
         && cleared.value?.chosen === null && cleared.value.size === probe,
       detail: `resizeComputer(${own}): ${chosen.detail}; resizeComputer(null): ${cleared.detail}`,
     },
-    { what: 'account-size-restored', reached: restored.status === 200, detail: `PUT ${prior ?? 'medium'} answered ${String(restored.status)} ${restored.body}` },
+    {
+      what: 'account-size-restored',
+      reached: restored.status === 200 && storedSize(after) === (prior ?? 'medium'),
+      detail: `PUT ${prior ?? 'medium'} answered ${String(restored.status)} ${restored.body}; then read ${after.body}`,
+    },
   ];
 }
 

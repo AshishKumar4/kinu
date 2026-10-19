@@ -178,6 +178,29 @@ export function narrowToolSurface(
   };
 }
 
+/**
+ * A surface whose builtins are an admitted set (a head, a swarm node), narrowed as `allowedTools` narrows it: its
+ * programs reach only the namespaces its admitted builtins, or a codemode-only capability, reach, so a program reaches
+ * nothing its native tools do not. A tool outside TOOL_REACH (a kind tool, an external one) passes as `allowedTools`
+ * says.
+ */
+export function narrowAdmittedSurface(admitted: readonly string[], allowedTools: readonly string[] | undefined): ToolSurfaceNarrowing {
+  const allowed = narrowToolSurface(allowedTools);
+  const held = new Set<string>([...admitted, ...CODEMODE_ONLY_REACH.map(({ name }) => name)]);
+
+  const admits = (namespace: string): boolean => {
+    const reaching = CAPABILITIES_BY_NAMESPACE[namespace];
+
+    return reaching === undefined ? held.has('eval') : reaching.some((name) => held.has(name));
+  };
+
+  return {
+    allowsTool: (name) => allowed.allowsTool(name) && (!isCapabilityName(name) || held.has(name)),
+    allowsNamespace: (namespace) => allowed.allowsNamespace(namespace) && admits(namespace),
+    narrowProviders: (providers) => allowed.narrowProviders(providers).filter((provider) => admits(provider.name)),
+  };
+}
+
 /** One filter over a named set, so a builtin added upstream never silently appears on a confined surface. */
 export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
   const kept: ToolSet = {};
@@ -235,7 +258,7 @@ export const BUILTIN_TOOL_SPECS = {
       'Write it like a Node script: top-level statements, `await` anywhere, and `return` (or a trailing expression) hands back the result. Type annotations do not parse.',
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
       '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
-      '`console.log` output comes back with the result. Variables do not survive between programs; `state` does.',
+      '`console.log` output comes back with the result. Variables do not survive between programs; a `private` `db` table keeps data.',
       'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
       'Run independent calls together with `await Promise.all([...])`, and `return` the values you need rather than logging them.',
       'Start with one `//` comment naming the operation and its target; the interface shows it as the call\'s intent.',

@@ -2,7 +2,7 @@
  * The file operations served over `rt.toolFiles`. A write or edit is refused until the agent has read what it would
  * replace, here or by the native tool: one ledger for both.
  */
-import { type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import * as v from 'valibot';
@@ -48,20 +48,24 @@ const IMAGE_READ_MAX_BYTES = 3_750_000;
 /** Which reads check for an image; the header decides. */
 const RASTER_PATH = /\.(?:png|jpe?g|gif|webp)$/iu;
 
-/** `truncated` is absent on a whole listing, so its presence is the fact. */
-function boundListing(path: string, entries: readonly string[]): { path: string; entries: string[]; truncated?: { shown: number; total: number } } {
+/** One page of a listing from `offset`; `truncated` is absent on a whole listing, so its presence is the fact. */
+function boundListing(path: string, entries: readonly string[], offset: number): {
+  path: string; entries: string[]; truncated?: { shown: number; total: number; next: number };
+} {
   const shown: string[] = [];
   let chars = 0;
 
-  for (const entry of entries) {
+  for (const entry of entries.slice(offset)) {
     if (shown.length >= FILE_LIST_MAX_ENTRIES || chars + entry.length > FILE_LIST_MAX_CHARS) break;
     chars += entry.length;
     shown.push(entry);
   }
 
-  return shown.length === entries.length
+  const next = offset + shown.length;
+
+  return offset === 0 && next >= entries.length
     ? { path, entries: shown }
-    : { path, entries: shown, truncated: { shown: shown.length, total: entries.length } };
+    : { path, entries: shown, truncated: { shown: shown.length, total: entries.length, next } };
 }
 
 /** The read-before-write gate's refusal and reason, or both null when the operation may proceed. */
@@ -181,9 +185,10 @@ export function serveFile(current: () => FileDeps): Readonly<Record<keyof typeof
 
   return {
     read: serve(FILE.read, async ({ path, offset, limit }) => await run((files) => files.read(path, { offset, limit }))),
+    text: serve(FILE.text, async ({ path }) => await run((files) => files.text(path))),
     edit: serve(FILE.edit, async ({ path, edits }) => await run((files) => files.edit(path, edits))),
     write: serve(FILE.write, async ({ path, content }) => await run((files) => files.write(path, content))),
-    list: serve(FILE.list, async ({ path }) => await run((files) => files.list(path))),
+    list: serve(FILE.list, async ({ path, offset }) => await run((files) => files.list(path, offset ?? 0))),
     stat: serve(FILE.stat, async ({ path }) => await run((files) => files.stat(path))),
     search: serve(FILE.search, async ({ path, query }) => await run((files) => files.search(path, query))),
   };
@@ -195,8 +200,10 @@ const ReadCallSchema = v.object({ op: v.literal('read') });
  * The native `file` tool. A read shows its own window, up to `FILE_READ_MAX_CHARS`, so only its larger cap applies to
  * it; any other result the turn's budget cannot hold is spilled, as any tool result is.
  */
-export function createFileTool(files: FileDeps): Tool {
-  const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(serveFile(() => files)));
+/** The native `file` tool over the actor's served file operations; `files` is what its results are clamped into. */
+export function createFileTool(served: Readonly<Record<keyof typeof FILE, Served>>, files: Pick<FileDeps, 'vfs' | 'home' | 'budget'>): Tool {
+  // A whole file is a program's to hold; the native tool reads a window of it.
+  const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(served).filter((member) => member !== served.text));
   const clamp = { files: { vfs: files.vfs, home: files.home }, budget: files.budget, producer: 'file_read', images: true } as const;
   const reads = withClampedToolResult(tool, { ...clamp, maxChars: FILE_READ_MAX_CHARS });
   const others = withClampedToolResult(tool, clamp);
@@ -204,16 +211,16 @@ export function createFileTool(files: FileDeps): Tool {
   return { ...others, execute: async (input, options) => await (v.is(ReadCallSchema, input) ? reads : others).execute?.(input, options) };
 }
 
-/** `file.*` for programs and slates, on the native tool's ledger. */
-export function createFileCodemodeProvider(current: () => FileDeps): CodemodeProvider {
-  return codemodeNamespace('file', 'Your workspace files, read and edited as the file tool does: an edit needs a read first.', Object.values(serveFile(current)));
+/** `file.*` for programs and slates: the operations the native tool runs, on its ledger. */
+export function createFileCodemodeProvider(served: Readonly<Record<keyof typeof FILE, Served>>): CodemodeProvider {
+  return codemodeNamespace('file', 'Your workspace files, read and edited as the file tool does: an edit needs a read first.', Object.values(served));
 }
 
 function fileOps(deps: FileDeps) {
   const { vfs, ledger, budget } = deps;
 
   /** A Plan-safe inspection: the VFS answer, bounded like a read. */
-  const inspect = async <A>(action: 'list' | 'stat' | 'search', path: string, read: () => Promise<A | null>): Promise<A> => {
+  const inspect = async <A>(action: 'read' | 'list' | 'stat' | 'search', path: string, read: () => Promise<A | null>): Promise<A> => {
     let output: A | null;
 
     try { output = await read(); }
@@ -280,7 +287,7 @@ function fileOps(deps: FileDeps) {
           `would discard ${verdict.total - verdict.coveredTo} lines you have not seen. ` +
           `Change part of it with op=edit, or read the rest first (op=read path=${path} offset=${verdict.coveredTo + 1}). ` +
           `If line ${verdict.coveredTo + 1} runs past ${String(FILE_READ_LINE_CHARS)} characters, a read cuts it and never counts it as seen: ` +
-          'read the whole file with workspace.readFile inside eval to cover it.' };
+          'read the whole file with file.text inside eval to cover it.' };
       case 'stale':
         return { reason: 'stale', refusal:
           `${path} changed since you read it. Read it again (op=read path=${path}) before you ` +
@@ -355,9 +362,19 @@ function fileOps(deps: FileDeps) {
     return slice.output;
   };
 
+  /** The whole file for a program, which holds the value: a later write or edit through either surface is not blind. */
+  const text = (path: string): Promise<string> => inspect('read', path, async () => {
+    const whole = await readText(vfs, path);
+
+    ledger.observeWhole(path, whole);
+
+    return whole;
+  });
+
   return {
     read,
-    list: (path: string) => inspect('list', path, async () => boundListing(path, (await vfs.readdir(path)).map(({ name }) => name))),
+    text,
+    list: (path: string, offset: number) => inspect('list', path, async () => boundListing(path, (await vfs.readdir(path)).map(({ name }) => name), offset)),
     stat: (path: string) => inspect('stat', path, async () => {
       const stat = await vfs.stat(path);
 

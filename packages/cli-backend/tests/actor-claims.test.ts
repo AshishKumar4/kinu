@@ -6,10 +6,7 @@ import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, toolExecute, withHostDeliveries, admitTestClaim } from '@kinu.run/test-utils';
-import {
-  ActorSession, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
-  resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
-  contextMount, localContextTree, withMountTable, createFileTool, TurnContextBudget, WORKSPACE_ROOT, cloudPlanes, type JsonObject } from '@kinu.run/core';
+import { ActorSession, EvolutionEngine, historyTurnPairs, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest, resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex, contextMount, localContextTree, withMountTable, createFileTool, TurnContextBudget, WORKSPACE_ROOT, cloudPlanes, type JsonObject, serveFile } from '@kinu.run/core';
 import type {
   ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileDeps, ProfileAuthorityInputs,
   StoredActorClaim, WorkMode,
@@ -120,7 +117,7 @@ async function runTurn(bound: Bound, opts: {
   await bound.actor.openTurnInput(lease, { item: {}, message: opts.input, birthContext: async () => [] });
 
   const result = await bound.actor.execute(lease, {
-    task: 'go', loopVersion: opts.loopVersion,
+    task: 'go', loopVersion: opts.loopVersion, stores: null,
     chat: { modelSpec: 'test/model', model: opts.model, system: 'sys', tools: opts.tools ?? {} },
     extensions: [], dynamic: () => ({}),
   }, (event) => opts.onEvent?.(event));
@@ -151,7 +148,7 @@ type FileCall = JsonObject & { readonly op: string };
 
 /** The native `file` tool over one turn's ledger. */
 function createFileDispatcher(deps: FileDeps) {
-  return toolExecute<FileCall, unknown>(createFileTool(deps));
+  return toolExecute<FileCall, unknown>(createFileTool(serveFile(() => deps), deps));
 }
 
 test('the claim and its admitted context are durable before the first model call', async () => {

@@ -1,5 +1,6 @@
 // One turn assembly for every actor kind on every backend; a backend supplies only the sources.
 
+import type { ServedStores } from '../tools/actor-stores';
 import type { ModelAttemptIdentity } from '../providers/attempt-identity';
 import type { LanguageModel, ToolSet } from 'ai';
 import { Effect } from 'effect';
@@ -59,7 +60,8 @@ export interface TurnAssemblySources {
   /** The pins a caller read before its turn opened, so the turn reads them once; read here when absent. */
   readonly choices?: ReturnType<typeof ownProfileChoices>;
   ancestors?(): readonly PinnedProfile[];
-  toolset(workMode: WorkMode): ToolSet;
+  /** The turn's tools in `workMode`, and the store operations they run. */
+  toolset(workMode: WorkMode): TurnTools;
   /** MCP and extension tools, reachable only through `eval`. */
   externalTools(window: ModelWindow): Promise<ToolSet>;
   /** Non-builtin tools of `toolset` (`report`, `submit_plan`, `reply_to_comment`). */
@@ -95,6 +97,13 @@ export interface TurnAssemblySources {
   settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
   /** A run's brief in place of its role's section. */
   brief?(callable: readonly string[]): { readonly id: string; readonly label: string; readonly instructions: string };
+}
+
+/** A turn's tools and the store operations they run; null where its tools are served elsewhere (an agent's isolate,
+ *  which runs the workspace's). */
+export interface TurnTools {
+  readonly tools: ToolSet;
+  readonly stores: ServedStores | null;
 }
 
 /** A one-shot run brings its tools and brief; the actor brings the rest. */
@@ -205,7 +214,9 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
 
   const { available: availableSkills, activeSkills } = await sources.skills(request.userText, roleSkills, limits);
 
-  const builtins = filterToolSetBySkills(sources.toolset(drafted.workMode), activeSkills);
+  const skilled = (offered: TurnTools): TurnTools => ({ ...offered, tools: filterToolSetBySkills(offered.tools, activeSkills) });
+  const drafting = skilled(sources.toolset(drafted.workMode));
+  const builtins = drafting.tools;
   const external = await sources.externalTools(limits);
 
   const profile = frozen?.profile ?? resolvedTurnProfile(sources, { profileInputs, choices, workMode: request.workMode, drafted, builtins, external, activeSkills });
@@ -215,7 +226,8 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const allowed = new Set(profile.allowedTools);
   const { workMode } = profile;
   // Read again: the resolved mode may be narrower, and a settled profile rebuilds its tools.
-  const callable = pick(sources.settle === undefined && workMode === drafted.workMode ? builtins : filterToolSetBySkills(sources.toolset(workMode), activeSkills), allowed);
+  const offered = sources.settle === undefined && workMode === drafted.workMode ? drafting : skilled(sources.toolset(workMode));
+  const callable = pick(offered.tools, allowed);
   const artifacts = sources.artifacts();
   const taskPlan = sources.taskPlan();
   // Evolved text, written for this agent, wins over its family's.
@@ -281,6 +293,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       instructions: renderUnverifiedInstructions({ agentsMd, activeSkills: pinned }),
       activated: invoked ? activatedSkillsBlock(invoked) : null,
       scaffoldSpend: sources.scaffoldSpend,
+      stores: offered.stores,
     },
     profile, profileInputs, operation, externalTools, activeSkills: activeSkills ?? null, window,
   };
