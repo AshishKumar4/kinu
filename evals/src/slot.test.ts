@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, EVAL_WORKSPACE_LEASE_MS, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
+import { evalWorkspaceName } from '@kinu.run/test-utils';
 import { evalMatrix } from './config';
 import { claimLabel, claimOf, freeBlock, prepareTrialAccount, trialAccounts, trialSlot } from './slot';
 import type { EvalTarget } from './workspace-roster';
@@ -136,6 +137,20 @@ describe('opening on a trial account', () => {
     servers.push(configured.server, stale.server);
     await expect(prepareTrialAccount(configured.target, now)).resolves.toBeUndefined();
     await expect(prepareTrialAccount(stale.target, now)).rejects.toThrow('user_config 1');
+  });
+
+  // Staging 5c522f12d, 2026-10-19: armada ran a Minecraft trial again (attempt 2) while attempt 1's workspace on its
+  // account, trial-33, was still marked live, and the retry was refused as another run's.
+  test('a retried trial takes its account back from its own earlier attempt; another run\'s live workspace still stops it', async () => {
+    const live = now - 126_000;
+    const retried = deployment({ workspaces: [{ name: evalWorkspaceName('minecraft-3'), lastVisited: live }] });
+    const rival = deployment({ workspaces: [{ name: evalWorkspaceName('chess-3'), lastVisited: live }] });
+
+    servers.push(retried.server, rival.server);
+    await expect(prepareTrialAccount(retried.target, now, 'minecraft-3')).resolves.toBeUndefined();
+    expect(retried.deleted).toHaveLength(1);
+    await expect(prepareTrialAccount(rival.target, now, 'minecraft-3')).rejects.toThrow('in use by another run');
+    expect(rival.deleted).toEqual([]);
   });
 
 });

@@ -12,6 +12,7 @@ import {
   EVAL_TRIAL_ACCOUNTS, EVAL_WORKSPACE_LEASE_MS, inheritedRows, JsonValueSchema, parseEvalAccount, ProfileCatalogEnvelopeSchema, type EvalAccount,
   type JsonValue,
 } from '@kinu.run/core';
+import { evalWorkspaceStem } from '@kinu.run/test-utils';
 import { deleteWorkspace, listWorkspaces, webHeaders } from './workspace-roster';
 import type { EvalMatrix } from './config';
 import type { EvalTarget } from './workspace-roster';
@@ -121,10 +122,16 @@ export async function trialInheritedRows(target: EvalTarget): Promise<{ inherite
     : { inherited: inheritedRows(rows, v.parse(ProfileCatalogEnvelopeSchema, catalog.value).version) };
 }
 
-/** Make `target`'s trial account its trial's own before the trial opens on it. */
-export async function prepareTrialAccount(target: EvalTarget, now: number): Promise<void> {
+/**
+ * Make `target`'s trial account its trial's own before the trial opens on it. A live workspace named for this trial
+ * (`subject`) is its own earlier attempt, which armada ran again once it lost it: the account is the trial's alone in
+ * its run's leased block, so the retry takes it back as it does a stopped run's. Any other live workspace is another
+ * run's, and stops it.
+ */
+export async function prepareTrialAccount(target: EvalTarget, now: number, subject?: string): Promise<void> {
   const workspaces = await listWorkspaces(target.origin, target.identity);
-  const live = workspaces.find((workspace) => now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS);
+  const own = subject === undefined ? null : evalWorkspaceStem(subject);
+  const live = workspaces.find((workspace) => now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS && (own === null || !workspace.name.startsWith(own)));
 
   if (live !== undefined) {
     throw new Error(`${accountOf(target)} is in use by another run: its workspace ${live.name} was marked live `
