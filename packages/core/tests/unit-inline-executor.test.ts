@@ -590,7 +590,7 @@ describe('workspace.slates', () => {
   // The slates skill calls `workspace.slates.$list()`; on staging 5c522f12d describe() answered no `$` member at all.
   test("describe declares the `$` members the skill documents, and a member's name points at the declaration holding it", () => {
     const { rt } = createTestRuntime();
-    const exec = createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell'), slate: async () => null });
+    const exec = createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell'), slate: async () => ({ ok: true, value: null }) });
     const declared = v.parse(v.function(), new Function(`${describeProgramSource(programDeclarations([fileNamespaceFor(rt, exec)]))}\nreturn describe;`)());
     const slates = v.parse(v.string(), declared('workspace.slates'));
 
