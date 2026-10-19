@@ -353,10 +353,15 @@ async function sweep(accounts: { fixture: Account; sender: Account; evals: EvalA
   }
 
   await removeMachinesBut(fixture, kept?.device);
+  await sweepFresh(evals, kept?.fresh);
+}
+
+/** The eval identity's fresh-start workspaces but `kept`. */
+async function sweepFresh(evals: EvalAccounts, kept: string | undefined): Promise<void> {
   const { origin } = evals.account;
 
   for (const row of await listWorkspaces(origin, evals.identity)) {
-    if (row.name.startsWith(FRESH_PREFIX) && row.name !== kept?.fresh) await deleteWorkspace(origin, evals.identity, row.name);
+    if (row.name.startsWith(FRESH_PREFIX) && row.name !== kept) await deleteWorkspace(origin, evals.identity, row.name);
   }
 }
 
@@ -388,6 +393,8 @@ export interface FixtureRun {
   /** Everything a run of this row made that `kept` (the anchor, when there is one) does not name, removed by name: the
    *  baseline an anchor replaced, a seed that did not hold, and what any run that stopped part way left. */
   readonly sweep: (kept: Manifest | null) => Promise<void>;
+  /** The eval identity's fresh-start workspaces but `kept`: the eval side of the sweep, which needs no builtin account. */
+  readonly sweepFresh: (kept: string) => Promise<void>;
 }
 
 /**
@@ -407,15 +414,20 @@ export async function runFixtures(
     const reset = missing === null ? null : await run.resetAt();
 
     // A reset deletes the anchor and the accounts together, and leaves no older build's data: nothing to upgrade, and
-    // nothing to seed with until the owner, who alone can invite, makes the accounts again.
+    // nothing to seed with until the owner, who alone can invite, makes the accounts again. The fresh start is on the eval
+    // identity, which a reset does not take away, and this build is still held to it.
     if (missing !== null && reset === null) throw new Error(missing);
 
     if (reset !== null) {
       notice(`staging was reset at ${reset}: no older build's data is left to upgrade, and the reset deleted ${FIXTURE.email} and `
-        + `${SENDER.email} (${String(missing)}). Seeding resumes on the deploy after the deployment's owner invites both again, with `
-        + `the passwords ${FIXTURE_PASSWORD_ENV} and ${SENDER_PASSWORD_ENV} hold.`);
+        + `${SENDER.email} (${String(missing)}), so continuity and the seed are skipped. They resume on the deploy after the `
+        + `deployment's owner invites both again, with the passwords ${FIXTURE_PASSWORD_ENV} and ${SENDER_PASSWORD_ENV} hold.`);
+      const fresh = await run.freshStart();
+      const started = report('a fresh start on the eval account', fresh.verdicts);
 
-      return true;
+      await run.sweepFresh(fresh.workspace);
+
+      return started;
     }
 
     report('continuity: no anchor, so this deploy seeds the first', []);
@@ -481,6 +493,7 @@ async function deploymentRun(origin: string): Promise<FixtureRun> {
     },
     writeAnchor: (manifest) => r2PutJson({ ...anchored, value: manifest }),
     sweep: async (kept) => { await sweep({ ...await accounts(), evals }, kept); },
+    sweepFresh: async (kept) => { await sweepFresh(evals, kept); },
   };
 }
 
