@@ -150,18 +150,22 @@ function compactStep(relayed: RelayedChunk[], step: number): void {
 interface LiveStream {
   readonly requestId: string;
   readonly turnId: string;
-  /** The run whose ledger holds the steps before `firstStep`. */
+  /** The run whose ledger holds the steps before `relayedFrom`. */
   readonly runId: string;
   /** Requests of the other messages a rerun carried, and a Retry answered after it opened: each answered when it closes. */
   readonly carried: string[];
   /** The answer's row id, on every provider call's `start`, so the answer stays one message. */
   readonly messageId: string;
   readonly open: OpenParts;
-  /** Every chunk this turn relayed, in order, with its step: the steps finished before it, each with its deltas merged
-   *  per part once it ends (`compactStep`). Dropped with the turn. */
+  /** Every chunk relayed since step `relayedFrom`, in order, with its step; a finished step's deltas merged per part
+   *  (`compactStep`). Dropped with the turn. */
   readonly relayed: RelayedChunk[];
-  /** The step this room opened it at: an isolate that ended finished the steps before, and only its ledger holds them. */
-  readonly firstStep: number;
+  /** The steps before it are its agent's ledger's alone: the room opened the turn there (an isolate that ended finished
+   *  them), or let them go as the next began, which only starts once its agent has recorded the one before. A turn's
+   *  every step relayed was held to its end: a screenshot turn's room held each image again (#103). */
+  relayedFrom: number;
+  /** Replays reading the ledger: while one does, the steps it will not read stay in the relay. */
+  replaying: number;
   /** Steps whose last chunk went out, those before this activation included. */
   finished: number;
   /** Tabs already replayed it: told again by their own probe, they are not held back again. */
@@ -388,12 +392,16 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       // Before anything is replayed, the relay's first chunk opens the message live.
       const opened = frame({ body: JSON.stringify({ type: 'start', messageId: live.messageId }), done: false });
 
-      // A turn this room opened at its first step relayed every step itself.
-      if (live.firstStep > 0) {
-        const restated = yield* attempt({ doing: "replaying a re-opened turn's finished steps from its agent's ledger", otherwise: 'unavailable' }, async () => {
+      // The steps before the relay's are the ledger's: none, while the turn's first step runs.
+      const from = live.relayedFrom;
+
+      if (from > 0) {
+        live.replaying += 1;
+
+        const restated = yield* attempt({ doing: "replaying a turn's finished steps from its agent's ledger", otherwise: 'unavailable' }, async () => {
           let step = 0;
 
-          for await (const parts of this.wire.steps(live.runId, live.firstStep)) {
+          for await (const parts of this.wire.steps(live.runId, from)) {
             // Ended or replaced while its ledger answered: what ended it told the tabs it held.
             if (this.live !== live) return 'stopped';
 
@@ -403,15 +411,15 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
             step += 1;
           }
 
-          return step === live.firstStep ? 'restated' : { short: step };
-        }).pipe(Effect.catch((failure) => Effect.succeed({ failure })));
+          return step === from ? 'restated' : { short: step };
+        }).pipe(Effect.catch((failure) => Effect.succeed({ failure })), Effect.ensuring(Effect.sync(() => { live.replaying -= 1; })));
 
         if (restated === 'stopped' || this.live !== live) return;
 
         if (restated !== 'restated') {
           const failure = 'failure' in restated
             ? restated.failure
-            : new KinuError('missing', `the ledger of run ${live.runId} holds ${String(restated.short)} of the ${String(live.firstStep)} steps the turn re-opened at`);
+            : new KinuError('missing', `the ledger of run ${live.runId} holds ${String(restated.short)} of the ${String(from)} steps the relay let go`);
 
           diagnostics.failure('chat.replay_steps_unread', failure);
           this.release(connection.id, hold);
@@ -587,7 +595,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const live: LiveStream = {
       requestId, turnId: turn.turnId, runId: turn.runId, carried, messageId: turn.messageId, open: new OpenParts(), relayed: [],
-      firstStep: turn.finishedSteps, finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null, spoke: false,
+      relayedFrom: turn.finishedSteps, replaying: 0, finished: turn.finishedSteps, joined: new Set(), broken: false, failure: null, spoke: false,
     };
 
     this.live = live;
@@ -656,7 +664,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         const chunk: UIMessageChunk = { type: STEP_CUT_CHUNK, data: { stepIndex: event.stepIndex }, transient: true };
         const body = JSON.stringify(chunk);
 
-        live.relayed.push({ step: live.finished, type: chunk.type, body });
+        this.relay(live, chunk.type, body);
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }),
           this.pendingResume.size === 0 ? undefined : [...this.pendingResume.keys()]);
 
@@ -707,6 +715,17 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
   }
 
+  /** Held for a tab that joins. A step starts only once its agent recorded the one before, so as one starts the finished
+   *  steps go, unless a replay is reading the ledger. */
+  private relay(live: LiveStream, type: string, body: string): void {
+    if (type === 'start-step' && live.relayedFrom < live.finished && live.replaying === 0) {
+      live.relayed.length = 0;
+      live.relayedFrom = live.finished;
+    }
+
+    live.relayed.push({ step: live.finished, type, body });
+  }
+
   /** Held for a reconnecting tab and broadcast; a continuation renews from the turn's parts, keeping one answer id. */
   async observe(stream: ReadableStream<UIMessageChunk>): Promise<void> {
     const live = this.live;
@@ -740,7 +759,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         const body = JSON.stringify(chunk);
 
-        live.relayed.push({ step: live.finished, type: chunk.type, body });
+        this.relay(live, chunk.type, body);
 
         // A joining tab reads it in its replay; sent now, it would run ahead of the parts the replay opens.
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }), this.pendingResume.size === 0 ? undefined : [...this.pendingResume.keys()]);
