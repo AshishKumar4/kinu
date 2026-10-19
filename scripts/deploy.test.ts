@@ -1294,10 +1294,9 @@ describe("one deploy path", () => {
   // Blind spot: what a body then executes — `bun scripts/<name>.ts` is one word here
   // whatever `x.ts` publishes.
   test("every automation file GitHub executes is in the denominator", () => {
-    expect(automationFiles, "the enumerator stopped listing the secret scan")
-      .toContain(".github/workflows/security-scan.yml");
-    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(0);
-    expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(0);
+    // GitHub executes nothing: every gate runs on armada. A file added here is read by every test below.
+    expect(automationFiles, "GitHub executes a tracked file").toEqual([]);
+    expect(automationSteps.length, "the parse read no run body").toBeGreaterThanOrEqual(Math.min(1, automationFiles.length));
 
     // Deploys are run by a person through `bun run deploy`; no workflow deploys.
     // Named so a workflow that starts deploying is a deliberate change here.

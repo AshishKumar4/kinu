@@ -828,10 +828,9 @@ export function truncatedHistoryRefusal(repo: string): Finding | undefined {
     silently: 'the governed range collapses to nothing and the gate reports a clean history it '
       + 'never read — a green badge over zero commits, which is the corpus-narrowing failure the '
       + 'whole gate ladder exists to refuse.',
-    fix: 'supply the history: `git fetch --unshallow` here, or `fetch-depth: 0` on the '
-      + 'actions/checkout step of the job that runs this gate — .github/workflows/'
-      + 'security-scan.yml states the same reason for the same setting. The `commit-msg` hook '
-      + 'needs no history and is unaffected.',
+    fix: 'supply the history: `git fetch --unshallow` here, or a full clone on the runner that runs '
+      + 'this gate — scripts/verified-secret-scan.ts refuses a shallow clone for the same reason. The '
+      + '`commit-msg` hook needs no history and is unaffected.',
   };
 }
 
