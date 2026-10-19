@@ -22,12 +22,12 @@ const TurnProvenanceSchema = v.looseObject({
   [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
 });
 
-/** The loop's turns as durable user rows: opening text and metadata provenance. */
+/** The loop's turns as the chat keeps their openings, the person's and the harness's alike: text and provenance. */
 async function turnsRun(
   harness: ActorHarness<HarnessOrchestratorAgent>,
 ): Promise<Array<{ text: string; provenance: v.InferOutput<typeof TurnProvenanceSchema> }>> {
   return (await storedChat(harness))
-    .filter((message) => message.role === 'user')
+    .filter((message) => message.role !== 'assistant')
     .map((message) => ({
       text: message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
       provenance: v.parse(TurnProvenanceSchema, v.parse(v.looseObject({ metadata: v.optional(v.unknown()) }), message).metadata ?? {}),

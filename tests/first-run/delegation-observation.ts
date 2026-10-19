@@ -60,12 +60,13 @@ export interface Delivery {
   readonly reply: string;
 }
 
-/** The first message after the hirer's `ask` that names `agent`, from the hirer's own history; null before it arrives. */
+/** The first message after the hirer's `ask` that names `agent`, from the hirer's own history; null before it arrives.
+ *  It arrives as an event the harness gave the hirer, which the chat shows as a `system` row. */
 export function delivered(history: readonly PublicMessage[], ask: string, agent: string): Delivery | null {
   const asked = history.map((row) => row.role === 'user' && row.text.trim() === ask.trim()).lastIndexOf(true);
 
   if (asked === -1) return null;
-  const at = history.findIndex((row, index) => index > asked && row.role === 'user' && row.text.includes(agent));
+  const at = history.findIndex((row, index) => index > asked && row.role === 'system' && row.text.includes(agent));
 
   if (at === -1) return null;
 

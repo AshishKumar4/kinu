@@ -829,11 +829,6 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
     : undefined;
 
   if (lifetime === 'task') {
-    if (fields.name !== undefined) {
-      return badInput('field "name" is not available on a lifetime:"task" hire: it is archived the '
-        + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');
-    }
-
     if (fields.tier !== undefined) {
       return badInput('field "tier" is not available on a lifetime:"task" hire: it runs at its role\'s tier; omit it, or hire `durable` for an override');
     }
@@ -857,6 +852,8 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
     };
 
     if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
+
+    if (fields.name !== undefined) Object.assign(request, { name: fields.name });
 
     return await temporary.start(request);
   }

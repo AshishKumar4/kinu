@@ -53,7 +53,7 @@ import { AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf, routedModelReads, userCredentials } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import { AgentWakes } from "./agent-wakes";
-import type { AgentTurnActivity, AgentSnapshot, RunEventRecorder, StoredRow } from '@kinu.run/core';
+import type { AgentTurnActivity, AgentSnapshot, ChatWindow, RunEventRecorder, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage, WebSearchProvider } from '@kinu.run/core';
 import type { CFRuntime } from './runtime';
 import { callOperation, listOperations, type OperationCaller, type OperationListing, type OperationResult } from '@kinu.run/core';
@@ -97,7 +97,7 @@ import { createCodemodeToolFactory } from "./codemode-tool";
 import { BROWSER_PRELUDE } from './browser-prelude';
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
-import type { ToolSet, UIMessage } from "ai";
+import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
@@ -129,7 +129,7 @@ import {
   appendMemoryNote,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
-  type LiveShareRecord, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
+  type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, runOptimization,
@@ -415,6 +415,9 @@ function runEndKey(end: Pick<RunEndReport, 'id' | 'runId'>): string {
   return `${end.id}\u0000${end.runId}`;
 }
 
+/** At most this often an open makes a listed share's Gallery card be told its viewers again. */
+const VIEWS_SYNC_MS = 60 * 60 * 1000;
+
 export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private readonly addressedName: string;
 
@@ -622,6 +625,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return this._workspace;
   }
+
+  /** When each listed share's Gallery card was last told its viewers, in this object's life (`openLiveShare`). */
+  private readonly viewsSynced = new Map<string, number>();
 
   private _pictures: SlatePictures | undefined;
 
@@ -1225,7 +1231,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** `window`: the transcript's newest messages as the turn ended, its room's closing frame. The room hears the end before
    *  this object writes it: a frame waits for the writes made before it, and the answer it tells of is already durable in
    *  the agent's own store (#103). */
-  private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: readonly UIMessage[]): Promise<void> {
+  private async hostedTurnEnded(actorId: string, event: TurnEndEvent, figures: AgentFigures, window: ChatWindow): Promise<void> {
     const { runId } = event;
     const fences = new TurnFences(this.boundSql);
     const ended = fences.ending(actorId, runId);
@@ -6098,12 +6104,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The share row re-read through the S6 gate, plus title and description from the slate's package.json, and whether
    *  its address admits `reader`: anyone to a public share, else its owner and the people it names, as the host does.
    *  No one signed in (`null`) is admitted to a public share alone. */
-  async readLiveShare(share: string, reader: string | null): Promise<SlateAnswer<LiveShareReading>> {
+  /**
+   * A live share opened through its link by `reader` (null signed out): whether it admits them, and if it does, the open
+   * counted under `viewer`, the per-share key of their account (`shareViewerKey`) or the signed-out bucket. The owner's
+   * own opens are not counted. A listed share's Gallery card is told its viewers by its next listing sync, made from
+   * here at most once an hour, so the Gallery is never written per open.
+   */
+  async openLiveShare(share: string, reader: string | null, viewer: string): Promise<SlateAnswer<LiveShareReading>> {
     const { controller } = await this.slates();
     const read = await controller.readLiveShareRecord(share);
 
     if (!read.ok) return read;
-    const admits = read.value.record.visibility === 'public' || (reader !== null && (reader === this.getOwnerUserId() || controller.live.hasUser(share, reader)));
+    const { record } = read.value;
+    const owner = reader !== null && reader === this.getOwnerUserId();
+    const admits = record.visibility === 'public' || owner || (reader !== null && controller.live.hasUser(share, reader));
+
+    if (admits && !owner) {
+      controller.live.opened(share, viewer);
+
+      if (record.gallery !== null && Date.now() - (this.viewsSynced.get(share) ?? 0) >= VIEWS_SYNC_MS) {
+        this.viewsSynced.set(share, Date.now());
+        controller.relist(record.slate);
+      }
+    }
 
     return { ...read, value: { ...read.value, admits } };
   }
@@ -6115,13 +6138,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
 
   /** DO-only, like the blueprint twin, for the same reason. */
-  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
+  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<OwnedLiveShare>> {
     return (await this.slates()).controller.shareLiveWith(share, users);
   }
 
   /** DO-only: a live share's mode, set by its owner's own share sheet, which the app host proves is theirs. No agent
    *  turns on `owner` mode, so no slate op or callable reaches this. */
-  async setLiveShareMode(body: LiveShareModeBody): Promise<SlateAnswer<LiveShareRecord>> {
+  async setLiveShareMode(body: LiveShareModeBody): Promise<SlateAnswer<OwnedLiveShare>> {
     return (await this.slates()).controller.setLiveShareMode(body);
   }
 
@@ -6143,7 +6166,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** DO-only, for the same reason: a live share listed in the Gallery, or taken off it, by its owner's share sheet. */
-  async setLiveShareListing(body: LiveShareListingBody): Promise<SlateAnswer<LiveShareRecord>> {
+  async setLiveShareListing(body: LiveShareListingBody): Promise<SlateAnswer<OwnedLiveShare>> {
     return (await this.slates()).controller.setLiveShareListing(body);
   }
 
@@ -6186,8 +6209,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), {
         ...shared, listed: true, url,
-        card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: this.pictures.shareDigest(share.slate, share.id) },
+        card: {
+          title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: this.pictures.shareDigest(share.slate, share.id),
+          viewers: controller.live.views(share.id).viewers,
+        },
       });
+      this.viewsSynced.set(share.id, Date.now());
     });
   }
 

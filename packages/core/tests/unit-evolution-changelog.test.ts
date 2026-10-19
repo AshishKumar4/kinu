@@ -119,22 +119,18 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(scaffold.evidence).toContain(`targets ${describePathology('no_action/prose')}`);
   });
 
-  test('crafted tool entry shows the EMA score and is informational (no revert)', () => {
+  // W0919-09: crafted tools are the agent's concern, not the person's; the agent keeps its own view of them.
+  test("a crafted tool is the agent's own: the person's changelog holds nothing of it, and counts nothing new", () => {
     const { rt } = setup();
+    const before = countUnseenChangelog(rt.storage.sql, rt.actor, 0);
+
     rt.craftStore.create({
       name: 'fetch_and_summarize', description: 'Fetch a URL and summarize it',
       code: 'async (args) => args.url',
     });
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.82, uses = 5, last_used_at = ${Date.now()}
-        WHERE name = 'fetch_and_summarize'`;
 
-    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'tool');
-    expect(entry.summary).toBe('Created a tool: fetch and summarize');
-    expect(entry.evidence).toContain('Crafted tool fetch_and_summarize');
-    expect(entry.evidence).toContain('Fetch a URL and summarize it');
-    expect(entry.evidence).toContain('EMA 0.82 over 5 uses');
-    // A crafted tool carries no Keep/Revert action.
-    expect(entry.revert).toBeUndefined();
+    expect(JSON.stringify(buildChangelog(rt.storage.sql, rt.actor))).not.toContain('fetch_and_summarize');
+    expect(countUnseenChangelog(rt.storage.sql, rt.actor, 0)).toBe(before);
   });
 
   test('fact aggregate humanizes rows while retaining raw evidence and reverts', () => {
@@ -610,7 +606,8 @@ describe('session-end digest — assembled when the window closes', () => {
 
     const startedAt = Date.now() - 5_000;
     facts.upsert('discovered_mid_session', 'yes');
-    rt.craftStore.create({ name: 'session_tool', description: 'made this session', code: 'async () => 1' });
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'replaced this session', 'historical')`;
 
     await engine.onSessionComplete({
       sessionId: 'sess-1',
@@ -625,7 +622,7 @@ describe('session-end digest — assembled when the window closes', () => {
     const digest = events.filter((e) => e.type === 'changelog_digest');
     expect(digest).toHaveLength(1);
     expect(digest[0].message).toContain('Self-change digest: 2 entries');
-    expect(digest[0].message).toContain('1 tool');
+    expect(digest[0].message).toContain('1 scaffold');
     expect(digest[0].message).toContain('1 fact');
     expect(digest[0].message).toContain('revertable');
 
@@ -651,11 +648,11 @@ describe('session-end digest — assembled when the window closes', () => {
 // Digest assembly across mixed kinds: ordering, windowing, per-kind timestamps.
 
 /** Seed `n` crafted tools stamped at distinct, controllable times. */
-function seedTools(rt: AgentRuntime, names: ReadonlyArray<string>, at: (i: number) => number): void {
-  for (const [i, name] of names.entries()) {
-    rt.craftStore.create({ name, description: `d-${name}`, code: 'async () => 1' });
-    void rt.storage.sql`UPDATE crafted_tools SET created_at = ${at(i)}, updated_at = ${at(i)}
-                   WHERE name = ${name}`;
+/** `count` earlier ways of working, version `i + 1` written at `at(i)`: one changelog entry each. */
+function seedVersions(rt: AgentRuntime, count: number, at: (i: number) => number): void {
+  for (let i = 0; i < count; i++) {
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, ${i + 1}, ${at(i)}, ${`way ${String(i + 1)}`}, 'historical')`;
   }
 }
 
@@ -663,10 +660,10 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
   test('orders strictly newest-first across kinds', () => {
     const { rt } = setup();
     const now = Date.now();
-    seedTools(rt, ['t_old', 't_mid', 't_new'], (i) => now - (2 - i) * 10_000);
+    seedVersions(rt, 3, (i) => now - (2 - i) * 10_000);
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
-    expect(entries.map((e) => e.id.split(':')[1])).toEqual(['t_new', 't_mid', 't_old']);
+    expect(entries.map((e) => e.id.split(':')[1])).toEqual(['v3', 'v2', 'v1']);
 
     for (let i = 1; i < entries.length; i++) {
       expect(entries[i - 1].at).toBeGreaterThan(entries[i].at);
@@ -677,7 +674,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     // Without a deterministic tiebreak the unseen badge flickers.
     const { rt } = setup();
     const at = Date.now();
-    seedTools(rt, ['aaa_tool', 'zzz_tool'], () => at);
+    seedVersions(rt, 2, () => at);
 
     const ids = buildChangelog(rt.storage.sql, rt.actor).map((e) => e.id);
     expect(buildChangelog(rt.storage.sql, rt.actor).map((e) => e.id)).toEqual(ids);
@@ -687,29 +684,28 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     // Each source is capped at `limit`, so the assembled list exceeds it before the final slice.
     const { rt } = setup();
     const now = Date.now();
-    seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
+    seedVersions(rt, 6, (i) => now - (5 - i) * 1000);
 
     for (let i = 0; i < 6; i++) rate(rt, { score: 4, source: 'model', now: now - (5 - i) * 1000 - 500 });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 3 });
     expect(entries).toHaveLength(3);
     expect(entries.map((e) => e.id)).toEqual([
-      `tool:t6:${now}`, `ratings:${now - 500}:6`, `tool:t5:${now - 1000}`,
+      'scaffold:v6:historical', `ratings:${now - 500}:6`, 'scaffold:v5:historical',
     ]);
   });
 
   test('the default limit is 50', () => {
     const { rt } = setup();
     const now = Date.now();
-    const names = Array.from({ length: 60 }, (_, i) => `tool_${String(i).padStart(2, '0')}`);
-    seedTools(rt, names, (i) => now - (59 - i) * 1000);
+    seedVersions(rt, 60, (i) => now - (59 - i) * 1000);
     expect(buildChangelog(rt.storage.sql, rt.actor, { limit: 60 })).toHaveLength(60);
   });
 
   test('`since` is exclusive — an entry stamped exactly at the marker is already seen', () => {
     const { rt } = setup();
     const at = Date.now() - 5_000;
-    seedTools(rt, ['boundary_tool'], () => at);
+    seedVersions(rt, 1, () => at);
 
     expect(buildChangelog(rt.storage.sql, rt.actor, { since: at })).toEqual([]);
     expect(buildChangelog(rt.storage.sql, rt.actor, { since: at - 1 })).toHaveLength(1);
@@ -761,18 +757,6 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
 
     // Already rolled back or superseded versions are not revertable.
     expect(revertable).toEqual(new Map([[1, true], [2, true], [3, false], [4, false]]));
-  });
-
-  test('a crafted tool dates from its newest touch, even with a skewed updated_at', () => {
-    const { rt } = setup();
-    const created = Date.now();
-    rt.craftStore.create({ name: 'skewed', description: 'd', code: 'async () => 1' });
-    void rt.storage.sql`UPDATE crafted_tools SET created_at = ${created}, updated_at = ${created - 60_000}
-                   WHERE name = 'skewed'`;
-
-    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'tool');
-    expect(entry.at).toBe(created);
-    expect(entry.id).toBe(`tool:skewed:${created}`);
   });
 
   test('a dotted, underscored fact key reads as a sentence', () => {

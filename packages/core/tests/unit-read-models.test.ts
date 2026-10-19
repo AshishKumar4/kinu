@@ -23,13 +23,13 @@ import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
-import { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
+import { chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
 import { keptMediaName } from '../src/session/chat-media';
 import { SessionHistory } from '../src/session/history';
 import { stampTurnAuthor } from '../src/types/turn-metadata';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
-import { CHAT_PAGE_BYTES, CHAT_SESSION_ID } from '../src/session/transcript-schema';
+import { CHAT_PAGE_BYTES, CHAT_SEED_ROWS, CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { PositionPageRequestSchema, type PositionCursor } from '../src/session/page';
 import { getWorkspaceDiff, resetWorkspaceBaseline } from '../src/read-models/workspace-diff';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -892,8 +892,8 @@ describe('config plane', () => {
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
     const { db, sql, actor, config } = workspace();
-    void sql`INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
-      VALUES ('summarize', 'sum', 'x', ${Date.now()}, ${Date.now()})`;
+    void sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${actor.actorId}, 1, ${Date.now()}, 'an earlier way of working', 'historical')`;
 
     expect(getEvolutionChangelog(sql, actor).entries).toHaveLength(1);
     expect(getEvolutionChangelog(sql, actor).unseenCount).toBe(1);
@@ -993,6 +993,37 @@ describe("a chat's pages", () => {
 
     expect(JSON.stringify(entry)).not.toContain(picture.slice(0, 16));
     expect((await transcript.media(ref))?.data).toBe(picture);
+    w.db.close();
+  });
+
+  // Staging rc21 (2026-10-19, live-app-plans): a tab was seeded with up to 200 rows, the whole of a 140-entry chat, and
+  // its first scroll-back asked for the newest page again, so nothing older came.
+  test("a tab is seeded with the chat's newest window, and reads on from just before it", async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+
+    for (let index = 0; index < 140; index += 1) {
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `row-${String(index)}`, origin: 'input', message: { role: 'user', content: `ask ${String(index)}` } });
+    }
+
+    const seed = await chatSeed(transcript, JSON.stringify);
+    const older = present(seed.older, 'the cursor before the window');
+    const next = await getChatHistoryPage(transcript, { cursor: older, limit: 40 }, JSON.stringify);
+
+    expect(seed.messages.map((message) => message.id)).toEqual(Array.from({ length: CHAT_SEED_ROWS }, (_, at) => `row-${String(140 - CHAT_SEED_ROWS + at)}`));
+    expect(next.items.map((item) => item.id)).toEqual(Array.from({ length: 40 }, (_, at) => `row-${String(140 - CHAT_SEED_ROWS - 40 + at)}`));
+    w.db.close();
+  });
+
+  test('a window that reaches the chat\'s start says there is nothing older to read', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+
+    for (let index = 0; index < 3; index += 1) {
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `row-${String(index)}`, origin: 'input', message: { role: 'user', content: `ask ${String(index)}` } });
+    }
+
+    expect(await chatSeed(transcript, JSON.stringify)).toMatchObject({ older: null });
     w.db.close();
   });
 });

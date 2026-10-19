@@ -159,7 +159,8 @@ describe('two real turns over the HTTP model seam', () => {
     expect(realUsers(calls[0])[1]).toBe('QUEUE-B\n\nQUEUE-C');
 
     expect(done.steers).toHaveLength(0);
-    expect(done.transcript.map((row) => row.role)).toEqual(['user', 'user', 'user', 'assistant']);
+    // The genesis turn's opening is the harness's, then the person's two sends and the answer.
+    expect(done.transcript.map((row) => row.role)).toEqual(['system', 'user', 'user', 'assistant']);
 
     for (const id of ['input-QUEUE-B', 'input-QUEUE-C']) {
       expect(done.transcript.filter((row) => row.role === 'user' && row.id === id)).toHaveLength(1);

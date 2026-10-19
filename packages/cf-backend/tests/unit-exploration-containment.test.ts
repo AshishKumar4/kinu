@@ -18,6 +18,7 @@ import {
   type HeadRuntime,
   type MergeOutput,
   type WebSearchProvider,
+  WEB_SEARCH_INDEX,
 } from '@kinu.run/core';
 import {
   BackgroundJobRunner, CONFINED_BACKGROUNDABLE_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult,
@@ -49,7 +50,7 @@ const mergeOutput: MergeOutput = {
 };
 
 const noopWebSearch: WebSearchProvider = {
-  search: async (query: string) => ({ query, results: [], source: 'ceramic' }),
+  search: async (query: string) => ({ query, results: [], source: WEB_SEARCH_INDEX }),
   fetch: async (url: string) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
   render: async (url: string) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
   screenshot: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), bytes: new Uint8Array() }),

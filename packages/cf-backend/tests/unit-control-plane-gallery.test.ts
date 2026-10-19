@@ -17,7 +17,7 @@ async function plane() {
     await index.observeWorkspace(caller, { userId: 'u-1', name: workspace, displayName: workspace, createdAt: 1, at: 1 });
     await index.gallerySync(caller, {
       share: `share-${workspace}`, workspace, slate: 'board', handle: '0123456789', listed: true, url: `https://app.test/shared/live/${workspace}/share-${workspace}`,
-      card: { title: 'Board', line: `The ${workspace} board`, category: 'work', ownerName: 'Sam', picture: null },
+      card: { title: 'Board', line: `The ${workspace} board`, category: 'work', ownerName: 'Sam', picture: null, viewers: 0 },
     });
   }
 

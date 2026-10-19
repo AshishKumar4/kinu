@@ -266,13 +266,17 @@ describe('an always answer binds the device for the workspace', () => {
 });
 
 describe("a device call's consent, as the binding rule decides it", () => {
-  const outcome = async (bound: 'allow' | 'deny' | null, verdict: ReturnType<DeviceConsentRegistry['ask']> | KinuError) => {
+  const outcome = async (bound: 'allow' | 'deny' | null, verdict: ReturnType<DeviceConsentRegistry['ask']> | KinuError, holds = true) => {
     const bindings: string[] = [];
 
     const answer = await Effect.runPromise(deviceConsentOutcome({
       bound, deviceLabel: 'the laptop',
       ask: verdict instanceof KinuError ? Effect.fail(verdict) : Effect.succeed(verdict),
-      bind: Effect.sync(() => { bindings.push('bound'); }),
+      bind: Effect.sync(() => {
+        if (holds) bindings.push('bound');
+
+        return holds;
+      }),
     }));
 
     return { answer, bound: bindings };
@@ -290,6 +294,14 @@ describe("a device call's consent, as the binding rule decides it", () => {
     expect(await outcome(null, 'once')).toEqual({ answer: { allowed: true }, bound: [] });
     expect((await outcome(null, 'queued')).answer).toMatchObject({ allowed: false, code: 'unavailable', reason: expect.stringContaining('NOT RUN') });
     expect(await outcome(null, 'denied')).toEqual({ answer: refused, bound: [] });
+  });
+
+  // L111 #4: an always that answered while a revocation ended its epoch binds nothing, and its call did not start.
+  test('an always whose epoch a revocation ended binds nothing and runs nothing, asking again', async () => {
+    expect(await outcome(null, 'always', false)).toEqual({
+      answer: { allowed: false, code: 'unavailable', reason: expect.stringContaining('changed while this call waited') },
+      bound: [],
+    });
   });
 
   test('an ask that could not be raised is unanswered, never a refusal', async () => {

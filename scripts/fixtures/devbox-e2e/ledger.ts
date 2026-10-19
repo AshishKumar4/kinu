@@ -112,10 +112,12 @@ export function contractLedger(deps: {
   readonly account: string;
   readonly accessKeyId: string;
   readonly secretAccessKey: string;
+  /** R2's S3 endpoint, `https://<account>.r2.cloudflarestorage.com` unless a test serves its own. */
+  readonly origin?: string;
 }): ContractLedger {
   const client = new AwsClient({ accessKeyId: deps.accessKeyId, secretAccessKey: deps.secretAccessKey, service: 's3', region: 'auto' });
   const residue = r2ResiduePlane({ accountId: deps.account, accessKeyId: deps.accessKeyId, secretAccessKey: deps.secretAccessKey });
-  const origin = `https://${deps.account}.r2.cloudflarestorage.com/${CONTRACT_TEARDOWN_BUCKET}`;
+  const origin = `${deps.origin ?? `https://${deps.account}.r2.cloudflarestorage.com`}/${CONTRACT_TEARDOWN_BUCKET}`;
   const key = (run: string) => `${PREFIX}${v.parse(Run, run)}.json`;
 
   const request = async (object: string, options: RequestInit = {}): Promise<Response> => {
@@ -161,7 +163,9 @@ export function contractLedger(deps: {
 
       return {
         read: async () => {
-          const response = await client.fetch(url);
+          // Uncompressed: R2 weakens the ETag of a gzip answer (`W/"…"`, measured 2026-10-19), and a weak tag never
+          // holds as the If-Match of the takeover that names it.
+          const response = await client.fetch(url, { headers: { 'accept-encoding': 'identity' } });
 
           if (response.status === 404) return null;
 

@@ -369,26 +369,6 @@ export function ConversationStartBoundary({
   return exhausted && !streaming ? empty : pending;
 }
 
-export interface CraftedToolDetail {
-  name: string;
-  description: string;
-  qualityScore: number;
-  usageCount: number;
-}
-
-export interface ChangelogEntryView extends ChangelogEntry {
-  toolDetail?: CraftedToolDetail;
-}
-
-export function changelogToolName(entry: ChangelogEntry): string | null {
-  if (entry.kind !== 'tool') return null;
-  const rest = entry.id.startsWith('tool:') ? entry.id.slice('tool:'.length) : entry.id;
-  const at = rest.lastIndexOf(':');
-  const name = (at < 0 ? rest : rest.slice(0, at)).trim();
-
-  return name === '' ? null : name;
-}
-
 export function changelogFactKey(entry: ChangelogEntry): string | null {
   if (entry.kind !== 'fact' || !entry.id.startsWith('fact:')) return null;
   const key = entry.id.slice('fact:'.length);
@@ -396,16 +376,3 @@ export function changelogFactKey(entry: ChangelogEntry): string | null {
   return key === '' ? null : key;
 }
 
-export function withToolDetails(
-  entries: readonly ChangelogEntry[],
-  tools: readonly CraftedToolDetail[],
-): ChangelogEntryView[] {
-  const byName = new Map(tools.map((tool) => [tool.name, tool]));
-
-  return entries.map((entry) => {
-    const name = changelogToolName(entry);
-    const detail = name !== null ? byName.get(name) : undefined;
-
-    return detail === undefined ? { ...entry } : { ...entry, toolDetail: detail };
-  });
-}

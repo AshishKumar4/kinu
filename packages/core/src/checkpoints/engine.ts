@@ -24,6 +24,9 @@ const SHA_RE = /^[0-9a-f]{4,64}$/i;
 /** git's output this process keeps in memory, at most. */
 const GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
 
+/** Paths one restore's `git clean` names: well under any system's argument vector at a path's usual length. */
+const RESTORE_DELETE_BATCH = 500;
+
 /** A git run: `code` null when git never finished (a signal, an overfull buffer); `missing` when it could not start. */
 interface CheckpointGitRun {
   readonly code: number | null;
@@ -33,7 +36,12 @@ interface CheckpointGitRun {
 }
 
 /** The node modules the engine reads through, as both hosts hand them over. */
-export interface CheckpointHost {
+/**
+ * `C`: how the host confines the git that touches a work tree, its own and opaque here. A device's daemon runs it in the
+ * frame's sandbox, so a directory of the tree a command swapped for a link out of its roots leads nowhere (L111 #3);
+ * null runs it as the host's own process, as the CLI always does.
+ */
+export interface CheckpointHost<C> {
   readonly fs: {
     existsSync(path: string): boolean;
     statSync(path: string): { isDirectory(): boolean };
@@ -43,7 +51,6 @@ export interface CheckpointHost {
     readFileSync(path: string, encoding: 'utf8'): string;
     writeFileSync(path: string, text: string): void;
     mkdirSync(path: string, options: { recursive: true }): void;
-    unlinkSync(path: string): void;
   };
   readonly path: {
     resolve(...paths: string[]): string;
@@ -57,8 +64,8 @@ export interface CheckpointHost {
   /** The process environment the git child inherits, less every `GIT_*` name. */
   readonly env: Readonly<Record<string, string | undefined>>;
   sha256(text: string): string;
-  /** Runs `bin` to its exit with no deadline; `maxBuffer` bounds what it may print. */
-  run(bin: string, args: readonly string[], options: { cwd: string; env: GitEnvironment; maxBuffer: number }): Promise<CheckpointGitRun>;
+  /** Runs `bin` to its exit with no deadline; `maxBuffer` bounds what it may print. A work tree's run is `confine`d. */
+  run(bin: string, args: readonly string[], options: { cwd: string; env: GitEnvironment; maxBuffer: number; confine: C | null; writesStore: boolean }): Promise<CheckpointGitRun>;
   now(): number;
   /** Told of a snapshot that failed: it never blocks the mutation it preceded, so this is where it is seen. */
   log(message: string): void;
@@ -73,27 +80,28 @@ export interface CheckpointEngineOptions {
 }
 
 /** A snapshot a mutation asks for. `turn` null is out of any turn: the turn key is `no-turn`. */
-interface CheckpointRequest {
+interface CheckpointRequest<C> {
   readonly agent: string;
   readonly dir: string;
   readonly turn: CheckpointTurnMeta | null;
   readonly reason: string;
+  readonly confine: C | null;
 }
 
 /** What a request got: the checkpoint id (null when the directory is no work tree), or why none was taken. */
 export type CheckpointOutcome = { readonly id: string | null } | { readonly skipped: string };
 
-export interface CheckpointEngine {
+export interface CheckpointEngine<C> {
   status(): Promise<CheckpointAvailability>;
   /** One snapshot per agent, directory and turn, in store order: null when this turn's already covers it. Never throws. */
-  ensure(request: CheckpointRequest): Promise<CheckpointOutcome | null>;
+  ensure(request: CheckpointRequest<C>): Promise<CheckpointOutcome | null>;
   /** `apply` after the snapshot `request` asks for, in store order, handed that snapshot's outcome. */
-  mutate<A>(request: CheckpointRequest | null, apply: (outcome: CheckpointOutcome | null) => A | Promise<A>): Promise<A>;
+  mutate<A>(request: CheckpointRequest<C> | null, apply: (outcome: CheckpointOutcome | null) => A | Promise<A>): Promise<A>;
   /** Newest first; `turnId` filters before `limit` cuts, since retention is per directory and the limit is global. */
   list(agent: string, query: { readonly limit?: number; readonly turnId?: string | null }): Promise<FileCheckpointEntry[]>;
-  plan(agent: string, dir: string, id: string): Promise<FileRestorePlan>;
+  plan(agent: string, dir: string, id: string, confine: C | null): Promise<FileRestorePlan>;
   /** Takes a pre-restore safety snapshot first. */
-  restore(agent: string, dir: string, id: string): Promise<FileRestoreResult>;
+  restore(agent: string, dir: string, id: string, confine: C | null): Promise<FileRestoreResult>;
   /** The project directory holding `path`, climbing only through directories `covers` admits. */
   workdirForPath(path: string, covers?: (dir: string) => boolean): string;
 }
@@ -104,6 +112,18 @@ function failed(message: string): Error {
 
 /** The environment a git child runs under. */
 interface GitEnvironment { [name: string]: string }
+
+/**
+ * Where one git runs: its directory and environment, the host's confinement for a work tree's (null for none), and
+ * whether it writes the store: a confined git that only reads it is given it read-only, so a work tree that leads into
+ * it cannot write there (L111 #3).
+ */
+interface GitPlace<C> {
+  readonly cwd: string;
+  readonly env: GitEnvironment;
+  readonly confine: C | null;
+  readonly writesStore: boolean;
+}
 
 /** A failure and each cause under it, outermost first: the frame naming the real fault is often a cause deeper. */
 function causeText(failure: Error): string {
@@ -121,7 +141,7 @@ function restoreKindOf(status: string): FileRestoreChange['kind'] {
   return status === 'D' ? 'delete' : 'modify';
 }
 
-export function createCheckpointEngine(host: CheckpointHost, options: CheckpointEngineOptions): CheckpointEngine {
+export function createCheckpointEngine<C>(host: CheckpointHost<C>, options: CheckpointEngineOptions): CheckpointEngine<C> {
   const { fs: disk, path: paths } = host;
   const keep = Math.max(1, options.keep);
   const unsnapshottable = new Set([host.tmpdir, '/tmp', '/var/tmp'].map((dir) => paths.resolve(dir)));
@@ -144,6 +164,13 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
     env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
+    // No hook and no monitor runs, whatever a store's own config names: a work tree's git can reach a store, and a
+    // store's git runs as the host's own process (L111 #3). Command-scope config outranks the repository's.
+    env.GIT_CONFIG_COUNT = '2';
+    env.GIT_CONFIG_KEY_0 = 'core.hooksPath';
+    env.GIT_CONFIG_VALUE_0 = host.devNull;
+    env.GIT_CONFIG_KEY_1 = 'core.fsmonitor';
+    env.GIT_CONFIG_VALUE_1 = 'false';
     // `stagingOutcome` parses git's own English diagnostics.
     env.LC_ALL = 'C';
 
@@ -152,10 +179,21 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
 
   const storeEnv = (gitDir: string, workdir: string): GitEnvironment => ({ ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir });
 
+  /** A store's own objects, refs and index, with no work tree: run in the store, which no command reaches. */
+  const storeOnly = (gitDir: string): GitPlace<C> => ({ cwd: gitDir, env: { ...isolatedEnv(), GIT_DIR: gitDir }, confine: null, writesStore: true });
+
+  /** A work tree with its store: run in the tree, `confine`d, writing the store only where it says so. */
+  const inTree = (gitDir: string, workdir: string, confine: C | null, writesStore: boolean): GitPlace<C> => ({
+    cwd: workdir, env: storeEnv(gitDir, workdir), confine, writesStore,
+  });
+
+  /** Neither a store nor a work tree: the host's own, as `--version` and a store's init are. */
+  const outside = (cwd: string): GitPlace<C> => ({ cwd, env: isolatedEnv(), confine: null, writesStore: true });
+
   /** A missing cwd fails the spawn the way a missing binary does; it is checked so it never reads as "no git". */
-  const runGit = async (args: readonly string[], cwd: string, env: GitEnvironment): Promise<CheckpointGitRun> => {
+  const runGit = async (args: readonly string[], { cwd, env, confine, writesStore }: GitPlace<C>): Promise<CheckpointGitRun> => {
     if (!disk.existsSync(cwd)) return { code: 1, stdout: '', stderr: `working directory not found: ${cwd}`, missing: false };
-    const run = await host.run(options.gitBin, args, { cwd, env, maxBuffer: GIT_OUTPUT_BYTES });
+    const run = await host.run(options.gitBin, args, { cwd, env, maxBuffer: GIT_OUTPUT_BYTES, confine, writesStore });
 
     if (run.missing) {
       gitAvailable = false;
@@ -168,8 +206,8 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
   };
 
   /** git's stdout, or its stderr thrown. */
-  const git = async (args: readonly string[], cwd: string, env: GitEnvironment, doing: string): Promise<string> => {
-    const run = await runGit(args, cwd, env);
+  const git = async (args: readonly string[], at: GitPlace<C>, doing: string): Promise<string> => {
+    const run = await runGit(args, at);
 
     const said = run.stderr.trim();
 
@@ -182,7 +220,7 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
     if (gitAvailable !== null) return gitAvailable;
 
     try {
-      await runGit(['--version'], host.homedir, isolatedEnv());
+      await runGit(['--version'], outside(host.homedir));
     } catch (error) {
       // A rejection that did not record a missing git is not one.
       if (gitAvailable !== false) throw error;
@@ -193,12 +231,11 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
 
   const sanitizeAgent = (agent: string): string => (agent === '' ? 'agent' : agent).replace(/[^A-Za-z0-9_-]/g, '_');
   const storeDirFor = (agent: string, dir: string): string => paths.join(options.base, sanitizeAgent(agent), host.sha256(paths.resolve(dir)).slice(0, 16));
-  const workdirOrBase = (workdir: string): string => (disk.existsSync(workdir) ? workdir : options.base);
 
   const initStore = async (gitDir: string, workdir: string): Promise<void> => {
     if (disk.existsSync(paths.join(gitDir, 'HEAD'))) return;
     disk.mkdirSync(gitDir, { recursive: true });
-    await git(['init', '--bare', '--quiet', gitDir], paths.dirname(gitDir), isolatedEnv(), 'checkpoint store init failed');
+    await git(['init', '--bare', '--quiet', gitDir], outside(paths.dirname(gitDir)), 'checkpoint store init failed');
     disk.mkdirSync(paths.join(gitDir, 'info'), { recursive: true });
     disk.writeFileSync(paths.join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n');
     disk.writeFileSync(paths.join(gitDir, CHECKPOINT_WORKDIR_MARKER), paths.resolve(workdir) + '\n');
@@ -218,9 +255,8 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
     return disk.statSync(abs).isDirectory() ? null : 'it is not a directory';
   };
 
-  const storeRefs = async (gitDir: string, workdir: string): Promise<Array<{ ref: string; id: string; subject: string }>> => {
-    const run = await runGit(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', CHECKPOINT_REF_PREFIX],
-      workdirOrBase(workdir), storeEnv(gitDir, workdir));
+  const storeRefs = async (gitDir: string): Promise<Array<{ ref: string; id: string; subject: string }>> => {
+    const run = await runGit(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', CHECKPOINT_REF_PREFIX], storeOnly(gitDir));
 
     if (run.code !== 0) return [];
 
@@ -231,62 +267,61 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
     });
   };
 
-  /** `--ignore-errors`, so an unreadable path costs only that path; the skipped paths are named in the reason. */
-  const stageCurrent = async (gitDir: string, workdir: string): Promise<{ tree: string; unreadable: string[] }> => {
-    const env = storeEnv(gitDir, workdir);
-    const add = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
+  /** `--ignore-errors`, so an unreadable path costs only that path; the skipped paths are named in the reason. The add
+   *  reads the work tree, `confine`d; the tree is written in the store. */
+  const stageCurrent = async (gitDir: string, workdir: string, confine: C | null): Promise<{ tree: string; unreadable: string[] }> => {
+    const add = await runGit(['add', '-A', '--ignore-errors'], inTree(gitDir, workdir, confine, true));
     const staged = stagingOutcome(add.code, add.stderr);
 
     if ('failure' in staged) throw failed(staged.failure);
 
-    return { tree: (await git(['write-tree'], workdir, env, 'checkpoint write-tree failed')).trim(), unreadable: staged.unreadable };
+    return { tree: (await git(['write-tree'], storeOnly(gitDir), 'checkpoint write-tree failed')).trim(), unreadable: staged.unreadable };
   };
 
   /** The new checkpoint's id, or the newest one's when nothing changed; null when `dir` is no work tree. */
-  const snapshot = async (agent: string, dir: string, meta: CheckpointTurnMeta | null, reason: string): Promise<string | null> => {
+  const snapshot = async ({ agent, dir, turn, reason, confine }: CheckpointRequest<C>): Promise<string | null> => {
     if (snapshotSkipped(dir) !== null) return null;
     const abs = paths.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
 
     await initStore(gitDir, abs);
-    const env = storeEnv(gitDir, abs);
-    const staged = await stageCurrent(gitDir, abs);
-    const refs = await storeRefs(gitDir, abs);
+    const staged = await stageCurrent(gitDir, abs, confine);
+    const store = storeOnly(gitDir);
+    const refs = await storeRefs(gitDir);
     const latest = refs[0];
 
-    if (latest !== undefined && (await runGit(['rev-parse', `${latest.id}^{tree}`], abs, env)).stdout.trim() === staged.tree) return latest.id;
+    if (latest !== undefined && (await runGit(['rev-parse', `${latest.id}^{tree}`], store)).stdout.trim() === staged.tree) return latest.id;
 
-    const subject = checkpointSubject(meta, checkpointReason(reason, staged.unreadable));
-    const sha = (await git(['commit-tree', staged.tree, '-m', subject], abs, env, 'checkpoint commit failed')).trim();
+    const subject = checkpointSubject(turn, checkpointReason(reason, staged.unreadable));
+    const sha = (await git(['commit-tree', staged.tree, '-m', subject], store, 'checkpoint commit failed')).trim();
     const refName = `${CHECKPOINT_REF_PREFIX}/${String(host.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
 
-    await git(['update-ref', refName, sha], abs, env, 'checkpoint ref update failed');
+    await git(['update-ref', refName, sha], store, 'checkpoint ref update failed');
 
     if (refs.length + 1 > keep) {
-      for (const stale of (await storeRefs(gitDir, abs)).slice(keep)) await runGit(['update-ref', '-d', stale.ref], abs, env);
-      await runGit(['prune', '--expire=now'], abs, env);
+      for (const stale of (await storeRefs(gitDir)).slice(keep)) await runGit(['update-ref', '-d', stale.ref], store);
+      await runGit(['prune', '--expire=now'], store);
     }
 
     return sha;
   };
 
-  const requireCheckpoint = async (agent: string, dir: string, id: string): Promise<{ gitDir: string; abs: string; env: GitEnvironment }> => {
+  const requireCheckpoint = async (agent: string, dir: string, id: string): Promise<{ gitDir: string; abs: string }> => {
     if (!SHA_RE.test(id)) throw failed(`invalid checkpoint id: ${id}`);
     const abs = paths.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
 
     if (!disk.existsSync(paths.join(gitDir, 'HEAD'))) throw failed(`no checkpoints exist for ${abs}`);
-    const env = storeEnv(gitDir, abs);
 
-    if ((await runGit(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env)).code !== 0) throw failed(`checkpoint not found: ${id}`);
+    if ((await runGit(['rev-parse', '--verify', `${id}^{commit}`], storeOnly(gitDir))).code !== 0) throw failed(`checkpoint not found: ${id}`);
 
-    return { gitDir, abs, env };
+    return { gitDir, abs };
   };
 
   /** The current tree against the checkpoint's, in restore direction; an unreadable path is in neither. */
-  const diffToCheckpoint = async (gitDir: string, abs: string, id: string): Promise<FileRestoreChange[]> => {
-    const current = await stageCurrent(gitDir, abs);
-    const out = await git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, storeEnv(gitDir, abs), 'checkpoint diff failed');
+  const diffToCheckpoint = async (gitDir: string, abs: string, id: string, confine: C | null): Promise<FileRestoreChange[]> => {
+    const current = await stageCurrent(gitDir, abs, confine);
+    const out = await git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], storeOnly(gitDir), 'checkpoint diff failed');
 
     return out.split('\n').flatMap((line): FileRestoreChange[] => {
       const tab = line.indexOf('\t');
@@ -313,7 +348,7 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
       if (!disk.existsSync(paths.join(gitDir, 'HEAD')) || !disk.existsSync(marker)) continue;
       const workdir = disk.readFileSync(marker, 'utf8').trim();
 
-      for (const ref of await storeRefs(gitDir, workdir)) {
+      for (const ref of await storeRefs(gitDir)) {
         const meta = parseCheckpointSubject(ref.subject);
 
         if (typeof query.turnId === 'string' && meta.turnId !== query.turnId) continue;
@@ -326,36 +361,34 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
     return entries.slice(0, Math.max(1, query.limit ?? 50));
   };
 
-  const restoreTo = async (agent: string, dir: string, id: string): Promise<FileRestoreResult> => {
+  const restoreTo = async (agent: string, dir: string, id: string, confine: C | null): Promise<FileRestoreResult> => {
     if (!(await probeGit())) throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-    const { gitDir, abs, env } = await requireCheckpoint(agent, dir, id);
+    const { gitDir, abs } = await requireCheckpoint(agent, dir, id);
 
     if (!disk.existsSync(abs)) throw failed(`working directory no longer exists: ${abs}`);
-    const files = await diffToCheckpoint(gitDir, abs, id);
+    const files = await diffToCheckpoint(gitDir, abs, id, confine);
     // Out of any turn, so the restore is undoable without joining the armed turn's group.
-    const preRestoreId = await snapshot(agent, abs, null, 'pre-restore');
+    const preRestoreId = await snapshot({ agent, dir: abs, turn: null, reason: 'pre-restore', confine });
+    // The restore writes the work tree and only reads its store.
+    const tree = inTree(gitDir, abs, confine, false);
 
-    // Files created since the checkpoint go; the checkpoint's tree, content and deletions, is then checked out.
-    for (const change of files) {
-      const target = paths.resolve(abs, change.path);
+    await git(['read-tree', id], storeOnly(gitDir), 'checkpoint read-tree failed');
+    // Files created since the checkpoint are untracked in its index: git removes them in the work tree, as it checks
+    // the checkpoint's tree out, both `confine`d, never by a path this process opens itself. Literal pathspecs, a
+    // batch at a time, so no name reads as a pattern and no list outgrows an argument vector; `-x`, so a name the work
+    // tree now ignores is removed as the plan said.
+    const deleted = files.filter((change) => change.kind === 'delete').map((change) => change.path);
 
-      if (change.kind !== 'delete' || !target.startsWith(abs)) continue;
-
-      // The one failure expected: the file is already gone.
-      try {
-        disk.unlinkSync(target);
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      }
+    for (let at = 0; at < deleted.length; at += RESTORE_DELETE_BATCH) {
+      await git(['--literal-pathspecs', 'clean', '-f', '-x', '-q', '--', ...deleted.slice(at, at + RESTORE_DELETE_BATCH)], tree, 'checkpoint restore failed');
     }
 
-    await git(['read-tree', id], abs, env, 'checkpoint read-tree failed');
-    await git(['checkout-index', '-a', '-f'], abs, env, 'checkpoint restore failed');
+    await git(['checkout-index', '-a', '-f'], tree, 'checkpoint restore failed');
 
     return { dir: abs, id, files, preRestoreId };
   };
 
-  const ensureNow = async (request: CheckpointRequest): Promise<CheckpointOutcome | null> => {
+  const ensureNow = async (request: CheckpointRequest<C>): Promise<CheckpointOutcome | null> => {
     try {
       if (!(await probeGit())) return { skipped: 'this machine has no git to take one with' };
       const abs = paths.resolve(request.dir);
@@ -366,7 +399,7 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
       const turnKey = request.turn?.turnId ?? 'no-turn';
 
       if (turnDone.get(key) === turnKey) return null;
-      const id = await snapshot(request.agent, abs, request.turn, request.reason);
+      const id = await snapshot({ ...request, dir: abs });
 
       turnDone.set(key, turnKey);
 
@@ -397,13 +430,13 @@ export function createCheckpointEngine(host: CheckpointHost, options: Checkpoint
     ensure: (request) => inOrder(() => ensureNow(request)),
     mutate: (request, apply) => inOrder(async () => apply(request === null ? null : await ensureNow(request))),
     list: (agent, query) => inOrder(() => listEntries(agent, query)),
-    plan: (agent, dir, id) => inOrder(async (): Promise<FileRestorePlan> => {
+    plan: (agent, dir, id, confine) => inOrder(async (): Promise<FileRestorePlan> => {
       if (!(await probeGit())) throw failed(CHECKPOINTS_UNAVAILABLE_NO_GIT);
       const { gitDir, abs } = await requireCheckpoint(agent, dir, id);
 
-      return { dir: abs, id, files: await diffToCheckpoint(gitDir, abs, id) };
+      return { dir: abs, id, files: await diffToCheckpoint(gitDir, abs, id, confine) };
     }),
-    restore: (agent, dir, id) => inOrder(() => restoreTo(agent, dir, id)),
+    restore: (agent, dir, id, confine) => inOrder(() => restoreTo(agent, dir, id, confine)),
     workdirForPath(target, covers = () => true) {
       const abs = paths.resolve(target);
       // The entry itself, never what a link points at: moving or removing a link changes the directory holding it.

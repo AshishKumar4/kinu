@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 import { settle, settleSync } from '../obs/effect';
 import type { ModelMessage } from 'ai';
 import type { TurnContextMeter } from '../context-meter';
-import type { ExtensionHost } from '../extension';
+import type { ExtensionHost, MessageSwap } from '../extension';
 import { MissionBudgetExhausted, type SpendGate } from '../mission-budget';
 import { markCacheTail, type PromptCacheRoute, type PromptCacheStrategy } from './cache-breakpoints';
 import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
@@ -38,6 +38,8 @@ export interface StepContextPlane {
   /** `turnStart`: the index of the turn's input, which blocks born at its first step ride before. */
   base(): Promise<{ readonly messages: ModelMessage[]; readonly changed: boolean; readonly turnStart?: number }>;
   consume(step: { readonly stepNumber: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute }): Promise<void>;
+  /** Swaps base messages for good (`PrepareStepContext.retire`). */
+  retire?(swaps: readonly MessageSwap[]): Promise<void>;
 }
 
 export interface StepPipeline {
@@ -101,7 +103,8 @@ function preparedStep(pipeline: StepPipeline, ctx: StepPrepareContext): StepPrep
 function prepareFromContext(
   pipeline: StepPipeline, ctx: StepPrepareContext, turnStart: number | undefined,
 ): StepPrepareResult | Promise<StepPrepareResult> {
-  const prepared = { ...ctx, abortSignal: pipeline.abortSignal };
+  const plane = pipeline.context;
+  const prepared = { ...ctx, abortSignal: pipeline.abortSignal, ...(plane?.retire !== undefined && { retire: (swaps: readonly MessageSwap[]) => plane.retire?.(swaps) ?? Promise.resolve() }) };
   const steered = pipeline.extensions?.runPrepareStep(prepared);
 
   const input = turnStart === undefined ? undefined : { at: turnStart, firstStep: ctx.stepNumber === 0 } satisfies TurnInput;

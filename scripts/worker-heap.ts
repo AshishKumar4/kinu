@@ -205,9 +205,13 @@ export const LONG_TURN_GROWTH_BOUND_BYTES = { workspace: 2_500_000, main: 10_500
  *  (armada map, one gate a container) and 318.6-330.5 MB over 12 beside 48 suites of the tier's heaviest on 60 containers
  *  at once; 315.1-333.3 MB over 8 more alone on 162bdf552 and the tip; and 337.3 and 338.4 MB in two tiers
  *  (20261017130149-357d290c, 20261017141010-0990fca1), which the old 335 MB bound read red. Over all 34: mean 325.1 MB,
- *  standard deviation 5.65 MB. So the bound is the mean and four deviations, 9.6 MB above the highest read: a per-step
- *  rebuild the size of the one 3e0c5614c cut (347-348 MB to 316-321 MB, above) still trips it. */
-export const LONG_TURN_ALLOCATED_BOUND_BYTES = 348_000_000;
+ *  standard deviation 5.65 MB. So the bound was the mean and four deviations, 9.6 MB above the highest read: a per-step
+ *  rebuild the size of the one 3e0c5614c cut (347-348 MB to 316-321 MB, above) still trips it. On 0a4fb372f, 2026-10-19,
+ *  once a model call's end comes from `onEnd` and the SDK's accessors, each a reader replaying every part the call
+ *  streamed, are read no more (#m2180e): 280.3-291.8 MB over 12 runs alone, mean 286.3 MB, main's 216.7-228.5 MB, where
+ *  6f59a1bc9 read 251.5-255.6 MB in main's over 3. The bound is that mean and four of the 34 runs' deviations: the seven
+ *  readers back, about 33 MB, trip it. */
+export const LONG_TURN_ALLOCATED_BOUND_BYTES = 309_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
@@ -326,6 +330,38 @@ export const HELPERS = { warm: 2, count: 12, answerBytes: 200_000, waitingPageBy
  */
 export const LONG_TURN = { steps: 150, stepBytes: 3000 } as const;
 
+/**
+ * The long computer-use turn the flatness bounds are about: `steps` model calls, each reading one of `distinct` seeded
+ * screenshots of `imageBytes` through the file tool, as a desktop turn takes one a step; per `window` steps the agent's
+ * isolate's live heap and CPU are read, and the chat seed a pane opens on is read meanwhile, as an eval harness reads it.
+ * Production and staging computer-use turns died every step past a few hundred, each re-driven by the minute's backstop
+ * (#103: production bc78a94bd, eval-seed-probe-c87o3p, 114 re-drives in 2 h; staging 667f96316, eval-minecraft-1-idumki,
+ * 30 between steps 411 and 484, the isolate out of memory and of CPU time before them).
+ */
+export const SCREENSHOT_TURN = { steps: 450, imageBytes: 200_000, distinct: 40, window: 50 } as const;
+
+/** Measured 2026-10-19 at {@link SCREENSHOT_TURN} (armada, one run each): on 814a4ca80 main's isolate held 46.7 MB live
+ *  at step 50 and 170.4 MB at 450, every screenshot the turn took, and its CPU per window went 4.2 to 8.3 s; once a turn's
+ *  room holds its running step, the codec tells its own handles by shape, and a moved screenshot is retired from the turn's
+ *  context (5df419bdd), 35.4 to 45.8 MB and 3.0 to 3.1 s. The bound catches one screenshot in fifty held again. */
+export const SCREENSHOT_LIVE_GROWTH_BOUND_BYTES = 20_000_000;
+
+/** The CPU of main's isolate in the last three windows over that in the first three, each the middle of its three: one
+ *  window alone read 0.78 to 1.52 over 36 runs once the turn was flat (2026-10-19: the tier on ba1e766a5 failed at 1.52
+ *  on a busy host), the middle of three 0.97 to 1.33, mean 1.10, deviation 0.08. The bound is that mean and four
+ *  deviations; 814a4ca80, every screenshot held, read 1.75, and the turn with only its room and codec cut 1.52. */
+export const SCREENSHOT_CPU_GROWTH_BOUND = 1.42;
+
+/** The middle of three windows' CPU, so one window a busy host slowed reads as noise, not as growth. */
+function middleCpu(windows: readonly ScreenshotWindow[]): number {
+  return [...windows].map((each) => each.mainCpuMs).sort((a, b) => a - b)[Math.floor(windows.length / 2)] ?? 0;
+}
+
+/** The workspace's isolate's live heap at the turn's last window beyond its first: its chat room held every relayed
+ *  screenshot, 39.8 MB of its 78.5 MB live at step 150 on 814a4ca80 (a snapshot's retainers), and its peak used went 105.3
+ *  to 217.0 MB over the 450 steps; on 5df419bdd the peak held at 98.0 MB from step 100 (above). */
+export const SCREENSHOT_WORKSPACE_GROWTH_BOUND_BYTES = 20_000_000;
+
 /** The host the product's OpenAI-compatible credential names; its requests go to the driver, any other is refused. */
 const COMPAT_HOST = 'model.invalid';
 
@@ -409,6 +445,23 @@ export interface HeapMeasurement {
   readonly wide: readonly string[];
   /** For each isolate {@link PLANTED_BYTES} were planted in, the bytes each isolate holds under that plant's marker. */
   readonly planted: Isolates<Isolates<number>>;
+  /** {@link SCREENSHOT_TURN}, a window at a time, and its turn's re-drives and the steps it took. */
+  readonly screenshotTurn: ScreenshotTurn;
+}
+
+/** Each window of {@link SCREENSHOT_TURN}: main's live heap at its end and CPU over it, and the workspace's live heap. */
+export interface ScreenshotWindow {
+  readonly through: number;
+  readonly mainLive: number;
+  readonly mainCpuMs: number;
+  readonly workspaceLive: number;
+}
+
+export interface ScreenshotTurn {
+  readonly windows: readonly ScreenshotWindow[];
+  /** Times its turn was re-driven (`turn.resumed`): a turn that died mid-way and was run again. */
+  readonly redrives: number;
+  readonly stepped: number;
 }
 
 export async function measure(): Promise<HeapMeasurement> {
@@ -424,6 +477,8 @@ export async function measure(): Promise<HeapMeasurement> {
   // The product's own reports that a streamed answer's headers are in, counted. The driver's park starts before they
   // leave it.
   let streamsOpened = 0;
+  // Its turns re-driven after they died mid-way.
+  let redrives = 0;
 
   // A native Ai binding transports cancellation to this local backend; an RPC fake cannot transport a facet's signal.
   const ai = await workersAiBinding((request) => driver.fetch('http://driver.invalid/ai', {
@@ -435,6 +490,8 @@ export async function measure(): Promise<HeapMeasurement> {
     // Miniflare's default handler, printing every line as it would, plus the count above.
     handleStructuredLogs: ({ level, message }) => {
       if (message.includes('"event":"provider.stream_opened"')) streamsOpened += 1;
+
+      if (message.includes('"event":"turn.resumed"')) redrives += 1;
 
       if (level === 'error' || level === 'warn') console.error(message);
       else console.log(message);
@@ -606,6 +663,8 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask('/quiesce?workspace=long');
       const failedPortRetained = beyond(await inEach(longIsolates, async (session) => await session.liveHeap()), beforeFailing);
       const failedPortCalls = v.parse(v.number(), JSON.parse(await ask('/failed-tool-calls?workspace=long'))) - failedBefore;
+      // Before the helpers, whose turns run on the binding: a step any other workspace took would be the cursor's.
+      const screenshotTurn = await measureScreenshotTurn(ask, port, workspace, () => redrives);
 
       // A root turn returns once it has hired; its helpers' turns end with their runners, each after its release.
       const noRunners = async (left: number): Promise<void> => {
@@ -686,7 +745,7 @@ export async function measure(): Promise<HeapMeasurement> {
 
       const planted = { workspace: await plant('workspace'), main: await plant('main') };
 
-      return { planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       for (const session of sessions) session.close();
     }
@@ -694,6 +753,78 @@ export async function measure(): Promise<HeapMeasurement> {
     await mf.dispose();
     rmSync(assets, { recursive: true, force: true });
   }
+}
+
+/** {@link SCREENSHOT_TURN} on a workspace of its own, its main's isolate read a window at a time: each step parks on the
+ *  model, so the reads land between steps. */
+async function measureScreenshotTurn(ask: (path: string) => Promise<string>, port: number, workspace: Inspector, redrives: () => number): Promise<ScreenshotTurn> {
+  const { steps, imageBytes, distinct, window } = SCREENSHOT_TURN;
+  const shots = await ask('/?workspace=shots&compat=1');
+  const agent = await inspect(port, `${ISOLATE_NAMES.main} in the screenshot turn's workspace`, mainOf(shots));
+
+  try {
+    await ask('/quiesce?workspace=shots');
+    await ask(`/seed-screenshots?workspace=shots&count=${String(distinct)}&bytes=${String(imageBytes)}`);
+    await ask(`/model?answerBytes=0&toolSteps=${String(steps - 1)}&stepBytes=0&screenshots=${String(distinct)}`);
+    const before = redrives();
+    const turn = ask('/turn?workspace=shots&text=shots');
+    const windows: ScreenshotWindow[] = [];
+
+    for (let step = 1; step <= steps; step++) {
+      while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(1);
+
+      if (step % window === 1) {
+        await agent.sampleCpu();
+        // Read while the step is parked, as a pane opening on the running turn reads it.
+        await ask('/seed?workspace=shots');
+      }
+
+      if (step % window === 0) {
+        windows.push({ through: step, mainCpuMs: await agent.cpuBusyMs(), mainLive: await agent.liveHeap(), workspaceLive: await workspace.liveHeap() });
+      }
+
+      await ask(`/model?released=${String(step)}`);
+    }
+
+    await turn;
+    const { stepped } = v.parse(v.object({ stepped: v.object({ compat: v.number() }) }), JSON.parse(await ask('/model?released=1000000')));
+
+    await ask('/main-idle?workspace=shots');
+    await ask('/quiesce?workspace=shots');
+
+    return { windows, redrives: redrives() - before, stepped: stepped.compat };
+  } finally {
+    agent.close();
+  }
+}
+
+/** What {@link SCREENSHOT_TURN} broke of its bounds. */
+function screenshotFindings(turn: ScreenshotTurn): string[] {
+  const first = turn.windows[0];
+  const last = turn.windows.at(-1);
+  const out: string[] = [];
+
+  if (turn.stepped !== SCREENSHOT_TURN.steps) out.push(`the screenshot turn took ${String(turn.stepped)} of its ${String(SCREENSHOT_TURN.steps)} scripted steps`);
+
+  if (turn.redrives > 0) out.push(`the screenshot turn was re-driven ${String(turn.redrives)} time(s): it died mid-way`);
+
+  if (first === undefined || last === undefined) return [...out, 'the screenshot turn read no window'];
+
+  if (last.mainLive - first.mainLive > SCREENSHOT_LIVE_GROWTH_BOUND_BYTES) {
+    out.push(`the screenshot turn holds ${mb(last.mainLive - first.mainLive)} more live in ${ISOLATE_NAMES.main} at step ${String(last.through)} than at ${String(first.through)}, over ${mb(SCREENSHOT_LIVE_GROWTH_BOUND_BYTES)}`);
+  }
+
+  const growth = middleCpu(turn.windows.slice(-3)) / middleCpu(turn.windows.slice(0, 3));
+
+  if (growth > SCREENSHOT_CPU_GROWTH_BOUND) {
+    out.push(`the screenshot turn's last three windows take ${growth.toFixed(2)} times its first three's CPU in ${ISOLATE_NAMES.main}, over ${String(SCREENSHOT_CPU_GROWTH_BOUND)}`);
+  }
+
+  if (last.workspaceLive - first.workspaceLive > SCREENSHOT_WORKSPACE_GROWTH_BOUND_BYTES) {
+    out.push(`the screenshot turn holds ${mb(last.workspaceLive - first.workspaceLive)} more live in ${ISOLATE_NAMES.workspace} at step ${String(last.through)} than at ${String(first.through)}, over ${mb(SCREENSHOT_WORKSPACE_GROWTH_BOUND_BYTES)}`);
+  }
+
+  return out;
 }
 
 function mb(bytes: number): string {
@@ -862,6 +993,10 @@ async function main(args: readonly string[]): Promise<number> {
   }
 
   findings.push(...workloadFindings(measured));
+  findings.push(...screenshotFindings(measured.screenshotTurn));
+  console.log(`${GATE}: a ${String(SCREENSHOT_TURN.steps)}-step screenshot turn, by ${String(SCREENSHOT_TURN.window)} steps: ${ISOLATE_NAMES.main} live `
+    + `${measured.screenshotTurn.windows.map((each) => mb(each.mainLive)).join(', ')}; its CPU ${measured.screenshotTurn.windows.map((each) => `${(each.mainCpuMs / 1000).toFixed(1)} s`).join(', ')}; `
+    + `${ISOLATE_NAMES.workspace} live ${measured.screenshotTurn.windows.map((each) => mb(each.workspaceLive)).join(', ')}; re-driven ${String(measured.screenshotTurn.redrives)} time(s)`);
 
   // The churn is the turn's work, wherever it runs.
   const allocated = { workspace: measured.longTurnAllocated.workspace.total, main: measured.longTurnAllocated.main.total };

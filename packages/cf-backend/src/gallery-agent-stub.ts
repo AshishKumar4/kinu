@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { UIMessage } from "ai";
 import * as v from "valibot";
-import { openingListOf, WORK_TAB_JOBS } from "@kinu.run/core";
+import { openingListOf, WORK_TAB_JOBS, type PositionCursor } from "@kinu.run/core";
 
 interface GalleryConnectionError {
 	readonly code: number;
@@ -89,6 +89,13 @@ export function seededGalleryChatRows(): number {
 	return seededChats.get("")?.length ?? 0;
 }
 
+/** Where each chat's seeded rows start, when stored rows come before them: the connect frame says so, as the room's does. */
+const seededStarts = new Map<string, PositionCursor>();
+
+export function galleryChatStartsAt(path: string, older: PositionCursor): void {
+	seededStarts.set(path, older);
+}
+
 /** Only ids are read: a walk-back redraw names rows the client already holds and adds none; a clear empties them. */
 const TranscriptFrameSchema = v.variant("type", [
 	v.object({ type: v.literal("cf_agent_chat_messages"), messages: v.array(v.looseObject({ id: v.string() })) }),
@@ -104,9 +111,12 @@ export function galleryServerPush(raw: string): void {
 
 const windows = new Map<string, Set<(messages: readonly UIMessage[]) => void>>();
 
-/** As the server's `cf_agent_chat_messages` frame lands: every window on the chat at `path` now shows `messages`. */
-export function galleryChatWindow(path: string, messages: readonly UIMessage[]): void {
+/** As the server's `cf_agent_chat_messages` frame lands: every window on the chat at `path` now shows `messages`, which
+ *  `older` says where the rows before them read on from (null: they reach the chat's start). */
+export function galleryChatWindow(path: string, messages: readonly UIMessage[], older: PositionCursor | null): void {
 	for (const show of windows.get(path) ?? []) show(messages);
+
+	for (const agent of live) if (agent.path === path) agent.deliver(JSON.stringify({ type: "cf_agent_chat_messages", messages, older }));
 }
 
 /** As the server answers a clear: the chat at `path` is emptied, then every window on it is told to empty. */
@@ -224,7 +234,7 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 		window.addEventListener("gallery-reconnect", reconnect);
 		live.add(agent);
 		queueMicrotask(() => {
-			agent.deliver(JSON.stringify({ type: "cf_agent_chat_messages", messages: seededChats.get(agent.path) ?? [] }));
+			agent.deliver(JSON.stringify({ type: "cf_agent_chat_messages", messages: seededChats.get(agent.path) ?? [], older: seededStarts.get(agent.path) ?? null }));
 		});
 		agent.answerProbe();
 

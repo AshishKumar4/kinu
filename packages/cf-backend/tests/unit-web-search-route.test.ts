@@ -2,7 +2,7 @@
 // Search API call a workspace makes through the AI binding, behind the inference proxy's bearer gate. The binding is
 // faked at its edge; the route and the gate are the product's.
 import { expect, test } from 'bun:test';
-import { createDefaultWebSearchProvider, routeWebSearch, USER_WEB_SEARCH_PATH, type UserCaller, type WorkersAiWebSearch } from '@kinu.run/core';
+import { createDefaultWebSearchProvider, routeWebSearch, USER_WEB_SEARCH_PATH, WEB_SEARCH_INDEX, type UserCaller, type WorkersAiWebSearch } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { cliAccount } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
@@ -70,9 +70,9 @@ test("a signed-in CLI's search is the deployment's own: the API's answer, read a
   const provider = createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER, firstParty: viaCli(SESSION_TOKEN) });
 
   expect(await provider.search('raleigh events', { limit: 3 })).toEqual({
-    query: 'raleigh events', source: 'ceramic', results: [{ title: 'First', url: 'https://example.com/a', snippet: 'The first.', position: 1 }],
+    query: 'raleigh events', source: WEB_SEARCH_INDEX, results: [{ title: 'First', url: 'https://example.com/a', snippet: 'The first.', position: 1 }],
   });
-  expect(asked).toEqual([{ gatewayId: 'kinu-ai-gateway', query: 'raleigh events', limit: 3, provider: 'ceramic' }]);
+  expect(asked).toEqual([{ gatewayId: 'kinu-ai-gateway', query: 'raleigh events', limit: 3, provider: WEB_SEARCH_INDEX }]);
 });
 
 test("the deployment's refusal reaches the CLI in the same words, and no one else's token reaches the search", async () => {

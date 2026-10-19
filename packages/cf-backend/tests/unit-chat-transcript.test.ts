@@ -7,7 +7,7 @@ import {
   type JsonObject, type MessagePartReference,
 } from '@kinu.run/core';
 import { claimFences } from '@kinu.run/core';
-import { chatSeed, keptMediaName } from '@kinu.run/core';
+import { authoredTurnMetadata, chatSeed, getChatHistoryPage, keptMediaName, newestOpener } from '@kinu.run/core';
 
 const databases: Database[] = [];
 
@@ -54,8 +54,26 @@ describe('the CF public transcript over canonical references', () => {
     expect(t.store.entries().map((entry) => [entry.id, entry.position])).toEqual([
       ['opening', 0], ['steer', 1],
     ]);
-    expect((await chatSeed(t.store, keptMediaName)).map((message) => message.id)).toEqual(['opening', 'steer']);
+    expect((await chatSeed(t.store, keptMediaName)).messages.map((message) => message.id)).toEqual(['opening', 'steer']);
     expect(await t.store.lastUserMetadata()).toMatchObject({ [STEER_STEP_METADATA_KEY]: 2 });
+  });
+
+  // rc21 (001f6d749), 2026-10-19: a helper's answer delivered to its hirer read `user` in the seed a tab opens on and
+  // `system` on every page the eval reader and scroll-back walk, so a reader of one found no row the other showed.
+  test("a row the harness wrote reads one role in the seed and on every page, and a Retry still names it", async () => {
+    const t = transcript();
+
+    await t.user('ask', 'hire a helper');
+    await t.user('programmatic:report', '1 event arrived while you were idle.', authoredTurnMetadata({ kind: 'programmatic' }));
+
+    const { messages: seed } = await chatSeed(t.store, keptMediaName);
+    const page = await getChatHistoryPage(t.store, {}, keptMediaName);
+
+    expect(seed.map((message) => [message.id, message.role])).toEqual([['ask', 'user'], ['programmatic:report', 'system']]);
+    expect(page.items.map((entry) => [entry.id, entry.role])).toEqual(seed.map((message) => [message.id, message.role]));
+    // The model is still sent the row as the person's turn it opened, and a Retry of that turn names it.
+    expect(t.store.newestUserId()).toBe('programmatic:report');
+    expect(newestOpener(seed)).toBe('programmatic:report');
   });
 
   test('a settled answer draws its narration, tool results and step markers as they streamed', async () => {
@@ -76,7 +94,7 @@ describe('the CF public transcript over canonical references', () => {
     if (finalText === undefined) throw new Error('fixture has no final text reference');
     const entry = await t.store.prepareAssistant({ id: 'answer', turnId: 'opening', runId: 'run', parts, finalText });
     t.store.appendAssistant(entry);
-    const answer = (await chatSeed(t.store, keptMediaName)).at(-1);
+    const answer = (await chatSeed(t.store, keptMediaName)).messages.at(-1);
 
     expect(answer?.parts).toEqual([
       { type: 'text', text: 'I will inspect the files.', state: 'done' },
@@ -102,7 +120,7 @@ describe('the CF public transcript over canonical references', () => {
 
     if (finalText === undefined) throw new Error('fixture has no display text reference');
     t.store.appendAssistant(await t.store.prepareAssistant({ id: 'answer', turnId: 'opening', runId: 'run', parts, finalText }));
-    expect((await chatSeed(t.store, keptMediaName)).at(-1)?.parts.at(-1)).toEqual({ type: 'text', text: 'The check passed.', state: 'done' });
+    expect((await chatSeed(t.store, keptMediaName)).messages.at(-1)?.parts.at(-1)).toEqual({ type: 'text', text: 'The check passed.', state: 'done' });
     const selected = t.history.context.selected();
 
     if (selected !== null) expect(t.history.context.entries(selected).some((entry) => entry.messageId === 'display-answer')).toBe(false);

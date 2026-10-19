@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
-import { SessionMessages, type ClaimFences, type PreparedMessage, type MessageReference, type MessagePartReference, type MessageOrigin } from './messages';
+import { SessionMessages, type ClaimFences, type PreparedMessage, type MessageReference, type MessagePartReference, type MessageOrigin, type ToolCallIndex } from './messages';
 import { SessionPayloads, type SessionFilePlane } from './payload';
 import { SessionContext, type ContextSelection, type ContextEntry } from './context';
 import { SessionProposals, type ContextProposal } from './proposals';
@@ -253,6 +253,26 @@ export class SessionHistory {
     }
 
     return { entries, messages, rendered: renders.map(({ message, at }) => ({ message, before: messages[at] ?? null, after: messages[at - 1] ?? null })) };
+  }
+
+  /**
+   * Each entry's message swapped for its replacement in one revision: the entries keep their places, their messages are
+   * new (`context_transform`). A turn's steps retire what they moved out of it (compaction's step images), so no later step
+   * materializes it again: each step of a screenshot turn held every image the turn took, and read it back (#103).
+   */
+  async retire(swaps: readonly { readonly entryId: string; readonly message: ModelMessage }[], calls: ToolCallIndex, turnId: string, assertOwner: () => void): Promise<void> {
+    const prepared = await Promise.all(swaps.map(async (swap) => ({ entryId: swap.entryId, message: await this.messages.prepare(swap.message, crypto.randomUUID(), calls) })));
+
+    this.dependencies.transactionSync(() => {
+      assertOwner();
+      const messageOf = new Map(prepared.map(({ entryId, message }) => [entryId, this.messages.insert(message, 'context_transform').messageId]));
+
+      this.context.commit(null, { cause: 'context_transform', turnId, assertEpoch: () => Effect.sync(assertOwner), mutate: (entries) => entries.map((entry) => {
+        const messageId = messageOf.get(entry.entryId);
+
+        return messageId === undefined ? entry : { ...entry, messageId };
+      }) });
+    });
   }
 
   /** The render row its request names too. */

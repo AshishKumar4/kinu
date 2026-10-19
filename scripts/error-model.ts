@@ -200,9 +200,8 @@ export const DECLARED = byFile([
   }],
   ['packages/core/src/chat.ts', {
     mechanisms: ['throw', 'catch', 'promise-rejection'],
-    within: ['runChat', 'settleModelOperation', 'suppressDeferredRejections'],
-    reason: '`runChat` is an async generator: its consumer receives a failure from next(), the iterator protocol; '
-      + 'the AI SDK\'s deferred accessors are observed detached, so a rejection there is never unhandled',
+    within: ['runChat'],
+    reason: '`runChat` is an async generator: its consumer receives a failure from next(), the iterator protocol',
   }],
   ['packages/core/src/providers/model-invocation.ts', {
     mechanisms: ['throw', 'catch'],

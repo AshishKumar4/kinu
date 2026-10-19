@@ -115,7 +115,7 @@ test("the Stop's RPC keeps its place in the room's order ahead of the send that 
     steps: async function* () { yield* []; },
     broadcast: () => {},
     getConnection: () => undefined,
-    seed: async () => [],
+    seed: async () => ({ messages: [], older: null }),
     media: async () => null,
     unseen: async (ids) => ids,
     send: async (_input, admitted) => {

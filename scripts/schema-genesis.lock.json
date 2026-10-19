@@ -810,6 +810,7 @@
     "url TEXT NOT NULL",
     "picture TEXT",
     "listed_at INTEGER NOT NULL",
+    "viewers INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY (workspace, slate)"
   ],
   "gallery_reports@packages/core/src/slates/gallery.ts": [
@@ -1343,6 +1344,12 @@
     "email TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (share_id, user_id)"
+  ],
+  "slate_share_views@packages/core/src/slates/live-shares.ts": [
+    "share TEXT NOT NULL",
+    "viewer TEXT NOT NULL",
+    "opens INTEGER NOT NULL",
+    "PRIMARY KEY (share, viewer)"
   ],
   "slate_shares@packages/core/src/slates/shares.ts": [
     "id TEXT PRIMARY KEY",

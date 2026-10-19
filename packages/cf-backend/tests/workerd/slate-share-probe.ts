@@ -20,7 +20,7 @@ import {
   type ActorHandle, MissionGovernor, provisionAgentHome, settleSharedRoots, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
   shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
-import { GalleryIndex, initGalleryTables, initSlateLiveShareTables, preapproveSlateEffect, slateDirectory } from '@kinu.run/core/slates';
+import { GalleryIndex, initGalleryTables, initSlateLiveShareTables, preapproveSlateEffect, slateDirectory, SlateLiveShareStore } from '@kinu.run/core/slates';
 import { SlateHost, type SlateDispatchContext } from '../../src/slates/host';
 import { rosterPage } from '../../src/user/roster';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
@@ -1055,7 +1055,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     index.sync({
       share: 's1', workspace: 'probe', slate: 'board', handle: 'h1', listed: true, url: 'https://app.test/shared/live/probe/s1',
-      card: { title: 'Board', line, category: 'work', ownerName: 'Sam', picture: null },
+      card: { title: 'Board', line, category: 'work', ownerName: 'Sam', picture: null, viewers: 0 },
     }, 1);
 
     try {
@@ -1063,6 +1063,16 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     } catch (cause) {
       return { failed: cause instanceof Error ? cause.message : String(cause) };
     }
+  }
+
+  /** A share's numbers in this object's own SQLite, as its workspace keeps them, after `opens` (a viewer's key each). */
+  shareViews(opens: readonly string[]): { viewers: number; opens: number; signedOutOpens: number } {
+    initSlateLiveShareTables((ddl) => { this.ctx.storage.sql.exec(ddl); });
+    const shares = new SlateLiveShareStore(this.ctx.storage.sql);
+
+    for (const viewer of opens) shares.opened('views-probe', viewer);
+
+    return shares.views('views-probe');
   }
 
   /**

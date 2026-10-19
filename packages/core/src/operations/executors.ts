@@ -214,7 +214,11 @@ export function computerDesktop(screen: DesktopScreen) {
     }),
     key: desk({
       name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord of modifiers and a key.',
-      input: deskInput(DESKTOP_INPUTS.key, { keys: KEYS_ARE, hold: 'Milliseconds to hold it down, as a game reads a held key; at most 10,000.' }),
+      input: deskInput(DESKTOP_INPUTS.key, {
+        keys: `${KEYS_ARE} Always one string: "ctrl+l", never ["ctrl", "l"]; the space bar is "space".`,
+        hold: 'Milliseconds it stays down before it is released, as a game reads a held key; 1 to 10,000. There is no '
+          + 'separate key down or key up: hold it for as long as it should act.',
+      }),
     }),
     scroll: desk({
       name: 'scroll', impact: 'execute', output: v.null(), help: 'Turn the mouse wheel over a point: what is under it scrolls.',

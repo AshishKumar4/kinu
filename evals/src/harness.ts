@@ -354,12 +354,13 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         const opened = await (async () => {
           try {
             const own = { ...target, identity: { ...target.identity, account } };
-            await timeline.span('account', () => prepareTrialAccount(own, Date.now()));
+            // The trial's workspace is named for it, so a retry of it knows its own earlier attempt's (prepareTrialAccount).
+            const subject = `${task.id}-${String(input.trial)}`;
+
+            await timeline.span('account', () => prepareTrialAccount(own, Date.now(), subject));
             productSha = (await timeline.span('build', () => deployedBuild(own))).sha;
 
-            const created = await timeline.span('open', () => openWorkspace(own, {
-              subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model,
-            }));
+            const created = await timeline.span('open', () => openWorkspace(own, { subject, mission: task.mission, model: input.model }));
 
             session = created;
             say(`workspace ${created.workspace} open on ${account}`);

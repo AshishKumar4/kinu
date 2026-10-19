@@ -58,6 +58,7 @@ import { PLATFORM_CATALOG } from './platform-catalog';
 import { sandboxSizeLabel } from './execution/sandbox';
 import type { SandboxSizes } from './execution/types';
 import { isoDate } from './utils/date';
+import { andList } from './utils/text';
 
 export type { TurnReason, WorkMode } from './types/turn';
 
@@ -156,7 +157,7 @@ function sandboxSizeSlots(sizes: SandboxSizes | undefined) {
   return {
     sized: true,
     defaultSize: named === undefined ? sizes.defaultSize : named.label,
-    sizes: labels.length === 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1) ?? ''}`,
+    sizes: andList(labels),
   };
 }
 
@@ -244,12 +245,8 @@ function renderPlanesSection(planes: PathPlanes, render: RenderSection): string 
   const ownSkills = planes.views.includes(SKILLS_VIEW.slice(1)) ? realPath(WORKSPACE_SKILLS_DIR, planes) : '';
 
   return render(PLANES_SECTION, {
-    aliases: listed(aliases), mounts: listed(mounts), views: listed(views), hasViews: views.length > 0, ownSkills, hasOwnSkills: ownSkills !== '',
+    aliases: andList(aliases), mounts: andList(mounts), views: andList(views), hasViews: views.length > 0, ownSkills, hasOwnSkills: ownSkills !== '',
   });
-}
-
-function listed(items: readonly string[]): string {
-  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
 }
 
 function renderAgentStateSection(surface: PromptSurface, render: RenderSection, isHired: boolean, pagesInAnswer: boolean): string {

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-19",
-  "files": 3461,
-  "functions": 90817,
+  "files": 3475,
+  "functions": 91287,
   "ceiling": 87,
   "line": 26,
   "inventory": [
@@ -182,10 +182,6 @@
       "complexity": 28
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
-      "complexity": 28
-    },
-    {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
       "complexity": 28
     },
@@ -219,10 +215,6 @@
     },
     {
       "key": "packages/core/src/chat.ts#ProviderCall.consume",
-      "complexity": 27
-    },
-    {
-      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
       "complexity": 27
     },
     {
@@ -323,6 +315,10 @@
     },
     {
       "key": "packages/compaction/src/extension.ts#compactionExtension>transformContext",
+      "complexity": 26
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
       "complexity": 26
     },
     {

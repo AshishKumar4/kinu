@@ -395,7 +395,7 @@ test('read-only transcript authorization is checked again after payload access',
       return s.rt.storage.vfs;
     });
 
-    expect(await chatSeed(reader, keptMediaName)).toEqual([{ id: 'public-input', role: 'user', parts: [{ type: 'text', text }] }]);
+    expect((await chatSeed(reader, keptMediaName)).messages).toEqual([{ id: 'public-input', role: 'user', parts: [{ type: 'text', text }] }]);
     revokeDuringRead = true;
     await expect(chatSeed(reader, keptMediaName)).rejects.toThrow('read grant revoked');
   } finally { s.testSql.close(); }

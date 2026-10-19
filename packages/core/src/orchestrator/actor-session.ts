@@ -1017,6 +1017,26 @@ export class ActorSession {
             if (stepNumber === 0) tally.admittedMessages = [...messages];
             stream.beginRequest(consumed.requestId, stepNumber);
           },
+          // A step swaps only messages of the context it read: each found by its place in it, the rest are not the context's.
+          retire: async (swaps) => {
+            const calls = new Map<string, { messageId: string; part: number }>();
+
+            for (const [at, message] of this.messages.entries()) {
+              const entry = stepEntries[at];
+
+              if (entry === undefined || message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+
+              for (const [part, value] of message.content.entries()) if (value.type === 'tool-call') calls.set(value.toolCallId, { messageId: entry.messageId, part });
+            }
+
+            const placed = swaps.flatMap(({ from, to }) => {
+              const entry = stepEntries[this.messages.indexOf(from)];
+
+              return entry === undefined ? [] : [{ entryId: entry.entryId, message: to }];
+            });
+
+            if (placed.length > 0) await this.canonical.retire(placed, calls, claim.turnId, assertClaim);
+          },
         } } satisfies ChatOptions,
     }), captureOperationProfile({
       actor: this.runtime.actor, profile,

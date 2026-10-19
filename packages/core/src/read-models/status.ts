@@ -3,7 +3,7 @@
 import type { ActorHandle } from '../identity/actor-handle';
 import { getCurrentScaffoldVersion } from '../scaffold/versions';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
-import { CHAT_PAGE_BYTES, CHAT_SESSION_ID } from '../session/transcript-schema';
+import { CHAT_PAGE_BYTES, CHAT_SEED_ROWS, CHAT_SESSION_ID } from '../session/transcript-schema';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { missionOf } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
@@ -14,7 +14,6 @@ import type { TierSource } from '../profiles/resolve';
 import type { RoleId } from '../types/profile';
 import type { PlanReview } from '../types/plans';
 import type { InlineSteer } from './transcript';
-import { transcriptRole } from '../utils/ui-message';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { JsonObjectSchema } from '../utils/json';
@@ -130,15 +129,15 @@ export async function getChatHistoryPage(
   const page = await transcript.drawnPage({ ...request, bytes: CHAT_PAGE_BYTES, media });
 
   return mapPage(page, (rows) => rows.flatMap(({ entry, message }) => {
-    const role = normalizeUiRole(entry.role);
+    // The message's own role, as the transcript drew it for the seed too; an unreadable row's, as stored.
+    const role = normalizeUiRole(message?.role ?? entry.role);
 
     if (!role) return [];
     const metadata = v.safeParse(JsonObjectSchema, message?.metadata);
     const parts = message === null ? [] : v.parse(v.array(JsonObjectSchema), message.parts);
 
     const drawn: ChatHistoryEntry = {
-      id: entry.id, position: entry.position, role: transcriptRole({ id: entry.id, role, metadata: metadata.success ? metadata.output : undefined }),
-      turnId: entry.turnId, runId: entry.runId, parts, createdAt: entry.recordedAt,
+      id: entry.id, position: entry.position, role, turnId: entry.turnId, runId: entry.runId, parts, createdAt: entry.recordedAt,
     };
 
     if (metadata.success) drawn.metadata = metadata.output;
@@ -149,11 +148,18 @@ export async function getChatHistoryPage(
   }));
 }
 
-/** What a tab is sent of a chat as it connects or a turn ends: its newest page, oldest first. */
-export async function chatSeed(transcript: SessionTranscriptReader, media: MediaUrl): Promise<UIMessage[]> {
-  const page = await transcript.drawnPage({ bytes: CHAT_PAGE_BYTES, media });
+/** A tab's window of its chat: its newest rows, oldest first, and where its scroll-back reads on from: the cursor of
+ *  the rows before them, or null when they reach the chat's start, so there is nothing older to ask for. */
+export interface ChatWindow {
+  readonly messages: UIMessage[];
+  readonly older: PositionCursor | null;
+}
 
-  return page.items.flatMap(({ message }) => (message === null ? [] : [message]));
+/** What a tab is sent of a chat as it connects or a turn ends: its newest window, within one page's bytes. */
+export async function chatSeed(transcript: SessionTranscriptReader, media: MediaUrl): Promise<ChatWindow> {
+  const page = await transcript.drawnPage({ bytes: CHAT_PAGE_BYTES, limit: CHAT_SEED_ROWS, media });
+
+  return { messages: page.items.flatMap(({ message }) => (message === null ? [] : [message])), older: page.status === 'more' ? page.next : null };
 }
 
 export type ChatHistoryPage = Page<ChatHistoryEntry, PositionCursor>;

@@ -216,7 +216,8 @@ describe('the workspace root answers the walk-back', () => {
 
       expect(lines(kept).slice(0, 2)).toEqual(['first ask', 'ok']);
       expect(kept).toHaveLength(3);
-      expect(notice?.role).toBe('user');
+      // The harness wrote it, so the chat draws it as `system`; the model reads it as the user row it is stored as.
+      expect(notice?.role).toBe('system');
 
       const card = classifyProgrammaticTurn({ metadata: notice?.metadata });
 

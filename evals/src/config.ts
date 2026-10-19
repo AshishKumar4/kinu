@@ -122,7 +122,8 @@ export function evalMatrix(env: Env, knownArms: readonly string[]): EvalMatrix {
     models: models.length > 0 ? models : DEFAULT_MODELS,
     arms: arms.length > 0 ? arms : [DEFAULT_ARM],
     trials: positiveInteger(env, 'KINU_EVAL_TRIALS', DEFAULT_TRIALS),
-    firstSlot: env.KINU_EVAL_PASS === '1' ? PASS_FIRST_SLOT : 1,
+    // A run's first account is the block its lease took (KINU_EVAL_FIRST_SLOT, scripts/evals-lease.ts), else its half's first.
+    firstSlot: positiveInteger(env, 'KINU_EVAL_FIRST_SLOT', env.KINU_EVAL_PASS === '1' ? PASS_FIRST_SLOT : 1),
   };
 }
 

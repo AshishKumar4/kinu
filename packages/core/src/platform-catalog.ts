@@ -1314,6 +1314,26 @@ export const PLATFORM_CATALOG = {
       + 'to the platform. Miniflare enforces none of it.',
   },
 
+  'r2.etag.compressed_weak': {
+    subject: "The ETag an R2 object's GET answers through the S3 API, by the encoding it is sent in",
+    limit: null,
+    origin: 'platform',
+    bounds: null,
+    evidence: 'proven-by-probe',
+    provenance: 'scripts/devbox-container-tier.test.ts:110 (R2 as measured on the live fixture lease, read three ways on 2026-10-19)',
+    date: '2026-10-19',
+    trigger: 'a GET that accepts gzip, which Bun\'s and the browsers\' fetch send by default, of an object R2 compresses',
+    onBreach: 'the answer comes gzip with its ETag weakened, W/"<md5>"; a PUT whose If-Match names that tag answers 412, as a conditional '
+      + 'write another writer beat would',
+    observable: [{ context: 'a GET without Accept-Encoding: identity', message: 'ETag: W/"839e114709ca83e1090a8cbf53663d3b"' }],
+    firstPartySignal: true,
+    notes:
+      'Accept-Encoding: identity answers the strong ETag, "839e114709ca83e1090a8cbf53663d3b", which a PUT\'s If-Match holds against; a '
+      + 'bucket listing names the strong one too. The devbox contracts\' fixture lease read its version from a default GET, so every '
+      + 'takeover of an ended holder was refused as taken by another run (staging deploy of 001f6d749, 2026-10-19; '
+      + 'scripts/fixtures/devbox-e2e/ledger.ts reads it uncompressed). A version read for a conditional write is read with identity.',
+  },
+
   'worker.connect.address_forms': {
     subject: "The spellings of an IP address a Worker's connect() reaches",
     limit: null,

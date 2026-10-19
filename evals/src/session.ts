@@ -1660,18 +1660,29 @@ export class KinuPublicSession {
   }
 
   /** Seed one file through the same route, so a case's inputs arrive on the
-   *  plane the agent's own tools read. */
+   *  plane the agent's own tools read. A file already there is replaced as the
+   *  Files upload replaces it once its owner says yes (hooks/use-uploads.ts):
+   *  over exactly the revision the route's conflict names. */
   writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void> {
     return this.boundary(`PUT files ${path}`, async () => {
-      const response = await fetch(this.filesUrl(path), {
+      const put = (revision?: JsonValue) => fetch(this.filesUrl(path), {
         method: 'PUT',
-        headers: { ...webHeaders(this.input.identity), 'content-type': 'application/octet-stream' },
+        headers: {
+          ...webHeaders(this.input.identity), 'content-type': 'application/octet-stream',
+          ...revision !== undefined && { 'if-match': JSON.stringify(revision) },
+        },
         body: content,
       });
 
+      const created = await put();
+      const said = created.ok ? '' : await created.text();
+      const held = created.status === 412 ? v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ revision: v.union([v.string(), v.number()]) })), said) : null;
+      const replaced = held?.success === true ? await put(held.output.revision) : null;
+      const response = replaced ?? created;
+
       if (!response.ok) {
         throw new DeploymentAnswer(`could not write ${path} over the files route: ${String(response.status)} `
-          + `${response.statusText} — ${(await response.text()).slice(0, 200)}`, response.status);
+          + `${response.statusText} — ${(replaced === null ? said : await replaced.text()).slice(0, 200)}`, response.status);
       }
     });
   }

@@ -2475,6 +2475,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
       expect(new URL(page.url()).pathname).toBe('/gallery.html');
       // The disclosure is on screen before anything is installed: no command yet.
       expect(await page.$('[data-connect-command]')).toBeNull();
+      // L111 #6: and it names the workspace the machine is granted to as it connects, before the command exists.
+      expect(await page.$eval('[role="dialog"] [data-connect-grant]', (line) => line.textContent ?? ''))
+        .toMatch(/its agents use this machine\s+without asking/u);
 
       // Named, and pressed twice before the first answer: one registration, carrying the name.
       await page.type('[role="dialog"] input[aria-label="Device name"]', 'Build box');

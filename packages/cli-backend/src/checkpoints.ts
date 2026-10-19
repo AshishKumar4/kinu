@@ -34,12 +34,13 @@ function exitCodeOf(error: ExecFileException | null): number | null {
 }
 
 /** This process as the engine reads it. */
-function nodeCheckpointHost(): CheckpointHost {
+/** The CLI's own process runs its git, confining nothing: `never` is the confinement no call can pass. */
+function nodeCheckpointHost(): CheckpointHost<never> {
   return {
     fs, path, homedir: homedir(), tmpdir: tmpdir(), devNull, env: process.env,
     sha256: (text) => createHash('sha256').update(text).digest('hex'),
-    run: (bin, args, options) => new Promise((resolve) => {
-      execFile(bin, [...args], options, (error, stdout, stderr) => {
+    run: (bin, args, { cwd, env, maxBuffer }) => new Promise((resolve) => {
+      execFile(bin, [...args], { cwd, env, maxBuffer }, (error, stdout, stderr) => {
         resolve({
           code: exitCodeOf(error),
           stdout: String(stdout), stderr: String(stderr), missing: classify({ cause: error }) === 'enoent',
@@ -66,13 +67,13 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       turn = meta;
     },
     async ensureCheckpoint(dir, reason = 'pre-mutation') {
-      const outcome = await engine.ensure({ agent: opts.agent, dir, turn, reason });
+      const outcome = await engine.ensure({ agent: opts.agent, dir, turn, reason, confine: null });
 
       return outcome !== null && 'id' in outcome ? outcome.id : null;
     },
     list: (query = {}) => engine.list(opts.agent, query),
-    plan: (dir, id) => engine.plan(opts.agent, dir, id),
-    restore: (dir, id) => engine.restore(opts.agent, dir, id),
+    plan: (dir, id) => engine.plan(opts.agent, dir, id, null),
+    restore: (dir, id) => engine.restore(opts.agent, dir, id, null),
     status: () => engine.status(),
     workdirForPath: (target) => engine.workdirForPath(target),
   };
