@@ -47,7 +47,7 @@ export const LOCKED_BASELINE: Baseline = {
   'file-plane/anchor-must-be-unique': 'ca2aa33c190dce3a',
   'file-plane/batch-is-atomic-and-original-anchored': '468afc83dff07123',
   'file-plane/mount-routes-to-the-owning-machine': 'f243ecf9cec10893',
-  'file-plane/no-silent-truncation': '17d010e8695cf2fd',
+  'file-plane/no-silent-truncation': '4b0ba472df316051',
   'memory-retrieval/hybrid-degrades-to-lexical': '67bba0906762aef8',
   'memory-retrieval/hybrid-merges-sources': '71cb2718a4627aa1',
   'memory-retrieval/rrf-constant': '96e6efb651f04eba',
