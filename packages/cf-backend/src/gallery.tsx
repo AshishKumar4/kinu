@@ -2522,12 +2522,12 @@ function gallerySlates() {
 const TAKE_COUNT = Number(new URLSearchParams(location.search).get("takes") ?? 0);
 
 let galleryTakes: AlternateTakeSet = {
-  id: "take-1", turnId: "rv-a2", sessionId: "default", task: "Read the rules from the campaign table instead", winnerNodeId: "win",
+  id: "take-1", turnId: "rv-a2", sessionId: "default", task: "Move the webhook routes onto openDb", winnerNodeId: "win",
   chosenNodeId: null, createdAt: NOW - 5 * 60e3,
   candidates: ([
     { nodeId: "win", text: "Moved `routes/webhooks.ts` onto `openDb` and updated eleven call sites.", origin: "live" },
-    { nodeId: "alt", text: "Kept the service and read each rule from the campaign table at its three call sites.", origin: "branch" },
-    { nodeId: "alt2", text: "Moved the rules into a view over the campaign table; the service reads the view.", origin: "branch" },
+    { nodeId: "alt", text: "Kept each route's own read and checked the binding at its three call sites.", origin: "branch" },
+    { nodeId: "alt2", text: "Moved the binding check into middleware the webhook routes share; each reads the database it is handed.", origin: "branch" },
   ] satisfies AlternateTakeSet["candidates"]).slice(0, TAKE_COUNT),
 };
 
@@ -2697,7 +2697,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listFileCheckpoints: () => REVERT_LISTING,
   planFileRestore: () => ({
     dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id,
-    files: [{ path: "src/pricing-service.ts", kind: "modify" }, { path: "src/campaign-rules.ts", kind: "delete" }],
+    files: [{ path: "workers/api/src/routes/webhooks.ts", kind: "modify" }, { path: "workers/api/test/webhooks-db.test.ts", kind: "delete" }],
   }),
   restoreFileCheckpoint: () => ({
     dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id, files: [], preRestoreId: "5afe70",

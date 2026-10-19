@@ -2178,7 +2178,7 @@ describe('file preview request generation at the actual FilesSurface boundary', 
         () => document.querySelector('[data-files-preview-body]')?.textContent?.includes('Fresh after refresh') === true,
       );
       await page.click('[data-files-fixture-release]');
-      // The held first reply was old checkout content. Once it settles it must
+      // The held first reply was the old content. Once it settles it must
       // not overwrite the fresh resource identity selected by the listing.
       const preview = await page.$eval('[data-files-preview-body]', (body) => body.textContent ?? '');
       expect(preview).toContain('Fresh after refresh');
@@ -4557,7 +4557,7 @@ describe('the home creation form, as a browser submits it', () => {
         }, { preconnect: inner.preconnect });
       });
 
-      await page.type('#workspace-mission', 'Own the checkout service.');
+      await page.type('#workspace-mission', 'Keep the api Worker deployed and healthy.');
       await page.click('button[type="submit"]');
 
       // Held request arrived AND the pending paint landed — not a sleep.
@@ -4658,7 +4658,7 @@ describe('the home creation form, as a browser submits it', () => {
 
       await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('#workspace-mission');
-      await page.type('#workspace-mission', 'Own the checkout service.');
+      await page.type('#workspace-mission', 'Keep the api Worker deployed and healthy.');
 
       // Whatever the page made of the failed listing is painted by now: the create must still be offered.
       expect(await page.$eval('button[type="submit"]', (button) => button instanceof HTMLButtonElement && button.disabled)).toBe(false);

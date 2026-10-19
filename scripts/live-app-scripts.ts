@@ -545,7 +545,7 @@ export const planWalkthrough: ScriptedModel = (request) => {
     }
 
     return {
-      text: 'Reading the checkout code before I plan the fix.',
+      text: 'Reading the api Worker before I plan the fix.',
       toolCall: { name: 'submit_plan', arguments: { edits: [{ start: 1, content: PLAN_MARKDOWN }] } },
     };
   }

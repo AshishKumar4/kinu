@@ -213,7 +213,7 @@ const OVERVIEW = {
 function workspaceRow(): JsonValue {
   return {
     userId: OTHER_ID, email: 'owner@example.com', name: 'api-worker',
-    displayName: 'Checkout fixes', createdAt: 1_000, lastSeenAt: 2_000, removedAt: null,
+    displayName: 'API Worker', createdAt: 1_000, lastSeenAt: 2_000, removedAt: null,
   };
 }
 
