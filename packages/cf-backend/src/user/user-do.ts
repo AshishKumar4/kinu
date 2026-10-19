@@ -62,6 +62,7 @@ import { Effect } from 'effect';
 import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { EvalLeaseJobs } from './eval-leases';
+import { WorkspaceDeletionJobs } from './workspace-deletions';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -112,6 +113,7 @@ export class UserDO extends Agent<Env> {
     this.lifecycle.use(gate);
     this.lifecycle.use(this.shareCards);
     this.lifecycle.use(this.evalLeases);
+    this.lifecycle.use(this.workspaceDeletions);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
@@ -130,7 +132,9 @@ export class UserDO extends Agent<Env> {
 
   /** Every gated RPC waits for this (`startBeforeRpc`); the MCP dials it starts are not awaited. */
   override onStart(): void {
-    if (this.storageRefusal === undefined) this.mcpServers.start();
+    if (this.storageRefusal !== undefined) return;
+    this.mcpServers.start();
+    this.workspaceDeletions.adoptMarked();
   }
 
   private readonly host: UserObjectHost = {
@@ -170,8 +174,14 @@ export class UserDO extends Agent<Env> {
     tearDown: (workspace) => this.workspaces.tearDownWorkspace(workspace, this.name),
   });
 
+  private readonly workspaceDeletions = new WorkspaceDeletionJobs({
+    marked: () => this.workspaces.markedForDeletion(),
+    tearDown: (workspace) => this.workspaces.tearDownWorkspace(workspace, this.name),
+  });
+
   private readonly workspaces = new UserWorkspaces({
-    ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, nudgeUnreported: () => { this.nudgeUnreported(); },
+    ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, deletions: this.workspaceDeletions,
+    nudgeUnreported: () => { this.nudgeUnreported(); },
   });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });

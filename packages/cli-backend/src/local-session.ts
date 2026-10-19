@@ -873,7 +873,7 @@ export class LocalAgentSession {
 
     const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.getActiveRoleId() });
     this.chat.reviseContext({ counted: true });
-    await this.terminal.modelSettingsChanged();
+    await this.terminal.ownerActed();
 
     return changed;
   }
@@ -885,7 +885,7 @@ export class LocalAgentSession {
       onChanged: () => {
         this.rebuildToolSurface();
         this.chat.reviseContext({ counted: true });
-        this.tracked(() => this.terminal.modelSettingsChanged());
+        this.tracked(() => this.terminal.ownerActed());
       },
     }, spec);
   }
@@ -901,7 +901,7 @@ export class LocalAgentSession {
   setProviderAccount(provider: string, account: string | null): ReturnType<typeof setProviderAccount> {
     const set = setProviderAccount(this.config, provider, account);
 
-    this.tracked(() => this.terminal.modelSettingsChanged());
+    this.tracked(() => this.terminal.ownerActed());
 
     return set;
   }

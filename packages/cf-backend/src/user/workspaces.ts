@@ -14,6 +14,7 @@ import type { UserMcpServers } from './mcp-servers';
 import type { UserObjectHost } from './user-host';
 import type { ShareCardJobs } from './share-cards';
 import type { EvalLeaseJobs } from './eval-leases';
+import type { WorkspaceDeletionJobs } from './workspace-deletions';
 
 /** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
@@ -42,6 +43,8 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   readonly mcpServers: Pick<UserMcpServers, 'stopWorkspaceMcpCalls'>;
   /** An eval run's workspaces' leases, moved by each mark and ended by the teardown. */
   readonly evalLeases: Pick<EvalLeaseJobs, 'marked' | 'ended'>;
+  /** Each workspace's deletion, run again by its own job until it lands. */
+  readonly deletions: Pick<WorkspaceDeletionJobs, 'begun' | 'ended'>;
   /** Brings a workspace's share recipients to the shares its overview names. */
   readonly shareCards: Pick<ShareCardJobs, 'reconcile'>;
   nudgeUnreported(): void;
@@ -116,8 +119,7 @@ export class UserWorkspaces {
 
   async listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
     const resolved = await this.host.requireTier(caller, 'workspaces.read');
-    // This read is the retry for unfinished teardowns and for stale fork reservations nothing else frees.
-    await this.resumePendingDeletions();
+    // This read is the retry for stale fork reservations nothing else frees; an unfinished teardown is its own job's.
     await this.reclaimStaleForkReservations();
     this.host.nudgeUnreported();
     const page = rosterPage(this.host.ctx.storage.sql, query);
@@ -337,8 +339,8 @@ export class UserWorkspaces {
   }
 
   /**
-   * Reclaim lapsed reservations. Driven by the owner's reads like {@link resumePendingDeletions}:
-   * this object has no timer, and the roster hides `create_pending` rows.
+   * Reclaim lapsed reservations. Driven by the owner's reads, and the roster hides
+   * `create_pending` rows.
    */
   private async reclaimStaleForkReservations(): Promise<void> {
     const stale = this.host.sqlx<{ name: string }>(
@@ -453,8 +455,8 @@ export class UserWorkspaces {
   }
 
   /**
-   * Row is marked before teardown and removed after, so a failed teardown is resumed by the next
-   * read (`resumePendingDeletions`); `destroyAgent` is idempotent.
+   * Row is marked before teardown and removed after, so a failed teardown is run again by its own
+   * job (`WorkspaceDeletionJobs`); `destroyAgent` is idempotent.
    */
   async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
     await this.host.requireTier(caller, 'workspaces.write');
@@ -464,13 +466,31 @@ export class UserWorkspaces {
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
+  /** The teardown running for each name: its DELETE, its deletion's job, a create that needs the name, an eval lease and
+   *  the account's deletion join it, since a second one's cleanup, keyed by the name alone, would land on a workspace
+   *  recreated after the first. */
+  private readonly tearingDown = new Map<string, Promise<void>>();
+
+  tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
+    const running = this.tearingDown.get(name);
+
+    if (running !== undefined) return running;
+    const teardown = this.tearDownOnce(name, ownerUserId).finally(() => { this.tearingDown.delete(name); });
+
+    this.tearingDown.set(name, teardown);
+
+    return teardown;
+  }
+
   /**
    * Mark it, then let its agents finish what they have open on it while it still holds its authority, then stop its MCP
    * calls and revoke in one synchronous turn before the destroy await, so a dying workspace keeps no authority past
    * its quiet. Destroy the DO before dropping the row; on failure the marked row stays and the revoke is not undone.
    */
-  async tearDownWorkspace(name: string, ownerUserId: string): Promise<void> {
+  private async tearDownOnce(name: string, ownerUserId: string): Promise<void> {
     this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ?`, name);
+    // With the mark's commit: a teardown that fails or dies on the way is run again a lap later, read or no read.
+    await this.host.deletions.begun(name);
     const object = this.host.env.OrchestratorAgent.idFromName(name);
     const stub = this.host.env.OrchestratorAgent.get(object);
 
@@ -500,6 +520,7 @@ export class UserWorkspaces {
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
     await this.host.evalLeases.ended(name);
+    await this.host.deletions.ended(name);
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
   }
@@ -510,50 +531,42 @@ export class UserWorkspaces {
     }
   }
 
-  /**
-   * Finish teardowns left marked; driven by the owner's reads since this object has no timer.
-   * Failures keep the marker (the row is the retry) and do not throw, so listings still succeed.
-   */
-  private async resumePendingDeletions(): Promise<void> {
-    const pending = this.host.sqlx<{ name: string }>(
-      `SELECT name FROM user_workspaces WHERE delete_pending = 1`,
-    );
+  /** The workspaces whose teardown began and has not landed. */
+  markedForDeletion(): string[] {
+    return this.host.sqlx<{ name: string }>(`SELECT name FROM user_workspaces WHERE delete_pending = 1`).map((row) => row.name);
+  }
 
-    if (pending.length === 0) return;
+  /**
+   * Refuse a name whose teardown is pending; the row still owns a DO a recreate would wire into. The name's own teardown
+   * runs again first, so a transient failure does not dead-end it until its job comes due; no other name's is touched,
+   * since a sweep read before it waits could tear down one recreated meanwhile.
+   */
+  private async requireNotDeleting(name: string): Promise<void> {
+    const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
+
+    // A teardown still running holds the name to its last step, past its row's removal; one that failed left it marked.
+    await Promise.allSettled([this.tearingDown.get(name)]);
+
+    if (this.host.sqlx(marked, name).length === 0) return;
     const ownerUserId = this.host.ctx.id.name ?? '';
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
-      diagnostics.failure('workspace.cleanup_unowned', toKinuError({
-        doing: 'resuming a pending workspace teardown',
-        cause: new Error('this user object has no user id to authorize the destroy with'),
-        otherwise: 'denied',
-      }), { pending: pending.length });
-
-      return;
-    }
-
-    for (const row of pending) {
+    if (/^[a-f0-9]{32}$/.test(ownerUserId)) {
       try {
-        await this.tearDownWorkspace(row.name, ownerUserId);
+        await this.tearDownWorkspace(name, ownerUserId);
       } catch (err) {
         diagnostics.failure('workspace.cleanup_retry_failed', toKinuError({
           doing: 'finishing a workspace teardown a previous attempt left unfinished',
           cause: err,
           otherwise: 'io',
-        }), { workspace: row.name });
+        }), { workspace: name });
       }
+    } else {
+      diagnostics.failure('workspace.cleanup_unowned', toKinuError({
+        doing: 'resuming a pending workspace teardown',
+        cause: new Error('this user object has no user id to authorize the destroy with'),
+        otherwise: 'denied',
+      }), { workspace: name });
     }
-  }
-
-  /**
-   * Refuse a name whose teardown is pending; the row still owns a DO a recreate would wire into.
-   * Retries the teardown first so a transient failure does not dead-end the name.
-   */
-  private async requireNotDeleting(name: string): Promise<void> {
-    const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
-
-    if (this.host.sqlx(marked, name).length === 0) return;
-    await this.resumePendingDeletions();
 
     if (this.host.sqlx(marked, name).length === 0) return;
     throw new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);

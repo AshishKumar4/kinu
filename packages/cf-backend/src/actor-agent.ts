@@ -3214,7 +3214,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this.modelSettingsChanges += 1;
     this._accountSwarms = null;
     this.invalidateModelCaches();
-    await this.terminal.modelSettingsChanged();
+    await this.terminal.ownerActed();
   }
 
 
