@@ -18,7 +18,8 @@ export const MODEL_ROUTE_POLICY = {
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },
   advisor: { kind: 'fixed', tier: 'deep' },
-  compaction: { kind: 'fixed', tier: 'fast' },
+  // Every compactor summarizes on the turn's own model (compaction/src/actor.ts, and the CLI's and workspace's).
+  compaction: { kind: 'invocation' },
   fast: { kind: 'fixed', tier: 'fast' },
   reflection: { kind: 'fixed', tier: 'fast' },
   platform: { kind: 'platform' },

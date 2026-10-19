@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   BUILTIN_ROLE_DEFINITIONS,
-  parentReasoningEffort, profileCatalogDigest, providerListingOf, providerSnapshotOf, resolveTurnProfile,
+  parentReasoningEffort, profileCatalogDigest, providerListingOf, providerSnapshotOf, resolveModelRoute, resolveTurnProfile,
   type PinnedProfile, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type ResolveTurnProfileInput, type RoleDefinition, type TierAssignments,
 } from '../src/profiles';
@@ -652,4 +652,13 @@ describe('an account that never set its fast tier', () => {
 
     expect(profileOver([...WORKERS, ...ANTHROPIC], tiers).tiers.fast).toMatchObject({ model: 'anthropic/claude-haiku-4-5', fallbacks: [] });
   });
+});
+
+// Every summarizer that compacts a conversation runs on the turn's own model (compaction/src/actor.ts, the CLI's and the
+// workspace's compactors), and the route table said `fast`: the one statement of which model a producer uses was false.
+test("compaction's route is the turn's own model, a workspace pin included", () => {
+  const profile = resolve({ workspaceModel: 'm-fast' });
+
+  expect(resolveModelRoute('compaction', profile)).toMatchObject({ tier: 'default', model: 'm-fast' });
+  expect(resolveModelRoute('compaction', resolve()).model).toBe('m-default');
 });
