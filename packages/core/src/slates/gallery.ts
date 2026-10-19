@@ -8,6 +8,7 @@
  */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
+import { textContains } from '../utils/text-match';
 import { GALLERY_CATEGORIES, GALLERY_PAGE_SIZE, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort } from './gallery-api';
 import type { GalleryListingSync } from './share-modes';
 
@@ -110,10 +111,9 @@ export class GalleryIndex {
     const where: string[] = [];
     const params: (string | number)[] = [];
 
-    // Its words anywhere in the title or the line, ASCII letters in either case: by `instr`, never a LIKE pattern, which
-    // a Durable Object's SQLite refuses whole past 50 bytes.
+    // Its words anywhere in the title or the line.
     if (query.q !== '') {
-      where.push('(instr(lower(l.title), lower(?)) > 0 OR instr(lower(l.line), lower(?)) > 0)');
+      where.push(`(${textContains('l.title')} OR ${textContains('l.line')})`);
       params.push(query.q, query.q);
     }
 

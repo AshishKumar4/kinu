@@ -991,7 +991,32 @@ export const PLATFORM_CATALOG = {
       + 'reasons; nothing in this repo checks.',
   },
 
-  'do.sqlite.columns_per_table': {
+  'do.sqlite.like_pattern_bytes': {
+    subject: 'Maximum length of a LIKE or GLOB pattern in a SQLite-backed Durable Object',
+    limit: { value: 50, unit: 'bytes' },
+    origin: 'platform',
+    bounds: 'query',
+    evidence: 'proven-by-probe',
+    provenance:
+      'packages/cf-backend/tests/workerd/text-search.test.ts:12 under workerd; on staging (kinu-staging 5c522f12d, '
+      + '2026-10-19), GET /api/gallery?q=<n bytes> with one listing indexed',
+    date: '2026-10-19',
+    trigger: 'a LIKE or GLOB whose pattern exceeds 50 bytes, evaluated against at least one row',
+    onBreach: 'the whole statement is refused, not answered; a table with no rows to compare answers nothing and no error',
+    observable: [{ context: 'thrown by sql.exec() on the first row compared', message: 'LIKE or GLOB pattern too complex: SQLITE_ERROR' }],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: "a search's `%q%` pattern answered (q = 48 bytes)", value: 50, unit: 'bytes' },
+      { scenario: "a search's `%q%` pattern refused, 500 (q = 49 bytes)", value: 51, unit: 'bytes' },
+    ],
+    notes:
+      'The documented D1 limit (https://developers.cloudflare.com/d1/platform/limits/) holds for Durable Object SQLite too, '
+      + 'and workerd applies it locally, unlike bun:sqlite (50,000). Kinu matches text by instr over lower() '
+      + '(packages/core/src/utils/text-match.ts), never a pattern; what still takes a pattern is the database tool\'s '
+      + '`like` operator, whose caller writes the pattern and is answered this refusal.',
+  },
+
+    'do.sqlite.columns_per_table': {
     subject: 'Maximum columns per table in a SQLite-backed Durable Object',
     limit: { value: 100, unit: 'count' },
     origin: 'platform',

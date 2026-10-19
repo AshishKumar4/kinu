@@ -92,6 +92,20 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
     return await boot;
   }
 
+  /**
+   * Whether `id` builds for `viewer` as its source stands now: its image built, or its last that built kept and the
+   * compiler's words for why the newer one did not. Never a process started or stopped: a write the slate's own call
+   * makes into its tree is checked here while that call still waits on the write, so restarting the slate would end
+   * the very call that made the edit. Its next call, or its preview's next load, boots the build this one made.
+   */
+  async built(viewer: SlateCaller, id: string): Promise<{ readonly broken: string | null }> {
+    const source = await this.ports.resolve(viewer.cred, id);
+    const caller = source.kind === 'message' ? source.author : viewer;
+    const { imaged } = await this.imaged(caller, id, source);
+
+    return { broken: imaged.broken };
+  }
+
   /** The slate's durable application, run as the workspace root. */
   served(root: SlateCaller, id: string): Promise<RunningSlate<Source, Process> & { readonly app: DurableAppIdentity }> {
     return settle(Effect.gen({ self: this }, function* () {
@@ -136,18 +150,15 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
     return ids;
   }
 
-  private async boot(caller: SlateCaller, id: string, held: string, resolved: Source): Promise<RunningSlate<Source, Process>> {
+  /**
+   * `id`'s image for `caller` from its source as it stands, built where no build of that source and generation is kept:
+   * the source it was read from, its digest, and the image (or the last that built, and why the newer did not). Built
+   * again while something it read moves during the compile.
+   */
+  private async imaged(caller: SlateCaller, id: string, resolved: Source)
+    : Promise<{ readonly source: Source; readonly digest: string; readonly imaged: { readonly image: SlateImage; readonly key: string; readonly broken: string | null } }> {
     for (let source = resolved; ; source = await this.ports.resolve(caller.cred, id)) {
-      const revision = this.revisions.get(id) ?? 0;
-      // The loader evaluates boot options only on a cache miss. This identity
-      // must not reuse an image created before outbound mediation was supplied.
-      // What the build looked at outside its tree moves its generation, durably and per authority.
-      const digest = `${await this.ports.digest(caller.cred, id, source)}:${String(this.ports.builds.generation(id, slateAuthority(caller.cred)))}`;
-      const key = `slate:mediated:${this.ports.workspace}:${held}:${digest}`;
-      const running = this.running.get(held);
-
-      if (running?.key === key && await running.process.isRunning()) return running;
-
+      const digest = await this.digestOf(caller, id, source);
       const changed = new Set<string>();
 
       this.building.add(changed);
@@ -159,7 +170,29 @@ export class SlateProcesses<Source extends RunnableSlateSource, Process extends 
       }).finally(() => { this.building.delete(changed); });
 
       // Something it read moved while it compiled: built again, under the generation that move gave it.
-      if (imaged === null) continue;
+      if (imaged !== null) return { source, digest, imaged };
+    }
+  }
+
+  /**
+   * What `id`'s image for `caller` is keyed by: its source's digest and the generation of what its builds looked at. The
+   * loader evaluates boot options only on a cache miss, so this identity must not reuse an image created before outbound
+   * mediation was supplied; what the build looked at outside its tree moves its generation, durably and per authority.
+   */
+  private async digestOf(caller: SlateCaller, id: string, source: Source): Promise<string> {
+    return `${await this.ports.digest(caller.cred, id, source)}:${String(this.ports.builds.generation(id, slateAuthority(caller.cred)))}`;
+  }
+
+  private async boot(caller: SlateCaller, id: string, held: string, resolved: Source): Promise<RunningSlate<Source, Process>> {
+    const keyOf = (digest: string) => `slate:mediated:${this.ports.workspace}:${held}:${digest}`;
+
+    for (let read = resolved; ; read = await this.ports.resolve(caller.cred, id)) {
+      const revision = this.revisions.get(id) ?? 0;
+      const running = this.running.get(held);
+
+      if (running?.key === keyOf(await this.digestOf(caller, id, read)) && await running.process.isRunning()) return running;
+      const { source, digest, imaged } = await this.imaged(caller, id, read);
+      const key = keyOf(digest);
       const { image, key: built, broken } = imaged;
 
       if (running !== undefined && running.built === built && await running.process.isRunning()) {
