@@ -276,9 +276,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   /** Openings whose landing is not known yet. The SDK sends the whole thread with each request and the room sends the
    *  agent every message in it the agent does not hold, so words a Stop handed back, this tab's Stop or another's, ran on
-   *  the next request: none carries these but the request that submits them. Each by its landing, which settles once
-   *  its caller has put words no turn read back in the draft. */
-  const unlanded = useRef(new Map<string, Promise<unknown>>());
+   *  the next request: none carries these but the request that submits them. Each by its landing, which settles in the
+   *  microtasks its caller puts words no turn read back in the draft. */
+  const unlanded = useRef(new Map<string, Promise<void>>());
 
   /** Stops still waiting on the landings they found unknown: the composer stays on the Stop until each is known, so words
    *  a Stop hands back are in the draft before Send returns (1008-e: a Continue sent first ran without the brief). */
@@ -531,7 +531,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
       // Released in the render the caller's restore of handed-back words lands in: both follow the same landings.
       if (landing.length > 0) {
-        await Promise.allSettled(landing);
+        await Promise.all(landing);
         setStopsLanding((stops) => stops - 1);
       }
     }
@@ -701,17 +701,20 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       });
 
       if (run !== null) {
+        const landed = Promise.withResolvers<void>();
+
+        unlanded.current.set(id, landed.promise);
+
         // Words no turn took leave the chat: they return to their composer.
-        const landing = settle(Effect.ensuring(
+        return settle(Effect.ensuring(
           Effect.tapError(attemptInItsWords("io", () => sendLanding(record, run, id)), (refused) => Effect.sync(() => {
             if (refused.code === "cancelled") setMessages((shown) => shown.filter((message) => message.id !== id));
           })),
-          Effect.sync(() => { unlanded.current.delete(id); }),
+          Effect.sync(() => {
+            unlanded.current.delete(id);
+            landed.resolve();
+          }),
         ));
-
-        unlanded.current.set(id, landing);
-
-        return landing;
       }
     }
 
