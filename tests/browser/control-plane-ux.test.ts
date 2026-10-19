@@ -212,8 +212,8 @@ const OVERVIEW = {
  *  row is what supplies the OWNER, which is what makes the name an address. */
 function workspaceRow(): JsonValue {
   return {
-    userId: OTHER_ID, email: 'owner@example.com', name: 'checkout-fixes',
-    displayName: 'Checkout fixes', createdAt: 1_000, lastSeenAt: 2_000, removedAt: null,
+    userId: OTHER_ID, email: 'owner@example.com', name: 'api-worker',
+    displayName: 'API Worker', createdAt: 1_000, lastSeenAt: 2_000, removedAt: null,
   };
 }
 
@@ -234,7 +234,7 @@ const APPROVAL = {
 /** The drilldown body, with every panel healthy unless a test overrides one. */
 function detailBody(over: Record<string, JsonValue>): JsonValue {
   return {
-    workspace: 'checkout-fixes',
+    workspace: 'api-worker',
     userId: OTHER_ID,
     runs: { status: 'ok', value: [] },
     activity: { status: 'ok', value: { spend: { usd: 0 } } },
@@ -259,7 +259,7 @@ function workspacesFixture(over: Record<string, JsonValue>): Answer {
  *  for the panel grid the read produces. Network idle is not readiness — the
  *  intercepted answer settles before React commits. */
 async function openWorkspaceRow(browserPage: Page): Promise<void> {
-  await browserPage.locator('tbody tr ::-p-text(checkout-fixes)').setTimeout(15_000).click();
+  await browserPage.locator('tbody tr ::-p-text(api-worker)').setTimeout(15_000).click();
   // Lowercased, because `innerText` is RENDERED text and the panel titles carry
   // an `uppercase` class — the same reason the assertions below compare in lower
   // case rather than pinning a CSS transform.
@@ -554,7 +554,7 @@ describe('the control plane in a browser', () => {
       // inside one UserDO and `OrchestratorAgent` is addressed globally, so a
       // page that asked by name alone would be asking about whichever account
       // registered that string first.
-      const detailAsk = probe.asked.find((path) => path.includes('/workspaces/checkout-fixes'));
+      const detailAsk = probe.asked.find((path) => path.includes('/workspaces/api-worker'));
       expect(detailAsk).toContain(`userId=${OTHER_ID}`);
       await browserPage.close();
     });
@@ -578,10 +578,10 @@ describe('the control plane in a browser', () => {
       await browserPage.waitForSelector('input');
 
       expect(await removeDisabled(browserPage)).toBe(true);
-      await browserPage.type('input', 'checkout-fix');
+      await browserPage.type('input', 'api-work');
       // A prefix is not the name. The gate is equality, not "looks close".
       expect(await removeDisabled(browserPage)).toBe(true);
-      await browserPage.type('input', 'es');
+      await browserPage.type('input', 'er');
       expect(await removeDisabled(browserPage)).toBe(false);
       await browserPage.close();
     });
@@ -631,12 +631,12 @@ describe('the control plane in a browser', () => {
       }
 
       expect(probe.posted).toEqual([
-        { action: 'job.cancel', userId: OTHER_ID, workspace: 'checkout-fixes', jobId: 'job-7' },
-        { action: 'job.retry', userId: OTHER_ID, workspace: 'checkout-fixes', jobId: 'job-7' },
-        { action: 'job.dismiss', userId: OTHER_ID, workspace: 'checkout-fixes', jobId: 'job-7' },
-        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'checkout-fixes', ids: ['ap-1'], decision: 'approved' },
-        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'checkout-fixes', ids: ['ap-1'], decision: 'denied' },
-        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'checkout-fixes', ids: ['ap-1'], decision: 'always' },
+        { action: 'job.cancel', userId: OTHER_ID, workspace: 'api-worker', jobId: 'job-7' },
+        { action: 'job.retry', userId: OTHER_ID, workspace: 'api-worker', jobId: 'job-7' },
+        { action: 'job.dismiss', userId: OTHER_ID, workspace: 'api-worker', jobId: 'job-7' },
+        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'api-worker', ids: ['ap-1'], decision: 'approved' },
+        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'api-worker', ids: ['ap-1'], decision: 'denied' },
+        { action: 'approvals.decide', userId: OTHER_ID, workspace: 'api-worker', ids: ['ap-1'], decision: 'always' },
       ]);
       await browserPage.close();
     });
@@ -660,8 +660,8 @@ describe('the control plane in a browser', () => {
       }
 
       expect(probe.posted).toEqual([
-        { action: 'jobs.clear', userId: OTHER_ID, workspace: 'checkout-fixes' },
-        { action: 'shell_grants.revoke', userId: OTHER_ID, workspace: 'checkout-fixes' },
+        { action: 'jobs.clear', userId: OTHER_ID, workspace: 'api-worker' },
+        { action: 'shell_grants.revoke', userId: OTHER_ID, workspace: 'api-worker' },
       ]);
       await browserPage.close();
     });
@@ -742,12 +742,12 @@ describe('the control plane in a browser', () => {
           items: [
             {
               id: '1', at: 1_700_000_000_000, actorEmail: OPERATOR, actorUserId: USER_ID,
-              operation: 'workspace_remove', targetKind: 'workspace', target: 'checkout-fixes',
+              operation: 'workspace_remove', targetKind: 'workspace', target: 'api-worker',
               outcome: 'denied', detail: 'refused: the sign-in was not fresh',
             },
             {
               id: '2', at: 1_699_999_000_000, actorEmail: OPERATOR, actorUserId: USER_ID,
-              operation: 'job_cancel', targetKind: 'job', target: 'checkout-fixes/j-7',
+              operation: 'job_cancel', targetKind: 'job', target: 'api-worker/j-7',
               outcome: 'ok', detail: 'cancelled j-7',
             },
           ],

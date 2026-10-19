@@ -40,7 +40,7 @@ describe('slate sharing surfaces', () => {
               item.click();
             });
             await shared.waitForSelector('[role="dialog"]');
-            await shared.waitForFunction(() => (document.querySelector('[role="dialog"]')?.textContent ?? '').includes('checkout-fixes'));
+            await shared.waitForFunction(() => (document.querySelector('[role="dialog"]')?.textContent ?? '').includes('api-worker'));
             const dialog = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             expect(dialog).toContain('New workspace');
             
@@ -124,8 +124,8 @@ describe('slate sharing surfaces', () => {
             expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('People get 5 read-only members. You allowed 0 of 5 changes.');
             // The risk statement is per member: the act, the workspace, who can trigger it.
             expect(text).toContain('Calls create_issue on GitHub with your credentials.');
-            expect(text).toContain('Writes, edits or deletes files in workspace checkout-fixes as you.');
-            expect(text).toContain('Sends agent.send out of workspace checkout-fixes as you');
+            expect(text).toContain('Writes, edits or deletes files in workspace api-worker as you.');
+            expect(text).toContain('Sends agent.send out of workspace api-worker as you');
             expect(text).toContain('Runs a model call on your inference. Every call spends it.');
             expect(text).toContain('Anyone you named on this share can trigger it.');
             // The app hop is drawn as a subtree of the slate it names.

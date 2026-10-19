@@ -67,11 +67,11 @@ export const GIF_WIDTH = 1200;
 
 /** The workspace's standing brief — what the workspace IS, shown by the empty
  *  conversation before the first turn. The mission is sent, not this. */
-const WORKSPACE_PURPOSE = 'Fix the checkout coupon 500 and report on the support queue';
+const WORKSPACE_PURPOSE = 'Fix the api Worker\'s 500 and report on the support queue';
 
 /** The title the workspace wears in the film — the header and its one sidebar
  *  row. The slug stays the recorder's, since a reader never sees it. */
-const WORKSPACE_TITLE = 'Checkout coupon fix';
+const WORKSPACE_TITLE = 'API Worker health fix';
 
 /** The dev identity the film records as. A fresh account rather than the dev
  *  liveness one: its sidebar holds only this run's workspace, and its account

@@ -188,8 +188,9 @@ function argv(command: string): string[] {
   return rest;
 }
 
-/** Keyed on the word the agent typed, so a match is evidence rather than inference. */
-const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: string]> = [
+/** Keyed on the word the agent typed, so a match is evidence rather than inference. `program`: the word means this only
+ *  as the program itself; as a later word it names something else (`wrangler tail` reads a Worker's logs). */
+const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: string, program?: true]> = [
   [(w) => w === "test" || w === "pytest" || w === "jest" || w === "vitest" || w === "mocha", "Ran tests"],
   [(w) => w === "typecheck" || w === "tsc", "Typechecked"],
   [(w) => w === "lint" || w === "eslint" || w === "ruff" || w === "clippy", "Linted"],
@@ -199,8 +200,8 @@ const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: 
   [(w) => w === "deploy" || w === "publish", "Deployed"],
   [(w) => w === "curl" || w === "wget" || w === "http" || w === "httpie", "Called an endpoint"],
   [(w) => w === "grep" || w === "rg" || w === "ag" || w === "find" || w === "fd", "Searched the tree"],
-  [(w) => w === "cat" || w === "head" || w === "tail" || w === "ls" || w === "wc" || w === "stat", "Inspected files"],
-  [(w) => w === "mkdir" || w === "cp" || w === "mv" || w === "rm" || w === "touch" || w === "chmod", "Changed files"],
+  [(w) => w === "cat" || w === "head" || w === "tail" || w === "ls" || w === "wc" || w === "stat", "Inspected files", true],
+  [(w) => w === "mkdir" || w === "cp" || w === "mv" || w === "rm" || w === "touch" || w === "chmod", "Changed files", true],
   [(w) => w === "docker" || w === "podman" || w === "kubectl", "Drove a container"],
   [(w) => w === "psql" || w === "sqlite3" || w === "mysql" || w === "redis-cli", "Queried a database"],
 ];
@@ -214,8 +215,16 @@ function describeCommand(command: string): string {
   if (commandWords[0] === "git" && commandWords[1]) return `Git ${commandWords[1]}`;
 
   // Runners sit in front of the verb (`bunx wrangler deploy`); look only a few words in so paths don't decide.
-  for (const word of commandWords.slice(0, 3)) {
-    for (const [test, verb] of RUN_VERBS) if (test(word)) return verb;
+  for (const [at, word] of commandWords.slice(0, 3).entries()) {
+    // A tool's own `tail` or `logs` follows a service's output: `wrangler tail`, `docker logs`.
+    if (at > 0 && (word === "tail" || word === "logs")) return "Read the logs";
+
+    for (const [test, verb, program] of RUN_VERBS) {
+      if (!test(word) || (program === true && at > 0)) continue;
+
+      // A dry run uploads nothing.
+      return verb === "Deployed" && commandWords.includes("--dry-run") ? "Checked the deploy" : verb;
+    }
   }
 
   return "";

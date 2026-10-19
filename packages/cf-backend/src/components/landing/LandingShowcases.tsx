@@ -29,9 +29,9 @@ function TuiPreview(): ReactElement {
       location: 'local',
       status: 'idle',
       subordinate: 'reviewer · auditor',
-      prompt: 'Audit the checkout flow, fix the coupon failure, and keep the tests green.',
-      answer: 'The migration only filled fixed coupons. I patched the backfill, added the percentage case, and started the focused suite.',
-      tools: [['run', '{"runtime":"workspace","command":"bun test coupon"}', '7 pass'], ['file', '{"action":"read","path":"0042_coupon_kind.sql"}', '1.8 KB'], ['file', '{"action":"edit","path":"0042_coupon_kind.sql"}', 'saved'], ['agents', '{"action":"swarm","preset":"prove","task":"three independent checks"}', 'settled']],
+      prompt: 'Audit the api Worker, fix the 500 on /api/health, and keep the tests green.',
+      answer: 'The config renamed the sessions binding and openDb still read the old one. I fixed openDb, added the missing-binding case, and started the focused suite.',
+      tools: [['run', '{"runtime":"workspace","command":"bun test workers/api"}', '7 pass'], ['file', '{"action":"read","path":"workers/api/src/db.ts"}', '1.8 KB'], ['file', '{"action":"edit","path":"workers/api/src/db.ts"}', 'saved'], ['agents', '{"action":"swarm","preset":"prove","task":"three independent checks"}', 'settled']],
     },
     migrations: {
       label: 'migrations',
@@ -39,8 +39,8 @@ function TuiPreview(): ReactElement {
       status: 'idle',
       subordinate: null,
       prompt: 'Review the migration plan and identify any destructive step.',
-      answer: 'The plan now ships the backfill first, verifies both coupon kinds, then adds the constraint in a later release.',
-      tools: [['file', '{"action":"read","path":"migrations/0042.sql"}', '2.1 KB'], ['agents', '{"action":"swarm","preset":"audit","task":"audit migration plan"}', '2 reports'], ['file', '{"action":"edit","path":"MIGRATION.md"}', 'saved']],
+      answer: 'The plan now ships the sessions index first, verifies both binding names, then drops the old name in a later release.',
+      tools: [['file', '{"action":"read","path":"migrations/0007_sessions.sql"}', '2.1 KB'], ['agents', '{"action":"swarm","preset":"audit","task":"audit migration plan"}', '2 reports'], ['file', '{"action":"edit","path":"MIGRATION.md"}', 'saved']],
     },
     jarvis: {
       label: 'Jarvis',
@@ -58,14 +58,14 @@ function TuiPreview(): ReactElement {
   const LOCAL_AGENTS: readonly AgentId[] = ['audit', 'migrations'];
   const CLOUD_AGENTS: readonly AgentId[] = ['jarvis'];
   const [agentId, setAgentId] = useState<AgentId>('audit');
-  const [checkoutOpen, setCheckoutOpen] = useState(true);
+  const [workerOpen, setWorkerOpen] = useState(true);
   const [cloudOpen, setCloudOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerFilter, setDrawerFilter] = useState('');
   const drawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const agent = agents[agentId];
   const cloudExpanded = cloudOpen || agentId === 'jarvis';
-  const checkoutExpanded = checkoutOpen || agentId !== 'jarvis';
+  const workerExpanded = workerOpen || agentId !== 'jarvis';
 
   const closeDrawer = () => {
     setDrawerOpen(false);
@@ -107,8 +107,8 @@ function TuiPreview(): ReactElement {
 
   const workspaceGroups = (filtered: boolean, onChoose: (id: AgentId) => void) => (
     <>
-      {groupHeader('checkout', LOCAL_AGENTS.length, checkoutExpanded, () => setCheckoutOpen(!checkoutExpanded))}
-      {(filtered || checkoutExpanded) && agentRows(LOCAL_AGENTS, onChoose, filtered)}
+      {groupHeader('api-worker', LOCAL_AGENTS.length, workerExpanded, () => setWorkerOpen(!workerExpanded))}
+      {(filtered || workerExpanded) && agentRows(LOCAL_AGENTS, onChoose, filtered)}
       {groupHeader('Cloud', CLOUD_AGENTS.length, cloudExpanded, () => setCloudOpen(!cloudExpanded))}
       {(filtered || cloudExpanded) && agentRows(CLOUD_AGENTS, onChoose, filtered)}
     </>
@@ -126,7 +126,7 @@ function TuiPreview(): ReactElement {
       <div className="flex min-h-8 items-center justify-between gap-4 whitespace-pre px-2 p-text-2">
         <div className="min-w-0 truncate">kinu <span className="p-accent">{TUI_MARKS.prompt}</span> <strong className="font-semibold p-text">{agent.label}</strong> <span className="p-text-4">{agent.location}</span></div>
         <div className="flex items-center gap-3">
-          <div className="hidden truncate p-text-4 sm:block">Claude Opus 4 <span className="p-text-4">[Ctrl+L]</span>  ctx ~68/1.1M  effort medium <span className="p-success">●</span></div>
+          <div className="hidden truncate p-text-4 sm:block">Muse Spark 1.3 <span className="p-text-4">[Ctrl+L]</span>  ctx ~68/1.1M  effort medium <span className="p-success">●</span></div>
           <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 leading-5 p-text-3 hover:p-text lg:hidden">{hint.keys} {hint.label}</button>
         </div>
       </div>
@@ -134,7 +134,7 @@ function TuiPreview(): ReactElement {
       <div className="relative grid min-h-[600px] lg:grid-cols-[220px_minmax(0,1fr)]">
         <aside aria-label="Pinned workspaces" className="hidden flex-col border-r border-[var(--c-border-strong)] p-sidebar py-2 lg:flex">
           <div className="px-2"><strong className="font-semibold p-text">Workspaces</strong></div>
-          <div className="px-2 p-text-4">3 of 3 · checkout</div>
+          <div className="px-2 p-text-4">3 of 3 · api-worker</div>
           <div className="mt-2">{workspaceGroups(false, setAgentId)}</div>
           <div className="mt-auto px-2 leading-5 p-text-4">Create a workspace from a mission.</div>
         </aside>

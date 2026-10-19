@@ -12,7 +12,7 @@ import type { LandingFrameKind } from './LandingWorkspaceFrame';
 const LandingWorkspaceFrame = lazy(() => import('./LandingWorkspaceFrame'));
 
 const WINDOW_TITLE = {
-  checkout: 'Kinu · Workspace',
+  work: 'Kinu · Workspace',
   plan: 'Kinu · Plan mode',
   slate: 'Kinu · Slate',
 } satisfies Record<LandingFrameKind, string>;

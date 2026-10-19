@@ -71,6 +71,18 @@ describe('tool call summaries — builtins', () => {
   });
 });
 
+describe('tool call summaries — what a command did', () => {
+  // The owner's review of a deploy fix (2026-10-19): `wrangler tail` read "Inspected files", a dry run "Deployed".
+  test("a tool's own subcommand is read as that tool means it, and a dry run deploys nothing", () => {
+    const said = (command: string) => describeToolCall('shell', { runtime: 'workspace', command });
+
+    expect(said('bunx wrangler tail api --format pretty')).not.toBe(said('tail -n 50 server.log'));
+    expect(said('docker logs web')).not.toBe(said('cat web.log'));
+    expect(said('bunx wrangler deploy --dry-run')).not.toBe(said('bunx wrangler deploy'));
+    expect(said('git rm old.ts')).not.toBe(said('rm old.ts'));
+  });
+});
+
 describe('tool call summaries — truthfulness', () => {
   test('missing, partial and malformed input never fabricate a summary', () => {
     expect(summarizeToolCall('file', undefined)).toBe('');

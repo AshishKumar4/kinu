@@ -91,10 +91,10 @@ export function cursorAt(t: number): MovieCursor {
 }
 
 const MOVIE_ASK
-  = 'Archived coupons still apply at checkout. Plan the fix, then build the support-queue dashboard.';
+  = 'The api Worker answers 500 since the last deploy. Plan the fix, then build the support-queue dashboard.';
 
 const PLAN_REASONING
-  = 'Plan mode: I can read the handler and the tests, but not edit them. I need the order of the eligibility check and the cart write.';
+  = 'Plan mode: I can read the Worker and its config, but not edit them. I need the name each environment binds the sessions database by.';
 
 const PLAN_READY_TEXT
   = 'The plan is ready for review. Approve it, or mark the lines that need to change.';
@@ -182,7 +182,7 @@ function messagesAt(t: number): UIMessage[] {
   const read = toolPart(t, {
     tool: 'file', id: 'movie-read',
     startAt: MOVIE_CUES.readStart, doneAt: MOVIE_CUES.readDone,
-    input: { op: 'read', path: 'packages/checkout/src/apply-coupon.ts' },
+    input: { op: 'read', path: 'workers/api/src/db.ts' },
     output: '…',
   });
 
@@ -191,7 +191,7 @@ function messagesAt(t: number): UIMessage[] {
   const search = toolPart(t, {
     tool: 'file', id: 'movie-search',
     startAt: MOVIE_CUES.searchStart, doneAt: MOVIE_CUES.searchDone,
-    input: { op: 'search', path: 'packages/checkout', query: 'coupon_ineligible' },
+    input: { op: 'search', path: 'workers/api', query: 'env.DB' },
     output: '3 matches',
   });
 

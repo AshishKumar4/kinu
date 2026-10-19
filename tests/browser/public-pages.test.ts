@@ -194,7 +194,7 @@ interface ShellFact {
 interface MovieFact {
   readonly typing: boolean;
   /** Tool rows in the plan frame, and whether they name the file the story reads. */
-  readonly tools: { rows: number; coupon: boolean };
+  readonly tools: { rows: number; read: boolean };
   readonly decisions: readonly { label: string; disabled: boolean }[];
   readonly decided: boolean;
   readonly slate: boolean;
@@ -393,16 +393,16 @@ beforeAll(async () => {
       facts.cli = surfaces.cli;
       // The frames are the product's own components, loaded as their own
       // chunk; `networkidle0` has fetched it, this proves it mounted.
-      await page.waitForSelector('[data-landing-frame="checkout"] textarea');
+      await page.waitForSelector('[data-landing-frame="work"] textarea');
       // The plan frame is the walkthrough movie, driven through its own
       // handle: at load it holds the story's start (an empty composer), and
       // each beat below seeks it before asserting that beat's DOM.
       await page.waitForFunction(() => window.__kinuLandingMovie !== undefined);
       await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]');
-      await page.waitForSelector('[data-landing-frame="checkout"] button[aria-label="Retry"]');
-      await page.click('[data-landing-frame="checkout"] button[aria-label="Retry"]');
+      await page.waitForSelector('[data-landing-frame="work"] button[aria-label="Retry"]');
+      await page.click('[data-landing-frame="work"] button[aria-label="Retry"]');
       await page.waitForFunction(
-        () => document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
+        () => document.querySelector('[data-landing-frame="work"]')?.textContent?.includes('Retried as') === true,
       );
 
       // Only the cue table crosses the boundary — the handle's methods are
@@ -492,7 +492,7 @@ beforeAll(async () => {
       // card on 2026-09-23 (7d471135f) and this suite hung on it from then on.
       const tools = await page.evaluate(() => ({
         rows: document.querySelectorAll('[data-landing-frame="plan"] [data-tool-state]').length,
-        coupon: document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true,
+        read: document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('src/db.ts') === true,
       }));
 
       // The plan pops up in the right-hand panel with Approve live: the movie
@@ -591,7 +591,7 @@ beforeAll(async () => {
           userLabel: user?.textContent?.includes('YOU') === true,
           assistantLabel: assistant?.querySelector('span')?.textContent ?? null,
           adaptiveHint: document.querySelector('[data-tui-agent]')?.textContent?.includes('Alt+W workspaces') === true,
-          groupHeader: buttons.some((button) => button.textContent?.replace(/\s+/gu, ' ').includes('checkout · 2') === true),
+          groupHeader: buttons.some((button) => button.textContent?.replace(/\s+/gu, ' ').includes('api-worker · 2') === true),
           subordinate: pinned?.textContent?.includes('└ reviewer · auditor') === true,
           cloudCollapsedHidesJarvis: buttons.every((button) => button.textContent?.includes('Jarvis') !== true),
         };
@@ -643,8 +643,8 @@ beforeAll(async () => {
         () => document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       );
       facts.interactions = await page.evaluate(() => ({
-        workspace: document.querySelector('[data-landing-frame="checkout"] [data-workspace-panel="run"] textarea') !== null,
-        decision: document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
+        workspace: document.querySelector('[data-landing-frame="work"] [data-workspace-panel="run"] textarea') !== null,
+        decision: document.querySelector('[data-landing-frame="work"]')?.textContent?.includes('Retried as') === true,
         plan: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved',
         slate: document.querySelectorAll('[data-landing-frame="slate"] [data-slate-dashboard] .landing-draw').length === 2,
         tui: document.querySelector('[data-tui-agent="jarvis"]') !== null,
@@ -678,7 +678,7 @@ beforeAll(async () => {
           ['cloud title', '#platform article h3'],
           ['cloud body', '#platform article p'],
           ['local heading', '[data-showcase="tui"] h2'],
-          ['workspace body', '[data-landing-frame="checkout"] [data-workspace-panel] p'],
+          ['workspace body', '[data-landing-frame="work"] [data-workspace-panel] p'],
           ['terminal body', '[data-showcase="tui"] p'],
           ['section title', '#platform h2'],
           ['section body', '#platform p'],
@@ -1149,7 +1149,7 @@ describe('the landing frames reuse the app rail', () => {
     }
 
     expect(rail.visible).toBeTrue();
-    expect(rail.roster).toContain('Storefront');
+    expect(rail.roster).toContain('API Worker');
     expect(rail.account).toBeTrue();
   });
 
@@ -1180,7 +1180,7 @@ describe('the plan frame walks through the session', () => {
   });
 
   test('tool calls stream into the transcript the way a real turn renders', () => {
-    expect(required(facts.movie, 'walkthrough').tools).toEqual({ rows: expect.any(Number), coupon: true });
+    expect(required(facts.movie, 'walkthrough').tools).toEqual({ rows: expect.any(Number), read: true });
     expect(required(facts.movie, 'walkthrough').tools.rows).toBeGreaterThan(0);
   });
 
