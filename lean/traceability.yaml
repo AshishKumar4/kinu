@@ -981,6 +981,7 @@ requirements:
       - packages/core/src/slates/share-policy.ts#containedTool
     remainingEvidence:
       - The pure verdict checks server, root, tool, revision and effects; selecting the viewer's consent by workspace and slate is a host premise, represented explicitly by consentFor in the state model
+      - A call's root is an input to the model, never derived in it; that the root names what the tool's handler reaches is partCallRoot's per-operation contract (share-policy.ts REPOSITORY_TOOLS, read off the GitHub MCP server's handlers), runtime evidence in unit-share-policy and unit-share-owner-effects
       - The host's routing of every tool call to that viewer's own account and the confined process's isolation need runtime evidence and attack replays in workerd
       - The fixture refines containedTool and partCallVerdict, including an uncontained read tool; it does not refine the abstract personalDispatch host or its signed-in viewer and share checks
     refinement:
