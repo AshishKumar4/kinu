@@ -580,13 +580,61 @@ export function reviewFileAccess(access: FileAccess): ApprovalResult {
   return { decision: dominant(hits), hits };
 }
 
+/** Interpreters that take a program as text, as well as from a file. */
+const PROGRAM_INTERPRETERS: ReadonlySet<string> = new Set(['python', 'python3', 'perl', 'ruby', 'node', 'bun', 'deno']);
+
+/** Words that run the command after them, each with how many of its own arguments precede that command. */
+const RUNNERS: ReadonlyMap<string, number> = new Map([
+  ['sudo', 0], ['command', 0], ['exec', 0], ['time', 0], ['nice', 0], ['nohup', 0], ['env', 0], ['timeout', 1],
+]);
+
+/** An interpreter's option that hands it the program as text: `-c`, `-e` or `-p`, combined as `-Bc` or `-ne`, or
+ *  spelled `--eval` / `--print` with or without `=`. */
+const INLINE_OPTION = /^(?:-[A-Za-z]*[cep]|--eval|--print)(?:=|$)/u;
+
+/** Options that only report, so an interpreter given nothing else runs no program. */
+const REPORT_OPTIONS: ReadonlySet<string> = new Set(['-V', '--version', '-v', '-h', '--help']);
+
+/**
+ * Whether one simple command's words (quoted text blanked) run an interpreter on a program given as text: an inline
+ * option, a heredoc, `-` or nothing at all (the program read from stdin), or `deno eval` / `bun eval`. A script file
+ * named before any of these is a file the gate's other rules read by path.
+ */
+function runsInlineProgram(words: readonly string[]): boolean {
+  let at = 0;
+
+  // Assignments and runners lead to the command they run.
+  while (at < words.length) {
+    const word = words[at] ?? '';
+    const skips = RUNNERS.get(word.slice(word.lastIndexOf('/') + 1));
+
+    if (ENV_ASSIGNMENT.test(word) || (word.startsWith('-') && at > 0)) at += 1;
+    else if (skips !== undefined) at += 1 + skips;
+    else break;
+  }
+
+  const head = words[at] ?? '';
+
+  if (!PROGRAM_INTERPRETERS.has(head.slice(head.lastIndexOf('/') + 1))) return false;
+  const rest = words.slice(at + 1);
+
+  for (const word of rest) {
+    if (INLINE_OPTION.test(word) || word === '-' || word.startsWith('<<') || word === 'eval') return true;
+
+    if (!word.startsWith('-')) return false;
+  }
+
+  return !rest.some((word) => REPORT_OPTIONS.has(word));
+}
+
+/** Whether any simple command of `unquoted` (quoted text blanked) runs an interpreter on a program given as text. */
+function runsAnyInlineProgram(unquoted: string): boolean {
+  return unquoted.split(/[;&|()\n`{}]|\$\(/u).some((segment) => runsInlineProgram(segment.trim().split(/\s+/u).filter((word) => word !== '')));
+}
+
 const PROGRAM_ON_USER_FILES: ApprovalRuleHit = {
   decision: 'gate', rule: 'program-on-user-files', explanation: 'Runs a program over the user\'s files.',
 };
-
-/** An interpreter handed its program as text (`python3 -c`, `node -e`, a heredoc), read with quoted text blanked: what
- *  the program does to the files it names cannot be read from the line, so over the user's files it asks once. */
-const INLINE_PROGRAM = /(?:^|[\s;&|(`])(?:[\w./-]*\/)?(?:python3?|perl|ruby|node|bun|deno)(?:\s+-[\w-]+)*?(?:\s+(?:-c|-e|--eval|-p|--print|eval|-)(?=\s|$)|\s*<<)/u;
 
 /** No default owner: no caller silently picks a trust tier. */
 export function reviewCommand(command: string, filesOwner: FilesOwner): ApprovalResult {
@@ -614,7 +662,7 @@ export function reviewCommand(command: string, filesOwner: FilesOwner): Approval
     hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
   }
 
-  if (!agentsOwn && INLINE_PROGRAM.test(unquoted)) hits.push(PROGRAM_ON_USER_FILES);
+  if (!agentsOwn && runsAnyInlineProgram(unquoted)) hits.push(PROGRAM_ON_USER_FILES);
 
   return { decision: dominant(hits), hits };
 }

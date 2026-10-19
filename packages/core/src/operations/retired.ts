@@ -33,7 +33,7 @@ const RETIRED_FIELDS = {
 
 /** A namespace taken off the surface whole → what to use instead. */
 const RETIRED_NAMESPACES = {
-  state: "a private db table: db.createTable({ spec: { name, scope: 'private', columns } }) once, then db.select, and db.batch to replace a row",
+  state: "a private db table: db.createTable({ name, scope: 'private', columns }) once, then db.select, and db.batch to replace a row",
 } as const satisfies Readonly<Record<string, string>>;
 
 /** What a program naming a retired namespace is told, or null for any other name. */

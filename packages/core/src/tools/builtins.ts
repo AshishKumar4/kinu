@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ConversationRecall } from '../memory/conversation-search';
 import {
-  ASK_OWNER_DESCRIPTION, ASK_OWNER_TOOL, BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowToolSurface,
+  ASK_OWNER_DESCRIPTION, ASK_OWNER_TOOL, BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins, narrowAdmittedSurface, narrowToolSurface,
   type ToolSurfaceNarrowing,
 } from './registry';
 import { TaskListStore } from './task-store';
@@ -57,6 +57,9 @@ export interface CodemodeSurface {
   readonly cwd: string;
   /** Where the native `report` reaches, on a turn its hirer drives: a program's `report.send` reaches the same. */
   readonly report?: ReportDeps;
+  /** The native `file` tool's read ledger and budget: a program's files account into the same, so a read through either
+   *  lets an edit through the other. */
+  readonly ledgers: { readonly files: TurnFileLedger; readonly context: TurnContextBudget };
 }
 
 /** Core has no codegen; each backend supplies its factory. `reach` is the namespaces the allowed tools reach, for a
@@ -79,16 +82,18 @@ function askOwnerTool() {
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}), report?: ReportDeps,
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet = () => ({}),
+  held: { readonly report?: ReportDeps; readonly ledgers?: CodemodeSurface['ledgers'] } = {},
 ): CodemodeSurface {
   const surface: CodemodeSurface = {
     native,
     craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     external: () => withCheckedInputs(external()),
     cwd: rt.planes.cwd,
+    ledgers: held.ledgers ?? { files: new TurnFileLedger(), context: new TurnContextBudget() },
   };
 
-  return report === undefined ? surface : { ...surface, report };
+  return held.report === undefined ? surface : { ...surface, report: held.report };
 }
 
 import type { SlateCallResult } from '../slates/rpc';
@@ -240,12 +245,15 @@ export function ownerLaneDeclarations(lane: { readonly submitPlan: boolean; read
 function installCodemode(
   surface: ToolSet,
   build: CodemodeBuilder,
-  deps: BuiltinToolDeps & { readonly allowed?: readonly string[] },
+  deps: BuiltinToolDeps & { readonly allowed?: readonly string[]; readonly admitted?: readonly string[] },
 ): void {
   const { rt } = deps;
-  // `eval` reaches only the namespaces the allowed tools reach.
+  const ledgers = { files: deps.fileLedger ?? new TurnFileLedger(), context: deps.contextBudget ?? new TurnContextBudget() };
+  // `eval` reaches only the namespaces the surface's own tools reach: its admitted builtins, then its allowed list.
+  const reach = deps.admitted === undefined ? narrowToolSurface(deps.allowed) : narrowAdmittedSurface(deps.admitted, deps.allowed);
+
   surface.eval = withCheckedInput('eval', build(
-    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external, deps.report), narrowToolSurface(deps.allowed),
+    codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface), deps.external, { ...deps.report !== undefined && { report: deps.report }, ledgers }), reach,
   ));
 }
 
@@ -265,7 +273,14 @@ export interface ToolSurfaceDeps extends BuiltinToolDeps {
   wrapFinished?: (finished: ToolSet) => ToolSet;
 }
 
-export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
+export function buildToolSurface(surfaceDeps: ToolSurfaceDeps): ToolSet {
+  // One read ledger and budget for the native tools and `eval`'s namespaces, whoever supplies them.
+  const deps: ToolSurfaceDeps = {
+    ...surfaceDeps,
+    fileLedger: surfaceDeps.fileLedger ?? new TurnFileLedger(),
+    contextBudget: surfaceDeps.contextBudget ?? new TurnContextBudget(),
+  };
+
   const built = buildBuiltinTools(deps.workMode === 'plan' ? { ...deps, workMode: 'build' } : deps);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
   const merged = deps.extra === undefined ? narrowed : { ...narrowed, ...withCheckedInputs(deps.extra) };

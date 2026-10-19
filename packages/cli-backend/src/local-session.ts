@@ -128,7 +128,7 @@ import { ActorSession, type ActorTurnLease,
   recordModelOperations, type ModelOperationSink,
   McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
   defaultLoopOrigin,
-  type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type TurnLedgers, type WriteObserver,
+  type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
@@ -2327,7 +2327,7 @@ export class LocalAgentSession {
       reportNodeDelta: () => this.publishHeadStream,
       model: () => this.cachedModel ?? this.defaultModel("an agents swarm"),
       reportModelCall: this.modelCallSink,
-      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider(), () => this.runLedgers(actor)),
+      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.getWebSearchProvider()),
       webSearch: this.getWebSearchProvider(),
       originContext: async () => this.actorSession.history,
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
@@ -2599,18 +2599,7 @@ export class LocalAgentSession {
       journal: () => this.headJournal,
       publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
-      ledgers: (actor) => this.runLedgers(actor),
     };
-  }
-
-  /** A run actor's turn ledgers: its session's, which runs its turn in this process while it is hosted. Public beside
-   *  `hostHead`, for a caller seating heads through this session. */
-  runLedgers(actor: SeatedActor): TurnLedgers {
-    const hosted = this.actorHost.hosted(actor.reference);
-
-    if (hosted === null) return settleSync(Effect.fail(new KinuError('missing', `${actor.record.name} is not hosted, so it runs no program`)));
-
-    return hosted.session.orchestrator.acc.ledgers;
   }
 
   /**

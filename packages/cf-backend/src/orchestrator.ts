@@ -1464,10 +1464,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // disclosed boundary and its real credential are the same fact.
       nodeHome: (actor) => this.actorHomes.require(actor.record, actor.reference),
       codemode: (actor, runtime, webSearch) => {
-        // A run's programs account into the run's own ledgers, across its calls.
-        const ledgers = turnLedgers();
-
+        // A run's programs account into the ledgers its native tools do (`CodemodeSurface.ledgers`).
         return (surface, reach) => {
+          const ledgers = { ...turnLedgers(), ...surface.ledgers };
           // A swarm node's programs report where its native `report` does.
           const reported = surface.report;
 

@@ -71,9 +71,15 @@ export interface TurnLedgers {
  *  read in one call lets a write in the next, as within a turn. */
 const standing = new WeakMap<AgentRuntime, TurnFileLedger>();
 
+/** File versions a standing ledger holds before it starts over: a turn's ledger resets at its end, and this one has
+ *  none, so a slate saving one file for hours would otherwise keep every version it saved. Starting over only asks
+ *  the next write to read first. */
+const STANDING_LEDGER_MAX = 512;
+
 export function standingFileLedger(runtime: AgentRuntime): TurnFileLedger {
   const held = standing.get(runtime) ?? new TurnFileLedger();
 
+  if (held.held > STANDING_LEDGER_MAX) held.reset();
   standing.set(runtime, held);
 
   return held;

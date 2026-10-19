@@ -923,61 +923,37 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
  * declared scope.
  */
 export function createDbCodemodeProvider(store: AppDataStore, reach: { readonly private: boolean }): CodemodeProvider {
-  const reached = (table: string): void => {
-    if (reach.private) return;
-    const { scope } = store.schema(table);
+  const kept = (table: string, scope: AppTableScope): KinuError => new KinuError('denied', `table \`${table}\` is the agent's own (${scope}): a slate's call does not reach it`);
 
-    if (!APP_TABLE_SCOPE[scope].slates) throw new KinuError('denied', `table \`${table}\` is the agent's own (${scope}): a slate's call does not reach it`);
+  // A named table this caller reaches, or its refusal.
+  const reached = (table: string): Effect.Effect<void, KinuError> => (reach.private
+    ? Effect.void
+    : Effect.flatMap(classified(() => store.schema(table)), ({ scope }) => (APP_TABLE_SCOPE[scope].slates ? Effect.void : Effect.fail(kept(table, scope)))));
+
+  // A declaration is refused for a scope it may not declare, and for a name a private table already holds, whose
+  // declaration it must not be shown.
+  const declared = (spec: AppTableSpec): Effect.Effect<void, KinuError> => {
+    if (reach.private) return Effect.void;
+
+    if (!APP_TABLE_SCOPE[spec.scope].slates) return Effect.fail(new KinuError('denied', `a slate's call declares no ${spec.scope}-scope table`));
+
+    return Effect.flatMap(classified(() => store.listTables().find(({ name }) => name === spec.name)), (held) => (
+      held === undefined || APP_TABLE_SCOPE[held.scope].slates ? Effect.void : Effect.fail(kept(spec.name, held.scope))));
   };
 
-  const declared = (scope: AppTableScope): void => {
-    if (!reach.private && !APP_TABLE_SCOPE[scope].slates) throw new KinuError('denied', `a slate's call declares no ${scope}-scope table`);
-  };
+  const on = <A>(table: string, run: () => A): Effect.Effect<A, KinuError> => Effect.flatMap(reached(table), () => classified(run));
 
   return codemodeNamespace('db', 'Tables of your own, read and written by structured calls, not SQL.', [
-    serve(DB.createTable, ({ spec }) => classified(() => {
-      declared(spec.scope);
-
-      return store.createTable(spec);
-    })),
+    serve(DB.createTable, ({ spec }) => Effect.flatMap(declared(spec), () => classified(() => store.createTable(spec)))),
     serve(DB.listTables, () => classified(() => store.listTables().filter(({ scope }) => reach.private || APP_TABLE_SCOPE[scope].slates))),
-    serve(DB.schema, ({ table }) => classified(() => {
-      reached(table);
-
-      return store.schema(table);
-    })),
-    serve(DB.select, ({ table, ...query }) => classified(() => {
-      reached(table);
-
-      return store.select(table, query);
-    })),
-    serve(DB.count, ({ table, where }) => classified(() => {
-      reached(table);
-
-      return store.count(table, where);
-    })),
-    serve(DB.insert, ({ table, rows }) => classified(() => {
-      reached(table);
-
-      return { rowsAffected: store.apply({ op: 'insert', table, rows }).rowsAffected };
-    })),
-    serve(DB.update, ({ table, set, where }) => classified(() => {
-      reached(table);
-
-      return { rowsAffected: store.apply({ op: 'update', table, set, where }).rowsAffected };
-    })),
-    serve(DB.deleteRows, ({ table, where }) => classified(() => {
-      reached(table);
-
-      return { rowsAffected: store.apply({ op: 'delete', table, where }).rowsAffected };
-    })),
-    serve(DB.batch, ({ ops }) => classified(() => {
-      for (const op of ops) reached(op.table);
-
-      return store.batch(ops).map(({ rowsAffected }) => ({ rowsAffected }));
-    })),
-    serve(DB.dropTable, ({ table }) => classified(() => {
-      reached(table);
+    serve(DB.schema, ({ table }) => on(table, () => store.schema(table))),
+    serve(DB.select, ({ table, ...query }) => on(table, () => store.select(table, query))),
+    serve(DB.count, ({ table, where }) => on(table, () => store.count(table, where))),
+    serve(DB.insert, ({ table, rows }) => on(table, () => ({ rowsAffected: store.apply({ op: 'insert', table, rows }).rowsAffected }))),
+    serve(DB.update, ({ table, set, where }) => on(table, () => ({ rowsAffected: store.apply({ op: 'update', table, set, where }).rowsAffected }))),
+    serve(DB.deleteRows, ({ table, where }) => on(table, () => ({ rowsAffected: store.apply({ op: 'delete', table, where }).rowsAffected }))),
+    serve(DB.batch, ({ ops }) => Effect.flatMap(Effect.forEach(ops, (op) => reached(op.table), { discard: true }), () => classified(() => store.batch(ops).map(({ rowsAffected }) => ({ rowsAffected }))))),
+    serve(DB.dropTable, ({ table }) => on(table, () => {
       store.dropTable(table);
 
       return null;

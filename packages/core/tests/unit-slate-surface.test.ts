@@ -65,6 +65,18 @@ test('slate fs paths route to flat machine members and the workspace shorthand',
   });
 });
 
+test('a slate or MCP server named fs keeps its three-part address', () => {
+  expect(slateCallAddress(['slates', 'fs', 'read'])).toEqual({ namespace: 'slates.fs', member: 'read' });
+  expect(call(['slates', 'fs', 'read'], ['notes'])).toMatchObject({
+    route: { kind: 'app', id: 'fs', method: 'read', args: ['notes'], chain: ['notes'] },
+    address: { namespace: 'slates.fs', member: 'read' },
+  });
+  expect(slateCallAddress(['mcp', 'fs', 'read'])).toEqual({ namespace: 'mcp.fs', member: 'read' });
+  expect(call(['mcp', 'fs', 'read'], [{ path: '/x' }])).toMatchObject({
+    route: { kind: 'mcp', server: 'fs', tool: 'read', args: { path: '/x' } },
+  });
+});
+
 test('a lineage comes from the host record, never from the caller', () => {
   const invocations = new Map<string, SlateInvocation>([
     ['live', { id: 'notes', chain: ['root'] }],

@@ -13,7 +13,7 @@ import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createCodemodeToolFactory, type CodemodeScope } from '../../src/codemode-tool';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
-import { actorNamespaces, createAppDataStore, initWorkspaceSchema, RunEventRecorder, SURFACE_POLICY, WorkspaceActorDirectory, type ActorHandle, type ExecutorProviderSurface, type SqlExec, type SqlExecutor, type SurfaceActor, type SurfacePolicy } from '@kinu.run/core';
+import { actorNamespaces, createAgentStores, adaptMemory, initWorkspaceSchema, SURFACE_POLICY, WorkspaceActorDirectory, turnLedgers, type ActorHandle, type ExecutorProviderSurface, type SqlExecutor, type SurfaceActor } from '@kinu.run/core';
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initAgentDataTables, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
@@ -32,28 +32,33 @@ import { storeFiles, workspacePath } from '@kinu.run/core/workspace';
 import { sqliteFiles } from '@nimbus-sh/core/vfs/sqlite-files.js';
 import { cloudPlanes, TurnContextBudget, type FileDeps } from '@kinu.run/core';
 import { TurnFileLedger } from '../../../core/src/vfs/file-ledger';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
 
 const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
 
 const NO_BROWSERS: BrowserSessions = { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} };
 
-/** A probe's actor: its programs run as a confined copy's do, over its state, tables, web and `executors` alone. */
+/** A probe's actor over genuine stores; its caller supplies any machine and file plane it exercises. */
 function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: ActorHandle, scope: { executors?: ExecutorProviderSurface[]; files?: FileDeps } = {}): SurfaceActor {
-  const unreached = (): never => { throw new Error('a probe actor holds no memory, files or tasks'); };
+  const unreached = (): never => { throw new Error('this probe supplies no file plane'); };
 
   const { files } = scope;
+  const vfs = createMemoryVfs().vfs;
+  const transaction = storage.transactionSync.bind(storage);
+  const stores = createAgentStores(() => sql, () => handle, transaction, async () => ({ vfs, artifactDirectory: '/probe-artifacts' }));
+  const memory = adaptMemory(new MemoryStore(vfs, sql, transaction), vfs);
 
   return {
     executors: () => scope.executors ?? [],
     web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
-    memory: unreached, files: files === undefined ? unreached : () => files, tasks: unreached,
-    db: createAppDataStore({ sql, actor: handle, transactionSync: (write) => storage.transactionSync(write), events: () => new RunEventRecorder(sql, handle), runId: () => 'probe' }),
+    memory: () => ({ memory, actor: handle, conversations: stores.conversationSearch }),
+    files: files === undefined ? unreached : () => files,
+    tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
+    db: stores.appData,
     agents: null, self: null, ownerWaits: null,
   };
 }
 
-/** A probe actor's programs: the agent's own reach, less the memory, files and tasks a probe holds none of. */
-const PROBE_POLICY: SurfacePolicy = { ...SURFACE_POLICY.program, stores: false };
 
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
@@ -87,11 +92,11 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
     const scope: CodemodeScope = {
       reach: slateToolReach(narrowToolSurface(undefined)),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), PROBE_POLICY, { executor }),
+      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), SURFACE_POLICY.program, { executor }),
     };
 
     // The store holds `crafted`, read fresh per program as a runtime's surface reads it.
-    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql) };
+    const surface: CodemodeSurface = { cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => selectInjectableCraftedTools({ list: () => [crafted] }, sql), ledgers: turnLedgers() };
 
     const host = new SlateHost({
       ctx: this.ctx, workspace: 'binding-probe', builds: new SlateBuilds(this.ctx.storage.sql),
@@ -183,9 +188,9 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       name: 'stop-probe', storageKey: 'stop-probe',
     }, () => Effect.void);
 
-    const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [] }, {
+    const execute = factory.toolFor({ cwd: WORKSPACE_ROOT, native, external: () => external, craftedTools: () => [], ledgers: turnLedgers() }, {
       reach: narrowToolSurface(undefined),
-      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), PROBE_POLICY, { executor }),
+      namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor), SURFACE_POLICY.program, { executor }),
     }).execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');
@@ -209,11 +214,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     if (!files.exists('/home/main/plan-data.txt')) files.writeFile('/home/main/plan-data.txt', 'original');
     const sql = bindAgentSql(this);
 
-    const exec: SqlExec = {
-      exec: (query, ...bindings) => this.ctx.storage.sql.exec(query, ...bindings.map((value) => typeof value === 'boolean' ? Number(value) : value)),
-    };
-
-    initWorkspaceSchema({ execRaw: (statement) => { this.ctx.storage.sql.exec(statement); }, sql, exec, transactionSync: (write) => this.ctx.storage.transactionSync(write) });
+    initWorkspaceSchema({ execRaw: (statement) => { this.ctx.storage.sql.exec(statement); }, sql, exec: this.ctx.storage.sql, transactionSync: this.ctx.storage.transactionSync.bind(this.ctx.storage) });
     void sql`INSERT OR IGNORE INTO workspace_identity (id, name) VALUES (${'mode-probe'}, ${'mode-probe'})`;
 
     const factory = createCodemodeToolFactory({
@@ -238,10 +239,10 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       namespaces: (executor) => actorNamespaces(probeActor(this.ctx.storage, sql, actor, { executors: [{
         name: 'workspace', positionalArgs: true, capabilities: new Set(), tools: {},
         fileRoot: async () => ({ root: '' }),
-      }], files: fileScope }), PROBE_POLICY, { executor }),
+      }], files: fileScope }), SURFACE_POLICY.program, { executor }),
     };
 
-    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] }, scope) }).eval;
+    const tool = toolsInWorkMode(mode, { eval: factory.toolFor({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [], ledgers: { files: fileScope.ledger, context: fileScope.budget } }, scope) }).eval;
     const execute = tool?.execute;
 
     if (execute === undefined) throw new Error('No callable codemode tool');

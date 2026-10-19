@@ -83,7 +83,9 @@ export function createParentExecutor(deps: {
 
           if (name !== undefined) return { refused: refusalOf(new KinuError('unsupported', 'parent exec: the parent workspace keeps no named shells for a fork')) };
           // The handle takes only the words, starting at the parent workspace's root; a `cwd` is where they start instead.
-          const words = cwd === undefined ? command : `cd -- ${shellQuote(cwd)} && ${command}`;
+          // The whole script runs only once `cd` succeeds, as a Nimbus box starts a call (`nimbus.ts`): a failed one runs
+          // none of it, in no other directory. `--` is not every shell's, so a leading `-` is made a path instead.
+          const words = cwd === undefined ? command : `cd ${shellQuote(cwd.startsWith('-') ? `./${cwd}` : cwd)} || exit\n${command}`;
 
           return {
             call: { text: command, context: {}, ...(cwd !== undefined && { cwd }), ...(signal !== undefined && { signal }) },

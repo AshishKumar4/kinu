@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, test, expect, spyOn } from 'bun:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { jsonSchema, tool, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { isMcpToolKey, narrowToolSurface, WORKSPACE_ROOT, type JsonObject, type JsonValue, type LLMProviderConfig } from '@kinu.run/core';
+import { isMcpToolKey, narrowToolSurface, turnLedgers, WORKSPACE_ROOT, type JsonObject, type JsonValue, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
@@ -155,7 +155,7 @@ describe('connectMcpServers', () => {
 
     try {
       const run = toolExecute<{ code: string }, unknown>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
-        cwd: WORKSPACE_ROOT,
+        cwd: WORKSPACE_ROOT, ledgers: turnLedgers(),
         native: {}, craftedTools: () => [], external: () => external,
       }));
 

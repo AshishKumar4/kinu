@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestActors, testActorHandle, type TestActors } from '@kinu.run/test-utils';
+import { createTestActors, present, testActorHandle, type TestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import {
@@ -19,6 +19,30 @@ import { sqlStorageOver } from '../src/identity/inline-primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { RunEvent } from '../src/events/types';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
+import { explainSandboxError } from '../src/tools/sandbox-errors';
+
+test('the retired state recipe creates usable private scratch and replaces a row by batch', async () => {
+  const w = world();
+
+  try {
+    const recipe = present(/db\.createTable\(\{[^}]+\}\)/u.exec(explainSandboxError('state is not defined'))?.[0], 'the state successor recipe');
+    const provider = createDbCodemodeProvider(w.store(w.a), { private: true });
+    const db = Object.fromEntries(Object.entries(provider.tools).map(([name, member]) => [name, member.execute]));
+
+    const run = new Function('db', 'name', 'columns', `return (async () => {
+      await ${recipe};
+      await db.insert(name, [{ key: "draft", value: 1 }]);
+      await db.batch([
+        { op: "delete", table: name, where: { key: "draft" } },
+        { op: "insert", table: name, rows: [{ key: "draft", value: 2 }] }
+      ]);
+      return { rows: await db.select(name), scope: (await db.schema(name)).scope };
+    })();`);
+
+    expect(await run(db, 'scratch', [{ name: 'key', type: 'text', primaryKey: true }, { name: 'value', type: 'json' }]))
+      .toEqual({ rows: [{ key: 'draft', value: 2 }], scope: 'private' });
+  } finally { w.close(); }
+});
 
 /** `PRAGMA table_info`, narrowed to the key assertion's columns. */
 interface World {

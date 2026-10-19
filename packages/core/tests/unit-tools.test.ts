@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
 import { programCodemode } from './helpers-program';
 import {
-  narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
+  narrowToolSurface, codemodeCapabilitiesFor, codemodeSurface, turnLedgers, TOOL_REACH,
   nestedMembers,
   buildActorTools,
   buildBuiltinTools,
@@ -29,6 +29,21 @@ import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
+
+test('codemodeSurface shares supplied file ledgers and report, and otherwise starts fresh', () => {
+  const { rt } = createTestRuntime();
+  const first = codemodeSurface(rt, {});
+  const next = codemodeSurface(rt, {});
+
+  expect(next.ledgers.files).not.toBe(first.ledgers.files);
+  expect(next.ledgers.context).not.toBe(first.ledgers.context);
+  const ledgers = turnLedgers();
+  const report: ReportDeps = { report: async () => ({ delivered: true }) };
+  const shared = codemodeSurface(rt, {}, undefined, { ledgers, report });
+
+  expect(shared.ledgers).toBe(ledgers);
+  expect(shared.report).toBe(report);
+});
 
 interface CircularValue {
   self?: CircularValue;

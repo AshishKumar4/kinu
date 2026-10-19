@@ -20,11 +20,20 @@ import { MACHINE_FILES } from '../operations/executors';
 /** The executor a program reaches as `workspace`; a one-name path is its member, as `workspace.listTools` is in a program. */
 const WORKSPACE_EXECUTOR = 'workspace';
 
-/** A path as it names a member: a machine's files group joins its member, as `fs.read` is one member of a machine. */
-function memberPath(path: readonly string[]): readonly string[] {
-  const at = path.length - 2;
+/** The executors a slate reaches whose files are a member group (`computer.fs.read`). */
+const MACHINES: readonly string[] = [WORKSPACE_EXECUTOR, 'computer', 'device'];
 
-  return at >= 0 && path[at] === MACHINE_FILES ? [...path.slice(0, at), `${MACHINE_FILES}.${path[at + 1] ?? ''}`] : path;
+/**
+ * A path as it names a member: a machine's files group joins its member, as `fs.read` is one member of a machine
+ * (`['computer', 'fs', 'read']`, or the workspace's own `['fs', 'read']`). A slate or MCP server named `fs` keeps its
+ * own three-part address.
+ */
+function memberPath(path: readonly string[]): readonly string[] {
+  const [first, second, third] = path;
+
+  if (path.length === 2 && first === MACHINE_FILES) return [`${MACHINE_FILES}.${second ?? ''}`];
+
+  return path.length === 3 && first !== undefined && MACHINES.includes(first) && second === MACHINE_FILES ? [first, `${MACHINE_FILES}.${third ?? ''}`] : path;
 }
 
 /**

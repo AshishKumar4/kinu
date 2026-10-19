@@ -109,8 +109,7 @@ function headDeps(
 
   return {
     hostHead: headSeatFactory(parent, host, 'fixture-run', { writes, model: resolve }),
-    // A seated head's programs account into its own session's turn.
-    ledgers: (actor) => present(host.hosted(actor.reference), 'the hosted head').session.orchestrator.acc.ledgers,
+
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {
       probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });
@@ -768,6 +767,50 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
 });
 
 describe("a head's eval holds the namespaces the shared description promises", () => {
+  test('a head program keeps file, web, workspace and db but no memory, tasks or agents, and calls its kind tool', async () => {
+    const journal = makeJournal();
+
+    const code = [
+      'const kind = await tools.record_evidence({ kind: "fact", body: "program-kind-call" });',
+      'return { memory: typeof memory, tasks: typeof tasks, agents: typeof agents,',
+      'file: typeof file.text, web: typeof web.search, workspace: typeof workspace.fs.text, db: typeof db.select, kind };',
+    ].join('\n');
+
+    const runtime = createCLIHeadRuntime(headDeps(evalThenDone(code), { journal: () => journal }));
+    const input = aHeadInput({ id: 'admitted-head', task: 'check the program surface' });
+    journal.insertSpawn(input);
+    const report = await (await runtime.spawnHead(input)).run();
+
+    const outputs = journal.readSteps(input.id).flatMap((step) => step.parts.filter(isToolUIPart))
+      .filter((part) => getToolName(part) === 'eval').map((part) => part.state === 'output-available' ? part.output : null);
+
+    expect(outputs).toEqual([expect.objectContaining({ result: {
+      memory: 'undefined', tasks: 'undefined', agents: 'undefined',
+      file: 'function', web: 'function', workspace: 'function', db: 'function', kind: expect.stringContaining('evidence recorded'),
+    } })]);
+    expect(report.evidence).toEqual([expect.objectContaining({ kind: 'fact', body: 'program-kind-call' })]);
+  });
+
+  test('a head native file read and its program reads share both directions of the edit ledger', async () => {
+    const parent = makeParent();
+    await writeText(parent.storage.vfs, 'head-from-native.txt', 'first native\n');
+    await writeText(parent.storage.vfs, 'head-from-program.txt', 'first program\n');
+
+    const model = toolSequenceModel([
+      { name: 'file', input: { op: 'read', path: 'head-from-native.txt' } },
+      { name: 'eval', input: { code: 'return await file.edit("head-from-native.txt", [{ old_text: "first", new_text: "second" }]);' } },
+      { name: 'eval', input: { code: 'return await file.text("head-from-program.txt");' } },
+      { name: 'file', input: { op: 'edit', path: 'head-from-program.txt', edits: [{ old_text: 'first', new_text: 'second' }] } },
+    ]);
+
+    const runtime = createCLIHeadRuntime(headDeps(model, { parentRuntime: parent }));
+    const report = await (await runtime.spawnHead(aHeadInput({ id: 'head-shared-ledger' }))).run();
+
+    expect(report.status).toBe('completed');
+    expect(await readText(parent.storage.vfs, 'head-from-native.txt')).toBe('second native\n');
+    expect(await readText(parent.storage.vfs, 'head-from-program.txt')).toBe('second program\n');
+  });
+
   test('a local head keeps private db scratch between programs', async () => {
     const journal = makeJournal();
     let step = 0;

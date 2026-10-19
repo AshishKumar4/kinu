@@ -8,7 +8,7 @@ import { expect, test } from 'bun:test';
 import type { ToolExecutionOptions } from 'ai';
 import {
   createSandboxExecutor, DEVICE_REQUEST_OPTION, DeviceRequestOwnership, executorNamespace, narrowToolSurface, type CodemodeSurface,
-  projectJsonValue, type JsonValue, type SandboxHandle,
+  projectJsonValue, turnLedgers, type JsonValue, type SandboxHandle,
 } from '@kinu.run/core';
 import type { DesktopAction, DesktopAnswer, DesktopScreen } from '../../core/src/execution/desktop';
 import { sandboxHandleLifecycle } from '../../core/tests/helpers/sandbox-handle-lifecycle';
@@ -97,7 +97,7 @@ test("an older program's late desktop calls carry its own stop and background st
   const { launch, running } = heldPrograms();
   const desk = desktopBox();
   const factory = createCodemodeToolFactory({ launch: () => launch, workspace: 'main' });
-  const surface: CodemodeSurface = { native: {}, craftedTools: () => [], external: () => ({}), cwd: '/home/user' };
+  const surface: CodemodeSurface = { native: {}, craftedTools: () => [], external: () => ({}), cwd: '/home/user', ledgers: turnLedgers() };
   const computer = createSandboxExecutor(desk.box, { desktop: { driver: 'main', screen: SCREEN } });
   const scope: CodemodeScope = { namespaces: (executor) => [executorNamespace(executor(computer))], reach: narrowToolSurface(undefined) };
   const { execute } = factory.toolFor(surface, scope);

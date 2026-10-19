@@ -20,6 +20,26 @@ const SCRATCH = {
   columns: [{ name: 'key', type: 'text', primaryKey: true }, { name: 'value', type: 'json' }],
 } as const;
 
+test('a slate cannot redeclare a private table name or learn its columns', async () => {
+  const actor = actorWith();
+  actor.db.createTable({ name: 'sealed', scope: 'private', columns: [{ name: 'confidential_column', type: 'json' }] });
+
+  for (const policy of [SURFACE_POLICY.slate, SURFACE_POLICY.slateTool]) {
+    const db = present(actorNamespaces(actor, policy).find(({ name }) => name === 'db'), 'the slate db');
+
+    const answer = await present(db.tools.createTable, 'db.createTable').execute({
+      name: 'sealed', scope: 'actor', columns: [{ name: 'public_column', type: 'text' }],
+    });
+
+    expect(answer).toMatchObject({ success: false, reason: 'denied', error: expect.stringContaining('sealed') });
+    expect(JSON.stringify(answer)).not.toContain('confidential_column');
+    expect(JSON.stringify(answer)).not.toContain('json');
+    expect(answer).not.toHaveProperty('columns');
+  }
+
+  expect(actor.db.schema('sealed').columns).toEqual([{ name: 'confidential_column', type: 'json' }]);
+});
+
 const SHOT = { url: 'https://example.com/', retrievedAt: '2026-10-08T00:00:00.000Z', bytes: new Uint8Array([137, 80, 78, 71]) };
 
 const WORKSPACE: ExecutorProviderSurface = {

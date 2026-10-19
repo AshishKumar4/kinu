@@ -46,6 +46,33 @@ function decidesAll(commands: readonly string[], decision: ApprovalDecision): vo
   }
 }
 
+describe('reviewCommand inline programs over user files', () => {
+  const cases = [
+    { command: "node --eval='console.log(1)'", asks: true },
+    { command: 'echo node -e', asks: false },
+    { command: 'python3 script.py', asks: false },
+    { command: "env FOO=1 python3 -c 'print(1)'", asks: true },
+    { command: 'cat x | node', asks: true },
+    { command: 'python3 --version', asks: false },
+    { command: "python3 -Bc 'print(1)'", asks: true },
+    { command: "perl -ne 'print' x", asks: true },
+    { command: 'node -', asks: true },
+    { command: "node <<'JS'\nconsole.log(1)\nJS", asks: true },
+    { command: "bun eval 'console.log(1)'", asks: true },
+    { command: "deno eval 'console.log(1)'", asks: true },
+  ];
+
+  for (const row of cases) {
+    test(row.command, () => {
+      const reviewed = reviewCommand(row.command, THEIRS);
+
+      expect(reviewed.decision).toBe(row.asks ? 'gate' : 'allow');
+      expect(reviewed.hits.some(({ rule }) => rule === 'program-on-user-files')).toBe(row.asks);
+      expect(reviewCommand(row.command, OURS).hits.some(({ rule }) => rule === 'program-on-user-files')).toBe(false);
+    });
+  }
+});
+
 describe('reviewCommand — the rule table', () => {
   test('returns allow with no hits for benign commands, everywhere', () => {
     for (const cmd of ['ls -la', 'cat README.md', 'npm install lodash', 'git status', 'node app.js']) {

@@ -3,14 +3,32 @@ import { compactToolCall } from '../src/evolution/tool-call-record';
 import { fnv1a64 } from '../src/utils/fnv1a';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
+import { standingFileLedger, TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { MissionGovernor } from '../src/mission-budget';
 import type { Usage } from '../src/usage';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestRuntime } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { FAILURE_WITHOUT_ERROR } from '../src/events/types';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
 import { createCompletedTurnStore, initCompletedTurnTable } from '../src/evolution/session-window';
+
+test('the standing file ledger retains its cap, then resets past 512 held versions', () => {
+  const { rt } = createTestRuntime();
+  const ledger = standingFileLedger(rt);
+
+  for (let at = 0; at < 256; at++) ledger.observeWhole(`/notes/${String(at)}`, `version ${String(at)}`);
+  expect(ledger.held).toBe(512);
+  expect(standingFileLedger(rt)).toBe(ledger);
+  expect(ledger.seenState('/notes/0', 'version 0', 'whole').state).toBe('seen');
+  ledger.observeWhole('/notes/0', 'one more version');
+  expect(ledger.held).toBe(513);
+  expect(standingFileLedger(rt)).toBe(ledger);
+  expect(ledger.held).toBe(0);
+  expect(ledger.seenState('/notes/0', 'one more version', 'whole').state).toBe('never');
+  ledger.observeWhole('/notes/0', 'read after reset');
+  expect(standingFileLedger(rt).seenState('/notes/0', 'read after reset', 'whole').state).toBe('seen');
+  expect(standingFileLedger(createTestRuntime().rt).held).toBe(0);
+});
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {

@@ -178,6 +178,29 @@ export function narrowToolSurface(
   };
 }
 
+/**
+ * A surface whose builtins are an admitted set (a head, a swarm node), narrowed as `allowedTools` narrows it: its
+ * programs reach only the namespaces its admitted builtins, or a codemode-only capability, reach, so a program reaches
+ * nothing its native tools do not. A tool outside TOOL_REACH (a kind tool, an external one) passes as `allowedTools`
+ * says.
+ */
+export function narrowAdmittedSurface(admitted: readonly string[], allowedTools: readonly string[] | undefined): ToolSurfaceNarrowing {
+  const allowed = narrowToolSurface(allowedTools);
+  const held = new Set<string>([...admitted, ...CODEMODE_ONLY_REACH.map(({ name }) => name)]);
+
+  const admits = (namespace: string): boolean => {
+    const reaching = CAPABILITIES_BY_NAMESPACE[namespace];
+
+    return reaching === undefined ? held.has('eval') : reaching.some((name) => held.has(name));
+  };
+
+  return {
+    allowsTool: (name) => allowed.allowsTool(name) && (!isCapabilityName(name) || held.has(name)),
+    allowsNamespace: (namespace) => allowed.allowsNamespace(namespace) && admits(namespace),
+    narrowProviders: (providers) => allowed.narrowProviders(providers).filter((provider) => admits(provider.name)),
+  };
+}
+
 /** One filter over a named set, so a builtin added upstream never silently appears on a confined surface. */
 export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
   const kept: ToolSet = {};

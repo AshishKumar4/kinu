@@ -39,7 +39,7 @@ export interface SurfaceWeb {
 export interface SurfaceActor {
   readonly executors: () => readonly ExecutorProviderSurface[];
   readonly web: SurfaceWeb;
-  /** Its stores, read only by a policy that reaches them. */
+  /** Its stores, read as its namespaces are built. */
   readonly memory: () => MemoryDeps;
   readonly files: () => FileDeps;
   /** `roleSwitch` null: its programs switch no role, as a hire's role is its hirer's to set. */
@@ -59,8 +59,6 @@ export interface SurfacePolicy {
    *  slate runs, whoever's slate it is. */
   readonly private: boolean;
   readonly agents: boolean;
-  /** `memory`, `file` and `tasks`. */
-  readonly stores: boolean;
   /** Whether a web screenshot is saved into the actor's files. */
   readonly webFiles: boolean;
   /** Whether its `memory.*` reaches the account's memory, where the actor's has it wired: never from a slate, whose
@@ -76,16 +74,16 @@ export interface SurfacePolicy {
 export const SURFACE_POLICY = {
   /** The actor's own programs, a hire's, a head's or a swarm node's alike: each reaches what its actor holds, as its
    *  native tools do. */
-  program: { private: true, agents: true, stores: true, webFiles: true, browser: 'program', account: true },
+  program: { private: true, agents: true, webFiles: true, browser: 'program', account: true },
   /** A caller outside eval acting as the actor: an isolate running its turn, an operation call. */
-  operations: { private: true, agents: true, stores: true, webFiles: true, browser: 'class', account: true },
+  operations: { private: true, agents: true, webFiles: true, browser: 'class', account: true },
   /** A slate's call, which a share's visitor may make: it saves nothing through web, delegates nothing and reaches no private table. */
-  slate: { private: false, agents: false, stores: true, webFiles: false, browser: 'class', account: false },
+  slate: { private: false, agents: false, webFiles: false, browser: 'class', account: false },
   /** The owner's own slate calling as the owner, no share in it: a slate's reach, and it hires and messages helpers. */
-  ownerSlate: { private: false, agents: true, stores: true, webFiles: false, browser: 'class', account: false },
+  ownerSlate: { private: false, agents: true, webFiles: false, browser: 'class', account: false },
   /** A crafted tool a slate runs: a program of the actor's that delegates nothing, driving its caller's browser. */
-  slateTool: { private: false, agents: false, stores: true, webFiles: true, browser: 'program', account: false },
-  slateToolForViewer: { private: false, agents: false, stores: true, webFiles: true, browser: 'viewer', account: false },
+  slateTool: { private: false, agents: false, webFiles: true, browser: 'program', account: false },
+  slateToolForViewer: { private: false, agents: false, webFiles: true, browser: 'viewer', account: false },
 } as const satisfies Readonly<Record<string, SurfacePolicy>>;
 
 const VIEWER_BROWSER = 'this program holds no browser session; a share\'s viewer drives none of its owner\'s';
@@ -127,17 +125,15 @@ function agentNamespace(self: AgentSelfHost | null, ownerWaits: OwnerWaitsHost |
 export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call: SurfaceCall = {}): CodemodeProvider[] {
   const { agents, self } = actor;
   const executor = call.executor ?? ((provider) => provider);
-  const tasks = policy.stores ? actor.tasks() : null;
+  const tasks = actor.tasks();
   // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane.
   const files = serveFile(actor.files);
 
   return [
     ...(policy.agents && agents !== null ? [createAgentsCodemodeProvider(agents)] : []),
-    ...(tasks === null ? [] : [
-      createMemoryCodemodeProvider(policy.account ? actor.memory : () => withoutAccount(actor.memory())),
-      createFileCodemodeProvider(actor.files),
-      createTasksCodemodeProvider(tasks.list, tasks.config, tasks.roleSwitch ?? undefined),
-    ]),
+    createMemoryCodemodeProvider(policy.account ? actor.memory : () => withoutAccount(actor.memory())),
+    createFileCodemodeProvider(actor.files),
+    createTasksCodemodeProvider(tasks.list, tasks.config, tasks.roleSwitch ?? undefined),
     createDbCodemodeProvider(actor.db, { private: policy.private }),
     ...agentNamespace(self, actor.ownerWaits),
     ...(call.report === undefined ? [] : [createReportCodemodeProvider(call.report)]),

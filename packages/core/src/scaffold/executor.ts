@@ -9,6 +9,10 @@
 
 import { namespaceDeclaration } from '../tools/operation-surfaces';
 import { executorNamespace } from '../tools/executor-operations';
+import { serveFile } from '../tools/file-operations';
+import { scopedTurnSurface } from '../orchestrator/main-turn-surface';
+import { standingFileLedger } from '../orchestrator/turn-accumulator';
+import { TurnContextBudget } from '../context-budget';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ChatEvent } from '../chat';
@@ -547,7 +551,15 @@ export function scaffoldProviders(
 ): Array<{ name: string; fns: SandboxFunctions; types?: string }> {
   const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [];
 
-  const routerProviders = (rt.executionRouter?.getProviders() ?? []).map((provider) => executorNamespace(provider));
+  // A machine's `fs` is the turn's own file operations, on the read ledger its `file` tool keeps.
+  const ledgers = scopedTurnSurface()?.ledgers;
+
+  const files = serveFile(() => ({
+    vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory,
+    ledger: ledgers?.files ?? standingFileLedger(rt), budget: ledgers?.context ?? new TurnContextBudget(),
+  }));
+
+  const routerProviders = (rt.executionRouter?.getProviders() ?? []).map((provider) => executorNamespace(provider, files));
 
   for (const p of routerProviders) {
     const fns: SandboxFunctions = {};

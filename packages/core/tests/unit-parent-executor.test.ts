@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { answerParentRpc, createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { createTestRuntime } from './helpers';
+import { present } from '@kinu.run/test-utils';
 
 function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
@@ -26,6 +29,22 @@ describe('parent executor input validation', () => {
     const parent = createParentExecutor({ handle: parentHandle(calls) });
     expect(await parent.tools.exec.execute('find . -name notes.md')).toBe('ok');
     expect(calls).toEqual(['exec:find . -name notes.md']);
+  });
+
+  test('a missing cwd runs none of a multi-command parent script', async () => {
+    const { rt } = createTestRuntime();
+    const shell = present(rt.shell, 'the real parent shell');
+    const parent = createParentExecutor({ handle: { exec: (command) => shell.exec(command) } });
+    const command = 'pwd; echo x > f';
+
+    await parent.tools.exec.execute(command, { cwd: rt.storage.home });
+    expect(await readText(rt.storage.vfs, 'f')).toBe('x\n');
+    await rt.storage.vfs.unlink('f');
+
+    const answer = await parent.tools.exec.execute(command, { cwd: `${rt.storage.home}/missing-parent-cwd`, parts: true });
+
+    expect(answer).toMatchObject({ stdout: '', exitCode: 1 });
+    expect(await exists(rt.storage.vfs, 'f')).toBe(false);
   });
 });
 

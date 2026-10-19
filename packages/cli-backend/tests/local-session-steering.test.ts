@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams, workspaceDatabase } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
+import { narrowToolSurface, turnLedgers, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { APICallError } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
@@ -1753,7 +1753,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const tool = createNodeCodemodeToolFactory({
       reach: narrowToolSurface(undefined),
       namespaces: [createAgentsCodemodeProvider(() => deps)],
-    })({ cwd: WORKSPACE_ROOT, native: {}, external: () => ({}), craftedTools: () => [] });
+    })({ cwd: WORKSPACE_ROOT, ledgers: turnLedgers(), native: {}, external: () => ({}), craftedTools: () => [] });
 
     return (code: string, options?: ToolExecutionOptions<unknown>) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
