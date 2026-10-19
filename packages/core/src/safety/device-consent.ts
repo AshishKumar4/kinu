@@ -21,6 +21,11 @@ export type DeviceConsentAnswer = 'once' | 'always' | 'deny';
 const DEVICE_CONSENT_DENIED =
   'device use was not approved: the owner declined';
 
+/** A call whose approval was given under an epoch a revocation has since ended: nothing ran, and nobody refused it. */
+export function deviceConsentMoved(deviceLabel: string): string {
+  return `access to ${deviceLabel} changed while this call waited for its approval, so nothing ran. Run it again to ask.`;
+}
+
 /** Worded so a model cannot mistake an unasked owner for a refusal: the capability is intact. */
 const DEVICE_CONSENT_UNANSWERED =
   'device use is still unapproved: the consent prompt could not be raised, so nobody decided. '
@@ -408,13 +413,15 @@ const REFUSED: DeviceConsentOutcome = { allowed: false, code: 'denied', reason: 
 /**
  * The binding rule, both halves: a standing binding decides without asking; otherwise the ask does. An `always` its
  * call spends is bound (`bind`), so later calls run on the binding; `once` runs this call alone. A parked ask is NOT
- * RUN, a did-not-start code, as is an ask that could not be raised: nobody was asked, so it is no refusal.
+ * RUN, a did-not-start code, as is an ask that could not be raised: nobody was asked, so it is no refusal. `bind`
+ * answers false when a revocation ended the epoch the ask was made under while it was out: that approval answers
+ * nothing, and the call, not run, asks again.
  */
 export function deviceConsentOutcome(input: {
   readonly bound: DeviceBinding;
   readonly deviceLabel: string;
   readonly ask: Effect.Effect<DeviceConsentVerdict, KinuError>;
-  readonly bind: Effect.Effect<void, KinuError>;
+  readonly bind: Effect.Effect<boolean, KinuError>;
 }): Effect.Effect<DeviceConsentOutcome, KinuError> {
   if (input.bound === 'allow') return Effect.succeed({ allowed: true });
 
@@ -433,6 +440,10 @@ export function deviceConsentOutcome(input: {
 
     if (verdict === 'queued') return Effect.succeed({ allowed: false, code: 'unavailable', reason: deviceConsentQueued(input.deviceLabel) });
 
-    return verdict === 'always' ? Effect.as(input.bind, { allowed: true }) : Effect.succeed({ allowed: true });
+    if (verdict === 'once') return Effect.succeed({ allowed: true });
+
+    return Effect.map(input.bind, (bound): DeviceConsentOutcome => (bound
+      ? { allowed: true }
+      : { allowed: false, code: 'unavailable', reason: deviceConsentMoved(input.deviceLabel) }));
   });
 }
