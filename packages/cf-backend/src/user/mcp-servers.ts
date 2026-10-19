@@ -777,11 +777,23 @@ export class UserMcpServers {
         diagnostics.failure('mcp.call_failed', toKinuError({ doing: `calling ${name} on MCP server ${serverId}`, cause, otherwise: 'unavailable' }), { ...facts, kind });
       })),
       Effect.map((answer) => {
-        if (v.is(McpProtocolFailureSchema, answer)) diagnostics.event('mcp.call_failed', { ...observed(), kind: 'tool_error' });
+        if (!v.is(McpProtocolFailureSchema, answer)) return JSON.stringify(decodeJsonValue({ value: answer }));
+        diagnostics.event('mcp.call_failed', { ...observed(), kind: 'tool_error' });
 
-        return JSON.stringify(decodeJsonValue({ value: answer }));
+        return JSON.stringify(decodeJsonValue({ value: this.explained(serverId, answer) }));
       }),
     );
+  }
+
+  /** A server's own error, with what its preset says its words alone leave out (`McpPreset.explainError`). */
+  private explained(serverId: string, answer: CallToolResult): CallToolResult {
+    const presetId = this.host.sqlx<{ preset_id: string | null }>(`SELECT preset_id FROM user_mcp_servers WHERE id = ?`, serverId)[0]?.preset_id ?? null;
+    const preset = presetId === null ? undefined : mcpPresetById(presetId);
+    const text = answer.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n');
+    const app = preset?.auth === 'oauth-app' ? mcpAppCredentials(this.host.env, preset) : null;
+    const note = preset?.explainError?.(text, app);
+
+    return note === undefined || note === null ? answer : { ...answer, content: [...answer.content, { type: 'text', text: note }] };
   }
 
   private async dispatchUserMcpTool(call: { serverId: string; name: string; args: JsonObject }, signal: AbortSignal): Promise<CallToolResult> {
