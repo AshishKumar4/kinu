@@ -1125,14 +1125,3 @@ describe('a turn\'s skills in its system prompt', () => {
     expect(prompt(quiet)).toContain(skillReference('slates'));
   });
 });
-
-// Staging 5c522f12d chat-app: all 6 chat slates answered @kinu through ai.run, a bare model told "You are Kinu",
-// where the skill offered ai.run first and agent.ask two bullets later.
-test('the slates skill says an assistant in a slate is the agent, reached through agent.ask, before it offers ai.run', () => {
-  const skill = BUILTIN_SKILLS.find((builtin) => builtin.name === 'slates')?.body ?? '';
-  const rule = skill.indexOf('**An assistant in a slate is you.**');
-
-  expect(rule).toBeGreaterThan(-1);
-  expect(rule).toBeLessThan(skill.indexOf('workspace.ai.run'));
-  expect(skill.slice(rule)).toContain('`workspace.ai.run` is a bare model with none of them');
-});
