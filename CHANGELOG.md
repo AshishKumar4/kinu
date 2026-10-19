@@ -104,7 +104,6 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
-- **Releases are signed with a new key.** The previous signing key was lost with the machine that held it, so this release cannot be signed with it. A CLI or device daemon installed before this release refuses the update. Install the CLI again with `curl -fsSL https://kinu.run/install.sh | bash`, and run `kinu connect` again on a machine you lend to a workspace, to take this and later releases.
 - **The CLI and the device daemon need Bun 1.4.3.** Bun 1.4.2 could leave a synchronous spawn spinning at full CPU over a child that had already exited, and the process stopped answering (oven-sh/bun#34069, fixed in 1.4.3). A machine whose Bun is older gets 1.4.3 installed under Kinu's home at the next launch, as with any older Bun; with `KINU_INSTALL_BUN=0` it is refused and names the version.
 - **Fewer top-level commands.** `kinu sessions` is now `kinu auth sessions`, and `kinu auth revoke <session>` or `kinu auth revoke --all` ends them; a bare `revoke` ends none. `kinu transcripts` is now `kinu debug <workspace> --transcripts`. `kinu alias`, `unalias`, `aliases` and `create --alias` are gone: `kinu run <name>` runs a workspace.
 - **Disconnecting a provider revokes its sign-in only when you ask.** Disconnect removes Kinu's copy. Disconnect and revoke at OpenAI or Cloudflare in the web app, or `kinu provider disconnect chatgpt --revoke`, also ends the sign-in there, and a refusal shows in the provider's own words with secrets masked.
