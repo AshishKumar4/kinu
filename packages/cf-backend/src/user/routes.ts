@@ -217,7 +217,7 @@ userRoutes.get('/api/user/workspaces/live', async (c) => c.get('stub').fetch(new
   headers: appendIdentityHeaders(c.req.raw.headers, c.get('identity')),
 }))));
 
-// The owner's own pictures: admitted by the roster. The Gallery's route reads the same bytes for a listed slate.
+// The owner's own pictures: admitted by the roster. Their private preview's, so never a Gallery card's.
 userRoutes.get('/api/user/pictures/:workspace/:slate/:digest', async (c) => {
   const picture = v.safeParse(PictureAddressSchema, c.req.param());
   const bucket = c.env.SLATE_PICTURES;

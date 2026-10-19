@@ -651,9 +651,27 @@ export class SlateHost {
       return await this.launch(launch);
     }
 
-    this.lineages.set(started, lineage);
+    const running = await this.sealed(id, lineage, started);
+
+    this.lineages.set(running, lineage);
     this.heldLineage.set(heldSlateKey(caller, id), lineage);
 
-    return started;
+    return running;
+  }
+
+  /**
+   * `started` while the sharing sealed in its lineage still holds; else stopped, and refused. A shared slate it inherited
+   * its bound from shares otherwise since the hop sealed it: the bound it was started under has ended, and started again
+   * under the same seals it would end the same way, so it never runs.
+   */
+  sealed(id: string, lineage: SlateLineage, started: ResidentSlateProcess): Promise<ResidentSlateProcess> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const ended = this.controller.servers.lineage(id, lineage, null);
+
+      if (ended === null) return started;
+      yield* Effect.promise(async () => started.stop());
+
+      return yield* ended;
+    }));
   }
 }

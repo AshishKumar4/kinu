@@ -191,6 +191,8 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private notesShare = '';
   /** Holds a launch where it asks for the owner's browser, until let go (`launchAcrossShare`). */
   private actorGate: { readonly gate: Promise<undefined>; readonly reached: (value: undefined) => void } | null = null;
+  /** The next process launch, held where it asks for its facets: after its lineage is minted, before it runs. */
+  #launchGate: { readonly gate: Promise<undefined>; readonly reached: (value: undefined) => void } | null = null;
   /** How many launches asked for the owner's browser. */
   private actorCalls = 0;
   /** The run the last part call named, as its process's binding sent it. */
@@ -237,7 +239,15 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     this.host = new SlateHost({
       ctx, workspace: ctx.id.name ?? ctx.id.toString(), builds: new SlateBuilds(ctx.storage.sql),
       session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
-      facetManager: async () => facets,
+      facetManager: async () => {
+        const held = this.#launchGate;
+
+        this.#launchGate = null;
+        held?.reached(undefined);
+        await held?.gate;
+
+        return facets;
+      },
       bundler: (vfs) => supervisorEsbuildService(ctx, env, vfs),
       dispatch: async (_caller, route, context) => {
         // The actor's half of `ai.stream`: the model's text, a piece at a time, as the actor hands it over.
@@ -627,34 +637,57 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     const hold = { path: '/gate', reached: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
     const before = this.#writes;
 
-    const inheritors = async (): Promise<SlateCaller[]> => {
-      const found: SlateCaller[] = [];
-
-      await this.host.controller.processes.stopWhere((running) => {
-        if (running.caller.via?.[SLATE_ID] !== undefined) found.push(running.caller);
-
-        return false;
-      });
-
-      return found;
-    };
-
     this.#heldRead = hold;
     const call = this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hopGated', args: [] });
 
     await hold.reached.promise;
     this.#heldRead = null;
-    const [sealed] = await inheritors();
+    const [sealed] = await this.#inheritors();
 
     if (sealed === undefined) throw new Error('the digest ran with no bound inherited from the board');
     await this.revoke(share);
-    const inheriting = (await inheritors()).length;
+    const inheriting = (await this.#inheritors()).length;
 
     hold.release.resolve();
     await call;
     const retained = await this.host.call({ caller: sealed, id: 'digest', method: 'rawWrite', args: [] });
 
     return { inheriting, retained: retained.ok ? JSON.stringify(retained.value) : retained.error, written: this.#writes > before };
+  }
+
+  /** The callers of every registered process that inherited the board's bound (`SlateCaller.via`). */
+  async #inheritors(): Promise<SlateCaller[]> {
+    const found: SlateCaller[] = [];
+
+    await this.host.controller.processes.stopWhere((running) => {
+      if (running.caller.via?.[SLATE_ID] !== undefined) found.push(running.caller);
+
+      return false;
+    });
+
+    return found;
+  }
+
+  /**
+   * The owner's own request into their shared board hops into the digest, whose process is held as it starts (its
+   * lineage minted, the board's sharing sealed in it) while the board's last share is revoked; let go, what the call
+   * answered, and how many processes that inherited the board's bound are left registered.
+   */
+  async inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; inheriting: number }> {
+    // The board's own shared process running already, so the next launch is the digest's.
+    await this.ownerCall('probe');
+    const gate = Promise.withResolvers<undefined>();
+    const reached = Promise.withResolvers<undefined>();
+
+    this.#launchGate = { gate: gate.promise, reached: reached.resolve };
+    const call = this.host.call({ caller: ROOT_SLATE_CALLER, id: SLATE_ID, method: 'hop', args: [] });
+
+    await reached.promise;
+    await this.revoke(share);
+    gate.resolve(undefined);
+    const answered = await call;
+
+    return { answered: answered.ok ? JSON.stringify(answered.value) : answered.error, inheriting: (await this.#inheritors()).length };
   }
 
   /**

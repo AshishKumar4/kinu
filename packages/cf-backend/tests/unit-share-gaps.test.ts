@@ -755,6 +755,23 @@ test("a live share its owner lists tells the Gallery its card, stays off the own
   expect(await page()).toBeUndefined();
 });
 
+test("R5-P1 private picture. a slate's shot of its owner's private preview never reaches its Gallery card", async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const owner = identityOf(OWNER_ID, 'owner@example.test');
+  const synced: GalleryListingSync[] = [];
+
+  tellGalleryInto(world, synced);
+  const made = await sharePublic(world, 'public');
+
+  // The camera's shot of the owner's own preview of it, which draws with the owner's reads.
+  world.owner.db.run('INSERT INTO slate_pictures (slate, port, digest) VALUES (?, ?, ?)', ['issues', 20000, 'ab'.repeat(32)]);
+  await sharedRequest(world.env, owner, post(LIVE_SHARE_LISTING_PATH, { workspace: 'issues-owner', share: made.share.id, listed: true, line: 'Triage the open issues', category: 'work' }));
+  await until(() => synced.length > 0, 'the Gallery told of the listing');
+
+  expect(synced.map((sync) => (sync.listed ? sync.card.picture : 'unlisted'))).toEqual([null]);
+});
+
 test("a slate's first share can start empty: a copy made now, code only, named as a copy, and none made when refused", async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);

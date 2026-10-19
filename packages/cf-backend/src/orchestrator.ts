@@ -6114,9 +6114,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const read = await (await this.slates()).controller.readLiveShareRecord(share.id);
       const title = read.ok ? read.value.title : share.slate;
 
+      // No picture: the camera shoots the owner's private preview, which draws with the owner's own reads, so its shot
+      // is never the share's to show. A card shows only a picture taken under the listed share's authority; none is.
       await controlPlaneStub(this.env).gallerySync(await internalCaller(this.env), {
         ...shared, listed: true, url,
-        card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: this.pictures.digests().get(share.slate) ?? null },
+        card: { title, line: listing.line, category: listing.category, ownerName: this.safeDisplayName(), picture: null },
       });
     });
   }

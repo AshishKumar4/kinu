@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 import { createTestActors } from '@kinu.run/test-utils';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
 import { SlateShareViewers } from '../src/slates/share-viewers';
-import { SharedServers } from '../src/slates/shared-server';
+import { SharedServers, type SharedServerDeps } from '../src/slates/shared-server';
 import { approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable } from '../src/index';
 import { preapproveSlateEffect } from '../src/slates/live-sharing';
 import { settle } from '../src/obs/effect';
@@ -30,7 +30,7 @@ const grant: ShareGrant = {
 const IMPACTS = new Map([['readFile', false], ['writeFile', true], ['web.connectBrowser', true]]);
 
 /** `revisions` is each slate's revision now; the share approved `board`'s at `rev-1`. */
-function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>> = { board: 'rev-1', digest: 'rev-9' }) {
+function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>> = { board: 'rev-1', digest: 'rev-9' }, toolContract?: SharedServerDeps['toolContract']) {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
 
@@ -55,6 +55,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
   const servers = new SharedServers({
     authoritiesOf: (slate) => live.authoritiesOf(slate), revision: (slate) => revisions[slate] ?? null, generation: (slate) => live.generation(slate), ownerEffects,
+    ...(toolContract !== undefined && { toolContract }),
   }, async () => 'Sam');
 
   const viewers = new SlateShareViewers({ live, shareEntry: () => null, ownerUserId: () => 'sam', ownerEffects });
@@ -238,6 +239,22 @@ test('a pre-approved tool and root run unasked at that revision only; another ro
 
   stale.live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, { ...grant, preapproved: [{ ...preapproved.preapproved?.[0] ?? { slate: '', namespace: '', member: '', root: {} }, revision: 'rev-0' }] });
   await expect(stale.call('writeFile')).rejects.toThrow('waits for the owner');
+});
+
+test('R5-P1 roots by operation. "Always" on one repository never runs an operation whose handler takes its target by global ID', async () => {
+  const github = world('owner', undefined, async (namespace, member) => (namespace === 'mcp.GitHub' ? { preset: 'github', tool: member } : null));
+  const tool = { slate: 'board', namespace: 'mcp.GitHub', member: 'discussion_comment_write' };
+
+  github.live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, {
+    ...grant, members: [...grant.members, { ...tool, impact: 'mutate' }], preapproved: [{ ...tool, root: { owner: 'acme', repo: 'a' }, revision: 'rev-1' }],
+  });
+  const send = async (payload: JsonValue) => settle(github.servers.gate({ slate: 'board', chain: [], address: { namespace: tool.namespace, member: tool.member }, effect: true, args: [payload], on: 'the owner' }));
+
+  // A comment added to repository A's discussion: the operation the owner's "Always for acme/a" covers, unasked.
+  expect((await send({ owner: 'acme', repo: 'a', method: 'add', discussionNumber: 1, body: 'hi' })).bounded).toBe(true);
+  expect(github.asked()).toEqual([]);
+  // Naming acme/a, but taking the comment by its node ID wherever it is: the whole connection's, so it asks.
+  await expect(send({ owner: 'acme', repo: 'a', method: 'update', commentNodeID: 'DC_elsewhere', body: 'x' })).rejects.toThrow('waits for the owner');
 });
 
 test('a server started, or a request made, under other sharing of its slate acts no more', () => {

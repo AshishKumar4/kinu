@@ -161,3 +161,16 @@ it('R4-P1 nested lineage. a member a running tool reaches inside itself is refus
   expect(more).toEqual([]);
 });
 
+// Fifth review of a841655f8 (MechanicalToad, 2026-10-19): a launch is held to every sharing sealed in it once it is started.
+it('R5-P2 inherited launch. a callee started while a shared slate above it stops sharing is stopped, never left registered', async () => {
+  const probe = subject('review5-inherited-launch');
+
+  await probe.start();
+  const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
+  const seen = await probe.inheritedLaunchAcrossRevoke(created.share.id);
+
+  // The board's call ends with the board's own process; the digest it started is not left behind it.
+  expect(seen.answered).not.toContain('digest-ok');
+  expect(seen.inheriting).toBe(0);
+});
+

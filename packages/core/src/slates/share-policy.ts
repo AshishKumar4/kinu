@@ -104,37 +104,48 @@ export interface ToolContract {
 }
 
 /**
- * Tools whose resource is chosen by `owner` and `repo` alone, both required, and which reach nothing outside that
- * repository: no free query, no other repository (`head`, `parent_repo`, `item_repo`, an organization), no URL. Read
- * off the GitHub MCP server's own tool reference (github/github-mcp-server README, 2026-10). A tool not named here is
- * scoped to its whole connection, however its arguments look.
+ * Tools whose handler selects the resource of each operation inside the repository its `owner` and `repo` name, and
+ * reaches nothing outside it: a `/repos/{owner}/{repo}/…` path, or a GraphQL query rooted at that repository whose IDs
+ * every later step derives from it (or checks against it). Read off each handler at github/github-mcp-server
+ * e3809fe91c75 (`pkg/github`), not its tool reference: a tool's arguments say nothing of what its handler ignores. Most
+ * do so for every operation (`'every'`); for the rest, only the operations their `method` names here, the others
+ * selecting a node by its global ID and ignoring both. A tool or operation not named here is scoped to its whole
+ * connection, however its arguments look.
  */
-const REPOSITORY_TOOLS: ReadonlyMap<string, ReadonlySet<string>> = new Map([['github', new Set([
-  // Reads.
-  'get_file_contents', 'get_repository_tree', 'get_commit', 'list_commits', 'list_branches', 'list_tags', 'get_tag',
-  'list_releases', 'get_latest_release', 'get_release_by_tag', 'issue_read', 'list_issues', 'list_issue_fields', 'list_issue_types',
-  'get_label', 'list_label', 'pull_request_read', 'list_pull_requests', 'get_discussion', 'get_discussion_comments', 'list_discussions',
-  'list_discussion_categories', 'actions_get', 'actions_list', 'get_job_logs', 'get_code_scanning_alert', 'list_code_scanning_alerts',
-  'get_code_quality_finding', 'get_dependabot_alert', 'list_dependabot_alerts', 'get_secret_scanning_alert', 'list_secret_scanning_alerts',
-  'list_repository_security_advisories', 'list_repository_collaborators',
-  // Writes to that repository alone.
-  'add_issue_comment', 'update_issue_comment', 'label_write', 'create_branch', 'create_or_update_file', 'delete_file', 'push_files',
-  'merge_pull_request', 'update_pull_request', 'update_pull_request_branch', 'pull_request_review_write', 'add_comment_to_pending_review',
-  'add_reply_to_pull_request_comment', 'discussion_comment_write',
+const REPOSITORY_TOOLS: ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string> | 'every'>> = new Map([['github', new Map<string, ReadonlySet<string> | 'every'>([
+  ...[
+    // Reads. With no `repo`, `list_discussions`, `list_discussion_categories`, `list_issue_fields` and
+    // `list_issue_types` read the owner's organization; such a call names no repository, so it has no root.
+    'get_file_contents', 'get_repository_tree', 'get_commit', 'list_commits', 'list_branches', 'list_tags', 'get_tag',
+    'list_releases', 'get_latest_release', 'get_release_by_tag', 'issue_read', 'list_issues', 'list_issue_fields', 'list_issue_types',
+    'get_label', 'list_label', 'pull_request_read', 'list_pull_requests', 'get_discussion', 'get_discussion_comments', 'list_discussions',
+    'list_discussion_categories', 'actions_get', 'actions_list', 'get_job_logs', 'get_code_scanning_alert', 'list_code_scanning_alerts',
+    'get_code_quality_finding', 'get_dependabot_alert', 'list_dependabot_alerts', 'get_secret_scanning_alert', 'list_secret_scanning_alerts',
+    'list_repository_security_advisories', 'list_repository_collaborators',
+    // Writes to that repository alone.
+    'add_issue_comment', 'update_issue_comment', 'label_write', 'create_branch', 'create_or_update_file', 'delete_file', 'push_files',
+    'merge_pull_request', 'update_pull_request', 'update_pull_request_branch', 'add_comment_to_pending_review', 'add_reply_to_pull_request_comment',
+  ].map((tool) => [tool, 'every'] as const),
+  // `update`, `delete`, `mark_answer` and `unmark_answer` take the comment by `commentNodeID` alone (discussions.go);
+  // `reply` reads it so, then refuses one outside the repository's discussion before it writes.
+  ['discussion_comment_write', new Set(['add', 'reply'])],
+  // `resolve_thread` and `unresolve_thread` take the thread by `threadId` alone (pullrequests.go).
+  ['pull_request_review_write', new Set(['create', 'submit_pending', 'delete_pending'])],
 ])]]);
 
 /**
- * The root a call is consented, approved or pre-approved for: the repository a known repository-scoped tool's `owner`
- * and `repo` name (`REPOSITORY_TOOLS`); else nothing, which is its whole connection. A root is never inferred from
- * fields a tool may ignore.
+ * The root a call is consented, approved or pre-approved for: the repository a known repository-scoped operation's
+ * `owner` and `repo` name (`REPOSITORY_TOOLS`); else nothing, which is its whole connection. A root is never inferred
+ * from fields its handler may ignore.
  */
 export function partCallRoot(contract: ToolContract | null, args: JsonValue): Record<string, string> {
-  const scoped = contract?.preset === null || contract === null ? false : REPOSITORY_TOOLS.get(contract.preset)?.has(contract.tool) === true;
+  const operations = contract === null || contract.preset === null ? undefined : REPOSITORY_TOOLS.get(contract.preset)?.get(contract.tool);
 
-  if (!scoped || args === null || typeof args !== 'object' || Array.isArray(args)) return {};
-  const { owner, repo } = args;
+  if (operations === undefined || args === null || typeof args !== 'object' || Array.isArray(args)) return {};
+  const { owner, repo, method } = args;
+  const scoped = operations === 'every' || (typeof method === 'string' && operations.has(method));
 
-  return typeof owner === 'string' && typeof repo === 'string' ? { owner, repo } : {};
+  return scoped && typeof owner === 'string' && typeof repo === 'string' && owner !== '' && repo !== '' ? { owner, repo } : {};
 }
 
 /** A root as the consent row keys it: its entries in key order. */
