@@ -222,6 +222,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { name: 'deleteSecret', run: (u, c) => u.deleteSecret(c, 'STRIPE_SECRET_KEY') },
   { name: 'grantSecret', run: (u, c) => u.grantSecret(c, { name: 'STRIPE_SECRET_KEY', workspace: 'w', reveal: true }) },
   { name: 'revokeSecretGrant', run: (u, c) => u.revokeSecretGrant(c, { name: 'STRIPE_SECRET_KEY', workspace: 'w' }) },
+  { name: 'revealedSecretsFor', run: (u, c) => u.revealedSecretsFor(c, 'w') },
   {
     capability: 'secrets.inject',
     name: 'resolveEgressInjection',

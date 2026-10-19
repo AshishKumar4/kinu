@@ -383,3 +383,56 @@ describe('queued native mutations belong to the kernel they observed', () => {
     });
   }
 });
+
+describe("a job its owner started reads the values its agents may read at each launch, and keeps none", () => {
+  /** Assembled, so no scanner reads a hardcoded password here. */
+  const VALUE = ['hunter2', 'job', 'db'].join('-');
+
+  const PLACEHOLDER = `pxs1_${'a'.repeat(43)}`;
+
+  class RevealingBox extends Devbox {
+    asked = 0;
+
+    protected override async revealedEnv(): Promise<Readonly<Record<string, string>>> {
+      this.asked += 1;
+
+      return { DATABASE_PASSWORD: VALUE };
+    }
+  }
+
+  /** Everything the box keeps: its rows and every file it wrote. */
+  function kept(made: ReturnType<typeof harness<RevealingBox>>): string {
+    return JSON.stringify([...made.rows.values()]) + JSON.stringify([...made.container.files.values()]);
+  }
+
+  test('the launch is handed the value in memory; the spec and the job directory hold the placeholder alone', async () => {
+    const made = harness(RevealingBox);
+
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, true);
+
+    expect(made.box.asked).toBe(1);
+    expect(made.container.launchEnvs.at(-1)).toMatchObject({ DATABASE_PASSWORD: VALUE, DEVBOX_REVEALED: 'DATABASE_PASSWORD' });
+    expect(kept(made)).toContain(PLACEHOLDER);
+    expect(kept(made)).not.toContain(VALUE);
+  });
+
+  test('a restore after a recycle asks again, so the job holds the value as the owner left it', async () => {
+    const made = harness(RevealingBox);
+
+    made.rows.set(`devbox:proc:${REPAIR_ID}`, { processId: REPAIR_ID, command: COMMAND, cwd: '/workspace', createdAt: 1, env: { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, reveal: true });
+    await made.box.devboxStartup();
+
+    expect(made.box.asked).toBe(1);
+    expect(made.container.launchEnvs.at(-1)).toMatchObject({ DATABASE_PASSWORD: VALUE });
+    expect(kept(made)).not.toContain(VALUE);
+  });
+
+  test("a job no owner started never asks, and its launch holds no value", async () => {
+    const made = harness(RevealingBox);
+
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER });
+
+    expect(made.box.asked).toBe(0);
+    expect(JSON.stringify(made.container.launchEnvs)).not.toContain(VALUE);
+  });
+});

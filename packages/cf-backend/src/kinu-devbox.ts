@@ -17,7 +17,9 @@ import {
   CONTAINER_EVENT_HOST,
   type KinuEgressParams,
 } from "./egress/outbound";
+import { revealedForJob } from './egress/send-out';
 import type { KinuEgress, KinuEvents } from './server';
+
 
 /** The owning workspace's egress configuration, and its name: without it no root agent hears the box's notices. */
 const EGRESS_CONFIG_KEY = 'kinu:egress-config';
@@ -125,6 +127,17 @@ export class KinuDevbox extends Devbox<Env> {
       routes: { [CONTAINER_EVENT_HOST]: this.#nativeExports.KinuEvents({ props: params }) },
       fallback: this.#nativeExports.KinuEgress({ props: params }),
     };
+  }
+
+  /**
+   * The values the workspace's agents may read, for a supervised job its owner started, at each of its launches: asked
+   * of the owner's object with the owner capability, for the workspace this box was configured for. A box not yet
+   * configured, or an account that does not answer, starts the job without them: its placeholders still hold.
+   */
+  protected override async revealedEnv(): Promise<Readonly<Record<string, string>>> {
+    const params = await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY);
+
+    return params === undefined ? {} : await revealedForJob(this.env, params);
   }
 
   async #rootAgent(): Promise<SandboxRootClient | null> {

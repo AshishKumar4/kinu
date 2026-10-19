@@ -2580,6 +2580,8 @@ export {
 
 export { withCommandEnvironment, type CommandEnvironment } from './execution/command-environment';
 
+export { providersWithoutOwnerSecrets, withholdingOwnerSecrets, type SecretsCaller } from './execution/secrets-caller';
+
 export {
   objectNamed, type ObjectNamespace,
   type PcUserNamespace,

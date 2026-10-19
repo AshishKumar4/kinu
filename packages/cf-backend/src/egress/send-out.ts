@@ -11,11 +11,16 @@ import {
   type EgressInjection, type EgressInjectionResult, type EgressRequestFacts, type GitHubRecorder, type ObjectNamespace,
   type OwnerCapabilityEnv, type ScrubReplacement, type UserCaller,
 } from '@kinu.run/core';
-import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 
 /** Narrow on purpose, like `runtime.ts`'s `RuntimeUserDOClient`. */
 interface EgressVaultClient {
   resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult>;
+}
+
+/** What a box asks the owner's object for a job its owner started; as narrow. */
+interface JobValuesClient {
+  revealedSecretsFor(caller: UserCaller, workspace: string): Promise<Record<string, string>>;
 }
 
 /** Whose secrets a request may spend: a workspace, named by the egress's sealed props, and the account that grants them. */
@@ -33,6 +38,24 @@ export interface ContainerEgressEnv<Id> extends OwnerCapabilityEnv {
  * secret as they stand. A request naming none costs no round trip; with no `vault` (a program run for a share's viewer)
  * one naming a placeholder is refused. Every egress that carries a program's requests out sends them here.
  */
+/**
+ * The values the workspace's agents may read, for a supervised job its owner started, at each of its launches: asked
+ * of the owner's object with the owner capability, for the workspace this box was configured for. An account that does
+ * not answer starts the job without them: its placeholders still hold.
+ */
+export function revealedForJob<Id>(env: OwnerCapabilityEnv & { readonly UserDO: ObjectNamespace<Id, JobValuesClient> }, params: SecretVault): Promise<Readonly<Record<string, string>>> {
+  const owner: JobValuesClient = objectNamed(env.UserDO, params.ownerUserId);
+
+  return settle(Effect.catch(
+    attempt({ doing: "reading the values a job's agents may read", otherwise: 'unavailable' }, async () => owner.revealedSecretsFor(await ownerCaller(env), params.workspaceName)),
+    (failure) => Effect.sync(() => {
+      diagnostics.failure('secrets.job_values_unread', failure, { workspace: params.workspaceName });
+
+      return {};
+    }),
+  ));
+}
+
 /** {@link sendOut} as a promise, for an egress whose own entry awaits it (`codemode-egress.ts`). */
 export function sendOutRequest<Id>(request: Request, env: ContainerEgressEnv<Id>, vault: SecretVault | null): Promise<Response> {
   return settle(sendOut(request, env, vault, undefined));

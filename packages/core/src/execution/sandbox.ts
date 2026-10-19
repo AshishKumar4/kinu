@@ -21,6 +21,7 @@ import { direntType } from '../vfs/dirent';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import { desktopTools, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop';
 import type { CommandEnvironment } from './command-environment';
+import { secretsCaller } from './secrets-caller';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
@@ -87,8 +88,12 @@ export interface SandboxHandle {
   unexposePort(port: number): Promise<JsonValue | void>;
   getExposedPorts():
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
-  /** The only kind of background process that survives container sleep; `env` is kept with it and set again on each restart. */
-  startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>> }):
+  /**
+   * The only kind of background process that survives container sleep; `env` is kept with it and set again on each
+   * restart. `reveal`: the owner started it, so at each start and restart the box asks the account for the values this
+   * workspace's agents may read, and the process holds them in memory only.
+   */
+  startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>>; reveal?: boolean }):
     Promise<{ processId: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
   /** What a supervised job wrote most recently, both streams as its terminal showed them. */
@@ -330,7 +335,7 @@ function execMember({ handle, names, shells, touch, environment }: Computer): Ex
           // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
           // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
           return await names.hold(name, callJob(exec), () => named.run(pinned, async () => {
-            const env: Record<string, string> = environment === undefined ? {} : { ...await environment('run') };
+            const env: Record<string, string> = environment === undefined ? {} : { ...await environment('run', secretsCaller()) };
 
             if (job !== undefined) env[JOB_STAMP_ENV] = job;
             const call = machineShellCall(command, exec, place, Object.keys(env));
@@ -391,12 +396,13 @@ function startProcessMember({ handle, touch, environment }: Computer): ExecutorT
       return { call: { text: command, cwd, context: {} }, run: async () => {
         try {
           // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
-          const env = environment === undefined ? undefined : await environment('keep');
+          const caller = secretsCaller();
+          const env = environment === undefined ? undefined : await environment('keep', caller);
 
           const started = await touch(async () => {
             await withSandboxRetry(() => handle.ensureReady());
 
-            return handle.startSupervisedProcess(command, { cwd, ...(env !== undefined && { env }) });
+            return handle.startSupervisedProcess(command, env === undefined ? { cwd } : { cwd, env, reveal: caller === 'owner' });
           });
 
           return { processId: started.processId };

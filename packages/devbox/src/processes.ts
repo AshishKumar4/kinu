@@ -137,15 +137,28 @@ if [ -f "${SAVED_SESSIONS}/$2/screen" ]; then rm -f "${SAVED_SESSIONS}/$2/runnin
 while [ ! -e "$dir/piped" ]; do sleep 0.05; done
 printf '\\033[2m$ %s\\033[0m\\n' "$(cat "$dir/command")"
 [ -f "$dir/env" ] && . "$dir/env"
+if [ -p "$dir/revealed" ]; then eval "$(timeout 10 cat "$dir/revealed")"; rm -f "$dir/revealed"; fi
 sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" /bin/bash -c "$(cat "$dir/command")"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
 exec /bin/bash --rcfile ${SESSION_RC_FILE} -i`;
 
-/** In a session (D95): the session's files, then the session, its pane copied to the job's one log. */
+/**
+ * In a session (D95): the session's files, then the session, its pane copied to the job's one log. The values named in
+ * `DEVBOX_REVEALED` reach the pane through a pipe in the job's directory, which holds nothing at rest; a pane that never
+ * starts leaves its writer to give up, and no tmux client or server holds them.
+ */
 const RUN_IN_SESSION = `session=$DEVBOX_SESSION
 ${INSTALL_SESSION_FILES}
 printf '%s\\n' "$DEVBOX_JOB_PANE" >${JOB_PANE_FILE}
 unset DEVBOX_SESSION DEVBOX_JOB_PANE
+if [ -n "\${DEVBOX_REVEALED:-}" ] && (umask 077; mkfifo "$dir/revealed"); then
+  revealed=$(for name in $DEVBOX_REVEALED; do eval "value=\\\${$name}"; printf "export %s='%s'\\n" "$name" "$(printf '%s' "$value" | sed "s/'/'\\\\\\\\''/g")"; done)
+  REVEALED=$revealed timeout 60 sh -c 'printf "%s\\n" "$REVEALED" >"$0/revealed"' "$dir" >/dev/null 2>&1 &
+  unset revealed
+fi
+# Gone before tmux runs: a server it starts takes its client's variables as every pane's.
+for name in \${DEVBOX_REVEALED:-}; do unset "$name"; done
+unset DEVBOX_REVEALED
 printf '%s' "$3" >"$dir/command"
 : >"$dir/stdout.log"; : >"$dir/stderr.log"
 tmux kill-session -t "=$session" 2>/dev/null
@@ -280,9 +293,13 @@ export class Processes {
   }
 
   /** With `session`, the job runs in that terminal session, where a person can watch and answer it (D95). */
-  /** `env` is written beside the job and read by its launch, in a session's pane too, which inherits no caller's variables. */
+  /**
+   * `env` is written beside the job and read by its launch, in a session's pane too, which inherits no caller's
+   * variables. `revealed` is never written: it rides the launch in memory, and into a session's pane through a pipe.
+   */
   start(command: string, options: {
-    readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string; readonly env?: Readonly<Record<string, string>> | undefined;
+    readonly cwd?: string; readonly processId: string; readonly current?: () => boolean; readonly session?: string;
+    readonly env?: Readonly<Record<string, string>> | undefined; readonly revealed?: Readonly<Record<string, string>> | undefined;
   }): Promise<ProcessRecord> {
     if (this.kernel === undefined) return settle(attempt('process', async () => {
       const kernel = await this.incarnation();
@@ -315,11 +332,15 @@ export class Processes {
 
       if (variables !== '') yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/env`, variables)));
 
-      const env = options.session === undefined ? CONTAINER_ENV : {
+      const revealed = options.revealed ?? {};
+
+      const env = options.session === undefined ? { ...CONTAINER_ENV, ...revealed } : {
         ...CONTAINER_ENV,
         ...SESSION_FILES,
+        ...revealed,
         DEVBOX_SESSION: options.session,
         DEVBOX_JOB_PANE: JOB_PANE,
+        ...(Object.keys(revealed).length > 0 && { DEVBOX_REVEALED: Object.keys(revealed).join(' ') }),
       };
 
       const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {

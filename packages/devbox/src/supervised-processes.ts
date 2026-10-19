@@ -9,7 +9,7 @@ import { attempt, settle, type DevboxError } from './errors';
 const SUPERVISED_SPEC_PREFIX = 'devbox:proc:';
 
 export type SupervisedStart =
-  | { readonly kind: 'start'; readonly command: string; readonly cwd: string; readonly env: Readonly<Record<string, string>> }
+  | { readonly kind: 'start'; readonly command: string; readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly reveal: boolean }
   | { readonly kind: 'restore'; readonly spec: SupervisedProcessSpec }
   | { readonly kind: 'native-start'; readonly processId: string; readonly command: string; readonly cwd: string };
 
@@ -40,6 +40,8 @@ interface Ports {
   readonly lane: ResourceLane;
   readonly native: () => Processes;
   readonly failedStop: (processId: string, cause: DevboxError) => Promise<void>;
+  /** The values a job its owner started may read, asked at each of its launches and handed over in memory only. */
+  readonly revealed: () => Promise<Readonly<Record<string, string>>>;
 }
 
 /** Native id plus the durable request's generation. A new request with the same command is not the old owner. */
@@ -121,8 +123,12 @@ export class SupervisedProcesses {
 
         if (owner === undefined) known = false;
 
-        // A re-issue keeps its id and takes the variables it was asked with, for this start and every restart after.
-        const reserved: SupervisedProcessSpec = { processId: crypto.randomUUID(), createdAt: Date.now(), ...owner, command: request.command, cwd: request.cwd, env: request.env };
+        // A re-issue keeps its id and takes the variables and the starter it was asked with, for this start and every
+        // restart after.
+        const reserved: SupervisedProcessSpec = {
+          processId: crypto.randomUUID(), createdAt: Date.now(), ...owner, command: request.command, cwd: request.cwd, env: request.env, reveal: request.reveal,
+        };
+
         owner = reserved;
 
         yield* attempt('io', () => this.ports.storage.put(`${SUPERVISED_SPEC_PREFIX}${reserved.processId}`, reserved));
@@ -163,9 +169,11 @@ export class SupervisedProcesses {
       const command = request.kind === 'restore' ? request.spec.command : request.command;
       const cwd = request.kind === 'restore' ? request.spec.cwd ?? DEVBOX_WORKDIR : request.cwd;
       const env = request.kind === 'native-start' ? undefined : owner?.env;
+      // Asked again at every launch, so a restart holds the values as the owner left them, and no launch keeps them.
+      const revealed = request.kind !== 'native-start' && owner?.reveal === true ? yield* attempt('io', () => this.ports.revealed()) : undefined;
       // An agent's job runs in a terminal session of its own, where a person can watch and answer it (D95).
       const session = request.kind === 'native-start' ? undefined : jobSessionId(processId);
-      const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current, session, env })));
+      const started = yield* Effect.result(attempt('process', () => native.start(command, { cwd, processId, current, session, env, revealed })));
 
       if (Result.isFailure(started)) {
         if (!current()) return STALE;

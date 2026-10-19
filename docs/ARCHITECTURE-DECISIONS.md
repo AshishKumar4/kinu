@@ -1981,18 +1981,24 @@ the workspace taken from the egress's sealed props). Nothing of the grant lives
 in a workspace: the earlier `egress-secret:<id>` approval grant was the
 workspace's own word, which this replaced (2026-10-19).
 
-S2. A granted secret is `$NAME` in every agent command on the workspace's box
-and its computer, `env.NAME`/`process.env.NAME` in eval (Worker Loader
-bindings), and `this.env.NAME` in an owner's slate server; a shared slate holds
-none and its egress spends none. Its value is a random placeholder that the one
-gate (`planEgress`) lets trusted egress replace only in a URL or header value
-(a Basic credential decoded and re-encoded), only toward its hosts and only
-over https or wss (6808df1f8), with the response scrubbed. Bodies are never
-substituted: an allowed host can publish a body. Raw TCP, request signing and
-form logins cannot use a placeholder; for those the owner turns on "Agents may
-read the value" per workspace and secret, and the value is read from the
-account object for each command and never kept by the workspace. A named shell
-sets a call's variables after restoring its saved state and never saves them.
+S2. A granted secret is `$NAME` in every command the owner's own calls run on
+the workspace's box and its computer, `env.NAME`/`process.env.NAME` in the
+owner's eval (Worker Loader bindings), and `this.env.NAME` in an owner's slate
+server. A call that is not the owner's (a share's viewer, a shared slate's
+server, a program either starts) holds none: who a call runs for is carried
+with it (`secrets-caller.ts`), past an approval that runs it later, and the
+account reads answer such a call with nothing. Its value is a random
+placeholder that the one gate (`planEgress`) lets trusted egress replace only
+in the secret's credential position (S6), only toward its hosts and only over
+https or wss, with the response scrubbed. Bodies are never substituted: an
+allowed host can publish a body. Raw TCP, request signing and form logins
+cannot use a placeholder; for those the owner turns on "Agents may read the
+value" per workspace and secret. A value then lives only in memory: read from
+the account object for each command, held by a process the box keeps but never
+writes or restarts, and asked again at every launch of a supervised job the
+owner started, whose spec and directory hold placeholders alone (the job's
+pane receives it through a pipe). A named shell sets a call's variables after
+restoring its saved state and never saves them.
 
 S3. A chat draft holding a known credential shape (`secret-patterns.ts`, the
 provider shapes carrying their provider's variable and hosts) is held in the
@@ -2010,6 +2016,12 @@ cookie as a workspace preview; its URL is no bearer link. The owner can make one
 port a public link, confirmed; a new publication of the port is the owner's
 alone again. The cookie is trusted for its life (12 hours) without asking the
 workspace on each request, since only the owner-checked entry mints one.
+
+S6. A secret rides only in its credential position: the Authorization header
+(Basic decoded) by default, else one named header or one named query
+parameter (`user_secrets.position`, parsed at the store, no default). A
+placeholder anywhere else in the URL or headers is refused before the vault
+opens anything, so an allowed host cannot be made to store or echo it.
 
 ## Open
 

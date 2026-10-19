@@ -521,6 +521,10 @@ export class UserDO extends Agent<Env> {
     return this.secrets.revealedSecrets(caller);
   }
 
+  revealedSecretsFor(caller: UserCaller, workspace: string): Promise<Record<string, string>> {
+    return this.secrets.revealedSecretsFor(caller, workspace);
+  }
+
   resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
     return this.secrets.resolveEgressInjection(caller, facts, workspace);
   }

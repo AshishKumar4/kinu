@@ -50,7 +50,7 @@ function granted(): Granted {
 function computer(environment: CommandEnvironment) {
   const home = mkdtempSync(join(tmpdir(), 'kinu-command-env-'));
   homes.push(home);
-  const started: { command: string; env: Readonly<Record<string, string>> | undefined }[] = [];
+  const started: { command: string; env: Readonly<Record<string, string>> | undefined; reveal: boolean | undefined }[] = [];
 
   const handle: SandboxHandle = {
     ...sandboxHandleLifecycle,
@@ -64,7 +64,7 @@ function computer(environment: CommandEnvironment) {
       return { stdout, stderr, exitCode };
     },
     startSupervisedProcess: async (command, opts) => {
-      started.push({ command, env: opts?.env });
+      started.push({ command, env: opts?.env, reveal: opts?.reveal });
 
       return { processId: 'proc-1' };
     },
@@ -110,15 +110,15 @@ test("a named shell restores its own exports and sets the secrets again over the
     .toMatchObject({ stdout: '[kept][][]' });
 });
 
-test('a process the computer restarts by itself gets placeholders, never a value', async () => {
+test('a job the computer restarts by itself is kept with placeholders, never a value, and reads its values at each launch', async () => {
   const { started, provider } = computer(granted().environment);
 
   await provider.tools.startProcess.execute('bun run dev');
 
-  expect(started).toEqual([{ command: 'bun run dev', env: { STRIPE_SECRET_KEY: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}` } }]);
+  expect(started).toEqual([{ command: 'bun run dev', env: { STRIPE_SECRET_KEY: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}` }, reveal: true }]);
 });
 
-test("on the workspace's box a command gets the secrets beneath its own variables, and a facet keeps its home", async () => {
+test("on the workspace's box a command, and a process the box keeps in memory, get the secrets beneath their own variables, and a facet keeps its home", async () => {
   const seen: { method: string; env: Readonly<Record<string, string>> | undefined }[] = [];
 
   const box: NimbusSandboxHandle = {
@@ -146,6 +146,7 @@ test("on the workspace's box a command gets the secrets beneath its own variable
 
   expect(seen).toEqual([
     { method: 'exec', env: { STRIPE_SECRET_KEY: CALLS_OWN, DATABASE_PASSWORD: DB_PASSWORD, HOME: '/home/alpha', TMPDIR: '/tmp/alpha' } },
-    { method: 'startProcess', env: { STRIPE_SECRET_KEY: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}`, HOME: '/home/alpha', TMPDIR: '/tmp/alpha' } },
+    // The box neither writes nor restarts it, so it holds the value as a command does.
+    { method: 'startProcess', env: { STRIPE_SECRET_KEY: PLACEHOLDER, DATABASE_PASSWORD: DB_PASSWORD, HOME: '/home/alpha', TMPDIR: '/tmp/alpha' } },
   ]);
 });

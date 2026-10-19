@@ -151,7 +151,7 @@ import {
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission,
+  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission,
   type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   childContextResolver,
@@ -2343,7 +2343,7 @@ export abstract class ActorAgent extends Agent<Env> {
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
         turnSurface: () => this.turnSurface(),
-        commandEnvironment: (use) => this.account.commandEnvironment(use),
+        commandEnvironment: (use, caller) => this.account.commandEnvironment(use, caller),
       }, {
         actor: this.actorHandle(),
         rootActor: true,
@@ -2424,7 +2424,8 @@ export abstract class ActorAgent extends Agent<Env> {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(actor.handle.actorId),
         }, this.agentStores(actor.handle.actorId).conversations(), { ownerWaits: null });
 
-        const providers = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
+        const reached = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
+        const providers = context.viewer === true ? providersWithoutOwnerSecrets(reached) : reached;
         // Narrow by the child's own durable, per-actor role, in the mode that role leaves the caller.
         const authority = await this.hostedSlateAuthority(actor, mode, providers, Object.keys(surface.native));
         const reach = slateToolReach(authority.reach);
@@ -2460,7 +2461,14 @@ export abstract class ActorAgent extends Agent<Env> {
    * Not `@callable`: reached on the stub transport only.
    */
   slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<SlateSurfaceValue> {
-    return settle(Effect.gen({ self: this }, function* () {
+    // A shared slate's call, its viewer's or its owner's own, and everything it starts runs for no owner.
+    if (context.viewer === true) return withholdingOwnerSecrets(() => settle(this.dispatchSlateCall(path, route, mode, context)));
+
+    return settle(this.dispatchSlateCall(path, route, mode, context));
+  }
+
+  private dispatchSlateCall(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+    return Effect.gen({ self: this }, function* () {
       // Only a namespace member is checked without running it; anything else asked about alone would run.
       if (context.authorizeOnly && route.kind !== 'namespace') {
         return yield* new KinuError('bad_input', `A ${route.kind} route runs at the host; it is not authorized to run elsewhere`);
@@ -2576,7 +2584,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
         case 'app': return yield* new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
       }
-    }));
+    });
   }
 
   /** The one adapter between a slate's `agent.send` and the turn inbox. */
@@ -2629,7 +2637,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return (online) => codemodeLauncher(
       { kinuNode: true, egress: online ? { workspace, actor, asOwner: owner, ownerUserId: owner ? this.getOwnerUserId() : null } : null },
-      owner ? () => this.account.commandEnvironment('run') : async () => ({}),
+      () => this.account.commandEnvironment('run', owner ? 'owner' : 'viewer'),
     );
   }
 
@@ -2651,7 +2659,11 @@ export abstract class ActorAgent extends Agent<Env> {
       this._slateToolFactories.set(launch, factory);
     }
 
-    const scope: CodemodeScope = { reach, nested: context.nested, namespaces: (executor) => actorNamespaces(actor, policy, { executor }) };
+    // A program calls back into these from its own isolate: a viewer's runs with none of the owner's secrets there too.
+    const scope: CodemodeScope = {
+      reach, nested: context.nested,
+      namespaces: (executor) => (context.viewer === true ? providersWithoutOwnerSecrets(actorNamespaces(actor, policy, { executor })) : actorNamespaces(actor, policy, { executor })),
+    };
 
     return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}, () => ({}), { stores: actor.stores }), route.name, route.input, scope)) ?? null;
   }
@@ -2767,8 +2779,11 @@ export abstract class ActorAgent extends Agent<Env> {
    * less `agents` unless `owner`: the owner's own slate, as the owner, with no share in it. The host refuses what else
    * only the agent does. Read per call: executors attach and detach while this object lives.
    */
+  /** A caller other than the owner (a share's viewer, a shared slate's server) runs commands with none of the owner's secrets. */
   protected slateNamespaces(mode: WorkMode, owner = false): CodemodeProvider[] {
-    return actorNamespaces(this.surfaceActor(mode, owner ? 'owner' : 'viewer'), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
+    const providers = actorNamespaces(this.surfaceActor(mode, owner ? 'owner' : 'viewer'), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
+
+    return owner ? providers : providersWithoutOwnerSecrets(providers);
   }
 
   /**

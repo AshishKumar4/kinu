@@ -1396,7 +1396,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       capabilityToken: () => this.workspaceCapabilityToken(),
       workspaceBox: (shellId) => this.workspaceBox(shellId),
       workspaceServing: () => this.workspaceServing(),
-      commandEnvironment: (use) => this.account.commandEnvironment(use),
+      commandEnvironment: (use, caller) => this.account.commandEnvironment(use, caller),
       homeHost: () => this.facetHomeHost(),
       homes: this.actorHomes,
       // The root's durable program is always readable because the root is this runtime;
@@ -5900,7 +5900,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A share's caller carries its viewer through, so what the call reaches inside itself is held to the grant.
       dispatch: (caller, route, context) => this.slateCallDispatch(caller.path, route, caller.workMode, { ...context, ...(caller.share !== undefined && { viewer: true }) }),
       browserActor: async (caller) => (caller.share === undefined ? this.slateCallerActorId(caller.path) : null),
-      secrets: () => this.account.commandEnvironment('keep'),
+      secrets: () => this.account.commandEnvironment('keep', 'owner'),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),

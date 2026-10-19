@@ -489,6 +489,11 @@ export interface SupervisedProcessSpec {
   readonly createdAt: number;
   /** Variables the job runs with, set again on every restart; a caller keeps no secret here, only what may be kept. */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * The workspace's owner started it: at each start and restart the box asks for the values its agents may read
+   * (`Devbox.revealedEnv`), and the job holds them in memory, never here or in any file beside it.
+   */
+  readonly reveal?: boolean;
 }
 
 /** The token is generated once and reused so preview URLs survive restarts verbatim;

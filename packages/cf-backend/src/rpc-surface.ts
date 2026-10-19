@@ -170,6 +170,7 @@ const USER_DO_METHODS = [
   'grantSecret',
   'grantedSecrets',
   'revealedSecrets',
+  'revealedSecretsFor',
   'searchExperience',
   'selectAIGateway',
   'selectCloudflareAccount',

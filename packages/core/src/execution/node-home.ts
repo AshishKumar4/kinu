@@ -18,13 +18,13 @@ export interface HostedNodeHome {
 type CommandOptions = Parameters<NimbusSandboxHandle['exec']>[1];
 
 /**
- * `box` with every command it runs given the options `optionsFor` makes of the caller's; `kept` is a process the box
- * keeps running past the call (`startProcess`). Nothing that runs a command is carried over as it is: a member not
- * bound here is absent, never run as someone else.
+ * `box` with every command it runs, a process it keeps running past the call (`startProcess`) included, given the
+ * options `optionsFor` makes of the caller's. Nothing that runs a command is carried over as it is: a member not bound
+ * here is absent, never run as someone else.
  */
 export function withCommandOptions(
   box: NimbusSandboxHandle,
-  optionsFor: (options: CommandOptions, kept: boolean) => CommandOptions | Promise<CommandOptions>,
+  optionsFor: (options: CommandOptions) => CommandOptions | Promise<CommandOptions>,
 ): NimbusSandboxHandle {
   const execution: NimbusSandboxHandle = {
     ready: () => box.ready(),
@@ -34,17 +34,17 @@ export function withCommandOptions(
     ...(box.mountTable !== undefined && { mountTable: box.mountTable.bind(box) }),
     ...(box.namespace !== undefined && { namespace: box.namespace.bind(box) }),
     ...(box.shellCwd !== undefined && { shellCwd: box.shellCwd.bind(box) }),
-    exec: async (command, options) => box.exec(command, await optionsFor(options, false)),
+    exec: async (command, options) => box.exec(command, await optionsFor(options)),
   };
 
   if (box.execStream) {
     const execStream = box.execStream;
-    execution.execStream = async (command, options) => execStream(command, await optionsFor(options, false));
+    execution.execStream = async (command, options) => execStream(command, await optionsFor(options));
   }
 
   if (box.startProcess) {
     const startProcess = box.startProcess;
-    execution.startProcess = async (command, options) => startProcess(command, await optionsFor(options, true));
+    execution.startProcess = async (command, options) => startProcess(command, await optionsFor(options));
   }
 
   return execution;

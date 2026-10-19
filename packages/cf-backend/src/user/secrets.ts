@@ -87,6 +87,19 @@ export class UserSecrets {
     }));
   }
 
+  /**
+   * The values `workspace`'s agents may read, for its computer to hand a supervised job it starts or restarts by
+   * itself, in memory: the box holds the owner capability and names the workspace from its own configuration.
+   */
+  revealedSecretsFor(caller: UserCaller, workspace: string): Promise<Record<string, string>> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.require(caller, 'secrets.inject');
+      const deps = yield* Effect.promise(() => this.deps());
+
+      return yield* Effect.promise(() => revealedSecrets(deps, workspace));
+    }));
+  }
+
   /** `workspace` comes from the egress's own sealed props, never from the program whose request this is. */
   resolveEgressInjection(caller: UserCaller, facts: EgressRequestFacts, workspace: string): Promise<EgressInjectionResult> {
     return settle(Effect.gen({ self: this }, function* () {
