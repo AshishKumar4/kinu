@@ -1,20 +1,28 @@
-# Mission Inbox: email ingress and outbound
+# Email ingress and outbound
 
-Mail to `<workspace-name>@EMAIL_DOMAIN` wakes the workspace, and its answer returns on the same thread. The same outbound path carries changelog, job, and monitoring notifications. The channel works only after the domain has Email Routing, a verified destination, and a Worker rule. kinu.run has not passed that live check: on 2026-08-20 the `kinu.run` zone held zero DNS records, and neither Email Routing nor Email Sending was onboarded. The binding, the var, and the `email()` handler are in place.
+Every address on `EMAIL_DOMAIN` is a box of one account: `<username>@D` the person's own, `<workspace>.<username>@D` a
+workspace's, `<agent>.<workspace>.<username>@D` an agent's (docs/MAIL.md §1). Mail to any of them is filed in the
+account's Mailbox, and wakes the box's agent only as the Mailbox decides from Cloudflare's own DMARC verdict. The
+channel works only after the domain has Email Routing, Email Sending and DNS onboarded, a deploy step (MAIL.md §5).
 
 ## Flow
 
 ```
 inbound   Email Routing (catch-all on EMAIL_DOMAIN)
-            → Worker email() handler                    (cf-backend/src/server.ts)
-            → handleInboundEmail                        (src/email/handler.ts)
-            → routeInboundEmail: recipient → workspace name (src/email/route.ts)
-              parse MIME once (postal-mime), strip quoted history
-            → agent DO: acceptEmailDelivery             (src/orchestrator.ts)
+            → Worker email() handler                     (cf-backend/src/server.ts)
+            → handleInboundMail                          (src/mail/handler.ts)
+            → routeInboundMail: recipient → label → MailName → account (src/mail/router.ts)
+              an unknown address is refused at SMTP time; 25 MiB ceiling, counted
+            → the account's MailboxDO.deliver            (src/mail/mailbox-do.ts, store.ts)
+              raw bytes to R2, postal-mime parse, Message-ID dedupe, threading, search index
+              verdict: the first Authentication-Results under Cloudflare's Received (core mail/verdict.ts)
+              wake: the verified owner always; others by the box's policy; unverified never
+            → when it woke an agent and is not machine mail:
+              the workspace's mailArrived(arrival, actorId)   (src/orchestrator.ts)
               EmailInbox.accept (core/src/events/ingress/email.ts)
-              trust gate → EventLog.publish (email variant, Message-ID dedupe)
-              + email_thread ReplyChannel (threading headers, 24h TTL)
-            → arms the durable wake, which drains it into a delivery (duplicates don't re-wake)
+              EventLog.publish (email variant): the owner's words, or input's sender and subject only
+              + email_thread ReplyChannel for the owner's mail to the workspace's main agent
+            → arms the durable wake; the drain runs the turn in Plan (any effect waits for the owner)
 
 outbound  turn completes (onChatResponse)
             → drainTurnId metadata → dispatchEmailRepliesForTurn
@@ -23,66 +31,23 @@ outbound  turn completes (onChatResponse)
               write-ahead intent + stable Message-ID → env.EMAIL.send
               (In-Reply-To / References per RFC 5322, "Re:" subject)
 
-notify    changelog_digest (EvolutionEngine event listener) and background-job
-          settles (BackgroundJobRunner.onSettled → notifyOwner) → sendOwnerEmail
-          → the same outbox → the owner's verified login email
+notify    changelog_digest and background-job settles → sendOwnerEmail
+          → the same outbox, from noreply@EMAIL_DOMAIN → the owner's login email
           Synthetic-monitoring incidents (src/monitor/incidents.ts) take the
-          same sendOwnerEmail + outbox path, from ops.monitor@EMAIL_DOMAIN to
-          OPS_ALERT_EMAIL rather than to a workspace owner.
+          same path, from ops.monitor@EMAIL_DOMAIN to OPS_ALERT_EMAIL.
 ```
-
-## Addressing
-
-The local part of the recipient address is the workspace name. Workspace names are globally unique Durable Object ids. `scout-a1b2c3@agents.example.com` routes to the workspace `scout-a1b2c3` and wakes its agent. `+tag` sub-addressing is stripped and case is ignored. A local part that is not a plausible workspace slug, or a host that is not `EMAIL_DOMAIN`, is dropped.
 
 ## Trust model
 
-Inbound email is untrusted input. The sender check runs inside the agent DO, before any event row exists, and decides who can drive a turn:
+The trust rule, its measurement and the turn policy are docs/MAIL.md §3-§4. In short:
 
-| Sender | Outcome | Event trust |
-| --- | --- | --- |
-| The owner's verified login email (UserDO profile) | admitted | `authenticated` |
-| An address on the agent's `email_route` allowlist | admitted | `external` |
-| Anyone else | dropped (silently, so no bounce and no existence oracle) | n/a |
+| Sender | Wakes | Event trust | The turn |
+|---|---|---|---|
+| The account's sign-in email, DMARC passed by Cloudflare | always | `authenticated` | the owner's instruction, in Plan: reading, planning and drafting run; every effect waits for their in-app approval |
+| Anyone else, DMARC passed | by the box's policy (`owner` by default: never) | `external` | untrusted input, in Plan: sender and subject only; the body through `mail.read`, never an instruction |
+| Not verified | never | none | none: kept and marked "Not verified" |
 
-- Even the owner is capped at `authenticated`, never `owner`. Email sender identity rests on envelope and DMARC checks upstream, which is weaker than an authenticated browser session. The trust lattice then limits the tool surface as it does for webhooks.
-- The allowlist lives in one `email_route` trigger row with `creator_trust: 'owner'`. It uses the same trigger registry, trust stamp, and lifecycle as every other ingress. Archiving the workspace pauses the row (`state='paused'`), and deleting it revokes the row (`state='revoked'`). Verified 2026-08-19 in `packages/core/src/events/hub/triggers.ts`.
-- `email_route`'s fork policy is `sever`, so a forked workspace inherits no email route. A fork gets its own address, and the owner re-grants the allowlist deliberately. Fork policy is a separate column from lifecycle state. `copy`, `sever` and `share` are its three values.
-- All senders combined share one inbound rate-limit window of 30 messages per minute per agent (`EMAIL_INBOUND_RATE_PER_MIN`, verified 2026-08-19). A refused window also publishes one internal `email_inbound_rate_limited` event, so the agent can report the refusal instead of missing mail without a trace.
-- Retried deliveries dedupe on `Message-ID`, enforced by a UNIQUE index on `agent_log.dedupe_key`. Mail carrying no `Message-ID` falls back to a hash of from, to, subject and body, bucketed in 5-minute windows. Verified 2026-08-19 in `packages/core/src/events/hub/dedupe.ts`.
-- Attachment metadata enters the turn input as `filename`, `content_type` and `size`. Attachment bytes never enter the event log. Verified 2026-08-19 in `packages/core/src/events/hub/types.ts` (`EmailAttachmentMeta`).
-- A body larger than the brief budget spills to a workspace path. The woken turn can read the whole message that woke it.
-- RFC 3834 auto-replies and bulk mail are dropped inbound. Kinu auto-replies on-thread, so admitting another machine's vacation responder would loop the two forever.
+## Rate limit
 
-## Operator API
-
-```
-GET /api/workspaces/<name>/email
-  → { address, allowlist, notifications }
-
-PUT /api/workspaces/<name>/email          (step-up auth: login within 5 minutes)
-  { "allow": ["friend@example.com"], "notifications": true }
-```
-
-Widening who can drive turns by email is a grant. `PUT` takes the same step-up rule as webhook trigger creation. Owner notifications default on (`email_notifications` agent config). They send only when the platform email pieces below exist, and skip quietly otherwise.
-
-## One-time owner setup
-
-Until these steps are done, no mail arrives and outbound sends skip quietly. `EMAIL_DOMAIN` is `kinu.run` in wrangler.jsonc `vars`; I change it there for a different domain.
-
-1. Enable Email Routing for the domain (receiving MX records). Dashboard: zone `kinu.run` → **Email** → **Email Routing** → enable. CLI alternative: `npx wrangler email routing enable kinu.run`, then `npx wrangler email routing dns get kinu.run` to verify records.
-2. Onboard the same domain for Email Sending (SPF/DKIM for outbound):
-   ```bash
-   npx wrangler email sending enable kinu.run
-   npx wrangler email sending dns get kinu.run   # verify
-   ```
-3. Point the catch-all routing rule at the Worker. It has to be a catch-all, because each agent has its own local part. Dashboard: **Email Routing → Routing rules → Catch-all address** → action **Send to a Worker** → `kinu`. CLI alternative: `npx wrangler email routing rules create` (see `npx wrangler email routing rules --help` for the worker action flags).
-4. Deploy with `bun run deploy` from the repo root. The `send_email` binding and the `EMAIL_DOMAIN` var are already in wrangler.jsonc.
-5. Verify from my login email. I send a message to `<workspace-name>@kinu.run`. The agent's timeline shows an `email` event, a turn runs, and a threaded reply lands back in my inbox. Mail from any other address must be dropped.
-
-## Tests
-
-- `packages/core/tests/unit-events-hub-email.test.ts`: trust/priority derivation, dedupe, rendering, email_thread channels, the drain path, and the CHECK-widening rebuild for live DOs.
-- `packages/cf-backend/tests/unit-email-ingress.test.ts`: addressing, MIME parse + quote stripping, the sender gate (owner / allowlist / dropped / rate limit / duplicate), and Worker routing.
-- `packages/cf-backend/tests/unit-email-outbound.test.ts`: the full inbound → turn → threaded-reply flow at its boundaries, threading headers, failure/retry audit, and owner notifications. The only mock is the send binding.
-- `packages/cf-backend/tests/unit-email-outbox.test.ts`: the write-ahead intent log: idempotency keys, the stable Message-ID, and the reconciliation sweep that re-drives a send left pending by a crash.
+One window per workspace: `EMAIL_INBOUND_RATE_PER_MIN` (30) arrivals a minute across all senders. Past it, mail is
+still filed in the Mailbox, but wakes nothing, and the agent is told once per window that its inbox went deaf.

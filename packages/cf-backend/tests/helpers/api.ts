@@ -32,6 +32,7 @@ function claimed(built: Partial<WorkspaceAgent> = {}): WorkspaceAgent {
   return {
     evalAbortActivation: built.evalAbortActivation ?? refuse('evalAbortActivation'),
     activations: built.activations ?? refuse('activations'),
+    mailHanded: built.mailHanded ?? refuse('mailHanded'),
   };
 }
 

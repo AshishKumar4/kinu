@@ -5,6 +5,8 @@ import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
+import type { MailNameDO } from "./src/mail/mailname-do";
+import type { MailboxDO } from "./src/mail/mailbox-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
 import type { CodemodeLauncher } from "./src/codemode-sandbox";
 import type { KinuEgress } from "./src/server";
@@ -42,6 +44,10 @@ declare global {
     KinuDevbox: DurableObjectNamespace<KinuDevbox>;
     /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare door). */
     DeployRunDO: DurableObjectNamespace<DeployRunDO>;
+    /** One per address label: the claim, and the one-hop lookup inbound mail makes (mail/mailname-do.ts). */
+    MAILNAME: DurableObjectNamespace<MailNameDO>;
+    /** One per account: every box it has (mail/mailbox-do.ts). */
+    MAILBOX: DurableObjectNamespace<MailboxDO>;
     /** Mossaic Drive tenant objects (SDK-fixed names); optional, the `/shared` mount then states its absence. */
     MOSSAIC_USER?: DurableObjectNamespace<MossaicUserDO>;
     MOSSAIC_SHARD?: DurableObjectNamespace<MossaicShardDO>;
@@ -58,6 +64,8 @@ declare global {
     RELEASES_BUCKET?: R2Bucket;
     /** Slate pictures; absent, a tile keeps its placeholder. */
     SLATE_PICTURES?: PictureBucket;
+    /** Mail's bytes under mail/<user_id>/ (mail/store.ts). */
+    MAIL_BUCKET?: R2Bucket;
     /** Browser Run: the `web` tool's rendered fetches and screenshots, agents' browser sessions, and slate pictures. */
     BROWSER: BrowserRun;
     /** Analytics Engine datasets, optional; user-authored names are digested before indexing. */
@@ -123,7 +131,7 @@ declare global {
     DEV_IDENTITY_SECRET?: string;
     /** Email Sending (`send_email`); optional, outbound email skips without it. */
     EMAIL?: SendEmail;
-    /** Agent mail domain; needs Email Sending and a catch-all route (docs/EMAIL-INGRESS.md). */
+    /** The mail domain every address sits on; needs Email Routing's catch-all and Email Sending (docs/MAIL.md §5). */
     EMAIL_DOMAIN?: string;
     /** Origin for unauthenticated CLI install/auth endpoints and synthetic monitoring. */
     CLI_PUBLIC_ORIGIN?: string;
@@ -133,6 +141,8 @@ declare global {
     /** Admin email allowlist (a var, auditable); unset ⇒ control plane unreachable; `dev` identities are
      *  refused. Inner half of the gate with `CONTROL_PLANE_ACCESS_*`. */
     CONTROL_PLANE_ADMINS?: string;
+    /** `operators` (the default): only CONTROL_PLANE_ADMINS may claim a mail address; `everyone`: any account may. */
+    MAIL_ACCOUNTS?: string;
     /** Cloudflare Access org for `/control*`: JWKS origin and pinned `iss`, else any org is a valid signer.
      *  Unset ⇒ 404 to everyone; `scripts/infra-verify.ts` requires it (control-plane/access-gate.ts). */
     CONTROL_PLANE_ACCESS_TEAM_DOMAIN?: string;

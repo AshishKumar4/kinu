@@ -80,8 +80,8 @@ const DRIVER = [
 ].join('\n');
 
 /**
- * A class that reads `ai.stream`, or the reply `agent.ask` answers, as its page would, a piece at a time, and answers
- * what it read and in how many pieces.
+ * A class that reads `ai.stream`'s text, or the reply `agent.ask` answers as UTF-8 bytes, as its page would, a piece at a
+ * time, and answers what it read and in how many pieces; or, `ask-whole`, reads the reply as the slates skill writes it.
  */
 const TYPIST = [
   'import { SlateObject } from "kinu:slate";',
@@ -89,7 +89,9 @@ const TYPIST = [
   '  async fetch(request) {',
   '    const url = new URL(request.url);',
   '    const say = url.searchParams.get("say");',
-  '    const stream = url.searchParams.get("via") === "ask" ? (await this.env.workspace.agent.ask({ text: say })).reply : await this.env.workspace.ai.stream({ prompt: say });',
+  '    const via = url.searchParams.get("via");',
+  '    if (via === "ask-whole") return Response.json([await new Response((await this.env.workspace.agent.ask({ text: say })).reply).text()]);',
+  '    const stream = via === "ask" ? (await this.env.workspace.agent.ask({ text: say })).reply.pipeThrough(new TextDecoderStream()) : await this.env.workspace.ai.stream({ prompt: say });',
   '    const pieces = [];',
   '    for await (const piece of stream) {',
   '      pieces.push(piece);',
@@ -441,8 +443,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   #typing = Promise.withResolvers<void>();
 
   /** What the typist slate's class read from `ai.stream`, or `agent.ask`'s reply, through the runner and the binding. */
-  async typed(say: string, via: 'stream' | 'ask' = 'stream'): Promise<string> {
+  async typed(say: string, via: 'stream' | 'ask' | 'ask-whole' = 'stream'): Promise<string> {
     this.#typing = Promise.withResolvers<void>();
+
+    // Read whole, the reply's last piece cannot wait on the reader having text already.
+    if (via === 'ask-whole') this.#typing.resolve();
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir('/slates/typist', { recursive: true });
     files.writeFile('/slates/typist/package.json', JSON.stringify({ main: 'server.js' }));
@@ -1067,6 +1072,50 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     } catch (cause) {
       return { failed: cause instanceof Error ? cause.message : String(cause) };
     }
+  }
+
+  /**
+   * Mail's search as docs/MAIL.md §11 declares it, in this object's own SQLite: the FTS5 table made, `rows` indexed by
+   * rowid, each of `queries` matched (best first), then `deleted` removed and every query matched again. What each
+   * found or how it failed. (`sqlite_version()` is not a function a Durable Object may call.)
+   */
+  mailSearch(rows: readonly { rowid: number; subject: string; sender: string; body: string }[], queries: readonly string[], deleted: readonly number[]) {
+    const sql = this.ctx.storage.sql;
+
+    const outcome = (fn: () => number[]): { found: number[] } | { failed: string } => {
+      try {
+        return { found: fn() };
+      } catch (cause) {
+        return { failed: cause instanceof Error ? cause.message : String(cause) };
+      }
+    };
+
+    const made = outcome(() => {
+      sql.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5 (
+        subject, sender, body, content = '', contentless_delete = 1, tokenize = 'unicode61 remove_diacritics 2'
+      )`);
+
+      return [];
+    });
+
+    const indexed = outcome(() => rows.map((row) => {
+      sql.exec('INSERT INTO mail_fts (rowid, subject, sender, body) VALUES (?, ?, ?, ?)', row.rowid, row.subject, row.sender, row.body);
+
+      return row.rowid;
+    }));
+
+    const matched = () => queries.map((query) => outcome(() => sql.exec('SELECT rowid FROM mail_fts WHERE mail_fts MATCH ? ORDER BY bm25(mail_fts)', query)
+      .toArray().map((row) => Number(row.rowid))));
+
+    const before = matched();
+
+    const removed = outcome(() => deleted.map((rowid) => {
+      sql.exec('DELETE FROM mail_fts WHERE rowid = ?', rowid);
+
+      return rowid;
+    }));
+
+    return { made, indexed, before, removed, after: matched() };
   }
 
   /** A share's numbers in this object's own SQLite, as its workspace keeps them, after `opens` (a viewer's key each). */

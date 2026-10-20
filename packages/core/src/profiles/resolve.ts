@@ -61,7 +61,8 @@ export interface ProfileAuthorityInputs {
   provider: ProviderCatalogSnapshot;
 }
 
-export type ProviderCacheOutcome = 'hit' | 'joined' | 'miss';
+/** `stored`: the account's last listing, served while a sweep runs behind it. */
+export type ProviderCacheOutcome = 'hit' | 'joined' | 'miss' | 'stored';
 
 export interface ProviderSnapshotRead {
   readonly snapshot: ProviderCatalogSnapshot;

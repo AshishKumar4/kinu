@@ -99,13 +99,20 @@ async function signInOnPage(view: SlateView, person: Person): Promise<boolean> {
   return view.pressNamed(/^(?:sign|log) ?in$/iu, 'call');
 }
 
+/** The slate's rooms, read as Alice: what each trial's chat holds, kept with its evidence. */
+const roomsEvidence: EvalPart['evidence'] = async (call, workspace) => {
+  const { ALICE } = people(workspace);
+  const signed = v.safeParse(Signed, await call(SLATE_ID, 'signIn', ALICE));
+
+  if (signed.success && signed.output.ok) await call(SLATE_ID, 'rooms', { token: signed.output.token });
+};
+
 const build: EvalPart = {
   id: 'chat',
   objectives: [
     'Build a chat slate with accounts, rooms joined only by invitation, and messages kept in the slate, each method to its contract and refusing what it must without changing anything.',
     'A message that mentions @kinu gets an answer in the room from Kinu, the workspace assistant.',
     'Its page lets a person sign in and read and write their rooms, drawn in the workspace theme and usable on a phone.',
-    'Later, a room owner can remove a member, who then can no longer read or write there, and each room counts what a member has not read.',
     'Built by the lead itself, from its own files: no prototype, no helpers.',
   ],
   turns: [{
@@ -237,7 +244,22 @@ A refused call changes nothing.`,
         return { pass: read?.ok === true && read.messages.some((message) => message.text === 'Great, noon at the park.'), evidence: { room, read: read?.ok ?? null } };
       });
     },
-  }, {
+  }],
+  evidence: roomsEvidence,
+};
+
+/**
+ * The same slate extended, a part of its own: a check of the first turn failing (a mention unanswered, the theme's
+ * contrast) left this turn unasked in 15 of 16 trials (rc22 2620e7c05 and the Luna-vs-Muse run), so removal, revoked
+ * access and unread counts went unmeasured. A slate the first turn never built fails these checks on their own.
+ */
+const extend: EvalPart = {
+  id: 'chat-extended',
+  objectives: [
+    'A room owner can remove a member, who then can no longer read or write there, and each room counts what a member has not read; everything that worked keeps working.',
+    'Built by the lead itself, from its own files: no prototype, no helpers.',
+  ],
+  turns: [{
     prompt: `Two more things for the chat. A room's owner can remove a member:
 - remove({ token, room, member }) -> { ok: true } | { ok: false, error: "NOT_THE_OWNER" }
 A removed member can no longer read or write the room, until someone invites them again.
@@ -290,12 +312,7 @@ Everything that already worked keeps working.`,
       await buildsClean(verifier, SIGN_IN.id);
     },
   }],
-  evidence: async (call, workspace) => {
-    const { ALICE } = people(workspace);
-    const signed = v.safeParse(Signed, await call(SLATE_ID, 'signIn', ALICE));
-
-    if (signed.success && signed.output.ok) await call(SLATE_ID, 'rooms', { token: signed.output.token });
-  },
+  evidence: roomsEvidence,
 };
 
 await defineTaskEval(defineEvalTask({
@@ -305,5 +322,5 @@ await defineTaskEval(defineEvalTask({
     source: "GitHub run37880718948 candidate chat-app-trial-2/ledger.jsonl: overlapping Muse agent/slate model_operation intervals; five retained trials, paired by runId+operationId and fenced at recorded run_end.",
   },
   mission: "Ripple's workspace. We build the chat app our friends and family use, with our assistant, Kinu, in it.",
-  parts: [build],
+  parts: [build, extend],
 }));

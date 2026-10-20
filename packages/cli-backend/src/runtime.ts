@@ -44,7 +44,7 @@ import { hostWorkspaceExecutor } from './host-toolchain';
 import { agentHomeFiles, localFilePlane, localFileReach, spaceFiles, type LocalPlane } from './host-mount';
 import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@kinu.run/core';
-import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
+import { createDecisionPort, createStructuredDecider, decisionPortOf, restDecisionRun } from '@kinu.run/core';
 import { readLaunchDotenv } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, workersAiRoute,
@@ -328,14 +328,16 @@ function buildCLIRuntime(
 
   const decisionEndpoint = workersAiRoute(config.llm, config.cloud)?.auth;
 
-  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere, and
-  // with no Workers AI route, no turn is rated.
-  const decide = !/\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '') ? undefined : createDecisionPort({
-    run: restDecisionRun({ getAuth: async () => decisionEndpoint ?? null }),
+  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere Clef
+  // refuses as unconnected, said once, and the fast tier answers what its measured agreement trusts it with.
+  const servesRun = /\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '');
+
+  const decide = decisionPortOf(createDecisionPort({
+    run: restDecisionRun({ getAuth: async () => (servesRun ? decisionEndpoint ?? null : null) }),
     model: async () => (await ensureProfile()).decisionModel,
     report,
     refusals,
-  });
+  }), createStructuredDecider(actor, modelLanes));
 
   const schedule: Schedule = {
     // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
@@ -464,7 +466,7 @@ function buildCLIRuntime(
     memory,
     craftStore,
     modelLanes,
-    ...(decide !== undefined && { decide }),
+    decide,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
   }), {

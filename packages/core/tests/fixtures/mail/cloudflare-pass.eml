@@ -1,0 +1,67 @@
+Received: from bg-bbd.cloudflare-smtp.net (104.30.16.113)
+        by cloudflare-email.net (cloudflare) id c7vktcpWs786
+        for <kinu-probe@dewml.dev>; Mon, 19 Oct 2026 19:14:14 +0000
+ARC-Seal: i=1; a=rsa-sha256; s=cf2024-1; d=cloudflare-email.net; cv=none;
+	b=MQ+YCttqU06kLdIk6ihZZIAWMYJuhSMLF9Gt4hpMYAAb0kcQ+SSBR1OqN8PTPdG5+1GjaGCPQ
+	uLwGt1KTAZPuDmh8HgE8jbwK4t4+nCfmvekRyMX7/XFEl9hoH/yj+8BtyLMymBfve3NOLDE/GKr
+	2YwEHoN4v28Rcjg29V0xY9V2LZyWKMwEP2pEQTuzdE62gp5nJiDEBgIDSNK6xMK0PLYp+X8vj4M
+	FehOeGjkI3DDn3XIzJPcW2eY2c/vMZheforEBcqk9JY6cXerjtPWSPW2c1xXMCQNwHd/NEJAydd
+	o2nma9ujZgibalZvy0erGgQ4cE7YNtr8/jcs19lUdY6w==;
+ARC-Message-Signature: i=1; a=rsa-sha256; s=cf2024-1; d=cloudflare-email.net; c=relaxed/relaxed;
+	h=Date:Subject:To:From:from:reply-to:cc:resent-date:resent-from:resent-to
+	:resent-cc:in-reply-to:references:list-id:list-help:list-subscribe
+	:list-post:list-owner:list-archive; t=1792437254; x=1793042054; bh=HpCXRYFw
+	408DxS7oXzPUu5rIYJO0ApOcoRtMuygMV2E=; b=PRYta1Nc/A7ya+WgQawklcGwNBtMV/wYPQW
+	l8qlLkPz7AnQZqu6ZwYfsDlhoEd99ds3VjLVEt497Y9edjDy8W+SpqYKECmmoO6U3vStVCYuCZX
+	v31tqEqezTGvhHU2YWPktW7Dfq0lLEvIiT5kuGccnrXD2uS3S2Y9wUgPgm8VECkG1tzfQP81Xdd
+	w38q8xkG+z+Lu/eGjPqzH7jSkYCWnp3UNJ9VMMbWmj/3refHeL+kt6cPzCmlJFePVTjDUICrtX4
+	k1O9GbKghrBKgl36GLCcLWC8MIGRYFPfo+OXA8dWYSajPKsqejHI9xl/3dNhWKG6k5rd/LpRb8C
+	3ZdNJMQ==;
+ARC-Authentication-Results: i=1; mx.cloudflare.net;
+	dkim=pass header.d=ashishkumarsingh.com header.s=cf-bounce header.b=dd467RUd;
+	dkim=pass header.d=cloudflare-smtp.net header.s=cf2024-1 header.b=hZz+xQ+r;
+	dmarc=pass header.from=ashishkumarsingh.com policy.dmarc=none;
+	spf=none (mx.cloudflare.net: no SPF records found for postmaster@bg-bbd.cloudflare-smtp.net) smtp.helo=bg-bbd.cloudflare-smtp.net;
+	spf=pass (mx.cloudflare.net: domain of b1auijezmx57hz2juxfanllww56sv2h43zol4g5bcrwah4ojxcgq@cf-bounce.ashishkumarsingh.com designates 104.30.16.113 as permitted sender) smtp.mailfrom=b1auijezmx57hz2juxfanllww56sv2h43zol4g5bcrwah4ojxcgq@cf-bounce.ashishkumarsingh.com;
+	arc=none smtp.remote-ip=104.30.16.113
+Received-SPF: pass (mx.cloudflare.net: domain of b1auijezmx57hz2juxfanllww56sv2h43zol4g5bcrwah4ojxcgq@cf-bounce.ashishkumarsingh.com designates 104.30.16.113 as permitted sender)
+	receiver=mx.cloudflare.net; client-ip=104.30.16.113; envelope-from="b1auijezmx57hz2juxfanllww56sv2h43zol4g5bcrwah4ojxcgq@cf-bounce.ashishkumarsingh.com"; helo=bg-bbd.cloudflare-smtp.net;
+Authentication-Results: mx.cloudflare.net;
+	dkim=pass header.d=ashishkumarsingh.com header.s=cf-bounce header.b=dd467RUd;
+	dkim=pass header.d=cloudflare-smtp.net header.s=cf2024-1 header.b=hZz+xQ+r;
+	dmarc=pass header.from=ashishkumarsingh.com policy.dmarc=none;
+	spf=none (mx.cloudflare.net: no SPF records found for postmaster@bg-bbd.cloudflare-smtp.net) smtp.helo=bg-bbd.cloudflare-smtp.net;
+	spf=pass (mx.cloudflare.net: domain of b1auijezmx57hz2juxfanllww56sv2h43zol4g5bcrwah4ojxcgq@cf-bounce.ashishkumarsingh.com designates 104.30.16.113 as permitted sender) smtp.mailfrom=b1auijezmx57hz2juxfanllww56sv2h43zol4g5bcrwah4ojxcgq@cf-bounce.ashishkumarsingh.com;
+	arc=none smtp.remote-ip=104.30.16.113
+X-CF-SpamH-Score: 1
+DKIM-Signature: v=1; a=rsa-sha256; s=cf-bounce; d=ashishkumarsingh.com; c=relaxed/relaxed;
+	h=Date:Subject:To:From:Feedback-ID:from:reply-to:cc:resent-date
+	:resent-from:resent-to:resent-cc:in-reply-to:references:list-id:list-help
+	:list-unsubscribe:list-unsubscribe-post:list-subscribe:list-post
+	:list-owner:list-archive; t=1792437254; x=1793042054; bh=HpCXRYFw408DxS7oXz
+	PUu5rIYJO0ApOcoRtMuygMV2E=; b=dd467RUdWoqwQFRPSRXnA0+6Wg3fC7MGKjp7nZEYJuZMT
+	01E3VxJSypTxUTS7qUWTf1FALfcKj/SrkaT711VeXQg43FWNi6Y688F87NsTvEwz1MmRXspXbLd
+	1g+q5QenWiTTaL1/LxJS1wo2UdnqrxmLyi9aVgJWSF0qHYh1x5UCOC9vpu7zk58cMn7qLW83nVB
+	pIsRZyQbfK+xWDKWwnnmiEAdG9UGF7mq2C9yjDeLG3s/wvOtiw4ZKsoG9w2U4A3+yGcBTXpl1ub
+	flsCvvfGD8wWPYaoOicgA+6Z0n+bDbOfdCdHs0F3Nhp+U9TZz9PPWqbv/JlrcV+QYdehHJIA==;
+DKIM-Signature: v=1; a=rsa-sha256; s=cf2024-1; d=cloudflare-smtp.net; c=relaxed/relaxed;
+	h=Date:Subject:To:From:Feedback-ID:from:reply-to:cc:resent-date
+	:resent-from:resent-to:resent-cc:in-reply-to:references:list-id:list-help
+	:list-unsubscribe:list-unsubscribe-post:list-subscribe:list-post
+	:list-owner:list-archive; t=1792437254; x=1793042054; bh=HpCXRYFw408DxS7oXz
+	PUu5rIYJO0ApOcoRtMuygMV2E=; b=hZz+xQ+rgQk9mLyBoH6feuJID3sa2S1RuAbcrq8fW0EzD
+	O1pe6MpfRiBs2xF8SjV56jRJH2Q/yNC61eCloCaoyaPyAlZCIsVx1dK2sj1AP9a2pjiXMRwgGr3
+	K0tfcQkC7mfakqPTqt8XTxMlOknoyasbZyl7xhyG3ZsyINaL2D0T/09cBEXmhxcGVMPIJVxJlFd
+	aZ2vf2Rm6/VTSnxWEElVAuQ9WlmGlBGN/UiPsMX/kwaa3PWTtO+Ukii1P3PDhpK3wrdvBJQau/z
+	TX5bP+mVhItomqJLe7sul2rytdahKGvY+W/Ksx49FY4KEVm4lFdOuOivMp2rG4HztjtpoMeA==;
+Feedback-ID: ashishkumarsingh.com:5:5:Cloudflare
+Message-ID: <8yJaAh6i87gsVrPvuHaauFhNcbYydzioAjoO@ashishkumarsingh.com>
+From: Kinu probe <probe@ashishkumarsingh.com>
+To: kinu-probe@dewml.dev
+Subject: probe 01b: control, no Authentication-Results anywhere
+Date: Mon, 19 Oct 2026 14:14:12 -0500
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+A control message for Kinu's inbound trust check. It carries no Authentication-Results lines.
+

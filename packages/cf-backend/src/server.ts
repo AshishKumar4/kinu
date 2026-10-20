@@ -31,7 +31,7 @@ import { authPageRoutes } from "./auth/routes";
 import { landingRoutes } from "./landing-route";
 import { pcRoutes } from "./pc-routes";
 import { opsRoutes } from "./ops-routes";
-import { handleInboundEmail } from "./email/handler";
+import { handleInboundMail } from "./mail/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
@@ -39,7 +39,7 @@ import {
   crossSiteRejection, sessionGate,
   type AuthIdentity,
 } from "./auth/session";
-import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
+import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
@@ -109,6 +109,10 @@ export { UserDO as MossaicUserDO, ShardDO as MossaicShardDO } from "@mossaic/sdk
 export { MonitorDO } from "./monitor/monitor-do";
 
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
+
+export { MailNameDO } from "./mail/mailname-do";
+
+export { MailboxDO } from "./mail/mailbox-do";
 
 export { DeployRunDO } from "./deploy/deploy-do";
 
@@ -188,6 +192,10 @@ export default {
     // Per isolate: repeat in `scheduled` and every DO activation, which run in other isolates.
     installAnalyticsDiagnostics(env);
     const url = new URL(request.url);
+    // First: mail.<domain> answers nothing of its own, and its host would otherwise read as a preview's.
+    const mail = mailHostRedirect(url, hostOf(env.CLI_PUBLIC_ORIGIN));
+
+    if (mail) return mail;
     const upgrade = httpsUpgrade(url, env);
 
     if (upgrade) return upgrade;
@@ -197,9 +205,9 @@ export default {
     return published(response, url, env);
   },
 
-  // Cloudflare Email Routing catch-all on EMAIL_DOMAIN.
+  // Cloudflare Email Routing catch-all on EMAIL_DOMAIN: the one inbound mail path (mail/router.ts).
   async email(message: ForwardableEmailMessage, env: Env) {
-    await handleInboundEmail(message, env);
+    await handleInboundMail(message, env);
   },
 
   // Synthetic monitoring cron; a failed run must not take the schedule down.

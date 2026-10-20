@@ -403,16 +403,15 @@ export interface AgentWorkspaceVerdict {
   /** The link the agent repeated from `agent.createWorkspace`'s answer, and the workspace it names. */
   readonly link: string;
   readonly created: { readonly name: string; readonly displayName: string } | null;
-  /** What waited on the owner in Work → Needs you once the turn was over. */
-  readonly needsYou: number;
   /** The Agent tab's Changelog entry for it: its words, and the workspace it opens. */
   readonly changelog: { readonly summary: string; readonly opens: string } | null;
 }
 
 /**
  * Row: the workspace's main agent creates a workspace in its owner's account, at once, nothing asked (the owner,
- * 2026-10-19): it exists under the name the agent gave it, the agent's reply carries its link, nothing waits in Work →
- * Needs you, and the Agent tab's Changelog records it with a way to open it.
+ * 2026-10-19): once its turn is over the workspace exists under the name the agent gave it, so no approval held it; the
+ * agent's reply carries its link, and the Agent tab's Changelog records it with a way to open it. The row never opens
+ * Work: with nothing waiting there, Work is not in the strip at all.
  */
 export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentWorkspaceVerdict> {
   const workspace = await createFlowWorkspace(target, 'agent-ws');
@@ -432,11 +431,7 @@ export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentW
     const row = (await listWorkspaces(target.origin, target.identity)).find((entry) => entry.name === created);
 
     await openInspector(page);
-    await until(page, 'Work in the inspector strip', `document.querySelector('#inspector button[aria-label="Work"]') !== null`);
-    await page.evaluate(stripTab('Work'));
-    await until(page, 'the Work tab', `document.querySelector('#inspector [data-section]') !== null`);
-    const needsYou = v.parse(v.number(), await page.evaluate(`document.querySelectorAll('#inspector [data-section="work-needs-you"] [data-pending-action]').length`));
-
+    await until(page, 'Agent in the inspector strip', `document.querySelector('#inspector button[aria-label="Agent"]') !== null`);
     await page.evaluate(stripTab('Agent'));
     const entry = `#inspector [data-changelog-workspace=${JSON.stringify(created ?? '(none)')}]`;
 
@@ -450,7 +445,7 @@ export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentW
     })()`));
 
     return {
-      link, needsYou, changelog, existedBefore: created !== null && before.has(created),
+      link, changelog, existedBefore: created !== null && before.has(created),
       created: row === undefined ? null : { name: row.name, displayName: row.displayName ?? '' },
     };
   } finally {

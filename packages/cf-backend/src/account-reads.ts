@@ -4,7 +4,7 @@
  * held under their refresh rule.
  */
 import { Effect } from 'effect';
-import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, UserCaller } from '@kinu.run/core';
+import type { AccountMemory, AccountProposer, CommandEnvironment, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
 import type { UserDoRpcMethod } from './rpc-surface';
@@ -188,5 +188,21 @@ export class AccountReads {
   /** The account's credentials revision as this workspace holds it, read at its first need. */
   credentialsRevision(): Promise<number> {
     return this.heldRevision.get(() => this.ask((stub, caller) => stub.getCredentialsRevision(caller)));
+  }
+
+  /** The account's last provider listing, if swept under its credentials as they stand and under `accounts`; an account
+   *  that does not answer has none, and the turn sweeps for itself. */
+  storedProviderListing(accounts: string): Promise<ProviderListing | null> {
+    return settle(Effect.catch(attempt({ doing: "reading the account's last provider listing", otherwise: 'unavailable' },
+      () => this.ask((stub, caller) => stub.storedProviderListing(caller, accounts))), (failure) => Effect.sync(() => {
+      diagnostics.failure('profile.stored_listing_unread', failure, { workspace: this.host.workspace() });
+
+      return null;
+    })));
+  }
+
+  /** Keeps a complete listing at the account under what it was swept under. */
+  keepProviderListing(revision: number, accounts: string, listing: ProviderListing): Promise<void> {
+    return this.ask((stub, caller) => stub.keepProviderListing(caller, revision, accounts, listing));
   }
 }

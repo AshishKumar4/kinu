@@ -32,7 +32,7 @@ export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-t
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
   type RunTurnSources, type TurnSourcesBundle, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
-  type TurnTools,
+  type TurnReads, type TurnTools,
 } from './orchestrator/turn-assembly';
 
 export {
@@ -90,6 +90,32 @@ export {
 } from './state/ops-tables';
 
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
+
+export { initMailNameTables, initMailboxTables } from './state/mail-schema';
+
+export { mailVerdict, type MailVerdict } from './mail/verdict';
+
+export { isMailLabel, mailAddressOf, mailLabelOf, parseMailRecipient, type MailRecipient } from './mail/address';
+
+export type * from './mail/mailbox-api';
+
+export { MailStore, type MailBlobs, type MailStoreDeps, type ParsedMail } from './mail/store';
+
+export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
+
+export { MAIL } from './operations/mail';
+
+export { mailHostRedirect } from './mail/host';
+
+export { inboundBody, isAutoReplyEmail, mailThreadText, stripQuotedReply } from './mail/words';
+
+export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/handed';
+
+export { mailInContext, type MailInContext } from './mail/in-context';
+
+export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
+
+export { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorDeps, type MonitorRunResult } from './monitor/incidents';
 
 export {
   DEFAULT_SOUL_MD,
@@ -199,6 +225,8 @@ export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROM
 export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, workspaceTitleProblem } from './read-models/workspace-title';
 
 export { EvolutionEngine } from './evolution/engine';
+
+export { createStructuredDecider } from './evolution/structured-decision';
 
 export {
   DEFAULT_EVOLUTION_CONFIG,
@@ -1565,7 +1593,7 @@ export {
   performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
 
-export { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './safety/approval-kind';
+export { approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,
@@ -1769,7 +1797,8 @@ export { activeOperationProfile, captureOperationProfile, currentOperationProfil
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
 export {
-  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type RouteModelBinder, type RouteModelBinding,
+  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type ModelLaneComponents, type RouteModelBinder,
+  type RouteModelBinding,
 } from './profiles/model-lane';
 
 export { tierRefusals } from './profiles/tier-refusals';
@@ -2150,8 +2179,8 @@ export {
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
-  providerListingOf, providerSnapshotOf, ProviderListingCache,
-  type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
+  KeptProviderListingSchema, providerListingOf, providerSnapshotOf, ProviderListingCache,
+  type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead, type StoredProviderListing,
   fastAssignment, fastCandidatesOf, type FastCandidate,
   agentRoleSwitch, changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,

@@ -110,7 +110,7 @@ export async function requestRefinement(
 }
 
 /** The cheapest step of a dream, before any draft: one decision-model question over the batch. */
-const TRIAGE = {
+export const TRIAGE = {
   worth: {
     type: 'noul',
     instructions: 'Does any of these turns show something the agent should change about how it works: a correction or a '

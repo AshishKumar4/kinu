@@ -21,6 +21,10 @@ export interface DeployInputs {
   readonly providerKeyNames: readonly string[];
   /** Needs Workers Paid (SELF-DEPLOY.md). */
   readonly sandbox: boolean;
+  /** The domain mail addresses sit on (docs/MAIL.md §1); absent or '' gives the deployment no mail. */
+  readonly mailDomain?: string;
+  /** Who may claim a mail address: the operators (the default), or everyone. */
+  readonly mailAccounts?: 'operators' | 'everyone';
 }
 
 // Letter first: an RFC 8941 key in the override header.
@@ -45,6 +49,9 @@ export const DeployInputsSchema: v.GenericSchema<DeployInputs> = v.object({
   accessEmails: v.array(v.pipe(v.string(), v.email())),
   providerKeyNames: v.array(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/u))),
   sandbox: v.boolean(),
+  // Optional: a record written before mail reads as a deployment without it.
+  mailDomain: v.optional(v.union([v.literal(''), v.pipe(v.string(), v.regex(/^[a-z0-9.-]+\.[a-z]{2,}$/u))])),
+  mailAccounts: v.optional(v.picklist(['operators', 'everyone'])),
 });
 
 export const DEFAULT_INSTANCE_NAME = 'kinu';

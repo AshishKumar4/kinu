@@ -39,6 +39,7 @@ import {
   actorEnded, actorStanding, isSubordinateOrigin,
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
+  createEmailThreadDispatcher,
 } from "@kinu.run/core";
 import { censusOf, requireOps, WorkspaceLayoutSchema, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
@@ -176,7 +177,7 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
-  type EmailAdmission, type IncomingEmail,
+  type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn,
   PeerHub, type PeerMessage, type ReceiveResult,
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
@@ -239,7 +240,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type OwnerWaitsHost,
+  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   AgentWorkspaceStore, createAgentWorkspace, type AgentWorkspaceDeps,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -258,7 +259,6 @@ import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, K
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
-import { createEmailThreadDispatcher } from "./email/outbound";
 import { WorkspaceEmail } from "./workspace-email";
 import { EmailOutbox } from "@kinu.run/core";
 import {
@@ -1593,6 +1593,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return hostedSurfaceActor(actor, {
       ...held.agents !== undefined && { agents: held.agents },
       ownerWaits: this.hireOwnerWaits(actor),
+      mail: this.mailFor(actor.handle.actorId, actor.record.name),
       web: { search: held.search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
       stores: held.stores,
     });
@@ -2072,6 +2073,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
       accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
+      mail: async () => {
+        const mail = this.mailFor(actor.handle.actorId, actor.record.name);
+
+        return mail === null ? undefined : unreadMailForTurn(mail, this.name);
+      },
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({
         actor: actor.handle, profile, inputs: operationInputs, runId: turn?.surface.key.runId ?? WORKSPACE_RUN_ID, turnId: turn?.surface.key.turnId ?? null,
@@ -2604,6 +2610,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     return this._replyChannels;
+  }
+
+  protected override mailFor(actorId: string, name: string): MailDeps | null {
+    const owner = this.getOwnerUserId();
+
+    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return null;
+
+    return {
+      caller: () => ({ workspace: this.name, title: this.safeDisplayName(), mainActorId: this.actorHandle().actorId, actorId, name }),
+      mailbox: () => objectNamed(this.env.MAILBOX, owner),
+      // An agent's message waits in this workspace's one queue, as every parked action does; its agent is woken by the answer.
+      approvals: {
+        ask: (id, send) => {
+          const verdict = this.deferrals.mailSend(id, send, actorId);
+
+          return verdict.outcome === 'approved' ? verdict : { outcome: verdict.outcome, approval: verdict.action.id };
+        },
+        take: (id) => this.deferrals.takeMailSend(id, actorId),
+        settle: async (spend, outcome) => this.deferrals.settle(spend, outcome, actorId),
+      },
+    };
   }
 
   /** Never throws pre-schema; an untitled workspace sends as the product, not its slug. */
@@ -7266,9 +7293,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Held across the activation, like the in-memory inbound rate window its inbox owns. */
   private get email(): WorkspaceEmail {
     this._email ??= new WorkspaceEmail({
-      log: this.eventLog,
+      log: (actorId) => new EventLog(this.watchedExec, this.agentBound(actorId).handle),
       replies: this.replyChannels,
-      triggers: this.triggerRegistry,
+      mainActorId: () => this.actorHandle().actorId,
       vfs: () => this.rt.storage.vfs,
       sql: this.ctx.storage.sql,
       onAdmitted: () => { this.armDurableWake(); },
@@ -7287,24 +7314,66 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._email;
   }
 
-  /** Pre-parse sender check so unauthorized senders cannot force a MIME parse; admits nothing,
-   * the delivery re-checks. */
-  async authorizeEmailSender(from: string): Promise<{ authorized: boolean; reason?: string }> {
-    return this.email.inbox.authorizes(from);
+  /**
+   * An arrival the account's Mailbox filed and decided wakes `actorId` (the workspace's main agent when it names none),
+   * on the owner's word or as input (docs/MAIL.md §3). Worker-only: the mail router holds the stub, never a browser.
+   * Publish and reply thread run here atomically.
+   */
+  async mailArrived(arrival: MailArrival, actorId?: string): Promise<MailAdmission> {
+    return await this.email.accept(arrival, actorId ?? this.actorHandle().actorId);
   }
 
-  /** Email counterpart of acceptWebhookDelivery: trust gate, publish, and reply thread run here atomically. */
-  async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
-    return await this.email.accept(opts);
+  /**
+   * This workspace, the owner's Personal assistant, reads their own box from now on (docs/MAIL.md §7). Worker-only: the
+   * assistant's install and the owner's claim of an address call it, each having read that this is their assistant.
+   */
+  async readOwnerMail(): Promise<void> {
+    const owner = this.getOwnerUserId();
+
+    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return;
+    await objectNamed(this.env.MAILBOX, owner).readBy({ workspace: this.name, actorId: this.actorHandle().actorId });
   }
 
-  async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
+  /**
+   * A thread the owner sent this workspace from Mail (docs/MAIL.md §8): a turn of its own for the main agent. Worker-only:
+   * the route proved the owner holds both the thread and this workspace.
+   */
+  async mailHanded(handed: HandedMail): Promise<{ status: 'queued' | 'skipped' }> {
+    const spilled = await spillEventContent(this.rt.storage.vfs, handed.text);
+    const outcome = await this.workspaceAgentDeliveries().signals.send(handedMailSignal(handed, spilled));
+
+    return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
+  }
+
+  /**
+   * The Agent tab's mail (docs/MAIL.md §7): the address the shown agent reads as its own, its unread count and its
+   * newest threads. `actorId` names one of this workspace's agents; absent, its main agent, whose box is the
+   * workspace's. Null where the deployment has no mail or the owner has no address yet.
+   */
+  @callable()
+  async agentMail(actorId?: string): Promise<{ address: string; unread: number; threads: MailThreadSummary[] } | null> {
+    const main = this.actorHandle().actorId;
+    const record = actorId === undefined || actorId === main ? null : this.actorHost().describe(actorId);
+
+    if (actorId !== undefined && actorId !== main && record === null) return null;
+
+    const mail = this.mailFor(actorId ?? main, record?.name ?? 'main');
+
+    if (mail === null) return null;
+
+    const caller = mail.caller();
+    const mailbox = mail.mailbox();
+    const [own] = await mailbox.readableBy(caller);
+
+    if (own === undefined) return null;
+
+    const listing = await mailbox.findFor(caller, { view: 'all', box: own.path, limit: 20 });
+
+    return { address: own.address, unread: listing.unread, threads: [...listing.threads] };
+  }
+
+  async getEmailIngress(): Promise<{ notifications: boolean }> {
     return this.email.ingress();
-  }
-
-  /** Reached only through the owner-authenticated + step-up route. */
-  async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
-    return await this.email.allow(allow);
   }
 
   async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {

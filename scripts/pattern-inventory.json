@@ -36,28 +36,28 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/cf-backend/src/email/inbound.ts",
+      "file": "packages/core/src/mail/words.ts",
       "kind": "hand-parser",
       "owner": "stripQuotedReply",
       "sourceSha256": "6b8e7f37ea7cb376d92e781d2f8faa67c3aad2d79790f520c4d42c1533990e22",
       "decision": "framing"
     },
     {
-      "file": "packages/cf-backend/src/email/inbound.ts",
+      "file": "packages/core/src/mail/words.ts",
       "kind": "regex-literal",
       "owner": "htmlToText",
       "sourceSha256": "70c5c1f05af2adf80ebf31e370e79d11a70bd93d39cee81ec9e8ff2280218d97",
       "decision": "html"
     },
     {
-      "file": "packages/cf-backend/src/email/inbound.ts",
+      "file": "packages/core/src/mail/words.ts",
       "kind": "regex-literal",
       "owner": "htmlToText",
       "sourceSha256": "55797ce4af50ebc2b14c8e0f5e6fd5be5513dcdba2479a44a409368808d9ed6d",
       "decision": "html"
     },
     {
-      "file": "packages/cf-backend/src/email/inbound.ts",
+      "file": "packages/core/src/mail/words.ts",
       "kind": "regex-literal",
       "owner": "htmlToText",
       "sourceSha256": "019e0b8a6822d20e835f355b340ffa40264181fd90425c4239d244981a5b4750",

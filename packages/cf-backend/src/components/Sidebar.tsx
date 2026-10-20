@@ -147,13 +147,17 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
   const { panel, drilled } = useOpenAgentsPanel(agentId);
 
   const {
-    entries: workspaces,
-    total: workspaceTotal,
+    entries: roster,
+    total: rosterTotal,
     error: listError,
     loading: listLoading,
     refresh: refreshWorkspaces,
     rename: renameWorkspace,
   } = useWorkspaceRoster();
+
+  // The owner's assistant is Home, so it is not listed again here.
+  const workspaces = roster.filter((entry) => entry.home !== true);
+  const workspaceTotal = rosterTotal - (roster.length - workspaces.length);
 
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);

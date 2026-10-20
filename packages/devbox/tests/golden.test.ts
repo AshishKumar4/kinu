@@ -121,6 +121,24 @@ test('a failed build tells each waiting box its words once; the next ask waits o
   });
 });
 
+// Staging 2026-10-20: a build retried after one that failed told every box asking meanwhile the failure it was
+// replacing, so for its 75 s each box's terminal and job were refused at once instead of held for the rebuild.
+test('a build after a failed one tells a box asking mid-build that it is rebuilding, not the old failure', async () => {
+  const platform = new Platform();
+  platform.failInstall = 'Network connection lost.';
+  await settle(goldenFor(platform.ports(), 'box-a'));
+  await Promise.allSettled([settle(buildGolden(platform.ports(), false))]);
+
+  platform.failInstall = undefined;
+  const midBuild: GoldenAnswer[] = [];
+
+  platform.duringInstall = async () => { midBuild.push(await settle(goldenFor(platform.ports(), 'box-a'))); };
+
+  await settle(buildGolden(platform.ports(), false));
+
+  expect(midBuild).toEqual([{ kind: 'pending', reason: expect.stringContaining('being rebuilt'), building: { step: 'installing the tools' } }]);
+});
+
 test('a golden of other tools still serves while one of the pinned tools is built', async () => {
   const platform = new Platform();
   await settle(buildGolden(platform.ports('tools-1'), false));

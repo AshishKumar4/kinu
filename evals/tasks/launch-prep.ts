@@ -252,9 +252,16 @@ const plainTitle = (title: string): string => title.trim().replace(/\.$/, '').to
 /** Trailing space and a missing final newline are not an edit. */
 const plainText = (text: string): string => text.split('\n').map((line) => line.trimEnd()).join('\n').trimEnd();
 
-/** The helpers with a completed run started by a message naming `file`, and that run's place in their list. */
-function finishedOn(helper: HelperWork, file: string): number {
-  return helper.runs.findIndex((run) => run.status === 'completed' && (run.userMessage ?? '').includes(file));
+/**
+ * Whether `helper` was given `first` and then, in a later run of its own, `second`: two distinct completed runs, one
+ * naming each file, the second started after the first. Briefs mention the other file too ("as with announcement.md",
+ * "Do NOT touch faq.md yet", delegation trials 1, 2 and 4 of rc22), so the first run naming a file is no witness.
+ */
+export function keptFor(helper: HelperWork, first: string, second: string): boolean {
+  const done = helper.runs.filter((run) => run.status === 'completed');
+
+  return done.some((one) => (one.userMessage ?? '').includes(first)
+    && done.some((two) => two !== one && two.startedAt > one.startedAt && (two.userMessage ?? '').includes(second)));
 }
 
 // ── The task ─────────────────────────────────────────────────────────
@@ -390,11 +397,7 @@ ${LAUNCH_DIR}/${FAQ.file} to fix the same way; don't hire another. Once both are
       const worked = await verifier.helperWork();
 
       // Two runs of one helper, each started by its own draft: kept on and given a second job, not hired twice.
-      const kept = worked.filter((helper) => {
-        const first = finishedOn(helper, ANNOUNCEMENT.file), second = finishedOn(helper, FAQ.file);
-
-        return first !== -1 && second !== -1 && first !== second;
-      });
+      const kept = worked.filter((helper) => keptFor(helper, ANNOUNCEMENT.file, FAQ.file));
 
       await verifier.check('one-proofreader-fixed-both-drafts', async () => ({
         pass: kept.length === 1,

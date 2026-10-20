@@ -26,6 +26,9 @@ export interface RosterQuery {
 
 const ACTIVE = 'w.delete_pending = 0 AND w.create_pending = 0';
 
+/** user_config: the workspace the owner's Home opens on, while it is theirs. */
+export const ASSISTANT_CONFIG_KEY = 'assistant';
+
 const FROM = `FROM user_workspaces w
   LEFT JOIN workspace_overviews o ON o.name = w.name
   LEFT JOIN workspace_logos l ON l.name = w.name`;
@@ -36,7 +39,8 @@ const BUCKET = `CASE WHEN ${DECISIONS} > 0 THEN 'needs' WHEN o.activity IS NULL 
   WHEN o.activity = 'working' THEN 'working' ELSE 'idle' END`;
 
 const ENTRY = `SELECT w.name, w.display_name AS displayName, w.created_at AS createdAt, w.last_visited AS lastVisited,
-  o.overview, COALESCE(o.decisions, 0) AS decisions, l.svg AS logo`;
+  o.overview, COALESCE(o.decisions, 0) AS decisions, l.svg AS logo,
+  COALESCE(w.name = (SELECT value FROM user_config WHERE key = '${ASSISTANT_CONFIG_KEY}'), 0) AS home`;
 
 const RosterRowSchema = v.object({
   name: v.string(),
@@ -46,6 +50,7 @@ const RosterRowSchema = v.object({
   overview: v.nullable(v.string()),
   decisions: v.number(),
   logo: v.nullable(v.string()),
+  home: v.number(),
 });
 
 type RosterRow = v.InferOutput<typeof RosterRowSchema>;
@@ -85,6 +90,7 @@ function rosterEntry(row: RosterRow): RosterEntry {
     overview: stored,
     decisions: row.decisions,
     logo: row.logo,
+    ...(row.home === 1 && { home: true }),
   };
 }
 

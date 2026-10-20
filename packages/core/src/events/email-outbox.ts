@@ -22,7 +22,7 @@ export interface OutboundEmailMessage {
   headers?: Record<string, string>;
 }
 
-interface EmailSender {
+export interface EmailSender {
   send(message: OutboundEmailMessage): Promise<{ messageId: string }>;
 }
 

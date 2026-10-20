@@ -119,6 +119,17 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  // The last complete provider listing a workspace of this account swept, under the credentials' revision and each
+  // provider's account it was swept under: a turn serves it while both are its own (profiles/provider-catalog.ts).
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_provider_listing (
+      id                   INTEGER PRIMARY KEY CHECK (id = 1),
+      credentials_revision INTEGER NOT NULL,
+      accounts             TEXT NOT NULL,
+      listing              TEXT NOT NULL
+    )
+  `);
+
   // Per-host egress secrets, spent without entering the container.
   initEgressVaultTables(sql);
 

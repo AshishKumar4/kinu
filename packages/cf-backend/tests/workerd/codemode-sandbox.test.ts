@@ -23,7 +23,8 @@ function children(dir: string): string[] {
   const prefix = `${dir.replace(/\/+$/, '')}/`;
   const names = [...files.keys()].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length).split('/')[0]);
 
-  if (names.length === 0) throw new Error('no such directory');
+  // As the file plane says a directory is absent (`ENOENT: no such file or directory, scandir …`, reason missing).
+  if (names.length === 0) throw new Error(`ENOENT: no such directory: ${dir}`);
 
   return [...new Set(names)];
 }

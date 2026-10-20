@@ -81,6 +81,9 @@ export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
 
   if (host === hostOf(env.CLI_PUBLIC_ORIGIN)) return false;
 
+  // Mail's host redirects into the app (docs/MAIL.md §7): `mail` is never a preview label.
+  if (host === `mail.${suffix}`) return false;
+
   return host.endsWith(`.${suffix}`);
 }
 

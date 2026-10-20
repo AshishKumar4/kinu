@@ -917,11 +917,12 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
       const twice = Date.now() - again;
 
       if (twice > 3_000) throw new Error(`two clicks at one point took ${String(twice)} ms: the second waited on the pointer to move`);
-      await desk('click', [GRID_POINTS[0], { button: 'right' }]);
+      // Each option answered, so a shape the click refuses fails here with its reason rather than as a screen unchanged.
+      requireEqual(await desk('click', [GRID_POINTS[0], { button: 'right' }]), null);
       await until('a right-click', (now) => now === 'right c0');
-      await desk('click', [GRID_POINTS[8], { count: 2 }]);
+      requireEqual(await desk('click', [GRID_POINTS[8], { count: 2 }]), null);
       await until('a double-click', (now) => now === 'double c8');
-      await desk('click', [GRID_POINTS[2], { hold: 'shift' }]);
+      requireEqual(await desk('click', [GRID_POINTS[2], { keys: ['shift'] }]), null);
       await until('a shift-click', (now) => now === 'click c2 1 shift');
       // Nothing it held stays down.
       await desk('click', [GRID_POINTS[6]]);

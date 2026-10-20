@@ -2,6 +2,7 @@
 // backends could otherwise disagree about silently.
 
 import { describe, test, expect } from 'bun:test';
+import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type FinishReason } from 'ai';
 import * as v from 'valibot';
@@ -577,6 +578,81 @@ describe('ProviderListingCache — complete listings only, guarded by generation
 
     for (let i = 0; i < 5; i++) await cache.read();
     expect(sweeps).toBe(1);
+  });
+});
+
+describe('ProviderListingCache — a store it serves from, and sweeps behind', () => {
+  const kept: ProviderListing = { models: ['a/1'], failures: [] };
+  const fresh: ProviderListing = { models: ['a/1', 'a/2'], failures: [] };
+
+  /** A store holding `held`, recording what is kept in it and running what it is handed off the read's path. */
+  function store(held: ProviderListing | null) {
+    const keeps: ProviderListing[] = [];
+    const behind: Promise<unknown>[] = [];
+
+    return {
+      keeps,
+      settled: async () => { while (behind.length > 0) await Promise.all(behind.splice(0)); },
+      port: {
+        read: async () => held,
+        keeper: () => async (listing: ProviderListing) => { keeps.push(listing); },
+        detach: (work: Effect.Effect<void>) => { behind.push(Effect.runPromise(work)); },
+      },
+    };
+  }
+
+  test('a read with nothing cached serves the stored listing before its sweep answers, and the sweep replaces it', async () => {
+    const answer = Promise.withResolvers<void>();
+    const kept1 = store(kept);
+
+    const cache = new ProviderListingCache(async () => {
+      await answer.promise;
+
+      return fresh;
+    }, kept1.port);
+
+    const served = await cache.read();
+
+    answer.resolve();
+    await kept1.settled();
+
+    expect({ served, after: await cache.read(), keeps: kept1.keeps })
+      .toEqual({ served: { listing: kept, cache: 'stored' }, after: { listing: fresh, cache: 'hit' }, keeps: [fresh] });
+  });
+
+  test('a store with nothing waits on the sweep, keeps a complete listing, and never a degraded one', async () => {
+    const empty = store(null);
+    const degraded: ProviderListing = { models: ['a/1'], failures: [{ provider: 'b', reason: '503' }] };
+    let next = fresh;
+    const cache = new ProviderListingCache(async () => next, empty.port);
+
+    const first = await cache.read();
+
+    await empty.settled();
+    cache.invalidate();
+    next = degraded;
+    const second = await cache.read();
+
+    await empty.settled();
+    expect({ first: first.cache, second: second.cache, keeps: empty.keeps }).toEqual({ first: 'miss', second: 'miss', keeps: [fresh] });
+  });
+
+  test('a sweep behind a stored read that straddled an invalidation is neither cached nor kept', async () => {
+    const answer = Promise.withResolvers<void>();
+    const kept1 = store(kept);
+
+    const cache = new ProviderListingCache(async () => {
+      await answer.promise;
+
+      return fresh;
+    }, kept1.port);
+
+    await cache.read();
+    cache.invalidate();
+    answer.resolve();
+    await kept1.settled();
+
+    expect(kept1.keeps).toEqual([]);
   });
 });
 

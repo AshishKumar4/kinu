@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { EmailOutbox, asFetchFunction, type OutboundEmailMessage } from '@kinu.run/core';
 import { analyticsDigest } from '@kinu.run/core/analytics';
 import { sampleFleet, settleFleet, type FleetEnv } from '@kinu.run/core/control-plane';
-import { ensureMonitorSchema, recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
+import { ensureMonitorSchema, recordProbeRun, listIncidents, type MonitorDeps } from '@kinu.run/core';
 import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '@kinu.run/core';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';

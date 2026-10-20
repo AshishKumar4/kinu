@@ -170,6 +170,10 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   prepareTerminal(): Promise<void>;
   openDeviceTerminal(): Promise<void>;
   isolateOutOfMemory(actorId: string, diedAt: number): Promise<void>;
+  sandboxRestore(status: { restoring: boolean; refused: string | undefined }): Promise<void>;
+  sandboxStopped(): Promise<void>;
+  acceptSandboxLifecycleIncident(body: null): Promise<void>;
+  workspaceTitle(): Promise<void>;
 }
 
 /** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */
@@ -387,6 +391,10 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   craftedAcrossRevoke(share: string): Promise<string[]>;
   gallerySearch(line: string, q: string): Promise<{ found: string[] } | { failed: string }>;
   rosterSearch(title: string, q: string): Promise<{ found: string[] } | { failed: string }>;
+  mailSearch(rows: readonly { rowid: number; subject: string; sender: string; body: string }[], queries: readonly string[], deleted: readonly number[]): Promise<{
+    made: { found: number[] } | { failed: string }; indexed: { found: number[] } | { failed: string };
+    before: ({ found: number[] } | { failed: string })[]; removed: { found: number[] } | { failed: string }; after: ({ found: number[] } | { failed: string })[];
+  }>;
   shareViews(opens: readonly string[]): Promise<{ viewers: number; opens: number; signedOutOpens: number }>;
   inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; started: string; inheriting: number; leftRunning: number }>;
   ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
@@ -401,7 +409,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   revoke(share: string): Promise<ProbeAnswer>;
   stopped(): Promise<boolean>;
   drive(session: string): Promise<string>;
-  typed(say: string, via?: 'stream' | 'ask'): Promise<string>;
+  typed(say: string, via?: 'stream' | 'ask' | 'ask-whole'): Promise<string>;
   driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
   setMode(share: string, revision: string): Promise<ProbeAnswer>;
   ownerQueue(): Promise<{ tool: string; server: string; viewer: string; payload: import('@kinu.run/core').JsonValue; revision: string }[]>;

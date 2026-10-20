@@ -224,10 +224,9 @@ describe(productFlowTestName('agent-workspace', 'a workspace the agent creates e
     expect(flow.link).toContain(`/workspace/${flow.created?.name ?? '(none)'}`);
   });
 
-  test('nothing waits on the owner, and the Changelog records it with a way to open it', () => {
+  test('the Changelog records it with a way to open it', () => {
     const flow = verdictOf(observed, 'agent-workspace');
 
-    expect(flow.needsYou).toBe(0);
     expect(flow.changelog?.summary).toContain(`Created workspace "${AGENT_WORKSPACE.name}"`);
     expect(flow.changelog?.opens).toBe(`/workspace/${flow.created?.name ?? '(none)'}`);
   });
