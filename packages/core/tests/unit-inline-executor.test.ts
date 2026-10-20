@@ -86,6 +86,45 @@ describe('workspace provider (InlineExecutor)', () => {
     expect(await run(kinu, nestedMembers(Object.fromEntries(Object.entries(workspace.tools).map(([name, entry]) => [name, entry.execute]))), WORKSPACE_ROOT)).toEqual(names);
   });
 
+  // A program's `fs.appendFile` reads the file, joins, and writes it whole. A read that failed but did not say the file
+  // is absent was ENOENT, so the append wrote the new bytes over the file's (the rc27 review).
+  test('the Node fs adapter\'s append fails on a read that failed, and leaves the file as it was', async () => {
+    const { rt } = createTestRuntime();
+    await writeText(rt.toolFiles, 'journal.md', 'kept line\n');
+    const members = Object.fromEntries(Object.entries(buildExec(rt).tools).map(([name, entry]) => [name, entry.execute]));
+    const workspace = nestedMembers(members);
+    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+
+    // Read once this turn, so the plane would take a whole-file write over it; then the host's next read refused as
+    // unavailable, as a store that did not answer refuses, and every other member as it is.
+    expect(await present(members['fs.text'], 'fs.text')('journal.md')).toBe('kept line\n');
+    const failingReads = nestedMembers({ ...members, 'fs.text': async () => ({ success: false, reason: 'unavailable', error: 'the file plane did not answer' }) });
+
+    const append = new Function('__kinu', 'workspace', 'cwd', `const fs = __kinu.createRequire({ workspace, builtins: {}, cwd })("fs").promises;
+      return fs.appendFile("journal.md", "new line\\n").then(() => null, (error) => error.code);`);
+
+    expect(await append(kinu, failingReads, WORKSPACE_ROOT)).toBe('EIO');
+    expect(await readText(rt.toolFiles, `${WORKSPACE_ROOT}/journal.md`)).toBe('kept line\n');
+    // The real plane: an existing file is appended to, and a file stated absent starts empty.
+    expect(await append(kinu, workspace, WORKSPACE_ROOT)).toBeNull();
+    expect(await readText(rt.toolFiles, `${WORKSPACE_ROOT}/journal.md`)).toBe('kept line\nnew line\n');
+    const fresh = new Function('__kinu', 'workspace', 'cwd', 'return __kinu.createRequire({ workspace, builtins: {}, cwd })("fs").promises.appendFile("fresh.md", "first\\n");');
+    await fresh(kinu, workspace, WORKSPACE_ROOT);
+    expect(await readText(rt.toolFiles, `${WORKSPACE_ROOT}/fresh.md`)).toBe('first\n');
+  });
+
+  test('the Node fs adapter reads ENOENT only where the host said the file is absent', async () => {
+    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+
+    const codeOf = new Function('__kinu', 'answer', `const fs = __kinu.createRequire({ workspace: { fs: { text: async () => answer, stat: async () => answer } }, builtins: {}, cwd: "/w" })("fs").promises;
+      return Promise.all([fs.readFile("a.md", "utf8"), fs.readFile("a.md"), fs.stat("a.md"), fs.exists("a.md")].map((read) => read.then((value) => value, (error) => error.code)));`);
+
+    expect(await codeOf(kinu, { success: false, reason: 'missing', error: 'no such file' })).toEqual(['ENOENT', 'ENOENT', 'ENOENT', false]);
+    expect(await codeOf(kinu, { success: false, reason: 'unavailable', error: 'the file plane did not answer' })).toEqual(['EIO', 'EIO', 'EIO', 'EIO']);
+    expect(await codeOf(kinu, { success: false, reason: 'denied', error: 'not yours' })).toEqual(['EACCES', 'EACCES', 'EACCES', 'EACCES']);
+    expect(await codeOf(kinu, { success: false, reason: null, error: 'ENOENT: no such file: a.md' })).toEqual(['ENOENT', 'ENOENT', 'ENOENT', false]);
+  });
+
   test('invalid file arguments are classified binding values, never refusal-shaped text', async () => {
     const { rt } = createTestRuntime();
     const provider = buildExec(rt);
