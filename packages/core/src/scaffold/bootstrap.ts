@@ -1,9 +1,7 @@
-import { exists, readText, writeText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
- * Scaffold cold-start bootstrap and activation refresh. Fresh workspaces write
- * `.v0` source, then its row, then the live view; every run converges the live
- * view onto the current pointer's version file.
+ * Scaffold cold-start bootstrap: a fresh workspace writes the `.v0` source, then its row. The `.vN` files and the
+ * current row are the loop; nothing else holds a copy.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -16,7 +14,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { initScaffoldTables } from './schemas';
-import { getCurrentScaffoldVersion, readScaffoldVersion, scaffoldSource } from './versions';
+import { getCurrentScaffoldVersion, scaffoldSource, writeScaffoldVersion } from './versions';
 
 import { nowMs } from '../utils/date';
 
@@ -49,56 +47,14 @@ function insertV0Row(rt: AgentRuntime): void {
   markStoreChanged(rt.storage.sql);
 }
 
-/** A loop's version file, in a directory made for it: the version is written before the live file that would make it. */
-async function writeVersion(vfs: VFS, path: string, version: number, source: string): Promise<void> {
-  const slash = path.lastIndexOf('/');
-
-  if (slash > 0) await vfs.mkdir(path.slice(0, slash), { recursive: true });
-  await writeText(vfs, `${path}.v${version}`, source);
-}
-
-/** The one writer of an actor's first loop: the bundled loop, at birth. */
+/** The one writer of an actor's first loop: the bundled loop as its `.v0` file, then its row. A seeded actor keeps its own. */
 export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   initScaffoldTables(rt.storage.execRaw);
-  const sql = rt.storage.sql;
-  const vfs = rt.agentStateVfs;
-  const path = rt.identity.scaffold.path;
-  const versionedPath = (version: number) => `${path}.v${version}`;
 
-  let current = getCurrentScaffoldVersion(sql, rt.actor);
-  const liveExists = await exists(vfs, path);
-
-  if (current === null && !liveExists) {
-    await writeVersion(vfs, path, 0, INITIAL_SCAFFOLD_SOURCE);
-    insertV0Row(rt);
-    await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-
-    return;
-  }
-
-  // Preserved workspace: seed the pointer's version file from the live source once.
-  const seededVersion = current ?? 0;
-
-  if (!(await exists(vfs, versionedPath(seededVersion)))) {
-    if (!liveExists) return;
-    await writeText(vfs, versionedPath(seededVersion), await readText(vfs, path));
-  }
-
-  if (current === null) {
-    insertV0Row(rt);
-    current = getCurrentScaffoldVersion(sql, rt.actor);
-  }
-
-  const activeVersion = current;
-
-  if (activeVersion === null || !(await exists(vfs, versionedPath(activeVersion)))) return;
-  const canonical = await readText(vfs, versionedPath(activeVersion));
-
-  if (!liveExists || (await readText(vfs, path)) !== canonical) {
-    await rt.identity.scaffold.write(canonical);
-  }
+  if (getCurrentScaffoldVersion(rt.storage.sql, rt.actor) !== null) return;
+  await writeScaffoldVersion(rt, 0, INITIAL_SCAFFOLD_SOURCE);
+  insertV0Row(rt);
 }
-
 
 /**
  * Seed a child actor's loop and return the version it points at. Idempotent:
@@ -130,15 +86,13 @@ export function seedActorLoop(
 
     const inherited = yield* inheritedSource(parent, origin);
     const version = 1;
-    const vfs = child.agentStateVfs;
-    yield* Effect.promise(() => writeVersion(vfs, child.identity.scaffold.path, version, inherited.source));
+    yield* Effect.promise(() => writeScaffoldVersion(child, version, inherited.source));
     child.actor.assertCurrent();
     void child.storage.sql`
       INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
       VALUES (${child.actor.actorId}, ${version}, ${nowMs()},
         ${`inherited from actor ${parent.actor.actorId} v${inherited.version}`}, 'current', ${inherited.version})`;
     markStoreChanged(child.storage.sql);
-    yield* Effect.promise(() => child.identity.scaffold.write(inherited.source));
 
     return { version };
   }));
@@ -166,7 +120,7 @@ function inheritedSource(
     }
 
     const version = getCurrentScaffoldVersion(parent.storage.sql, parent.actor) ?? 0;
-    const source = yield* Effect.promise(() => readScaffoldVersion(parent, version));
+    const source = yield* Effect.promise(() => scaffoldSource(parent, version));
 
     if (source !== null) return { version, source };
 

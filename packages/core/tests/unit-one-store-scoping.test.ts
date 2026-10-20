@@ -134,7 +134,6 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
         path: 'scaffold/agent.js',
         exists: async () => false,
         read: async () => '',
-        write: async () => {},
         version: async () => 0,
       },
     },

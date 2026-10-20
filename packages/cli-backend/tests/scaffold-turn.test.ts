@@ -1,4 +1,3 @@
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The mutable scaffold on a local workspace through LocalAgentSession: a promoted scaffold drives the turn,
 // and a pending proposal resolves, so maybeEvolveScaffold's pending guard cannot deadlock the loop.
 import { describe, test, expect } from 'bun:test';
@@ -19,6 +18,7 @@ import { readTranscriptRows, scratchPath, scratchDir, workspaceDatabase, createR
 import { existsSync, readFileSync } from 'node:fs';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { chatSeed, keptMediaName } from '@kinu.run/core';
+import { writeScaffoldVersion } from '@kinu.run/core';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -57,7 +57,7 @@ async function provision(opts: { provisionScaffold?: boolean } = {}) {
   initAgentConfigTable(rt.storage.execRaw);
 
   if (opts.provisionScaffold !== false) {
-    await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
+    await writeScaffoldVersion(rt, 0, INITIAL_SCAFFOLD_SOURCE);
     void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'initial bootstrap'})`;
   }
@@ -91,10 +91,7 @@ async function installScaffold(
   rt: AgentRuntime,
   opts: { version: number; status: 'current' | 'pending'; code: string },
 ): Promise<void> {
-  // Version files sit beside the live scaffold in the agent's own state, where promotion reads them.
-  await writeText(rt.agentStateVfs, `${rt.identity.scaffold.path}.v${opts.version}`, opts.code);
-
-  if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
+  await writeScaffoldVersion(rt, opts.version, opts.code);
   void rt.storage.sql`
     INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, ${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;

@@ -13,6 +13,7 @@ import {
   createScaffoldCallTool, initToolEffectClaimTable, withEffectReceipt,
   type EffectClaimDeps,
 } from '../src/index';
+import { writeScaffoldVersion } from '../src/scaffold/versions';
 
 describe('Scaffold modification (4-gate)', () => {
   test('rejects rationale shorter than 50 chars', async () => {
@@ -82,12 +83,10 @@ describe('Scaffold modification (4-gate)', () => {
     expect(result.version).toBeDefined();
   });
 
-  test('pending writes to versioned file, NOT live scaffold/agent.js', async () => {
-    // Pending goes to scaffold/agent.js.v{N}; the live file changes only on applyPromotion,
-    // or shadow eval would compare a file to itself.
+  test('a pending version is its own file; the loop that runs stays the current version until a promotion', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
-    await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');
+    await writeScaffoldVersion(rt, 0, 'async function* run(rt, task) { yield "v0"; }');
     const before = await rt.identity.scaffold.read();
 
     const pendingCode = `async function* run(rt, task) {

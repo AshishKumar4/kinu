@@ -141,7 +141,7 @@ import {
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
   type ScaffoldVersionView, type EvolutionStatus,
-  readScaffoldVersion,
+  scaffoldSource,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
 
   listProposedTasks, updateProposedTaskStatus,
@@ -5084,7 +5084,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     version: number; previousVersion: number | null;
     added: number; removed: number; lines: DiffLine[];
   }> {
-    const after = (await readScaffoldVersion(this.rt, version)) ?? "";
+    const after = (await scaffoldSource(this.rt, version)) ?? "";
 
     const prevRow = this.sql<{ version: number }>`
       SELECT version FROM scaffold_versions
@@ -5092,7 +5092,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ORDER BY version DESC LIMIT 1`;
 
     const previousVersion = prevRow[0]?.version ?? null;
-    const before = previousVersion != null ? (await readScaffoldVersion(this.rt, previousVersion)) ?? "" : "";
+    const before = previousVersion != null ? (await scaffoldSource(this.rt, previousVersion)) ?? "" : "";
     const d = diffLines(before, after);
 
     return { version, previousVersion, added: d.added, removed: d.removed, lines: d.lines };

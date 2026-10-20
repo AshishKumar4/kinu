@@ -3,17 +3,9 @@
  * a crafted tool used. Picks are confused where a turn read one skill and then another, or where the user corrected
  * a turn and the next one picked something else. Only dreams read them: no turn sees this.
  */
-import * as v from 'valibot';
 import type { CompletedTurn } from './types';
-import type { TurnRating } from './ratings';
+import { isCorrected, type TurnPicks, type TurnRating } from './ratings';
 
-export const TurnPicksSchema = v.object({
-  /** In the order they were read, a re-read of the same one not repeated. */
-  skills: v.pipe(v.array(v.string()), v.readonly()),
-  tools: v.pipe(v.array(v.string()), v.readonly()),
-});
-
-export type TurnPicks = v.InferOutput<typeof TurnPicksSchema>;
 
 /** A skill is picked by reading its `SKILL.md`, through `/skills` or the folder it lives in. */
 const SKILL_READ = /skills\/([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\/SKILL\.md/gu;
@@ -55,9 +47,6 @@ export interface ConfusedPicks {
   readonly corrected: readonly CorrectedPick[];
 }
 
-/** From this the rater read the user's next words as a correction (`RatingVerdict.corrected`). */
-const CORRECTED_FROM = 0.5;
-
 const KINDS = [['skill', 'skills'], ['tool', 'tools']] as const;
 
 /** Over rated turns, in the order they were rated; a turn whose picks were not recorded is skipped. */
@@ -77,7 +66,7 @@ export function confusedPicks(ratings: readonly TurnRating[]): ConfusedPicks {
   };
 
   for (const [at, { rating, picks }] of rated.entries()) {
-    const corrected = rating.corrected >= CORRECTED_FROM;
+    const corrected = isCorrected(rating);
 
     for (const [index, name] of picks.skills.entries()) {
       const before = picks.skills[index - 1];

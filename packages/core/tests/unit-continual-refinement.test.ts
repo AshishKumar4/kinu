@@ -1836,9 +1836,21 @@ describe('a dream — every five new turns, or when the agent is idle, triaged f
     expect(owed.key).toMatch(/^[0-9a-f]{16,}$/);
   });
 
+  test('a batch with a low or corrected turn goes to the dreamer by rule, with no triage call', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 1, DREAM_CADENCE - 1);
+    const { port } = scriptedRefiner('{}');
+    // A triage that would stop it, were it asked.
+    const dream = await dreamRequest(fx.deps(port, undefined, 0.01), 'cadence');
+
+    expect(dream?.stage).toBe('requested');
+    expect(dream?.detail).toContain('rated low or corrected');
+    expect(fx.triaged).toEqual([]);
+  });
+
   test('the cadence opens one dream after a triage that finds something worth changing, and never the same turns twice', async () => {
     const fx = fixture();
-    seedGradedTurns(fx.rt, 3, 2);
+    seedGradedTurns(fx.rt, 0, DREAM_CADENCE);
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace', summary: 'none', edits: [],
@@ -1852,9 +1864,10 @@ describe('a dream — every five new turns, or when the agent is idle, triaged f
     expect(first?.trigger).toBe('cadence');
     expect(first?.stage).toBe('requested');
     expect(first?.turnIds).toEqual(debt.turnIds);
-    // The triage read every turn of the batch.
+    // The triage read every turn of the batch, each with how it was rated.
     expect(fx.triaged).toHaveLength(1);
-    expect(fx.triaged[0]).toContain('no, shorter please');
+    expect(fx.triaged[0]).toContain('thanks');
+    expect(fx.triaged[0]).toContain('RATED: 4.5 of 5');
 
     // Primary guard: the batch is taken, so nothing is owed twice.
     expect(await dreamRequest(deps, 'cadence')).toBeNull();

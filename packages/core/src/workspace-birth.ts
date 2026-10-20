@@ -96,7 +96,7 @@ export async function createWorkspace(
   await writeText(home, MEMORY_PATH, `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
   const rt = buildComponents({ db, sql, execRaw, transactionSync, home, actor });
 
-  // The loop's versioned source, its pointer and its live view, through the one writer every reopen heals with.
+  // The loop's versioned source and its pointer, through the one writer every reopen heals with.
   await bootstrapScaffold(rt);
 
   return rt;

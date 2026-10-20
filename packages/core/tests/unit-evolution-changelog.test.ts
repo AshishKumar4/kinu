@@ -23,6 +23,7 @@ import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 import { present } from '@kinu.run/test-utils';
 import { historyTurnPairs } from '../src/identity/conversation-store';
+import { writeScaffoldVersion } from '../src/scaffold/versions';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -42,7 +43,7 @@ function setup() {
 }
 
 async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
-  await rt.identity.scaffold.write(V0_CODE);
+  await writeScaffoldVersion(rt, 0, V0_CODE);
   void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
                  VALUES (${rt.actor.actorId}, 0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
   const result = await modifyScaffold(rt, RATIONALE, V1_CODE);
@@ -76,7 +77,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
 
   test('a scaffold entry says which failure the version was written for', async () => {
     const { rt } = setup();
-    await rt.identity.scaffold.write(V0_CODE);
+    await writeScaffoldVersion(rt, 0, V0_CODE);
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
                    VALUES (${rt.actor.actorId}, 0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
     const result = await modifyScaffold(rt, RATIONALE, `// pathology: no_action/prose\n${V1_CODE}`);

@@ -6,11 +6,11 @@ import {
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
+import { writeScaffoldVersion } from '@kinu.run/core';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -39,8 +39,7 @@ export const DELEGATING_PROGRAM = 'async function run({ task }) { await host.def
 
 /** Writes the program's version file, where promotion and a recovery's verification read it, and makes it current. */
 export async function installProgram(rt: AgentRuntime, version: number, code: string): Promise<void> {
-  await writeText(rt.agentStateVfs, `${rt.identity.scaffold.path}.v${version}`, code);
-  await rt.identity.scaffold.write(code);
+  await writeScaffoldVersion(rt, version, code);
   void rt.storage.sql`
     INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, ${version}, ${Date.now()}, ${`v${version}`}, ${'current'})`;

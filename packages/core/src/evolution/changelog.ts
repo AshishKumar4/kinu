@@ -526,7 +526,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   if (!row) return { ok: false, error: `scaffold v${version} not found` };
 
   if (row.status === 'pending') {
-    // The decision machinery restores the live file from current and flips status.
+    // The decision machinery flips its status; current stays where it is.
     const pending = getPendingScaffold(sql, actor);
 
     if (!pending || pending.version !== version) {
@@ -543,7 +543,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   }
 
   // Back to the version this one replaced, as its promotion recorded; a version no promotion made current (an inherited
-  // one) falls back to its numeric predecessor. Pointer-first: one statement swaps them, then the live view refreshes.
+  // one) falls back to its numeric predecessor. One statement swaps the pointer.
   const prev = replacedBy(sql, actor, version)?.replaced ?? sql<{ version: number }>`
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${actor.actorId} AND version < ${version}

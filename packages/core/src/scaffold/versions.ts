@@ -2,7 +2,7 @@
  * The scaffold's versions: the one reader of the version an actor runs (every status read uses it), the source of any
  * version, the waiting proposal, and the owner's promote or roll back of it.
  */
-import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -61,22 +61,20 @@ export async function readVersionedScaffoldSource(source: VersionedScaffoldSourc
   return v.parse(v.string(), await readText(source.vfs, versioned));
 }
 
-/** The source of a runtime's own scaffold at `version`, from its own state; null without that version's file. */
+/** The source of a runtime's own scaffold at `version`, from its own state, its `.vN` file the only copy; null without it. */
 export function scaffoldSource(rt: Pick<AgentRuntime, 'identity' | 'agentStateVfs'>, version: number): Promise<string | null> {
   return readVersionedScaffoldSource({ path: rt.identity.scaffold.path, vfs: rt.agentStateVfs }, version);
 }
 
-/** Prefers the canonical `agent.js.v{N}` file; the live file holds the current version, not a pending one. */
-export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
-  const versioned = await scaffoldSource(rt, version);
+/** The one writer of a scaffold version's source: its `.vN` file, in a directory made for it, before any row names it. */
+export async function writeScaffoldVersion(rt: Pick<AgentRuntime, 'identity' | 'agentStateVfs'>, version: number, source: string): Promise<void> {
+  const { path } = rt.identity.scaffold;
+  const slash = path.lastIndexOf('/');
 
-  if (versioned !== null) return versioned;
-
-  // No version file (v0): the live file holds only the status='current' version, so a missing pending file is not it.
-  if (version !== getCurrentScaffoldVersion(rt.storage.sql, rt.actor)) return null;
-
-  return await rt.identity.scaffold.read();
+  if (slash > 0) await rt.agentStateVfs.mkdir(path.slice(0, slash), { recursive: true });
+  await writeText(rt.agentStateVfs, `${path}.v${String(version)}`, source);
 }
+
 
 /**
  * Apply a promotion decision. 'promote' moves the pointer atomically and then
@@ -102,7 +100,7 @@ export function applyPromotionDecision(
 
     if (decision === 'promote') {
       // Re-check misevolution against the version file bytes that will actually run.
-      const pendingCode = yield* Effect.promise(() => readScaffoldVersion(rt, pending.version));
+      const pendingCode = yield* Effect.promise(() => scaffoldSource(rt, pending.version));
 
       if (pendingCode == null) {
         return yield* Effect.die(new Error(`promote failed: no scaffold code found for v${pending.version}`));
@@ -127,7 +125,6 @@ export function applyPromotionDecision(
             AND (version = ${pending.version}
                  OR (status = 'current' AND version != ${pending.version}))`;
       markStoreChanged(sql);
-      yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
       yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: currentVersion, toVersion: pending.version });
 
       return { fromVersion: currentVersion, newCurrentVersion: pending.version, action: 'promote' };
@@ -136,12 +133,6 @@ export function applyPromotionDecision(
     void sql`UPDATE scaffold_versions SET status = 'rolled_back'
         WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
     markStoreChanged(sql);
-    const currentCode = yield* Effect.promise(() => readScaffoldVersion(rt, currentVersion));
-
-    if (currentCode != null) {
-      yield* Effect.promise(() => rt.identity.scaffold.write(currentCode));
-    }
-
     yield* recordScaffoldDecision(events, {
       type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion,
       ...(typeof decision === 'object' && { reason: decision.rollback }),

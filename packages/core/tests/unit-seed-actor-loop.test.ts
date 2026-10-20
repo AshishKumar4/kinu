@@ -1,4 +1,4 @@
-import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // seedActorLoop: every created actor has an explicit `LoopOrigin`, checked against
 // real bytes and a real pointer.
 import { describe, test, expect } from 'bun:test';
@@ -17,6 +17,7 @@ import type { Identity, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { wrapDatabase } from '../src/identity/inline-primitives';
+import { createScaffoldSurface } from '../src/scaffold/surface';
 
 const PARENT_V1 = '// parent v1 — the promoted loop\nasync function* run(rt, task) { yield "v1"; }\n';
 
@@ -35,14 +36,7 @@ function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: str
   return {
     id: `actor-${name}`,
     name,
-    scaffold: {
-      path,
-      exists: () => exists(vfs, path),
-      read: () => readText(vfs, path),
-      write: (source: string) => writeText(vfs, path, source),
-      version: async () => sql<{ version: number | null }>`
-        SELECT MAX(version) AS version FROM scaffold_versions WHERE actor_id = ${actorId}`[0]?.version ?? 0,
-    },
+    scaffold: createScaffoldSurface({ vfs, sql, actor: { actorId, assertCurrent: () => {} }, path }),
   };
 }
 
@@ -86,7 +80,6 @@ async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
     VALUES (${parent.actor.actorId}, 1, ${Date.now()}, 'promoted in test', 'current', 0)`;
   void fx.sql`UPDATE scaffold_versions SET status = 'historical'
     WHERE actor_id = ${parent.actor.actorId} AND version = 0`;
-  await parent.identity.scaffold.write(PARENT_V1);
 
   return parent;
 }
