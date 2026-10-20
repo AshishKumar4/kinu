@@ -9,12 +9,12 @@ import type {
   ProviderListing, ProviderSnapshotRead, ResolvedTurnProfile, RunEventInput, WorkMode,
 } from '@kinu.run/core';
 import {
-  BUILTIN_PROFILE_CATALOG, ProviderListingCache,
+  BUILTIN_PROFILE_CATALOG, providerListingKey, ProviderListingCache,
   loadProfileAuthorityInputs, ownProfileChoices, providerListingOf, providerSnapshotOf,
   profileCatalogDigest, resolveTurnProfile,
 } from '@kinu.run/core';
 import type { LocalModelResolver } from './model-resolver';
-import { diagnostics, settleSync } from '@kinu.run/core/obs';
+import { settleSync } from '@kinu.run/core/obs';
 
 /** The spec a runtime with no model registry reports; static planes are test-only. */
 export const STATIC_MODEL_SPEC = 'local/static';
@@ -102,7 +102,6 @@ export function createLocalProfileAuthority(deps: {
   let plane = deps.plane;
   let envelopeSource = deps.envelope ?? null;
   let record: ProfileAuthorityRefinement['record'] | null = null;
-  let observedRevision: number | null = null;
 
   // The sweep reads the current plane, so a refinement needs no second cache.
   const listings = new ProviderListingCache(() => plane.listModels());
@@ -126,24 +125,11 @@ export function createLocalProfileAuthority(deps: {
   const envelope = async (): Promise<ProfileCatalogEnvelope> =>
     (await envelopeSource?.()) ?? bootstrapEnvelope();
 
-  /**
-   * Compared before resolution, else an invalidation lands a turn late. Never
-   * expired: an unchanged revision means nothing changed.
-   */
-  const observeRevision = (): void => {
-    if (!plane.revision) return;
-    const revision = plane.revision();
-    const previous = observedRevision;
-    observedRevision = revision;
-
-    if (previous === null || previous === revision) return;
-    diagnostics.event('provider.listing_invalidated', { from: previous, to: revision });
-    listings.invalidate();
-  };
-
   /** The configured spec pins the revision here, so a stored change has no invalidation to miss. */
   const providerSnapshot = async (): Promise<ProviderSnapshotRead> => {
-    const { listing, cache } = await listings.read();
+    // Read with the providers' revision (another process may have connected one) and this actor's accounts, so either
+    // changing is a new listing before this resolution, never a turn late.
+    const { listing, cache } = await listings.read(providerListingKey(plane.revision?.() ?? null, deps.config.getProviderAccounts()));
     const configured = normalizeSpec(deps.config.getModel());
 
     return {
@@ -153,9 +139,6 @@ export function createLocalProfileAuthority(deps: {
   };
 
   const inputs = async (): Promise<ProfileAuthorityInputs> => {
-    // Before the loads, so another process's provider mutation reaches this resolution.
-    observeRevision();
-
     const load: Parameters<typeof loadProfileAuthorityInputs>[0] = {
       envelope,
       provider: providerSnapshot,
@@ -198,7 +181,6 @@ export function createLocalProfileAuthority(deps: {
     refine(refinement) {
       if (refinement.plane && refinement.plane !== plane) {
         plane = refinement.plane;
-        observedRevision = null;
         listings.invalidate();
       }
 
