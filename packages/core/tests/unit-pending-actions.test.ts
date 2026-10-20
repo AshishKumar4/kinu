@@ -13,7 +13,7 @@ import { SLATE_READ_MODELS } from '../src/slates/read-models';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 const EMPTY: PendingActionInputs = {
-  scaffoldVersions: [], deferredActions: [], workspaceProposals: [],
+  scaffoldVersions: [], deferredActions: [],
   changeApprovals: { count: 0, latestAt: 0 }, pendingPlans: [],
 };
 
@@ -87,7 +87,6 @@ describe('buildPendingActions', () => {
       deferredActions: [parked({ requestedAt: 6000 })],
       changeApprovals: { count: 2, latestAt: 4000 },
       pendingPlans: [],
-      workspaceProposals: [],
     });
 
     expect(actions.map((a) => a.kind)).toEqual([
@@ -200,11 +199,11 @@ describe('the attention stack the chat shows', () => {
   test('is what holds the person and every consent, newest first, from the reads Work shows', () => {
     const asks = ownerAsks({
       pendingActions: [row('push', 'deferred_action', 30), row('v8', 'scaffold_version', 90), row('plan', 'plan_review', 10),
-        row('skill', 'change_approval', 80), row('pricing', 'workspace_proposal', 50)],
+        row('skill', 'change_approval', 80)],
       pendingConsents: [consent('c-1', 40)],
     });
 
-    expect(asks.map((ask) => ask.key)).toEqual(['action:pricing', 'consent:c-1', 'action:push', 'action:plan']);
+    expect(asks.map((ask) => ask.key)).toEqual(['consent:c-1', 'action:push', 'action:plan']);
   });
 
   test('an agent\'s own pane stacks only the asks it raised; the workspace\'s own stay with the workspace', () => {

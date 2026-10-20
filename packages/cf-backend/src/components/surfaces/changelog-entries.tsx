@@ -5,9 +5,10 @@ import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
 import {
   GitBranchIcon, BrainIcon,
   SparkleIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
-  NotePencilIcon, ArrowsClockwiseIcon,
+  NotePencilIcon, ArrowsClockwiseIcon, SquaresFourIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import type { ChangelogEntry, ChangelogEntryKind } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { showing, detach } from "@kinu.run/core/obs";
@@ -26,6 +27,7 @@ const KIND_ICON = {
   ratings: ChecksIcon,
   artifact: NotePencilIcon,
   refinement: ArrowsClockwiseIcon,
+  workspace: SquaresFourIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
 /** Showing the digest marks it seen, so what is new to the owner is lit once. */
@@ -229,6 +231,11 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
             <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
+          )}
+          {entry.workspace !== undefined && (
+            <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="mt-1.5 inline-block p-meta p-accent hover:underline" data-changelog-workspace={entry.workspace}>
+              Open the workspace
+            </Link>
           )}
           {entry.items && entry.items.length > 0 && (
             <SubEntryList

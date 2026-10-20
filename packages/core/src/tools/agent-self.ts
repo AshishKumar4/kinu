@@ -16,7 +16,7 @@ import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
 import { safeJsonParse, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/index';
-import type { WorkspaceProposalInput, WorkspaceProposalReceipt } from '../safety/workspace-proposals';
+import type { AgentWorkspaceInput, AgentWorkspaceReceipt } from '../identity/agent-workspaces';
 import { serve } from '../operations/operation';
 import { AGENT } from '../operations/agent';
 import { codemodeNamespace } from './operation-surfaces';
@@ -51,7 +51,7 @@ export interface AgentSelfHost {
    *  assembly — the same one-shot flag overflow recovery uses — where that assembly reads it. */
   armCompactNow(): Promise<void>;
   /** Parks a proposed workspace for the owner; absent where no owner account can hold one (a local session). */
-  readonly proposeWorkspace?: (proposal: WorkspaceProposalInput) => Effect.Effect<WorkspaceProposalReceipt, KinuError>;
+  readonly createWorkspace?: (input: AgentWorkspaceInput) => Effect.Effect<AgentWorkspaceReceipt, KinuError>;
   /** What waits on the owner, every row of it, and this agent's wake. */
   readonly ownerWaits: OwnerWaitsHost;
 }
@@ -125,8 +125,8 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
     serve(AGENT.listCurriculum, async ({ status }) => await host.listCurriculumTasks(status)),
     serve(AGENT.acceptCurriculumTask, async ({ id }) => await host.setCurriculumTaskStatus(id, 'accepted')),
     serve(AGENT.proposeScaffold, async ({ rationale, code, baseVersion }) => await host.proposeScaffold(rationale, code, baseVersion)),
-    serve(AGENT.proposeWorkspace, (proposal) => host.proposeWorkspace?.(proposal)
-      ?? Effect.fail(new KinuError('unsupported', 'agent.proposeWorkspace: this session has no owner account to create a workspace under'))),
+    serve(AGENT.createWorkspace, (input) => host.createWorkspace?.(input)
+      ?? Effect.fail(new KinuError('unsupported', 'agent.createWorkspace: this session has no owner account to create a workspace under'))),
     serve(AGENT.scaffoldVersions, async ({ limit }) => await host.listScaffoldVersions(limit)),
     serve(AGENT.schedule, (opts) => Effect.gen(function* () {
       const { cron, atMs } = opts;

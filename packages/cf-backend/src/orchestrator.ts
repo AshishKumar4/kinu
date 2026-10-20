@@ -244,7 +244,7 @@ import {
 import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
-  WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
+  AgentWorkspaceStore, createAgentWorkspace, type AgentWorkspaceDeps,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal, bearWorkspaceIdentity,
   type DeviceConsentRequest, type PendingDeviceConsent,
@@ -3406,6 +3406,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
           const workspaceInput = { name: agentName === '' ? undefined : agentName, purpose };
           const entry = await createCloudWorkspaceForUser({ env: this.env, userId, userDO, caller, input: workspaceInput });
+
+          this.recordAgentWorkspace({ workspace: entry.name, name: entry.displayName, brief: purpose });
           agentName = entry.name;
           created = true;
         }
@@ -3436,7 +3438,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
       // Main's turns are assembled in its own isolate, which reads and clears the arm (D9).
       armCompactNow: async () => { await this.mainCall((isolate, snapshot) => isolate.armCompaction(snapshot)); },
-      proposeWorkspace: (proposal) => this.proposals.propose(proposal),
+      createWorkspace: (input) => createAgentWorkspace(this.agentWorkspaceDeps(), input),
       ownerWaits: this.ownerWaitsOf(this.actorHandle().actorId, true),
     });
   }
@@ -3467,7 +3469,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return ownerWaits({
       deferred: this.deferrals.list(),
       plans: this.hostedPendingPlans(hostedPlans),
-      proposals: this.proposals.open(),
       consents: this.consents.list(),
       questions,
       nameOf: (actorId) => this.actorHost().describe(actorId)?.name ?? actorId,
@@ -4210,31 +4211,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  // Lazy like `consents`. A proposed workspace is created through the account's one creation path, under its owner.
-  private _proposals: WorkspaceProposals | null = null;
-  private get proposals(): WorkspaceProposals {
-    return this._proposals ??= new WorkspaceProposals({
-      store: new WorkspaceProposalStore(this.boundSql),
-      newId: () => `wsp-${nanoid(10)}`,
-      now: () => Date.now(),
+  /**
+   * How the workspace's agent makes a workspace in its owner's account: through the account's one creation path, at
+   * once, kept in the ledger the Changelog reads and in Activity. Only the workspace's own agent holds it (`agentSelf`,
+   * and `peers` for the workspace reach), so what it made is that agent's.
+   */
+  private agentWorkspaceDeps(): AgentWorkspaceDeps {
+    return {
       create: async ({ displayName, purpose, soul }) => {
         const { stub: userDO, caller } = await this.userHub();
 
         return createCloudWorkspaceForUser({ env: this.env, userId: this.requireOwner(), userDO, caller, input: { displayName, purpose }, soul });
       },
+      made: ({ workspace, name, brief }) => { this.recordAgentWorkspace({ workspace, name, brief }); },
       link: (workspace) => `${this.env.CLI_PUBLIC_ORIGIN ?? ''}/workspace/${encodeURIComponent(workspace)}`,
-      // Read through `this.orch` at delivery time, never captured, as the deferrals' inbox is.
-      inbox: { send: (signal) => this.workspaceAgentDeliveries().signals.send(signal) },
-      announce: () => { this.overviewChanged(); },
-    });
+    };
   }
 
-  /** The owner's one decision on a workspace the agent proposed; a second answer decides nothing. */
-  @callable()
-  async decideWorkspaceProposal(id: string, answer: WorkspaceProposalAnswer): Promise<{ decided: boolean; workspace: string | null }> {
-    const asked = v.parse(v.object({ id: v.string(), answer: v.picklist(['approve', 'decline']) }), { id, answer });
-
-    return settle(Effect.map(this.proposals.decide(asked.id, asked.answer), (decided) => ({ decided: decided !== null, workspace: decided?.workspace ?? null })));
+  private recordAgentWorkspace(made: { readonly workspace: string; readonly name: string; readonly brief: string }): void {
+    new AgentWorkspaceStore(this.boundSql).record({ actorId: this.actorHandle().actorId, ...made, createdAt: Date.now() });
+    this.logActivity('workspace_created', `${made.workspace}: ${made.name}`);
   }
 
   /** Called by the UserDO over DO RPC: what a device call may do now. A call that raises or re-issues a waiting ask is
@@ -4909,7 +4905,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return buildPendingActions({
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
-      workspaceProposals: this.proposals.open(),
       changeApprovals: { count: awaiting.length, latestAt: awaiting[0]?.at ?? Date.now() },
       // Each agent's plans are its own isolate's (main's included).
       pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),

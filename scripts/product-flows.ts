@@ -32,7 +32,7 @@ import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
   JOB_ASK, JOB_NOT_STARTED, JOB_STARTED,
-  APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
+  APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
 } from './flows-script';
@@ -397,64 +397,60 @@ export async function hireParksAndRunsOnApproval(target: FlowTarget): Promise<Hi
   }
 }
 
-export interface WorkspaceProposalVerdict {
-  /** What the Needs-you card offered the owner before anything existed. */
-  readonly cardTitle: string;
-  readonly cardSoul: string;
-  /** Whether the account already listed a workspace of that name before the approval. */
-  readonly existedBeforeApproval: boolean;
-  /** The link the agent repeated from its wake, and the workspace it names. */
+export interface AgentWorkspaceVerdict {
+  /** Whether the account already listed a workspace of that name before the agent's turn. */
+  readonly existedBefore: boolean;
+  /** The link the agent repeated from `agent.createWorkspace`'s answer, and the workspace it names. */
   readonly link: string;
   readonly created: { readonly name: string; readonly displayName: string } | null;
-}
-
-/** The proposal's card in the chat's attention stack, where Work's row for it opens it. */
-const PROPOSAL_CARD = '#chat [data-workspace-proposal]';
-
-/** A button in the proposal card, by its words. */
-function proposalButton(words: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${PROPOSAL_CARD} button`)})].find((button) => ${words}.test(button.textContent ?? ''))?.click()`;
+  /** What waited on the owner in Work → Needs you once the turn was over. */
+  readonly needsYou: number;
+  /** The Agent tab's Changelog entry for it: its words, and the workspace it opens. */
+  readonly changelog: { readonly summary: string; readonly opens: string } | null;
 }
 
 /**
- * Row: the workspace's main agent proposes a new workspace, Work → Needs you lists it, its row opens its card in the
- * chat's attention stack, the owner approves it there once, and it exists under the owner's account with the proposed
- * name, while the agent that asked is woken with its link.
+ * Row: the workspace's main agent creates a workspace in its owner's account, at once, nothing asked (the owner,
+ * 2026-10-19): it exists under the name the agent gave it, the agent's reply carries its link, nothing waits in Work →
+ * Needs you, and the Agent tab's Changelog records it with a way to open it.
  */
-export async function agentProposesAWorkspace(target: FlowTarget): Promise<WorkspaceProposalVerdict> {
-  const workspace = await createFlowWorkspace(target, 'proposal');
+export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentWorkspaceVerdict> {
+  const workspace = await createFlowWorkspace(target, 'agent-ws');
   let created: string | null = null;
 
   try {
+    const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
-    await sendAndSettle(page, WORKSPACE_PROPOSAL_ASK);
-    await openInspector(page);
-    // Work shows once the workspace's presence says it holds work, read again after the proposal's write
-    // (`reads_changed`); pressed the moment the turn closed, a slow read found no tab (staging rc23, 2026-10-19).
-    await until(page, 'Work in the inspector strip', `document.querySelector('#inspector button[aria-label="Work"]') !== null`);
-    await page.evaluate(stripTab('Work'));
-    await until(page, 'the proposal in Work → Needs you', `document.querySelector('#inspector [data-section="work-needs-you"] [data-pending-action]') !== null`);
-    await page.click('#inspector [data-section="work-needs-you"] [data-pending-action]');
-    await until(page, "the proposal's card in the chat", `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
-    const cardTitle = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(PROPOSAL_CARD)})?.textContent ?? ''`));
-
-    await page.evaluate(proposalButton('/show its soul/iu'));
-    await until(page, 'the soul approving writes', `document.querySelector('[data-workspace-proposal-soul]') !== null`);
-    const cardSoul = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-workspace-proposal-soul]')?.textContent ?? ''`));
-    const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
-
-    await page.evaluate(proposalButton('/create workspace/iu'));
+    await sendAndSettle(page, AGENT_WORKSPACE_ASK);
     await until(page, "the agent's reply with the new workspace's link",
-      `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PROPOSAL_LINK_REPLY)})`);
+      `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(AGENT_WORKSPACE_REPLY)})`);
     const said = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
-    const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(PROPOSAL_LINK_REPLY)))?.[0] ?? '';
+    const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(AGENT_WORKSPACE_REPLY)))?.[0] ?? '';
 
     created = /\/workspace\/([a-z0-9-]+)$/u.exec(link)?.[1] ?? null;
     const row = (await listWorkspaces(target.origin, target.identity)).find((entry) => entry.name === created);
 
+    await openInspector(page);
+    await until(page, 'Work in the inspector strip', `document.querySelector('#inspector button[aria-label="Work"]') !== null`);
+    await page.evaluate(stripTab('Work'));
+    await until(page, 'the Work tab', `document.querySelector('#inspector [data-section]') !== null`);
+    const needsYou = v.parse(v.number(), await page.evaluate(`document.querySelectorAll('#inspector [data-section="work-needs-you"] [data-pending-action]').length`));
+
+    await page.evaluate(stripTab('Agent'));
+    const entry = `#inspector [data-changelog-workspace=${JSON.stringify(created ?? '(none)')}]`;
+
+    await until(page, "the Changelog's entry for the new workspace", `document.querySelector(${JSON.stringify(entry)}) !== null`);
+
+    const changelog = v.parse(v.nullable(v.object({ summary: v.string(), opens: v.string() })), await page.evaluate(`(() => {
+      const link = document.querySelector(${JSON.stringify(entry)});
+      // The entry's details region is labelled by its summary.
+      const details = link?.closest('[role="region"]');
+      return link === null ? null : { summary: details?.getAttribute('aria-label') ?? '', opens: link.getAttribute('href') ?? '' };
+    })()`));
+
     return {
-      cardTitle, cardSoul, link, existedBeforeApproval: created !== null && before.has(created),
+      link, needsYou, changelog, existedBefore: created !== null && before.has(created),
       created: row === undefined ? null : { name: row.name, displayName: row.displayName ?? '' },
     };
   } finally {

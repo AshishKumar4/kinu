@@ -26,6 +26,7 @@ import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
 import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
+import { AgentWorkspaceStore } from '../identity/agent-workspaces';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.number(),
@@ -33,7 +34,7 @@ const ScaffoldRunEventSchema = v.object({
 });
 
 const CHANGELOG_ENTRY_KINDS = [
-  'scaffold', 'fact', 'gepa', 'ratings', 'artifact', 'refinement',
+  'scaffold', 'fact', 'gepa', 'ratings', 'artifact', 'refinement', 'workspace',
 ] as const;
 
 export type ChangelogEntryKind = (typeof CHANGELOG_ENTRY_KINDS)[number];
@@ -66,6 +67,8 @@ export interface ChangelogEntry {
   noChange?: boolean;
   /** Child rows of an aggregate card. */
   items?: ChangelogEntry[];
+  /** A workspace the agent made, by address: the entry opens it. */
+  workspace?: string;
 }
 
 /** A revert as a client reads it over the wire. */
@@ -88,6 +91,7 @@ export const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() =
   decision: v.optional(v.object({ requestId: v.string(), routeIndex: v.number() })),
   noChange: v.optional(v.boolean()),
   items: v.optional(v.array(ChangelogEntrySchema)),
+  workspace: v.optional(v.string()),
 }));
 
 export interface BuildChangelogOptions {
@@ -302,6 +306,18 @@ function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): C
   });
 }
 
+/** Workspaces the agent made in its owner's account, read from the ledger that keeps them (identity/agent-workspaces.ts). */
+function workspaceEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  return new AgentWorkspaceStore(sql).madeBy(actor.actorId, limit).map((made) => ({
+    id: `workspace:${made.workspace}`,
+    kind: 'workspace',
+    at: made.createdAt,
+    summary: `Created workspace “${made.name}”`,
+    evidence: made.brief,
+    workspace: made.workspace,
+  }));
+}
+
 const SOURCE_PREVIEW_CHARS = 1_200;
 
 const REFINEMENT_STAGE_PROSE = {
@@ -460,6 +476,7 @@ export function buildChangelog(
         ...gepaEntries(sql, actor, limit),
         ...artifactEntries(sql, actor, limit),
         ...refinementEntries(sql, actor, limit),
+        ...workspaceEntries(sql, actor, limit),
       ].filter((e) => opts.since === undefined || e.at > opts.since);
 
       const facts = factAggregate(sql, actor, limit, opts.since);

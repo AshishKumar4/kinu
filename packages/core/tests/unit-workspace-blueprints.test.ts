@@ -28,7 +28,7 @@ describe("Kinu's workspace blueprints", () => {
   test('the assistant creates and steers workspaces without asking, and asks first only before what leaves Kinu', () => {
     const { soul } = blueprintSeed(assistant(), { owner: 'Ashish', utcOffsetMinutes: 0 });
 
-    expect(soul).toContain('agents.hireWorkspace');
+    expect(soul).toContain('agent.createWorkspace');
     expect(soul).toContain('never ask before it');
     expect(soul).toContain("Ask Ashish first, in one line, before anything that leaves Ashish's own Kinu");
   });

@@ -92,7 +92,7 @@ test('an effect is the owner\'s decision card, with its payload, and no part of 
 
   const [card] = buildPendingActions({
     scaffoldVersions: [], deferredActions: queue.list(), changeApprovals: { count: 0, latestAt: 0 },
-    workspaceProposals: [], pendingPlans: [],
+    pendingPlans: [],
   });
 
   expect(card).toMatchObject({ id: 'call-1', title: 'Approve: createIssue on github, for user:ana through a share of board', detail: '{\n  "title": "Ship it"\n}' });

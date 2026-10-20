@@ -39,6 +39,7 @@ export const CHANGE_KIND_GLYPH = {
   ratings: '✓',
   artifact: '➤',
   refinement: '⌁',
+  workspace: '⊞',
 } satisfies Record<ChangelogEntryKind, string>;
 
 /** The CLI preset imports these, so an advertised hint can only change with its binding. */

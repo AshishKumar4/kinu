@@ -5,7 +5,6 @@
 
 import type { AccountMemoryProposal } from '../memory/account';
 import type { DeferredApproval } from '../safety/deferred-approval';
-import { proposedSoul, type WorkspaceProposal } from '../safety/workspace-proposals';
 import { approvalKindOf } from '../safety/approval-kind';
 import { describeExecutionContext } from '../safety/approval-gate';
 import type { PendingConsent } from '../protocol';
@@ -19,8 +18,6 @@ export type PendingActionKind =
   | 'scaffold_version'
   /** Skills the agent wrote for itself, held for the owner's approval in the Agent tab's journal. */
   | 'change_approval'
-  /** Decided here: the agent's proposed workspace, approved or declined once. */
-  | 'workspace_proposal'
   /** Deep-links to the full-tab review. */
   | 'plan_review';
 
@@ -37,9 +34,7 @@ export interface PendingAction {
   readonly write?: { readonly path: string };
   /** Where and how a parked command runs, as the owner reads it: part of what approving allows. */
   readonly where?: string;
-  /** A proposed workspace: the SOUL.md it would start with, exactly as approving writes it. */
-  readonly proposal?: { readonly name: string; readonly brief: string; readonly soul: string };
-  /** The actor whose ask it is, by id (a parked command, a plan); absent, the workspace's own (a proposal). */
+  /** The actor whose ask it is, by id (a parked command, a plan); absent, the workspace's own. */
   readonly raisedBy?: string;
   /**
    * A shared slate's effect: the shared slate, the slate whose call it is, and the tool on its root. Answered "always",
@@ -60,7 +55,6 @@ export interface PersonAsks {
 /** Rows holding the person's work until they decide; the agent's own proposals and notes do not (#21). */
 const HOLDS_THE_PERSON = {
   deferred_action: true,
-  workspace_proposal: true,
   plan_review: true,
   scaffold_version: false,
   change_approval: false,
@@ -123,8 +117,6 @@ export interface PendingActionInputs {
   readonly deferredActions: readonly DeferredApproval[];
   /** The journal's changes that wait on the owner (`awaitingTheOwner`); what the agent did by itself is not counted. */
   readonly changeApprovals: { count: number; latestAt: number };
-  /** Still-open only (safety/workspace-proposals.ts). */
-  readonly workspaceProposals: readonly WorkspaceProposal[];
   /** Workspace-wide and retired-inclusive: a subordinate's plan asks the same owner. `actor`: its owner's id. */
   readonly pendingPlans: ReadonlyArray<{
     owner: string; actor: string; id: string; revision: number; content: string; updatedAt: number;
@@ -168,17 +160,6 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
 
   for (const action of input.deferredActions) {
     if (action.status === 'queued') actions.push(deferredCard(action));
-  }
-
-  for (const proposal of input.workspaceProposals) {
-    actions.push({
-      id: proposal.id,
-      kind: 'workspace_proposal',
-      title: `Create a workspace: ${proposal.name}`,
-      detail: proposal.brief,
-      at: proposal.requestedAt,
-      proposal: { name: proposal.name, brief: proposal.brief, soul: proposedSoul(proposal) },
-    });
   }
 
   for (const version of input.scaffoldVersions) {

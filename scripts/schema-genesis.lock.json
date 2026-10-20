@@ -253,6 +253,14 @@
     "settled INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
+  "agent_workspaces@packages/core/src/identity/agent-workspaces.ts": [
+    "actor_id TEXT NOT NULL",
+    "workspace TEXT NOT NULL",
+    "name TEXT NOT NULL",
+    "brief TEXT NOT NULL",
+    "created_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, workspace)"
+  ],
   "alternate_takes@packages/core/src/mcts/takes.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

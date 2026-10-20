@@ -1538,9 +1538,9 @@ export {
 } from './safety/device-consent';
 
 export {
-  WorkspaceProposals, WorkspaceProposalStore, initWorkspaceProposalsTable, proposedSoul, type WorkspaceProposal,
-  type WorkspaceProposalAnswer, type WorkspaceProposalInput, type WorkspaceProposalReceipt,
-} from './safety/workspace-proposals';
+  AgentWorkspaceStore, agentWorkspaceSoul, createAgentWorkspace, initAgentWorkspacesTable,
+  type AgentWorkspace, type AgentWorkspaceDeps, type AgentWorkspaceInput, type AgentWorkspaceReceipt,
+} from './identity/agent-workspaces';
 
 export {
   SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern, type SecretProvider,

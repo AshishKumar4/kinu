@@ -20,6 +20,7 @@ const RETIRED_MEMBERS = {
   'device.exists': 'device.fs.stat(path), which refuses a path that is not there',
   'parent.readdir': 'file.list(path): the folder you share with your parent is among your own files',
   'parent.exists': 'file.stat(path), which refuses a path that is not there',
+  'agent.proposeWorkspace': 'agent.createWorkspace(name, brief, soul), which creates it at once and answers its link',
 } as const satisfies Readonly<Record<string, string>>;
 
 /** `namespace.operation` → each retired field and what to use instead. */

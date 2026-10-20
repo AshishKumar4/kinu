@@ -755,7 +755,6 @@ export class LocalAgentSession {
       plans: ownsAsks && active?.status === 'pending'
         ? [{ actor: this.rt.actor.actorId, id: active.id, revision: active.revision, content: active.content, updatedAt: active.updatedAt }]
         : [],
-      proposals: [],
       consents: [],
       questions: ownsAsks ? await this.listOwnerQuestions() : [],
       nameOf: (actorId) => localActorDirectory(this.rt.actor).directory.retained(actorId)?.name ?? actorId,

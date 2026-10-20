@@ -2340,10 +2340,6 @@ const SYSTEM_EVENT_ROWS: UIMessage[] = [
   harnessTurn("event-gate", { kinuEvent: COMPLETION_GATE_EVENT }, "[Runtime check — a mechanical gate from Kinu, not written by the user.]\n\nThis run ends after your next reply."),
   harnessTurn("event-consent", { kinuEvent: "device_consent", ids: ["c1", "c2", "c3"], approved: 2, denied: 1 },
     "Your owner answered your device requests: 2 approved, 1 denied. Re-issue the approved commands to run them."),
-  harnessTurn("event-proposal", { kinuEvent: "workspace_proposal", proposal: "p1", decision: "created", name: "Release notes", workspace: "release-notes", url: "/workspace/release-notes" },
-    "Your owner approved the workspace \"Release notes\". It exists now, and its first turn acts on the brief. Its link: /workspace/release-notes"),
-  harnessTurn("event-proposal-declined", { kinuEvent: "workspace_proposal", proposal: "p2", decision: "declined", name: "Weekly digest" },
-    "Your owner declined the workspace you proposed, \"Weekly digest\". Nothing was created."),
   harnessTurn("event-sandbox", { kinuEvent: "sandbox_lifecycle_failure", incidentId: "inc-1", stage: "checkpoint", reason: "The snapshot upload timed out after 3 tries." },
     "The workspace container failed at the checkpoint stage. Work written inside the container since the last good checkpoint is NOT durable.\n\nIncident id: inc-1"),
   harnessTurn("event-plan-approved", { kinuEvent: "plan_approved", planId: "plan-1", revision: 2, decision: "approve", planTitle: "Read the database by its new binding" },
@@ -3091,8 +3087,6 @@ const PLAN_ASKS: PendingAction[] = [{
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/routes/webhooks.ts", detail: null, at: NOW - 150_000, write: { path: "src/routes/webhooks.ts" } },
-  { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
-    proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
   ...PLAN_ASKS,
   { id: "plan:binding-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit the binding of every route", detail: "Submitted by binding-auditor", at: NOW - 200_000,
     planRef: { owner: "binding-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("binding-auditor") },
@@ -3124,10 +3118,10 @@ const ASK_SETS = new Map([
   ["effect", EFFECT_ASKS], ["effects", EFFECTS_ASKS], ["effect-mixed", [...EFFECT_ASKS, ...PARKED_ASKS.slice(0, 1)]],
 ]);
 
-/** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
+/** A plan submitted after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
 const LATE_ASKS: PendingAction[] = [{
-  id: "proposal-late", kind: "workspace_proposal", title: "Create workspace “Release notes”", detail: "Draft each release's notes.", at: NOW,
-  proposal: { name: "Release notes", brief: "Draft each release's notes.", soul: "# Release notes\n\nKeep them short." },
+  id: "plan-late", kind: "plan_review", title: "Review the plan: Write the v2 release notes", detail: null, at: NOW,
+  planRef: { owner: WORKSPACE_PAGE_NAME, id: "pl-late", revision: 1 },
 }];
 
 window.addEventListener("gallery:arrive-ask", () => {
