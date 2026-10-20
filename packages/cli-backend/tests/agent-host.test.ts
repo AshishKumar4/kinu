@@ -50,7 +50,7 @@ import {
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
-import type { SessionEvent } from '@kinu.run/core';
+import type { ModelInfo, SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -211,6 +211,20 @@ function heldSearchModel() {
  * Starts a task hire, which returns at once; its answer is the settling report its hirer's rail announces, taken once
  * the hirer's turn on it has ended.
  */
+/** A resolver serving `model` for every spec, listed as OpenAI's `gpt-x` with `listed`'s traits. */
+function fixedModelResolver(model: LanguageModel, listed: Pick<ModelInfo, 'reasoningEfforts'> = {}): LocalModelResolver {
+  return {
+    normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
+    resolveModel: () => model,
+    listProviders: async () => [],
+    listModels: async () => ({ models: [{ provider: 'openai', id: 'gpt-x', ...listed }], failures: [] }),
+    modelInfo: async () => null,
+    getAuth: async () => null,
+    attemptFor: async () => null,
+    countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
+  };
+}
+
 async function taskHire(
   host: LocalAgentHost, team: TeamToolDeps, request: TemporaryRunRequest,
 ): Promise<{ readonly agent: string; readonly report: { readonly status: string; readonly text: string } }> {
@@ -509,6 +523,8 @@ interface TestHostExtras {
   deferLiveReads?: (flush: () => void) => void;
   /** "Beta: swarms" on for every workspace the host opens, as the session suites run it. */
   swarms?: boolean;
+  /** The workspace is signed in to its providers, so its open config names no endpoint (cli/config.ts). */
+  signedIn?: boolean;
 }
 
 function makeHost(
@@ -523,7 +539,7 @@ function makeHost(
     roster: () => refs,
     dbPath: (name) => join(state, name, 'agent.db'),
     open: async (ref, db, dbPath) => {
-      const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
+      const openConfig = { llm: extras.signedIn === true ? null : DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
 
       if (extras.advisor === true) rt.actor.config.setAdvisorEnabled(true);
@@ -1334,19 +1350,7 @@ describe('LocalAgentHost', () => {
     });
 
     // Every spec is an OpenAI model that takes any level, so a request carries the effort its turn resolved.
-    const modelResolver: LocalModelResolver = {
-      normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
-      resolveModel: () => model,
-      listProviders: async () => [],
-      listModels: async () => ({
-        models: [{ provider: 'openai', id: 'gpt-x', reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] }],
-        failures: [],
-      }),
-      modelInfo: async () => null,
-      getAuth: async () => null,
-      attemptFor: async () => null,
-      countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
-    };
+    const modelResolver = fixedModelResolver(model, { reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] });
 
     const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { modelResolver });
 
@@ -1359,6 +1363,23 @@ describe('LocalAgentHost', () => {
       await answered;
 
       expect(efforts).toEqual(['xhigh']);
+    } finally {
+      await host.close();
+    }
+  });
+
+  // The InternalFish audit: a hire was refused unless the open config named an endpoint, which a workspace signed in to
+  // its providers never does (cli/config.ts), so local chats that worked could not hire.
+  test('a workspace signed in to its providers hires, and its hire answers', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const { host } = makeHost(state, reportingChildModel('done').model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { signedIn: true });
+
+    try {
+      const team = await host.team('root');
+      const agent = await taskHire(host, team, { role: 'task', roleLabel: 'task', task: 'Say done.', mode: 'build' });
+
+      expect(agent.report.status).toBe('completed');
     } finally {
       await host.close();
     }
