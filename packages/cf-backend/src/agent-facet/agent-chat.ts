@@ -7,7 +7,7 @@ import {
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, phaseLinesEffect, phaseLinesOwed,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
-  type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts,
+  type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts, type ProfileAuthorityInputs, type ResolvedTurnProfile,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
   refusedRun, turnAttemptOf, endedStandingOf, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
@@ -242,6 +242,7 @@ export class FacetChat {
       // A measure between turns binds nothing: no turn is open to bind it to.
       settle: async (profile, inputs) => {
         if (bind === undefined) return;
+        this.routing = { prepared, profile, inputs };
         await bind(profile, inputs);
         await bundle.settle?.(profile, inputs);
       },
@@ -250,6 +251,9 @@ export class FacetChat {
 
   /** The running turn's charges to its workspace's missions, if it runs under any. */
   private missionCharges: { settled(): Promise<void> } | null = null;
+
+  /** What the newest turn ran on: its answer's phase lines are asked on it, with no turn's context assembled again. */
+  private routing: { readonly prepared: PreparedAgentTurn; readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs } | null = null;
 
   private async charged(): Promise<void> {
     const charges = this.missionCharges;
@@ -445,7 +449,7 @@ export class FacetChat {
         }),
         phase_lines: phaseLinesEffect({
           answer: async (messageId) => await this.drawnAnswer(messageId),
-          completer: async () => await this.oneShotOn('phase_line', 'phase-lines'),
+          completer: async () => await this.oneShotOn('phase_line', 'phase-lines', this.routing),
           amend: async (messageId, patch) => { await this.amendAnswer(messageId, patch); },
         }),
         workspace_settle: terminalEffect({
@@ -658,11 +662,12 @@ export class FacetChat {
     return await suggestWorkspaceTitle(await this.oneShotOn('fast', 'title'), mission);
   }
 
-  /** One completion at a time down `source`'s tier chain, on the agent's own models. */
-  private async oneShotOn(source: 'fast' | 'phase_line', turnId: string): Promise<(system: string, prompt: string) => Promise<string>> {
+  /** One completion at a time down `source`'s tier chain, on the agent's own models; `kept`, the newest turn's, spares
+   *  assembling a turn's context and profile again (a replay after a restart has none, and assembles them). */
+  private async oneShotOn(source: 'fast' | 'phase_line', turnId: string, kept: FacetChat['routing'] = null): Promise<(system: string, prompt: string) => Promise<string>> {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
-    const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
+    const prepared = kept?.prepared ?? await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
 
     // No run of this agent's: its provider's words are the workspace's, as every actor's turnless call's are.
     const { sources } = facetTurnSources({
@@ -670,8 +675,8 @@ export class FacetChat {
       recordsIn: WORKSPACE_RUN_ID,
     });
 
-    const inputs = await sources.profileInputs();
-    const profile = resolveTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
+    const inputs = kept?.inputs ?? await sources.profileInputs();
+    const profile = kept?.profile ?? resolveTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
     // The listing the profile was resolved on: a source that wants its own effort is asked at it as each model declares.
     const route = resolveModelRoute(source, profile, inputs.provider.reasoningEfforts);
     const { routed } = sources.models;

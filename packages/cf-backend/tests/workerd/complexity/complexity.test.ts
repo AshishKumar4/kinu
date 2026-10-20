@@ -448,10 +448,14 @@ test('a production turn runs no more statements than it was measured at, and ask
  * 16 and 13 on 2026-10-18 (#103): a model call's start and end stay in its agent's own ledger, beside its attempts, as
  * the CLI keeps them (`host.reportModelOperation`, gone at the open and the close); 33 in all, 28 for one. Against
  * 3c27a547b the same day: 17 and 14.
+ * 15 at the close on 2026-10-19 (the owner's phase lines): an answer holding a phase of tool calls has the fast tier name
+ * it once the answer committed, on the newest turn's context, so nothing is prepared again. Its model call's charge
+ * (`host.reportModelCall`) is measured here, 14; once a line is written, its room is shown the answer again
+ * (`host.answerAmended`), which this probe's scripted model never earns, as its reply is no line.
  */
 /** The budget per place, as measured (the history above): no crossing runs once per step beyond a step's own, nor once
  *  per earlier step. */
-const CROSSINGS = { open: 16, step: 2, close: 13 } as const;
+const CROSSINGS = { open: 16, step: 2, close: 15 } as const;
 
 /**
  * The planted calls (`ObservedOrchestrator.plantCrossings`), each counted once where it lands, and nothing else: the
