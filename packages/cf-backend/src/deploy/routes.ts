@@ -12,10 +12,12 @@
  * Either OAuth leg is bound to its browser by the `__Host-kinu_deploy_state` cookie holding the `state` digest, as
  * `auth/session.ts` does for sign-in.
  */
-import { Hono } from 'hono';
+import { Hono, type Context, type Next } from 'hono';
+import { ownRequest } from '../nimbus-route';
 import {
   CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID, DEPLOY_SESSION_STATE,
-  DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema, DeployRunRequestSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
+  DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
+  DeploySessionSchema, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
   accountChoices, authorizeUrl, bearerTransport, buildOf, causeWords, deployedKinus, domainsMatching, fetchReleaseManifest, heard,
   judgeRefusal, mailPreview, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest, zoneHeld,
   type CloudflareTransport, type CloudflareUser, type CloudflareWords, type DeployChoice, type DeployOptions, type DeployRunView,
@@ -103,20 +105,36 @@ export const deployRoutes = new Hono<FamilyEnv<Env, DeployVariables>>();
 
 deployRoutes.all(`${DEPLOY_API}/options`, async (c) => options(c.req.raw, c.env));
 
+/**
+ * The page's sign-in is a cookie, and a sibling host under the same site (a preview, a share) is sent it too: every
+ * request the page makes with it must come from this origin, by the browser's fetch metadata or its exact `Origin`
+ * (`ownRequest`). The CLI's door carries a run key instead and is not the page's.
+ */
+async function fromThePage(c: Context<FamilyEnv<Env, DeployVariables>>, next: Next): Promise<Response | undefined> {
+  const pageRun = c.req.path !== `${DEPLOY_API}/runs` || (c.req.header('content-type') ?? '').includes('application/json');
+
+  if (pageRun && !ownRequest(c.req.raw, new URL(c.req.url).origin, false)) return err(403, 'Only this Kinu\'s deploy page may ask that.');
+  await next();
+
+  return undefined;
+}
+
+for (const path of ['signin', 'session', 'preflight', 'domains', 'mail', 'runs', 'runs/current', 'runs/current/*']) deployRoutes.use(`${DEPLOY_API}/${path}`, fromThePage);
+
 // The page's door: its sign-in, the reads it shows, and the run it follows.
 deployRoutes.post(`${DEPLOY_API}/signin`, async (c) => signIn(c.req.raw, c.env));
 
 deployRoutes.get(`${DEPLOY_API}/session`, noHead<FamilyEnv<Env, DeployVariables>>((c) => sessionAnswer(c.req.raw, c.env)));
 
-deployRoutes.get(`${DEPLOY_API}/preflight`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => preflight(transport, account, Date.now()))));
+deployRoutes.get(`${DEPLOY_API}/preflight`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => Effect.map(preflight(transport, account, Date.now()), (body) => v.parse(DeployPreflightSchema, body)))));
 
-deployRoutes.get(`${DEPLOY_API}/domains`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => domainsMatching(transport, account, c.req.query('q') ?? ''))));
+deployRoutes.get(`${DEPLOY_API}/domains`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => Effect.map(domainsMatching(transport, account, c.req.query('q') ?? ''), (body) => v.parse(DeployDomainsSchema, body)))));
 
 deployRoutes.get(`${DEPLOY_API}/mail`, noHead<FamilyEnv<Env, DeployVariables>>((c) => pageRead(c.req.raw, c.env, (transport) => {
   const zone = c.req.query('zone') ?? '';
 
   return v.is(CloudflareIdSchema, zone)
-    ? Effect.flatMap(zoneHeld(transport, zone), (held) => mailPreview(transport, held))
+    ? Effect.map(Effect.flatMap(zoneHeld(transport, zone), (held) => mailPreview(transport, held)), (body) => v.parse(MailPreviewSchema, body))
     : Effect.fail(new KinuError('bad_input', 'That is not a zone id.'));
 })));
 
@@ -324,7 +342,12 @@ function callback(request: Request, env: Env, url: URL): Effect.Effect<Response,
   return attemptInItsWords('io', land).pipe(Effect.flatMap((landed) => {
     if (!landed) return Effect.succeed(burnt(err(400, 'That authorization is not one this run started.')));
 
-    return backTo(env, session, session === null ? { run: runId } : {});
+    // The sign-in's hour starts once Cloudflare proved who it is, not while its consent screen was open.
+    return Effect.map(backTo(env, session, session === null ? { run: runId } : {}), (back) => {
+      if (session !== null) back.headers.append('set-cookie', setCookie(DEPLOY_SESSION_COOKIE_NAME, session, SESSION_TTL_MS));
+
+      return back;
+    });
   }), Effect.catch((failure) => backTo(env, session, { error: 'token_exchange_failed', error_description: failure.message })));
 }
 
@@ -422,7 +445,7 @@ async function signedIn(request: Request, env: Env): Promise<SignedIn | null> {
   return { session, user, token: await session.readToken() ?? '' };
 }
 
-const SIGNED_OUT: DeploySession = { signedIn: false, email: '', accounts: [], resume: null, deployments: [] };
+const SIGNED_OUT: DeploySession = { signedIn: false, email: '', accounts: [], resume: null, deployments: [], unreadable: [] };
 
 /** Nobody signed in: the page offers "Continue with Cloudflare". */
 function signInFirst(): Response {
@@ -496,9 +519,7 @@ function sessionAnswer(request: Request, env: Env): Effect.Effect<Response, Kinu
     const origin = env.CLI_PUBLIC_ORIGIN ?? 'https://kinu.run';
     const channel = { http: (url: string) => fetch(url), origin, available: yield* channelBuild(origin) };
 
-    const kinus = yield* Effect.forEach(accounts.answer, (account) => Effect.map(
-      heard(deployedKinus(transport, account.id, channel)), (found) => ('answer' in found ? found.answer : []),
-    ), { concurrency: 4 });
+    const kinus = yield* Effect.forEach(accounts.answer, (account) => Effect.map(heard(deployedKinus(transport, account.id, channel)), (found) => ({ account: account.id, found })), { concurrency: 4 });
 
     const views = yield* Effect.forEach(accounts.answer, (account) => Effect.promise(async () => ownRun(env, held.user, account.id).view(held.user.id)));
     const unfinished = views.find((run) => run !== null && (run.state !== 'live' || run.live?.pending !== undefined)) ?? null;
@@ -511,10 +532,13 @@ function sessionAnswer(request: Request, env: Env): Effect.Effect<Response, Kinu
       email: held.user.email,
       accounts: accounts.answer,
       resume: unfinished === null ? null : { runId: unfinished.runId, account: followed, phase: unfinished.phase.id, state: unfinished.state },
-      deployments: kinus.flat(),
+      deployments: kinus.flatMap(({ found }) => ('answer' in found ? found.answer : [])),
+      // An account whose Kinus could not be read is not one without Kinus: it is named, in Cloudflare's words.
+      unreadable: kinus.flatMap(({ account, found }) => ('words' in found ? [{ account, words: found.words }] : [])),
     };
 
-    return json({ body: session });
+    // Held to the page's contract before it leaves.
+    return json({ body: v.parse(DeploySessionSchema, session) });
   });
 }
 
@@ -570,6 +594,6 @@ function followedRun(
     const account = yield* Effect.promise(async () => held.session.following());
     const view = account === '' ? null : yield* Effect.promise(async () => act(ownRun(env, held.user, account), held.user, held.session));
 
-    return view === null ? err(404, 'This sign-in follows no deploy run.') : json({ body: view });
+    return view === null ? err(404, 'This sign-in follows no deploy run.') : json({ body: v.parse(DeployRunViewSchema, view) });
   });
 }

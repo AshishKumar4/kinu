@@ -57,8 +57,8 @@ export { deployPlan, type DeployStep } from './steps';
 export { MailPreviewSchema, mailPreview, type MailPreview, type MailPurpose, type MailRecord } from './mail';
 
 export {
-  DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser, deployedInputs, deployedKinus,
-  domainsMatching, freeWorkerName, plannedRun, preflight, zoneHeld,
+  DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser, deployedKinus,
+  domainsMatching, plannedRun, preflight, zoneHeld,
   type CloudflareUser, type DeployDomain, type DeployHeldZone, type DeployPendingZone, type DeployPreflight,
   type DeployRunPlan, type DeployRunRequest, type DeploySession, type DeployZone, type DeployedKinu,
 } from './account';

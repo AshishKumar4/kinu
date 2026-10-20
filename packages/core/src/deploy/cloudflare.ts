@@ -87,6 +87,23 @@ export async function cloudflareResult<Result>(
   return readEnvelope(call.path, response, schema);
 }
 
+/** The most a page of `/accounts` and `/zones` holds (their `per_page` maximum). */
+const PAGE = 50;
+
+/** Every item of a listing, a page at a time until one comes back short: no account or zone past the first page lost. */
+export async function cloudflarePages<Item>(transport: CloudflareTransport, path: string, schema: v.GenericSchema<Item>): Promise<Item[]> {
+  const items: Item[] = [];
+  const joiner = path.includes('?') ? '&' : '?';
+
+  for (let page = 1; ; page += 1) {
+    const batch = await cloudflareResult(transport, { method: 'GET', path: `${path}${joiner}per_page=${String(PAGE)}&page=${String(page)}` }, v.array(schema));
+
+    items.push(...batch);
+
+    if (batch.length < PAGE) return items;
+  }
+}
+
 export function readEnvelope<Result>(
   path: string,
   response: CloudflareHttpResponse,

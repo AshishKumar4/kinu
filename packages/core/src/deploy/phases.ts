@@ -68,7 +68,8 @@ export interface DeployLive {
   readonly setupLinkExpiresAt: number;
   readonly cli: string;
   /** A domain registered elsewhere: the nameservers to set, until its zone is active and the run moved onto it. */
-  readonly pending?: { readonly domain: string; readonly nameservers: readonly string[] };
+  /** A domain still on its way: its nameservers, and whether it points at them now and waits on a sign-in to move. */
+  readonly pending?: { readonly domain: string; readonly nameservers: readonly string[]; readonly ready: boolean };
 }
 
 export interface DeployRunView {
@@ -99,7 +100,7 @@ export const DeployRunViewSchema: v.GenericSchema<DeployRunView> = v.object({
     setupLink: v.string(),
     setupLinkExpiresAt: v.number(),
     cli: v.string(),
-    pending: v.optional(v.object({ domain: v.string(), nameservers: v.array(v.string()) })),
+    pending: v.optional(v.object({ domain: v.string(), nameservers: v.array(v.string()), ready: v.boolean() })),
   })),
 });
 
@@ -121,7 +122,7 @@ export interface DeployRunStanding {
   /** The run holds no grant: whatever it stopped on, signing in again comes first. */
   readonly signedOut: boolean;
   readonly seat: { readonly link: string; readonly expiresAt: number } | null;
-  readonly pending: { readonly domain: string; readonly nameservers: readonly string[] } | null;
+  readonly pending: { readonly domain: string; readonly nameservers: readonly string[]; readonly ready: boolean } | null;
   /** The prepare phase's note: the name the run took when the asked one was gone. */
   readonly note: string;
   readonly now: number;
@@ -130,7 +131,9 @@ export interface DeployRunStanding {
 export function deployRunView(standing: DeployRunStanding): DeployRunView {
   const verdict = verdictOf(standing);
   const phases = phaseStates(standing, 'refused' in verdict);
-  const at = Math.max(0, phases.findIndex((phase) => phase.state !== 'done'));
+  const unfinished = phases.findIndex((phase) => phase.state !== 'done');
+  // Every phase done: the run is in its last, live.
+  const at = unfinished === -1 ? phases.length - 1 : unfinished;
   const id = phases[at]?.id ?? 'prepare';
 
   return {

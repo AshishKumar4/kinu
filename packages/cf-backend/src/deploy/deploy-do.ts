@@ -47,7 +47,7 @@ import {
   fetchReleaseArtifact, fetchReleaseManifest, heard, judgeRefusal, mintDeployRun, refreshDeployToken, runDeployPlan, runKeyAdmits,
   zoneHeld,
   type ArtifactMember, type ArtifactSource, type CloudflareUser, type DeployChoice, type DeployFrame, type DeployInputs, type DeployLedger, type DeployNeed,
-  type DeployRunFrame, type DeployRunOutcome, type DeployRunPlan, type DeployRunView,
+  DeployRunFrameSchema, type DeployRunFrame, type DeployRunOutcome, type DeployRunPlan, type DeployRunView,
   type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
   type DeployStepRow, type DeployStepSeed, type DeploymentRecord, type TarArtifact,
 } from '@kinu.run/core/deploy';
@@ -144,8 +144,6 @@ const PauseSchema = v.object({ need: DeployNeedSchema, step: v.string(), since: 
 
 type DeployPause = v.InferOutput<typeof PauseSchema>;
 
-/** The handover wrote this run's refresh token into the deployment: from then on the run never spends it. */
-const HANDED_KEY = 'run.handed_over';
 
 /** When the object deletes itself: seven days after the run last moved. */
 const RETAIN_KEY = 'run.retain_until';
@@ -171,6 +169,9 @@ const VAULT_TTL_MS = 3_600_000;
 
 /** A paused run asks Cloudflare again this often, and whenever the page reads it. */
 const RECHECK_MS = 15_000;
+
+/** How often a run with no grant looks up a pending domain's nameservers: a zone's own activation check is slower. */
+const DNS_WATCH_MS = 5 * 60_000;
 
 /** The ledger, the minted keys and the setup link outlive the grant by this much: the link's own lifetime. */
 const RETAIN_MS = 7 * 24 * 3_600_000;
@@ -201,6 +202,19 @@ function fetchedOnWalk(open: () => Promise<TarArtifact>): ArtifactSource {
       yield* artifact.members();
     },
   };
+}
+
+/** The nameservers public DNS gives `domain`, lower-cased and without the trailing dot (Cloudflare's DNS over HTTPS). */
+async function nameserversOf(domain: string): Promise<readonly string[]> {
+  const answer = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=NS`, { headers: { accept: 'application/dns-json' } });
+  const read = v.parse(v.object({ Answer: v.optional(v.array(v.object({ data: v.string() })), []) }), await answer.json());
+
+  return read.Answer.map((record) => record.data.toLowerCase().replace(/\.$/u, ''));
+}
+
+/** The domain points at Cloudflare now; moving the deployment onto it takes the person's grant again. */
+function movingNeed(domain: string): DeployNeed {
+  return { id: 'signin-again', sentence: `${domain} now points at Cloudflare. Sign in again to move Kinu onto it.`, action: { label: 'Sign in again' } };
 }
 
 export class DeployRunDO extends DurableObject<Env> {
@@ -300,7 +314,6 @@ export class DeployRunDO extends DurableObject<Env> {
   /** A grant the person just gave: the run's own to spend, held for the hour from now. */
   private async landGrant(grant: DeployGrant): Promise<void> {
     await this.holdGrant(grant);
-    await this.ctx.storage.delete(HANDED_KEY);
 
     // A refresh in the middle of a plan must not send the page back to the form.
     if (await this.runState() === 'authorizing') await this.ctx.storage.put(RUN_STATE_KEY, 'collecting');
@@ -447,35 +460,36 @@ export class DeployRunDO extends DurableObject<Env> {
   }
 
   async ending(): Promise<DeploySignInEnd> {
-    const held = v.safeParse(EndSchema, await this.ctx.storage.get(SESSION_END_KEY));
-
-    return held.success ? held.output : 'tab';
+    return await this.held(SESSION_END_KEY, EndSchema) ?? 'tab';
   }
 
   /** The code exchanged for a grant, and the grant proven against `GET /user`: the user a run of this sign-in is named for. */
-  async landSignIn(clientId: string, redirectUri: string, code: string, state: string): Promise<boolean> {
-    const expected = await this.ctx.storage.get<string>(STATE_KEY) ?? '';
-    const verifier = await this.ctx.storage.get<string>(VERIFIER_KEY) ?? '';
+  landSignIn(clientId: string, redirectUri: string, code: string, state: string): Promise<boolean> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const expected = (yield* Effect.promise(async () => this.ctx.storage.get<string>(STATE_KEY))) ?? '';
+      const verifier = (yield* Effect.promise(async () => this.ctx.storage.get<string>(VERIFIER_KEY))) ?? '';
 
-    if (expected === '' || verifier === '' || state !== expected) return false;
+      if (expected === '' || verifier === '' || state !== expected) return false;
 
-    const token = await exchangeDeployCode({ clientId, redirectUri, code, verifier });
-    const user = await settle(cloudflareUser(bearerTransport(token.accessToken)));
+      const token = yield* Effect.promise(async () => exchangeDeployCode({ clientId, redirectUri, code, verifier }));
+      // A run is named for this id, so an answer without one is no sign-in.
+      const user = yield* cloudflareUser(bearerTransport(token.accessToken));
 
-    await this.ctx.storage.delete([VERIFIER_KEY, STATE_KEY]);
-    await this.holdGrant({
-      clientId, accessToken: token.accessToken, refreshToken: token.refreshToken,
-      expiresAt: token.expiresInSeconds === 0 ? 0 : this.now() + token.expiresInSeconds * 1000,
-    });
-    await this.ctx.storage.put(SESSION_USER_KEY, { id: user.id, email: user.email });
+      yield* Effect.promise(async () => this.ctx.storage.delete([VERIFIER_KEY, STATE_KEY]));
+      yield* Effect.promise(async () => this.holdGrant({
+        clientId, accessToken: token.accessToken, refreshToken: token.refreshToken,
+        expiresAt: token.expiresInSeconds === 0 ? 0 : this.now() + token.expiresInSeconds * 1000,
+      }));
+      yield* Effect.promise(async () => this.ctx.storage.put(SESSION_USER_KEY, { id: user.id, email: user.email }));
+      // Its hour from now, as the cookie the callback renews says.
+      yield* Effect.promise(async () => this.openSession());
 
-    return true;
+      return true;
+    }));
   }
 
   async signedIn(): Promise<CloudflareUser | null> {
-    const held = v.safeParse(UserSchema, await this.ctx.storage.get(SESSION_USER_KEY));
-
-    return held.success ? held.output : null;
+    return this.held(SESSION_USER_KEY, UserSchema);
   }
 
   /** A live access token for the page's reads; null when the sign-in holds none it can renew. */
@@ -517,6 +531,8 @@ export class DeployRunDO extends DurableObject<Env> {
   async begin(owner: string, plan: DeployRunPlan, grant: DeployGrant): Promise<string | null> {
     if (await this.going()) return null;
     const parsed = v.parse(DeployRunPlanSchema, plan);
+
+    this.initSchema();
     const runId = mintDeployRun().runId;
     const vault = await this.ctx.storage.list({ prefix: SECRET_PREFIX });
 
@@ -524,8 +540,7 @@ export class DeployRunDO extends DurableObject<Env> {
     await this.ctx.storage.delete([...vault.keys(), PAUSE_KEY, SEAT_KEY, VERSION_KEY]);
     await this.ctx.storage.put(RUN_ID_KEY, runId);
     await this.ctx.storage.put(OWNER_KEY, owner);
-    await this.ctx.storage.put(PLAN_KEY, JSON.stringify(parsed));
-    await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(parsed.inputs));
+    await this.holdPlan(parsed);
     await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
     await this.landGrant(grant);
     await this.wake({ channelOrigin: this.channelOrigin() });
@@ -535,9 +550,13 @@ export class DeployRunDO extends DurableObject<Env> {
 
   /** The page's view, for its own user only; null for anyone else's sign-in, or when no run is here. */
   async view(owner: string): Promise<DeployRunView | null> {
-    if (!await this.ownedBy(owner)) return null;
+    if (await this.ownedBy(owner)) return this.runView();
 
-    return this.runView();
+    // A session asks every account's run object; one that holds no run keeps nothing for having been asked, and a run
+    // that begins here later makes its table again (`begin`).
+    if (await this.runId() === '') await this.ctx.storage.deleteAll();
+
+    return null;
   }
 
   /** The view, and a paused run asks Cloudflare again now rather than at its next fifteen seconds. */
@@ -549,9 +568,12 @@ export class DeployRunDO extends DurableObject<Env> {
     return this.runView();
   }
 
-  /** Whether `continue` needs the sign-in's grant: the run let go of its own, and has more to do. */
+  /** Whether `continue` needs the sign-in's grant: the run let go of its own, or Cloudflare stopped accepting the one it
+   *  holds (paused to sign in again), and it has more to do. */
   async wantsGrant(owner: string): Promise<boolean> {
-    if (!await this.ownedBy(owner) || await this.authorized()) return false;
+    if (!await this.ownedBy(owner)) return false;
+
+    if (await this.authorized() && (await this.pause())?.need.id !== 'signin-again') return false;
 
     return await this.runState() !== 'done' || ((await this.plan())?.pending ?? null) !== null;
   }
@@ -568,7 +590,9 @@ export class DeployRunDO extends DurableObject<Env> {
     if (!await this.going()) {
       await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
 
+      // A live run with a domain pending looks at it now, with the grant that came: no step of it waits on a pause.
       if (await this.runState() === 'done') {
+        await this.ctx.storage.delete(PAUSE_KEY);
         await this.ctx.storage.setAlarm(Date.now());
       } else {
         this.sql.exec(`UPDATE deploy_step SET state = 'pending', failure = NULL WHERE state = 'failed'`);
@@ -585,14 +609,29 @@ export class DeployRunDO extends DurableObject<Env> {
     return held !== '' && held === owner;
   }
 
+  /** The page's plan, its answers read from the one record every run drives from (`INPUTS_KEY`). */
   private async plan(): Promise<DeployRunPlan | null> {
     const held = await this.ctx.storage.get<string>(PLAN_KEY);
+    const inputs = await this.ctx.storage.get<string>(INPUTS_KEY);
 
-    return held === undefined ? null : v.parse(DeployRunPlanSchema, JSON.parse(held));
+    return held === undefined || inputs === undefined ? null : v.parse(DeployRunPlanSchema, { ...JSON.parse(held), inputs: JSON.parse(inputs) });
+  }
+
+  /** The plan's answers under `INPUTS_KEY`, as every run's; the rest under `PLAN_KEY`, without them. */
+  private async holdPlan(plan: DeployRunPlan): Promise<void> {
+    const { inputs, ...page } = plan;
+
+    await this.ctx.storage.put(PLAN_KEY, JSON.stringify(page));
+    await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(inputs));
   }
 
   private async pause(): Promise<DeployPause | null> {
-    const held = v.safeParse(PauseSchema, await this.ctx.storage.get(PAUSE_KEY));
+    return this.held(PAUSE_KEY, PauseSchema);
+  }
+
+  /** What the object keeps under `key`, as `schema` reads it; null when it keeps nothing there that it reads. */
+  private async held<T>(key: string, schema: v.GenericSchema<T>): Promise<T | null> {
+    const held = v.safeParse(schema, await this.ctx.storage.get(key));
 
     return held.success ? held.output : null;
   }
@@ -621,7 +660,7 @@ export class DeployRunDO extends DurableObject<Env> {
       paused: (await this.pause())?.need ?? null,
       signedOut: state !== 'done' && !await this.authorized(),
       seat: await this.seat(),
-      pending: pending === null ? null : { domain: pending.domain, nameservers: pending.nameservers },
+      pending: pending === null ? null : { domain: pending.domain, nameservers: pending.nameservers, ready: (await this.pause())?.need.id === 'signin-again' },
       note: renamed,
       now: this.now(),
     });
@@ -689,21 +728,38 @@ export class DeployRunDO extends DurableObject<Env> {
     return await this.pause() !== null && await this.authorized() && await this.ctx.storage.get(INPUTS_KEY) !== undefined;
   }
 
-  /** Live on workers.dev with a zone pending: once Cloudflare calls the zone active, the same plan runs again with the
-   *  host as the address, which moves the deployment onto it. A refused read is asked again at the next tick. */
+  /**
+   * Live on workers.dev with a zone pending. The run holds no grant once it handed over, so it watches the domain's
+   * nameservers in public DNS (DNS over HTTPS, no sign-in); once they are the two Cloudflare assigned, it asks for a
+   * sign-in to move the deployment onto the host. With a grant (the person signed in again) and the zone active, the
+   * same plan runs again with the host as the address. A run replaced while it read is left alone.
+   */
   private watchZone(): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const plan = yield* Effect.promise(async () => this.plan());
       const live = (yield* Effect.promise(async () => this.runState())) === 'done';
 
-      if (plan === null || plan.pending === null || !live || !(yield* Effect.promise(async () => this.authorized()))) return;
+      if (plan === null || plan.pending === null || !live) return;
       const pending = plan.pending;
+      const run = yield* Effect.promise(async () => this.runId());
+
+      if (!(yield* Effect.promise(async () => this.authorized()))) {
+        const pointed = yield* heard(Effect.promise(async () => nameserversOf(pending.domain)));
+
+        if ('answer' in pointed && pending.nameservers.every((ns) => pointed.answer.includes(ns.toLowerCase())) && run === (yield* Effect.promise(async () => this.runId()))) {
+          yield* Effect.promise(async () => this.ctx.storage.put(PAUSE_KEY, { need: movingNeed(pending.domain), step: 'address', since: this.now() }));
+        }
+
+        return;
+      }
+
       const token = yield* heard(this.accessToken());
 
       if ('words' in token) return;
       const zone = yield* heard(zoneHeld(bearerTransport(token.answer), pending.zoneId));
 
-      if ('words' in zone || zone.answer.status !== 'active') return;
+      // Read over the network, so another call may have begun a run here meanwhile.
+      if ('words' in zone || zone.answer.status !== 'active' || run !== (yield* Effect.promise(async () => this.runId()))) return;
 
       const moved: DeployRunPlan = {
         ...plan, kind: 'change', pending: null,
@@ -711,10 +767,10 @@ export class DeployRunDO extends DurableObject<Env> {
       };
 
       this.sql.exec(`DELETE FROM deploy_step`);
-      yield* Effect.promise(async () => this.ctx.storage.put(PLAN_KEY, JSON.stringify(moved)));
-      yield* Effect.promise(async () => this.ctx.storage.put(INPUTS_KEY, JSON.stringify(moved.inputs)));
+      yield* Effect.promise(async () => this.holdPlan(moved));
+      yield* Effect.promise(async () => this.ctx.storage.delete(PAUSE_KEY));
       yield* Effect.promise(async () => this.wake({ channelOrigin: this.channelOrigin() }));
-      diagnostics.event('deploy.zone_active', { run: yield* Effect.promise(async () => this.runId()), zone: pending.zoneId });
+      diagnostics.event('deploy.zone_active', { run, zone: pending.zoneId });
     });
   }
 
@@ -748,13 +804,17 @@ export class DeployRunDO extends DurableObject<Env> {
     const plan = await this.plan();
     const holds = await this.authorized();
     const waiting = (plan?.pending ?? null) !== null && await this.runState() === 'done';
-    const looks = holds && (await this.pause() !== null || waiting) ? now + RECHECK_MS : undefined;
+    const paused = await this.pause() !== null;
+    // With its grant the run asks Cloudflare; without, it watches the domain's nameservers, until they point there.
+    const looks = holds && (paused || waiting) ? now + RECHECK_MS : undefined;
+    const watches = !holds && waiting && !paused ? now + DNS_WATCH_MS : undefined;
 
     const due = [
       await this.ctx.storage.get<number>(SESSION_UNTIL_KEY),
       await this.ctx.storage.get<number>(GRANT_UNTIL_KEY),
       await this.ctx.storage.get<number>(RETAIN_KEY),
       looks,
+      watches,
     ].filter((at): at is number => at !== undefined);
 
     if (due.length === 0) {
@@ -783,7 +843,7 @@ export class DeployRunDO extends DurableObject<Env> {
     const own = await this.ctx.storage.get<string>(RECORD_KEY) !== undefined;
     const dropped = GRANT_KEYS.filter((key) => !own || !OWN_KEY.includes(key));
 
-    await this.ctx.storage.delete([...dropped, GRANT_UNTIL_KEY, HANDED_KEY]);
+    await this.ctx.storage.delete([...dropped, GRANT_UNTIL_KEY]);
 
     if (!own && this.rows().length === 0 && await this.plan() === null) {
       await this.deleteSelf('deploy.run_dropped');
@@ -823,10 +883,6 @@ export class DeployRunDO extends DurableObject<Env> {
       const expiresAt = (yield* Effect.promise(async () => this.ctx.storage.get<number>(TOKEN_EXPIRES_KEY))) ?? 0;
 
       if (expiresAt === 0 || expiresAt > this.now() + TOKEN_FLOOR_MS) return held;
-
-      if ((yield* Effect.promise(async () => this.ctx.storage.get<boolean>(HANDED_KEY))) === true) {
-        return yield* new KinuError('denied', 'this run handed its refresh token to the deployment and will not spend it');
-      }
 
       const clientId = yield* Effect.promise(async () => this.ctx.storage.get<string>(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`));
       const refreshToken = yield* Effect.promise(async () => this.ctx.storage.get<string>(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`));
@@ -902,7 +958,9 @@ export class DeployRunDO extends DurableObject<Env> {
     const failure = outcome.rows.find((row) => row.id === outcome.failedAt)?.failure ?? null;
     const judged = failure === null ? null : judgeRefusal(failureWords(failure), account);
     const paging = await this.ctx.storage.get<string>(OWNER_KEY) !== undefined;
-    await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
+
+    // A deployment's own update is never retired: after a failed one this object holds the only unspent refresh token.
+    if (await this.runId() !== SELF_UPDATE_RUN_ID) await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
 
     if (paging && judged !== null && 'need' in judged && outcome.failedAt !== null) {
       const again = prior !== null && prior.step === outcome.failedAt;
@@ -950,15 +1008,12 @@ export class DeployRunDO extends DurableObject<Env> {
 
         return [...held.keys()].map((key) => key.slice(SECRET_PREFIX.length));
       },
+      // The grant too, whatever is left to do: the deployment now holds its refresh token, and two holders of one
+      // rotating token leave whichever spends it second with a spent one.
       wipe: async () => {
-        const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
-        const watching = ((await this.plan())?.pending ?? null) !== null;
-        const wiped = [...held.keys()].filter((key) => !watching || !GRANT_KEYS.includes(key));
+        const wiped = [...(await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX })).keys()];
 
-        await this.ctx.storage.delete(wiped);
-
-        if (watching) await this.ctx.storage.put(HANDED_KEY, true);
-        else await this.ctx.storage.delete(GRANT_UNTIL_KEY);
+        await this.ctx.storage.delete([...wiped, GRANT_UNTIL_KEY]);
         diagnostics.event('deploy.secrets_wiped', { run: await this.runId(), count: wiped.length });
       },
     };
@@ -1077,6 +1132,6 @@ export class DeployRunDO extends DurableObject<Env> {
     const snapshot = await this.snapshot();
 
     this.deliver(snapshot.runId, { type: 'deploy.snapshot', snapshot }, socket);
-    this.deliver(snapshot.runId, { type: 'deploy.run', run: await this.runView() }, socket);
+    this.deliver(snapshot.runId, v.parse(DeployRunFrameSchema, { type: 'deploy.run', run: await this.runView() }), socket);
   }
 }

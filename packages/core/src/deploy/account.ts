@@ -5,7 +5,7 @@
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
-import { CloudflareApiError, cloudflareResult, type CloudflareTransport } from './cloudflare';
+import { CloudflareApiError, cloudflarePages, cloudflareResult, type CloudflareTransport } from './cloudflare';
 import type { HttpGet } from './context';
 import type { DeployChoice } from './door';
 import {
@@ -14,7 +14,7 @@ import {
   type DeployAddress, type DeployInputs,
 } from './inputs';
 import type { DeployPhaseId, DeployRunViewState } from './phases';
-import { DeployNeedSchema, causeWords, heard, judgeRefusal, type DeployNeed } from './refusals';
+import { CloudflareWordsSchema, DeployNeedSchema, causeWords, heard, judgeRefusal, type CloudflareWords, type DeployNeed } from './refusals';
 import { HealthAnswerSchema, UpdateOfferSchema, updateOffer, type UpdateBuild, type UpdateOffer } from './update';
 
 export interface CloudflareUser {
@@ -24,7 +24,9 @@ export interface CloudflareUser {
 
 const UserSchema = v.object({ id: v.pipe(v.string(), v.minLength(1)), email: v.string() });
 
-const ChoicesSchema = v.array(v.object({ id: v.string(), name: v.string() }));
+const ChoiceSchema = v.object({ id: v.string(), name: v.string() });
+
+const ChoicesSchema = v.array(ChoiceSchema);
 
 export interface DeployZone {
   readonly id: string;
@@ -92,6 +94,8 @@ export interface DeploySession {
   readonly accounts: readonly DeployChoice[];
   readonly resume: { readonly runId: string; readonly account: string; readonly phase: DeployPhaseId; readonly state: DeployRunViewState } | null;
   readonly deployments: readonly DeployedKinu[];
+  /** Accounts whose Kinus Cloudflare would not list, in its words. */
+  readonly unreadable: readonly { readonly account: string; readonly words: CloudflareWords }[];
 }
 
 export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
@@ -105,6 +109,7 @@ export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
     state: v.picklist(['running', 'paused', 'refused', 'live']),
   })),
   deployments: v.array(v.object({ account: v.string(), name: v.string(), url: v.string(), update: UpdateOfferSchema })),
+  unreadable: v.array(v.object({ account: v.string(), words: CloudflareWordsSchema })),
 });
 
 const DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/u;
@@ -170,12 +175,12 @@ export function cloudflareUser(transport: CloudflareTransport): Effect.Effect<Cl
 }
 
 export function accountChoices(transport: CloudflareTransport): Effect.Effect<readonly DeployChoice[]> {
-  return Effect.promise(async () => cloudflareResult(transport, { method: 'GET', path: '/accounts?per_page=50' }, ChoicesSchema));
+  return Effect.promise(async () => cloudflarePages(transport, '/accounts', ChoiceSchema));
 }
 
-export function zonesOf(transport: CloudflareTransport, account: string): Effect.Effect<readonly DeployZone[]> {
+function zonesOf(transport: CloudflareTransport, account: string): Effect.Effect<readonly DeployZone[]> {
   return Effect.promise(async () => {
-    const zones = await cloudflareResult(transport, { method: 'GET', path: `/zones?account.id=${account}&per_page=50` }, v.array(ZoneSchema));
+    const zones = await cloudflarePages(transport, `/zones?account.id=${account}`, ZoneSchema);
 
     return zones.map((zone) => heldZone(zone));
   });
@@ -191,7 +196,7 @@ function heldZone(zone: v.InferOutput<typeof ZoneSchema>): DeployHeldZone {
 }
 
 /** The domain as a zone of this account: the one it has, else added (`POST /zones`, which DNS write allows). */
-export function zoneAdded(transport: CloudflareTransport, account: string, domain: string): Effect.Effect<DeployHeldZone> {
+function zoneAdded(transport: CloudflareTransport, account: string, domain: string): Effect.Effect<DeployHeldZone> {
   return Effect.promise(async () => {
     const held = await cloudflareResult(
       transport, { method: 'GET', path: `/zones?name=${encodeURIComponent(domain)}&account.id=${account}` }, v.array(ZoneSchema),
@@ -208,7 +213,7 @@ export function zoneAdded(transport: CloudflareTransport, account: string, domai
 }
 
 /** The script names in the account: a Worker's `id` is its name. */
-export function workerNames(transport: CloudflareTransport, account: string): Effect.Effect<readonly string[]> {
+function workerNames(transport: CloudflareTransport, account: string): Effect.Effect<readonly string[]> {
   return Effect.promise(async () => {
     const scripts = await cloudflareResult(transport, { method: 'GET', path: `/accounts/${account}/workers/scripts` }, v.array(v.object({ id: v.string() })));
 
@@ -217,7 +222,7 @@ export function workerNames(transport: CloudflareTransport, account: string): Ef
 }
 
 /** `wanted`, else `wanted-2`, `wanted-3` …: the first the account does not hold. */
-export function freeWorkerName(names: readonly string[], wanted: string): string {
+function freeWorkerName(names: readonly string[], wanted: string): string {
   let candidate = wanted;
 
   for (let next = 2; names.includes(candidate); next += 1) candidate = `${wanted}-${String(next)}`;
@@ -226,18 +231,16 @@ export function freeWorkerName(names: readonly string[], wanted: string): string
 }
 
 /** Null when the account has none yet; Cloudflare answers that 404 (unmeasured: an empty name reads the same). */
-export function workersSubdomain(transport: CloudflareTransport, account: string): Effect.Effect<string | null> {
+function workersSubdomain(transport: CloudflareTransport, account: string): Effect.Effect<string | null> {
   const read = Effect.promise(async () => cloudflareResult(
     transport, { method: 'GET', path: `/accounts/${account}/workers/subdomain` }, v.object({ subdomain: v.nullish(v.string()) }),
   ));
 
+  const none = (failed: Cause.Cause<KinuError>) => Cause.squash(failed) instanceof CloudflareApiError && v.is(v.object({ status: v.literal(404) }), Cause.squash(failed));
+
   return read.pipe(
     Effect.map((held) => (held.subdomain === undefined || held.subdomain === null || held.subdomain === '' ? null : held.subdomain)),
-    Effect.catchCause((failed) => {
-      const cause = Cause.squash(failed);
-
-      return cause instanceof CloudflareApiError && cause.status === 404 ? Effect.succeed(null) : Effect.failCause(failed);
-    }),
+    Effect.catchCause((failed) => (none(failed) ? Effect.succeed(null) : Effect.failCause(failed))),
   );
 }
 
@@ -272,7 +275,8 @@ export function preflight(transport: CloudflareTransport, account: string, now: 
 
     return {
       workersSubdomain: 'answer' in subdomain ? subdomain.answer : null,
-      suggestedName: freeWorkerName('answer' in names ? names.answer : [], DEFAULT_INSTANCE_NAME),
+      // Free only as far as the account says: no name is suggested while its Workers cannot be listed.
+      suggestedName: 'answer' in names ? freeWorkerName(names.answer, DEFAULT_INSTANCE_NAME) : '',
       r2: 'answer' in r2 ? 'on' : 'off',
       plan: 'unknown',
       zones: 'answer' in zones ? zones.answer : [],
@@ -364,7 +368,7 @@ const RUN_SECRETS: readonly string[] = [...MINTED_SECRETS, FIRST_OWNER_LINK_SECR
  * answers): the vars a run derived from them (`derivedVar` in steps.ts), its Durable Object classes and its secrets'
  * names. Null when the Worker carries no deployment record, so no run made it.
  */
-export function deployedInputs(transport: CloudflareTransport, account: string, name: string): Effect.Effect<DeployInputs | null, KinuError> {
+function deployedInputs(transport: CloudflareTransport, account: string, name: string): Effect.Effect<DeployInputs | null, KinuError> {
   return Effect.gen(function* () {
     const bindings = yield* scriptBindings(transport, account, name);
 
@@ -404,8 +408,8 @@ function addressServing(transport: CloudflareTransport, account: string, host: s
   });
 }
 
-/** The workers.dev subdomain a workers.dev address needs: the account's, else one made from its name, once more with a suffix
- *  if Cloudflare refuses the first (the refusal for a name taken is unmeasured). */
+/** The workers.dev subdomain a workers.dev address needs: the account's, else one made from its name. A refusal stands
+ *  in Cloudflare's own words (its code reaches the catalog, 10063 among them), with no second guess at another name. */
 function subdomainHeld(transport: CloudflareTransport, account: string): Effect.Effect<string, KinuError> {
   return Effect.gen(function* () {
     const held = yield* workersSubdomain(transport, account);
@@ -414,21 +418,11 @@ function subdomainHeld(transport: CloudflareTransport, account: string): Effect.
     const named = yield* Effect.promise(async () => cloudflareResult(transport, { method: 'GET', path: `/accounts/${account}` }, v.object({ name: v.optional(v.string()) })));
     const slug = (named.name ?? '').toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 40) || DEFAULT_INSTANCE_NAME;
 
-    const make = (subdomain: string) => heard(Effect.promise(async () => cloudflareResult(
-      transport, { method: 'PUT', path: `/accounts/${account}/workers/subdomain`, body: { subdomain } }, v.object({ subdomain: v.string() }),
-    )));
+    const made = yield* Effect.promise(async () => cloudflareResult(
+      transport, { method: 'PUT', path: `/accounts/${account}/workers/subdomain`, body: { subdomain: slug } }, v.object({ subdomain: v.string() }),
+    ));
 
-    const first = yield* make(slug);
-
-    if ('answer' in first) return first.answer.subdomain;
-    const suffix = new Uint8Array(3);
-
-    crypto.getRandomValues(suffix);
-    const second = yield* make(`${slug}-${[...suffix].map((byte) => (byte % 36).toString(36)).join('')}`);
-
-    if ('answer' in second) return second.answer.subdomain;
-
-    return yield* new KinuError('bad_input', `Cloudflare refused a workers.dev subdomain for this account: ${second.words.message}`);
+    return made.subdomain;
   });
 }
 

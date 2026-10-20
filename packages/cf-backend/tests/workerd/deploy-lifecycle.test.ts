@@ -335,7 +335,7 @@ const newKinu = JSON.stringify(NEW_KINU);
 
 /** One browser on the page: its sign-in cookie, carried as a browser carries it. */
 async function signedInPage(): Promise<string> {
-  const started = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/signin', { 'content-type': 'application/json' }, JSON.stringify({ end: 'tab' }));
+  const started = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/signin', { 'content-type': 'application/json', ...FROM_THE_PAGE }, JSON.stringify({ end: 'tab' }));
   const cookie = (name: string) => started.setCookie.find((each) => each.startsWith(`${name}=`))?.split(';')[0] ?? '';
   const state = new URL(v.parse(v.object({ location: v.string() }), JSON.parse(started.body)).location).searchParams.get('state') ?? '';
 
@@ -348,14 +348,35 @@ async function signedInPage(): Promise<string> {
   return cookie(DEPLOY_SESSION_COOKIE);
 }
 
+/** What a browser says of a request the page itself made. */
+const FROM_THE_PAGE = { 'sec-fetch-site': 'same-origin' };
+
 /** A call from that browser: no run key, only its cookie; a body is JSON. */
 const page = async (cookie: string, method: string, path: string, body?: string) => env.DEPLOY_DOOR_PROBE.hit(
-  method, path, body === undefined ? { cookie } : { cookie, 'content-type': 'application/json' }, body,
+  method, path, body === undefined ? { cookie, ...FROM_THE_PAGE } : { cookie, 'content-type': 'application/json', ...FROM_THE_PAGE }, body,
 );
 
 const current = async (cookie: string) => v.parse(DeployRunViewSchema, JSON.parse((await page(cookie, 'GET', '/api/deploy/runs/current')).body));
 
 const sessionOf = async (cookie: string) => v.parse(DeploySessionSchema, JSON.parse((await page(cookie, 'GET', '/api/deploy/session')).body));
+
+// A preview or share host is the same site, so the browser sends it the page's cookie: it may not act with it.
+it('refuses the page\'s routes to a request from a sibling host, which carries the cookie, and keeps the CLI\'s door', async () => {
+  await env.DEPLOY_FAKE.reset();
+
+  const cookie = await signedInPage();
+  const sibling = { cookie, 'sec-fetch-site': 'same-site', origin: 'https://preview-1.kinu.probe.workers.dev' };
+  const asked = async (method: string, path: string, body?: string) => (await env.DEPLOY_DOOR_PROBE.hit(method, path, body === undefined ? sibling : { ...sibling, 'content-type': 'application/json' }, body)).status;
+
+  expect({
+    session: await asked('GET', '/api/deploy/session'),
+    run: await asked('POST', '/api/deploy/runs', newKinu),
+    carryOn: await asked('POST', '/api/deploy/runs/current/continue'),
+    current: await asked('GET', '/api/deploy/runs/current'),
+    page: (await page(cookie, 'GET', '/api/deploy/session')).status,
+    cli: (await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/runs')).status,
+  }).toEqual({ session: 403, run: 403, carryOn: 403, current: 403, page: 200, cli: 200 });
+});
 
 /** The run is named for its Cloudflare user and account; the sign-in for its cookie's digest. */
 const pageRun = (user = DEPLOY_FAKE_USER.id) => runStub(`deploy-run.${user}.${DEPLOY_FAKE_ACCOUNT}`);
@@ -393,7 +414,7 @@ describe('the deploy page', () => {
       sessionHolds: await signInObject(cookie).heldCredentials(),
       runHolds: await run.heldCredentials(),
     }).toEqual({
-      session: { signedIn: true, email: DEPLOY_FAKE_OWNER, accounts: [{ id: DEPLOY_FAKE_ACCOUNT, name: 'Probe Account' }], resume: null, deployments: [] },
+      session: { signedIn: true, email: DEPLOY_FAKE_OWNER, unreadable: [], accounts: [{ id: DEPLOY_FAKE_ACCOUNT, name: 'Probe Account' }], resume: null, deployments: [] },
       begun: 200,
       checklist: { r2: 'off', needs: ['r2'], name: 'kinu', subdomain: DEPLOY_FAKE_SUBDOMAIN, plan: 'unknown' },
       paused: { state: 'paused', phase: 'storage', need: 'r2', href: `https://dash.cloudflare.com/${DEPLOY_FAKE_ACCOUNT}/r2/overview`, code: 10_042 },
@@ -407,7 +428,7 @@ describe('the deploy page', () => {
     await run.settledAfter(['done']);
 
     const live = await current(cookie);
-    const frames = await env.DEPLOY_FRAMES_PROBE.frames('/api/deploy/runs/current/socket', { upgrade: 'websocket', cookie }, 2);
+    const frames = await env.DEPLOY_FRAMES_PROBE.frames('/api/deploy/runs/current/socket', { upgrade: 'websocket', cookie, ...FROM_THE_PAGE }, 2);
     const made = await env.DEPLOY_FAKE.state();
     const rows = await run.rowText();
 
@@ -509,25 +530,39 @@ describe('the deploy page', () => {
 
     await run.settledAfter(['done']);
     const waiting = await current(cookie);
+    // The deployment holds the refresh token now, and the run none: it watches the domain in public DNS.
+    const heldWhileWaiting = await run.heldCredentials();
 
     await env.DEPLOY_FAKE.activate(deployFakeZoneId('flourandhearth.com'));
-    await run.advance(15_000);
+    await run.advance(5 * 60_000);
+    const ready = await current(cookie);
+    // A sign-in on another device finds the run, and the grant it brings moves the deployment.
+    const again = await signedInPage();
+
+    await sessionOf(again);
+    await page(again, 'POST', '/api/deploy/runs/current/continue');
+    // Its clock looks at the zone with that grant, then runs the move.
+    await run.advance(0);
+    await run.advance(0);
     await run.settledAfter(['done']);
 
-    const moved = await current(cookie);
+    const moved = await current(again);
     const made = await env.DEPLOY_FAKE.state();
 
     expect({
-      waiting: { state: waiting.state, url: waiting.live?.url, pending: waiting.live?.pending },
+      waiting: { state: waiting.state, url: waiting.live?.url, pending: waiting.live?.pending }, heldWhileWaiting,
+      ready: ready.live?.pending?.ready,
       moved: { state: moved.state, url: moved.live?.url, pending: moved.live?.pending },
       made: { domains: made.domains, uploads: made.uploads }, held: await run.heldCredentials(),
     }).toEqual({
       waiting: {
         state: 'live', url: `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev`,
-        pending: { domain: 'flourandhearth.com', nameservers: ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'] },
+        pending: { domain: 'flourandhearth.com', nameservers: ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'], ready: false },
       },
+      heldWhileWaiting: [],
+      ready: true,
       moved: { state: 'live', url: 'https://flourandhearth.com', pending: undefined },
-      // A new version for the new origin; the grant kept to watch the zone is gone with the move's handover.
+      // A new version for the new origin; the move's handover gives the deployment the new grant and keeps none.
       made: { domains: ['flourandhearth.com'], uploads: 2 }, held: [],
     });
   });

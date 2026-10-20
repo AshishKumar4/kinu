@@ -7,7 +7,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
-import { readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
+import { cloudflareResult, readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
 import type { DeployContext } from './context';
 import type { DeployInputs } from './inputs';
 import type { JsonObject } from '../utils/json';
@@ -217,23 +217,23 @@ function purposeOf(record: Pick<DnsRecord, 'type' | 'content'>, routing: boolean
 /**
  * The same records the step reaches: Email Routing's (`GET …/email/routing/dns`, the records it needs), the sending
  * domain's when it exists (Cloudflare makes them with it, so a domain not sending yet lists none), and DMARC where the
- * domain has none. A read the token may not make lists nothing for it.
+ * domain has none. A read Cloudflare refuses fails the preview in its words: a record it could not read is not absent.
  */
 export function mailPreview(transport: CloudflareTransport, zone: { readonly id: string; readonly name: string }): Effect.Effect<MailPreview> {
   return Effect.promise(async () => {
     const host = zone.name;
 
-    const read = async (type: string, name: string) => await allowed(transport, {
+    const read = async (type: string, name: string) => await cloudflareResult(transport, {
       method: 'GET', path: `/zones/${zone.id}/dns_records?type=${type}&name=${encodeURIComponent(name)}&per_page=100`,
-    }, DnsRecordsSchema) ?? [];
+    }, DnsRecordsSchema);
 
-    const routing = await allowed(transport, { method: 'GET', path: `/zones/${zone.id}/email/routing/dns` }, DnsRecordsSchema) ?? [];
-    const sendings = await allowed(transport, { method: 'GET', path: `/zones/${zone.id}/email/sending/subdomains` }, v.array(SendingDomainSchema));
-    const sending = sendings?.find((each) => each.name === host);
+    const routing = await cloudflareResult(transport, { method: 'GET', path: `/zones/${zone.id}/email/routing/dns` }, DnsRecordsSchema);
+    const sendings = await cloudflareResult(transport, { method: 'GET', path: `/zones/${zone.id}/email/sending/subdomains` }, v.array(SendingDomainSchema));
+    const sending = sendings.find((each) => each.name === host);
 
     const sent = sending === undefined
       ? []
-      : await allowed(transport, { method: 'GET', path: `/zones/${zone.id}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema) ?? [];
+      : await cloudflareResult(transport, { method: 'GET', path: `/zones/${zone.id}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema);
 
     const asMail = (records: readonly DnsRecord[], routes: boolean): MailRecord[] => records
       .map((record) => ({ type: record.type, name: record.name, content: record.content, purpose: purposeOf(record, routes) }));

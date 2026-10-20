@@ -110,9 +110,11 @@ const CATALOG: readonly CatalogEntry[] = [
 export type DeployJudgement = { readonly need: DeployNeed } | { readonly refused: DeployRefusal };
 
 export function judgeRefusal(words: CloudflareWords, account: string): DeployJudgement {
-  const entry = CATALOG.find((each) => (each.code === 0 || each.code === words.code)
-    && (each.endpoint === undefined || (words.endpoint ?? '').includes(each.endpoint))
-    && (each.status === undefined || each.status === words.status));
+  const fits = (each: CatalogEntry) => (each.endpoint === undefined || (words.endpoint ?? '').includes(each.endpoint))
+    && (each.status === undefined || each.status === words.status);
+
+  // A refusal's own code first: a sign-in Cloudflare no longer accepts is that on any endpoint, a plan only where no code says otherwise.
+  const entry = CATALOG.find((each) => each.code !== 0 && each.code === words.code && fits(each)) ?? CATALOG.find((each) => each.code === 0 && fits(each));
 
   if (entry === undefined) return { refused: { sentence: 'This step did not finish.', action: RETRY, details: words } };
 

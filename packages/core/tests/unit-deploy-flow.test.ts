@@ -6,7 +6,7 @@ import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
   CLOUDFLARE_DEPLOY_SCOPES, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
-  FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, deployedInputs, domainsMatching, factsFrom,
+  FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom,
   judgeRefusal, localLayout, mailPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
@@ -311,7 +311,12 @@ class FakeCloudflare implements CloudflareTransport {
       return { status: 404, body: { success: false, errors: [{ code: 10_007, message: 'This account has no workers.dev subdomain.' }], result: null } };
     }
 
-    if (call.path.startsWith('/zones?account.id=')) return this.ok([...this.zones].map(([name, id]) => this.zoneOf(name, id)));
+    if (call.path.startsWith('/zones?account.id=')) {
+      // Fifty to a page, as Cloudflare pages a listing.
+      const page = Number(new URLSearchParams(call.path.slice(call.path.indexOf('?'))).get('page') ?? '1');
+
+      return this.ok([...this.zones].slice((page - 1) * 50, page * 50).map(([name, id]) => this.zoneOf(name, id)));
+    }
 
     if (call.path === '/zones' && call.method === 'POST') {
       const name = bodyText(call.body ?? {}, 'name');
@@ -1560,7 +1565,7 @@ describe('the page\'s view of a run', () => {
 
     expect(view).toEqual({
       runId: 'run-1', account: ACCOUNT, state: 'live',
-      phase: { id: 'prepare', index: 1, of: 6, words: 'Preparing your account' },
+      phase: { id: 'live', index: 6, of: 6, words: 'Going live' },
       phases: ['prepare', 'storage', 'upload', 'address', 'check', 'live'].map((id) => expect.objectContaining({ id, state: 'done' })),
       live: {
         url: 'https://kinu.acme.workers.dev', setupLink: seats[0]?.link, setupLinkExpiresAt: seats[0]?.expiresAt,
@@ -1624,9 +1629,12 @@ describe('the page\'s view of a run', () => {
     expect([
       judgeRefusal({ message: 'Authentication error', code: 10_000, status: 401, endpoint: `/accounts/${ACCOUNT}` }, ACCOUNT),
       judgeRefusal({ message: 'not on this plan', status: 403, endpoint: `/accounts/${ACCOUNT}/containers/applications` }, ACCOUNT),
+      // A missing permission on the computer's endpoint is a sign-in to repeat, not a plan to buy.
+      judgeRefusal({ message: 'Unauthorized to access requested resource', code: 9109, status: 403, endpoint: `/accounts/${ACCOUNT}/containers/applications` }, ACCOUNT),
     ].map((judged) => ('need' in judged ? [judged.need.id, judged.need.action] : judged.refused.sentence))).toEqual([
       ['signin-again', { label: 'Sign in again' }],
       ['plan', { label: 'Upgrade to Workers Paid', href: `https://dash.cloudflare.com/${ACCOUNT}/workers/plans` }],
+      ['signin-again', { label: 'Sign in again' }],
     ]);
   });
 });
@@ -1639,10 +1647,10 @@ describe('what the page reads of an account', () => {
     cloudflare.otherScripts.push('blog');
     await run(made);
 
-    expect({
-      kinu: await settle(deployedInputs(cloudflare, ACCOUNT, 'kinu')),
-      blog: await settle(deployedInputs(cloudflare, ACCOUNT, 'blog')),
-    }).toEqual({ kinu: made, blog: null });
+    const asked = (name: string) => settle(plannedRun(cloudflare, { id: 'user-1', email: INPUTS.ownerEmail }, { kind: 'update', account: ACCOUNT, name })
+      .pipe(Effect.match({ onFailure: (error) => error.code, onSuccess: (plan) => plan.inputs })));
+
+    expect({ kinu: await asked('kinu'), blog: await asked('blog') }).toEqual({ kinu: made, blog: 'missing' });
   });
 
   test('preflight reads the checklist together and says only what needs the person', async () => {
@@ -1664,6 +1672,25 @@ describe('what the page reads of an account', () => {
     cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/workers/subdomain`, status: 401, code: 10_000, message: 'Authentication error' };
 
     expect((await settle(preflight(cloudflare, ACCOUNT, 0))).needs.map((need) => need.id)).toEqual(['signin-again']);
+  });
+
+  test('every zone past the first page of fifty is read, so the last is offered too', async () => {
+    for (let at = 1; at <= 51; at += 1) cloudflare.zones.set(`site-${String(at).padStart(2, '0')}.example`, `zone-${String(at)}`);
+
+    expect((await settle(preflight(cloudflare, ACCOUNT, 0))).zones.map((zone) => zone.name).at(-1)).toBe('site-51.example');
+  });
+
+  test('a name is suggested only when the account\'s Workers could be listed', async () => {
+    cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/workers/scripts`, status: 403, code: 9109, message: 'Unauthorized to access requested resource' };
+
+    expect(await settle(preflight(cloudflare, ACCOUNT, 0))).toMatchObject({ suggestedName: '', needs: [expect.objectContaining({ id: 'signin-again' })] });
+  });
+
+  test('a mail preview Cloudflare refuses a read of fails in its words, never as records that are not there', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.refuseOnce = { path: '/zones/zone-raman/email/routing/dns', status: 403, code: 10_000, message: 'Authentication error' };
+
+    await expect(settle(mailPreview(cloudflare, { id: 'zone-raman', name: 'raman.dev' }))).rejects.toThrow('Authentication error');
   });
 
   test('a domain search names the account\'s zones, and a domain registered elsewhere as such', async () => {

@@ -675,6 +675,24 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path === `/accounts/${ACCOUNT_ID}`) return envelope({ id: ACCOUNT_ID, name: 'Probe Account' });
 
+  const indexed = v.safeParse(v.object({ dimensions: v.number(), metric: v.string() }), body.config);
+  const stored = storageApi(path, request, named, indexed.success ? indexed.output : null);
+
+  if (stored !== undefined) return stored;
+
+  if (path.endsWith('/workers/subdomain')) return envelope({ subdomain: SUBDOMAIN });
+
+  if (path.endsWith('/subdomain')) return envelope({ enabled: true });
+
+  const scripted = workerScriptApi(path, request, named, () => v.parse(DeployedVersionsSchema, body.versions));
+
+  if (scripted !== undefined) return scripted;
+
+  throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
+}
+
+/** The run's storage: KV namespaces, buckets, Vectorize indexes and the AI Gateway, each listed or made. */
+function storageApi(path: string, request: Request, named: (key: string) => string, config: { readonly dimensions: number; readonly metric: string } | null): Response | undefined {
   if (path.endsWith('/storage/kv/namespaces?per_page=100')) {
     return envelope(held.namespaces.map((title) => ({ id: `id-${title}`, title })));
   }
@@ -702,8 +720,10 @@ async function api(url: URL, request: Request): Promise<Response> {
   }
 
   if (path.endsWith('/vectorize/v2/indexes')) {
+    if (config === null) throw new Error('the deploy fake was asked for an index with no dimensions and metric');
+
     held.indexes.push(named('name'));
-    held.indexConfigs.set(named('name'), v.parse(v.object({ dimensions: v.number(), metric: v.string() }), body.config));
+    held.indexConfigs.set(named('name'), config);
     held.creates.push(`vectorize:${named('name')}`);
 
     return envelope({ name: named('name') });
@@ -718,15 +738,7 @@ async function api(url: URL, request: Request): Promise<Response> {
     return envelope({ id: named('id') });
   }
 
-  if (path.endsWith('/workers/subdomain')) return envelope({ subdomain: SUBDOMAIN });
-
-  if (path.endsWith('/subdomain')) return envelope({ enabled: true });
-
-  const scripted = workerScriptApi(path, request, named, () => v.parse(DeployedVersionsSchema, body.versions));
-
-  if (scripted !== undefined) return scripted;
-
-  throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
+  return undefined;
 }
 
 function zoneOf(id: string): JsonValue {
@@ -1048,6 +1060,16 @@ export async function deployOutbound(request: Request): Promise<Response> {
       : await api(url, request);
 
     return stalled(request.method, path, answer);
+  }
+
+  // Public DNS, as a run with no grant reads a pending domain: Cloudflare's nameservers once the zone is active, as a
+  // registrar's change would make them, and the registrar's own before.
+  if (url.host === 'cloudflare-dns.com' && url.pathname === '/dns-query') {
+    const domain = url.searchParams.get('name') ?? '';
+    const active = [...held.zones.values()].some((zone) => zone.name === domain && zone.status === 'active');
+    const servers = active ? NAMESERVERS : ['ns1.registrar.example', 'ns2.registrar.example'];
+
+    return Response.json({ Status: 0, Answer: servers.map((server) => ({ name: domain, type: 2, data: `${server}.` })) });
   }
 
   if (url.origin === DEPLOY_FAKE_CHANNEL) {
