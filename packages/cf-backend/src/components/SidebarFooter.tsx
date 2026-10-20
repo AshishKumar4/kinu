@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { DesktopTowerIcon, EnvelopeSimpleIcon, GearIcon, ShieldCheckIcon, SignOutIcon } from "@phosphor-icons/react";
+import { DesktopTowerIcon, GearIcon, ShieldCheckIcon, SignOutIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { lastValue } from "@/hooks/use-async-resource";
-import { useImportantMail } from "@/hooks/use-important-mail";
 import { Avatar } from "./ui/Avatar";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
@@ -13,36 +12,16 @@ import { NAV_HOVER } from "./nav";
 
 const MENU_ROW = "flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover";
 
-/** Where the mail the assistant reads lands; Important is its first view. */
-const MAIL_ROUTE = "/mail";
-
-/** A count on an icon: hidden at nothing, and "9+" past nine. */
-function CountBadge({ count, label }: { count: number; label: string }) {
-  if (count <= 0) return null;
-
-  return (
-    <span aria-label={label} data-count-badge={count}
-      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--c-accent)] px-1 text-[10px] font-semibold leading-none text-[var(--c-accent-on)] ring-2 ring-[var(--c-sidebar)]">
-      {count > 9 ? "9+" : count}
-    </span>
-  );
-}
-
-/** Mail, with what the assistant marked Important and you have not read, and the machines you connected. */
+/** The machines you connected. Mail joins it with its page (feat/mail-build). */
 export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
   const { pathname } = useLocation();
-  const unread = useImportantMail().unread;
   const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-accent-subtle)] p-accent" : `p-text-3 ${NAV_HOVER}`}`;
   const at = (root: string) => pathname === root || pathname.startsWith(`${root}/`);
-  const mailWords = unread > 0 ? `Mail, ${String(unread)} important unread` : "Mail";
 
   return (
     <div className={`flex items-center gap-0.5 ${vertical ? "flex-col" : ""}`}>
-      <Link to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} data-footer-mail className={cls(at(MAIL_ROUTE))}>
-        <EnvelopeSimpleIcon size={17} />
-        <CountBadge count={unread} label={`${String(unread)} important unread`} />
-      </Link>
-      <Link to={APP_ROUTES.devices} aria-label="Devices" title="Devices" data-footer-devices className={cls(at(APP_ROUTES.devices))}>
+      <Link to={APP_ROUTES.devices} aria-label="Devices" title="Devices" aria-current={at(APP_ROUTES.devices) ? "page" : undefined} data-footer-devices
+        className={cls(at(APP_ROUTES.devices))}>
         <DesktopTowerIcon size={17} />
       </Link>
     </div>
@@ -75,7 +54,7 @@ export function AccountMenu({ onClose, className }: { onClose: () => void; class
   );
 }
 
-/** The sidebar's foot: you, opening your menu, then Mail and Devices. */
+/** The sidebar's foot: you, opening your menu, then Devices. */
 export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
   const profile = lastValue(useAccount().profile);
   const [open, setOpen] = useState(initiallyOpen);

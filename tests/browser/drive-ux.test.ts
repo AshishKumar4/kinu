@@ -268,7 +268,7 @@ describe('the Drive', () => {
   test('a slate tile shows its picture, and its cover while it has none or when the picture fails', async () => {
     await withGallery(async (gallery) => {
       // Issue triage's picture answers; Landing perf report's is missing; Standup notes has none yet.
-      expect(await drawnPictures(gallery, 'drive', '[data-drive-slate]', 'data-drive-slate'))
+      expect(await drawnPictures(gallery, 'slates', '[data-drive-slate]', 'data-drive-slate'))
         .toEqual([['issue-triage', 'picture'], ['lighthouse', 'cover'], ['standup', 'cover']]);
     });
   });

@@ -901,8 +901,8 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ href: a.getAttribute('href'), current: a.getAttribute('aria-current') })));
 
-              // Settings, Mail and Devices are the sidebar footer's: the account
-              // menu, and the icons beside it. The nav carries no row for them.
+              // Settings and Devices are the sidebar footer's: the account menu,
+              // and the icon beside it. The nav carries no row for them.
               expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/drive', '/explore', '/plugins', '/workspaces']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
@@ -980,7 +980,11 @@ describe('account panels', () => {
               expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 
-            if (viewport === 'desktop') expect(await activeNavRow(devices)).toBe('Devices');
+            // Devices is the footer's icon, not a nav row: the icon is the open page, and no nav row is.
+            if (viewport === 'desktop') {
+              expect(await devices.$('[data-footer-devices][aria-current="page"]')).not.toBeNull();
+              expect(await devices.$$('nav[aria-label="Primary"] a[aria-current="page"]')).toHaveLength(0);
+            }
             
           } finally {
             await devices.close();
@@ -992,11 +996,11 @@ describe('account panels', () => {
             await shared.waitForSelector('[data-drive-section="Shared with you"]');
             const body = await shared.evaluate(() => document.body.innerText);
 
-            // The Drive's second place, in its column or below `lg` its switch: what others shared first, then what the owner shared.
+            // The Drive's third place, after My stuff and Slates, in its column or below `lg` its switch: what others shared first, then what the owner shared.
             const place = viewport === 'desktop' ? 'data-drive-place' : 'data-drive-tab';
 
             expect(await shared.$$eval(`[${place}]`, (tabs, name) => tabs.map((tab) => [tab.getAttribute(name), tab.getAttribute('aria-current')]), place))
-              .toEqual([['slates', null], ['mine', null], ['shared', 'page']]);
+              .toEqual([['mine', null], ['slates', null], ['shared', 'page']]);
             expect(body.indexOf('Shared with you')).toBeLessThan(body.indexOf('Shared by you'));
 
             // The Drive row stays lit on /shared: it is the Drive, not another page.

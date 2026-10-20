@@ -207,8 +207,6 @@ const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
-  // The assistant's Important picks, as the shell's Mail icon reads them (lib/mail-api.ts).
-  "/api/user/mail/important": { unread: 2, items: [] },
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
