@@ -5,7 +5,7 @@
  */
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { diagnostics, renderThrownChain, settle } from '../obs/index';
+import { diagnostics, settle } from '../obs/index';
 import type { AuthResolution, ModelInfo } from './types';
 import { cloneModelInfos, StaleModelList } from './util';
 
@@ -42,6 +42,11 @@ export function catalogBody<S extends v.GenericSchema>(
   });
 }
 
+/** What a read that said nothing answers: what it read, else the credential's last list, under its reason. */
+function staleList(label: string, unread: CatalogUnread, last: readonly ModelInfo[] | undefined): StaleModelList {
+  return new StaleModelList(cloneModelInfos(unread.models ?? last), { reason: `${label} models could not be read: ${unread.reason}`, cause: unread.cause });
+}
+
 /**
  * `label`'s list as `read` answers it per credential, kept `ttlMs`; no credential lists nothing. A read that says
  * nothing holds what it read, else this credential's last list.
@@ -61,9 +66,11 @@ export function credentialCatalog(label: string, ttlMs: number) {
       Effect.tap((models) => Effect.sync(() => { held.set(key, { at: Date.now(), models }); })),
       Effect.map((models) => cloneModelInfos(models)),
       Effect.catch((unread) => {
-        diagnostics.event('models.catalog_unread', { provider: label, error: unread.cause === undefined ? unread.reason : renderThrownChain({ cause: unread.cause }) });
+        const stale = staleList(label, unread, last?.models);
 
-        return Effect.fail(new StaleModelList(cloneModelInfos(unread.models ?? last?.models), { reason: `${label} models could not be read: ${unread.reason}`, cause: unread.cause }));
+        diagnostics.failure('models.catalog_unread', stale, { provider: label });
+
+        return Effect.fail(stale);
       }),
     ));
   };
