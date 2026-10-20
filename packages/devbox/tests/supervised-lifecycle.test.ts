@@ -6,6 +6,7 @@ import { Devbox, gate, harness, SandboxFailure, type FakeSandbox } from './suppo
 import { handClock } from '../../test-utils/src/hand-clock';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy, type StartClock } from '../src/lifecycle';
 import { Processes } from '../src/processes';
+import { chainBox } from './support/chain-box';
 
 const COMMAND = 'bun run server.ts';
 
@@ -302,6 +303,39 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
     }
 
     expect(container.processes.has(processId)).toBe(true);
+  });
+});
+
+// Staging rc27, 2026-10-20: a three-hour job the computer ran to its end rested with it, and the next wake ran it again
+// from its first line. A finished job kept its spec, and a start restores every spec.
+describe('a supervised command that finished is done; one that failed restarts cold', () => {
+  /** What the next start does with a command that ended `status` before the box rested. */
+  async function restartedAfter(status: 'completed' | 'failed') {
+    const { box, container } = chainBox();
+
+    try {
+      await box.start();
+      const { processId } = await box.startSupervised(COMMAND);
+      const row = container.processes.get(processId);
+
+      container.processes.set(processId, { id: processId, pid: row?.pid ?? 1, command: COMMAND, status });
+      expect((await box.quiesce()).kind).toBe('committed');
+      const before = container.starts.length;
+
+      await box.start();
+
+      return { specs: await reservations(box), started: container.starts.length - before };
+    } finally {
+      await box.destroy();
+    }
+  }
+
+  test('a job seen completed is not started again by the next start', async () => {
+    expect(await restartedAfter('completed')).toEqual({ specs: [], started: 0 });
+  });
+
+  test('a server that failed comes back with the next start, as D35 restores it', async () => {
+    expect(await restartedAfter('failed')).toEqual({ specs: [expect.any(String)], started: 1 });
   });
 });
 

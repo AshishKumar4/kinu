@@ -2448,6 +2448,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.#trace('quiesce.list.exit', { count: listed.length });
       const residents = new Set((await this.#procSpecs()).map(spec => spec.processId));
 
+      // A supervised command seen to finish is done: its spec goes, so the next start does not run it again (staging
+      // rc27, 2026-10-20: a three-hour job ran again from its first line on the next wake). One that failed keeps its
+      // spec and restarts cold (D35). Here, with admissions fenced, no start of the same command can race the forget.
+      for (const process of listed) if (process.status === 'completed' && residents.has(process.id)) await this.#supervised().forget(process.id);
+
       if (!ending && listed.some(process => isProcessLive(process.status) && !residents.has(process.id))) {
         return { kind: 'failed', reason: 'the stop is refused: unmanaged commands are still running', bytes: undefined, movedBytes: undefined };
       }

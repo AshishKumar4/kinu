@@ -5137,6 +5137,24 @@ Stop included, until the block's cap resets the object. A Stop retried on the fr
 not adopt. A container read on a box has not been seen to hang. The wedge report measured `cat`, builtins and
 `/bin/true` answering through a stall (kinu-logs/container-btrfs-wedge-2026-10-17).
 
+D105. A supervised command the box saw finish is done: its spec goes at the rest, so no later start runs it again
+(2026-10-20; #105's disconnected canary). Refines D35's "the next start restores it", which holds for a command still
+running or one that failed.
+
+What happened. Staging rc27, eval-killn-canary-3o5nhr: a computer job of 180 one-minute iterations ran 09:30:18 to
+12:29:19Z with nobody connected and finished about 12:30:19Z. The box rested at 12:30:41Z. At the next wake (13:33:07Z)
+the restore started every spec, and the finished job ran again from its first iteration. A supervised spec was deleted
+only by a stop or a session's close (`supervised-processes.ts`, `closeTerminalSession`); nothing observed an exit.
+
+The design.
+- The quiesce reads the process list already, with admissions fenced and lanes drained. A spec whose process it lists
+  `completed` (exit 0) is forgotten there. A `failed` one keeps its spec and restarts cold.
+- Not done in the heartbeat: supervised ids are reused for the same command and cwd, so a beat that read the old
+  `completed` row could forget the spec of a run the owner had just started again.
+- Gap accepted: a container lost without a rest restores a command that finished before the loss, as before.
+- Tests: `supervised-lifecycle.test.ts` "a job seen completed is not started again by the next start" (red before
+  this change: its spec kept, started once) and "a server that failed comes back with the next start".
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
