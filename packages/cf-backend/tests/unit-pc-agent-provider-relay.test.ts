@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   CODEX_CRED_KEY, DEVICE_CONNECT_PATH,
-  DEVICE_FRAMES, DEVICE_METHOD, RELAY_ROUTES, relayRefusal,
+  DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { createTestUserDO, testOwner, type AcceptedSocket, type TestUserDO } from './helpers/user-do';
@@ -26,7 +26,6 @@ const RelayModuleSchema = v.object({
   RELAY_METHOD: v.string(),
   RELAY_HEAD_FRAME: v.string(),
   RELAY_BODY_FRAME: v.string(),
-  RELAY_ROUTES: v.record(v.string(), v.pipe(v.array(v.string()), v.readonly())),
   CHATGPT_METHODS: v.object({ status: v.string(), signIn: v.string(), signOut: v.string() }),
   CHATGPT_SIGNED_OUT: v.string(),
   relayRefusal: v.pipe(v.function(), v.args(v.tuple([v.string(), v.string()])), v.returns(v.nullable(v.string()))),
@@ -513,11 +512,13 @@ describe('the daemon carries only what core allows', () => {
     expect(pcAgent.CHATGPT_SIGNED_OUT).toBe('chatgpt_signed_out');
   });
 
-  test('its allow-list is core\'s, the rule the hub reads', () => {
-    expect(pcAgent.RELAY_ROUTES).toEqual(RELAY_ROUTES);
+  test('it carries the Codex and ChatGPT plan routes and nothing else, as the hub does', () => {
+    const calls = [
+      ['POST', 'https://chatgpt.com/backend-api/codex/responses'], ['GET', 'https://api.openai.com/v1/models'],
+      ['POST', 'https://user:pass@chatgpt.com/backend-api/codex/responses'], ['POST', 'http://api.openai.com/v1/responses'],
+      ['POST', 'https://api.openai.com/v1/chat/completions'], ['GET', 'https://chatgpt.com/backend-api/conversation'],
+    ] as const;
 
-    for (const url of ['https://chatgpt.com/backend-api/codex/responses', 'https://user:pass@chatgpt.com/backend-api/wham/usage', 'http://api.openai.com/v1/responses']) {
-      for (const method of ['GET', 'POST']) expect(pcAgent.relayRefusal(method, url)).toBe(relayRefusal(method, url));
-    }
+    expect(calls.map(([method, url]) => pcAgent.relayRefusal(method, url) === null)).toEqual([true, true, false, false, false, false]);
   });
 });

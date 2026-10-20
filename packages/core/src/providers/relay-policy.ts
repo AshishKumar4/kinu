@@ -6,7 +6,7 @@
  * Each host's calls, `METHOD /path`: Codex on chatgpt.com, which refuses Kinu's cloud network, and the ChatGPT plan's API
  * on api.openai.com, which the machine's own sign-in carries.
  */
-export const RELAY_ROUTES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+const RELAY_ROUTES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   'chatgpt.com': Object.freeze(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']),
   'api.openai.com': Object.freeze(['GET /v1/models', 'POST /v1/responses']),
 });

@@ -40,7 +40,7 @@ export * from './codex';
 
 export * from './chatgpt';
 
-export { RELAY_ROUTES, relayRefusal } from './relay-policy';
+export { relayRefusal } from './relay-policy';
 
 export {
   chatgptLoginIssuer, CHATGPT_PASTE_REDIRECT, ChatGptPasteSignInSchema, ChatGptRegistrationSchema, chatgptHostId,

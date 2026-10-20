@@ -277,7 +277,7 @@ const RELAY_BODY_FRAME = FRAMES.relayBody;
 const CHATGPT_HOST = 'api.openai.com';
 
 /** What the relay carries, the hub's own policy (core providers/relay-policy.ts): each end checks the same rule. */
-const { RELAY_ROUTES, relayRefusal } = require('../../core/src/providers/relay-policy.ts');
+const { relayRefusal } = require('../../core/src/providers/relay-policy.ts');
 
 /** The hub's calls on this machine's ChatGPT sign-in, core's DEVICE_CHATGPT. */
 const CHATGPT_METHODS = Object.freeze({ status: METHODS.chatgptStatus, signIn: METHODS.chatgptSignIn, signOut: METHODS.chatgptSignOut });
@@ -2504,7 +2504,6 @@ module.exports = {
   RELAY_METHOD,
   RELAY_HEAD_FRAME,
   RELAY_BODY_FRAME,
-  RELAY_ROUTES,
   relayRefusal,
   CHATGPT_METHODS,
   CHATGPT_SIGNED_OUT,
