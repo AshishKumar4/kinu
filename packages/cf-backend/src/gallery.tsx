@@ -8004,6 +8004,11 @@ async function mount() {
 
       return diffDesignFrame();
     }],
+    ["mail", async () => {
+      const { default: mailFrame } = await import("@/gallery-mail");
+
+      return mailFrame();
+    }],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
     ["qualitylive", () => {
       serveGalleryRpc(workspacePageRpc);

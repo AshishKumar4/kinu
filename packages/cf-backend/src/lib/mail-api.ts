@@ -19,6 +19,8 @@ const ImportantMailSchema = v.object({
   unread: v.boolean(),
 });
 
+export type ImportantMail = v.InferOutput<typeof ImportantMailSchema>;
+
 const ImportantSchema = v.object({ unread: v.number(), items: v.array(ImportantMailSchema) });
 
 export type Important = v.InferOutput<typeof ImportantSchema>;
