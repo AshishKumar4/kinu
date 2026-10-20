@@ -1048,6 +1048,10 @@
     "created_at INTEGER NOT NULL",
     "CHECK (important IS NULL OR path = '')"
   ],
+  "mail_untriaged@packages/core/src/state/mail-schema.ts": [
+    "thread_id TEXT PRIMARY KEY REFERENCES mail_threads (id)",
+    "since INTEGER NOT NULL"
+  ],
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
     "actor_id TEXT NOT NULL",
     "root_id TEXT NOT NULL",

@@ -82,7 +82,8 @@ export function compactionTriggerOptions(
   return inputTokens >= (forced ? SERVER_COMPACTION_MIN_TOKENS : threshold) ? { openai: { compactionTrigger: true } } : undefined;
 }
 
-function triggerTokens(contextWindow: number | null | undefined): number {
+/** The tokens at which a conversation on a `contextWindow`-token model is compacted; 0 for an unknown window. */
+export function triggerTokens(contextWindow: number | null | undefined): number {
   return Math.floor(((contextWindow ?? 0) * COMPACTION_TRIGGER_PERCENT) / 100);
 }
 

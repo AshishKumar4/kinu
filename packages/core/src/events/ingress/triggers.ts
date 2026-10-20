@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
 import type { TriggerRegistry } from '../hub/triggers';
 import type { TriggerRow, TrustLevel } from '../hub/types';
-import { nextCronFire } from '../hub/cron';
+import { knownTimeZone, nextCronFire } from '../hub/cron';
 import type { WebhookSecretStore } from './secrets';
 import { JsonObjectSchema, type JsonObject } from '../../utils/json';
 import { Effect } from 'effect';
@@ -12,6 +12,8 @@ import { KinuError, settleSync } from '../../obs/index';
 
 export interface TimerTriggerOpts {
   cron?: string;
+  /** The IANA zone whose wall clock `cron` names; absent, UTC. */
+  timeZone?: string;
   atMs?: number;
   label?: string;
   payload?: JsonObject;
@@ -27,6 +29,7 @@ export interface TimerTrigger {
 
 const TimerSpecSchema = v.object({
   cron: v.optional(v.string()),
+  time_zone: v.optional(v.string()),
   label: v.optional(v.string()),
   payload: v.optional(JsonObjectSchema),
   mission_label: v.optional(v.string()),
@@ -41,7 +44,9 @@ export async function createTimerTrigger(
   now: number,
 ): Promise<TimerTrigger> {
   const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
-  const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
+  const nextFireAt = opts.cron ? nextCronFire(opts.cron, now, opts.timeZone) : (opts.atMs ?? null);
+
+  if (opts.timeZone !== undefined && !knownTimeZone(opts.timeZone)) return settleSync(Effect.fail(new KinuError('bad_input', `Unknown time zone: ${opts.timeZone}`)));
 
   if (opts.cron && nextFireAt === null) return settleSync(Effect.fail(new KinuError('bad_input', `Unsupported cron expression: ${opts.cron}`)));
 
@@ -49,6 +54,8 @@ export async function createTimerTrigger(
   const triggerSpec: JsonObject = {};
 
   if (opts.cron !== undefined) Object.assign(triggerSpec, { cron: opts.cron });
+
+  if (opts.timeZone !== undefined) Object.assign(triggerSpec, { time_zone: opts.timeZone });
 
   if (opts.label !== undefined) Object.assign(triggerSpec, { label: opts.label });
 
@@ -170,7 +177,7 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
     });
 
     if (trigger.kind === 'timer_cron') {
-      await deps.registry.markFired(trigger.id, now, spec.cron ? nextCronFire(spec.cron, now) : null);
+      await deps.registry.markFired(trigger.id, now, spec.cron ? nextCronFire(spec.cron, now, spec.time_zone) : null);
     } else {
       await deps.registry.markFired(trigger.id, now, null);
       deps.registry.revoke(trigger.id, now);

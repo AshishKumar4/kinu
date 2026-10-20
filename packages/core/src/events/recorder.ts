@@ -650,20 +650,6 @@ export class RunEventRecorder {
       ORDER BY rowid DESC LIMIT 1`[0]?.text ?? null);
   }
 
-  /** Auto-GEPA's durable denominator. Rows without `workMode` count nothing; a turn in the same
-   *  millisecond as `sinceTs` counts as before, so a re-driven pass does not recount. */
-  completedWorkTurns(sinceTs: string | null): number {
-    this.actor.assertCurrent();
-
-    const rows = this.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM run_events
-      WHERE actor_id = ${this.actorId} AND type = ${'turn_end' satisfies RunEventType}
-        AND (${sinceTs} IS NULL OR ts > ${sinceTs})
-        AND json_extract(payload, '$.workMode') != 'plan'`;
-
-    return rows[0]?.n ?? 0;
-  }
-
   stepFinish(runId: string, stepIndex: number): Extract<RunEvent, { type: 'step_finish' }> | null {
     this.actor.assertCurrent();
 

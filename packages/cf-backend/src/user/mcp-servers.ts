@@ -5,12 +5,13 @@ import {
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
-import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, hold, KinuError, recording, renderThrownChain, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import { mcpOAuthStorage } from './mcp-oauth-storage';
 import type { UserCredentials } from './credentials';
 import type { SqlRow, UserObjectHost } from './user-host';
+import { ASSISTANT_CONFIG_KEY } from './roster';
 
 /** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
 const MCP_APP_ENV = {
@@ -567,7 +568,39 @@ export class UserMcpServers {
       throw new KinuError('unavailable', 'Could not connect to the MCP server. Check its URL and credentials, then add it again.', { cause: err });
     }
 
+    // Connected by a token, with no sign-in to wait for.
+    if (authUrl === null) await this.assistantConnectionsChanged();
+
     return { id, authUrl };
+  }
+
+  /** The presets the account is connected to now: configured, and their connection one a call can use. */
+  connectedPresets(): string[] {
+    const connections = this.host.mcp.mcpConnections;
+
+    return this.host.sqlx<{ id: string; preset_id: string | null }>(`SELECT id, preset_id FROM user_mcp_servers WHERE preset_id IS NOT NULL`)
+      .flatMap((row) => (row.preset_id !== null && CALLABLE_MCP_STATES.has(mapConnectionStatus(connections[row.id]?.connectionState)) ? [row.preset_id] : []));
+  }
+
+  async userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
+    await this.host.requireTier(caller, 'mcp.manage');
+
+    return this.connectedPresets();
+  }
+
+  /**
+   * The owner's assistant arms the watchers of the connections they now hold, and cancels the rest (its
+   * `connectionsChanged`). A workspace that does not answer keeps what it had until the next change; the connection
+   * stands either way.
+   */
+  private async assistantConnectionsChanged(): Promise<void> {
+    const assistant = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, ASSISTANT_CONFIG_KEY)[0]?.value;
+
+    if (assistant === undefined) return;
+    const stub = this.host.env.OrchestratorAgent.get(this.host.env.OrchestratorAgent.idFromName(assistant));
+
+    await settleLogged('mcp.assistant_watchers_unreconciled', { doing: "arming the assistant's checks of the owner's connections", otherwise: 'unavailable' },
+      async () => { await stub.connectionsChanged(this.connectedPresets()); }, { workspace: assistant });
   }
 
   async userMcp_remove(caller: UserCaller, id: string): Promise<void> {
@@ -587,6 +620,7 @@ export class UserMcpServers {
 
     this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
     this._mcpToolLists.delete(id);
+    await this.assistantConnectionsChanged();
   }
 
   /**
@@ -941,6 +975,7 @@ export class UserMcpServers {
         }
 
         await this.readMcpToolList(result.serverId);
+        await this.assistantConnectionsChanged();
 
         return { ok: true, serverId: result.serverId, error: null };
       }

@@ -33,8 +33,6 @@ export const APP_ROUTES = {
   explore: '/explore',
   /** One listed workspace blueprint: what it does, what is inside, what it needs, and Install. */
   exploreWorkspace: '/explore/workspaces/:blueprint',
-  /** Slates people listed for anyone to use: Explore's apps, at their first address. */
-  gallery: '/gallery',
   /** One listed slate: what it uses, what a fork gets, and Open, Fork, Star. */
   gallerySlate: '/gallery/:workspace/:slate',
   deploy: '/deploy',

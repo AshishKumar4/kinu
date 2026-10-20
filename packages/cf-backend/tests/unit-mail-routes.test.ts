@@ -205,6 +205,19 @@ describe('the person reads and sends their own mail, and only their own', () => 
     expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3' })).toEqual({ status: 200, body: { unread: 0, items: [] } });
   });
 
+  test('the footer\'s read and the Important view show the assistant\'s pick with its reason', async () => {
+    const dana = await storeOf(ASHISH.userId).deliver({
+      raw: new TextEncoder().encode(['From: Dana Whitfield <dana@northwind.io>', 'To: ashish@kinu.run', 'Subject: Webhook deliveries to /hooks/v2 failing with 500', '', 'Every delivery gets a 500.'].join('\r\n')),
+      envelopeFrom: 'dana@northwind.io', recipient: { username: 'ashish', path: '', tag: null },
+    });
+
+    storeOf(ASHISH.userId).update(dana?.threadId ?? '', { important: 'Dana is blocked on /hooks/v2.' });
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3' })).body).toMatchObject({
+      unread: 1, items: [{ thread: dana?.threadId, from: { address: 'dana@northwind.io' }, reason: 'Dana is blocked on /hooks/v2.', unread: true }],
+    });
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/threads?view=important' })).body).toMatchObject({ threads: [{ important: 'Dana is blocked on /hooks/v2.' }] });
+  });
+
   test('the person cannot mark Important themselves: that is the assistant\'s pick', async () => {
     expect((await call(ASHISH, { method: 'PATCH', path: '/api/user/mail/threads/t-1', body: { important: 'mine' } })).status).toBe(400);
   });

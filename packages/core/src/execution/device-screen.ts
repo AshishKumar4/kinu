@@ -173,7 +173,7 @@ export class DeviceScreenHub {
 
     if (!pending) {
       diagnostics.event('device.screen_data_unclaimed', { device });
-      this.closeOnDevice(device, stream);
+      this.closeStream(device, stream);
 
       return;
     }
@@ -188,7 +188,7 @@ export class DeviceScreenHub {
     pending.held = [];
     pending.heldBytes = 0;
     pending.ended = SCREEN_UNREAD;
-    this.closeOnDevice(device, stream);
+    this.closeStream(device, stream);
   }
 
   /** The machine ended the stream: its viewer closes with the machine's words. */
@@ -201,7 +201,7 @@ export class DeviceScreenHub {
 
   /** The machine stops capturing for a stream: its viewer's socket closed, no viewer came, or its open failed. */
   closeStream(device: string, stream: number): void {
-    this.closeOnDevice(device, stream);
+    this.devices.tunnel(device)?.notify({ type: DEVICE_FRAMES.screenClose, stream });
   }
 
   /** The device's socket dropped: its daemon ended every stream with it. */
@@ -215,10 +215,6 @@ export class DeviceScreenHub {
     for (const [session, pending] of this.unattached) {
       if (pending.device === device) this.unattached.delete(session);
     }
-  }
-
-  private closeOnDevice(device: string, stream: number): void {
-    this.devices.tunnel(device)?.notify({ type: DEVICE_FRAMES.screenClose, stream });
   }
 
   private pendingStream(device: string, stream: number): PendingScreen | null {

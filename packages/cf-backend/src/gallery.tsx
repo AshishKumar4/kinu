@@ -7952,9 +7952,8 @@ async function mount() {
     ["drive-empty", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
     ["drive-wide", { node: <DrivePageFrame />, entries: [drivePathAsked] }],
     ["drive-recipient", { node: <DrivePageFrame />, entries: [APP_ROUTES.drive] }],
-    // The Gallery, and `&slate=<slate>`'s own page.
-    ["gallery-list", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
-    ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(frame, new URLSearchParams(location.search))] }],
+    // `&slate=<slate>`'s own page.
+    ["gallery-slate", { node: <GalleryAppFrame />, entries: [galleryEntry(new URLSearchParams(location.search))] }],
     // A slate's personal parts, hosted by an app page; and one part's frame, inside the slate's page.
     ["part-host", { node: <PartHostFrame />, entries: ["/"] }],
     ["part-host-refused", { node: <PartHostFrame />, entries: ["/"] }],

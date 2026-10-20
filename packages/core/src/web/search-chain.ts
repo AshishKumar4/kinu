@@ -42,7 +42,7 @@ export interface WebSearchChain {
 /** The deployment's own Cloudflare search: the AI binding on the gateway `AI_GATEWAY_URL` names. */
 export type DeploymentSearch = (request: { readonly query: string; readonly limit: number; readonly provider: WebSearchProviderId }) => Promise<Response>;
 
-export interface WebSearchDeps {
+interface WebSearchDeps {
   readonly fetch: typeof fetch;
   /** The account's keys, stored under each provider's id, and its Cloudflare login as {@link CLOUDFLARE_WEB_SEARCH_CRED_KEY}. */
   readonly getAuth: AuthResolver;

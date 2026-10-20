@@ -2,7 +2,7 @@
  * Prompt prose as data: each template is an addressable, evolvable artifact.
  * `{{#if}}` keeps a whole section one string; iteration and non-boolean
  * decisions stay in `prompt.ts` (see `template.ts`). `PROMPT_SECTIONS` is the
- * index the GEPA bridge reads; anything not in it is not separately evolvable.
+ * index a dream's section edits address; anything not in it is not separately evolvable.
  */
 
 // One import spelling across Bun/CLI, esbuild and Vite/workerd (Vite's promptText plugin;
@@ -81,7 +81,7 @@ export const BUILTIN_TOOL_LINE = definePromptSection(
 /**
  * Stable operating doctrine. The current mode and submission reach ride the
  * dynamic ledger, while tool execution still enforces the resolved profile.
- * GEPA can tune this section's wording, not the mode's permission rules.
+ * A dream can reword this section, not the mode's permission rules.
  */
 export const OPERATING_GUIDANCE = definePromptSection(
   "guidance/operating",

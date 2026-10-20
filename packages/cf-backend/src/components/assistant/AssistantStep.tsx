@@ -5,8 +5,7 @@
 import type { ReactNode } from "react";
 import { HandPalmIcon, KeyIcon, SunHorizonIcon } from "@phosphor-icons/react";
 import { kinuBlueprint, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
-import { useMcpServers } from "@/hooks/use-mcp-servers";
-import { lastValue } from "@/hooks/use-async-resource";
+import { useConnectedPreset } from "@/hooks/use-mcp-servers";
 import { ChatMascot } from "@/components/Marks";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
@@ -25,7 +24,8 @@ export const DEFAULT_ASSISTANT: AssistantChoice = { install: true, name: "Kinu",
 /** Its mascot's seed: the assistant workspace's main chat, so setup shows the face Home will. */
 const ASSISTANT_SEED = "personal-assistant/main";
 
-const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
+/** The brief times setup and Install offer. */
+export const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
 
 function Tile({ chosen, onChoose, title, badge, about, value }: {
   chosen: boolean; onChoose: () => void; title: string; badge?: string; about: string; value: string;
@@ -60,8 +60,7 @@ function Reach({ icon, title, children, connected }: { icon: ReactNode; title: s
 }
 
 export function AssistantStep({ choice, onChange }: { choice: AssistantChoice; onChange: (choice: AssistantChoice) => void }) {
-  const servers = lastValue(useMcpServers().servers.resource) ?? [];
-  const has = (preset: string) => servers.some((server) => server.presetId === preset && (server.status === "ready" || server.status === "connected"));
+  const has = useConnectedPreset();
   const needs = kinuBlueprint(PERSONAL_ASSISTANT_ID)?.needs ?? [];
 
   return (

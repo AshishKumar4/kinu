@@ -611,7 +611,7 @@ export class LocalAgentSession {
       root: () => ({ kind: 'root', actorId: this.rt.actor.actorId, store: this.jobs, runner: this.jobRunner }),
       revive: (actorId) => this.endedLoopJobs(actorId),
     });
-    // Scaffold cold-start heal (DO onStart parity): the proposer edits scaffold/agent.js, so it must exist. Idempotent; tracked for end().
+    // Scaffold cold-start heal (DO onStart parity): scaffold/agent.js must exist before a turn runs it. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
     // The next turn awaits this before admitting input.
@@ -1852,7 +1852,7 @@ export class LocalAgentSession {
       : { kind: 'agent', opensConversation: input.opensConversation };
 
     // No `turnEndExtensions` (runChat fires them in-stream), no `eventReplies` (startup's
-    // `reclaimStrandedEventDeliveries` covers them), no `craftedToolsUsed`/`autoGepa` lanes here.
+    // `reclaimStrandedEventDeliveries` covers them), no `craftedToolsUsed` lane here.
     return declareTerminalRoster(facts, { role, advisor: this.actorSession.advisor, turn: scoped, reachableTools: input.reachableTools }, parts);
   }
 

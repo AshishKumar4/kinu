@@ -19,7 +19,9 @@ import { parseArgs } from 'node:util';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import type { LanguageModel } from 'ai';
-import { rateTurn, renderRating, type RatedTurnInput, type RatingVerdict } from '../packages/core/src/evolution/ratings';
+import {
+  isHighRating, isLowRating, rateTurn, renderRating, type RatedTurnInput, type RatingVerdict,
+} from '../packages/core/src/evolution/ratings';
 import { TRIAGE } from '../packages/core/src/evolution/refinement-lane';
 import {
   createDecisionPort, DECISION_MODELS, DEFAULT_DECISION_MODEL, type DecisionModel, type DecisionPort, type DecisionRun,
@@ -73,11 +75,11 @@ export function share(pairs: readonly ReadPair[]): Share {
   };
 }
 
-/** The band the ratings are read in: low below 2.5, high from 3.5 (`ratings.ts`). */
+/** The band the ratings are read in, by the bounds `ratings.ts` reads them with. */
 function band(score: number): string {
-  if (score < 2.5) return 'low';
+  if (isLowRating(score)) return 'low';
 
-  return score < 3.5 ? 'mid' : 'high';
+  return isHighRating(score) ? 'high' : 'mid';
 }
 
 /** A yes-or-no answer as every consumer reads it: yes from 0.5. */

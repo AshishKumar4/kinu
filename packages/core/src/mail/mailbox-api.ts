@@ -125,6 +125,8 @@ export interface MailDelivery {
   readonly woke: MailWoke | null;
   /** The box's reader to wake; null when nothing wakes. `main`: the workspace's own box, read by its main agent. */
   readonly wake: { readonly workspace: string; readonly actorId: string; readonly main: boolean } | null;
+  /** The person's assistant, to triage it: new mail in their own box that is not their instruction (§8). */
+  readonly triage: { readonly workspace: string; readonly actorId: string } | null;
   /** The owner's verified instruction's own words, the only body an arrival hands an agent unasked (§3). */
   readonly instruction: string | null;
 }
@@ -169,6 +171,8 @@ export interface MailboxAgentCalls {
   readableBy(caller: MailCaller): Promise<readonly MailBox[]>;
   findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { readonly box?: string; readonly unread?: boolean }): Promise<MailListing>;
   readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null>;
+  /** The person's threads waiting for the assistant's triage, newest first; none for an agent that does not read their box. */
+  untriagedFor(caller: MailCaller, limit: number): Promise<readonly MailThreadView[]>;
   draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
   /** Sends it now: the workspace calls this only with the owner's approval of these exact bytes in hand. */
   sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;

@@ -110,6 +110,7 @@ const USER_DO_METHODS = [
   'getAuthHeaders',
   'getCodexStatus',
   'getConfig',
+  'claimConfig',
   'getCredentialEndpoint',
   'getDeviceFileView',
   'getWorkspaceTitle',
@@ -196,6 +197,7 @@ const USER_DO_METHODS = [
   'userMcp_cancelCall',
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
+  'userMcp_connectedPresets',
   'userMcp_list',
   'userMcp_presets',
   'userMcp_remove',
@@ -278,6 +280,10 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
+  // The account's install, DO-to-DO (`workspace-create.ts`): a blueprint's layout, agent and owner schedules.
+  'seedBlueprint',
+  // The account, DO-to-DO, when the owner's connections change (`user/mcp-servers.ts`).
+  'connectionsChanged',
   'blueprintBundle',
   'readBlueprint',
   'shareBlueprintWith',
@@ -359,6 +365,8 @@ const ORCHESTRATOR_METHODS = [
   'mailHanded',
   // Worker-only: the assistant's install and the owner's claim of an address (user/blueprint-install.ts, mail/routes.ts).
   'readOwnerMail',
+  // Worker-only: the mail router's word that new mail waits for the assistant's triage (mail/handler.ts).
+  'triageOwnerMail',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',

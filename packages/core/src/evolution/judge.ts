@@ -85,7 +85,7 @@ export async function scoreAuthoredEdit(deps: { readonly rt: AgentRuntime; reado
   const before = artifactBody(rt.storage.sql, rt.actor, input.artifactId);
 
   if (before === null) return { refused: `${input.artifactId} is no evolvable artifact` };
-  const vetoed = artifactEditRefusal(rt.storage.sql, rt.actor, { artifactId: input.artifactId, before, after: input.body, record: true });
+  const vetoed = artifactEditRefusal(rt.storage.sql, rt.actor, { artifactId: input.artifactId, before, after: input.body });
 
   if (vetoed !== null) return { refused: vetoed };
 

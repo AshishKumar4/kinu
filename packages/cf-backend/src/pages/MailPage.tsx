@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
+import { APP_ROUTES, MAIL_LABEL_PATTERN, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
 import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
 import { MailRow, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
@@ -36,7 +36,7 @@ function Claim({ email, onClaimed }: { email: string; onClaimed: () => void }) {
     <form onSubmit={claim} className="p-card mt-5 max-w-sm space-y-3 p-4">
       <label className="block space-y-1 p-row-text p-text-2">Username
         <input value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} aria-label="Username" autoComplete="username" autoCapitalize="none"
-          pattern="[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?" maxLength={20} required disabled={busy !== null} className={inputCls} />
+          pattern={MAIL_LABEL_PATTERN} maxLength={20} required disabled={busy !== null} className={inputCls} />
       </label>
       {error !== null && <p role="alert" className="p-row-text p-danger">{error}</p>}
       <FilledButton type="submit" disabled={busy !== null}>{busy === null ? "Claim address" : "Claiming…"}</FilledButton>

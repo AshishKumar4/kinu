@@ -16,14 +16,12 @@ import {
   EGRESS_PLACEHOLDER_PREFIX,
   PLACEHOLDER_BODY_LENGTH,
   isEgressPlaceholder,
+  isSecretName,
   planEgress,
   type EgressRequestFacts,
   type EgressSecretBinding,
   type SecretPosition,
 } from './egress-gate';
-
-/** A variable name in every shell and a property in every program; the same shape `parseDotenv` reads. */
-const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 /** A hostname, or one under a domain as `*.example.com`: a wildcard anywhere else (`api.*`, a bare `*`) would let a
  *  program name a host of its own choosing and have the secret sent there. */
@@ -68,7 +66,7 @@ export interface SecretSummary {
 }
 
 /** The owner's consent for one workspace; `reveal` lets its agents read the value itself. */
-export interface SecretGrant {
+interface SecretGrant {
   readonly workspace: string;
   /** The workspace's own title, as the owner's roster shows it. */
   readonly title: string;
@@ -217,7 +215,7 @@ export function putSecrets(deps: EgressVaultDeps, entries: readonly SecretInput[
     const rows: { name: string; hosts: string; position: string }[] = [];
 
     for (const entry of entries) {
-      if (!SECRET_NAME_RE.test(entry.name)) {
+      if (!isSecretName(entry.name)) {
         return yield* new KinuError('bad_input', `"${entry.name}" cannot name a secret: use letters, digits and _, not starting `
           + 'with a digit, as an environment variable is named.');
       }

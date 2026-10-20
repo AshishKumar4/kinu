@@ -34,6 +34,8 @@ export interface MailRouterDeps {
   mailbox(userId: string): Pick<MailboxDO, 'deliver'>;
   /** Hands an arrival to the workspace whose agent it woke. */
   wake(delivery: MailDelivery & { readonly wake: NonNullable<MailDelivery['wake']> }, recipient: MailRecipient): Promise<void>;
+  /** Tells the person's assistant new mail waits for its triage; answers even when the assistant does not, the mail filed. */
+  triage(reader: NonNullable<MailDelivery['triage']>): Promise<void>;
 }
 
 export type MailRouting =
@@ -92,6 +94,8 @@ export async function routeInboundMail(message: InboundMail, deps: MailRouterDep
 
     return { outcome: 'refused', reason: `no box at ${message.to}` };
   }
+
+  if (delivery.triage !== null) await deps.triage(delivery.triage);
 
   const wake = delivery.wake;
 

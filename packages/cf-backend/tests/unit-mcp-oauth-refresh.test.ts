@@ -280,5 +280,10 @@ describe('Gmail, which lists its tools to anyone and refuses only a call', () =>
     google.expire();
     expect(await client.callTool({ name: 'search_threads', arguments: {} })).toMatchObject({ content: [{ text: '1 thread' }] });
     expect(google.refreshes).toHaveLength(1);
+    // An hour on, the refreshed token expires too. Google keeps the refresh token, so the next refresh presents the same
+    // one; it must reach Google, not be answered with the first refresh's token, long expired (the rc27 review).
+    google.expire();
+    expect(await client.callTool({ name: 'search_threads', arguments: {} })).toMatchObject({ content: [{ text: '1 thread' }] });
+    expect(google.refreshes).toEqual(['1//refresh.1', '1//refresh.1']);
   });
 });

@@ -1,12 +1,12 @@
 diff --git a/packages/core/src/providers/structured.ts b/packages/core/src/providers/structured.ts
 --- a/packages/core/src/providers/structured.ts
 +++ b/packages/core/src/providers/structured.ts
-@@ -19,7 +19,7 @@
-
- /** Return the first fenced payload, or the trimmed response when there is no fence. */
- export function stripMarkdownFences(raw: string): string {
--  return markdownFencedBlocks(raw)[0]?.code ?? raw.trim();
-+  return raw.trim();
+@@ -12,7 +12,7 @@ export interface MarkdownFencedBlock {
+ export function markdownFencedBlocks(text: string): MarkdownFencedBlock[] {
+   return [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map((match) => ({
+     tag: (match[1] ?? '').trim().split(/\s+/)[0]?.toLowerCase() || null,
+-    code: (match[2] ?? '').trim(),
++    code: match[0].trim(),
+   }));
  }
-
- export function jsonObjectOnlyInstruction(): string {
+ 

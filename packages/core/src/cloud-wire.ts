@@ -92,7 +92,7 @@ const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
  * id proves it). Each is one `user_config` row; every other configuration row, and every runtime row from earlier work,
  * still belongs to the isolation check.
  */
-export interface ProvisionedConfig { readonly catalog: boolean; readonly gateway: boolean }
+interface ProvisionedConfig { readonly catalog: boolean; readonly gateway: boolean }
 
 export function inheritedRows(held: Readonly<Record<string, number>>, provisioned: ProvisionedConfig = { catalog: false, gateway: false }): Record<string, number> {
   const written = Number(provisioned.catalog) + Number(provisioned.gateway);

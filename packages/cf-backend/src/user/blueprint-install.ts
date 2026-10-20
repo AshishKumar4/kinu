@@ -1,13 +1,14 @@
 /**
  * Installing a workspace blueprint: a new workspace of the owner's, born with the blueprint's soul, layout, main agent
- * and schedules before its first turn. The Personal assistant is the owner's one: installing it again opens the one
- * they have, and it may become their Home (`ASSISTANT_CONFIG_KEY`).
+ * and schedules before its first turn. The Personal assistant installed as Home is the owner's one (`ASSISTANT_CONFIG_KEY`):
+ * its name is claimed in the account before it is made, so installs at once, or one retried after a failed make, end in
+ * the same workspace. One installed without Home is a workspace like any other.
  */
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
-  blueprintSeed, err, fallbackWorkspaceIdentity, json, kinuBlueprint, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
+  blueprintSeed, ClockSchema, err, fallbackWorkspaceIdentity, json, kinuBlueprint, knownTimeZone, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
@@ -20,8 +21,9 @@ const InstallBodySchema = v.strictObject({
   /** The main agent's name; absent, the blueprint's. */
   agent: v.optional(v.pipe(v.string(), v.maxLength(60))),
   /** The daily brief's time, `HH:MM`, in the owner's day. */
-  brief: v.optional(v.pipe(v.string(), v.regex(/^([01]\d|2[0-3]):[0-5]\d$/))),
-  utcOffsetMinutes: v.pipe(v.number(), v.integer(), v.minValue(-14 * 60), v.maxValue(14 * 60)),
+  brief: v.optional(ClockSchema),
+  /** The owner's IANA time zone, whose wall clock the brief keeps. */
+  timeZone: v.pipe(v.string(), v.check(knownTimeZone, 'an IANA time zone, as Europe/Lisbon')),
   /** The assistant only: Home opens on its chat. */
   home: v.optional(v.boolean()),
 });
@@ -29,7 +31,7 @@ const InstallBodySchema = v.strictObject({
 export type InstallBody = v.InferOutput<typeof InstallBodySchema>;
 
 /** The account reads and writes an install makes. */
-export type InstallAuthority = CloudWorkspaceRegistry & Pick<UserDO, 'getConfig' | 'setConfig' | 'listActiveWorkspaces' | 'getProfile'>;
+export type InstallAuthority = CloudWorkspaceRegistry & Pick<UserDO, 'getConfig' | 'claimConfig' | 'listActiveWorkspaces' | 'getProfile' | 'userMcp_connectedPresets'>;
 
 /** The owner's assistant workspace while it is still theirs; a removed one is no Home. */
 export async function installedAssistant(userDO: Pick<InstallAuthority, 'getConfig' | 'listActiveWorkspaces'>, caller: UserCaller): Promise<string | null> {
@@ -56,34 +58,32 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
     const blueprint = kinuBlueprint(id);
 
     if (blueprint === undefined) return yield* Effect.fail(new KinuError('missing', `No workspace blueprint "${id}".`));
-    const assistant = id === PERSONAL_ASSISTANT_ID;
+    const proposed = fallbackWorkspaceIdentity(blueprint.line, crypto.randomUUID()).name;
 
-    if (assistant) {
-      const held = yield* Effect.promise(async () => installedAssistant(userDO, owner));
+    // Home's name is the account's before the workspace is listed, so the roster's first word of it already says Home;
+    // a name already claimed is the assistant another install made, or is making, or failed to make.
+    const home = id === PERSONAL_ASSISTANT_ID && body.home !== false;
+    const name = home ? yield* Effect.promise(async () => userDO.claimConfig(owner, ASSISTANT_CONFIG_KEY, proposed)) : proposed;
 
-      if (held !== null) return { name: held };
-    }
+    if (name !== proposed && (yield* Effect.promise(async () => installedAssistant(userDO, owner))) === name) return { name };
 
-    const profile = yield* Effect.promise(async () => userDO.getProfile(owner));
+    // A schedule that watches a connection is armed now only if the owner holds it; the account arms it later on connect.
+    const [profile, connected] = yield* Effect.promise(async () => Promise.all([userDO.getProfile(owner), userDO.userMcp_connectedPresets(owner)]));
     // The owner as the soul names them: their name, else their address's first part.
-    const ownerName = [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((name) => name !== undefined && name !== '') ?? 'you';
+    const ownerName = [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((called) => called !== undefined && called !== '') ?? 'you';
 
     const { soul, seed } = blueprintSeed(blueprint, {
-      utcOffsetMinutes: body.utcOffsetMinutes, owner: ownerName,
+      timeZone: body.timeZone, owner: ownerName, connected,
       ...(body.agent !== undefined && { agent: body.agent }), ...(body.brief !== undefined && { brief: body.brief }),
     });
 
-    // Home is named before the workspace is listed, so the roster's first word of it already says Home.
-    const name = fallbackWorkspaceIdentity(blueprint.line, crypto.randomUUID()).name;
-
-    if (assistant && body.home !== false) yield* Effect.promise(async () => userDO.setConfig(owner, ASSISTANT_CONFIG_KEY, name));
-
+    // A claimed name not yet listed is made here; an install making it meanwhile answers it as it is (`registerWorkspace`).
     const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
       env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
     }));
 
     // Home reads the owner's own mail (docs/MAIL.md §7), once they have an address; a failed hand-over is said, not the install undone.
-    if (assistant && body.home !== false) {
+    if (home) {
       yield* attempt({ doing: 'giving the assistant the owner\'s mail', otherwise: 'unavailable' }, async () => objectNamed(env.OrchestratorAgent, entry.name).readOwnerMail()).pipe(
         Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, { workspace: entry.name }); })),
       );
@@ -103,7 +103,7 @@ export function handleInstallRequest<Id>(call: Omit<InstallRequest<Id>, 'body'> 
   return settle(Effect.gen(function* () {
     const body = yield* Effect.promise(async () => safeJson(call.request, InstallBodySchema));
 
-    if (body === null) return err(400, 'Body must be { displayName?, agent?, brief?, utcOffsetMinutes, home? }.');
+    if (body === null) return err(400, 'Body must be { displayName?, agent?, brief?, timeZone, home? }.');
 
     return yield* Effect.catchCause(
       Effect.map(installBlueprint({ ...call, body }), (workspace) => json({ body: { workspace: workspace.name } }, { status: 201 })),

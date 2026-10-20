@@ -108,6 +108,29 @@ describe('a production OrchestratorAgent stub', () => {
   });
 });
 
+// The rc27 review: the account's install called seedBlueprint across the stub, which the seal refused, so a blueprint's
+// layout, agent name and schedules never reached the workspace it made.
+// Each name of `CloudWorkspaceBirth` (`workspace-create.ts`), the calls an install makes on the workspace it creates.
+test('answers each call a workspace\'s creation makes on it', async () => {
+  const stub = env.SEALED_ORCHESTRATOR.get(env.SEALED_ORCHESTRATOR.idFromName('sealed-birth'));
+
+  const birth = {
+    claimOwner: () => stub.claimOwner(),
+    setInitialDisplayName: () => stub.setInitialDisplayName(),
+    setSoul: () => stub.setSoul(),
+    resetWorkspaceBaseline: () => stub.resetWorkspaceBaseline(),
+    setModel: () => stub.setModel(),
+    setReasoningEffort: () => stub.setReasoningEffort(),
+    setRole: () => stub.setRole(),
+    beginGenesisTurn: () => stub.beginGenesisTurn(),
+    seedBlueprint: () => stub.seedBlueprint(),
+    // And what the account calls on its assistant when the owner's connections change.
+    connectionsChanged: () => stub.connectionsChanged(),
+  };
+
+  for (const [name, call] of Object.entries(birth)) expect([name, (await answerTo(call)).includes(refusal(name))]).toEqual([name, false]);
+});
+
 describe('a production UserDO stub', () => {
   test('refuses its credential store and inherited members, and still reaches its gated reads, which refuse a missing caller', async () => {
     const stub = env.SEALED_USER_DO.get(env.SEALED_USER_DO.idFromName('sealed-account'));

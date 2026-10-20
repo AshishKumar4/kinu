@@ -7,7 +7,7 @@ import { ReasoningEffortSchema, type ReasoningEffort } from '../providers/reason
 import type { ProviderCatalogSnapshot, ProviderCacheOutcome } from './resolve';
 import { Effect } from 'effect';
 import { logged } from '../obs/index';
-import { fastCandidatesOf, type FastCandidate } from './fast-tier';
+import { contextWindowsOf, fastCandidatesOf, type FastCandidate } from './fast-tier';
 
 /** One credential sweep; `models` are `<provider>/<modelId>` specs. */
 export interface ProviderListing {
@@ -17,6 +17,8 @@ export interface ProviderListing {
   readonly reasoningEfforts?: Readonly<Record<string, readonly ReasoningEffort[]>>;
   /** What an unset fast tier may run on, cheapest first (`fastCandidatesOf`). */
   readonly fast?: readonly FastCandidate[];
+  /** Each model's window, by spec, where the catalog states one (`contextWindowsOf`). */
+  readonly contextWindows?: Readonly<Record<string, number>>;
 }
 
 /** A complete listing as a store keeps it: no failure row, since a degraded one is never kept. */
@@ -24,7 +26,8 @@ export const KeptProviderListingSchema: v.GenericSchema<unknown, ProviderListing
   models: v.array(v.string()),
   failures: v.tuple([]),
   reasoningEfforts: v.optional(v.record(v.string(), v.array(ReasoningEffortSchema))),
-  fast: v.optional(v.array(v.object({ model: v.string(), contextWindow: v.optional(v.number()) }))),
+  fast: v.optional(v.array(v.object({ model: v.string() }))),
+  contextWindows: v.optional(v.record(v.string(), v.number())),
 });
 
 export function providerListingOf(menu: ModelMenu): ProviderListing {
@@ -38,11 +41,11 @@ export function providerListingOf(menu: ModelMenu): ProviderListing {
     return spec;
   });
 
-  return { models, failures: menu.failures, reasoningEfforts, fast: fastCandidatesOf(menu) };
+  return { models, failures: menu.failures, reasoningEfforts, fast: fastCandidatesOf(menu), contextWindows: contextWindowsOf(menu) };
 }
 
 /** Both backends' snapshot, as swept; a `pinned` spec moves only the revision. Sorted, so answer order never moves
- *  the revision; failures hashed, as a degraded listing admits unverified. No spec begins with `!`, `~`, `=` or `^`. */
+ *  the revision; failures hashed, as a degraded listing admits unverified. No spec begins with `!`, `~`, `=`, `^` or `#`. */
 export function providerSnapshotOf(listing: ProviderListing, pinned: readonly string[] = []): ProviderCatalogSnapshot {
   const availableModels = [...new Set(listing.models)].sort();
 
@@ -57,7 +60,13 @@ export function providerSnapshotOf(listing: ProviderListing, pinned: readonly st
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.reason.localeCompare(b.reason));
 
   // In the pick's order: a price change that reorders the candidates moves the revision.
-  const fast = (listing.fast ?? []).map((candidate) => ({ ...candidate }));
+  const fast = (listing.fast ?? []).map(({ model }) => ({ model }));
+
+  const contextWindows = Object.fromEntries(availableModels.flatMap((spec) => {
+    const window = listing.contextWindows?.[spec];
+
+    return window === undefined ? [] : [[spec, window]];
+  }));
 
   return {
     revision: sha256Hex([
@@ -65,12 +74,14 @@ export function providerSnapshotOf(listing: ProviderListing, pinned: readonly st
       ...unavailableProviders.map(({ provider, reason }) => `!${provider}\t${reason}`),
       ...Object.entries(reasoningEfforts).map(([spec, levels]) => `~${spec}\t${levels.join(',')}`),
       ...[...new Set(pinned)].sort().map((spec) => `=${spec}`),
-      ...fast.map(({ model, contextWindow }) => `^${model}\t${String(contextWindow ?? '')}`),
+      ...fast.map(({ model }) => `^${model}`),
+      ...Object.entries(contextWindows).map(([spec, window]) => `#${spec}\t${String(window)}`),
     ].join('\n')),
     availableModels,
     unavailableProviders,
     reasoningEfforts,
     fast,
+    contextWindows,
   };
 }
 
