@@ -11,7 +11,7 @@ import { objectNamed, sanitizeReturnTo } from '@kinu.run/core';
 import { escapeHtml, json, KINU_USER_AGENT, nonEmptyString, scopeList, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
-import { builtinSignInOn, grantOf, OAUTH_PROVIDER_ENV, type SignInDeclarationEnv } from '@kinu.run/core/identity';
+import { builtinSignInOn, firstOwnerLinkEmail, grantOf, OAUTH_PROVIDER_ENV, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
@@ -68,6 +68,7 @@ export type AuthRoutesAuthority = SessionAuthority
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
 export interface AuthRoutesEnv<Id = DurableObjectId> extends SignInDeclarationEnv, OwnerCapabilityEnv {
   KINU_SETUP_TOKEN?: string;
+  KINU_FIRST_OWNER_LINK?: string;
   AUTH_KV: KvStore;
   UserDO: ObjectNamespace<Id, AuthRoutesAuthority>;
   OrchestratorAgent: ObjectNamespace<Id, ModelSettingsFanoutTarget>;
@@ -192,7 +193,21 @@ function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): 
         : { mode: 'invite', invite, email, returnTo };
     }
 
-    if (yield* Effect.promise(async () => accounts.builtinHasOwner(caller))) return { mode: 'sign-in', returnTo };
+    const hasOwner = yield* Effect.promise(async () => accounts.builtinHasOwner(caller));
+    const setup = url.searchParams.get('setup');
+
+    if (setup !== null) {
+      const email = firstOwnerLinkEmail(env.KINU_FIRST_OWNER_LINK, setup, Date.now());
+
+      return hasOwner || email === null
+        ? {
+          mode: 'sign-in', returnTo,
+          notice: 'This setup link was already used or has expired. Open the deploy flow for this Kinu again to get a new one.',
+        }
+        : { mode: 'owner', setup, email, returnTo };
+    }
+
+    if (hasOwner) return { mode: 'sign-in', returnTo };
 
     if ((env.KINU_SETUP_TOKEN ?? '').trim() !== '') return { mode: 'owner', returnTo };
 

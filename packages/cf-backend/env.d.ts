@@ -104,6 +104,8 @@ declare global {
     /** Root user-plane secret: seals credentials and derives the owner capability; without it no
      *  signed-in user can be served. Generate with `openssl rand -base64 32`. */
     CREDENTIAL_ENCRYPTION_KEY?: string;
+    /** One-time first-owner link digest, expiry and email; absent leaves manual setup or sign-in. */
+    KINU_FIRST_OWNER_LINK?: string;
     /** Retired keys for reading only during rotation (user/credential-envelope.ts). */
     /** Signs webhook delivery URLs (secret); without it creation answers 503 and URLs 404. Rotation
      *  revokes every URL (events/webhook-route.ts). */

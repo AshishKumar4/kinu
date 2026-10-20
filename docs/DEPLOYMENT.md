@@ -252,7 +252,9 @@ After it, every external system that posts to a Kinu webhook needs the new URL. 
 
 A deployment that declares no OAuth provider signs in with its own accounts: a password or a passkey. "Declares" means any of the `*_OAUTH_CLIENT_ID` / `*_OAUTH_CLIENT_SECRET` names set to a non-empty value, or a non-empty `SIGN_IN_PROVIDERS`. A declared provider that is broken (an id without its secret) leaves sign-in unavailable rather than falling back to built-in accounts. The default `wrangler.jsonc` declares Cloudflare (`CLOUDFLARE_OAUTH_CLIENT_ID`, `SIGN_IN_PROVIDERS`), so a self-hosted deployment clears both for built-in sign-in.
 
-The first account becomes the deployment's owner, and only a request carrying the setup token may create it. Generate a long random token in your password manager, keep it there, and set it as a secret:
+On a self-deployed Kinu, the run's one-time setup link creates the first owner for the Cloudflare email used by that run. The link is single-use, expires after 7 days, and cannot recover an account. `KINU_SETUP_TOKEN` remains the owner's recovery key: keep it in a password manager and never put it in a URL.
+
+For a manual deployment, the first account becomes the owner through a request carrying the setup token. Generate a long random token in your password manager, keep it there, and set it as a secret:
 
 ```bash
 bunx wrangler secret put KINU_SETUP_TOKEN

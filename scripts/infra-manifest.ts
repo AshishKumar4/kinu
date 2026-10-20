@@ -792,6 +792,12 @@ export const SUPPLY = new Map<string, Supply>([
       + 'client with PKCE, redirect https://kinu.run/deploy/callback plus a localhost redirect '
       + 'for the CLI door, and the scopes in docs/SELF-DEPLOY.md § The Cloudflare door.',
   }],
+  ['KINU_FIRST_OWNER_LINK', {
+    handling: 'out-of-band',
+    required: false,
+    absent: 'no setup link: the first owner is created with KINU_SETUP_TOKEN, or not at all',
+    source: 'written by the self-deploy run (docs/SELF-DEPLOY-FLOW.md); never set by hand',
+  }],
   ['KINU_DEPLOYMENT_RECORD', {
     handling: 'out-of-band',
     required: false,
