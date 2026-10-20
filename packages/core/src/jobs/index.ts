@@ -75,6 +75,6 @@ export {
   type BackgroundableTool,
 } from './background-wrap';
 
-export { JOB_STAMP_ENV } from '../types/jobs';
+export { JOB_STAMP_ENV, type AdoptsJobs, type JobAdoption } from '../types/jobs';
 
 export { recordServingJobs, type PortHolders, type ServingScope } from './serving';

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { present } from "@kinu.run/test-utils";
+import { NO_JOBS, present } from "@kinu.run/test-utils";
 import { KinuError, settle } from "../src/obs";
 import { sandboxHandleLifecycle } from "./helpers/sandbox-handle-lifecycle";
 import { executorNamespace } from "../src/tools/executor-operations";
@@ -137,7 +137,7 @@ function nimbusWorkspace(box: SessionBox) {
   const { rt } = createTestRuntime();
 
   return createNimbusWorkspaceExecutor({
-    box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
+    box, jobs: NO_JOBS, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
   });
 }
 

@@ -1,6 +1,6 @@
 // A non-zero exit must not drop stdout (where pytest/make write diagnostics), on every public exec surface.
 import { describe, test, expect } from 'bun:test';
-import { oneMachine, toolExecute } from '@kinu.run/test-utils';
+import { NO_JOBS, oneMachine, toolExecute } from '@kinu.run/test-utils';
 import { answeredRefusal, formatExecResult, type CommandResult, type ExecOutcome } from '../src/execution/exec-result';
 import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
@@ -146,7 +146,7 @@ describe('the surfaces the model reads', () => {
     };
 
     const workspace = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
+      box, jobs: NO_JOBS, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     });
 
     const out = await workspace.tools.exec?.execute('pytest');

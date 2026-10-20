@@ -55,7 +55,10 @@ function machineMembers<const O extends v.ObjectEntries>(op: MachineOp, option: 
         help: 'Start a long-running process in the background, such as a server; it returns while the process runs. Put '
           + 'variables at the head of the command (`PORT=4100 node server.js`). `logs` reads what it writes, `stopProcess` ends it.',
         input: input({ command: Command, cwd: v.optional(described(v.string(), 'Where it starts; default its home.')) }),
-        output: v.strictObject({ processId: v.string() }),
+        output: v.strictObject({
+          processId: v.string(),
+          jobId: v.optional(described(v.string(), 'The background job it runs as on the workspace: its end wakes you.')),
+        }),
       }),
       stopProcess: op({
         name: 'stopProcess', help: 'End a process `startProcess` started.', impact: 'administer',
