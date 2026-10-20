@@ -1,7 +1,8 @@
 /**
  * Explore: apps to open and workspaces to install, in one feed ranked by what people use now. Kinu's own come first,
  * the personal assistant leading; kind, category and sort are light chips, and search reads both kinds. Query and
- * filters live in the URL, as the Gallery's do. Its header and left edge are every page's (ui/PageHeader.tsx).
+ * filters live in the URL, and `/gallery` lands here with Apps on. Its header and left edge are every page's
+ * (ui/PageHeader.tsx).
  */
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";

@@ -48,22 +48,6 @@ export const GALLERY_LAST_PAGE = Math.floor(Number.MAX_SAFE_INTEGER / GALLERY_PA
 
 export type GallerySort = (typeof GALLERY_SORTS)[number];
 
-/** One page of the Gallery: `next` is the page after it, null at the end. */
-export const GalleryPageSchema = v.object({ listings: v.array(GalleryListingSchema), next: v.nullable(v.number()) });
-
-export type GalleryPage = v.InferOutput<typeof GalleryPageSchema>;
-
-/** `GET`, public: one page of listings, matching `q` and in `category` when given. */
-export function galleryPath(query: { q: string; sort: GallerySort; category: GalleryCategory | null; page: number }): string {
-  const search = new URLSearchParams({ sort: query.sort, page: String(query.page) });
-
-  if (query.q !== '') search.set('q', query.q);
-
-  if (query.category !== null) search.set('category', query.category);
-
-  return `/api/gallery?${search.toString()}`;
-}
-
 /** A listed slate's own page, as the index holds it. */
 export const GallerySlateSchema = v.object({
   listing: GalleryListingSchema,

@@ -36,7 +36,7 @@ export const PAGE_ROWS = {
   workspaceAgentPath: ['agent-nested-chat'],
   workspaceView: ['workspace-settings', 'workspace-panes'],
   swarm: ['exploration'],
-  // Explore opens the Gallery's listing until the Explore page lands on its own route.
+  // Explore's apps are the listed slates: gallery-listing lists one and finds it there.
   explore: ['gallery-listing'],
   exploreWorkspace: { unreachable: 'routed only once the Explore page lands (feat/explore); until then no link reaches it' },
   control: { unreachable: 'the operator console answers only an operator the admin gate admits (control-plane/admin-caller.ts), and the eval identity is not one' },
@@ -47,7 +47,6 @@ export const PAGE_ROWS = {
   sharedBlueprint: ['blueprint-fork'],
   sharedLive: ['users-share'],
   liveSlatePart: ['slate-parts'],
-  gallery: ['gallery-listing'],
   gallerySlate: ['gallery-listing'],
   deploy: ['deploy-door'],
   updates: { unreachable: 'the update offer answers only the deployment\'s recorded owner and 404s everyone else (updates/routes.ts), and the eval identity is not the owner' },
