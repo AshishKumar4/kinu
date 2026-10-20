@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { Button } from "@cloudflare/kumo";
 import { ArrowBendUpLeftIcon, NotePencilIcon, PaperPlaneTiltIcon } from "@phosphor-icons/react";
-import type { MailBox, MailMessageView, MailThreadView } from "@kinu.run/core";
+import { replySubject, type MailBox, type MailMessageView, type MailThreadView } from "@kinu.run/core";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
@@ -91,7 +91,7 @@ export function ReplyBox({ mail, box, drafts, onChanged, onSent }: {
     const keep = saving(event);
 
     const message: MailWrite = {
-      path: box.path, to, subject: editing?.subject ?? (/^re:/iu.test(mail.thread.subject) ? mail.thread.subject : `Re: ${mail.thread.subject}`),
+      path: box.path, to, subject: editing?.subject ?? replySubject(mail.thread.subject),
       text, threadId: mail.thread.id, ...(editing !== undefined && editing.cc.length > 0 && { cc: editing.cc.map((party) => party.address) }),
     };
 

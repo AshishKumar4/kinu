@@ -17,6 +17,7 @@ interface EmailAddress {
 export interface OutboundEmailMessage {
   from: string | EmailAddress;
   to: string | EmailAddress | (string | EmailAddress)[];
+  cc?: string | EmailAddress | (string | EmailAddress)[];
   subject: string;
   text: string;
   headers?: Record<string, string>;
@@ -39,16 +40,22 @@ export class EmailOutbox {
   private readonly outbox: Outbox<OutboundEmailMessage, EmailSender>;
 
   /** Awaited: on a Durable Object arming is a storage write, and an unawaited one is cancelled
-   *  silently on reset (`do.wait_until.no_op`). */
-  constructor(sql: SqlExec, scheduleRetry: (at: number) => Promise<void> = async () => {}) {
+   *  silently on reset (`do.wait_until.no_op`). `sentAs`: the Message-ID the service wrote for a key's send. */
+  constructor(sql: SqlExec, scheduleRetry: (at: number) => Promise<void> = async () => {}, sentAs: (key: string, messageId: string) => void = () => {}) {
     this.outbox = scheduledOutbox<OutboundEmailMessage, EmailSender>(sql, 'email', {
       maxAttempts: MAX_SEND_ATTEMPTS,
       baseMs: RETRY_BASE_MS,
       schedule: scheduleRetry,
       // No `orderBy`: one provider outage must not hold unrelated mail.
-      send(message, _info, binding) {
+      send: (message, info, binding) => {
         return settle(Effect.tryPromise({ try: () => binding.send(message), catch: (cause) => ({ cause }) }).pipe(Effect.match({
-          onSuccess: (): OutboxDisposition => ({ status: 'sent' }),
+          onSuccess: (result): OutboxDisposition => {
+            const key = this.outbox.status(info.id)?.dedupeKey ?? null;
+
+            if (key !== null) sentAs(key, result.messageId);
+
+            return { status: 'sent' };
+          },
           onFailure: (failed): OutboxDisposition => {
             // Counted without address, subject or body; `last_error` alone is invisible at fleet scale.
             diagnostics.failure('email.outbox_send_failed', toKinuError({
@@ -92,5 +99,10 @@ export class EmailOutbox {
 
   nextRetryAt(): number | null {
     return this.outbox.nextRetryAt();
+  }
+
+  /** Where a key's send stands: waiting for a retry, sent, or given up after its last attempt; null for no such key. */
+  stateOf(key: string): 'pending' | 'sent' | 'dlq' | null {
+    return this.outbox.find(key)?.state ?? null;
   }
 }

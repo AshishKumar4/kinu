@@ -1,8 +1,11 @@
 import { PaperclipIcon, ShieldWarningIcon } from "@phosphor-icons/react";
-import type { MailBox, MailThreadSummary } from "@kinu.run/core";
+import type { MailBox, MailThreadSummary, MailView } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { mailRowCls, mailTime } from "./ImportantMailRow";
 import { mailExcerpt } from "./MailMessage";
+
+/** Each view's name, as the page's views and lists say it. */
+export const MAIL_VIEW_LABEL: Record<MailView, string> = { important: "Important", all: "All", sent: "Sent", drafts: "Drafts", trash: "Trash" };
 
 export function mailBoxLabel(box: MailBox): string {
   if (box.kind === "person") return box.address;

@@ -99,7 +99,8 @@ export async function routeInboundMail(message: InboundMail, deps: MailRouterDep
 
   const wake = delivery.wake;
 
-  if (wake === null || delivery.duplicate || isAutoReplyEmail(message.headers)) return { outcome: 'filed', delivery, woke: false };
+  // A redelivery is handed on again: the handoff may be what failed, and the workspace admits a Message-ID once.
+  if (wake === null || isAutoReplyEmail(message.headers)) return { outcome: 'filed', delivery, woke: false };
 
   await deps.wake({ ...delivery, wake }, target.recipient);
 

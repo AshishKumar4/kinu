@@ -110,6 +110,7 @@ function serveMail({ caller: callerNow, mailbox, approvals }: MailDeps): readonl
       return { status: 'sent' as const, message: sent.id, thread: sent.threadId };
     })),
     serve(MAIL.update, async ({ thread, ...change }) => summaryOf(await mailbox().updateFor(caller(), thread, change))),
+    serve(MAIL.trash, async ({ thread, restore }) => summaryOf(await mailbox().updateFor(caller(), thread, { trashed: restore !== true }))),
   ];
 }
 

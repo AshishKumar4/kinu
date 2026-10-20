@@ -53,7 +53,7 @@ export interface AdminGateEnv extends ControlSecretEnv {
 }
 
 /** Case-insensitive, matching every provider in `auth/providers.ts`. */
-function controlPlaneAdmins(env: AdminGateEnv): readonly string[] {
+function controlPlaneAdmins(env: Pick<AdminGateEnv, 'CONTROL_PLANE_ADMINS'>): readonly string[] {
   return (env.CONTROL_PLANE_ADMINS ?? '')
     .split(',')
     .map((entry) => entry.trim().toLowerCase())
@@ -84,6 +84,12 @@ function operatorEmail(env: AdminGateEnv, identity: AuthIdentity): OperatorLooku
   if (email.length === 0 || !admins.includes(email)) return denied('not_admin');
 
   return Result.succeed(email);
+}
+
+/** Whether `email` is on the deployment's operator list, read where only an account's email is known (Mail's send cap
+ *  and address claims), never as authorization to the control plane. */
+export function isListedOperator(env: Pick<AdminGateEnv, 'CONTROL_PLANE_ADMINS'>, email: string): boolean {
+  return controlPlaneAdmins(env).includes(email.trim().toLowerCase());
 }
 
 /** Nav-link visibility only, not authorization: profile requests carry no

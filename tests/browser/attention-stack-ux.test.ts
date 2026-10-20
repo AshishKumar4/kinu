@@ -119,6 +119,7 @@ test("an agent's message is its own card: the message as it would leave, sent on
 
     expect(card).toContain('scout wants to send this mail');
     expect(card).toContain('dana@northwind.io');
+    expect(await page.$eval('[data-attention-card="action:mail-dana"] [data-mail-send-cc]', (cc) => cc.textContent)).toBe('priya@raman.dev');
     expect(card).toContain('the binding the webhook route reads');
     expect(card).not.toContain('Always');
     await answer(page, 'Approve and send');

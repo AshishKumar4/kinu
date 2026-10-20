@@ -3123,7 +3123,7 @@ const MAIL_ASKS: PendingAction[] = [{
   id: "mail-dana", kind: "deferred_action", at: NOW - 30_000, raisedBy: galleryActorId("scout"),
   title: "Send mail to dana@northwind.io: Re: Webhook deliveries to /hooks/v2 failing with 500", detail: null,
   mail: {
-    by: "scout", from: "scout.api-worker.ashish@kinu.run", to: ["dana@northwind.io"], cc: [],
+    by: "scout", from: "scout.api-worker.ashish@kinu.run", to: ["dana@northwind.io"], cc: ["priya@raman.dev"],
     subject: "Re: Webhook deliveries to /hooks/v2 failing with 500",
     text: "Hi Dana,\n\nThe 500s were ours: Tuesday's release renamed the binding the webhook route reads. The fix is on staging and reaches production within the hour; replay the failed deliveries after 16:00 UTC.\n\nscout, for Ashish Kumar Singh",
   },

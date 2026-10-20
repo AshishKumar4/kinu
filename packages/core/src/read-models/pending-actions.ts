@@ -5,7 +5,7 @@
 
 import type { AccountMemoryProposal } from '../memory/account';
 import type { DeferredApproval } from '../safety/deferred-approval';
-import { approvalKindOf } from '../safety/approval-kind';
+import { approvalKindOf, type MailSend } from '../safety/approval-kind';
 import { describeExecutionContext } from '../safety/approval-gate';
 import type { PendingConsent } from '../protocol';
 import type { PlanReview } from '../types/plans';
@@ -39,7 +39,7 @@ export interface PendingAction {
    */
   readonly effect?: { readonly slate: string; readonly caller: string; readonly server: string; readonly tool: string; readonly root: Readonly<Record<string, string>> };
   /** An agent's message, exactly as approving lets it leave once (docs/MAIL.md §3). Never answered "always". */
-  readonly mail?: { readonly by: string; readonly from: string; readonly to: readonly string[]; readonly cc: readonly string[]; readonly subject: string; readonly text: string };
+  readonly mail?: Omit<MailSend, 'thread'>;
 }
 
 /** What a workspace asks of the person now. */
@@ -136,7 +136,7 @@ function deferredCard(action: PendingActionInputs['deferredActions'][number]): P
 
       return {
         ...card, raisedBy: action.actor, title: `Send mail to ${send.to.join(', ')}: ${send.subject}`, detail: null,
-        mail: { by: send.by, from: send.from, to: send.to, cc: send.cc, subject: send.subject, text: send.text },
+        mail: { by: send.by, from: send.from, to: send.to, cc: send.cc, subject: send.subject, text: send.text } satisfies Omit<MailSend, 'thread'>,
       };
     }
 

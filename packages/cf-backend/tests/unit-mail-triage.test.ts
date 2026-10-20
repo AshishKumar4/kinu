@@ -50,9 +50,8 @@ async function arrive(raw: Uint8Array, recipient: MailRecipient = toPerson) {
 function deps(): MailTriageDeps {
   return {
     mailbox: {
-      untriagedFor: async (caller, limit) => store.untriagedFor(caller, limit),
-      updateFor: (caller, thread, change) => Promise.resolve(store.updateFor(caller, thread, change)),
-      draftFor: async (caller, message) => store.draftFor(caller, message),
+      untriagedFor: async (caller, limit, skip) => store.untriagedFor(caller, limit, skip),
+      triagedFor: (caller, thread, version, pick) => Promise.resolve(store.triagedFor(caller, thread, version, pick)),
     },
     caller: KINU, about: '# Kinu\n\nBe Ashish\'s personal assistant.', owner: OWNER,
     complete: (system, prompt) => {
@@ -143,11 +142,68 @@ describe('the assistant triages each new thread in the person\'s box', () => {
     await arrive(mail('Cloudflare Registrar <registrar@cloudflare.com>', 'kinu.run renews on 26 October', 'Update your payment method.', { id: 'renew@cloudflare.com' }));
 
     expect(await triageMail(deps())).toEqual({ important: 1, ordinary: 0, drafted: 1, failed: 2 });
-    expect((await store.untriagedFor(KINU, 10)).map((view) => view.thread.subject)).toEqual(['kinu.run renews on 26 October']);
+    expect((await store.untriagedFor(KINU, 10)).map((item) => item.view.thread.subject)).toEqual(['kinu.run renews on 26 October']);
     expect(store.list({ view: 'important' }).threads.map((thread) => thread.subject)).toEqual([DANA]);
 
     answers.set('kinu.run renews on 26 October', '{"important":true,"reason":"The registrar needs a new card by 26 October.","reply":null}');
     expect(await triageMail(deps())).toEqual({ important: 1, ordinary: 0, drafted: 0, failed: 0 });
+  });
+
+  test('mail that arrives while the model reads a thread is not lost: the stale pick is dropped and the thread is read again', async () => {
+    const dana = await arrive(mail('Dana Whitfield <dana@northwind.io>', DANA, 'Since Tuesday every delivery gets a 500.', { id: 'hooks-v2@northwind.io' }));
+    const triage = deps();
+    const shown: string[] = [];
+    let held = false;
+
+    answers.set(DANA, '{"important":false,"reason":"","reply":null}');
+
+    const answered = await triageMail({
+      ...triage,
+      complete: async (system, prompt) => {
+        shown.push(prompt);
+
+        // The model is still answering when Dana writes again, on the same thread.
+        if (!held) {
+          held = true;
+          await arrive(mail('Dana Whitfield <dana@northwind.io>', `Re: ${DANA}`, 'We lose orders: please call me.', { id: 'hooks-v2-2@northwind.io', more: ['In-Reply-To: <hooks-v2@northwind.io>'] }));
+          answers.set(DANA, '{"important":true,"reason":"Dana is losing orders and asks you to call.","reply":null}');
+
+          return '{"important":false,"reason":"","reply":null}';
+        }
+
+        return triage.complete(system, prompt);
+      },
+    });
+
+    expect(shown).toHaveLength(2);
+    expect(shown[0]).not.toContain('We lose orders');
+    expect(shown[1]).toContain('We lose orders: please call me.');
+    expect(answered).toMatchObject({ important: 1, ordinary: 0, failed: 0 });
+    expect((await store.thread(dana.threadId))?.thread.important).toBe('Dana is losing orders and asks you to call.');
+    expect(await store.untriagedFor(KINU, 10)).toEqual([]);
+  });
+
+  test('a pick on a read older than the thread\'s newest mail is refused, even for mail in the same millisecond', async () => {
+    const dana = await arrive(mail('Dana Whitfield <dana@northwind.io>', DANA, 'Since Tuesday every delivery gets a 500.', { id: 'hooks-v2@northwind.io' }));
+    const [read] = await store.untriagedFor(KINU, 10);
+
+    clock -= 60_000;
+    await arrive(mail('Dana Whitfield <dana@northwind.io>', `Re: ${DANA}`, 'We lose orders.', { id: 'hooks-v2-2@northwind.io', more: ['In-Reply-To: <hooks-v2@northwind.io>'] }));
+
+    expect(store.triagedFor(KINU, dana.threadId, read?.version ?? 0, { important: null, reply: 'Thanks, Dana.' })).toEqual({ settled: false, drafted: false });
+    expect((await store.thread(dana.threadId))?.thread).toMatchObject({ important: null, draft: false });
+    expect((await store.untriagedFor(KINU, 10)).map((item) => item.view.thread.id)).toEqual([dana.threadId]);
+  });
+
+  test('one pass empties the queue, however long, in batches; threads the tier cannot answer do not hold back older ones', async () => {
+    answers.set('Backlog', '{"important":false,"reason":"","reply":null}');
+
+    for (let n = 1; n <= 45; n += 1) await arrive(mail('Northwind Status <status@northwind.io>', `Backlog ${String(n)}`, 'All systems normal.', { id: `backlog-${String(n)}@northwind.io` }));
+
+    for (let n = 1; n <= 12; n += 1) await arrive(mail('Dana Whitfield <dana@northwind.io>', `Unanswered ${String(n)}`, 'Still failing.', { id: `unanswered-${String(n)}@northwind.io` }));
+
+    expect(await triageMail(deps())).toEqual({ important: 0, ordinary: 45, drafted: 0, failed: 12 });
+    expect((await store.untriagedFor(KINU, 100)).map((item) => item.view.thread.subject)).toHaveLength(12);
   });
 
   test('new mail in a triaged thread waits again; the owner\'s own instruction and other boxes are not triaged; only the reader sees what waits', async () => {
@@ -161,7 +217,7 @@ describe('the assistant triages each new thread in the person\'s box', () => {
 
     expect(again.threadId).toBe(dana.threadId);
     expect([again.triage, elsewhere.triage]).toEqual([{ workspace: KINU.workspace, actorId: KINU.actorId }, null]);
-    expect((await store.untriagedFor(KINU, 10)).map((view) => view.thread.id)).toEqual([dana.threadId]);
+    expect((await store.untriagedFor(KINU, 10)).map((item) => item.view.thread.id)).toEqual([dana.threadId]);
     expect(await store.untriagedFor({ ...KINU, workspace: 'api-worker', mainActorId: 'actor-api', actorId: 'actor-api' }, 10)).toEqual([]);
   });
 });

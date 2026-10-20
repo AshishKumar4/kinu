@@ -262,3 +262,20 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     expect(rowFor(sql, 'revive')?.state).toBe('sent');
   });
 });
+
+describe('a send the service accepted keeps the Message-ID it wrote, and its state is the outbox\'s', () => {
+  test('the Message-ID reaches its key once sent, including on a retry; the state reads pending, sent, or given up', async () => {
+    const { sql } = makeSql();
+    const ids: [string, string][] = [];
+    let down = true;
+    const box = new EmailOutbox(sql, async () => {}, (key, messageId) => { ids.push([key, messageId]); });
+    const { binding } = fakeBinding(() => { if (down) throw new Error('503 from the email service'); });
+
+    expect(await box.send(binding, 'mail:m-1', message(), 1_000)).toMatchObject({ status: 'failed' });
+    expect([box.stateOf('mail:m-1'), box.stateOf('mail:none'), ids]).toEqual(['pending', null, []]);
+
+    down = false;
+    await box.reconcile(binding, 1_000 + 60 * 60_000);
+    expect([box.stateOf('mail:m-1'), ids]).toEqual(['sent', [['mail:m-1', 'ack-1']]]);
+  });
+});

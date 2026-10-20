@@ -6,17 +6,28 @@
  */
 import type { MailRecipient } from './address';
 
-export type MailBoxKind = 'person' | 'workspace' | 'agent';
+// Each list is the one every schema, route and page reads; the Mailbox's DDL spells its CHECKs once more, as deployed storage.
+export const MAIL_BOX_KINDS = ['person', 'workspace', 'agent'] as const;
+
+export type MailBoxKind = (typeof MAIL_BOX_KINDS)[number];
 
 /** Who may wake a box's agent (docs/MAIL.md §3): the verified owner only, also listed senders, any verified sender, or nobody. */
-export type MailWake = 'owner' | 'allowlist' | 'verified' | 'never';
+export const MAIL_WAKES = ['owner', 'allowlist', 'verified', 'never'] as const;
+
+export type MailWake = (typeof MAIL_WAKES)[number];
 
 /** On whose word an arrival woke its box's agent: the owner's verified instruction, or untrusted input. */
-export type MailWoke = 'owner' | 'input';
+export const MAIL_WOKE = ['owner', 'input'] as const;
 
-export type MailView = 'important' | 'all' | 'sent' | 'drafts' | 'trash';
+export type MailWoke = (typeof MAIL_WOKE)[number];
 
-export type MailSendState = 'draft' | 'queued' | 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained';
+export const MAIL_VIEWS = ['important', 'all', 'sent', 'drafts', 'trash'] as const;
+
+export type MailView = (typeof MAIL_VIEWS)[number];
+
+export const MAIL_SEND_STATES = ['draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained'] as const;
+
+export type MailSendState = (typeof MAIL_SEND_STATES)[number];
 
 export interface MailBox {
   readonly path: string;
@@ -166,13 +177,36 @@ export interface MailAgentMessage {
   readonly thread?: string;
 }
 
+/** A thread waiting for triage, as read: `version` changes whenever mail reaches it, so a pick on an older read is refused. */
+export interface MailTriageItem {
+  readonly view: MailThreadView;
+  readonly version: number;
+}
+
+/** What the assistant decided on a thread: Important's reason or null, and the reply the person may send, if one is due. */
+export interface MailTriagePick {
+  readonly important: string | null;
+  readonly reply: string | null;
+}
+
+/** Whether a pick was applied (`settled`), and whether its reply was left as a draft. */
+export interface MailTriaged {
+  readonly settled: boolean;
+  readonly drafted: boolean;
+}
+
 /** The Mailbox's calls for an agent (docs/MAIL.md §3): only the boxes it reads, its own first. */
 export interface MailboxAgentCalls {
   readableBy(caller: MailCaller): Promise<readonly MailBox[]>;
   findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { readonly box?: string; readonly unread?: boolean }): Promise<MailListing>;
   readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null>;
-  /** The person's threads waiting for the assistant's triage, newest first; none for an agent that does not read their box. */
-  untriagedFor(caller: MailCaller, limit: number): Promise<readonly MailThreadView[]>;
+  /** The person's threads waiting for the assistant's triage, newest first, but `skip`; none for an agent that does not read their box. */
+  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailTriageItem[]>;
+  /**
+   * The assistant's pick on a thread it read at `version`, and its reply as a draft, applied together, and only if no mail
+   * reached the thread since: otherwise nothing is written and the thread stays waiting (`settled: false`).
+   */
+  triagedFor(caller: MailCaller, thread: string, version: number, pick: MailTriagePick): Promise<MailTriaged>;
   draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
   /** Sends it now: the workspace calls this only with the owner's approval of these exact bytes in hand. */
   sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
