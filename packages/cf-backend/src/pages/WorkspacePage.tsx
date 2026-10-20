@@ -532,7 +532,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
       <FocusBar
         workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/overview` }}
         agent={{
-          label: focus.label ?? speaking?.label ?? title, seed: mascotSeed(workspace, speaking?.key ?? "main"),
+          label: focus.label ?? "", seed: mascotSeed(workspace, speaking?.key ?? "main"),
           colour: mascotColour(workspace, speaking?.colour ?? 0), activity: speaking?.activity,
         }}
         line={focus.line}
@@ -642,10 +642,13 @@ function useOwnBar(shownElsewhere: boolean): void {
 }
 
 /** The `focus` layout's bar and composer: whom they name, and what the bar says of them. Null in `workbench`. */
-function focusOf(layout: WorkspaceLayout | undefined, given: FocusIdentity | undefined, title: string, agents: { shown: PanelAgent | undefined; all: readonly PanelAgent[] }): FocusIdentity | null {
+function focusOf(layout: WorkspaceLayout | undefined, given: FocusIdentity | undefined, title: string, agents: { shown: PanelAgent | undefined; all: readonly PanelAgent[]; loaded: boolean }): FocusIdentity | null {
   if (layout !== "focus") return null;
 
   if (given !== undefined) return given;
+
+  // Before the agents are read, no name rather than a wrong one: the stand-in main agent is "Main".
+  if (!agents.loaded) return { line: "" };
   const speaking = agents.shown ?? agents.all.find((agent) => agent.category === "main");
 
   return { label: speaking?.label ?? title, line: activityLine(speaking) };
@@ -865,7 +868,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
   const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
   // Blank until the row is read: `agentId` is the URL slug, not a title, and "Untitled" would be a false one.
   const shownTitle = rosterEntry === undefined ? "" : workspaceDisplayTitle(rosterEntry);
-  const focus = focusOf(state.status?.layout ?? layout, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list });
+  const focus = focusOf(state.status?.layout ?? layout, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list, loaded: rosterLoaded });
 
   // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
