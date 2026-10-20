@@ -406,8 +406,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           MAILBOX: { className: 'CensusMailboxDO', useSQLite: true },
           MAILNAME: { className: 'MailNameDO', useSQLite: true },
           ControlPlaneDO: { className: 'CensusControlPlaneDO', useSQLite: true },
-          MOSSAIC_USER: { className: 'MossaicUserDO', useSQLite: true },
-          MOSSAIC_SHARD: { className: 'MossaicShardDO', useSQLite: true },
+          MOSSAIC_USER: { className: 'CensusDriveUser', useSQLite: true },
+          MOSSAIC_SHARD: { className: 'CensusDriveShard', useSQLite: true },
         }, })],
 ["store-reset-probe", async () => ({
           // The probe's `OrchestratorAgent` is the production class plus the one method that plants the old table.
@@ -585,6 +585,8 @@ const runnerOptions = {
           CENSUS_MAILBOX: { className: 'CensusMailboxDO', scriptName: 'account-census-probe', useSQLite: true },
           CENSUS_MAILNAME: { className: 'MailNameDO', scriptName: 'account-census-probe', useSQLite: true },
           CENSUS_CONTROL: { className: 'CensusControlPlaneDO', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_DRIVE_USER: { className: 'CensusDriveUser', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_DRIVE_SHARD: { className: 'CensusDriveShard', scriptName: 'account-census-probe', useSQLite: true },
           DEVICE_USER_PROBE: { className: 'UserDO', scriptName: 'device-user-probe', useSQLite: true },
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', scriptName: 'addressed-name-probe', useSQLite: true },

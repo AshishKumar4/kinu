@@ -7,7 +7,7 @@
  * Northwind, shared a board with her.
  */
 import { getAgentByName, type AgentContext } from 'agents';
-import { objectNamed, ownerCaller, sandboxIdForWorkspace, sandboxPreviewExposures, type WorkspaceOverview } from '@kinu.run/core';
+import { ownerCaller, sandboxIdForWorkspace, sandboxPreviewExposures, type WorkspaceOverview } from '@kinu.run/core';
 import { initSlateLiveShareTables, initSlateShareTables, SlateLiveShareStore, SlateShareStore } from '@kinu.run/core/slates';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
@@ -16,12 +16,14 @@ import { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
 import { MailboxDO } from '../../src/mail/mailbox-do';
 import { ORCHESTRATOR_RPC_SURFACE, USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
 import { tenantDrive } from '../../src/drive/tenant';
-// Mossaic's own name for a tenant's user object, so a census of the wrong object cannot pass.
-import { vfsUserDOName } from '../../../../third_party/mossaic/worker/core/lib/utils';
+// Mossaic's own names for a tenant's objects and its base shard pool, so a census of the wrong objects cannot pass.
+import { vfsShardDOName, vfsUserDOName } from '../../../../third_party/mossaic/worker/core/lib/utils';
+import { BASE_POOL_SIZE } from '../../../../third_party/mossaic/shared/constants';
+import { MossaicShardDO, MossaicUserDO as DriveUser } from '../../src/drive/mossaic-objects';
+import { handleInboundMail } from '../../src/mail/handler';
 import { UserDO } from '../../src/user/user-do';
 import { shareViewerKey } from '../../src/viewer-pass';
 import { accountIdFor } from '../../src/auth/store';
-import type { MossaicUserDO } from '../../src/drive/mossaic-objects';
 
 export * from '../../src/server';
 
@@ -33,6 +35,32 @@ interface Person {
 
 const PREVIEW_PORT = 4100;
 
+/** Above Mossaic's inline limit (16 KiB), so the file's bytes are on a shard, not in its user object's row. */
+const DRIVE_FILE_BYTES = 40 * 1024;
+
+/** Every row in every table of an object's SQLite, and its KV keys: what it physically keeps. */
+function storageRows(ctx: DurableObjectState): number {
+  const sql = ctx.storage.sql;
+
+  const tables = sql.exec<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'`)
+    .toArray().map((row) => row.name);
+
+  return tables.reduce((sum, name) => sum + sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM "${name}"`).one().n, 0) + [...ctx.storage.kv.list()].length;
+}
+
+/** Mossaic's two Drive objects as deployed, each able to say what it physically keeps. */
+export class CensusDriveUser extends DriveUser {
+  storageRows(): number {
+    return storageRows(this.ctx);
+  }
+}
+
+export class CensusDriveShard extends MossaicShardDO {
+  storageRows(): number {
+    return storageRows(this.ctx);
+  }
+}
+
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 /** A workspace by name, as the account's own teardown and claims reach it. */
@@ -40,7 +68,7 @@ function workspaceNamed(env: ProbeEnv, name: string): Promise<DurableObjectStub<
   return getAgentByName<ProbeEnv, ProductionOrchestrator>(env.OrchestratorAgent, name);
 }
 
-const ACCOUNT_METHODS = ['accountsOf', 'runDueWork', 'pushStale', 'deletedAt', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'driveCensus', 'previewCensus'];
+const ACCOUNT_METHODS = ['accountsOf', 'runDueWork', 'pushStale', 'deletedAt', 'mailTo', 'driveNames', 'previewKeys', 'signInRows', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus'];
 
 /** The tables an account holds, by the prefixes `account-reset-probe.ts` counts, and its sent cards. */
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_', 'share_cards_'];
@@ -72,7 +100,7 @@ export class CensusAccountDO extends UserDO {
     await this.ensureWorkspaceCapability('priya-notes', claim.capabilityHash);
     await this.registerDevice(owner, "Priya's laptop");
     await this.setCredential(owner, 'anthropic.bearer', { kind: 'bearer', token: 'sk-priya' });
-    await tenantDrive(this.env, person.userId)?.writeFile('/notes.md', new TextEncoder().encode('Webhook signing: rotate the Northwind secret.'));
+    await tenantDrive(this.env, person.userId)?.writeFile('/notes.md', new TextEncoder().encode('Webhook signing: rotate the Northwind secret.\n'.repeat(DRIVE_FILE_BYTES / 46 + 1)));
     await sandboxPreviewExposures(this.env.AUTH_KV, sandboxIdForWorkspace('priya-notes')).publish(PREVIEW_PORT, 'preview-token');
   }
 
@@ -143,16 +171,58 @@ export class CensusAccountDO extends UserDO {
     return (await this.builtinListAccounts(await ownerCaller(this.env))).filter((account) => account.email === person.email).length;
   }
 
-  /** How many shards `tenant`'s Drive spans, by its own record: none once its user object is gone. */
-  async driveCensus(tenant: string): Promise<number> {
-    const users = this.env.MOSSAIC_USER;
-
-    return users === undefined ? 0 : objectNamed<DurableObjectId, DurableObjectStub<MossaicUserDO>>(users, vfsUserDOName('default', tenant)).tenantShards();
+  /** The names of `tenant`'s Drive objects, as Mossaic names them: its user object, and each base shard. */
+  async driveNames(tenant: string): Promise<{ readonly user: string; readonly shards: readonly string[] }> {
+    return {
+      user: vfsUserDOName('default', tenant),
+      shards: Array.from({ length: BASE_POOL_SIZE }, (_, index) => vfsShardDOName('default', tenant, undefined, index)),
+    };
   }
 
-  /** Whether `workspace`'s preview is still published. */
-  async previewCensus(workspace: string): Promise<boolean> {
-    return (await sandboxPreviewExposures(this.env.AUTH_KV, sandboxIdForWorkspace(workspace)).isPublic(PREVIEW_PORT)) !== null;
+  /** The raw KV records `workspace`'s previews are kept under, every family's. */
+  async previewKeys(workspace: string): Promise<number> {
+    const id = sandboxIdForWorkspace(workspace).toLowerCase();
+    let keys = 0;
+
+    for (const family of ['sandbox-preview', 'sandbox-preview-public', 'sandbox-preview-withdrawn']) {
+      for (let cursor: string | undefined, more = true; more;) {
+        const page = await this.env.AUTH_KV.list({ prefix: `${family}:${id}:`, ...(cursor !== undefined && { cursor }) });
+
+        keys += page.keys.length;
+        cursor = page.list_complete ? undefined : page.cursor;
+        more = cursor !== undefined;
+      }
+    }
+
+    return keys;
+  }
+
+  /** Rows of the sign-in directory (this class, under its own name) naming `person`, in every table it keeps. */
+  async signInRows(person: Person): Promise<number> {
+    const sql = this.ctx.storage.sql;
+
+    const tables = sql.exec<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'builtin_%'`).toArray()
+      .map((row) => row.name);
+
+    const names = (value: SqlStorageValue): boolean => typeof value === 'string' && (value.toLowerCase().includes(person.email) || value.includes(person.userId));
+
+    return tables.reduce((sum, name) => sum + sql.exec(`SELECT * FROM "${name}"`).toArray().filter((row) => Object.values(row).some(names)).length, 0);
+  }
+
+  /** Mail to `to` as Email Routing hands it to the Worker: the refusals its router answered. */
+  async mailTo(to: string, mime: string): Promise<readonly string[]> {
+    const raw = new TextEncoder().encode(mime);
+    const rejected: string[] = [];
+
+    await handleInboundMail({
+      from: 'dana@northwind.io', to, headers: new Headers(), rawSize: raw.byteLength,
+      raw: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(raw); controller.close(); } }),
+      setReject: (reason) => { rejected.push(reason); },
+      forward: async () => { throw new Error('the census forwards nothing'); },
+      reply: async () => { throw new Error('the census replies to nothing'); },
+    }, this.env);
+
+    return rejected;
   }
 }
 

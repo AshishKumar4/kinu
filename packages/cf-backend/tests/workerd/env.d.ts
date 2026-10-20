@@ -312,8 +312,10 @@ interface CensusAccountRpc extends Rpc.DurableObjectBranded {
   sentTo(person: CensusPerson): Promise<{ readonly cards: number; readonly overviews: number }>;
   deleteThis(): Promise<{ ok: true; workspaces: number }>;
   signInCensus(person: CensusPerson): Promise<number>;
-  driveCensus(tenant: string): Promise<number>;
-  previewCensus(workspace: string): Promise<boolean>;
+  driveNames(tenant: string): Promise<{ readonly user: string; readonly shards: readonly string[] }>;
+  previewKeys(workspace: string): Promise<number>;
+  signInRows(person: CensusPerson): Promise<number>;
+  mailTo(to: string, mime: string): Promise<readonly string[]>;
 }
 
 interface CensusWorkspaceRpc extends Rpc.DurableObjectBranded {
@@ -330,6 +332,10 @@ interface CensusMailboxRpc extends Rpc.DurableObjectBranded {
 interface CensusMailNameRpc extends Rpc.DurableObjectBranded {
   claim(label: string, userId: string): Promise<{ label: string; user_id: string; state: string }>;
   lookup(): Promise<{ label: string; user_id: string; state: string } | null>;
+}
+
+interface CensusStorageRpc extends Rpc.DurableObjectBranded {
+  storageRows(): Promise<number>;
 }
 
 interface CensusControlRpc extends Rpc.DurableObjectBranded {
@@ -627,6 +633,8 @@ declare global {
       CENSUS_MAILBOX: DurableObjectNamespace<CensusMailboxRpc>;
       CENSUS_MAILNAME: DurableObjectNamespace<CensusMailNameRpc>;
       CENSUS_CONTROL: DurableObjectNamespace<CensusControlRpc>;
+      CENSUS_DRIVE_USER: DurableObjectNamespace<CensusStorageRpc>;
+      CENSUS_DRIVE_SHARD: DurableObjectNamespace<CensusStorageRpc>;
       DEVICE_USER_PROBE: DurableObjectNamespace<DeviceUserProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;

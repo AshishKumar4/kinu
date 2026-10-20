@@ -50,15 +50,28 @@ describe("deleting an account on real workerd, every store's census", () => {
       await account(dana).runDueWork();
     }
 
+    // What a Drive tenant physically keeps: its user object's rows and keys, and every base shard's.
+    const drive = async (tenant: string) => {
+      const names = await account(dana).driveNames(tenant);
+      const held = async (namespace: typeof env.CENSUS_DRIVE_USER, object: string) => namespace.get(namespace.idFromName(object)).storageRows();
+      const shards = await Promise.all(names.shards.map(async (shard) => held(env.CENSUS_DRIVE_SHARD, shard)));
+
+      return { user: await held(env.CENSUS_DRIVE_USER, names.user), shards: shards.reduce((sum, rows) => sum + rows, 0) };
+    };
+
+    // A tenant that never wrote, as an emptied one must read: its objects' own schema, and nothing of anyone's.
+    const pristine = await drive('census-pristine');
+
     // Read from Dana's account where a read would make Priya's again.
     const census = async () => ({
       account: await account(priya.userId).accountCensus(),
       mailbox: await mailbox.mailCensus(priya.userId),
       mailName: await name.lookup(),
-      driveShards: await account(dana).driveCensus(priya.userId),
-      preview: await account(dana).previewCensus('priya-notes'),
+      drive: await drive(priya.userId),
+      previewKeys: await account(dana).previewKeys('priya-notes'),
       controlPlane: await control().controlCensus(priya),
       signIn: await account('kinu:builtin-accounts').signInCensus(priya),
+      signInRows: await account('kinu:builtin-accounts').signInRows(priya),
       danaWorkspace: await workspace('northwind-api').shareCensus(priya),
       danaAccount: await account(dana).sentTo(priya),
     });
@@ -69,15 +82,17 @@ describe("deleting an account on real workerd, every store's census", () => {
     expect(before).toMatchObject({
       account: { user_workspaces: 1, user_devices: 1, user_credentials: 1, user_share_cards: 1, user_profile: 1 },
       mailbox: { mail_box: 1, mail_messages: 1, mail_attachments: 1 },
-      mailName: { state: 'active', user_id: priya.userId },
-      preview: true,
+      mailName: { label: 'priya', user_id: priya.userId },
+      previewKeys: 2,
       controlPlane: { cp_users: 1, cp_workspaces: 1, cp_feedback: 2, cp_audit_naming: 1, gallery_stars: 1, gallery_installs: 1, feedback_objects: 1 },
       signIn: 1,
       danaWorkspace: { slate_share_users: 2, slate_share_users_revoked: 0, slate_viewer_requests: 0, slate_edit_marks: 1 },
       danaAccount: { cards: 1, overviews: 1 },
     });
     expect(before.mailbox['r2_objects']).toBeGreaterThan(0);
-    expect(before.driveShards).toBeGreaterThan(0);
+    expect(before.drive.user).toBeGreaterThan(pristine.user);
+    expect(before.drive.shards).toBeGreaterThan(pristine.shards);
+    expect(before.signInRows).toBeGreaterThan(0);
 
     // The account's own delete; its object aborts a tick after, so the answer or the `destroyed` sentinel both count.
     try {
@@ -93,6 +108,11 @@ describe("deleting an account on real workerd, every store's census", () => {
 
     for (const [table, rows] of Object.entries(after.mailbox)) expect({ table, rows }).toEqual({ table, rows: 0 });
 
+    // Her address routes nowhere, and no one can take it (docs/MAIL.md §11): Email Routing's mail to it is refused.
+    expect(await account(dana).mailTo('priya@kinu.run', MIME)).toHaveLength(1);
+    await expect(name.claim('priya', dana)).rejects.toThrow();
+    await expect(name.claim('priya', priya.userId)).rejects.toThrow();
+
     // A push from a workspace still naming her, as one cached before the deletion would send: her account keeps no
     // card, it answers that it was deleted, and Dana's account forgets her again (owner decision, 2026-10-20).
     expect(await account(priya.userId).deletedAt()).toEqual(expect.any(Number));
@@ -105,12 +125,13 @@ describe("deleting an account on real workerd, every store's census", () => {
     expect(after).toMatchObject({
       // Retired: kept, owned by no one (docs/MAIL.md §11).
       mailName: { label: 'priya', user_id: '' },
-      driveShards: 0,
-      preview: false,
+      drive: pristine,
+      previewKeys: 0,
       controlPlane: {
         cp_users: 0, cp_workspaces: 0, cp_feedback: 0, cp_audit_naming: 0, cp_audit_rows: 1, gallery_stars: 0, gallery_installs: 0, feedback_objects: 0,
       },
       signIn: 0,
+      signInRows: 0,
       danaWorkspace: { slate_share_users: 0, slate_share_users_revoked: 0, slate_viewer_requests: 0, slate_edit_marks: 0, slate_share_views: 0 },
       danaAccount: { cards: 0, overviews: 0 },
     });
