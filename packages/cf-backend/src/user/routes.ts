@@ -41,7 +41,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
   | 'getConfig' | 'setConfig' | 'claimConfig'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
-  | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove'
+  | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_connectedPresets'
   | 'userMcp_handleOAuthCallback'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
   | 'slateAiSpend'

@@ -15,6 +15,7 @@ import {
 } from '../providers/types';
 import { formatApprovalGrant, parseApprovalGrant, type ApprovalGrant } from '../safety/approval-gate';
 import { OwnerWaitWatchSchema, type OwnerWaitWatch } from '../types/owner-waits';
+import { BlueprintScheduleSchema, type BlueprintSchedule } from '../types/blueprint-schedule';
 import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
 } from '../types/advisor';
@@ -76,6 +77,8 @@ export const AGENT_CONFIG_KEYS = {
   layout: 'layout',
   /** The workspace blueprint the workspace was installed from, by id; unset for one made any other way. */
   blueprint: 'blueprint',
+  /** Its schedules that watch a connection, JSON `BlueprintSchedule[]`: armed while the owner holds the connection. */
+  blueprintWatchers: 'blueprint_watchers',
   /** A one-shot wait this agent armed on its owner (`agent.wakeWhenOwnerDone`), JSON `OwnerWaitWatch`: met, it wakes the
    *  agent once and the row goes. Read on each change to what waits on the owner, only while one is armed. */
   ownerWaitsWatch: 'owner_waits_watch',
@@ -164,6 +167,9 @@ export interface AgentConfigStore {
   setLayout(layout: WorkspaceLayout): void;
   getBlueprint(): string | null;
   setBlueprint(id: string): void;
+  /** Unset, or a row that no longer parses, reads as none. */
+  getBlueprintWatchers(): BlueprintSchedule[];
+  setBlueprintWatchers(watchers: readonly BlueprintSchedule[]): void;
   /** Unset, or a row that no longer parses, reads as none. */
   getOwnerWaitsWatch(): OwnerWaitWatch | null;
   /** Null clears it. */
@@ -449,6 +455,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     setBlueprint(id) {
       set(AGENT_CONFIG_KEYS.blueprint, id);
+    },
+    getBlueprintWatchers() {
+      const stored = get(AGENT_CONFIG_KEYS.blueprintWatchers);
+
+      return stored === null ? [] : tolerate(() => v.parse(v.array(BlueprintScheduleSchema), JSON.parse(stored)), 'malformed-input') ?? [];
+    },
+    setBlueprintWatchers(watchers) {
+      set(AGENT_CONFIG_KEYS.blueprintWatchers, JSON.stringify(watchers));
     },
     getOwnerWaitsWatch() {
       const stored = get(AGENT_CONFIG_KEYS.ownerWaitsWatch);

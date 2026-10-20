@@ -6,6 +6,7 @@
 import * as v from 'valibot';
 import { GALLERY_CATEGORIES, type BlueprintPage, type WorkspaceCard } from '../slates/gallery-api';
 import { WORKSPACE_LAYOUTS, type WorkspaceLayout } from '../config/workspace-layout';
+import type { BlueprintSchedule } from '../types/blueprint-schedule';
 
 /** `HH:MM`, 24-hour. */
 const ClockSchema = v.pipe(v.string(), v.regex(/^([01]\d|2[0-3]):[0-5]\d$/));
@@ -19,7 +20,8 @@ const WhenSchema = v.variant('kind', [
 export type BlueprintWhen = v.InferOutput<typeof WhenSchema>;
 
 /** A schedule the new workspace holds: its main agent wakes with `prompt` each time it runs. `brief`: the one the
- *  installer's brief time moves. */
+ *  installer's brief time moves. `connection`: the connection (an MCP preset id) it watches, armed only while the
+ *  owner holds it, since without it each run is a turn that finds nothing. */
 const AutomationSchema = v.strictObject({
   label: v.pipe(v.string(), v.nonEmpty()),
   /** What it does, as the blueprint's page says it. */
@@ -27,6 +29,7 @@ const AutomationSchema = v.strictObject({
   when: WhenSchema,
   prompt: v.pipe(v.string(), v.nonEmpty()),
   brief: v.optional(v.boolean()),
+  connection: v.optional(v.string()),
 });
 
 /** What it reaches of its owner's: a connection (an MCP preset id) or a secret by name, read or written, and why. */
@@ -62,8 +65,11 @@ export const WorkspaceBlueprintSchema = v.strictObject({
 
 export type WorkspaceBlueprint = v.InferOutput<typeof WorkspaceBlueprintSchema>;
 
-/** What an install chose: the main agent's name, and the time of the brief in the owner's own day. */
+/** What an install chose: the main agent's name, and the time of the brief in the owner's own day; and the connections
+ *  the owner holds as it installs. */
 export interface BlueprintInstall {
+  /** The MCP preset ids the owner's account is connected to now (`blueprintConnectionsOf`). */
+  readonly connected: readonly string[];
   readonly agent?: string;
   readonly brief?: string;
   /** The owner's IANA time zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`): their 08:00 stays theirs across a
@@ -77,9 +83,13 @@ export interface WorkspaceSeed {
   readonly blueprint: string;
   readonly layout: WorkspaceLayout;
   readonly agent: string;
-  /** Each with the zone whose wall clock its cron names (a daily one's, the owner's); absent, UTC. */
-  readonly schedules: readonly { readonly label: string; readonly cron: string; readonly timeZone?: string; readonly prompt: string }[];
+  /** Each with the zone whose wall clock its cron names (a daily one's, the owner's), absent for UTC; and the connection
+   *  it watches, if any, armed only while the owner holds it (the orchestrator's `connectionsChanged`). */
+  readonly schedules: readonly BlueprintSchedule[];
+  /** The connections the owner held as it installed: a watcher of one of them is armed at the seed. */
+  readonly connected: readonly string[];
 }
+
 
 /** A daily `HH:MM`, as a cron of hour and minute in the zone the schedule names. */
 function dailyCron(at: string): string {
@@ -110,13 +120,15 @@ export function blueprintSeed(blueprint: WorkspaceBlueprint, install: BlueprintI
       blueprint: blueprint.id,
       layout: blueprint.layout,
       agent,
-      schedules: blueprint.automations.map(({ label, when, prompt, brief }) => ({
+      schedules: blueprint.automations.map(({ label, when, prompt, brief, connection }) => ({
         label,
         ...(when.kind === 'every'
           ? { cron: everyCron(when.minutes) }
           : { cron: dailyCron(brief === true ? install.brief ?? when.at : when.at), timeZone: install.timeZone }),
+        ...(connection !== undefined && { connection }),
         prompt: fill(prompt),
       })),
+      connected: install.connected,
     },
   };
 }
@@ -140,7 +152,7 @@ export function blueprintPage(blueprint: WorkspaceBlueprint, card: WorkspaceCard
       automations: blueprint.automations.map((automation) => ({ label: automation.label, when: whenText(automation), does: automation.about })),
       slates: [],
       layout: blueprint.layout,
-      soul: blueprintSeed(blueprint, { owner: 'the owner', timeZone: 'UTC' }).soul,
+      soul: blueprintSeed(blueprint, { owner: 'the owner', timeZone: 'UTC', connected: [] }).soul,
     },
     asks: blueprint.asks,
     version: blueprint.version,

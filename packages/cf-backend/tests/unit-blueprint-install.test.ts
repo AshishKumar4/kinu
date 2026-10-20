@@ -62,6 +62,7 @@ function account() {
       return held;
     },
     async listActiveWorkspaces(_caller: UserCaller) { return active.map((name) => ({ name, displayName: name, createdAt: 7 })); },
+    async userMcp_connectedPresets(_caller: UserCaller) { return ['github']; },
     async getProfile(_caller: UserCaller) {
       return { email: 'ashish@cloudflare.com', displayName: 'Ashish', createdAt: 1, lastSeenAt: 1, onboardedAt: null, workspaceCount: active.length };
     },
@@ -170,9 +171,11 @@ describe('installing a workspace blueprint', () => {
       blueprint: 'personal-assistant', layout: 'focus', agent: 'Jarvis',
       schedules: [
         { label: 'Daily brief', cron: '30 8 * * *', timeZone: 'Europe/Berlin', prompt: expect.stringContaining("Write Ashish's brief for today") },
-        { label: 'GitHub check', cron: '*/15 * * * *', prompt: expect.stringContaining('GitHub tools') },
-        { label: 'Gmail check', cron: '*/15 * * * *', prompt: expect.stringContaining("Ashish's Gmail") },
+        { label: 'GitHub check', cron: '*/15 * * * *', connection: 'github', prompt: expect.stringContaining('GitHub tools') },
+        { label: 'Gmail check', cron: '*/15 * * * *', connection: 'google', prompt: expect.stringContaining("Ashish's Gmail") },
       ],
+      // The account holds GitHub as it installs: its check is armed at the seed, Gmail's when the owner connects it.
+      connected: ['github'],
     });
     expect(await owner.home()).toBe(workspace);
     // Named Home before it was listed, so the roster's first frame of it already says Home.
@@ -226,7 +229,7 @@ describe('installing a workspace blueprint', () => {
 
     expect(answer.status).toBe(201);
     expect(birth.steps).toContain('title:API Worker v2 release');
-    expect(birth.seed).toEqual({ blueprint: 'release-manager', layout: 'workbench', agent: 'Release', schedules: [] });
+    expect(birth.seed).toEqual({ blueprint: 'release-manager', layout: 'workbench', agent: 'Release', schedules: [], connected: ['github'] });
     expect(await owner.home()).toBeNull();
     expect(birth.homeWhenListed).toBeNull();
     expect(owner.counted).toEqual([]);

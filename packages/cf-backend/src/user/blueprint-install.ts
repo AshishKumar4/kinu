@@ -31,7 +31,7 @@ const InstallBodySchema = v.strictObject({
 export type InstallBody = v.InferOutput<typeof InstallBodySchema>;
 
 /** The account reads and writes an install makes. */
-export type InstallAuthority = CloudWorkspaceRegistry & Pick<UserDO, 'getConfig' | 'claimConfig' | 'listActiveWorkspaces' | 'getProfile'>;
+export type InstallAuthority = CloudWorkspaceRegistry & Pick<UserDO, 'getConfig' | 'claimConfig' | 'listActiveWorkspaces' | 'getProfile' | 'userMcp_connectedPresets'>;
 
 /** The owner's assistant workspace while it is still theirs; a removed one is no Home. */
 export async function installedAssistant(userDO: Pick<InstallAuthority, 'getConfig' | 'listActiveWorkspaces'>, caller: UserCaller): Promise<string | null> {
@@ -67,12 +67,13 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
 
     if (name !== proposed && (yield* Effect.promise(async () => installedAssistant(userDO, owner))) === name) return { name };
 
-    const profile = yield* Effect.promise(async () => userDO.getProfile(owner));
+    // A schedule that watches a connection is armed now only if the owner holds it; the account arms it later on connect.
+    const [profile, connected] = yield* Effect.promise(async () => Promise.all([userDO.getProfile(owner), userDO.userMcp_connectedPresets(owner)]));
     // The owner as the soul names them: their name, else their address's first part.
     const ownerName = [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((called) => called !== undefined && called !== '') ?? 'you';
 
     const { soul, seed } = blueprintSeed(blueprint, {
-      timeZone: body.timeZone, owner: ownerName,
+      timeZone: body.timeZone, owner: ownerName, connected,
       ...(body.agent !== undefined && { agent: body.agent }), ...(body.brief !== undefined && { brief: body.brief }),
     });
 

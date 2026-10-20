@@ -26,7 +26,7 @@ describe("Kinu's workspace blueprints", () => {
     expect(new Set(KINU_BLUEPRINTS.map((blueprint) => blueprint.id)).size).toBe(KINU_BLUEPRINTS.length);
 
     for (const blueprint of KINU_BLUEPRINTS) {
-      const { soul, seed } = blueprintSeed(blueprint, { owner: 'Ashish', timeZone: 'UTC' });
+      const { soul, seed } = blueprintSeed(blueprint, { owner: 'Ashish', timeZone: 'UTC', connected: [] });
 
       expect(soul).toContain('## Mission');
       expect(soul).not.toContain('{{');
@@ -36,7 +36,7 @@ describe("Kinu's workspace blueprints", () => {
   });
 
   test('the assistant creates and steers workspaces without asking, and asks first only before what leaves Kinu', () => {
-    const { soul } = blueprintSeed(assistant(), { owner: 'Ashish', timeZone: 'UTC' });
+    const { soul } = blueprintSeed(assistant(), { owner: 'Ashish', timeZone: 'UTC', connected: [] });
 
     expect(soul).toContain('agent.createWorkspace');
     expect(soul).toContain('never ask before it');
@@ -45,7 +45,7 @@ describe("Kinu's workspace blueprints", () => {
 });
 
 describe('the brief in the owner\'s own time', () => {
-  const schedulesOf = (brief: string, timeZone: string) => blueprintSeed(assistant(), { owner: 'A', brief, timeZone }).seed.schedules;
+  const schedulesOf = (brief: string, timeZone: string) => blueprintSeed(assistant(), { owner: 'A', brief, timeZone, connected: [] }).seed.schedules;
 
   // The rc27 review: an offset taken on the day of install moved the brief an hour at the next daylight-saving change.
   test("the brief is the owner's wall clock in their zone, and stays there across a daylight-saving change", () => {
@@ -63,8 +63,8 @@ describe('the brief in the owner\'s own time', () => {
   });
 
   test('a name chosen at install replaces the blueprint\'s in the soul and the seed; a blank one keeps it', () => {
-    const named = blueprintSeed(assistant(), { owner: 'Ashish', agent: 'Jarvis', timeZone: 'UTC' });
-    const blank = blueprintSeed(assistant(), { owner: 'Ashish', agent: '  ', timeZone: 'UTC' });
+    const named = blueprintSeed(assistant(), { owner: 'Ashish', agent: 'Jarvis', timeZone: 'UTC', connected: [] });
+    const blank = blueprintSeed(assistant(), { owner: 'Ashish', agent: '  ', timeZone: 'UTC', connected: [] });
 
     expect(named.soul).toStartWith('# Jarvis');
     expect(named.seed.agent).toBe('Jarvis');

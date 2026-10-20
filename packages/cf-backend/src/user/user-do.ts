@@ -737,6 +737,10 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_warmConnections(caller);
   }
 
+  userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
+    return this.mcpServers.userMcp_connectedPresets(caller);
+  }
+
   userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
     return this.mcpServers.userMcp_list(caller);
   }

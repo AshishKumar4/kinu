@@ -197,6 +197,7 @@ const USER_DO_METHODS = [
   'userMcp_cancelCall',
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
+  'userMcp_connectedPresets',
   'userMcp_list',
   'userMcp_presets',
   'userMcp_remove',
@@ -279,6 +280,8 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
+  // The account, DO-to-DO, when the owner's connections change (`user/mcp-servers.ts`).
+  'connectionsChanged',
   'blueprintBundle',
   'readBlueprint',
   'shareBlueprintWith',
