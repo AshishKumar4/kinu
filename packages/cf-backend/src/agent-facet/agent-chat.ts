@@ -672,7 +672,8 @@ export class FacetChat {
 
     const inputs = await sources.profileInputs();
     const profile = resolveTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
-    const route = resolveModelRoute(source, profile);
+    // The listing the profile was resolved on: a source that wants its own effort is asked at it as each model declares.
+    const route = resolveModelRoute(source, profile, inputs.provider.reasoningEfforts);
     const { routed } = sources.models;
 
     return (system, prompt) => completeOnRoute(route, {

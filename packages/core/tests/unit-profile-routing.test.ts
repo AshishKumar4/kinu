@@ -128,9 +128,10 @@ test('a phase line asks the fast tier at low, as near as its model declares; the
   const model = resolveModelRoute('fast', resolveTurnProfile(baseInput())).model;
 
   const at = (declared: readonly ('low' | 'medium' | 'high')[]) => {
-    const profile = resolveTurnProfile(baseInput({ provider: { ...PROVIDER, reasoningEfforts: { [model]: [...declared] } } }));
+    const efforts = { [model]: [...declared] };
+    const profile = resolveTurnProfile(baseInput({ provider: { ...PROVIDER, reasoningEfforts: efforts } }));
 
-    return [resolveModelRoute('phase_line', profile).reasoningEffort, resolveModelRoute('fast', profile).reasoningEffort];
+    return [resolveModelRoute('phase_line', profile, efforts).reasoningEffort, resolveModelRoute('fast', profile, efforts).reasoningEffort];
   };
 
   expect(at(['low', 'medium', 'high'])).toEqual(['low', 'medium']);

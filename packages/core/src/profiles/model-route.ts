@@ -2,6 +2,7 @@
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../providers/effort';
 import { declaredReasoningEffort } from '../providers/reasoning-effort';
+import { specWithoutAccount } from '../providers/types';
 import type { TierId } from './catalog';
 import type { ResolvedTurnProfile, TierFallback, TierRoute } from './resolve';
 
@@ -57,15 +58,14 @@ export interface ModelRouteResolution {
   readonly retries: number;
 }
 
-/** The tier's chain asked at `wanted`, each model at the level it declares nearest; a model declaring none is asked at none. */
-function atEffort(slot: TierRoute, wanted: ReasoningEffort): TierRoute {
-  const efforts = slot.efforts ?? {};
+/** The levels each listed model declares, as the provider listing a profile was resolved on holds them. */
+export type DeclaredEfforts = Readonly<Record<string, readonly ReasoningEffort[]>>;
 
-  return {
-    model: slot.model,
-    reasoningEffort: declaredReasoningEffort(wanted, efforts[slot.model]),
-    fallbacks: slot.fallbacks.map((fallback) => ({ ...fallback, reasoningEffort: declaredReasoningEffort(wanted, efforts[fallback.model]) })),
-  };
+/** The tier's chain asked at `wanted`, each model at the level it declares nearest; a model declaring none is asked at none. */
+function atEffort(slot: TierRoute, wanted: ReasoningEffort, declared: DeclaredEfforts): TierRoute {
+  const at = (spec: string) => declaredReasoningEffort(wanted, declared[specWithoutAccount(spec)]);
+
+  return { model: slot.model, reasoningEffort: at(slot.model), fallbacks: slot.fallbacks.map((fallback) => ({ ...fallback, reasoningEffort: at(fallback.model) })) };
 }
 
 function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
@@ -79,17 +79,21 @@ function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
 }
 
 /** Null only for `platform` producers, which build their binding-bound client directly. */
+/** `declared`: the listing's levels, for a source whose policy wants an effort of its own; without it, the slot's. */
 export function resolveModelRoute(
   source: ProfileRoutedSource,
   profile: ResolvedTurnProfile,
+  declared?: DeclaredEfforts,
 ): ModelRouteResolution;
 export function resolveModelRoute(
   source: SpendSource,
   profile: ResolvedTurnProfile,
+  declared?: DeclaredEfforts,
 ): ModelRouteResolution | null;
 export function resolveModelRoute(
   source: SpendSource,
   profile: ResolvedTurnProfile,
+  declared?: DeclaredEfforts,
 ): ModelRouteResolution | null {
   if (!isProfileRouted(source)) return null;
   const policy = MODEL_ROUTE_POLICY[source];
@@ -107,7 +111,7 @@ export function resolveModelRoute(
   }
 
   const slot = tierResolution(profile, policy.tier);
-  const { model, reasoningEffort, fallbacks } = 'effort' in policy ? atEffort(slot, policy.effort) : slot;
+  const { model, reasoningEffort, fallbacks } = 'effort' in policy && declared !== undefined ? atEffort(slot, policy.effort, declared) : slot;
 
   return Object.freeze({ source, tier: policy.tier, model, reasoningEffort, fallbacks, retries: profile.retries });
 }

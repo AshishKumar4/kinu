@@ -121,8 +121,6 @@ export interface TierRoute {
   readonly model: string;
   readonly reasoningEffort: ReasoningEffort | null;
   readonly fallbacks: readonly TierFallback[];
-  /** The levels each of its models declares, by spec, so a call can ask its own (`MODEL_ROUTE_POLICY`'s `effort`). */
-  readonly efforts?: Readonly<Record<string, readonly ReasoningEffort[]>>;
 }
 
 export interface ResolvedTurnProfile {
@@ -210,8 +208,6 @@ interface CheckedAuthority {
   /** A pin is refused when no model of the chain is listed. */
   requireAvailable(model: string, fallbacks: readonly string[], id: TierId): Effect.Effect<void>;
   effortFor(spec: string, wanted: ReasoningEffort): ReasoningEffort | null;
-  /** The levels the listing declares for `spec`; undefined for a model it says nothing of. */
-  declaredEfforts(spec: string): readonly ReasoningEffort[] | undefined;
   chainOf(model: string, tierChain: readonly string[], wanted: ReasoningEffort): readonly TierFallback[];
 }
 
@@ -285,7 +281,6 @@ function checkedAuthority(input: ProfileAuthorityInputs): Effect.Effect<CheckedA
         });
       },
       effortFor,
-      declaredEfforts: (spec) => provider.reasoningEfforts[specWithoutAccount(spec)],
       chainOf: (model, tierChain, wanted) => Object.freeze(
         (envelope.catalog.modelFallbacks?.[model] ?? tierChain).filter((spec) => spec !== model)
           .map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
@@ -390,22 +385,11 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       const slot = authority.serving(id, id === 'default' ? authority.defaultAssignment : (envelope.catalog.tiers[id] ?? authority.defaultAssignment));
       const wanted = slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT;
 
-      const fallbacks = authority.chainOf(slot.model, slot.fallbacks ?? [], wanted);
-
-      const efforts = [slot.model, ...fallbacks.map((fallback) => fallback.model)].flatMap((spec) => {
-        const declared = authority.declaredEfforts(spec);
-
-        return declared === undefined ? [] : [[spec, declared] as const];
-      });
-
-      const route: TierRoute = {
+      return Object.freeze({
         model: slot.model,
         reasoningEffort: authority.effortFor(slot.model, wanted),
-        fallbacks,
-        efforts: Object.freeze(Object.fromEntries(efforts)),
-      };
-
-      return Object.freeze(route);
+        fallbacks: authority.chainOf(slot.model, slot.fallbacks ?? [], wanted),
+      });
     };
 
     const tiers: Record<TierId, TierRoute> = {};
