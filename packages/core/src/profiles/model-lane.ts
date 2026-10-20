@@ -36,14 +36,14 @@ export interface RouteModelBinding {
 
 export type RouteModelBinder = (route: ModelRouteResolution) => RouteModelBinding;
 
-/** A registry's binding: the effort options are the provider's the spec names once normalised. */
+/** A registry's binding: the effort options are those of the API serving the spec once normalised. */
 export function bindRoute(
   registry: { normalize(spec: string): string; resolve(spec: string): LanguageModel },
   route: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>,
 ): RouteModelBinding {
   const spec = registry.normalize(route.model);
   const model = registry.resolve(spec);
-  const providerOptions = reasoningEffortOptions(route.reasoningEffort, parseModelSpec(spec).provider);
+  const providerOptions = reasoningEffortOptions(route.reasoningEffort, spec);
 
   return providerOptions === undefined ? { model } : { model, providerOptions };
 }

@@ -234,7 +234,8 @@ export interface ModelProvider {
 
 /** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive
  *  intact. A leading `@` is a bare Workers AI id, not an account. */
-function splitSpec(spec: string): { provider: string; account: string | null; modelId: string } | null {
+/** A spec's provider, account and model, or null for one with no provider; nothing about the account is checked. */
+export function splitSpec(spec: string): { provider: string; account: string | null; modelId: string } | null {
   const i = spec.indexOf('/');
 
   if (i < 1) return null;

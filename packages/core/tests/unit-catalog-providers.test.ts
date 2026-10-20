@@ -303,7 +303,7 @@ describe('registry with dynamic catalog source', () => {
 
     const deps = makeDeps({ 'opencode-go.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
     const model = makeRegistry().resolve('opencode-go/glm', deps);
-    await generateText({ model, prompt: 'hello', providerOptions: reasoningEffortOptions('high', 'opencode-go') });
+    await generateText({ model, prompt: 'hello', providerOptions: reasoningEffortOptions('high', 'opencode-go/glm-5.3') });
 
     const sent = mock.requests.find((request) => request.url.includes('/chat/completions'));
     expect(JSON.parse(sent?.body ?? '{}')).toMatchObject({ reasoning_effort: 'high' });

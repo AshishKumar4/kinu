@@ -281,7 +281,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   };
 
   const { provider, modelId } = parseModelSpec(spec);
-  const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, provider);
+  const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, spec);
 
   const system = buildSystemPromptParts(sources.rt, prompt);
 
@@ -338,7 +338,7 @@ function routedChat(models: TurnModelSources, spec: string, profile: ResolvedTur
         spec: fallback,
         accepts: models.catalog.acceptedMedia(model),
         window: models.catalog.window(model),
-        bind: () => ({ model: models.resolve(fallback), provider: fallbackProvider, providerOptions: reasoningEffortOptions(reasoningEffort, fallbackProvider) }),
+        bind: () => ({ model: models.resolve(fallback), provider: fallbackProvider, providerOptions: reasoningEffortOptions(reasoningEffort, fallback) }),
       };
     }),
   };

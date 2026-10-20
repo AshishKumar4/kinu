@@ -2,7 +2,7 @@
 
 import { modelWindow, type ModelWindow } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
-import { specProvider, type ModelInfo, type ModelPricing } from '../providers/types';
+import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
 import { Cause, Effect, type Exit } from 'effect';
 import { classifyErrorCode, diagnostics, hold, renderThrownChain, settle, settleSync, toKinuError } from '../obs/index';
@@ -129,13 +129,8 @@ export class ModelCatalogSession {
   acceptedMedia(spec?: string): ReadonlySet<MediaModality> {
     const named = spec ?? this.deps.effectiveSpec();
     const info = this.infoOf(named);
-    // Only the provider is read (it selects the transport ceiling); a named account's is its provider's.
-    const provider = specProvider(named.trim()) ?? undefined;
 
-    return acceptedMediaForModel({
-      provider,
-      catalogInputModalities: info?.inputModalities,
-    });
+    return acceptedMediaForModel({ spec: named, catalogInputModalities: info?.inputModalities });
   }
 
   private armed(spec: string): CachedEntry {

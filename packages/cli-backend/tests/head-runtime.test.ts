@@ -116,7 +116,7 @@ function headDeps(
 
       return {
         model,
-        providerOptions: reasoningEffortOptions(route.reasoningEffort, 'openai') ?? {},
+        providerOptions: reasoningEffortOptions(route.reasoningEffort, 'openai/gpt-6.1') ?? {},
       };
     },
     reportModelCall: () => {},

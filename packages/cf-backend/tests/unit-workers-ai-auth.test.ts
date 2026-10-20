@@ -28,7 +28,7 @@ function chatCompletionResponse(): Response {
 test('configured effort reaches the native Workers AI binding through its SDK transport', async () => {
   const { model, runs } = bindingModel(() => chatCompletionResponse());
 
-  await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai') });
+  await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai/@cf/zai-org/glm-5.3') });
   expect(runs[0]?.inputs.reasoning_effort).toBe('high');
   expect(runs[0]?.inputs.reasoningEffort).toBeUndefined();
   expect(runs[0]?.inputs.providerOptions).toBeUndefined();

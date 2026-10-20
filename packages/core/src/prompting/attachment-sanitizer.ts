@@ -10,6 +10,7 @@ import type { AssistantModelMessage, DataContent, FilePart, ImagePart, ModelMess
 import { untagged } from '../utils/file-data';
 
 import type { ModelInputModality } from '../providers/types';
+import { servingRoute } from '../providers/serving-route';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '../obs/index';
 import { Effect } from 'effect';
@@ -33,12 +34,12 @@ export interface AttachmentPolicy {
 /** Other providers use the OpenAI-compatible schema, where a `type:"file"` part is a guaranteed 400. */
 const PDF_CAPABLE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'claude', 'openai', 'codex', 'chatgpt']);
 
-/** Transport ceiling ∩ catalog input modalities; the ceiling alone when the catalog has no entry. */
+/** The serving API's ceiling (`servingRoute`) ∩ catalog input modalities; the ceiling alone when the catalog has no entry. */
 export function acceptedMediaForModel(opts: {
-  provider?: string;
+  spec?: string;
   catalogInputModalities?: readonly ModelInputModality[];
 }): ReadonlySet<MediaModality> {
-  const ceiling: ReadonlySet<MediaModality> = PDF_CAPABLE_PROVIDERS.has(opts.provider ?? '')
+  const ceiling: ReadonlySet<MediaModality> = PDF_CAPABLE_PROVIDERS.has(servingRoute(opts.spec ?? '')?.provider ?? '')
     ? new Set<MediaModality>(['image', 'pdf'])
     : new Set<MediaModality>(['image']);
 
