@@ -28,7 +28,8 @@ function account() {
   const config = new Map<string, string>();
   const active: string[] = [];
   const counted: string[] = [];
-  const births: { name: string; steps: string[]; soul: string; seed: WorkspaceSeed | null }[] = [];
+  // `homeWhenListed`: the workspace Home named as this one was listed on the roster.
+  const births: { name: string; steps: string[]; soul: string; seed: WorkspaceSeed | null; homeWhenListed: string | null }[] = [];
 
   const userDO = userAccount({
     async getWorkspaceProfileCatalog(_caller: UserCaller) { return ENVELOPE; },
@@ -37,7 +38,7 @@ function account() {
     async ensureWorkspaceCapability() {},
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
       active.push(name);
-      births.push({ name, steps: [], soul: '', seed: null });
+      births.push({ name, steps: [], soul: '', seed: null, homeWhenListed: config.get('assistant') ?? null });
 
       return { entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7 }, status: 'created' as const };
     },
@@ -150,6 +151,8 @@ describe('installing a workspace blueprint', () => {
       ],
     });
     expect(await owner.home()).toBe(workspace);
+    // Named Home before it was listed, so the roster's first frame of it already says Home.
+    expect(birth.homeWhenListed).toBe(workspace);
     expect(owner.counted).toEqual(['personal-assistant']);
   });
 
@@ -175,6 +178,7 @@ describe('installing a workspace blueprint', () => {
     expect(birth.steps).toContain('title:API Worker v2 release');
     expect(birth.seed).toEqual({ blueprint: 'release-manager', layout: 'workbench', agent: 'Release', schedules: [] });
     expect(await owner.home()).toBeNull();
+    expect(birth.homeWhenListed).toBeNull();
     expect(owner.counted).toEqual([]);
   });
 

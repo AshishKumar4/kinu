@@ -7,14 +7,12 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
-  blueprintSeed, err, json, kinuBlueprint, PERSONAL_ASSISTANT_ID, safeJson,
+  blueprintSeed, err, fallbackWorkspaceIdentity, json, kinuBlueprint, PERSONAL_ASSISTANT_ID, safeJson,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
+import { ASSISTANT_CONFIG_KEY } from './roster';
 import { createCloudWorkspaceForUser, isCreateConflict, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv } from './workspace-create';
-
-/** user_config: the workspace the owner's Home opens on, while it is theirs. */
-const ASSISTANT_CONFIG_KEY = 'assistant';
 
 const InstallBodySchema = v.strictObject({
   /** The workspace's title; absent, the blueprint's. */
@@ -75,11 +73,14 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
       ...(body.agent !== undefined && { agent: body.agent }), ...(body.brief !== undefined && { brief: body.brief }),
     });
 
-    const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
-      env, userId, userDO, caller: owner, input: { displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
-    }));
+    // Home is named before the workspace is listed, so the roster's first word of it already says Home.
+    const name = fallbackWorkspaceIdentity(blueprint.line, crypto.randomUUID()).name;
 
-    if (assistant && body.home !== false) yield* Effect.promise(async () => userDO.setConfig(owner, ASSISTANT_CONFIG_KEY, entry.name));
+    if (assistant && body.home !== false) yield* Effect.promise(async () => userDO.setConfig(owner, ASSISTANT_CONFIG_KEY, name));
+
+    const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
+      env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
+    }));
 
     // The workspace is the person's either way: a count Explore missed is said, not their install undone.
     yield* attempt({ doing: `counting an install of ${id} on Explore`, otherwise: 'unavailable' }, async () => request.counted(id)).pipe(

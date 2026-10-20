@@ -1,21 +1,25 @@
 /**
  * Explore in the gallery: `explore` (the feed; `&kind=`, `&category=`, `&q=` as its URL takes them) and
  * `explore-workspace&id=<blueprint>` (`&install=1` with Install open; `&assistant=1` once it is the person's), in the
- * product's own shell. `/api/explore` is
+ * product's own shell. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
+ * own address once the roster is read, as a link inside the app would. `/api/explore` is
  * answered here from a fixed feed of the owner's kind of work, ranked as the index would. Kinu's blueprints show their
  * served pictures; an app's picture is a listing's read, which a test or a shot answers.
  */
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
-import type { GalleryListing } from "@kinu.run/core";
+import { RosterPageSchema, type GalleryListing, type RosterEntry } from "@kinu.run/core";
 import Layout from "@/components/layout";
+import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import type { BlueprintPage, ExploreItem, ExploreNeed, WorkspaceCard } from "@/lib/explore-api";
 
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
 
 const ExploreWorkspacePage = lazy(() => import("@/pages/ExploreWorkspacePage"));
+
+const WorkspacePage = lazy(() => import("@/pages/WorkspacePage"));
 
 const NOW = Date.now();
 
@@ -169,8 +173,16 @@ function installExploreFixture(): void {
       return new Response(null, { status: 204 });
     }
 
-    // `&assistant=1`: the person already has the Personal assistant.
-    if (url.pathname === "/api/user/assistant") return Response.json({ workspace: new URLSearchParams(location.search).has("assistant") ? "personal-assistant-4f2a" : null });
+    // `&assistant=1`: the person already has the Personal assistant, and the roster lists it as Home.
+    const assistant = new URLSearchParams(location.search).has("assistant");
+
+    if (url.pathname === "/api/user/assistant") return Response.json({ workspace: assistant ? ASSISTANT.name : null });
+
+    if (url.pathname === "/api/user/workspaces" && assistant) {
+      const page = v.parse(RosterPageSchema, await (await next(input, init)).json());
+
+      return Response.json({ ...page, entries: [ASSISTANT, ...page.entries], total: page.total + 1, counts: { ...page.counts, all: page.counts.all + 1, idle: page.counts.idle + 1 } });
+    }
 
     if (area === "explore" && kind === "workspaces" && id !== undefined) {
       const found = blueprintOf(decodeURIComponent(id));
@@ -188,6 +200,15 @@ function installExploreFixture(): void {
   }, { preconnect: next.preconnect });
 }
 
+const ASSISTANT: RosterEntry = {
+  name: "personal-assistant-4f2a", displayName: "Personal assistant", createdAt: NOW - DAY, lastVisited: NOW, overview: null, decisions: 0, logo: null, home: true,
+};
+
+/** Its children once the roster is read, as a page opened from a link inside the app finds it. */
+function AfterRoster({ children }: { children: ReactNode }) {
+  return useWorkspaceRoster().loading ? null : children;
+}
+
 const loading = (node: React.ReactNode) => <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{node}</Suspense>;
 
 /** `explore` or `explore-workspace`, in the product's shell. */
@@ -196,14 +217,17 @@ export function exploreFrame(frame: string) {
   const search = new URLSearchParams(location.search);
   const id = v.parse(v.string(), search.get("id") ?? "personal-assistant");
   const feedQuery = new URLSearchParams([...search].filter(([key]) => ["q", "kind", "category", "sort"].includes(key))).toString();
+  const opened = frame === "explore-workspace" ? `/explore/workspaces/${id}${search.has("install") ? "?install=1" : ""}` : `/explore${feedQuery === "" ? "" : `?${feedQuery}`}`;
 
   return {
-    entries: [frame === "explore-workspace" ? `/explore/workspaces/${id}${search.has("install") ? "?install=1" : ""}` : `/explore${feedQuery === "" ? "" : `?${feedQuery}`}`],
+    entries: [search.get("at") === "assistant" ? `/workspace/${ASSISTANT.name}` : opened],
     node: (
       <Routes>
         <Route element={<Layout />}>
           <Route path="/explore" element={loading(<ExplorePage />)} />
           <Route path="/explore/workspaces/:blueprint" element={loading(<ExploreWorkspacePage />)} />
+          {search.get("at") === "assistant" && <Route path="/workspace/:agentId" element={<AfterRoster>{loading(<WorkspacePage />)}</AfterRoster>} />}
+          <Route index element={<div className="h-full" data-gallery-home />} />
           <Route path="*" element={<div className="h-full" data-gallery-blank />} />
         </Route>
       </Routes>
