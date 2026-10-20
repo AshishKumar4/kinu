@@ -168,7 +168,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   const { hydrate: hydrateLayout, fail: failLayout } = layout;
 
   useEffect(() => {
-    if (status) hydrateLayout(status.layout ?? "workbench");
+    if (status) hydrateLayout(status.layout);
     else if (snapshotError) failLayout({ cause: snapshotError });
   }, [status, snapshotError, hydrateLayout, failLayout]);
 

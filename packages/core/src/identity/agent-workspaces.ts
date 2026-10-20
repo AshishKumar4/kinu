@@ -38,7 +38,7 @@ export interface AgentWorkspaceReceipt {
 }
 
 /** The SOUL.md the new workspace starts with. */
-export function agentWorkspaceSoul(input: AgentWorkspaceInput): string {
+function agentWorkspaceSoul(input: AgentWorkspaceInput): string {
   const head = renderSoulMarkdown({ name: input.name, mission: input.brief });
   const body = input.soul.trim();
 

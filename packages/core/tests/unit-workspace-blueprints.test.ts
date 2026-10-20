@@ -1,7 +1,16 @@
 // Kinu's workspace blueprints, and how an install turns one into a soul and a seed: the owner's name in the soul, and
 // each schedule in the owner's own time as the UTC cron the trigger hub reads.
 import { describe, expect, test } from 'bun:test';
-import { blueprintSeed, KINU_BLUEPRINTS, kinuBlueprint, nextCronFire, PERSONAL_ASSISTANT_ID } from '../src/index';
+import { blueprintSeed, kinuBlueprint, kinuListings, nextCronFire, PERSONAL_ASSISTANT_ID, type WorkspaceBlueprint } from '../src/index';
+
+/** Every blueprint Kinu keeps, as Explore lists them. */
+const KINU_BLUEPRINTS: WorkspaceBlueprint[] = kinuListings().map(({ id }) => {
+  const blueprint = kinuBlueprint(id);
+
+  if (blueprint === undefined) throw new Error(`Explore lists ${id}, which Kinu does not keep`);
+
+  return blueprint;
+});
 
 const assistant = () => {
   const found = kinuBlueprint(PERSONAL_ASSISTANT_ID);

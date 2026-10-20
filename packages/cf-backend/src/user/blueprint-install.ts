@@ -5,7 +5,7 @@
  */
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
-import { authoredRefusal, KinuError, settle } from '@kinu.run/core/obs';
+import { attempt, authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
   blueprintSeed, err, json, kinuBlueprint, PERSONAL_ASSISTANT_ID, safeJson,
   type UserCaller, type WorkspaceEntry,
@@ -14,9 +14,9 @@ import type { UserDO } from './user-do';
 import { createCloudWorkspaceForUser, isCreateConflict, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv } from './workspace-create';
 
 /** user_config: the workspace the owner's Home opens on, while it is theirs. */
-export const ASSISTANT_CONFIG_KEY = 'assistant';
+const ASSISTANT_CONFIG_KEY = 'assistant';
 
-export const InstallBodySchema = v.strictObject({
+const InstallBodySchema = v.strictObject({
   /** The workspace's title; absent, the blueprint's. */
   displayName: v.optional(v.pipe(v.string(), v.trim(), v.nonEmpty(), v.maxLength(60))),
   /** The main agent's name; absent, the blueprint's. */
@@ -47,11 +47,13 @@ export interface InstallRequest<Id> {
   readonly owner: UserCaller;
   readonly id: string;
   readonly body: InstallBody;
+  /** Counts the install on its Explore listing. */
+  readonly counted: (blueprint: string) => Promise<void>;
 }
 
 /** The new workspace, or the assistant the owner already has. */
-export function installBlueprint<Id>(request: InstallRequest<Id>): Promise<WorkspaceEntry | { readonly name: string }> {
-  return settle(Effect.gen(function* () {
+function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<WorkspaceEntry | { readonly name: string }, KinuError> {
+  return Effect.gen(function* () {
     const { env, userId, userDO, owner, id, body } = request;
     const blueprint = kinuBlueprint(id);
 
@@ -79,8 +81,13 @@ export function installBlueprint<Id>(request: InstallRequest<Id>): Promise<Works
 
     if (assistant && body.home !== false) yield* Effect.promise(async () => userDO.setConfig(owner, ASSISTANT_CONFIG_KEY, entry.name));
 
+    // The workspace is the person's either way: a count Explore missed is said, not their install undone.
+    yield* attempt({ doing: `counting an install of ${id} on Explore`, otherwise: 'unavailable' }, async () => request.counted(id)).pipe(
+      Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('explore.install_uncounted', failure, { blueprint: id }); })),
+    );
+
     return entry;
-  }));
+  });
 }
 
 /** POST /api/user/blueprints/:id/install → 201 the workspace | 404 no such blueprint | 409 a name taken. */
@@ -91,7 +98,7 @@ export function handleInstallRequest<Id>(call: Omit<InstallRequest<Id>, 'body'> 
     if (body === null) return err(400, 'Body must be { displayName?, agent?, brief?, utcOffsetMinutes, home? }.');
 
     return yield* Effect.catchCause(
-      Effect.map(Effect.promise(async () => installBlueprint({ ...call, body })), (workspace) => json({ body: { workspace: workspace.name } }, { status: 201 })),
+      Effect.map(installBlueprint({ ...call, body }), (workspace) => json({ body: { workspace: workspace.name } }, { status: 201 })),
       (failed) => Effect.gen(function* () {
         const cause = Cause.squash(failed);
         const error = authoredRefusal({ doing: 'installing this workspace', cause });

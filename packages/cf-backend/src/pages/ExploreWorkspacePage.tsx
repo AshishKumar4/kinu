@@ -15,12 +15,11 @@ import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
-import { KindBadge, Maker, blueprintPicturePath } from "@/components/explore/ExploreCard";
+import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { lastValue } from "@/hooks/use-async-resource";
 import { readBlueprint, type BlueprintPage, type ExploreNeed } from "@/lib/explore-api";
-import { pictureSrc } from "@/lib/picture-src";
 
 const ago = (at: number) => {
   const days = Math.round((Date.now() - at) / 864e5);
@@ -108,7 +107,7 @@ export default function ExploreWorkspacePage() {
 
         <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
           <div className="relative aspect-[16/10] overflow-hidden rounded-[18px] border p-border p-recessed">
-            {workspace.picture !== null && <img src={pictureSrc(blueprintPicturePath(workspace.id, workspace.picture))} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
+            {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
           </div>
           <div className="flex min-w-0 flex-col gap-3">
             <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="p-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>

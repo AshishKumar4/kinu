@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import type { OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
+import type { AgentStatus, OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -605,7 +605,7 @@ function useLiveSplices(entries: readonly { readonly message: UIMessage }[], car
 }
 
 /** What the `focus` layout's bar says: the name it goes by (the workspace's title unless given) and its line. */
-export interface FocusIdentity {
+interface FocusIdentity {
   readonly label?: string;
   readonly line: ReactNode;
 }
@@ -627,18 +627,33 @@ export default function WorkspacePage(props: WorkspacePageProps = {}) {
   return <OpenWorkspace key={agentId} onGone={setGone} {...props} />;
 }
 
-function OpenWorkspace({ onGone, workspace, identity }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
-  const params = useParams();
-  const agentId = workspace ?? params.agentId;
+/** Shown where its route is not (Home), a workspace still draws the phone's one bar. */
+function useOwnBar(shownElsewhere: boolean): void {
   const area = useWorkspaceArea();
 
-  // Shown where its route is not (Home), the workspace still draws the phone's one bar.
   useEffect(() => {
-    if (workspace === undefined || area === null) return undefined;
+    if (!shownElsewhere || area === null) return undefined;
     area.ownBar(true);
 
     return () => { area.ownBar(false); };
-  }, [workspace, area]);
+  }, [shownElsewhere, area]);
+}
+
+/** The `focus` layout's bar and composer: whom they name, and what the bar says of them. Null in `workbench`. */
+function focusOf(status: AgentStatus | null, given: FocusIdentity | undefined, title: string, agents: { shown: PanelAgent | undefined; all: readonly PanelAgent[] }): FocusIdentity | null {
+  if (status?.layout !== "focus") return null;
+
+  return given ?? { label: title, line: activityLine(agents.shown ?? agents.all.find((agent) => agent.category === "main")) };
+}
+
+/** What the composer says while no turn runs: in `focus`, whom it addresses. */
+const restingPlaceholder = (focus: FocusIdentity | null) => (focus?.label === undefined ? "Send a message..." : `Message ${focus.label}…`);
+
+function OpenWorkspace({ onGone, workspace, identity }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
+  const params = useParams();
+  const agentId = workspace ?? params.agentId;
+
+  useOwnBar(workspace !== undefined);
   const subName = routedAgentPath(params);
   const [search] = useSearchParams();
   const linkIds = useMemo<AgentLinkIds>(() => ({ actor: search.get("actor"), parent: search.get("parent") }), [search]);
@@ -841,20 +856,18 @@ function OpenWorkspace({ onGone, workspace, identity }: WorkspacePageProps & { o
   if (!agentId) return null;
 
   const as = state.actorSnapshot;
-  const focused = (state.status?.layout ?? "workbench") === "focus";
-  // In the focus layout the composer addresses whoever the bar names.
-  const restingPlaceholder = focused && identity?.label !== undefined ? `Message ${identity.label}…` : "Send a message...";
   // The roster holds the title; the visit (`touchWorkspace`) makes this workspace its newest row.
   const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
   // Blank until the row is read: `agentId` is the URL slug, not a title, and "Untitled" would be a false one.
   const shownTitle = rosterEntry === undefined ? "" : workspaceDisplayTitle(rosterEntry);
+  const focus = focusOf(state.status, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list });
 
   // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
     <>
       <WorkspaceBar workspace={agentId} title={shownTitle} editValue={rosterEntry === undefined ? "" : workspaceTitleDraft(rosterEntry)}
         state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions}
-        focus={focused ? identity ?? { label: shownTitle, line: activityLine(shownAgent ?? agentsPanel.list.find((agent) => agent.category === "main")) } : null} />
+        focus={focus} />
       <DeleteChat chat={deletingChat} workspace={agentId} shown={subName} dismiss={state.dismissSubordinate} onClose={() => setDeletingChat(null)} />
     </>
   );
@@ -904,7 +917,7 @@ function OpenWorkspace({ onGone, workspace, identity }: WorkspacePageProps & { o
         ref={workbench}
         workspace={agentId}
         contents={state}
-        quiet={focused}
+        quiet={focus !== null}
         onInspector={setInspectorControl}
         chat={(control) => <HelperChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
             {shownNode !== null && (
@@ -919,7 +932,7 @@ function OpenWorkspace({ onGone, workspace, identity }: WorkspacePageProps & { o
               </AgentPlanWindowContext.Provider>
             ) : (
             <ChatColumn pane={mainPane} label="Chat" state={state} ui={ui} chat={chat} retryOwed={retryOwed} input
-              placeholder={live ? "Steer the running turn…" : restingPlaceholder}
+              placeholder={live ? "Steer the running turn…" : restingPlaceholder(focus)}
               attention={<AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />}
               empty={<EmptyConversation mission={as?.mission ?? ""} />}
               asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-7 pb-12" }}

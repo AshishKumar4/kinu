@@ -39,7 +39,7 @@ describe('a workspace the agent creates', () => {
     }]);
     expect(buildChangelog(rt.storage.sql, rt.actor).filter((entry) => entry.kind === 'workspace')).toEqual([{
       id: 'workspace:release-notes-1a2b', kind: 'workspace', at: 5_000,
-      summary: 'Created workspace “Release notes”', evidence: 'Write the v2 release notes.', workspace: 'release-notes-1a2b',
+      summary: 'Created workspace "Release notes"', evidence: 'Write the v2 release notes.', workspace: 'release-notes-1a2b',
     }]);
   });
 

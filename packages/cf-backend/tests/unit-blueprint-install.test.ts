@@ -27,6 +27,7 @@ const ENVELOPE: ProfileCatalogEnvelope = {
 function account() {
   const config = new Map<string, string>();
   const active: string[] = [];
+  const counted: string[] = [];
   const births: { name: string; steps: string[]; soul: string; seed: WorkspaceSeed | null }[] = [];
 
   const userDO = userAccount({
@@ -99,7 +100,13 @@ function account() {
     const owner = await testOwner();
 
     const family = new Hono<FamilyEnv<CreateWorkspaceEnv<string>, object>>()
-      .post('/api/user/blueprints/:id/install', async (c) => handleInstallRequest({ request: c.req.raw, env: c.env, userId: USER_ID, userDO: authority, owner, id: c.req.param('id') }));
+      .post('/api/user/blueprints/:id/install', async (c) => handleInstallRequest({
+        request: c.req.raw, env: c.env, userId: USER_ID, userDO: authority, owner, id: c.req.param('id'),
+        counted: async (blueprint) => {
+          if (blueprint === 'release-manager') throw new Error('the control plane is unreachable');
+          counted.push(blueprint);
+        },
+      }));
 
     const originalFetch = globalThis.fetch;
 
@@ -117,7 +124,7 @@ function account() {
     }
   };
 
-  return { install, births, config, active, home: async () => installedAssistant(authority, await testOwner()) };
+  return { install, births, config, active, counted, home: async () => installedAssistant(authority, await testOwner()) };
 }
 
 const InstalledSchema = v.object({ workspace: v.string() });
@@ -143,6 +150,7 @@ describe('installing a workspace blueprint', () => {
       ],
     });
     expect(await owner.home()).toBe(workspace);
+    expect(owner.counted).toEqual(['personal-assistant']);
   });
 
   test('installing the assistant again opens the one the owner has; once it is removed, Home has none and a new one is made', async () => {
@@ -158,7 +166,7 @@ describe('installing a workspace blueprint', () => {
     expect(owner.births).toHaveLength(2);
   });
 
-  test("another blueprint keeps its own layout and the owner's title, and Home stays as it was", async () => {
+  test("another blueprint keeps its own layout and the owner's title, Home stays as it was, and a count Explore missed undoes nothing", async () => {
     const owner = account();
     const answer = await owner.install('release-manager', { displayName: 'API Worker v2 release', utcOffsetMinutes: -420 });
     const birth = present(owner.births[0], 'the release workspace');
@@ -167,6 +175,7 @@ describe('installing a workspace blueprint', () => {
     expect(birth.steps).toContain('title:API Worker v2 release');
     expect(birth.seed).toEqual({ blueprint: 'release-manager', layout: 'workbench', agent: 'Release', schedules: [] });
     expect(await owner.home()).toBeNull();
+    expect(owner.counted).toEqual([]);
   });
 
   test('a blueprint Kinu does not keep is refused as missing, and a body without the owner\'s offset is refused', async () => {

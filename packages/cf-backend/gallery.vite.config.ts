@@ -20,8 +20,6 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      // Before "@", which would take it: the gallery's pictures are files of its own.
-      "@/lib/picture-src": resolve(galleryRoot, "src/gallery-pictures.ts"),
       "@": resolve(galleryRoot, "src"),
       "node:crypto": resolve(galleryRoot, "client-node-stubs.ts"),
       "node:async_hooks": resolve(galleryRoot, "client-node-stubs.ts"),

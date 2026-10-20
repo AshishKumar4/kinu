@@ -3,7 +3,7 @@
  * and search live in the URL and ask the Gallery again; a page at a time, the next one joining it.
  */
 import { useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchChoice } from "@/hooks/use-search-choice";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
@@ -22,7 +22,7 @@ const chip = (on: boolean) => `rounded-full px-3 py-1 text-xs font-medium transi
 const categoryChip = (on: boolean) => `rounded-full border px-3 py-1 text-xs transition-colors ${on ? "border-[var(--c-text-3)] p-text" : "p-border p-text-2 hover:bg-[var(--c-elevated)]"}`;
 
 export default function GalleryPage() {
-  const [search, setSearch] = useSearchParams();
+  const [search, choose] = useSearchChoice();
   const sort = GALLERY_SORTS.find((each) => each === search.get("sort")) ?? "trending";
   const category = GALLERY_CATEGORIES.find((each) => each === search.get("category")) ?? null;
   const q = search.get("q") ?? "";
@@ -45,16 +45,6 @@ export default function GalleryPage() {
     return () => { current = false; };
   }, [q, sort, category, tries]);
 
-  const choose = useCallback((key: "sort" | "category" | "q", value: string | null) => {
-    setSearch((prior) => {
-      const next = new URLSearchParams(prior);
-
-      if (value === null || value === "") next.delete(key);
-      else next.set(key, value);
-
-      return next;
-    }, { replace: key === "q" });
-  }, [setSearch]);
 
   const more = useCallback((page: number) => {
     detach(Effect.catchCause(

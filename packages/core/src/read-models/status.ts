@@ -38,8 +38,7 @@ export interface AgentStatus {
   model: string;
   reasoningEffort: ReasoningEffort | null;
   forkLineage: ForkLineageRow | null;
-  /** Absent: `workbench`. */
-  layout?: WorkspaceLayout;
+  layout: WorkspaceLayout;
 }
 
 /**
@@ -91,7 +90,7 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
 
 /** What a status says of an actor from its workspace's storage and SOUL.md alone, folded the same on every backend and
  * in the CLI's read-only inspection. */
-export type AgentStatusFacts = Omit<AgentStatus, 'displayName' | 'model' | 'reasoningEffort'>;
+export type AgentStatusFacts = Omit<AgentStatus, 'displayName' | 'model' | 'reasoningEffort' | 'layout'>;
 
 /** Every table read here is created by `initWorkspaceSchema`, so a failed read means a broken workspace and throws
  * rather than answering with a fabricated identity. `name` stands in only for a missing identity row. */

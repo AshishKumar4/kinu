@@ -55,13 +55,6 @@
     "inputs_json TEXT NOT NULL",
     "PRIMARY KEY(actor_id,inputs_key)"
   ],
-  "actor_program_state@packages/core/src/identity/program-state.ts": [
-    "actor_id TEXT NOT NULL",
-    "key TEXT NOT NULL",
-    "value TEXT NOT NULL",
-    "updated_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, key)"
-  ],
   "actor_requests@packages/core/src/session/schema.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "request_id TEXT NOT NULL",
@@ -807,34 +800,47 @@
     "want_files INTEGER NOT NULL DEFAULT 0",
     "published INTEGER NOT NULL DEFAULT 0"
   ],
-  "gallery_listings@packages/core/src/slates/gallery.ts": [
+  "gallery_installs@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
     "workspace TEXT NOT NULL",
-    "slate TEXT NOT NULL",
+    "item TEXT NOT NULL",
+    "user_id TEXT NOT NULL",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (kind, workspace, item, user_id)"
+  ],
+  "gallery_listings@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
+    "workspace TEXT NOT NULL",
+    "item TEXT NOT NULL",
     "share TEXT NOT NULL",
     "title TEXT NOT NULL",
     "line TEXT NOT NULL",
     "category TEXT NOT NULL",
     "owner_name TEXT NOT NULL",
+    "maker TEXT NOT NULL DEFAULT 'person' CHECK (maker IN ('person', 'kinu'))",
     "url TEXT NOT NULL",
     "picture TEXT",
+    "needs TEXT",
     "listed_at INTEGER NOT NULL",
     "viewers INTEGER NOT NULL DEFAULT 0",
-    "PRIMARY KEY (workspace, slate)"
+    "PRIMARY KEY (kind, workspace, item)"
   ],
   "gallery_reports@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
     "workspace TEXT NOT NULL",
-    "slate TEXT NOT NULL",
+    "item TEXT NOT NULL",
     "email TEXT NOT NULL",
     "reason TEXT NOT NULL",
     "at INTEGER NOT NULL",
-    "PRIMARY KEY (workspace, slate, email)"
+    "PRIMARY KEY (kind, workspace, item, email)"
   ],
   "gallery_stars@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
     "workspace TEXT NOT NULL",
-    "slate TEXT NOT NULL",
+    "item TEXT NOT NULL",
     "email TEXT NOT NULL",
     "at INTEGER NOT NULL",
-    "PRIMARY KEY (workspace, slate, email)"
+    "PRIMARY KEY (kind, workspace, item, email)"
   ],
   "gepa_candidates@packages/core/src/evolution/gepa/persistence.ts": [
     "actor_id TEXT NOT NULL",
@@ -1321,9 +1327,9 @@
     "revoked_at INTEGER",
     "mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner'))",
     "grant_revision TEXT",
-    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
     "listing_line TEXT",
     "listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun'))",
+    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
     "CHECK ((listing_line IS NULL) = (listing_category IS NULL))",
     "CHECK (listing_line IS NULL OR mode = 'own')"
   ],
@@ -1627,15 +1633,6 @@
     "update_check INTEGER NOT NULL DEFAULT 1",
     "unstopped_at INTEGER"
   ],
-  "user_egress_secrets@packages/core/src/safety/egress-vault.ts": [
-    "id TEXT PRIMARY KEY",
-    "label TEXT NOT NULL",
-    "host TEXT NOT NULL",
-    "placeholder TEXT NOT NULL UNIQUE",
-    "secret TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
-  ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
     "headers TEXT",
@@ -1754,14 +1751,5 @@
     "activity TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL",
     "overview TEXT NOT NULL"
-  ],
-  "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [
-    "id TEXT PRIMARY KEY",
-    "name TEXT NOT NULL",
-    "soul TEXT NOT NULL",
-    "brief TEXT NOT NULL",
-    "status TEXT NOT NULL DEFAULT 'pending'",
-    "requested_at INTEGER NOT NULL",
-    "decided_at INTEGER"
   ]
 }

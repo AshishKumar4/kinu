@@ -228,7 +228,7 @@ describe(productFlowTestName('agent-workspace', 'a workspace the agent creates e
     const flow = verdictOf(observed, 'agent-workspace');
 
     expect(flow.needsYou).toBe(0);
-    expect(flow.changelog?.summary).toContain(`Created workspace “${AGENT_WORKSPACE.name}”`);
+    expect(flow.changelog?.summary).toContain(`Created workspace "${AGENT_WORKSPACE.name}"`);
     expect(flow.changelog?.opens).toBe(`/workspace/${flow.created?.name ?? '(none)'}`);
   });
 });

@@ -31,20 +31,20 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
-  const install = () => detach(Effect.catchCause(Effect.gen(function* () {
+  const install = () => Effect.catchCause(Effect.gen(function* () {
     setBusy(true);
     setFailure(null);
     const workspace = yield* Effect.promise(() => installBlueprint(page.workspace.id, assistant ? { agent: name, brief, home } : { displayName: name }));
 
     yield* Effect.promise(async () => navigate(assistant && home ? APP_ROUTES.home : `/workspace/${encodeURIComponent(workspace)}`));
-  }), showing((chain) => { setFailure(chain); setBusy(false); })));
+  }), showing((chain) => { setFailure(chain); setBusy(false); }));
 
   return (
     <Modal title={`Install ${page.workspace.title}`} icon={<DownloadSimpleIcon size={16} className="p-accent" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
       footer={(
         <>
           <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <FilledButton onClick={install} disabled={busy || name.trim() === ""} data-install-confirm>{busy && <Loader size="sm" />}Install</FilledButton>
+          <FilledButton onClick={() => detach(install())} disabled={busy || name.trim() === ""} data-install-confirm>{busy && <Loader size="sm" />}Install</FilledButton>
         </>
       )}>
       <div className="space-y-4" data-install-dialog={page.workspace.id}>

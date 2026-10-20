@@ -405,6 +405,7 @@
     "cp_feedback",
     "cp_users",
     "cp_workspaces",
+    "gallery_installs",
     "gallery_listings",
     "gallery_reports",
     "gallery_stars"

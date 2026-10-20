@@ -5546,7 +5546,8 @@ const BRAIN_STATUS = {
   name: "api-worker-health-9935d3", displayName: "API Worker",
   purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.", model: "opencode-go/muse-spark-1.3-contributor",
   scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
-  soul: "# API Worker", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
+  soul: "# API Worker", forkLineage: null,
+  layout: "workbench", createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
 const GALLERY_SLATE_ID = "sandbox-probe";

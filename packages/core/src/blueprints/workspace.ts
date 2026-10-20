@@ -4,7 +4,7 @@
  * owner's own; a later version never changes it. Kinu keeps its own here, in code (docs/HOME-EXPLORE.md §4).
  */
 import * as v from 'valibot';
-import { GALLERY_CATEGORIES } from '../slates/gallery-api';
+import { GALLERY_CATEGORIES, type BlueprintPage, type WorkspaceCard } from '../slates/gallery-api';
 import { WORKSPACE_LAYOUTS, type WorkspaceLayout } from '../config/workspace-layout';
 
 /** `HH:MM`, 24-hour. */
@@ -22,13 +22,15 @@ export type BlueprintWhen = v.InferOutput<typeof WhenSchema>;
  *  installer's brief time moves. */
 const AutomationSchema = v.strictObject({
   label: v.pipe(v.string(), v.nonEmpty()),
+  /** What it does, as the blueprint's page says it. */
+  about: v.pipe(v.string(), v.nonEmpty()),
   when: WhenSchema,
   prompt: v.pipe(v.string(), v.nonEmpty()),
   brief: v.optional(v.boolean()),
 });
 
 /** What it reaches of its owner's: a connection (an MCP preset id) or a secret by name, read or written, and why. */
-export const BlueprintNeedSchema = v.strictObject({
+const BlueprintNeedSchema = v.strictObject({
   connection: v.nullable(v.string()),
   secret: v.nullable(v.string()),
   access: v.picklist(['read', 'write']),
@@ -113,5 +115,32 @@ export function blueprintSeed(blueprint: WorkspaceBlueprint, install: BlueprintI
         prompt: fill(prompt),
       })),
     },
+  };
+}
+
+/** When a schedule runs, as a blueprint's page says it. */
+function whenText(automation: WorkspaceBlueprint['automations'][number]): string {
+  const { when } = automation;
+
+  if (when.kind === 'every') return `Every ${String(when.minutes)} minutes`;
+
+  return automation.brief === true ? `Each day at ${when.at}, or the time you choose` : `Each day at ${when.at}`;
+}
+
+/** A blueprint's page, from the blueprint and its listing. Its soul reads as installed, for "the owner". */
+export function blueprintPage(blueprint: WorkspaceBlueprint, card: WorkspaceCard): BlueprintPage {
+  return {
+    workspace: card,
+    about: blueprint.about,
+    inside: {
+      agents: [{ name: blueprint.agent, about: blueprint.line }],
+      automations: blueprint.automations.map((automation) => ({ label: automation.label, when: whenText(automation), does: automation.about })),
+      slates: [],
+      layout: blueprint.layout,
+      soul: blueprintSeed(blueprint, { owner: 'the owner', utcOffsetMinutes: 0 }).soul,
+    },
+    asks: blueprint.asks,
+    version: blueprint.version,
+    updatedAt: card.listedAt,
   };
 }

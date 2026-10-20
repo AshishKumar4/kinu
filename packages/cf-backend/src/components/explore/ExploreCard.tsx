@@ -11,7 +11,6 @@ import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { Cover } from "@/components/drive/DriveTiles";
 import { SlatePicture } from "@/components/slates/SlatePicture";
-import { pictureSrc } from "@/lib/picture-src";
 import type { ExploreItem, ExploreKind, ExploreNeed } from "@/lib/explore-api";
 
 /** A workspace blueprint's page. */
@@ -21,14 +20,15 @@ export const exploreWorkspaceHref = (id: string) => `/explore/workspaces/${encod
 const appHref = (workspace: string, slate: string) => `/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
 
 /** Where a workspace blueprint's picture is read. */
-export const blueprintPicturePath = (id: string, picture: string) => `/api/explore/workspaces/${encodeURIComponent(id)}/picture/${picture}`;
+/** A picture of one of Kinu's own blueprints at work, which the app serves with its assets. */
+export const kinuBlueprintPicture = (picture: string) => `/assets/explore/${encodeURIComponent(picture)}.webp`;
 
 /** A picture of a whole page, cropped to its top left at a size its words can be read at in a card. */
 const ZOOMED = "absolute left-0 top-0 h-auto w-[165%] max-w-none";
 
 const count = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString("en-US"));
 
-export const KIND_WORDS: Record<ExploreKind, { label: string; verb: string }> = {
+const KIND_WORDS: Record<ExploreKind, { label: string; verb: string }> = {
   app: { label: "App", verb: "Open" },
   workspace: { label: "Workspace", verb: "Install" },
 };
@@ -102,7 +102,7 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
     <Card href={exploreWorkspaceHref(workspace.id)} kind="workspace" title={workspace.title} line={workspace.line} id={workspace.id}
       picture={workspace.picture === null
         ? <Cover title={workspace.title} />
-        : <img src={pictureSrc(blueprintPicturePath(workspace.id, workspace.picture))} alt="" loading="lazy" className={ZOOMED} />}
+        : <img src={kinuBlueprintPicture(workspace.picture)} alt="" loading="lazy" className={ZOOMED} />}
       maker={<Maker maker={workspace.maker} />}
       needs={workspace.needs}
       numbers={<><DownloadSimpleIcon size={13} className="p-text-3" />{count(workspace.installs)}<StarIcon size={13} className="ml-1.5 p-text-3" />{count(workspace.stars)}</>} />

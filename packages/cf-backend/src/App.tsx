@@ -34,6 +34,10 @@ const GalleryPage = lazyRoute(() => import("./pages/GalleryPage"));
 
 const GallerySlatePage = lazyRoute(() => import("./pages/GallerySlatePage"));
 
+const ExplorePage = lazyRoute(() => import("./pages/ExplorePage"));
+
+const ExploreWorkspacePage = lazyRoute(() => import("./pages/ExploreWorkspacePage"));
+
 const WorkspacesPage = lazyRoute(() => import("./pages/WorkspacesPage"));
 
 const PluginsPage = lazyRoute(() => import("./pages/PluginsPage"));
@@ -129,14 +133,14 @@ export default function App() {
             <Route path={APP_ROUTES.workspaceAgentPath} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.workspaceView} element={<Page label="workspace-view"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.swarm} element={<Page label="swarm-explorer"><SwarmExplorer /></Page>} />
+            <Route path={APP_ROUTES.explore} element={<Page label="explore"><ExplorePage /></Page>} />
+            <Route path={APP_ROUTES.exploreWorkspace} element={<Page label="explore-workspace"><ExploreWorkspacePage /></Page>} />
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
           </Route>
         </Route>
         {/* Public discovery: the app's shell signed in, a bar with Sign in signed out (GalleryShell). */}
         <Route element={<GalleryShell />}>
-          {/* Explore opens today's Gallery until the Explore page lands on its own route (feat/explore). */}
-          <Route path={APP_ROUTES.explore} element={<Page label="gallery"><GalleryPage /></Page>} />
           <Route path={APP_ROUTES.gallery} element={<Page label="gallery"><GalleryPage /></Page>} />
           <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
         </Route>

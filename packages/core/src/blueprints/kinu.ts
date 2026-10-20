@@ -5,6 +5,7 @@
  */
 import * as v from 'valibot';
 import { WorkspaceBlueprintSchema, type WorkspaceBlueprint } from './workspace';
+import type { KinuListing } from '../slates/gallery';
 
 export const PERSONAL_ASSISTANT_ID = 'personal-assistant';
 
@@ -42,17 +43,20 @@ When this workspace starts, introduce yourself in a few lines: what you can reac
   automations: [
     {
       label: 'Daily brief',
+      about: 'What waits on you, mail that needs a reply, and what your workspaces did.',
       when: { kind: 'daily', at: '08:00' },
       brief: true,
       prompt: `Write {{owner}}'s brief for today. Lead with what waits on them: questions and approvals across their workspaces, and mail that needs a reply. Then what each workspace you run did since the last brief and how far it has come, and anything your checks found. Under 200 words, as a short list.`,
     },
     {
       label: 'GitHub check',
+      about: 'Reviews requested of you, mentions, and failing checks; it speaks only when one needs you.',
       when: { kind: 'every', minutes: 15 },
       prompt: `Check GitHub with your GitHub tools for what is new since your last check: reviews requested of {{owner}}, mentions, and failing checks on their pull requests. Tell {{owner}} only what needs them, in a line or two each. If nothing does, or you hold no GitHub tools, end without a message.`,
     },
     {
       label: 'Gmail check',
+      about: 'Mail that needs you, with a reason and a draft reply; it speaks only when one does.',
       when: { kind: 'every', minutes: 15 },
       prompt: `Check {{owner}}'s Gmail with your Gmail tools for mail since your last check. Tell {{owner}} about the mail that needs them, a line on why each, and draft a reply where one is due. If nothing needs them, or you hold no Gmail tools, end without a message.`,
     },
@@ -93,6 +97,7 @@ Keep {{owner}}'s Cloudflare Worker healthy: watch its errors and latency, read i
 `,
   automations: [{
     label: 'Health check',
+    about: "The Worker's error rate and p95 latency.",
     when: { kind: 'every', minutes: 10 },
     prompt: `Read the watched Worker's error rate and p95 latency over the last 10 minutes with your Cloudflare tools. If they crossed the line in your soul, investigate and report; otherwise end without a message.`,
   }],
@@ -174,9 +179,14 @@ Answer {{owner}}'s research questions with a report they can share: read the pri
 };
 
 /** In the order Explore shows them. */
-export const KINU_BLUEPRINTS: readonly WorkspaceBlueprint[] = [PERSONAL_ASSISTANT, WORKER_ON_CALL, RELEASE_MANAGER, RESEARCH_DESK]
+const KINU_BLUEPRINTS: readonly WorkspaceBlueprint[] = [PERSONAL_ASSISTANT, WORKER_ON_CALL, RELEASE_MANAGER, RESEARCH_DESK]
   .map((blueprint) => v.parse(WorkspaceBlueprintSchema, blueprint));
 
 export function kinuBlueprint(id: string): WorkspaceBlueprint | undefined {
   return KINU_BLUEPRINTS.find((blueprint) => blueprint.id === id);
+}
+
+/** Kinu's blueprints as Explore lists them (slates/gallery.ts `syncKinu`). */
+export function kinuListings(): KinuListing[] {
+  return KINU_BLUEPRINTS.map(({ id, title, line, category, picture, needs }) => ({ id, title, line, category, picture, needs }));
 }

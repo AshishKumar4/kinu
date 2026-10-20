@@ -321,6 +321,8 @@ export {
   GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
   GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
+  EXPLORE_KINDS, ExplorePageSchema, BlueprintPageSchema, explorePath, workspaceBlueprintPath,
+  type ExploreKind, type ExploreItem, type ExplorePage, type WorkspaceCard, type BlueprintPage,
 } from './slates/gallery-api';
 
 // The part and consent contracts the client parses: `./slates` pulls the server's runtime, so the browser reads them here.
@@ -1538,7 +1540,7 @@ export {
 } from './safety/device-consent';
 
 export {
-  AgentWorkspaceStore, agentWorkspaceSoul, createAgentWorkspace, initAgentWorkspacesTable,
+  AgentWorkspaceStore, createAgentWorkspace, initAgentWorkspacesTable,
   type AgentWorkspace, type AgentWorkspaceDeps, type AgentWorkspaceInput, type AgentWorkspaceReceipt,
 } from './identity/agent-workspaces';
 
@@ -2045,11 +2047,11 @@ export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getTool
 export { WORKSPACE_LAYOUTS, WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
 
 export {
-  BlueprintNeedSchema, WorkspaceBlueprintSchema, blueprintSeed,
+  WorkspaceBlueprintSchema, blueprintPage, blueprintSeed,
   type BlueprintInstall, type BlueprintNeed, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
 } from './blueprints/workspace';
 
-export { KINU_BLUEPRINTS, PERSONAL_ASSISTANT_ID, kinuBlueprint } from './blueprints/kinu';
+export { PERSONAL_ASSISTANT_ID, kinuBlueprint, kinuListings } from './blueprints/kinu';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 

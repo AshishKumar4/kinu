@@ -312,10 +312,10 @@ function workspaceEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): 
     id: `workspace:${made.workspace}`,
     kind: 'workspace',
     at: made.createdAt,
-    summary: `Created workspace “${made.name}”`,
+    summary: `Created workspace "${made.name}"`,
     evidence: made.brief,
     workspace: made.workspace,
-  }));
+  } satisfies ChangelogEntry));
 }
 
 const SOURCE_PREVIEW_CHARS = 1_200;

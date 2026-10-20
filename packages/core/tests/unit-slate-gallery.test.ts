@@ -3,13 +3,20 @@
 // refill: a row lost to a repair comes back at the share's next sync, its stars waiting for it.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { GalleryIndex, initGalleryTables } from '../src/slates/gallery';
+import { GalleryIndex, initGalleryTables, KINU_LISTINGS, type KinuListing } from '../src/slates/gallery';
 import type { GalleryCard, GalleryListingSync } from '../src/slates/share-modes';
 import { makeExecRaw, makeSqlExec } from './helpers';
 
 const DAY = 24 * 60 * 60 * 1000;
 
 const NOW = Date.UTC(2026, 9, 15);
+
+const ASSISTANT: KinuListing = {
+  id: 'personal-assistant', title: 'Personal assistant', line: 'Reads your mail and GitHub, and briefs you each day.', category: 'work', picture: 'assistant',
+  needs: [{ connection: 'github', secret: null, access: 'read', why: 'Your reviews and mentions.' }],
+};
+
+const RELEASE: KinuListing = { id: 'release-manager', title: 'Release manager', line: 'Cuts the release and deploys staging.', category: 'developer', picture: null, needs: [] };
 
 function newIndex() {
   const db = new Database(':memory:');
@@ -91,7 +98,7 @@ test('a listing is a cache its share refills: a lost row comes back at the next 
 
   index.sync(listed('board'), NOW);
   index.star({ email: 'a@x.dev', workspace: 'sam', slate: 'board', on: true }, NOW);
-  db.exec("DELETE FROM gallery_listings WHERE slate = 'board'");
+  db.exec("DELETE FROM gallery_listings WHERE item = 'board'");
 
   expect(index.slate('sam', 'board', null, NOW)).toBeNull();
 
@@ -99,14 +106,19 @@ test('a listing is a cache its share refills: a lost row comes back at the next 
   expect(index.slate('sam', 'board', 'a@x.dev', NOW + DAY)?.listing).toMatchObject({ stars: 1, starred: true, listedAt: NOW + DAY });
 });
 
-test('a deleted account\'s stars and reports go, and the others\' stay', () => {
+test('a deleted account\'s stars, reports and installs go, and the others\' stay', () => {
   const { db, index } = newIndex();
 
   index.sync(listed('board'), NOW);
+  index.syncKinu([ASSISTANT], NOW);
   index.star({ email: 'a@x.dev', workspace: 'sam', slate: 'board', on: true }, NOW);
   index.star({ email: 'b@x.dev', workspace: 'sam', slate: 'board', on: true }, NOW);
   index.report({ email: 'a@x.dev', workspace: 'sam', slate: 'board', reason: 'spam' }, NOW);
-  index.forget('a@x.dev');
+  index.installed({ kind: 'workspace', workspace: KINU_LISTINGS, item: 'personal-assistant', userId: 'user-a' }, NOW);
+  index.installed({ kind: 'workspace', workspace: KINU_LISTINGS, item: 'personal-assistant', userId: 'user-b' }, NOW);
+  index.forget({ email: 'a@x.dev', userId: 'user-a' });
+
+  expect(index.workspaceCard(KINU_LISTINGS, 'personal-assistant', null, NOW)?.installs).toBe(1);
 
   expect(index.slate('sam', 'board', 'a@x.dev', NOW)?.listing).toMatchObject({ stars: 1, starred: false });
   expect(index.starred('a@x.dev', NOW)).toEqual([]);
@@ -134,4 +146,40 @@ test('a page holds 24 listings and names the next one', () => {
 
   expect([first.listings.length, first.next, second.listings.length, second.next]).toEqual([24, 1, 6, null]);
   expect(first.listings[0]?.slate).toBe('s29');
+});
+
+// Explore: Kinu's own workspace blueprints, written from code each start, listed first beside people's apps; each
+// counted once per installer; and one a build stops keeping taken down, while apps stay as their shares left them.
+test("Kinu's blueprints list first beside apps, count each installer once, and leave with the build that dropped them", () => {
+  const { index } = newIndex();
+
+  index.sync(listed('board'), NOW);
+  index.syncKinu([ASSISTANT, RELEASE], NOW - DAY);
+  index.star({ email: 'a@x.dev', workspace: 'sam', slate: 'board', on: true }, NOW);
+
+  const feed = index.explore({ q: '', kind: null, sort: 'trending', category: null, page: 0 }, null, NOW);
+
+  expect(feed.items.map((item) => (item.kind === 'app' ? `app:${item.app.slate}` : `workspace:${item.workspace.id}`)))
+    .toEqual(['workspace:personal-assistant', 'workspace:release-manager', 'app:board']);
+  expect(feed.items[0]).toEqual({
+    kind: 'workspace',
+    workspace: {
+      id: 'personal-assistant', title: 'Personal assistant', line: ASSISTANT.line, category: 'work', maker: { name: 'Kinu', kinu: true },
+      picture: 'assistant', installs: 0, stars: 0, starred: false, needs: ASSISTANT.needs, listedAt: NOW - DAY, featured: false,
+    },
+  });
+
+  expect(index.installed({ kind: 'workspace', workspace: KINU_LISTINGS, item: 'personal-assistant', userId: 'user-a' }, NOW)).toBe(true);
+  expect(index.installed({ kind: 'workspace', workspace: KINU_LISTINGS, item: 'personal-assistant', userId: 'user-a' }, NOW)).toBe(true);
+  expect(index.installed({ kind: 'workspace', workspace: KINU_LISTINGS, item: 'pricing-watch', userId: 'user-a' }, NOW)).toBe(false);
+  expect(index.workspaceCard(KINU_LISTINGS, 'personal-assistant', null, NOW)?.installs).toBe(1);
+
+  // Only one kind, by words; the Gallery's own page is apps alone.
+  expect(index.explore({ q: 'release', kind: 'workspace', sort: 'new', category: null, page: 0 }, null, NOW).items.map((item) => item.kind)).toEqual(['workspace']);
+  expect(index.page({ q: '', sort: 'new', category: null, page: 0 }, null, NOW).listings.map((each) => each.slate)).toEqual(['board']);
+
+  // The next build keeps one: the other leaves, its listing time and installs kept on the one that stays.
+  index.syncKinu([{ ...ASSISTANT, line: 'Your mail, GitHub and Google, briefed daily.' }], NOW);
+  expect(index.explore({ q: '', kind: 'workspace', sort: 'new', category: null, page: 0 }, null, NOW).items)
+    .toEqual([{ kind: 'workspace', workspace: expect.objectContaining({ id: 'personal-assistant', line: 'Your mail, GitHub and Google, briefed daily.', listedAt: NOW - DAY, installs: 1 }) }]);
 });
