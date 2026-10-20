@@ -169,7 +169,7 @@ async function rated(decide: DecisionPort, turn: RatedTurnInput): Promise<Rating
 /** Five turns as a cadence dream batches them, in the state triage reads (`refinement-lane.ts`); stride two. */
 function triageStates(turns: readonly RatedTurnInput[]): string[] {
   const rendered = turns.map((turn) => renderRating({
-    ...turn, id: '', turnId: '', source: 'model', score: 3, corrected: 0, wrong: null, scaffoldVersion: null, artifacts: null, rejects: null, createdAt: 0,
+    ...turn, id: '', turnId: '', source: 'model', score: 3, corrected: 0, wrong: null, scaffoldVersion: null, artifacts: null, picks: null, rejects: null, createdAt: 0,
   }));
 
   return Array.from({ length: Math.max(0, Math.floor((rendered.length - 5) / 2) + 1) }, (_, at) => rendered.slice(at * 2, at * 2 + 5).join('\n\n---\n\n'));
