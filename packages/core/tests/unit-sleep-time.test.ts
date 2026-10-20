@@ -1,8 +1,8 @@
 import * as v from 'valibot';
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { objectOnRoute, routedLlm } from '../src/profiles/model-lane';
-import type { ModelRouteResolution } from '../src/profiles/model-route';
+import { createRoutedModelLane, routedLlm } from '../src/profiles/model-lane';
+import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
 import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SLEEP_TIME_CADENCE,
@@ -183,19 +183,20 @@ describe('Sleep-time compute', () => {
       },
     });
 
-    const route: ModelRouteResolution = {
-      source: 'fast', tier: 'fast', model: 'workers-ai/glm-4.7-flash', reasoningEffort: null, retries: 0,
-      fallbacks: [{ model: 'workers-ai/glm-5.3-flash', reasoningEffort: null }],
-    };
-
+    // The fast lane a host builds: glm-4.7-flash serving, glm-5.3-flash its fallback.
     const lane = (first: string) => {
       const served = new Map([['workers-ai/glm-4.7-flash', answering(first)], ['workers-ai/glm-5.3-flash', answering('{"upserts":[],"decay":[]}')]]);
+      const tiers = { default: { model: 'workers-ai/glm-5.3-flash' }, fast: { model: 'workers-ai/glm-4.7-flash' } };
+      const catalog = { roles: {}, tiers, modelFallbacks: { 'workers-ai/glm-4.7-flash': ['workers-ai/glm-5.3-flash'] } };
 
-      return {
-        object: <S extends v.GenericSchema>(prompt: string, schema: S) => objectOnRoute(route, {
-          llm: (serving) => routedLlm((bound) => ({ model: present(served.get(bound.model), bound.model) }), serving, { report: () => {} }),
-        }, prompt, schema),
-      };
+      return createRoutedModelLane({ actorId: 'actor-test', workspaceId: 'ws-test', parentActorId: null }, 'fast', {
+        llm: (serving) => routedLlm((bound) => ({ model: present(served.get(bound.model), bound.model) }), serving, { report: () => {} }),
+        resolveProfile: async () => resolveTurnProfile({
+          envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+          provider: { revision: 'r', availableModels: [...served.keys()] },
+          roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+        }),
+      });
     };
 
     expect(await runSleepTimeCompute(lane('{"upserts":[{"key":"build.dir","value":"dist","confidence":0.9,"rationale":"the build said so"}],"decay":[]}'), { turns: ONE_TURN, currentFacts: [] }))

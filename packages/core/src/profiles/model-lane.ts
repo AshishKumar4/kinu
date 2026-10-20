@@ -113,7 +113,7 @@ export function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComp
 }
 
 /** `schema`'s answer on the route; an answer off it ends the walk (`generateObjectReported`), as a wrong answer does. */
-export function objectOnRoute<S extends v.GenericSchema>(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string, schema: S): Promise<v.InferOutput<S>> {
+function objectOnRoute<S extends v.GenericSchema>(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string, schema: S): Promise<v.InferOutput<S>> {
   return onRoute(route, lane, (serving) => lane.llm(serving).object(prompt, schema));
 }
 
