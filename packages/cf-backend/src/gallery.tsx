@@ -296,10 +296,11 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
 /** A name the account already claims refuses the preset's own add; 'github' is the GitHub preset's name. */
 const GALLERY_UNCLAIMED_MCP = GALLERY_CUSTOM_MCP.filter((row) => row.name !== "github");
 
-/** Mutable so the preset add is observable on the next GET. `mcp-preset=connected` swaps in the preset-tagged states; `mcp-preset=open` leaves every preset unclaimed. */
+/** Mutable so the preset add is observable on the next GET. `mcp-preset=connected` swaps in the preset-tagged states; `mcp-preset=open` leaves every preset unclaimed.
+ *  The whole app opens connected: a preset added is tagged, so the mockup shows GitHub once, under Connected. */
 let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
-const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
+const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset") ?? (frame === "whole" ? "connected" : null);
 
 if (mcpPresetVariant === "connected") {
   galleryMcpRows = [
