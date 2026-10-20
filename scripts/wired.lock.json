@@ -11,6 +11,7 @@
   "packages/cli-backend/src/config-lock.ts#createProcessIdentityBoundary (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#decodeLockOwner (unreached-export)",
   "packages/cli-backend/src/config-lock.ts#encodeLockOwner (unreached-export)",
+  "packages/cli-backend/src/local-session.ts#LocalAgentSessionOpts.boundary (unsupplied-field)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.fetch (unsupplied-field)",
   "packages/cli/src/local-agent-client.ts#LocalAgentClient (unreached-export)",
   "packages/cli/src/tui/streaming-buffer.ts#createStreamingBufferController (unreached-export)",
