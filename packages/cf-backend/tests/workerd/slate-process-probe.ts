@@ -18,7 +18,7 @@ import { SqliteSlateStateStore, type SlateImage } from '@kinu.run/core/slates';
 import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateProcess } from '../../src/slates/resident';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
-import { codemodeEgress } from '../../src/codemode-egress';
+import { codemodeEgress } from '../../src/codemode-egress-mint';
 
 /** Uses the host's own `issuedSlateInvocation`, so this probe cannot pass while `SlateHost`
  *  would refuse. */

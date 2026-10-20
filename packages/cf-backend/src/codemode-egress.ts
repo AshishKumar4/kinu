@@ -9,21 +9,13 @@
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { objectNamed, KITESURF_SESSION_ID, type EgressPrincipal } from '@kinu.run/core';
+import { BROWSER_GATE_HOST, type CodemodeEgressProps } from './codemode-egress-mint';
+import { objectNamed, KITESURF_SESSION_ID } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import { EGRESS_FAILURE_HEADER } from './egress/send-out';
 import { forwardEgress, githubRecorder, type EgressPolicyEnv, type GitHubWorkspace } from './egress/policy';
 
-export interface CodemodeEgressProps {
-  /**
-   * Whom the program runs for. Its `actorId` is whose browser sessions it reaches; null for slate code, which reaches only
-   * a new Kitesurf browser. A preview's slate runs as the owner, unbounded by a share's grant; a shared one, as a viewer.
-   */
-  readonly principal: EgressPrincipal;
-}
 
-/** The host `connectBrowser` dials; the path's last segment is a session id or `kitesurf`. */
-export const BROWSER_GATE_HOST = 'browser.kinu.invalid';
 
 interface BrowserSockets {
   fetch(input: string, init: RequestInit): Promise<Response>;
@@ -66,9 +58,4 @@ export class CodemodeEgress extends WorkerEntrypoint<EgressEnv, CodemodeEgressPr
 
     return await forwardEgress(request, this.env, this.ctx.props.principal, { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'codemode' });
   }
-}
-
-/** Null outside workerd (test harnesses). */
-export function codemodeEgress(props: CodemodeEgressProps): Fetcher | null {
-  return exports.CodemodeEgress?.({ props }) ?? null;
 }

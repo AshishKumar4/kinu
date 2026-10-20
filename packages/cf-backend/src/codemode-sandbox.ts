@@ -13,7 +13,7 @@ import {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, stoppedProgram } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
+import { codemodeEgress, type CodemodeEgressProps } from './codemode-egress-mint';
 import { EGRESS_FAILURE_HEADER } from './egress/send-out';
 import { BROWSER_CLIENT_MODULE, browserClientSource } from './browser-prelude';
 
