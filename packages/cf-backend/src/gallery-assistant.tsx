@@ -113,7 +113,7 @@ const BRIEF = `Two things wait on you this morning, and the rest moved overnight
 
 **Waiting on you**
 - **API Worker** has the \`SESSIONS_DB\` fix on staging: 2,140 requests since 06:10, no 500s. It wants to deploy to production; the approval is in its chat.
-- **#4120 Web search chain** on kinu-run/kinu needs your review. CI is green; it is 1,182 lines, mostly the provider registry.
+- [#4120 Web search chain](https://github.com/kinu-run/kinu/pull/4120) on kinu-run/kinu needs your review. CI is green; it is 1,182 lines, mostly the provider registry.
 
 **Mail**: three Important. Priya Shah wants a Dynamic Workers demo this week; Thursday afternoon has nothing on it in your mail.
 

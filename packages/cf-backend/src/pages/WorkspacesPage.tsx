@@ -9,7 +9,7 @@ import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hook
 import type { RosterFilterBucket } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
-import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
+import { pageBody, PageHeader } from "@/components/ui/PageHeader";
 import { NewWorkspaceButton } from "@/components/workspaces/NewWorkspaceButton";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 
@@ -88,7 +88,7 @@ export default function WorkspacesPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className={`space-y-6 ${PAGE_BODY}`}>
+      <div className={`space-y-6 ${pageBody("browse", "")}`}>
         <PageHeader icon={<SquaresFourIcon size={22} />} title="Workspaces">
           <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
             icon={<ListIcon size={14} />} onClick={() => setView("list")} />

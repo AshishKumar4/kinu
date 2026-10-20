@@ -14,7 +14,7 @@ import {
 import { McpPresetCards, presetBrand } from "@/components/plugins/McpPresetCards";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
-import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
+import { formMeasure, pageBody, PageHeader } from "@/components/ui/PageHeader";
 
 function serverLine(server: McpServerSummary): string {
   if (server.error !== null) return server.error;
@@ -79,11 +79,12 @@ export default function PluginsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className={`space-y-8 ${PAGE_BODY}`}>
+      <div className={`space-y-8 ${pageBody("form", "")}`}>
         <PageHeader icon={<PuzzlePieceIcon size={22} />} title="Plugins">
           <Button variant="secondary" size="sm" onClick={() => setManaging(true)}>Manage</Button>
         </PageHeader>
 
+        <div className={`space-y-8 ${formMeasure()}`}>
         <InstalledStrip servers={lastValue(servers.resource) ?? []} />
 
         <PluginSection title="Popular" onRetry={servers.reload} what="your MCP servers"
@@ -108,6 +109,7 @@ export default function PluginsPage() {
               );
             }))}
         />
+        </div>
       </div>
       {managing && <AccountPanelModal panel="mcp" mcp={mcp} returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
     </div>

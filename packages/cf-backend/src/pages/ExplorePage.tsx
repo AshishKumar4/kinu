@@ -15,7 +15,7 @@ import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ExploreCard, exploreWorkspaceHref, KindBadge, Maker, Needs, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { EXPLORE_KINDS, readExplore, type ExploreItem, type ExploreKind, type ExplorePage, type WorkspaceCard } from "@/lib/explore-api";
-import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
+import { pageBody, PageHeader } from "@/components/ui/PageHeader";
 import { useSearchChoice } from "@/hooks/use-search-choice";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 
@@ -132,11 +132,12 @@ function Filters({ kind, category, sort, q, choose }: {
   );
 }
 
-/** The feed after Kinu's own, and the next page. Empty under Kinu's own, it says nothing: the page is not empty. */
+/** The feed after Kinu's own, and the next page. Empty under Kinu's own, one quiet line says what will appear there. */
 function Feed({ items, next, q, more, below }: { items: readonly ExploreItem[]; next: number | null; q: string; more: (page: number) => void; below: boolean }) {
   return (
     <>
       {items.length === 0 && !below && <p className="py-12 text-center p-text-3" data-explore-no-match>{q === "" ? "Nothing here yet" : `Nothing matches “${q}”`}</p>}
+      {items.length === 0 && below && next === null && <p className="py-10 text-center p-meta p-text-3" data-explore-only-kinu>That's all for now. Apps and workspaces people publish will appear here.</p>}
       {items.length > 0 && <ul className={`mt-4 ${GRID}`}>{items.map((item) => <ExploreCard key={item.kind === "app" ? `a/${item.app.workspace}/${item.app.slate}` : `w/${item.workspace.id}`} item={item} />)}</ul>}
       {next !== null && (
         <div className="mt-6 flex justify-center">
@@ -184,7 +185,7 @@ export default function ExplorePage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className={`space-y-6 ${PAGE_BODY}`}>
+      <div className={`space-y-6 ${pageBody("browse", "")}`}>
         <PageHeader icon={<CompassIcon size={22} />} title="Explore" />
         {lead !== undefined && (
           <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

@@ -1,7 +1,7 @@
 /**
  * Explore in the gallery: `explore` (the feed; `&kind=`, `&category=`, `&q=` as its URL takes them) and
  * `explore-workspace&id=<blueprint>` (`&install=1` with Install open; `&assistant=1` once it is the person's), in the
- * product's own shell; `&signed=out` for a visitor's page, under the public bar. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
+ * product's own shell; `&signed=out` for a visitor's page, under the public bar; `&feed=kinu` with Kinu's own alone. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
  * own address with the roster's read held 1.5 s, so the page draws before it knows it is Home. `/api/explore` is
  * answered here from a fixed feed of the owner's kind of work, ranked as the index would, Kinu's own read from core.
  * Kinu's blueprints show their served pictures; an app's picture is a listing's read, which a test or a shot answers.
@@ -105,7 +105,11 @@ function feed(search: URLSearchParams): Response {
   const stars = (item: ExploreItem) => (item.kind === "app" ? item.app.stars : item.workspace.stars);
   const listed = (item: ExploreItem) => (item.kind === "app" ? item.app.listedAt : item.workspace.listedAt);
 
+  // `&feed=kinu`: the catalogue as production's is today, Kinu's own blueprints and nothing else.
+  const kinuOnly = new URLSearchParams(location.search).get("feed") === "kinu";
+
   const items = ITEMS
+    .filter((item) => !kinuOnly || (item.kind === "workspace" && item.workspace.maker.kinu))
     .filter((item) => kind === null || item.kind === kind)
     .filter((item) => category === null || (item.kind === "app" ? item.app.category : item.workspace.category) === category)
     .filter((item) => q === "" || `${title(item)} ${line(item)}`.toLowerCase().includes(q));

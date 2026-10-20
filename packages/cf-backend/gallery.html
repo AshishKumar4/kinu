@@ -19,8 +19,11 @@
           ? stored
           : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
         const look = new URLSearchParams(location.search).get("look");
+        // `&layout=a|b`: the margin directions under review (PageHeader.tsx pageBody).
+        const layout = new URLSearchParams(location.search).get("layout");
         document.documentElement.setAttribute("data-mode", mode);
         if (look !== null) document.documentElement.setAttribute("data-theme", look);
+        if (layout !== null) document.documentElement.setAttribute("data-layout", layout);
         document.documentElement.style.colorScheme = mode;
       })();
     </script>

@@ -9,7 +9,7 @@ import {
 } from "@phosphor-icons/react";
 import { setDisplayName, type UserProfile } from "../lib/user-api";
 import { Card } from "@/components/ui/form";
-import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
+import { pageBody, PageHeader } from "@/components/ui/PageHeader";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAccount } from "@/hooks/use-account";
@@ -73,7 +73,7 @@ export default function UserSettingsPage() {
   if (profile.resource.status === "loading" || profile.resource.status === "error") {
     return (
       <div className="h-full overflow-y-auto">
-        <div className={`max-w-5xl space-y-8 ${PAGE_BODY}`}>
+        <div className={`space-y-8 ${pageBody("railed", "max-w-5xl")}`}>
           <PageHeader icon={<GearSixIcon size={22} />} title="Settings" />
           {profile.resource.status === "loading"
             ? <div className="flex justify-center py-10"><Loader size="base" /></div>
@@ -85,8 +85,8 @@ export default function UserSettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      {/* A page of forms: it starts on every page's left edge and stops at a reading width. */}
-      <div className={`max-w-5xl ${PAGE_BODY}`}>
+      {/* A page of forms, at its kind's margins; its rail heads the sections' column. */}
+      <div className={pageBody("railed", "max-w-5xl")}>
         <div className="flex flex-col gap-7 lg:flex-row lg:gap-10">
           {/* The title heads the sections' column, as Drive's heads its places. */}
           <div className="space-y-5 lg:sticky lg:top-8 lg:w-48 lg:shrink-0 lg:self-start">
