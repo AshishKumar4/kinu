@@ -14,7 +14,7 @@ import { DISK_PROBE, DISK_STALL_RESTARTED, DISK_STALLED, diskStallOf, type DiskS
 import { Snapshots } from './snapshots';
 import {
   GOLDEN_BASE, GOLDEN_ENTRYPOINT, GOLDEN_NAME, GOLDEN_REFRESH_MS, GoldenStateSchema, buildGolden, goldenFor, pipeParts, refreshTools,
-  type GoldenAnswer, type GoldenPorts,
+  type GoldenAnswer, type GoldenPorts, type GoldenState,
 } from './golden';
 import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
@@ -653,7 +653,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(this.#buildGolden(keepAlive).pipe(Effect.asVoid));
   }
 
-  #buildGolden(keepAlive: boolean) {
+  /**
+   * One build at a time on this object: a build asked for while one runs (the cron's, the alarm a box's ask arms, a
+   * refresh) waits for it, then finds the golden it built, or retries the one it failed. A second at once would start
+   * its own container, destroying the one the first is installing into: staging, 2026-10-20, failed "installing the
+   * tools: Network connection lost." that way, and every box waiting was told so.
+   */
+  #buildGolden(keepAlive: boolean): Effect.Effect<GoldenState, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       const state = yield* buildGolden(this.#goldenPorts(), keepAlive);
       const next = state.current === undefined ? undefined : state.current.takenAt + GOLDEN_REFRESH_MS - Date.now();
@@ -661,8 +667,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (next !== undefined) yield* attempt('io', () => this.armAlarm(GOLDEN_REFRESH_CALLBACK, Math.max(0, next / 1000)));
 
       return state;
-    });
+    }).pipe(this.#goldenTurns.withPermits(1));
   }
+
+  readonly #goldenTurns = Semaphore.makeUnsafe(1);
 
   #refreshTools(): Effect.Effect<void, DevboxError> {
     return refreshTools({ pin: this.toolsPin, exec: (command) => this.#rawExec(command, DEVBOX_RUNTIME_DIR), pipe: (key, path) => this.#pipeParts(key, path) });
