@@ -59,7 +59,7 @@ function installFixture(): void {
 
     return [thread.id, { thread: {
       id: thread.id, path: box.path, subject: thread.subject, from: [...new Map(thread.mail.map((mail) => [mail.from.address, mail.from])).values()],
-      snippet: latest.text, at: latest.at, count: thread.mail.length, unread: thread.unread, verified: latest.verified,
+      snippet: latest.text, sender: latest.from, at: latest.at, count: thread.mail.length, unread: thread.unread, verified: latest.verified,
       attachments: messages.some((mail) => mail.attachments.length > 0), important: assistant ? thread.important ?? null : null,
       trashedAt: thread.trashed ?? null, draft: thread.draft !== undefined, outgoing: thread.mail.some((mail) => mail.sent !== undefined),
     }, messages }];
@@ -110,7 +110,7 @@ function installFixture(): void {
     };
 
     const summary: MailThreadSummary = {
-      id: threadId, path: box.path, subject: outgoing.subject, from: [message.from], snippet: message.text,
+      id: threadId, path: box.path, subject: outgoing.subject, from: [message.from], snippet: message.text, sender: message.from,
       at: message.at, count: 1, unread: false, verified: true, attachments: false, important: null, trashedAt: null, draft, outgoing: !draft,
     };
 

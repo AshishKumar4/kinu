@@ -456,7 +456,8 @@ export class MailStore {
     for (const message of sent) from.set(message.from_addr, { name: message.from_name, address: message.from_addr });
 
     return {
-      id, path: thread.path, subject: thread.subject, from: [...from.values()], snippet: shown.snippet, at: shown.at, count: sent.length,
+      id, path: thread.path, subject: thread.subject, from: [...from.values()], snippet: shown.snippet,
+      sender: { name: shown.from_name, address: shown.from_addr }, at: shown.at, count: sent.length,
       unread: messages.some((message) => message.direction === 'in' && message.read === 0), verified: shown.verdict !== 'unverified',
       attachments: this.deps.sql.exec(`SELECT 1 FROM mail_attachments WHERE message_id IN (${messages.map(() => '?').join(',')}) LIMIT 1`, ...messages.map((m) => m.id)).toArray().length > 0,
       important: thread.important, trashedAt: thread.trashed_at, draft: messages.some((message) => message.send_state === 'draft'),

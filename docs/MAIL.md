@@ -340,6 +340,7 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
    - `POST /api/workspaces/<name>/mail {thread}`, behind the workspace gate, reads the thread from the person's Mailbox and hands its main agent a turn of its own (`mail_handed`, a Mail card).
    - On the page: the thread's menu offers "Send to a workspace…", whose dialog picks one workspace by name (the Secrets panel's workspace search) and, once it is taken, opens that workspace's chat.
    - The click is the authority, so the turn runs in the workspace's mode, not Plan. The thread's words stay untrusted input: the turn carries them as `mail.read` renders them, and a thread longer than a brief is saved to the workspace and named by its path.
+   - `mail.read` and the hand render a thread the same way (`mailThreadText`): a label, then the subject and every message inside one `<mail>` block. Any `<mail`, `<soul`, `<dynamic_context`, `<workspace_instructions` or `<system-reminder` a sender wrote is made inert (`&lt;`), so nothing inside can close the block or pass for Kinu's own text. The unread-mail section seals its senders and subjects the same way.
 5. **Provenance everywhere.**
    - Sent mail shows who wrote it ("written by scout, approved by you").
    - An agent's send is its approval card: the exact message, with Approve and send, Edit or Deny. The approval spends once.

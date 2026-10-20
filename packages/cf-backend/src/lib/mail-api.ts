@@ -40,7 +40,7 @@ const BoxesSchema = v.object({ address: v.nullable(v.string()), canClaim: v.bool
 export type MailBoxes = v.InferOutput<typeof BoxesSchema>;
 
 const SummarySchema = v.object({
-  id: v.string(), path: v.string(), subject: v.string(), from: v.array(PartySchema), snippet: v.string(), at: v.number(),
+  id: v.string(), path: v.string(), subject: v.string(), from: v.array(PartySchema), snippet: v.string(), sender: PartySchema, at: v.number(),
   count: v.number(), unread: v.boolean(), verified: v.boolean(), attachments: v.boolean(), important: v.nullable(v.string()),
   trashedAt: v.nullable(v.number()), draft: v.boolean(), outgoing: v.boolean(),
 }) satisfies v.GenericSchema<unknown, MailThreadSummary>;

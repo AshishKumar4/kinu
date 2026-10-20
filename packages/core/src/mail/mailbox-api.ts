@@ -41,6 +41,8 @@ export interface MailThreadSummary {
   /** The people who wrote in it, in order, each once. */
   readonly from: readonly MailParty[];
   readonly snippet: string;
+  /** Who wrote the newest message, which `at`, `verified` and `snippet` are about. */
+  readonly sender: MailParty;
   readonly at: number;
   readonly count: number;
   readonly unread: boolean;

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Database } from 'bun:sqlite';
-import { initMailboxTables, type SqlExec } from '@kinu.run/core';
+import { initMailboxTables, mailInContext, type SqlExec } from '@kinu.run/core';
 import { makeSqlExec } from '../../core/tests/helpers';
 import type { MailDelivery } from '@kinu.run/core';
 import { MailStore, type MailBlobs } from '@kinu.run/core';
@@ -232,6 +232,26 @@ describe('threads, views and search', () => {
     store.update(newer.threadId, { read: true });
     expect(store.list({ view: 'all', unread: true, limit: 1 })).toMatchObject({ unread: 1, threads: [{ id: older.threadId }] });
     expect(store.list({ view: 'all', limit: 1 })).toMatchObject({ unread: 1, threads: [{ id: newer.threadId }] });
+  });
+
+  test('a thread names who wrote its newest message, not whoever wrote in it last of those who wrote first', async () => {
+    open('ashish@kinu.run');
+    const box = store.boxFor({ kind: 'agent', workspace: 'api-worker', name: 'scout', actorId: 'actor-scout' });
+    const recipient = { username: 'ashish', path: box.path, tag: null };
+    const first = await delivered({ raw: stranger('Webhook deliveries to /hooks/v2 failing with 500', 'Every delivery gets a 500.'), envelopeFrom: 'dana@northwind.io', recipient });
+
+    clock += 60_000;
+    await store.queue({ path: box.path, threadId: first.threadId, to: ['dana@northwind.io'], subject: 'Re: Webhook deliveries', text: 'Looking now.' });
+    clock += 60_000;
+    await delivered({ raw: new TextEncoder().encode([
+      'From: Dana Whitfield <dana@northwind.io>', 'To: scout.api-worker.ashish@kinu.run', 'Subject: Re: Webhook deliveries', 'Message-ID: <hooks-v2-500-2@northwind.io>',
+      'In-Reply-To: <hooks-v2-500@northwind.io>', 'Content-Type: text/plain; charset=utf-8', '', 'Still failing.',
+    ].join('\r\n')), envelopeFrom: 'dana@northwind.io', recipient });
+
+    const [thread] = store.list({ view: 'all', unread: true }).threads;
+
+    expect(thread).toMatchObject({ id: first.threadId, from: [{ address: 'dana@northwind.io' }, { address: 'scout.api-worker.ashish@kinu.run' }], sender: { address: 'dana@northwind.io' } });
+    expect(mailInContext(store.list({ view: 'all', unread: true })).items).toEqual([expect.objectContaining({ from: 'dana@northwind.io' })]);
   });
 
   test('search finds words in subject, sender and body, and quoted words are not syntax', async () => {

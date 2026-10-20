@@ -10,7 +10,7 @@ import { hostedSeatsOver } from './helpers-actor-host';
 
 const DANA = mailInContext({ unread: 1, threads: [{
   id: 't-dana', path: '', subject: 'Webhook deliveries to /hooks/v2 failing with 500', from: [{ name: 'Dana Whitfield', address: 'dana@northwind.io' }],
-  snippet: 'Every delivery to /hooks/v2 gets a 500.', at: Date.UTC(2026, 9, 20, 14, 12), count: 1, unread: true, verified: false,
+  snippet: 'Every delivery to /hooks/v2 gets a 500.', sender: { name: 'Dana Whitfield', address: 'dana@northwind.io' }, at: Date.UTC(2026, 9, 20, 14, 12), count: 1, unread: true, verified: false,
   attachments: false, important: null, trashedAt: null, draft: false, outgoing: false,
 }] });
 
