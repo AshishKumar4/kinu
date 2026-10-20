@@ -8,7 +8,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
@@ -276,7 +276,7 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
-    allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+    allowedTools: ["create_issue"], authUrl: galleryAuthorizeUrl("linear"),
     error: null, presetId: null,
   },
   {
@@ -304,7 +304,7 @@ if (mcpPresetVariant === "connected") {
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
-      authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
+      authUrl: galleryAuthorizeUrl("Cloudflare"), error: null,
       presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
@@ -432,8 +432,45 @@ const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", l
 /** `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it. */
 const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
 
-/** Where a sign-in ending on the connected page began (`&next=`). */
-const CONNECTED_NEXT = new URLSearchParams(location.search).get("next") ?? "/";
+/** The finish page's own address (`&service=`, `&error=`), as a connect's callback writes it. */
+const CONNECTED_AT = connectedPath(connectEndedOf(new URLSearchParams(location.search)));
+
+/** Services whose sign-in a finish page in another tab of this gallery ended, by name: the callback's stand-in, which
+ *  stores the grant before it sends the tab to the finish page. Shared through this origin's storage. */
+const SIGNED_IN_KEY = "gallery-mcp-signed-in";
+
+if (frame === "connected" && new URLSearchParams(location.search).get("error") === null) {
+  const named = new URLSearchParams(location.search).get("service");
+
+  if (named !== null) localStorage.setItem(SIGNED_IN_KEY, JSON.stringify([...signedInServices(), named]));
+}
+
+/** A sign-in's start on this gallery: its provider's consent page stands in for the provider's own. */
+function galleryAuthorizeUrl(service: string): string {
+  return `${location.origin}${location.pathname}?${new URLSearchParams({ frame: "authorize", service }).toString()}`;
+}
+
+/** The provider's consent page: approved, the provider sends the tab to the server's callback, which stores the grant
+ *  and ends on the finish page; declined, the callback ends there with the provider's refusal. */
+function GalleryAuthorize() {
+  const service = new URLSearchParams(location.search).get("service") ?? "the service";
+  const end = (error: string | null) => { location.assign(`${location.pathname}?frame=connected&${connectedPath({ service, error }).split("?")[1] ?? ""}`); };
+
+  return (
+    <div className="flex h-screen flex-col items-center justify-center gap-3 p-bg p-text text-sm" data-gallery-authorize={service}>
+      <p>{service} asks to connect to your Kinu account.</p>
+      <div className="flex gap-2">
+        <button type="button" data-authorize="approve" className="rounded-md border p-border px-3 py-1" onClick={() => { end(null); }}>Approve</button>
+        <button type="button" data-authorize="deny" className="rounded-md border p-border px-3 py-1" onClick={() => { end("The person declined."); }}>Deny</button>
+      </div>
+    </div>
+  );
+}
+
+/** The names a finish page in this gallery said signed in. */
+function signedInServices(): string[] {
+  return v.parse(v.array(v.string()), JSON.parse(localStorage.getItem(SIGNED_IN_KEY) ?? "[]"));
+}
 
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
@@ -448,9 +485,17 @@ const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 /** `&chatgpt=signed-in`: the account holds a ChatGPT sign-in, so its entry offers the disconnect; OpenAI refuses the revoke. */
 let settingsChatGptSignedIn = new URLSearchParams(location.search).get("chatgpt") === "signed-in";
 
+/** Whether the account holds a ChatGPT plan: the machine stores it once the person approves in the sign-in's tab, where
+ *  the provider's consent page stands in. */
+function chatgptSignedIn(): boolean {
+  return settingsChatGptSignedIn || signedInServices().includes("ChatGPT");
+}
+
 function galleryChatGptStatus() {
+  const signedIn = chatgptSignedIn();
+
   return {
-    signedIn: settingsChatGptSignedIn, email: settingsChatGptSignedIn ? "owner@example.com" : null, planEnabled: settingsChatGptSignedIn,
+    signedIn, email: signedIn ? "owner@example.com" : null, planEnabled: signedIn,
     pending: false, lastFailure: null, firstSignIn: false,
   };
 }
@@ -469,6 +514,7 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
 
   if (route === "/api/user/chatgpt" && method === "DELETE") {
     settingsChatGptSignedIn = false;
+    localStorage.setItem(SIGNED_IN_KEY, JSON.stringify(signedInServices().filter((name) => name !== "ChatGPT")));
 
     return fixtureJson({ unrevoked: query === "revoke=1" ? "OpenAI refused to revoke the refresh_token: The refresh token has already been used." : null });
   }
@@ -476,14 +522,14 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
   if (path === "/api/user/chatgpt") {
     return fixtureJson(CHATGPT_DEVICE
       ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: null }
-      : { device: null, status: null, account: settingsChatGptSignedIn ? { email: "owner@example.com" } : null, machineSignIn: null });
+      : { device: null, status: null, account: chatgptSignedIn() ? { email: "owner@example.com" } : null, machineSignIn: null });
   }
 
+  // Open, not signed in: the plan arrives only once the person approves in the sign-in's tab.
   if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
     if (!CHATGPT_DEVICE) return fixtureJson({ state: "waiting_for_machine" });
-    settingsChatGptSignedIn = true;
 
-    return fixtureJson({ state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE });
+    return fixtureJson({ state: "open", authorizeUrl: galleryAuthorizeUrl("ChatGPT"), device: GALLERY_DEVICE });
   }
 
   if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") return fixtureJson({ cancelled: true });
@@ -592,7 +638,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       models: [
         ...WORKERS_AI_MODELS,
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-        ...settingsChatGptSignedIn ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
+        ...chatgptSignedIn() ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
         ...settingsSavedCredentials.has("groq.bearer")
           ? [{ spec: "groq/llama-3.3-70b-versatile", label: "Llama 3.3 70B", provider: "groq", reasoningEfforts: [] }]
           : [],
@@ -687,9 +733,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
 
     const id = `srv-add-${String(galleryMcpRows.length + 1)}`;
 
-    const authUrl = signIn
-      ? `${new URL(preset.serverUrl).origin}/authorize?${id}`
-      : null;
+    const authUrl = signIn ? galleryAuthorizeUrl(name) : null;
 
     // Exposed so the gate can check the posted payload.
     localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
@@ -709,7 +753,12 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
   }
 
   if (path === "/api/user/mcp/servers") {
-    return fixtureJson(v.parse(v.array(McpServerSummarySchema), galleryMcpRows));
+    // A server another tab signed in is ready here, as the account's server list says once its tokens are stored.
+    const signedIn = new Set(signedInServices());
+
+    return fixtureJson(v.parse(v.array(McpServerSummarySchema), galleryMcpRows.map((row) => (signedIn.has(row.name)
+      ? { ...row, status: "ready" as const, toolsCount: 21, authUrl: null }
+      : row))));
   }
 
   return null;
@@ -7274,7 +7323,8 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
               onDismiss={() => { /* the card stays up for the capture */ }}
             />
             <AddServerCard onCancel={() => { /* the form stays up for the capture */ }}
-              onAdded={() => { /* nothing is added; the gate never submits */ }} />
+              onAdded={() => { /* nothing is added; the gate never submits */ }}
+              onConnected={() => { /* nothing connects; the gate never submits */ }} />
           </>
         )}
       </div>
@@ -8025,8 +8075,10 @@ async function mount() {
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // `&step=0..3` picks the wizard panel.
     ["welcome", { node: <WelcomeFrame />, entries: [WELCOME_ROUTE] }],
-    // Where a sign-in ends in its helper window.
-    ["connected", { node: <ConnectedPage />, entries: [`${APP_ROUTES.connected}?${new URLSearchParams({ next: CONNECTED_NEXT }).toString()}`] }],
+    // Where every connect ends: what a server's callback sends its tab to.
+    ["connected", { node: <ConnectedPage />, entries: [CONNECTED_AT] }],
+    // A provider's consent page, the network seam's stand-in: `&service=` is what asks to connect.
+    ["authorize", { node: <GalleryAuthorize />, entries: ["/"] }],
     // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],

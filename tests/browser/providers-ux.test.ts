@@ -42,12 +42,22 @@ describe('the providers list', () => {
       await page.click('[data-settings-resource="your ChatGPT connection"] button');
       await page.waitForSelector('[data-provider="ChatGPT"] button');
 
-      // The sign-in opens its own tab; the page polls the machine until it reports the plan.
+      // The sign-in opens on the machine; its link opens the provider's page in a tab of its own, and the page polls the
+      // machine until it reports the plan, which it holds only once the person approves there.
       await page.click('[data-provider="ChatGPT"] button');
+      await page.waitForSelector('[data-chatgpt-state="open"] a');
+      const opened = page.browser().waitForTarget((target) => target.opener() === page.target() || target.url().includes('frame=authorize'));
+      await page.click('[data-chatgpt-state="open"] a');
+      const tab = await (await opened).page();
+
+      if (tab === null) throw new Error('the sign-in opened no tab');
+      await tab.waitForSelector('[data-authorize="approve"]');
+      expect(await page.$('[data-provider="ChatGPT"] button[aria-label="Disconnect ChatGPT"]')).toBeNull();
+      await tab.click('[data-authorize="approve"]');
       await page.waitForSelector('[data-provider="ChatGPT"] button[aria-label="Disconnect ChatGPT"]');
 
-      // The sign-in's own tab took the front; a background tab draws no frames to click through.
-      for (const other of await page.browser().pages()) if (other !== page) await other.close();
+      // A background tab draws no frames to click through.
+      for (const other of await page.browser().pages()) if (other !== page && !other.isClosed()) await other.close();
 
       await page.bringToFront();
 

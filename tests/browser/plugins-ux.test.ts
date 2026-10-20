@@ -35,19 +35,20 @@ function drawnRows(page: Page): Promise<{ name: string; text: string; buttons: n
   })));
 }
 
-/** Capture the tabs a row opens: a real `window.open` navigation would hang
- *  the fixture, so the capture writes each URL into the same localStorage
- *  pocket the fixture uses, newest last. */
-async function captureOpenedTabs(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    localStorage.setItem('gallery-mcp-opened', '');
-    window.open = (url?: string | URL) => {
-      localStorage.setItem('gallery-mcp-opened',
-        `${localStorage.getItem('gallery-mcp-opened') ?? ''}${String(url)}\n`);
+/** The tab a click on `selector` opens, once it reaches the provider's consent page standing in for the provider's own:
+ *  the sign-in the card started, in a real tab. */
+async function signInTab(page: Page, selector: string): Promise<{ readonly tab: Page; readonly service: string; readonly closed: Promise<void> }> {
+  const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
 
-      return null;
-    };
-  });
+  await page.click(selector);
+  const tab = await (await opened).page();
+
+  if (tab === null) throw new Error('the sign-in opened no tab');
+  const closed = new Promise<void>((resolve) => { tab.once('close', () => { resolve(); }); });
+
+  await tab.waitForSelector('[data-gallery-authorize]');
+
+  return { tab, closed, service: await tab.$eval('[data-gallery-authorize]', (node) => node.getAttribute('data-gallery-authorize') ?? '') };
 }
 
 /** The names in the Installed strip, in the order it draws them. */
@@ -85,33 +86,23 @@ describe('MCP presets', () => {
         expect(await presetStatus(page, 'cloudflare')).toBe('Not added');
         expect(await presetStatus(page, 'google')).toBe('Not added');
 
-        await captureOpenedTabs(page);
-
-        // Cloudflare is the OAuth preset: one click posts the add.
-        await page.click('[data-plugin-source="cloudflare"] [data-plugin-add]');
-
+        // Cloudflare is the OAuth preset: one click posts the add, and its sign-in opens in a tab of its own.
+        const signIn = await signInTab(page, '[data-plugin-source="cloudflare"] [data-plugin-add]');
         const add = v.parse(v.object({ presetId: v.literal('cloudflare') }), await lastMcpAdd(page));
 
-        expect(add.presetId).toBe('cloudflare');
+        expect({ add: add.presetId, asking: signIn.service }).toEqual({ add: 'cloudflare', asking: 'Cloudflare' });
 
-        await page.waitForFunction(
-          () => localStorage.getItem('gallery-mcp-opened') !== '',
-        );
-
-        const opened = v.parse(
-          v.string(),
-          await page.evaluate(() => localStorage.getItem('gallery-mcp-opened')),
-        );
-
-        // The authorize server is the preset's own, and the URL carries the
-        // row the add created — whose id is the fixture's own counter.
-        expect(opened.trim()).toMatch(/^https:\/\/mcp\.cloudflare\.com\/authorize\?srv-add-\d+$/);
-
-        // The status the next list read reports — the same poll the panel runs.
+        // The status the next list read reports, while the sign-in waits.
         await page.waitForFunction(
           () => document.querySelector('[data-plugin-source="cloudflare"]')?.getAttribute('data-plugin-state') === 'Needs sign-in',
         );
-        expect(await presetStatus(page, 'cloudflare')).toBe('Needs sign-in');
+
+        // Approved, the tab ends on the finish page and closes, and the card says so at once.
+        await signIn.tab.click('[data-authorize="approve"]');
+        await signIn.closed;
+        await page.waitForFunction(
+          () => document.querySelector('[data-plugin-source="cloudflare"]')?.getAttribute('data-plugin-state') === 'Connected',
+        );
 
         // The added server joins the strip of what the account holds, and the
         // page still draws it once: its own preset row, not a second copy in
@@ -186,33 +177,25 @@ describe('MCP presets', () => {
 
         expect(await page.$('[data-plugin-source="google"]')).toBeNull();
 
-        await captureOpenedTabs(page);
+        // GitHub's add is a sign-in, not a token prompt: no field opens, the
+        // add posts the preset id alone, and the sign-in opens in its tab.
+        const signIn = await signInTab(page, '[data-plugin-source="github"] [data-plugin-add]');
+        const add = v.parse(v.object({ presetId: v.literal('github') }), await lastMcpAdd(page));
 
-        // GitHub's add is a sign-in, not a token prompt: no field opens and
-        // the add posts the preset id alone.
-        await page.click('[data-plugin-source="github"] [data-plugin-add]');
-
-        const add = v.parse(
-          v.object({ presetId: v.literal('github') }),
-          await lastMcpAdd(page),
-        );
-
-        expect(add.presetId).toBe('github');
-
-        await page.waitForFunction(
-          () => localStorage.getItem('gallery-mcp-opened') !== '',
-        );
-
-        const opened = v.parse(
-          v.string(),
-          await page.evaluate(() => localStorage.getItem('gallery-mcp-opened')),
-        );
-
-        expect(opened.trim()).toMatch(/^https:\/\/api\.githubcopilot\.com\/authorize\?srv-add-\d+$/);
+        expect({ add: add.presetId, asking: signIn.service }).toEqual({ add: 'github', asking: 'GitHub' });
 
         await page.waitForFunction(
           () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Needs sign-in',
         );
+
+        // Declined, the tab still closes, and the card keeps its way back to the sign-in.
+        await signIn.tab.click('[data-authorize="deny"]');
+        await signIn.closed;
+        await page.click('[data-plugin-source="github"] [data-plugin-menu]');
+        const again = await signInTab(page, '[data-plugin-source="github"] [data-plugin-sign-in]');
+
+        expect(again.service).toBe('GitHub');
+        await again.tab.close();
       } finally {
         await page.close();
       }

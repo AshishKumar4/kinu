@@ -1,5 +1,6 @@
 /** Route templates, so a client error report names the surface without leaking workspace names. `App.tsx`
  * reads its paths from here; the server validates reported routes against this set. */
+import * as v from 'valibot';
 
 /** Every path `App.tsx` routes; `home` is `/`. */
 export const APP_ROUTES = {
@@ -39,10 +40,32 @@ export const APP_ROUTES = {
   gallerySlate: '/gallery/:workspace/:slate',
   deploy: '/deploy',
   updates: '/updates',
-  /** Where a provider's sign-in ends in its helper window: it tells the tab that opened it, then closes. `?next=`
-   *  is where that tab began, for a window the browser opened that cannot close itself. */
+  /** Where every connect run in a helper tab ends (`connectedPath`): it tells the tab that started it, then closes. */
   connected: '/connected',
 } as const;
+
+/** What a connect's finish page tells the tab that started it, over the `CONNECT_CHANNEL` broadcast: the service as
+ *  the page names it ("Cloudflare", an MCP server's name), and why it did not connect, null when it did. */
+export const ConnectEndedSchema = v.object({ service: v.string(), error: v.nullable(v.string()) });
+
+export type ConnectEnded = v.InferOutput<typeof ConnectEndedSchema>;
+
+/** The same-origin broadcast a finish page answers on: it needs no opener, which a provider's pages may cut. */
+export const CONNECT_CHANNEL = 'kinu-connected';
+
+/** Where a connect run in a helper tab ends, for every connect: the finish page, naming `service` and why it failed. */
+export function connectedPath(ended: ConnectEnded): string {
+  const query = new URLSearchParams({ service: ended.service });
+
+  if (ended.error !== null) query.set('error', ended.error.slice(0, 300));
+
+  return `${APP_ROUTES.connected}?${query.toString()}`;
+}
+
+/** The finish page's own reading of its address, as `connectedPath` wrote it. */
+export function connectEndedOf(search: URLSearchParams): ConnectEnded {
+  return { service: search.get('service') ?? 'the service', error: search.get('error') };
+}
 
 type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
 

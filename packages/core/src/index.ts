@@ -2563,6 +2563,11 @@ export {
 
 export {
   APP_ROUTES,
+  CONNECT_CHANNEL,
+  connectedPath,
+  connectEndedOf,
+  type ConnectEnded,
+  ConnectEndedSchema,
   type ReportedRoute,
   REPORTED_ROUTES,
   routeTemplateOf,

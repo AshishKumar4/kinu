@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  nanoid, plainFetch, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
+  nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -955,7 +955,8 @@ export class UserMcpServers {
     }
   }
 
-  async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
+  /** The sign-in's end, as the finish page says it: the server by its name, and why it did not connect. */
+  async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<ConnectEnded> {
     await this.host.requireTier(caller, 'mcp.manage');
 
     try {
@@ -971,22 +972,27 @@ export class UserMcpServers {
         catch (cause) {
           diagnostics.failure('mcp.connect_failed', toKinuError({ doing: 'establishing an authorized MCP connection', cause, otherwise: 'unavailable' }));
 
-          return { ok: true, serverId: result.serverId, error: 'Signed in, but the MCP server did not accept the connection yet.' };
+          return { service: this.serverName(result.serverId), error: 'Signed in, but the MCP server did not accept the connection yet.' };
         }
 
         await this.readMcpToolList(result.serverId);
         await this.assistantConnectionsChanged();
 
-        return { ok: true, serverId: result.serverId, error: null };
+        return { service: this.serverName(result.serverId), error: null };
       }
 
-      return { ok: false, serverId: result.serverId ?? null, error: result.authError };
+      return { service: this.serverName(result.serverId), error: result.authError ?? 'The MCP server refused the sign-in.' };
     } catch (cause) {
       const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
       diagnostics.failure('mcp.oauth_callback_failed', error);
 
-      return { ok: false, serverId: null, error: renderThrownChain({ cause: error }) };
+      return { service: 'the MCP server', error: renderThrownChain({ cause: error }) };
     }
+  }
+
+  /** A server's name as the person gave it, for words about it. */
+  private serverName(serverId: string | null | undefined): string {
+    return (serverId === null || serverId === undefined ? undefined : this.catalog().get(serverId)?.name) ?? 'the MCP server';
   }
 
   /** Reads GitHub with the account's token (vault, else MCP); the workspace gets only the answers (m48). */

@@ -1,16 +1,16 @@
 import { WarningCircleIcon } from "@phosphor-icons/react";
-import { cloudflareReconnectPath } from "@/lib/user-api";
-import { connectCloudflareInHelper } from "@/lib/connect-window";
+import { CLOUDFLARE_CONNECT_PATH } from "@/lib/user-api";
+import { beginConnect } from "@/lib/connect-window";
 
 interface CloudflareAIConnectNoticeProps {
-  returnTo: string;
+  /** Rereads what the connection changes, once the connect has ended. */
+  onConnected: () => void;
   message?: string;
-  /** The link's own words, where connecting is signing in again. */
   action?: string;
 }
 
 export function CloudflareAIConnectNotice({
-  returnTo,
+  onConnected,
   message = "Cloudflare Workers AI is not connected for this account.",
   action = "Connect Cloudflare Workers AI",
 }: CloudflareAIConnectNoticeProps) {
@@ -20,13 +20,13 @@ export function CloudflareAIConnectNotice({
         <WarningCircleIcon size={14} className="mt-0.5 shrink-0 p-warning" />
         <div className="min-w-0 space-y-2">
           <p>{message}</p>
-          <a
-            href={cloudflareReconnectPath(returnTo)}
-            onClick={(event) => { if (connectCloudflareInHelper(returnTo)) event.preventDefault(); }}
+          <button
+            type="button"
+            onClick={() => { beginConnect().start(CLOUDFLARE_CONNECT_PATH, onConnected); }}
             className="inline-flex items-center rounded-md border p-border px-2 py-1 p-t-control p-warning p-card-hover"
           >
             {action}
-          </a>
+          </button>
         </div>
       </div>
     </div>

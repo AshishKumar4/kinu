@@ -1,10 +1,10 @@
-/** MCP server panel. OAuth adds open `authUrl` in a tab; the callback returns here with `?mcp_auth=ok&server_id=...`. */
+/** MCP server panel. A server that signs in connects through `beginConnect`; its end updates this panel in place. */
 import { Effect, Cause } from 'effect';
-import { useEffect, useState, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState, useCallback } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIcon } from "@phosphor-icons/react";
-import type { McpTransport } from "@kinu.run/core";
+import type { ConnectEnded, McpTransport } from "@kinu.run/core";
+import { beginConnect } from "@/lib/connect-window";
 import { addMcpServer, removeMcpServer } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { Status } from "@/components/ui/Status";
@@ -31,23 +31,13 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
   useMcpWatch(mcp);
   const servers = lastValue(resource) ?? [];
   const [showAdd, setShowAdd] = useState(false);
-  const [searchParams, setSearchParams] = useSearchParams();
+  // How the last sign-in this panel started ended, as its finish page said.
+  const [ended, setEnded] = useState<ConnectEnded | null>(null);
 
-  // Strip OAuth-return params so a reload doesn't show stale state.
-  const authResult = searchParams.get('mcp_auth');
-  const authError = searchParams.get('error');
-  useEffect(() => {
-    if (!authResult) return;
+  const connected = useCallback((done: ConnectEnded) => {
+    setEnded(done);
     reload();
-
-    const t = setTimeout(() => {
-      const next = new URLSearchParams(searchParams);
-      next.delete('mcp_auth'); next.delete('error'); next.delete('server_id');
-      setSearchParams(next, { replace: true });
-    }, 4000);
-
-    return () => clearTimeout(t);
-  }, [authResult, reload, searchParams, setSearchParams]);
+  }, [reload]);
 
   const { ask, dialog } = useConfirmation();
 
@@ -60,7 +50,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
     <div className="space-y-4">
       {dialog}
       <div className="space-y-0.5">
-        <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} />
+        <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} onConnected={connected} />
       </div>
 
       <div className="flex justify-end">
@@ -70,14 +60,14 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
         </Button>
       </div>
 
-      {authResult === 'ok' && (
+      {ended !== null && ended.error === null && (
         <div className="p-card p-3 text-xs flex items-center gap-2 p-success">
-          <CheckIcon size={14} /> Authorization complete. Discovering tools…
+          <CheckIcon size={14} /> Connected to {ended.service}. Discovering tools…
         </div>
       )}
-      {authResult === 'failed' && (
+      {ended !== null && ended.error !== null && (
         <div className="p-card p-3 text-xs flex items-center gap-2 p-danger">
-          <WarningIcon size={14} /> Authorization failed{authError ? `: ${authError}` : ''}.
+          <WarningIcon size={14} /> {ended.service} did not connect: {ended.error}
         </div>
       )}
       {resource.status === "error" && <LoadFailure what="your MCP servers" message={resource.message} onRetry={reload} />}
@@ -86,6 +76,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
         <AddServerCard
           onCancel={() => setShowAdd(false)}
           onAdded={() => { setShowAdd(false); reload(); }}
+          onConnected={connected}
         />
       )}
 
@@ -106,12 +97,12 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                   <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
                   <div className="ml-auto flex items-center gap-2">
                     {s.authUrl && (
-                      <a
-                        href={s.authUrl} target="_blank" rel="noopener noreferrer"
+                      <button
+                        type="button" onClick={() => { if (s.authUrl) beginConnect().start(s.authUrl, connected); }}
                         className="text-xs px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
                       >
                         <ArrowSquareOutIcon size={11} /> Authorize
-                      </a>
+                      </button>
                     )}
                     <button
                       onClick={() => remove(s.id, s.name)}
@@ -146,7 +137,12 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
   );
 }
 
-export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: () => void }) {
+export function AddServerCard({ onCancel, onAdded, onConnected }: {
+  onCancel: () => void;
+  onAdded: () => void;
+  /** Hears how a server that signs in ended its sign-in. */
+  onConnected: (ended: ConnectEnded) => void;
+}) {
   const [name, setName] = useState('');
   const [serverUrl, setServerUrl] = useState('');
   const [transport, setTransport] = useState<McpTransport>('auto');
@@ -180,14 +176,13 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
         name: name.trim(), serverUrl: serverUrl.trim(), transport, headers, allowedTools: tools,
       }));
 
-      if (result.authUrl) {
-        window.open(result.authUrl, '_blank', 'noopener,noreferrer');
-      }
+      // Known only now: a custom server may or may not sign in. Opened after the add, a blocked helper runs it in this tab.
+      if (result.authUrl) beginConnect().start(result.authUrl, onConnected);
 
       onAdded();
     }), (failed) => Effect.sync(() => {
       const e = Cause.squash(failed); setErr(renderThrownChain({ cause: e })); })), Effect.sync(() => { setSaving(false); }));
-  })), [name, serverUrl, transport, headersText, allowedTools, onAdded]);
+  })), [name, serverUrl, transport, headersText, allowedTools, onAdded, onConnected]);
 
   return (
     <section className="p-card p-5 space-y-3">

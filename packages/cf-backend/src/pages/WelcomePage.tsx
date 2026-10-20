@@ -258,7 +258,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'providers' && (
                   <div className="space-y-5">
-                    <ProvidersPanel framed={false} returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />
+                    <ProvidersPanel framed={false} />
                   </div>
                 )}
 
@@ -266,7 +266,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 {s.id === 'model' && i === step && <DefaultModelField />}
 
                 {/* Likewise: the model step writes the same catalog, so this one reads it when it opens. */}
-                {s.id === 'search' && i === step && <WebSearchSettings place="setup" returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />}
+                {s.id === 'search' && i === step && <WebSearchSettings place="setup" />}
 
                 {s.id === 'tools' && (
                   <div className="space-y-4">

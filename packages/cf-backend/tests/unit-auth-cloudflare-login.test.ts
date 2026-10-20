@@ -7,7 +7,7 @@ import { bootstrappedProfile, workerContext } from './helpers/bindings';
 import { serveFamily } from './helpers/api';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
-import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
+import { CLOUDFLARE_WORKERS_AI_SCOPES, connectedPath } from '@kinu.run/core';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/sessions';
@@ -21,6 +21,9 @@ const ORIGIN = 'https://kinu.example.com';
 function setupEnv() {
   const kv = makeKv();
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
+  /** Each account a UserDO was asked for, by the name it is addressed under, and the emails given a profile. */
+  const profiled: string[] = [];
+  const accounts = { credentialsOf: new Map<string, string[]>(), profiled };
   /** Sessions as the real UserDO holds them: the row says a cookie is live and carries the step-up `authTime`. */
   const sessions = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
 
@@ -29,7 +32,11 @@ function setupEnv() {
     async builtinHasOwner() { return true; },
     async builtinInvitedEmail() { return null; },
     async builtinResetAccount() { return null; },
-    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+    async ensureProfile(_caller: UserCaller, email: string) {
+      accounts.profiled.push(email);
+
+      return bootstrappedProfile(email);
+    },
     async registerBrowserSession(
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
     ) { sessions.set(tokenHash, { expiresAt, identity }); },
@@ -47,7 +54,17 @@ function setupEnv() {
 
   const env: AuthRoutesEnv<string> = {
     AUTH_KV: kv,
-    UserDO: { idFromName: (name) => name, get: () => userDO },
+    UserDO: {
+      idFromName: (name) => name,
+      // The account a credential lands on, by the object it was written through.
+      get: (name) => ({
+        ...userDO,
+        async setCredential(caller: UserCaller, key: string, credential: OAuthCredential) {
+          accounts.credentialsOf.set(name, [...accounts.credentialsOf.get(name) ?? [], credential.accessToken]);
+          await userDO.setCredential(caller, key, credential);
+        },
+      }),
+    },
     OrchestratorAgent: {
       idFromName: (name) => name,
       get: () => ({ onModelSettingsChanged: async () => ({ ok: true as const }) }),
@@ -57,10 +74,10 @@ function setupEnv() {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
-  return { env, kv, credentials, sessions };
+  return { env, kv, credentials, sessions, accounts };
 }
 
-function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: string }) {
+function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: string }, email = 'ashish@example.com') {
   const tokenRequests: URLSearchParams[] = [];
 
   const fetchFake = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -88,7 +105,7 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
     if (url === 'https://api.cloudflare.com/client/v4/user') {
       return Response.json({
         success: true,
-        result: { id: 'cf-user-1', email: 'ashish@example.com', username: 'ashish' },
+        result: { id: `cf-${email}`, email, username: email.split('@')[0] },
       });
     }
 
@@ -114,11 +131,16 @@ interface CloudflareHandoff {
   authorizeUrl: string;
 }
 
-async function startCloudflareLogin(env: AuthRoutesEnv<string>, prompt?: 'login'): Promise<CloudflareHandoff> {
+async function startCloudflareLogin(
+  env: AuthRoutesEnv<string>, prompt?: 'login', connect?: { readonly session: string },
+): Promise<CloudflareHandoff> {
   const start = new URL(`${ORIGIN}/auth/cloudflare/start`);
 
   if (prompt) start.searchParams.set('prompt', prompt);
-  const response = await authPages(new Request(start), env);
+
+  if (connect !== undefined) start.searchParams.set('intent', 'connect');
+
+  const response = await authPages(new Request(start, connect === undefined ? {} : { headers: { cookie: connect.session } }), env);
 
   if (!response) throw new Error('auth route did not handle the sign-in start');
   const location = response.headers.get('location');
@@ -138,17 +160,19 @@ async function startCloudflareLogin(env: AuthRoutesEnv<string>, prompt?: 'login'
   return { state, codeChallenge, setCookie, authorizeUrl: location };
 }
 
-/** The provider callback; without `setCookie` it is a planted callback link. */
+/** The provider callback; without `setCookie` it is a planted callback link. `session` is the browser's own. */
 async function completeCloudflareLogin(
   env: AuthRoutesEnv<string>,
   handoff: { state: string; setCookie?: string },
+  session?: string,
 ): Promise<Response> {
   const callback = new URL(`${ORIGIN}/auth/cloudflare/callback`);
   callback.searchParams.set('state', handoff.state);
   callback.searchParams.set('code', 'auth-code-1');
+  const cookies = [...handoff.setCookie === undefined ? [] : [handoff.setCookie.split(';')[0]], ...session === undefined ? [] : [session]];
 
   const response = await authPages(new Request(callback.toString(), {
-    headers: handoff.setCookie === undefined ? {} : { cookie: handoff.setCookie.split(';')[0] },
+    headers: cookies.length === 0 ? {} : { cookie: cookies.join('; ') },
   }), env);
 
   if (!response) throw new Error('auth route did not handle the callback');
@@ -212,6 +236,59 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
       await completeCloudflareLogin(env, await startCloudflareLogin(env));
       expect(credentials.map((c) => c.credential.accessToken)).toEqual(['cf-access-1', 'cf-access-2']);
       expect(credentials[1].credential.refreshToken).toBe('cf-refresh-2');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// The owner's report (2026-10-20): "Connect Cloudflare" ran the sign-in, so connecting a Cloudflare login under another
+// email switched the person into another Kinu account instead of attaching the credential to theirs.
+describe('connecting Cloudflare attaches to the account that asked, and signs nobody in', () => {
+  test('signed in as A, connecting a login whose email is B: A stays signed in, holds the credential, and B is no account', async () => {
+    const { env, accounts } = setupEnv();
+    const originalFetch = globalThis.fetch;
+
+    try {
+      globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
+      const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
+      const session = (sessionCookieIn(signedIn) ?? '').split(';')[0] ?? '';
+      const accountA = [...accounts.credentialsOf.keys()][0];
+
+      globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-b', refresh_token: 'cf-b-refresh' }, 'b@example.com').fetchFake;
+      const handoff = await startCloudflareLogin(env, 'login', { session });
+      const connected = await completeCloudflareLogin(env, handoff, session);
+
+      expect({
+        location: connected.headers.get('location'),
+        session: sessionCookieIn(connected) ?? null,
+        credentials: Object.fromEntries(accounts.credentialsOf),
+        profiled: accounts.profiled,
+      }).toEqual({
+        location: `${ORIGIN}${connectedPath({ service: 'Cloudflare', error: null })}`,
+        session: null,
+        credentials: { [accountA ?? '']: ['cf-a', 'cf-b'] },
+        profiled: ['a@example.com'],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('a connect needs a signed-in account to start, and the same one at its end', async () => {
+    const { env, accounts } = setupEnv();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
+
+    try {
+      const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
+      const session = (sessionCookieIn(signedIn) ?? '').split(';')[0] ?? '';
+      const unsigned = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start?intent=connect`), env);
+      // Its session gone by the callback: the grant is attached to nobody, and the finish page says why.
+      const ended = await completeCloudflareLogin(env, await startCloudflareLogin(env, 'login', { session }));
+
+      expect({ unsigned: unsigned?.status, ended: new URL(ended.headers.get('location') ?? '').searchParams.get('error'), credentials: [...accounts.credentialsOf.values()].flat() })
+        .toEqual({ unsigned: 401, ended: 'The Kinu account that started connecting is no longer signed in here.', credentials: ['cf-a'] });
     } finally {
       globalThis.fetch = originalFetch;
     }

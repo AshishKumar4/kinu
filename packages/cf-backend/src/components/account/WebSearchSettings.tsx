@@ -62,7 +62,7 @@ function Framed({ place, children }: { place: Place; children: ReactNode }) {
   return place === "settings" ? <section className="p-card overflow-hidden"><div className="px-5 py-5">{children}</div></section> : <>{children}</>;
 }
 
-export function WebSearchSettings({ returnTo, place }: { returnTo: string; place: Place }) {
+export function WebSearchSettings({ place }: { place: Place }) {
   const catalog = useAsyncResource(getProfileCatalog);
   const creds = useAsyncResource(listCredentials);
   const accounts = useAsyncResource(listCloudflareAccounts);
@@ -76,7 +76,7 @@ export function WebSearchSettings({ returnTo, place }: { returnTo: string; place
             {(credentials) => (
               <SearchChoice place={place} envelope={envelope} credentials={credentials} saved={catalog.set} onKeySaved={creds.reload}
                 payer={<CardSlot resource={accounts.resource} what="your Cloudflare account" onRetry={reloadAll}>
-                  {(status) => <Payer status={status} returnTo={returnTo} />}
+                  {(status) => <Payer status={status} onConnected={reloadAll} />}
                 </CardSlot>} />
             )}
           </CardSlot>
@@ -199,15 +199,15 @@ function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
 }
 
 /** Said only where a search through Cloudflare is not paid through the person's own account: then this deployment pays. */
-function Payer({ status, returnTo }: { status: CloudflareAccountStatus; returnTo: string }) {
+function Payer({ status, onConnected }: { status: CloudflareAccountStatus; onConnected: () => void }) {
   if (!status.connected) {
-    return <CloudflareAIConnectNotice returnTo={returnTo} action="Connect Cloudflare"
+    return <CloudflareAIConnectNotice onConnected={onConnected} action="Connect Cloudflare"
       message="No Cloudflare account is connected, so Kinu pays for these searches for now." />;
   }
 
   if (!status.webSearch) {
-    return <CloudflareAIConnectNotice returnTo={returnTo} action="Sign in with Cloudflare again"
-      message="Sign in with Cloudflare again so these searches are paid through your account. Until then Kinu pays for them." />;
+    return <CloudflareAIConnectNotice onConnected={onConnected} action="Connect Cloudflare again"
+      message="Connect Cloudflare again so these searches are paid through your account. Until then Kinu pays for them." />;
   }
 
   return null;

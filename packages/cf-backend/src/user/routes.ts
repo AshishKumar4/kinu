@@ -5,7 +5,7 @@ import type { UserDO } from './user-do';
 import { ROSTER_SOCKET_PATH } from './roster';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
 import { pictureKey, PictureAddressSchema, readSlatePicture, type PictureBucket } from '../slates/pictures';
-import { FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
+import { connectedPath, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
@@ -598,16 +598,10 @@ userRoutes.delete('/api/user/memory/notes/:id', (c) => settle(Effect.tryPromise(
 
 userRoutes.get('/api/user/mcp/callback', async (c) => {
   // `userMcp_handleOAuthCallback` validates the `<nonce>.<serverId>` state inside UserDO.
-  const result = await c.get('stub').userMcp_handleOAuthCallback(c.get('owner'), c.req.url);
-  // Redirect to settings regardless of outcome; the page polls userMcp_list for status.
-  const settingsUrl = new URL('/user/settings/mcp', publicOrigin(c));
-  settingsUrl.searchParams.set('mcp_auth', result.ok ? 'ok' : 'failed');
+  const ended = await c.get('stub').userMcp_handleOAuthCallback(c.get('owner'), c.req.url);
 
-  if (result.error) settingsUrl.searchParams.set('error', result.error.slice(0, 200));
-
-  if (result.serverId) settingsUrl.searchParams.set('server_id', result.serverId);
-
-  return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
+  // The finish page every connect ends on: it tells the page that started it, never routing into the app.
+  return new Response(null, { status: 302, headers: { Location: new URL(connectedPath(ended), publicOrigin(c)).toString() } });
 });
 
 // The account's routes the CLI's bearer reaches too, under `/api/cli`.

@@ -1,13 +1,13 @@
 import { Effect, Cause, Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
-import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken } from './session';
+import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken, requestIdentity } from './session';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
-import { objectNamed, sanitizeReturnTo } from '@kinu.run/core';
+import { connectedPath, objectNamed, sanitizeReturnTo } from '@kinu.run/core';
 import { escapeHtml, json, KINU_USER_AGENT, nonEmptyString, scopeList, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
@@ -215,6 +215,13 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     const url = new URL(request.url);
     const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
     const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
+    // A connect attaches what the provider grants to the account asking, and signs nobody in.
+    const connecting = url.searchParams.get('intent') === 'connect';
+
+    if (connecting && !CONNECTS.has(provider.id)) return html('Nothing to connect', `<p>Kinu keeps nothing from ${escapeHtml(provider.label)} to connect.</p>`, { status: 404 });
+    const connectFor = connecting ? (yield* Effect.promise(async () => requestIdentity(request, env)))?.userId ?? null : null;
+
+    if (connecting && connectFor === null) return html('Sign in first', '<p>Connecting a service needs the Kinu account it is for: <a href="/login">sign in</a>, then connect again.</p>', { status: 401 });
     const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
 
     if (!as.authorization_endpoint) return yield* Effect.die(new Error(`${provider.label} OAuth metadata has no authorization endpoint.`));
@@ -229,6 +236,7 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
       nonce,
       returnTo,
       redirectUri,
+      connectFor,
     }));
 
     const authorizationUrl = new URL(as.authorization_endpoint);
@@ -282,11 +290,15 @@ function completeOAuth<Id>(
     if (!state) return html('Sign in failed', '<p>The sign-in response came back without its state. Return to <a href="/login">sign in</a> and try again.</p>', { status: 400 });
 
     let stage = 'state';
+    // A connect that fails after its state was read still ends on the finish page.
+    let connecting = false;
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       const savedState = yield* Effect.promise(async () => consumeOAuthState(
         env.AUTH_KV, state, provider.id, readCookie(request, OAUTH_STATE_COOKIE_NAME),
       ));
+
+      connecting = savedState.connectFor !== null;
 
       stage = 'metadata';
       const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
@@ -306,13 +318,24 @@ function completeOAuth<Id>(
 
       stage = 'token_response';
       const tokens = yield* processOAuthTokenResponse({ provider, as, client, response: tokenResponse, nonce: savedState.nonce ?? null });
+
+      if (savedState.connectFor !== null) {
+        stage = 'connect';
+
+        return yield* connectGranted({ request, env, ctx, account: savedState.connectFor, tokens, provider });
+      }
+
       stage = 'profile';
       const profile = yield* fetchOAuthProfile(provider, as, client, tokens);
       stage = 'session';
       const session = yield* Effect.promise(async () => createSession(env, profile));
 
       if (provider.id === 'cloudflare') {
-        yield* attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens);
+        // Never fails the sign-in: the person is signed in, and the "Connect Cloudflare Workers AI" notice reports an
+        // unusable credential.
+        yield* Effect.catch(attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens), (failure) => Effect.sync(() => {
+          diagnostics.failure('auth.workers_ai_credential_unavailable', failure);
+        }));
       }
 
       const destination = new URL(savedState.returnTo, url.origin).toString();
@@ -331,6 +354,11 @@ function completeOAuth<Id>(
         otherwise: 'unavailable',
       }), { provider: providerId, stage, reason: failure.reason, detail: failure.log });
 
+      // A connect ends on the finish page whatever happened, in its own words.
+      if (connecting) {
+        return redirect(new URL(connectedPath({ service: provider.label, error: failure.reason }), url.origin).toString());
+      }
+
       return html('Sign in failed', `
       <p class="lede">Kinu could not finish signing you in. Return to sign in and try again.</p>
       <p class="muted">Failure stage: <code>${escapeHtml(stage)}</code></p>
@@ -341,31 +369,47 @@ function completeOAuth<Id>(
   });
 }
 
-/** Never throws: the operator is already signed in, and a billing lookup must not undo that. An unusable
- *  credential is reported by the "Connect Cloudflare Workers AI" notice. */
+/** The providers whose grant Kinu keeps for an account, so a connect can attach it: each one's attach. */
+const CONNECTS = new Map([['cloudflare', attachCloudflareWorkersAI]]);
+
+/**
+ * A connect's end: what the provider granted is attached to the account that started it, whose session this browser
+ * must still hold; no session is minted and no cookie set, so connecting a provider login under another email cannot
+ * move the person into another account. It ends on the finish page, which tells the tab that started it (or, run in
+ * that tab, returns it to its step).
+ */
+function connectGranted<Id>(input: {
+  readonly request: Request; readonly env: AuthRoutesEnv<Id>; readonly ctx: Pick<ExecutionContext, 'waitUntil'>;
+  readonly account: string; readonly tokens: CloudflareTokenPayload; readonly provider: OAuthProviderConfig;
+}): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const { request, env, provider } = input;
+    const origin = new URL(request.url).origin;
+    const signedIn = yield* Effect.promise(async () => requestIdentity(request, env));
+    const attach = CONNECTS.get(provider.id) ?? (() => Effect.fail(new KinuError('unsupported', `Kinu keeps nothing from ${provider.label} to connect.`)));
+
+    const error = signedIn?.userId === input.account
+      ? yield* Effect.match(attach(env, input.ctx, input.account, input.tokens), { onFailure: (failure) => failure.message, onSuccess: () => null })
+      : 'The Kinu account that started connecting is no longer signed in here.';
+
+    return redirect(new URL(connectedPath({ service: provider.label, error }), origin).toString(), { headers: { 'cache-control': 'no-store' } });
+  });
+}
+
+/** The Workers AI credential a Cloudflare grant carries, attached to `userId`; fails in its own words. */
 function attachCloudflareWorkersAI<Id>(
   env: AuthRoutesEnv<Id>,
   ctx: Pick<ExecutionContext, 'waitUntil'>,
   userId: string,
   tokens: CloudflareTokenPayload,
 ): Effect.Effect<void, KinuError> {
-  return Effect.gen(function* () {
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const credential = yield* Effect.promise(async () => cloudflareTokenToCredential(tokens));
-      const userDO = objectNamed(env.UserDO, userId);
-      yield* Effect.promise(async () => userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential));
-      // No model seeding: the built-in default tier already names the native Workers AI model.
-      notifyWorkspacesModelSettingsChanged(env, userDO, ctx);
-    }), (failed) => Effect.sync(() => {
-      const e = Cause.squash(failed);
-      const failure = summarizeOAuthFailure({ cause: e });
-      diagnostics.failure('auth.workers_ai_credential_unavailable', toKinuError({
-        doing: 'attaching the Workers AI credential to a Cloudflare sign-in',
-        cause: e,
-        otherwise: 'unavailable',
-      }), { reason: failure.reason, detail: failure.log });
-    }));
-  });
+  return Effect.catchCause(Effect.gen(function* () {
+    const credential = yield* Effect.promise(async () => cloudflareTokenToCredential(tokens));
+    const userDO = objectNamed(env.UserDO, userId);
+    yield* Effect.promise(async () => userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential));
+    // No model seeding: the built-in default tier already names the native Workers AI model.
+    notifyWorkspacesModelSettingsChanged(env, userDO, ctx);
+  }), (failed) => Effect.fail(toKinuError({ doing: 'attaching the Workers AI credential Cloudflare granted', cause: Cause.squash(failed), otherwise: 'unavailable' })));
 }
 
 interface OAuthTokenExchange {
