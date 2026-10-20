@@ -42,11 +42,11 @@ function mailbox(): MailboxAgentCalls {
     readFor: async (caller, thread) => store.readFor(caller, thread),
     untriagedFor: async (caller, limit, skip) => store.untriagedFor(caller, limit, skip),
     triagedFor: (caller, thread, version, pick) => Promise.resolve(store.triagedFor(caller, thread, version, pick)),
-    draftFor: async (caller, message) => store.draftFor(caller, message),
+    draftFor: async (caller, message) => store.draft(store.messageFor(caller, message)),
     sendFor: async (caller, message) => {
       sent.push(message);
 
-      return (await store.queueFor(caller, message)).view;
+      return (await store.queue(store.messageFor(caller, message))).view;
     },
     updateFor: (caller, thread, change) => Promise.resolve(store.updateFor(caller, thread, change)),
   };

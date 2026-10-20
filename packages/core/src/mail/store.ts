@@ -5,7 +5,7 @@
  */
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { KinuError, settle, settleSync } from '../obs/index';
+import { KinuError, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import { replySubject } from './words';
@@ -259,23 +259,6 @@ export class MailStore {
     return this.reads(caller, thread) ? this.thread(thread) : null;
   }
 
-  async draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
-    const outgoing = this.outgoingFor(caller, message);
-
-    if (outgoing instanceof KinuError) return settle(Effect.fail(outgoing));
-
-    return this.draft(outgoing);
-  }
-
-  /** Files an agent's message to send: the Mailbox calls this only with the owner's approval of it in hand. */
-  async queueFor(caller: MailCaller, message: MailAgentMessage): Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }> {
-    const outgoing = this.outgoingFor(caller, message);
-
-    if (outgoing instanceof KinuError) return settle(Effect.fail(outgoing));
-
-    return this.queue(outgoing);
-  }
-
   updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): MailThreadSummary {
     if (!this.reads(caller, thread)) return settleSync(Effect.fail(new KinuError('missing', `No thread "${thread}" in a box you read.`)));
 
@@ -289,13 +272,14 @@ export class MailStore {
     return path !== null && this.readablePath(caller, path) !== null;
   }
 
-  /** The agent's message as it is filed: from a box it reads, answering a thread it reads, signed as its writer. */
-  private outgoingFor(caller: MailCaller, message: MailAgentMessage): (MailOutgoing & { threadId?: string }) | KinuError {
+  /** An agent's message as it is filed, to draft or (with the owner's approval in hand) to send: from a box it reads,
+   *  answering a thread it reads, signed as its writer; refused otherwise. */
+  messageFor(caller: MailCaller, message: MailAgentMessage): MailOutgoing & { threadId?: string } {
     const path = this.readablePath(caller, message.box);
 
-    if (path === null) return new KinuError('denied', `You do not read the box "${message.box ?? ''}".`);
+    if (path === null) return settleSync(Effect.fail(new KinuError('denied', `You do not read the box "${message.box ?? ''}".`)));
 
-    if (message.thread !== undefined && !this.reads(caller, message.thread)) return new KinuError('missing', `No thread "${message.thread}" in a box you read.`);
+    if (message.thread !== undefined && !this.reads(caller, message.thread)) return settleSync(Effect.fail(new KinuError('missing', `No thread "${message.thread}" in a box you read.`)));
 
     return {
       path, to: message.to, cc: message.cc ?? [], subject: message.subject, text: message.text, writtenBy: caller.name,

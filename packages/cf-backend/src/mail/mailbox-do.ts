@@ -212,11 +212,11 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
-    return settle(this.served(() => this.store.draftFor(caller, message)));
+    return settle(this.served(async () => this.store.draft(this.store.messageFor(caller, message))));
   }
 
   sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
-    return settle(this.sendOut(() => this.store.queueFor(caller, message)));
+    return settle(this.sendOut(async () => this.store.queue(this.store.messageFor(caller, message))));
   }
 
   updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {

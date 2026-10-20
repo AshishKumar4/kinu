@@ -91,7 +91,7 @@ describe('share-policy refines the SharingNimbus decisions', () => {
   test.each(cases.map((c, i) => [i, c] as const))('Lean case %d', (_i, c) => {
     if (c.kind === 'contained') {
       // Contained is what a call to a tool with these marks resolves to (`resolvePartCall`).
-      const resolved = resolvePartCall([{ serverName: 'lean', name: 'tool', ...c.descriptor }], { server: 'mcp.lean', tool: 'tool', args: [{}] });
+      const resolved = resolvePartCall([{ serverName: 'Refined', name: 'tool', ...c.descriptor }], { server: 'mcp.Refined', tool: 'tool', args: [{}] });
 
       expect(resolved.kind === 'resolved' && resolved.call.contained).toBe(c.expected);
 
