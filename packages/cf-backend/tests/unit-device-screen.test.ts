@@ -213,6 +213,22 @@ describe("a PC's screen through the owner's account", () => {
     harness.close();
   });
 
+  test("a DESKTOP frame changes the screen the roster shows, and leaves the PC's open screens and panes be", async () => {
+    const { harness, workspace, deviceId, device } = await granted();
+    const { session } = await openScreen(harness, device, workspace, deviceId);
+    const { viewer } = await attachViewer(harness, session);
+    const desktop = async () => (await harness.userDO.listDevices(await testOwner()))[0]?.desktop;
+
+    await harness.userDO.webSocketMessage(device.ws, JSON.stringify({ type: DEVICE_FRAMES.desktop, desktop: { state: 'permission' } }));
+    expect({ desktop: await desktop(), viewer: present(viewer, 'the viewer').closed() }).toEqual({ desktop: { state: 'permission' }, viewer: null });
+
+    await harness.userDO.webSocketMessage(device.ws, JSON.stringify({ type: DEVICE_FRAMES.desktop, desktop: { state: 'ready', width: 1280, height: 800 } }));
+    expect(await desktop()).toEqual({ state: 'ready', width: 1280, height: 800 });
+
+    await harness.joinFibers();
+    harness.close();
+  });
+
   test("the roster shows the screen its connection's HELLO reported: one the hub cannot read is none, and so is a PC offline", async () => {
     const harness = createTestUserDO();
     const { device } = await connectDevice(harness);
