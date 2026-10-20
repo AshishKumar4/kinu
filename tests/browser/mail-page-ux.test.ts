@@ -58,6 +58,18 @@ async function reader(page: Page, id: string): Promise<void> {
 }
 
 describe('Mail', () => {
+  test('the approved wireframe still opens the Mail page and workspace mail', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1440, height: 1000 });
+      await page.goto(`${origin}/gallery.html?frame=mail&view=all&thread=t-dana`, { waitUntil: 'networkidle0' });
+      expect(await page.$('[data-mail-reader="t-dana"]')).not.toBeNull();
+      await page.goto(`${origin}/gallery.html?frame=mail&at=workspace`, { waitUntil: 'networkidle0' });
+      expect((await page.$$('[data-mail-pill]')).length).toBeGreaterThan(0);
+      await page.close();
+    });
+  });
+
   test('five views, Important unread and Draft counts, address scope and server search', async () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '', 390);
@@ -77,6 +89,7 @@ describe('Mail', () => {
       expect(await rows(page)).toEqual(['t-dana']);
       await pick(page, 'Address', 'All addresses');
       await page.type('[aria-label="Search mail"]', 'Gmail');
+      expect(await page.$eval('[aria-label="Search mail"]', (input) => input instanceof HTMLInputElement ? input.value : '')).toBe('Gmail');
       await page.waitForFunction(() => document.querySelectorAll('[data-mail-list] [data-mail-thread]').length === 1);
       expect(await rows(page)).toEqual(['t-priya']);
       expect((await calls(page)).some((call) => call.path.includes('q=Gmail'))).toBe(true);

@@ -35,7 +35,7 @@ import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
 import { MailSendBody, type MailSend } from "@/components/mail/MailSendBody";
-import { mailExcerpt as firstLine, MailBody as Body, SealedMailHtml as SealedHtml } from "@/components/mail/MailMessage";
+import { mailExcerpt as firstLine, quotedMail as quoted, MailBody as Body, SealedMailHtml as SealedHtml } from "@/components/mail/MailMessage";
 import type { ImportantMail } from "@/lib/mail-api";
 
 const NOW = Date.now();
@@ -65,7 +65,7 @@ interface Address {
   readonly agent: string;
 }
 
-const ADDRESSES: readonly Address[] = [
+export const ADDRESSES: readonly Address[] = [
   { id: "ashish", address: "ashish@kinu.run", label: "ashish@kinu.run", workspace: "personal-assistant", agent: "Kinu" },
   { id: "api-worker", address: "api-worker.ashish@kinu.run", label: "API Worker", workspace: WORKSPACE, agent: "main" },
   { id: "scout", address: "scout.api-worker.ashish@kinu.run", label: "scout · API Worker", workspace: WORKSPACE, agent: "scout" },
@@ -74,7 +74,7 @@ const ADDRESSES: readonly Address[] = [
 const addressOf = (id: string): Address => ADDRESSES.find((each) => each.id === id) ?? ADDRESSES[0];
 
 /** The owner's registered address: a verified mail from it is their instruction. */
-const OWNER = { name: "Ashish Kumar Singh", address: "me@ashishkumarsingh.com" };
+export const OWNER = { name: "Ashish Kumar Singh", address: "me@ashishkumarsingh.com" };
 
 interface Party { readonly name: string; readonly address: string }
 
@@ -154,7 +154,7 @@ const SCOUT_REPLY: MailSend & { readonly text: string } = {
   text: "Hi Dana,\n\nYou're right, and it's ours. Tuesday's release renamed the database binding the webhook route reads, so every delivery to /hooks/v2 failed before it was stored. Nothing you sent was processed twice.\n\nThe fix is on staging now and goes to production within the hour. Please replay the failed deliveries from your dashboard after 16:00 UTC. I'll check that they land and write back.\n\nscout, for Ashish Kumar Singh",
 };
 
-const THREADS: readonly Thread[] = [
+export const THREADS: readonly Thread[] = [
   {
     id: "t-priya", box: "ashish", subject: "Self-hosted Kinu: Gmail says my replies fail DMARC", unread: true,
     important: "She's blocked: her own deploy's replies land in spam, and she asks whether the deploy should have written _dmarc. It should have.",
@@ -283,8 +283,6 @@ const THREADS: readonly Thread[] = [
     }],
   },
 ];
-
-export { ADDRESSES as mailAddresses, THREADS as mailThreads, OWNER as mailOwner };
 
 
 const VIEWS = ["important", "all", "sent", "drafts", "trash"] as const;

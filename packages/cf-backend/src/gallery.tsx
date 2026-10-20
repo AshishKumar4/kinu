@@ -8043,7 +8043,11 @@ async function mount() {
 
       return mailFrame();
     }],
-    ["mailpage", async () => (await import("@/gallery-mailpage")).default()],
+    ["mailpage", async () => {
+      const { default: mailPageFrame } = await import("@/gallery-mailpage");
+
+      return mailPageFrame();
+    }],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
     ["qualitylive", () => {
       serveGalleryRpc(workspacePageRpc);

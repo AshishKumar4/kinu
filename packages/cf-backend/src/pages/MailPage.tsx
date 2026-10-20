@@ -2,7 +2,7 @@ import { useCallback, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, type MailListing, type MailView } from "@kinu.run/core";
+import { APP_ROUTES, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
 import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
 import { MailRow, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
@@ -59,17 +59,23 @@ interface Inbox {
   readonly drafts: number;
 }
 
+function mailLocation(params: URLSearchParams, boxes: readonly MailBox[], splat: string | undefined) {
+  const view = VIEWS.find((name) => name === params.get("view")) ?? "important";
+  const address = params.get("address");
+  const path = params.get("path") ?? boxes.find((box) => box.address === address || box.path === address)?.path;
+  const query = params.get("q") ?? "";
+  const before = params.has("before") ? Number(params.get("before")) : undefined;
+  const opened = splat === "" || splat === undefined ? params.get("thread") : splat;
+
+  return { view, path, query, before, opened };
+}
+
 function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const [params] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   const route = useParams();
-  const view = VIEWS.find((name) => name === params.get("view")) ?? "important";
-  const namedAddress = params.get("address");
-  const path = params.get("path") ?? account.boxes.find((box) => box.address === namedAddress || box.path === namedAddress)?.path;
-  const query = params.get("q") ?? "";
-  const before = params.has("before") ? Number(params.get("before")) : undefined;
-  const opened = route["*"] === "" || route["*"] === undefined ? params.get("thread") : route["*"];
+  const { view, path, query, before, opened } = mailLocation(params, account.boxes, route["*"]);
   const [composing, setComposing] = useState(false);
   const [installing, setInstalling] = useState(false);
   const navigation = useLabelledStep(() => undefined);

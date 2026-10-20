@@ -6,7 +6,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { mailTime } from "./ImportantMailRow";
 
-function quoted(text: string): { own: string; quote: string | null } {
+export function quotedMail(text: string): { own: string; quote: string | null } {
   const lines = text.split("\n");
   const at = lines.findIndex((line) => /^On .+ wrote:$/u.test(line) || line.startsWith(">"));
 
@@ -14,7 +14,7 @@ function quoted(text: string): { own: string; quote: string | null } {
 }
 
 export function mailExcerpt(text: string): string {
-  const lines = quoted(text).own.split("\n").map((line) => line.trim()).filter(Boolean);
+  const lines = quotedMail(text).own.split("\n").map((line) => line.trim()).filter(Boolean);
   const greeting = /^(hi|hello|hey)\b[^.!?]{0,24},$/iu.test(lines[0] ?? "");
 
   return (greeting ? lines.slice(1) : lines).join(" ");
@@ -22,7 +22,7 @@ export function mailExcerpt(text: string): string {
 
 export function MailBody({ text }: { text: string }) {
   const [shown, setShown] = useState(false);
-  const { own, quote } = quoted(text);
+  const { own, quote } = quotedMail(text);
 
   return (
     <div className="space-y-2">
@@ -47,6 +47,26 @@ export function SealedMailHtml({ html }: { html: string }) {
   );
 }
 
+function MessageHeader({ mail, name, onToggle }: { mail: MailMessageView; name: string; onToggle: () => void }) {
+  return (
+      <button type="button" onClick={onToggle} aria-expanded="true" className="flex w-full items-start gap-3 text-left">
+        <Avatar name={name} size={30} />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span className="p-row-text font-medium p-text">{name}</span>
+            <span className="min-w-0 truncate p-meta p-text-3">{mail.from.address}</span>
+            {mail.verified
+              ? <span data-mail-verified title={mail.auth ?? undefined} className="inline-flex shrink-0 items-center gap-1 p-meta p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent" />Verified</span>
+              : <span data-mail-unverified title={mail.auth ?? undefined} className="inline-flex shrink-0 items-center gap-1 p-meta p-warning"><ShieldWarningIcon size={13} weight="fill" />Not verified</span>}
+          </span>
+          <span className="block truncate p-meta p-text-3">to {mail.to.map((party) => party.address).join(", ")}</span>
+          {mail.cc.length > 0 && <span className="block truncate p-meta p-text-3">cc {mail.cc.map((party) => party.address).join(", ")}</span>}
+        </span>
+        <span className="shrink-0 p-meta tabular-nums p-text-3">{mailTime(mail.at)}</span>
+      </button>
+  );
+}
+
 export function MailMessage({ mail, box, owner, open, onToggle }: {
   mail: MailMessageView; box: MailBox | undefined; owner: string; open: boolean; onToggle: () => void;
 }) {
@@ -67,21 +87,7 @@ export function MailMessage({ mail, box, owner, open, onToggle }: {
 
   return (
     <article data-mail-message={mail.id} className="space-y-3 px-4 py-4">
-      <button type="button" onClick={onToggle} aria-expanded="true" className="flex w-full items-start gap-3 text-left">
-        <Avatar name={name} size={30} />
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-            <span className="p-row-text font-medium p-text">{name}</span>
-            <span className="min-w-0 truncate p-meta p-text-3">{mail.from.address}</span>
-            {mail.verified
-              ? <span data-mail-verified title={mail.auth ?? undefined} className="inline-flex shrink-0 items-center gap-1 p-meta p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent" />Verified</span>
-              : <span data-mail-unverified title={mail.auth ?? undefined} className="inline-flex shrink-0 items-center gap-1 p-meta p-warning"><ShieldWarningIcon size={13} weight="fill" />Not verified</span>}
-          </span>
-          <span className="block truncate p-meta p-text-3">to {mail.to.map((party) => party.address).join(", ")}</span>
-          {mail.cc.length > 0 && <span className="block truncate p-meta p-text-3">cc {mail.cc.map((party) => party.address).join(", ")}</span>}
-        </span>
-        <span className="shrink-0 p-meta tabular-nums p-text-3">{mailTime(mail.at)}</span>
-      </button>
+      <MessageHeader mail={mail} name={name} onToggle={onToggle} />
       {mail.woke !== null && <p data-mail-woke={mail.woke} className="p-meta p-text-3">Woke {reader}{chat !== null && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}</p>}
       {mail.direction === "out" && mail.writtenBy !== null && <p className="p-meta p-text-3">Written by {mail.writtenBy} · approved by you</p>}
       {mail.sendState !== null && ["queued", "bounced", "failed", "complained"].includes(mail.sendState) && <p className="p-meta p-text-3">{mail.sendState}</p>}
