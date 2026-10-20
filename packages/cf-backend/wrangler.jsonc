@@ -542,8 +542,10 @@
       "vectorize": [
         { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory-staging" }
       ],
-      // Production's vars with staging's values. Empty means off: no mail in or
-      // out (EMAIL_DOMAIN, OPS_ALERT_EMAIL), no OAuth provider on /login
+      // Production's vars with staging's values. Mail is on, at staging.kinu.run,
+      // open to every account (MAIL_ACCOUNTS) so the eval identity may claim; a
+      // subdomain has no catch-all, so only addresses with a literal rule arrive.
+      // Empty means off: no ops alert mail (OPS_ALERT_EMAIL), no OAuth provider on /login
       // (CLOUDFLARE_OAUTH_CLIENT_ID), and no operators, so the admin plane
       // answers 404 and needs no Access application (CONTROL_PLANE_*). Staging is
       // driven by the eval identity alone: DEV_USER_EMAIL names it, and the
@@ -560,12 +562,12 @@
         "SIGN_IN_PROVIDERS": "",
         "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
         "CLOUDFLARE_AI_GATEWAY_ID": "default",
-        "EMAIL_DOMAIN": "",
+        "EMAIL_DOMAIN": "staging.kinu.run",
         "OPS_ALERT_EMAIL": "",
         "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "",
         "CONTROL_PLANE_ACCESS_AUD": "",
         "CONTROL_PLANE_ADMINS": "",
-        "MAIL_ACCOUNTS": "operators",
+        "MAIL_ACCOUNTS": "everyone",
         "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
         "ANALYTICS_DATASET_SUFFIX": "_staging"
       }

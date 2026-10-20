@@ -296,6 +296,18 @@ describe('Mail', () => {
     });
   });
 
+  test('on a deployment with no mail domain, Mail is off: no footer icon, the page says so, no claim offered', async () => {
+    await withGallery(async (gallery) => {
+      const page = await open(gallery, '&account=claim&mail=off');
+
+      await page.waitForFunction(() => document.querySelector('[data-mail-off]') !== null);
+      expect(await page.$('[data-footer-mail]')).toBeNull();
+      expect(await page.$('[data-footer-devices]')).not.toBeNull();
+      expect(await page.$('[data-mail-page] form')).toBeNull();
+      await page.close();
+    });
+  });
+
   test('Mail renders in both themes at desktop and phone widths', async () => {
     await withGallery(async (gallery) => {
       const dir = evidenceDir('mail-page');

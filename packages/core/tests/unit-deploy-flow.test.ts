@@ -144,6 +144,30 @@ class FakeCloudflare implements CloudflareTransport {
   /** Paths under a zone the token may not touch: Email Routing, Sending or DNS. */
   readonly forbiddenUnder: string[] = [];
 
+  /** Email Sending as the API answers it: a sending subdomain is named by its `tag`, and making one twice is refused. */
+  private sendingCall(id: string, rest: string, call: CloudflareCall): CloudflareHttpResponse | null {
+    const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+    const name = this.routing.sending.get(id);
+
+    if (rest === 'email/sending/subdomains' && call.method === 'GET') return ok(name === undefined ? [] : [{ tag: `tag-${name}`, name, enabled: true }]);
+
+    if (rest === 'email/sending/subdomains') {
+      const asked = bodyText(call.body ?? {}, 'name');
+
+      if (name !== undefined) return { status: 409, body: { success: false, errors: [{ code: 1000, message: 'Sending subdomain already exists' }], result: null } };
+      this.routing.sending.set(id, asked);
+
+      return ok({ tag: `tag-${asked}`, name: asked, enabled: true });
+    }
+
+    if (rest !== `email/sending/subdomains/tag-${name ?? ''}/dns`) return null;
+
+    return ok([
+      { type: 'MX', name: `cf-bounce.${name ?? ''}`, content: 'route1.mx.cloudflare.net', priority: 47 },
+      { type: 'TXT', name: `cf-bounce._domainkey.${name ?? ''}`, content: 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN' },
+    ]);
+  }
+
   private zoneCall(call: CloudflareCall): CloudflareHttpResponse | null {
     const zone = /^\/zones\/([^/?]+)\/(.+)$/u.exec(call.path);
     const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
@@ -162,7 +186,8 @@ class FakeCloudflare implements CloudflareTransport {
       return { status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }], result: null } };
     }
 
-    if (rest === 'email/routing/enable') { this.routing.enabled.add(id);
+    // Email Routing is enabled through its DNS: `routing/enable` is deprecated and not served here.
+    if (rest === 'email/routing/dns' && call.method === 'POST') { this.routing.enabled.add(id);
 
  return ok({ enabled: true }); }
 
@@ -170,22 +195,7 @@ class FakeCloudflare implements CloudflareTransport {
 
  return ok({ enabled: true }); }
 
-    if (rest === 'email/sending/subdomains') {
-      const name = bodyText(call.body ?? {}, 'name');
-
-      this.routing.sending.set(id, name);
-
-      return ok({ id: `sending-${name}`, name });
-    }
-
-    if (/^email\/sending\/subdomains\/[^/]+\/dns$/u.test(rest)) {
-      const name = this.routing.sending.get(id) ?? '';
-
-      return ok([
-        { type: 'MX', name: `cf-bounce.${name}`, content: 'route1.mx.cloudflare.net', priority: 47 },
-        { type: 'TXT', name: `cf-bounce._domainkey.${name}`, content: 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN' },
-      ]);
-    }
+    if (rest.startsWith('email/sending/subdomains')) return this.sendingCall(id, rest, call);
 
     if (rest.startsWith('dns_records?')) {
       const type = /type=([^&]+)/u.exec(rest)?.[1];
@@ -713,6 +723,15 @@ describe('a guided run', () => {
       'TXT cf-bounce._domainkey.raman.dev v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN',
       'TXT _dmarc.raman.dev v=DMARC1; p=none; rua=mailto:dmarc@raman.dev',
     ]);
+  });
+
+  test('a domain already sending is onboarded again without a second sending domain, its records read by its tag', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.routing.sending.set('zone-raman', 'raman.dev');
+    const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
+
+    expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done', detail: expect.stringContaining('Mail onboarded on raman.dev') });
+    expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.raman.dev', 'TXT cf-bounce._domainkey.raman.dev', 'TXT _dmarc.raman.dev']);
   });
 
   test('a domain\'s own DMARC and the records it already holds are kept, not written again', async () => {

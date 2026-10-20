@@ -2,7 +2,8 @@
 // on the zone with a catch-all to this Worker, Email Sending for the domain and its DNS records, and `_dmarc` where
 // the domain has none. Each call is made only when the deploy's token may; what it may not do is asked of the owner,
 // named exactly, and the deployment goes on without mail rather than failing. Paths are those wrangler 4.x calls
-// (`src/email-routing/*`), read 2026-10-20.
+// (`src/email-routing/*`) and the API reference names, read 2026-10-20: routing is enabled through its DNS (`/enable` is
+// deprecated), and a sending subdomain is named by its `tag`.
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
@@ -18,7 +19,7 @@ function dmarcRecord(domain: string): string {
 
 const ZonesSchema = v.array(v.object({ id: v.string(), name: v.string() }));
 
-const SendingDomainSchema = v.object({ id: v.string(), name: v.string() });
+const SendingDomainSchema = v.object({ tag: v.string(), name: v.string() });
 
 const DnsRecordsSchema = v.array(v.object({
   type: v.string(), name: v.string(), content: v.string(), priority: v.optional(v.number()), ttl: v.optional(v.number()),
@@ -68,6 +69,16 @@ async function ensureRecords(context: DeployContext, zone: string, records: read
   return asked;
 }
 
+/** The domain's sending subdomain: the one it has, else made now; null where the token may not. */
+async function sendingDomain(context: DeployContext, zone: string, domain: string): Promise<v.InferOutput<typeof SendingDomainSchema> | null> {
+  const held = await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains` }, v.array(SendingDomainSchema));
+
+  if (held === null) return null;
+
+  return held.find((each) => each.name === domain)
+    ?? await allowed(context, { method: 'POST', path: `/zones/${zone}/email/sending/subdomains`, body: { name: domain } }, SendingDomainSchema);
+}
+
 const recordLine = (record: DnsRecord): string => `${record.type} ${record.name} ${record.priority === undefined ? '' : `${String(record.priority)} `}${record.content}`;
 
 export function mailStep(inputs: DeployInputs) {
@@ -89,7 +100,7 @@ export function mailStep(inputs: DeployInputs) {
         }
 
         const asks: string[] = [];
-        const routed = await allowed(context, { method: 'POST', path: `/zones/${zone}/email/routing/enable`, body: {} }, v.unknown());
+        const routed = await allowed(context, { method: 'POST', path: `/zones/${zone}/email/routing/dns`, body: { name: domain } }, v.unknown());
 
         const catchAll = routed === null ? null : await allowed(context, {
           method: 'PUT', path: `/zones/${zone}/email/routing/rules/catch_all`,
@@ -101,8 +112,8 @@ export function mailStep(inputs: DeployInputs) {
             + 'Or give the deploy token the zone\'s "Email Routing Rules: Edit" and "Zone Settings: Edit".');
         }
 
-        const sending = await allowed(context, { method: 'POST', path: `/zones/${zone}/email/sending/subdomains`, body: { name: domain } }, SendingDomainSchema);
-        const records = sending === null ? null : await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.id}/dns` }, DnsRecordsSchema);
+        const sending = await sendingDomain(context, zone, domain);
+        const records = sending === null ? null : await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema);
 
         if (sending === null || records === null) {
           asks.push(`In the dashboard, open ${domain}, then Email, then Email Sending: enable it for ${domain} and add the records it lists. Sending needs Workers Paid.`);
