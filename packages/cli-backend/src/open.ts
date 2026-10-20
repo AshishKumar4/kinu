@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import type { LLMProviderConfig } from '@kinu.run/core';
+import type { LLMProviderConfig, ToolBoundary } from '@kinu.run/core';
 import {
   agentStatusFacts, initWorkspaceSchema, initActorStateSchema, memoryBytes,
 } from '@kinu.run/core';
@@ -34,6 +34,8 @@ interface CLIOpenOptions {
   /** The folder the workspace works in; see `CLIRuntimeConfig.cwd`. */
   cwd: string;
   checkpointKeep?: number;
+  /** A measured run's calls meet this instead of the world (`toolsBehindBoundary`); every agent it hires inherits it. */
+  boundary?: ToolBoundary;
 }
 
 export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;

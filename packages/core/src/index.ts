@@ -1176,7 +1176,7 @@ export { explainSandboxError } from './tools/sandbox-errors';
 
 export { stoppedProgram } from './execution/program-stop';
 
-export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode, toolsBehindBoundary, type ToolBoundary } from './execution/work-mode';
 
 export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 
@@ -1891,7 +1891,7 @@ export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 // Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
   REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
-  createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementRequestView,
+  createRefinementStore, evolutionDebt, initRefinementTables, refinementRequestView,
   refinementStagingPath, RefinementRequestViewSchema,
   type EvolutionDebt, type RefinementDeps,
   type RefinementDisposition, type RefinementEdit,
@@ -1904,7 +1904,7 @@ export {
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
 export {
-  listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+  listRefinements, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
 export { activateDreamSkills, dreamSkillsHidden } from './evolution/refinement-skill';

@@ -643,6 +643,9 @@ export class LocalAgentHost {
     if (input.ws.profileAuthority) sessionOpts.profileAuthority = input.ws.profileAuthority;
 
     if (input.ws.providerRevision) sessionOpts.providerRevision = input.ws.providerRevision;
+
+    // A hire's open config is its parent's (`childOpenConfig`), so a measured run's boundary holds for every agent in it.
+    if (input.ws.openConfig.boundary) sessionOpts.boundary = input.ws.openConfig.boundary;
     const session = new LocalAgentSession(sessionOpts);
 
     const entry: HostEntry = {
@@ -1485,7 +1488,6 @@ export class LocalAgentHost {
       await this.drive(entry, async () => {
         await entry.session.flushPendingDrains();
         await this.drainAssignedWork(entry);
-        await entry.session.runEvolutionAnswer(Date.now());
       });
     }, { agent: entry.key, source });
   }
