@@ -8,7 +8,6 @@ import {
   JsonValueSchema,
   type EmailThreadAddr, type JsonValue,
 } from '@kinu.run/core';
-import { agentEmailAddress } from './inbound';
 import type { EmailOutbox, OutboundEmailMessage } from '@kinu.run/core';
 import { Cause, Effect } from 'effect';
 import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -158,8 +157,11 @@ export interface OwnerEmailDeps {
   outbox: EmailOutbox;
 }
 
+/** A machine's own address on the deployment's domain: it is sent from and receives nothing (mail/mailname-do.ts reserves it). */
+const NOREPLY_LOCAL_PART = 'noreply';
+
 /** Returns false when email is not configured (a capability, never a requirement). `key` is a stable
- *  idempotency key: a re-fire never double-sends. */
+ *  idempotency key: a re-fire never double-sends. Sent from `noreply@`: a note, not a thread to answer. */
 export async function sendOwnerEmail(
   deps: OwnerEmailDeps,
   note: { subject: string; text: string; key: string },
@@ -168,7 +170,7 @@ export async function sendOwnerEmail(
 
   const result = await deps.outbox.send(deps.email, `owner:${note.key}`, {
     from: {
-      email: agentEmailAddress(deps.agentName, deps.emailDomain),
+      email: `${NOREPLY_LOCAL_PART}@${deps.emailDomain.trim().toLowerCase()}`,
       name: deps.agentDisplayName,
     },
     to: deps.ownerEmail,

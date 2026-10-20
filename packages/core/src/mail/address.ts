@@ -22,12 +22,6 @@ export interface MailRecipient {
   readonly tag: string | null;
 }
 
-/** A box by the labels its address uses (`mailLabelOf` of a workspace's name; an agent's name). */
-export type MailBoxOwner =
-  | { readonly kind: 'person' }
-  | { readonly kind: 'workspace'; readonly workspace: string }
-  | { readonly kind: 'agent'; readonly workspace: string; readonly agent: string };
-
 /** The box an address names on `domain`, or null when it names none. */
 export function parseMailRecipient(address: string, domain: string): MailRecipient | null {
   const at = address.lastIndexOf('@');
@@ -51,13 +45,6 @@ export function parseMailRecipient(address: string, domain: string): MailRecipie
 /** The address of the box at `path` under `username`. */
 export function mailAddressOf(username: string, path: string, domain: string): string {
   return `${path === '' ? '' : `${path}.`}${username}@${domain}`;
-}
-
-/** The path of a box: the person's, a workspace's, or an agent's in its workspace. */
-export function mailPathOf(owner: MailBoxOwner): string {
-  if (owner.kind === 'person') return '';
-
-  return owner.kind === 'workspace' ? owner.workspace : `${owner.agent}.${owner.workspace}`;
 }
 
 /**

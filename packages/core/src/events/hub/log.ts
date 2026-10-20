@@ -219,6 +219,7 @@ const EmailPayloadSchema = v.object({
   })),
   body_path: v.optional(v.string()),
   body_unsaved: v.optional(v.string()),
+  mail: v.optional(v.object({ box: v.string(), thread: v.string(), message: v.string() })),
 });
 
 const InternalPayloadSchema = v.object({ kind: v.string(), data: v.unknown() });

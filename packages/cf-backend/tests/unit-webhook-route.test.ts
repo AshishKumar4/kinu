@@ -96,7 +96,6 @@ function hubObject(): HubTarget {
     cancelTrigger: refuse('cancelTrigger'),
     listRecentEvents: refuse('listRecentEvents'),
     getEmailIngress: refuse('getEmailIngress'),
-    setEmailAllowlist: refuse('setEmailAllowlist'),
     setEmailNotifications: refuse('setEmailNotifications'),
   };
 }

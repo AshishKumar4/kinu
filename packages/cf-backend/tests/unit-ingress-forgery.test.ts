@@ -1,11 +1,17 @@
 /**
  * Forged ingress through the real `worker.fetch` / `worker.email` into a real OrchestratorAgent;
  * defends: an object that stopped verifying signatures or senders while stubbed suites stay green.
+ * Mail is filed by a real Mailbox store and judged by Cloudflare's verdict (docs/MAIL.md §4), never by its From.
  * The clock is pinned: the HMAC replay window and the dedupe bucket are both five minutes.
  */
 import { afterAll, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
 import * as v from 'valibot';
-import { hmacSha256Hex } from '@kinu.run/core';
+import { hmacSha256Hex, initMailboxTables } from '@kinu.run/core';
+import { MailStore } from '../src/mail/store';
+import { parseMail } from '../src/mail/parse';
+import { makeSqlExec } from '../../core/tests/helpers';
 import {
   orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
   type RecordedUserPlaneCalls,
@@ -25,7 +31,7 @@ const WORKSPACE = 'harness-actor';
 
 const EMAIL_DOMAIN = 'agents.example.com';
 
-const AGENT_ADDRESS = `${WORKSPACE}@${EMAIL_DOMAIN}`;
+const AGENT_ADDRESS = `${WORKSPACE}.owner@${EMAIL_DOMAIN}`;
 
 const OWNER_EMAIL = 'owner@example.com';
 
@@ -67,11 +73,28 @@ function workspace(): Workspace {
   harness.agent.harnessHoldsCapability('harness-token');
 
   const activations: string[] = [];
+  const sql = makeSqlExec(new Database(':memory:'));
+
+  initMailboxTables(sql);
+
+  const mailbox = new MailStore({
+    sql, domain: EMAIL_DOMAIN, now: () => Date.now(), id: () => crypto.randomUUID(), parse: parseMail,
+    blobs: { put: () => Promise.resolve(), text: () => Promise.resolve(null), delete: () => Promise.resolve() },
+    digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+  });
+
+  mailbox.open({ userId: 'u-owner', email: OWNER_EMAIL, username: 'owner', assistant: null });
+  mailbox.boxFor({ kind: 'workspace', workspace: WORKSPACE, name: WORKSPACE, actorId: harness.agent.harnessMainActorId() });
   const view: Partial<Env> = {};
   Object.assign(view, {
     AUTH_KV: makeKv(),
     CLI_PUBLIC_ORIGIN: ORIGIN,
     EMAIL_DOMAIN,
+    MAILNAME: {
+      idFromName: (label: string) => label,
+      get: () => ({ lookup: () => Promise.resolve({ label: 'owner', user_id: 'u-owner', kind: 'username', target_path: null, state: 'active' }) }),
+    },
+    MAILBOX: { idFromName: (userId: string) => userId, get: () => ({ deliver: (input: Parameters<MailStore['deliver']>[0]) => mailbox.deliver(input) }) },
     WEBHOOK_ROUTE_SECRET: ROUTE_SECRET,
     OrchestratorAgent: {
       idFromName: (name: string) => name,
@@ -124,20 +147,32 @@ function signed(timestamp: number): Promise<string> {
 
 interface ConstructedMail {
   readonly message: ForwardableEmailMessage;
-  /** Unauthorized mail is dropped, not rejected, so an agent address is no existence oracle. */
+  /** Mail to a box the account has is kept, never rejected: only an unknown address is refused at SMTP time. */
   readonly rejections: string[];
   readonly forwards: string[];
 }
 
-/** `headerFrom` is the sender-written MIME `From:`; the gate must read the envelope sender. */
+/** The fields Cloudflare's MX adds above everything a sender wrote: its Received, and its verdict for `domain`. */
+function cloudflareStamp(dmarc: 'pass' | 'fail' | 'none', domain: string): string[] {
+  return [
+    'Received: from mx.evil.example by cloudflare-email.net (unknown) id 7d1a; Sun, 01 Mar 2026 12:00:00 +0000',
+    `Authentication-Results: mx.cloudflare.net; dkim=${dmarc === 'pass' ? 'pass' : 'none'} header.d=${domain}; dmarc=${dmarc} header.from=${domain} policy.dmarc=reject; spf=pass smtp.mailfrom=${domain}`,
+  ];
+}
+
+/** `headerFrom` is the sender-written MIME `From:`; `stamp` is what Cloudflare's MX wrote above it; `forged` is what the sender wrote above its own From. */
 function inboundMail(opts: {
   envelopeFrom: string;
   headerFrom?: string;
   messageId?: string;
+  stamp: readonly string[];
+  forged?: readonly string[];
 }): ConstructedMail {
   const messageId = opts.messageId ?? '<forgery-1@mail.example.com>';
 
   const raw = [
+    ...opts.stamp,
+    ...opts.forged ?? [],
     `From: ${opts.headerFrom ?? opts.envelopeFrom}`,
     `To: ${AGENT_ADDRESS}`,
     'Subject: Ship it',
@@ -165,10 +200,10 @@ function inboundMail(opts: {
   });
 
   // SAFETY: every member the inbound path reads is constructed by the
-  // `Object.assign` above — `from`, `to`, `headers` and `raw`, verified against
-  // the bodies of `handleInboundEmail` and `routeInboundEmail` — and the three
-  // disposition methods the handler's type declares are constructed alongside
-  // them. Nothing unassigned is reachable through this cast.
+  // `Object.assign` above — `from`, `to`, `headers`, `raw` and `rawSize`, verified
+  // against the bodies of `handleInboundMail` and `routeInboundMail` — and the
+  // three disposition methods the handler's type declares are constructed
+  // alongside them. Nothing unassigned is reachable through this cast.
   return { message: partial as ForwardableEmailMessage, rejections, forwards };
 }
 
@@ -273,23 +308,47 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
 });
 
 describe('hostile mail reaches no event log', () => {
-  test('a forged From header does not make a stranger the owner', async () => {
+  test('the owner\'s address in From, with the owner\'s envelope too, wakes nothing when Cloudflare did not pass it', async () => {
     const ws = workspace();
-    const mail = inboundMail({ envelopeFrom: ATTACKER_EMAIL, headerFrom: OWNER_EMAIL });
+    const mail = inboundMail({ envelopeFrom: OWNER_EMAIL, headerFrom: OWNER_EMAIL, stamp: cloudflareStamp('fail', 'example.com') });
 
     await worker.email(mail.message, ws.env);
 
-    // The gate read the authenticated envelope sender, not the typed header.
+    // The envelope is the sender's to choose: the verdict is Cloudflare's, and it said fail.
     expect(await ws.events('email')).toEqual([]);
     expect(mail.rejections).toEqual([]);
     expect(mail.forwards).toEqual([]);
   });
 
-  test("the owner's mail is admitted once, and the edge's redelivery adds no second event", async () => {
+  test('a sender\'s own Authentication-Results claiming the owner passed wakes nothing', async () => {
+    const ws = workspace();
+
+    const mail = inboundMail({
+      envelopeFrom: ATTACKER_EMAIL, headerFrom: OWNER_EMAIL, stamp: cloudflareStamp('none', 'example.com'),
+      forged: ['Authentication-Results: mx.cloudflare.net; dkim=pass header.d=example.com; dmarc=pass header.from=example.com policy.dmarc=reject'],
+    });
+
+    await worker.email(mail.message, ws.env);
+    expect(await ws.events('email')).toEqual([]);
+  });
+
+  test('a message with no Cloudflare stamp at all, whatever it claims, wakes nothing', async () => {
+    const ws = workspace();
+
+    const mail = inboundMail({
+      envelopeFrom: OWNER_EMAIL, stamp: [],
+      forged: cloudflareStamp('pass', 'example.com').slice(1),
+    });
+
+    await worker.email(mail.message, ws.env);
+    expect(await ws.events('email')).toEqual([]);
+  });
+
+  test("the owner's verified mail is admitted once, and the edge's redelivery adds no second event", async () => {
     const ws = workspace();
 
     const mail = () => inboundMail({
-      envelopeFrom: OWNER_EMAIL, messageId: '<retried@mail.example.com>',
+      envelopeFrom: OWNER_EMAIL, messageId: '<retried@mail.example.com>', stamp: cloudflareStamp('pass', 'example.com'),
     });
 
     await worker.email(mail().message, ws.env);

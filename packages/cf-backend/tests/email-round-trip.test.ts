@@ -1,11 +1,18 @@
-// Mail in and mail out, as the Worker takes it: raw MIME at the `email()` entry, the workspace's receipt, the turn it
-// opens, and that turn's answer threaded back to the sender; a refused send retried by the next wake; a redelivery
-// answered once; and an entry that cannot reach the workspace failing by name without its cause's secrets.
+// Mail in and mail out, as the Worker takes it: raw MIME at the `email()` entry, filed by the account's Mailbox, the
+// owner's receipt, the turn their verified mail opens, and that turn's answer threaded back to them; a refused send
+// retried by the next wake; a redelivery answered once; and an entry that cannot reach the Mailbox failing by name
+// without its cause's secrets.
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
 import * as v from 'valibot';
+import { initMailboxTables } from '@kinu.run/core';
 import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { scriptedTurnModel, createRecordingLogger } from '@kinu.run/test-utils';
-import { handleInboundEmail } from '../src/email/handler';
+import { handleInboundMail } from '../src/mail/handler';
+import { MailStore } from '../src/mail/store';
+import { parseMail } from '../src/mail/parse';
+import { makeSqlExec } from '../../core/tests/helpers';
 import { fireSoonestWake, orchestratorHarness, until, type RecordedUserPlaneCalls } from './helpers/actor-harness';
 import { refuseUnlistedHeaders } from './helpers/email-service';
 
@@ -23,9 +30,14 @@ const SentSchema = v.object({
 
 type Sent = v.InferOutput<typeof SentSchema>;
 
-/** One message as the platform hands the Worker's `email()` entry: envelope, headers and the raw MIME stream. */
+/**
+ * One message as the platform hands the Worker's `email()` entry: envelope, headers and the raw MIME stream, opening
+ * with the two fields Cloudflare's MX adds, as measured (docs/MAIL.md §4): its Received, and its verdict.
+ */
 function inbound(to: string, mime: { subject: string; messageId: string; inReplyTo?: string; references?: string; body: string }) {
   const raw = [
+    'Received: from mail.example.com by cloudflare-email.net (unknown) id 8c2f; Mon, 19 Oct 2026 19:15:01 +0000',
+    'Authentication-Results: mx.cloudflare.net; dkim=pass header.d=example.com header.s=s1; dmarc=pass header.from=example.com policy.dmarc=none; spf=pass smtp.mailfrom=example.com',
     'From: owner@example.com', `To: ${to}`, `Subject: ${mime.subject}`, `Message-ID: ${mime.messageId}`,
     ...(mime.inReplyTo === undefined ? [] : [`In-Reply-To: ${mime.inReplyTo}`]),
     ...(mime.references === undefined ? [] : [`References: ${mime.references}`]),
@@ -36,8 +48,31 @@ function inbound(to: string, mime: { subject: string; messageId: string; inReply
     from: 'owner@example.com', to, rawSize: raw.length,
     headers: new Headers({ 'message-id': mime.messageId }),
     raw: new Response(raw).body,
+    setReject: (reason: string) => { throw new Error(`refused: ${reason}`); },
   });
 }
+
+/** The account's Mailbox over SQLite, opened for owner@example.com, with its workspace's box read by its main agent. */
+function mailboxFor(workspace: string, actorId: string) {
+  const sql = makeSqlExec(new Database(':memory:'));
+
+  initMailboxTables(sql);
+
+  const store = new MailStore({
+    sql, domain: DOMAIN, now: () => Date.now(), id: () => crypto.randomUUID(), parse: parseMail,
+    blobs: { put: () => Promise.resolve(), text: () => Promise.resolve(null), delete: () => Promise.resolve() },
+    digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+  });
+
+  store.open({ userId: 'u-owner', email: 'owner@example.com', username: 'owner', assistant: null });
+
+  return {
+    address: store.boxFor({ kind: 'workspace', workspace, name: workspace, actorId }).address,
+    deliver: (input: Parameters<MailStore['deliver']>[0]) => store.deliver(input),
+  };
+}
+
+const CLAIM = { label: 'owner', user_id: 'u-owner', kind: 'username', target_path: null, state: 'active' } as const;
 
 test('an email opens a turn whose answer threads back to the sender; a refused send is retried, a redelivery answered once', async () => {
   const sent: Sent[] = [];
@@ -67,12 +102,19 @@ test('an email opens a turn whose answer threads back to the sender; a refused s
     warnings: [],
   }) });
 
-  const address = `${agent.name}@${DOMAIN}`;
-  const env = Object.assign(Object.create(null), { EMAIL_DOMAIN: DOMAIN, OrchestratorAgent: { idFromName: (name: string) => name, get: () => agent } });
+  const mailbox = mailboxFor(agent.name, agent.harnessMainActorId());
+  const address = mailbox.address;
+
+  const env = Object.assign(Object.create(null), {
+    EMAIL_DOMAIN: DOMAIN, OrchestratorAgent: { idFromName: (name: string) => name, get: () => agent },
+    MAILNAME: { idFromName: (label: string) => label, get: () => ({ lookup: () => Promise.resolve(CLAIM) }) },
+    MAILBOX: { idFromName: (userId: string) => userId, get: () => mailbox },
+  });
+
   const replies = () => sent.filter((mail) => mail.headers?.['Auto-Submitted'] === 'auto-replied' && mail.text === 'Yes — staging is green.');
 
   const deliver = async (mime: Parameters<typeof inbound>[1]) => {
-    await handleInboundEmail(inbound(address, mime), env);
+    await handleInboundMail(inbound(address, mime), env);
     await fireSoonestWake(agent, db);
   };
 
@@ -100,7 +142,7 @@ test('an email opens a turn whose answer threads back to the sender; a refused s
   // The platform delivers the first message again: no second receipt, no second turn.
   const before = sent.length;
 
-  await handleInboundEmail(inbound(address, first), env);
+  await handleInboundMail(inbound(address, first), env);
 
   expect({
     receipt: {
@@ -123,19 +165,20 @@ test('an email opens a turn whose answer threads back to the sender; a refused s
   });
 });
 
-test('an email the workspace cannot take fails as a classified error, logged by name, with no secret of its cause', async () => {
+test('an email the Mailbox cannot take fails as a classified error, logged by name, with no secret of its cause', async () => {
   const logs = createRecordingLogger();
   const restore = setDiagnosticsSink(logs);
 
   const env = Object.assign(Object.create(null), {
     EMAIL_DOMAIN: DOMAIN,
-    OrchestratorAgent: {
+    MAILNAME: { idFromName: (label: string) => label, get: () => ({ lookup: () => Promise.resolve(CLAIM) }) },
+    MAILBOX: {
       idFromName: () => { throw new Error('object storage unreachable at node sk-live-SECRET'); },
       get: () => { throw new Error('unreachable'); },
     },
   });
 
-  const failed = handleInboundEmail(inbound(`atlas@${DOMAIN}`, { subject: 'hi', messageId: '<x@mail.example.com>', body: 'hi' }), env);
+  const failed = handleInboundMail(inbound(`owner@${DOMAIN}`, { subject: 'hi', messageId: '<x@mail.example.com>', body: 'hi' }), env);
 
   await expect(failed).rejects.toBeInstanceOf(KinuError);
   await expect(failed).rejects.not.toThrow(/sk-live-SECRET/);

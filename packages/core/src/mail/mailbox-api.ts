@@ -89,6 +89,12 @@ export interface MailThreadView {
   readonly messages: readonly MailMessageView[];
 }
 
+/** A view's threads, newest first, and how many of them are unread. */
+export interface MailListing {
+  readonly threads: readonly MailThreadSummary[];
+  readonly unread: number;
+}
+
 export interface MailListQuery {
   readonly view: MailView;
   /** One box, or every box the account has. */
@@ -101,8 +107,14 @@ export interface MailListQuery {
 
 /** What an arrival came to: where it was filed, and whom it woke, on whose word. */
 export interface MailDelivery {
+  /** The box it was filed in. */
+  readonly box: string;
   readonly messageId: string;
   readonly threadId: string;
+  /** Its Message-ID and References, for the reply thread the owner's instruction opens. */
+  readonly headerId: string | null;
+  readonly references: string | null;
+  readonly attachments: readonly { readonly filename: string; readonly content_type: string; readonly size: number }[];
   readonly duplicate: boolean;
   readonly verified: boolean;
   readonly from: MailParty;
@@ -129,12 +141,18 @@ export interface MailOutgoing {
 export interface MailboxCalls {
   /** Makes the account's mail identity and its person's box; a second call changes nothing. */
   open(account: { readonly userId: string; readonly email: string; readonly username: string; readonly assistant: { readonly workspace: string; readonly actorId: string } | null }): Promise<MailBox>;
-  /** The box a workspace or agent reads, made on first ask. */
-  boxFor(owner: { readonly kind: 'workspace' | 'agent'; readonly workspace: string; readonly label: string; readonly actorId: string }): Promise<MailBox>;
+  /**
+   * The box a workspace's main agent (`workspace`) or another of its agents (`agent`, named `name`) reads, made on first
+   * ask. Its address labels come from the names (`mailLabelOf`); a clash within the account gets `-2`, `-3`, ….
+   */
+  boxFor(owner: { readonly kind: 'workspace' | 'agent'; readonly workspace: string; readonly name: string; readonly actorId: string }): Promise<MailBox>;
   boxes(): Promise<readonly MailBox[]>;
-  /** Files a raw message that reached `recipient`; decides, by the box's wake and the verdict, whom it wakes. */
-  deliver(input: { readonly raw: Uint8Array; readonly envelopeFrom: string; readonly recipient: MailRecipient }): Promise<MailDelivery>;
-  list(query: MailListQuery): Promise<{ readonly threads: readonly MailThreadSummary[]; readonly unread: number }>;
+  /**
+   * Files a raw message that reached `recipient`; decides, by the box's wake and the verdict, whom it wakes. Null when
+   * the account has no box at that path: the router refuses the message as an unknown address.
+   */
+  deliver(input: { readonly raw: Uint8Array; readonly envelopeFrom: string; readonly recipient: MailRecipient }): Promise<MailDelivery | null>;
+  list(query: MailListQuery): Promise<MailListing>;
   thread(id: string): Promise<MailThreadView | null>;
   update(id: string, change: { readonly read?: boolean; readonly trashed?: boolean; readonly important?: string | null }): Promise<MailThreadSummary>;
   /** Saves (or replaces) the thread's draft; the person sends it themselves from Drafts. */

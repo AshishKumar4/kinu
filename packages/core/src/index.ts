@@ -91,6 +91,14 @@ export {
 
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
 
+export { initMailNameTables, initMailboxTables } from './state/mail-schema';
+
+export { mailVerdict, type MailVerdict } from './mail/verdict';
+
+export { isMailLabel, mailAddressOf, mailLabelOf, parseMailRecipient, type MailRecipient } from './mail/address';
+
+export type * from './mail/mailbox-api';
+
 export {
   DEFAULT_SOUL_MD,
   SOUL_FILE,

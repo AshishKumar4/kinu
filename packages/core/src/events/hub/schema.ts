@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS triggers (
                               CHECK(kind IN (
                                 'webhook_durable', 'webhook_ephemeral',
                                 'timer_oneshot', 'timer_cron',
+                                -- Retired with the old mail ingress (docs/MAIL.md §11): no row holds it, and none
+                                -- is written; the CHECK keeps it so deployed storage's definition is unchanged.
                                 'email_route'
                               )),
   spec                TEXT    NOT NULL DEFAULT '{}',

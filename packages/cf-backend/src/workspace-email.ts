@@ -1,15 +1,14 @@
 /**
- * A workspace's email: the mail its address admits, the receipt a fresh admission sends, the senders its owner allows,
- * and the away-channel notes the owner is sent. The workspace object keeps the methods its routes reach and answers
- * each from here.
+ * A workspace's email: the arrivals its account's Mailbox wakes it for (docs/MAIL.md §3), the receipt the owner's
+ * instruction gets, and the away-channel notes the owner is sent. The workspace object keeps the methods its routes
+ * reach and answers each from here.
  */
 import {
-  EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
-  type EmailAdmission, type EmailInboxDeps, type EmailOutbox, type IncomingEmail,
+  EmailInbox, planOwnerNotification,
+  type EmailInboxDeps, type EmailOutbox, type MailAdmission, type MailArrival,
 } from '@kinu.run/core';
 import type { Effect } from 'effect';
 import { logged } from '@kinu.run/core/obs';
-import { agentEmailAddress } from './email/inbound';
 import { sendInboundEmailReceipt, sendOwnerEmail } from './email/outbound';
 import type { UserHubClient } from './account-reads';
 import type { UserCaller } from '@kinu.run/core';
@@ -30,10 +29,8 @@ export interface WorkspaceEmailHost extends Omit<EmailInboxDeps, 'ownerEmail'> {
   detach(work: Effect.Effect<void>): void;
 }
 
-/** The workspace's address, the senders it admits beside the owner, and whether the owner is mailed while away. */
+/** Whether the owner is mailed while away. Its addresses and who may wake it are the Mailbox's (mail/routes.ts). */
 export interface EmailIngress {
-  address: string | null;
-  allowlist: string[];
   notifications: boolean;
 }
 
@@ -55,12 +52,12 @@ export class WorkspaceEmail {
     return (await stub.getProfile(caller))?.email ?? null;
   }
 
-  /** Trust gate, publish, and reply thread run here atomically. Receipt is awaited (floating promises die on eviction)
-   * and sent only on fresh admission. */
-  async accept(email: IncomingEmail): Promise<EmailAdmission> {
-    const admission = await this.inbox.accept(email);
+  /** Publish and reply thread run here atomically. Receipt is awaited (floating promises die on eviction) and sent only
+   * on the owner's fresh instruction: input never mails its sender back. */
+  async accept(arrival: MailArrival, actorId: string): Promise<MailAdmission> {
+    const admission = await this.inbox.accept(arrival, actorId);
 
-    if (admission.admitted && !admission.duplicate && admission.thread && admission.event_id) {
+    if (admission.admitted && !admission.duplicate && admission.thread !== null) {
       await sendInboundEmailReceipt({
         email: this.host.env.EMAIL,
         agentDisplayName: this.host.displayName(),
@@ -72,18 +69,7 @@ export class WorkspaceEmail {
   }
 
   ingress(): EmailIngress {
-    const domain = this.host.env.EMAIL_DOMAIN;
-
-    return {
-      address: domain ? agentEmailAddress(this.host.name, domain) : null,
-      allowlist: readEmailAllowlist(this.host.triggers),
-      notifications: this.host.notifications(),
-    };
-  }
-
-  /** Owner's verified address is always allowed; an empty list revokes the email_route trigger. */
-  async allow(allow: string[]): Promise<{ allowlist: string[] }> {
-    return await setEmailAllowlist(this.host.triggers, allow, Date.now());
+    return { notifications: this.host.notifications() };
   }
 
   notify(enabled: boolean): Pick<EmailIngress, 'notifications'> {

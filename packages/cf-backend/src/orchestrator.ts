@@ -180,7 +180,7 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
-  type EmailAdmission, type IncomingEmail,
+  type MailAdmission, type MailArrival,
   PeerHub, type PeerMessage, type ReceiveResult,
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
@@ -7332,9 +7332,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Held across the activation, like the in-memory inbound rate window its inbox owns. */
   private get email(): WorkspaceEmail {
     this._email ??= new WorkspaceEmail({
-      log: this.eventLog,
+      log: (actorId) => new EventLog(this.watchedExec, this.agentBound(actorId).handle),
       replies: this.replyChannels,
-      triggers: this.triggerRegistry,
+      mainActorId: () => this.actorHandle().actorId,
       vfs: () => this.rt.storage.vfs,
       sql: this.ctx.storage.sql,
       onAdmitted: () => { this.armDurableWake(); },
@@ -7353,24 +7353,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._email;
   }
 
-  /** Pre-parse sender check so unauthorized senders cannot force a MIME parse; admits nothing,
-   * the delivery re-checks. */
-  async authorizeEmailSender(from: string): Promise<{ authorized: boolean; reason?: string }> {
-    return this.email.inbox.authorizes(from);
+  /**
+   * An arrival the account's Mailbox filed and decided wakes `actorId`, on the owner's word or as input (docs/MAIL.md
+   * §3). Worker-only: the mail router holds the stub, never a browser. Publish and reply thread run here atomically.
+   */
+  async mailArrived(arrival: MailArrival, actorId: string): Promise<MailAdmission> {
+    return await this.email.accept(arrival, actorId);
   }
 
-  /** Email counterpart of acceptWebhookDelivery: trust gate, publish, and reply thread run here atomically. */
-  async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
-    return await this.email.accept(opts);
-  }
-
-  async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
+  async getEmailIngress(): Promise<{ notifications: boolean }> {
     return this.email.ingress();
-  }
-
-  /** Reached only through the owner-authenticated + step-up route. */
-  async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
-    return await this.email.allow(allow);
   }
 
   async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {

@@ -13,7 +13,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach, MailAdmission } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
 import type { GalleryListingSync } from '@kinu.run/core/slates';
@@ -322,6 +322,16 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessMainTurnInFlight(): boolean { return this.mainChatTurn() !== null; }
   /** The owner's Stop of main's chat, as its window sends it. */
   async harnessStopMain(): Promise<void> { await this.cancelCurrentWork(); }
+  /** Main's id: the actor a workspace's own mailbox wakes. */
+  harnessMainActorId(): string { return this.actorHandle().actorId; }
+  /** The owner's verified mail to the workspace, as the mail router hands it on once the Mailbox filed it. */
+  harnessOwnerMail(n: number, words: string): Promise<MailAdmission> {
+    return this.mailArrived({
+      woke: 'owner', from: 'owner@example.com', to: 'workspace.owner@kinu.run', subject: `issue ${String(n)}`, instruction: words,
+      message_id: `<m-${String(n)}@example.com>`, references: null, attachments: [],
+      mail: { box: 'workspace', thread: `t-${String(n)}`, message: `m-${String(n)}` }, now: Date.now(),
+    }, this.actorHandle().actorId);
+  }
   /** The owner's words to main, admitted as its window admits them; resolves once reserved. */
   harnessAdmitMain(text: string, id: string, mode: WorkMode | undefined): Promise<void> {
     return this.hostedAdmit(this.actorHandle().actorId, { text, files: [], id, mode: mode ?? 'build' });

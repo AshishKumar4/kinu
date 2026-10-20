@@ -265,10 +265,7 @@ test('an email delivered to Main reads working until its drain takes it, and the
   endTick(agent);
   named();
 
-  const admission = await agent.acceptEmailDelivery({
-    from: 'owner@example.com', to: 'workspace@kinu.run', subject: 'status?', body_text: 'how is the deploy?',
-    message_id: '<m-1@example.com>', in_reply_to: null, references: null, attachments: [], now: Date.now(),
-  });
+  const admission = await agent.harnessOwnerMail(1, 'how is the deploy?');
 
   endTick(agent);
 

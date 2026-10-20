@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mailAddressOf, mailLabelOf, mailPathOf, parseMailRecipient } from '../src/mail/address';
+import { mailAddressOf, mailLabelOf, parseMailRecipient } from '../src/mail/address';
 
 const DOMAIN = 'kinu.run';
 
@@ -35,12 +35,6 @@ describe('a recipient names one box: the person, a workspace or an agent, under 
     }
 
     expect(mailAddressOf('ashish', 'scout.api-worker', DOMAIN)).toBe('scout.api-worker.ashish@kinu.run');
-  });
-
-  test('a workspace\'s box path is its name; an agent\'s is the agent\'s name under it', () => {
-    expect(mailPathOf({ kind: 'person' })).toBe('');
-    expect(mailPathOf({ kind: 'workspace', workspace: 'api-worker' })).toBe('api-worker');
-    expect(mailPathOf({ kind: 'agent', workspace: 'api-worker', agent: 'scout' })).toBe('scout.api-worker');
   });
 
   test('a workspace\'s name becomes its label: lowercased, dots and underscores as hyphens, cut to twenty', () => {

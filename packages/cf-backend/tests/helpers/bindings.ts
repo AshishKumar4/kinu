@@ -63,6 +63,8 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     ControlPlaneDO: unreachableObjects('ControlPlaneDO'),
     KinuDevbox: unreachableObjects('KinuDevbox'),
     DeployRunDO: unreachableObjects('DeployRunDO'),
+    MAILNAME: unreachableObjects('MAILNAME'),
+    MAILBOX: unreachableObjects('MAILBOX'),
     AUTH_KV: unreachableKvNamespace('AUTH_KV'),
     BROWSER: unreachableBrowser(),
     ASSETS: unreachableFetcher('ASSETS'),
