@@ -9,12 +9,14 @@ import {
   CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID,
   DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema, RELEASE_MANIFEST_PATH, authorizeUrl,
   mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
-  type DeployOptions,
+  type DeployChoice, type DeployOptions,
 } from '@kinu.run/core/deploy';
 import { objectNamed, createPkcePair, err, fetchDeployedAsset, json, safeJson, serveApp, sha256Hex, timingSafeEqual } from '@kinu.run/core';
 import * as v from 'valibot';
+import { Effect } from 'effect';
+import { attemptInItsWords, type KinuError } from '@kinu.run/core/obs';
 import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/cookies';
-import { beneath, type FamilyEnv } from '../api/context';
+import { beneath, noHead, type FamilyEnv } from '../api/context';
 import type { DeployRunDO } from './deploy-do';
 
 /** Long enough to read a permission list; short enough that a shared machine carries no usable half-leg. */
@@ -63,7 +65,7 @@ const RUN_PATH = /^\/api\/deploy\/runs\/([A-Za-z0-9_-]+)(\/[a-z/-]*)?$/u;
 /** The OAuth return; the door's API is `deployRoutes`. */
 export const deployCallbackRoutes = new Hono<FamilyEnv<Env, object>>();
 
-deployCallbackRoutes.all(DEPLOY_CALLBACK_PATH, async (c) => callback(c.req.raw, c.env, new URL(c.req.url)));
+deployCallbackRoutes.all(DEPLOY_CALLBACK_PATH, noHead<FamilyEnv<Env, object>>((c) => callback(c.req.raw, c.env, new URL(c.req.url))));
 
 export const deployRoutes = new Hono<FamilyEnv<Env, DeployVariables>>();
 
@@ -95,9 +97,9 @@ deployRoutes.all(`${DEPLOY_API}/runs/:run/socket`, async (c) => {
 deployRoutes.get(`${DEPLOY_API}/runs/:run`, async (c) => json({ body: await c.get('run').snapshot() }));
 
 // Read with the person's own token; neither answer is stored.
-deployRoutes.get(`${DEPLOY_API}/runs/:run/accounts`, async (c) => json({ body: await c.get('run').accounts() }));
+deployRoutes.get(`${DEPLOY_API}/runs/:run/accounts`, noHead<FamilyEnv<Env, DeployVariables>>((c) => cloudflareRead(() => c.get('run').accounts())));
 
-deployRoutes.get(`${DEPLOY_API}/runs/:run/zones`, async (c) => json({ body: await c.get('run').zones() }));
+deployRoutes.get(`${DEPLOY_API}/runs/:run/zones`, noHead<FamilyEnv<Env, DeployVariables>>((c) => cloudflareRead(() => c.get('run').zones())));
 
 // A POST, so the key authorizes it in a header; the navigated `location` carries only `state` and the challenge.
 deployRoutes.post(`${DEPLOY_API}/runs/:run/authorize`, async (c) => authorize(c.req.raw, c.env, c.get('run')));
@@ -215,35 +217,52 @@ async function authorize(request: Request, env: Env, stub: DurableObjectStub<Dep
   return handoff;
 }
 
-async function callback(request: Request, env: Env, url: URL): Promise<Response> {
+function callback(request: Request, env: Env, url: URL): Effect.Effect<Response, KinuError> {
   const state = url.searchParams.get('state') ?? '';
   const code = url.searchParams.get('code') ?? '';
   const runId = state.split('.')[0] ?? '';
+  const refused = url.searchParams.get('error');
+
+  // A declined consent or a refused scope (RFC 6749 § 4.1.2.1): the page shows Cloudflare's words and "Sign in again".
+  if (refused !== null) return Effect.succeed(burnt(toPage({ error: refused, error_description: url.searchParams.get('error_description') ?? '' })));
 
   if (!DEPLOY_RUN_ID.test(runId) || code === '') {
-    return burnt(err(400, 'That is not an authorization this flow started.'));
+    return Effect.succeed(burnt(err(400, 'That is not an authorization this flow started.')));
   }
 
   // Refused before the run is touched: a forwarded callback URL must stay unauthorized.
   const bound = readCookie(request, DEPLOY_STATE_COOKIE_NAME) ?? '';
 
   if (bound === '' || !timingSafeEqual(bound, sha256Hex(state))) {
-    return burnt(err(400, 'This browser did not start that authorization.'));
+    return Effect.succeed(burnt(err(400, 'This browser did not start that authorization.')));
   }
 
   const clientId = deployClientId(env);
 
-  if (clientId === '') return burnt(err(503, 'This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare.'));
+  if (clientId === '') return Effect.succeed(burnt(err(503, 'This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare.')));
 
   const redirectUri = new URL(DEPLOY_CALLBACK_PATH, url.origin).href;
 
-  const landed = await runStub(env, runId).landAuthorization(clientId, redirectUri, code, state);
+  // The token endpoint's refusal (a spent code, a client it does not know) reaches the person in its words.
+  return attemptInItsWords('io', () => runStub(env, runId).landAuthorization(clientId, redirectUri, code, state)).pipe(Effect.match({
+    onFailure: (failure) => burnt(toPage({ error: 'token_exchange_failed', error_description: failure.message })),
+    onSuccess: (landed) => burnt(landed ? toPage({ run: runId }) : err(400, 'That authorization is not one this run started.')),
+  }));
+}
 
-  if (!landed) return burnt(err(400, 'That authorization is not one this run started.'));
-
-  return burnt(new Response(null, {
+/** Back to the page, which reads these: `run`, or the OAuth refusal's `error` and `error_description`. */
+function toPage(params: Readonly<Record<string, string>>): Response {
+  return new Response(null, {
     status: 302,
-    headers: { location: `${DEPLOY_PAGE_PATH}?run=${encodeURIComponent(runId)}`, 'cache-control': 'no-store' },
+    headers: { location: `${DEPLOY_PAGE_PATH}?${new URLSearchParams(params).toString()}`, 'cache-control': 'no-store' },
+  });
+}
+
+/** Cloudflare's refusal of a read in its own words (its path, code and message), never a bare route error. */
+function cloudflareRead(read: () => Promise<readonly DeployChoice[]>): Effect.Effect<Response, KinuError> {
+  return attemptInItsWords('io', read).pipe(Effect.match({
+    onFailure: (failure) => err(502, failure.message),
+    onSuccess: (body) => json({ body }),
   }));
 }
 

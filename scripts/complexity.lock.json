@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-20",
-  "files": 3614,
-  "functions": 95149,
+  "files": 3642,
+  "functions": 95777,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -282,10 +282,6 @@
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
-      "complexity": 26
-    },
-    {
       "key": "packages/cf-backend/tests/workerd/fork-probe.ts#ForkSourceProbeDO.deliver",
       "complexity": 26
     },
@@ -431,10 +427,6 @@
     },
     {
       "key": "packages/core/src/web/hero-art.ts#SearchTree.stepLayer",
-      "complexity": 25
-    },
-    {
-      "key": "packages/core/tests/unit-deploy-flow.test.ts#FakeCloudflare.answer",
       "complexity": 25
     },
     {

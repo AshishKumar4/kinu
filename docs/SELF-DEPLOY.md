@@ -100,10 +100,14 @@ straight to disk.
 1. **Sign in with Cloudflare.** A self-managed OAuth client owned by Kinu,
    public with PKCE, so a deployment can refresh its own token without a
    client secret. Scopes (`CLOUDFLARE_DEPLOY_SCOPES` in
-   `packages/core/src/deploy/pkce.ts`): workers scripts, routes, KV, R2,
-   Vectorize, AI, AI Gateway, Secrets Store, Access, DNS write, zone read,
-   account read, user read, offline access. Every one is in the catalog; the
-   first client creation confirms each is selectable.
+   `packages/core/src/deploy/pkce.ts`) are the OAuth catalog's dot ids
+   (`GET /oauth/scopes`): workers scripts, routes, KV, R2, Vectorize, AI
+   Gateway, zone read, DNS write, the three mail scopes, user details,
+   account settings and offline access. The authorize endpoint refuses the
+   old colon names (`invalid_scope` for `account:read`, kinu.run 2026-10-20).
+   The mail scopes are the client's optional ones. A declined consent or a
+   refused scope comes back to the page with Cloudflare's `error` and
+   `error_description`, as does a refused code exchange.
 2. **Account and plan.** The lean deployment runs on the free plan. R2 needs
    a payment method on file. The sandbox needs Workers Paid and is off by
    default: with it off, the upload leaves out the `KinuDevbox` binding, and
@@ -114,13 +118,12 @@ straight to disk.
    `<name>.<subdomain>.workers.dev` by default, or a hostname in one of the
    account's zones, in which case the flow creates a Workers custom domain,
    which makes the DNS record.
-4. **Sign-in to your Kinu.** Cloudflare Access with one-time PIN, the way
-   Cloudflare OS does it, on the Zero Trust free tier. The flow creates the
-   Access application and a policy for the owner's email. The page sends only
-   that one email; adding more is not built. Kinu already verifies Access on
-   its control plane; the self-hosted profile verifies it on everything. No
-   OAuth app registrations at Google or GitHub, which is the part
-   non-technical people cannot do.
+4. **Sign-in to your Kinu.** Built-in sign-in (passkey or password): the
+   run mints a one-time setup link, `https://<address>/login?setup=<token>`,
+   shown when the run is done. The Worker holds only the token's digest, its
+   lapse (7 days) and the owner's Cloudflare email (`KINU_FIRST_OWNER_LINK`),
+   and the link creates the first owner once, with that email. No Zero Trust
+   setup and no Access application.
 5. **Models.** Default model from Workers AI's free tier. Optional keys for
    OpenAI, Anthropic and OpenRouter, stored as secrets on the deployment,
    never at kinu.run. Subscriptions shared from a connected device work the
@@ -130,8 +133,8 @@ straight to disk.
    existing WebSocket surface, and wipes the token at the end. Each step is
    idempotent, so a re-run resumes. In order: read the account and settle the
    address; create KV, the R2 buckets, the Vectorize index with the geometry
-   `release.json` states, the AI Gateway, the Access app and policy; seed the
-   runtime cache; mint the secrets; upload the Worker version with the
+   `release.json` states, the AI Gateway; seed the runtime cache; mint the
+   secrets and the first owner's setup link; upload the Worker version with the
    bindings and migrations from `release.json`; bind the address and deploy
    the new version at 0% beside the one serving; smoke-check `/api/health`
    through a version override, for the new version's id and the release's own

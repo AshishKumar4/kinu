@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
+  CLOUDFLARE_DEPLOY_SCOPES, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
   REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, localLayout, parseReleaseManifest, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
@@ -15,6 +16,7 @@ import type {
   MultipartUpload, ReleaseManifest, UpdateBuild,
 } from '../src/deploy/index';
 import { parseJsonObject, type JsonObject, type JsonValue } from '../src/utils/json';
+import { sha256Hex } from '../src/safety/argument-digest';
 
 const MANIFEST: ReleaseManifest = {
   version: '0.4.0+abc1234',
@@ -73,7 +75,6 @@ const INPUTS: DeployInputs = {
   instanceName: 'kinu',
   address: { kind: 'workers-dev', hostname: '', zoneId: '' },
   ownerEmail: 'owner@example.com',
-  accessEmails: ['owner@example.com', 'second@example.com'],
   providerKeyNames: [],
   sandbox: false,
 };
@@ -114,21 +115,6 @@ class FakeCloudflare implements CloudflareTransport {
 
   readonly gateways: string[] = [];
 
-  readonly apps: string[] = [];
-
-  /** Each Access policy, under the app it guards. */
-  readonly policies: { app: string; id: string; name: string; include: unknown }[] = [];
-
-  /** An app's policies listed, one added, or one replaced in place. */
-  private accessPolicy(method: string, [, app = '', id]: RegExpExecArray, body: JsonObject): JsonValue {
-    if (method === 'GET') return this.policies.filter((policy) => policy.app === app).map(({ id: held, name }) => ({ id: held, name }));
-    const policy = { app, id: id ?? `policy-${String(this.policies.length + 1)}`, name: bodyText(body, 'name'), include: body.include ?? null };
-
-    if (method === 'PUT') this.policies.splice(this.policies.findIndex((held) => held.id === id), 1, policy);
-    else this.policies.push(policy);
-
-    return { id: policy.id };
-  }
 
   readonly objects: string[] = [];
 
@@ -454,22 +440,6 @@ class FakeCloudflare implements CloudflareTransport {
       return { id: body.id ?? '' };
     }
 
-    if (path.endsWith('/access/apps') && call.method === 'GET') {
-      return this.apps.map((domain) => ({ id: `app-${domain}`, domain }));
-    }
-
-    if (path.endsWith('/access/apps')) {
-      const domain = bodyText(body, 'domain');
-
-      this.apps.push(domain);
-
-      return { id: `app-${domain}` };
-    }
-
-    const policyPath = /\/access\/apps\/([^/]+)\/policies(?:\/([^/]+))?$/.exec(path);
-
-    if (policyPath !== null) return this.accessPolicy(call.method, policyPath, body);
-
     if (path.endsWith('/workers/subdomain')) return { subdomain: 'acme' };
 
     if (path.endsWith('/subdomain')) return { enabled: true };
@@ -612,6 +582,9 @@ let ledger: ArrayLedger;
 
 let vault: MemoryVault;
 
+/** The setup links the runs held, in order. */
+let seats: { link: string; expiresAt: number }[];
+
 let progress: DeployProgress[];
 
 /** What an uploaded version answers; the prior version answers 200 with `PRIOR_BUILD`. */
@@ -634,13 +607,14 @@ const healthFetch: HttpGet = async (url, headers) => {
   });
 };
 
-async function contextFor(inputs: DeployInputs = INPUTS): Promise<DeployContext> {
+async function contextFor(inputs: DeployInputs = INPUTS, manifest: ReleaseManifest = MANIFEST): Promise<DeployContext> {
   return {
-    manifest: MANIFEST,
+    manifest,
     inputs,
     transport: cloudflare,
-    artifact: artifactFor(MANIFEST),
+    artifact: artifactFor(manifest),
     vault,
+    seat: { hold: async (link, expiresAt) => { seats.push({ link, expiresAt }); } },
     facts: factsFrom(await ledger.rows()),
     http: healthFetch,
     update: updating,
@@ -648,10 +622,10 @@ async function contextFor(inputs: DeployInputs = INPUTS): Promise<DeployContext>
   };
 }
 
-async function run(inputs: DeployInputs = INPUTS): Promise<DeployStepRow[]> {
+async function run(inputs: DeployInputs = INPUTS, manifest: ReleaseManifest = MANIFEST): Promise<DeployStepRow[]> {
   const outcome = await runDeployPlan(
-    deployPlan(MANIFEST, inputs),
-    await contextFor(inputs),
+    deployPlan(manifest, inputs),
+    await contextFor(inputs, manifest),
     ledger,
     (event) => progress.push(event),
   );
@@ -663,6 +637,7 @@ beforeEach(async () => {
   cloudflare = new FakeCloudflare();
   ledger = new ArrayLedger();
   vault = new MemoryVault();
+  seats = [];
   progress = [];
   health = 200;
   updating = false;
@@ -680,7 +655,6 @@ describe('a guided run', () => {
     expect(cloudflare.namespaces).toEqual(['kinu-auth-kv']);
     expect(cloudflare.buckets).toEqual(['kinu-backups']);
     expect(cloudflare.indexes).toEqual(['kinu-memory']);
-    expect(cloudflare.apps).toEqual(['kinu.acme.workers.dev']);
     expect(cloudflare.secrets.get(DEPLOYMENT_REFRESH_SECRET)).toBe('refresh-token-value');
     expect(JSON.parse(cloudflare.secrets.get(DEPLOYMENT_RECORD_SECRET) ?? '{}')).toMatchObject({
       inputs: { accountId: INPUTS.accountId, instanceName: 'kinu', ownerEmail: INPUTS.ownerEmail },
@@ -745,7 +719,7 @@ describe('a guided run', () => {
     expect(plain.find((binding) => binding.name === 'SIGN_IN_PROVIDERS')?.text).toBe('');
     expect(plain.map((binding) => binding.name)).not.toContain('DEV_USER_EMAIL');
     expect(bindings.filter((binding) => binding.type === 'secret_text').map((binding) => binding.name).sort())
-      .toEqual([...MINTED_SECRETS].sort());
+      .toEqual([...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET].sort());
   });
 
   /** The mail vars the run uploaded: EMAIL_DOMAIN, then MAIL_ACCOUNTS. */
@@ -842,6 +816,53 @@ describe('a guided run', () => {
   });
 });
 
+describe('what a run asks, makes and hands over', () => {
+  /** A release whose computer needs the registry token the owner mints. */
+  const WITH_COMPUTER: ReleaseManifest = {
+    ...MANIFEST,
+    secrets: [...MANIFEST.secrets, { name: 'DEVBOX_REGISTRY_TOKEN', handling: 'prompted', required: true, prompt: 'Containers Edit' }],
+  };
+
+  test('asks Cloudflare only for scopes its OAuth catalog names', () => {
+    // kinu.run 2026-10-20: the authorize endpoint refused `account:read` with invalid_scope.
+    expect(CLOUDFLARE_DEPLOY_SCOPES.filter((scope) => scope.includes(':'))).toEqual([]);
+    expect(CLOUDFLARE_DEPLOY_SCOPES).toContain('offline_access');
+  });
+
+  test('a run that would stop at a missing secret stops before it makes anything', async () => {
+    const rows = await run({ ...INPUTS, sandbox: true }, WITH_COMPUTER);
+
+    expect(rows.find((row) => row.state === 'failed')).toMatchObject({ id: 'account', failure: { detail: expect.stringContaining('DEVBOX_REGISTRY_TOKEN') } });
+    expect(cloudflare.namespaces).toEqual([]);
+    expect(cloudflare.buckets).toEqual([]);
+  });
+
+  test('the computer\'s registry token is not asked of a run without the computer', async () => {
+    const rows = await run(INPUTS, WITH_COMPUTER);
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+  });
+
+  test('makes no Access application: the first owner signs in through a one-time setup link', async () => {
+    const before = Date.now();
+    const rows = await run();
+    const [seat] = seats;
+    const token = new URL(seat?.link ?? 'https://absent.invalid').searchParams.get('setup') ?? '';
+
+    const bound = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu')))
+      .find((binding) => binding.name === FIRST_OWNER_LINK_SECRET);
+
+    expect(cloudflare.calls.filter((call) => call.path.includes('/access/'))).toEqual([]);
+    expect(seat?.link.startsWith('https://kinu.acme.workers.dev/login?setup=')).toBe(true);
+    expect(token.length).toBeGreaterThanOrEqual(32);
+    expect(seat?.expiresAt ?? 0).toBeGreaterThanOrEqual(before + FIRST_OWNER_LINK_MS);
+    // The Worker holds the token's digest, its lapse and the owner's email; never the token.
+    expect(bound).toMatchObject({ type: 'secret_text', text: `${sha256Hex(token)}.${String(seat?.expiresAt)}.owner@example.com` });
+    expect(JSON.stringify(rows)).not.toContain(token);
+    expect(await vault.names()).toEqual([]);
+  });
+});
+
 describe('a second sitting on the same account', () => {
   test('creates nothing twice', async () => {
     await run();
@@ -860,24 +881,6 @@ describe('a second sitting on the same account', () => {
       .toEqual([]);
     expect(cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/r2/buckets/')))
       .toEqual([]);
-  });
-
-  // core-rest review P2-18: the Access step POSTed a new Owners policy on every sitting.
-  test('keeps one Owners policy and sets its addresses to today\'s', async () => {
-    await run();
-    const [held] = cloudflare.policies;
-
-    if (held === undefined) throw new Error('the first sitting made no Owners policy');
-    held.include = [{ email: { email: 'gone@example.com' } }];
-    ledger = new ArrayLedger();
-    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
-    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
-
-    await run();
-
-    expect(cloudflare.policies.map(({ name, include }) => ({ name, include }))).toEqual([{
-      name: 'Owners', include: ['owner@example.com', 'second@example.com'].map((email) => ({ email: { email } })),
-    }]);
   });
 });
 

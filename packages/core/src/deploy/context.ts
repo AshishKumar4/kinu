@@ -30,12 +30,18 @@ export interface DeployFacts {
   set(key: string, value: string): void;
 }
 
+/** Where the run keeps the first owner's setup link to show it, outside the ledger and the vault the handover wipes. */
+export interface DeployOwnerSeat {
+  hold(link: string, expiresAt: number): Promise<void>;
+}
+
 export interface DeployContext {
   readonly manifest: ReleaseManifest;
   readonly inputs: DeployInputs;
   readonly transport: CloudflareTransport;
   readonly artifact: ArtifactSource;
   readonly vault: DeploySecretVault;
+  readonly seat: DeployOwnerSeat;
   readonly facts: DeployFacts;
   readonly http: HttpGet;
   /** Self-update: root secrets are not re-minted and the upload declares no migrations. */
@@ -50,9 +56,7 @@ export const FACT_WORKERS_SUBDOMAIN = 'account.workers_subdomain';
 
 export const FACT_GATEWAY_URL = 'ai_gateway.url';
 
-export const FACT_ACCESS_APP = 'access.app_id';
-
-export const FACT_OWNER_EMAIL = 'access.owner_email';
+export const FACT_OWNER_EMAIL = 'owner.email';
 
 export const FACT_VERSION_ID = 'worker.version_id';
 

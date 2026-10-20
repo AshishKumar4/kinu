@@ -145,7 +145,6 @@ function answers(door: DeployDoor, prompts: readonly string[]): Effect.Effect<De
         ? { kind: 'zone', hostname, zoneId: zone.id }
         : { kind: 'workers-dev', hostname: '', zoneId: '' },
       ownerEmail,
-      accessEmails: [ownerEmail],
       providerKeyNames: keyNames,
       sandbox: false,
       mailDomain: zones.some((held) => held.name === mailDomain) ? mailDomain : '',

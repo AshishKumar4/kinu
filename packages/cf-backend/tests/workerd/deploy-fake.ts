@@ -64,7 +64,6 @@ export const DEPLOY_FAKE_RECORD = JSON.stringify({
     instanceName: 'kinu',
     address: { kind: 'workers-dev', hostname: '', zoneId: '' },
     ownerEmail: DEPLOY_FAKE_OWNER,
-    accessEmails: [DEPLOY_FAKE_OWNER],
     providerKeyNames: [],
     sandbox: false,
   },
@@ -308,7 +307,6 @@ export const DeployFakeStateSchema = v.object({
   buckets: v.array(v.string()),
   indexes: v.array(v.string()),
   gateways: v.array(v.string()),
-  apps: v.array(v.string()),
   secrets: v.record(v.string(), v.string()),
   uploads: v.number(),
   creates: v.array(v.string()),
@@ -334,7 +332,6 @@ export interface DeployFakeState {
   readonly buckets: readonly string[];
   readonly indexes: readonly string[];
   readonly gateways: readonly string[];
-  readonly apps: readonly string[];
   /** Values are this plane's fakes: they prove the handover wrote the token and record it was meant to. */
   readonly secrets: Readonly<Record<string, string>>;
   readonly uploads: number;
@@ -381,9 +378,7 @@ interface Held {
   /** Each index's shape, as Vectorize reports it. */
   indexConfigs: Map<string, { dimensions: number; metric: string }>;
   gateways: string[];
-  apps: string[];
   /** Each app's Access policy names, in creation order. */
-  policies: Map<string, string[]>;
   secrets: Map<string, string>;
   uploads: number;
   creates: string[];
@@ -422,8 +417,6 @@ function fresh(): Held {
     indexes: [],
     indexConfigs: new Map(),
     gateways: [],
-    apps: [],
-    policies: new Map(),
     secrets: new Map<string, string>(),
     uploads: 0,
     creates: [],
@@ -453,8 +446,6 @@ function reset(): void {
   held.indexes = empty.indexes;
   held.indexConfigs = empty.indexConfigs;
   held.gateways = empty.gateways;
-  held.apps = empty.apps;
-  held.policies = empty.policies;
   held.secrets = empty.secrets;
   held.uploads = 0;
   held.creates = empty.creates;
@@ -481,7 +472,6 @@ function snapshot(): DeployFakeState {
     buckets: [...held.buckets],
     indexes: [...held.indexes],
     gateways: [...held.gateways],
-    apps: [...held.apps],
     secrets: Object.fromEntries(held.secrets),
     uploads: held.uploads,
     creates: [...held.creates],
@@ -586,17 +576,6 @@ async function stalled(method: string, path: string, answer: Response): Promise<
   return answer;
 }
 
-/** Access policies by app: the step finds its Owners policy before it writes one, and a PUT names it in place. */
-function accessPolicy(method: string, [, app = '', id]: RegExpExecArray, named: (key: string) => string): Response {
-  const policies = held.policies.get(app) ?? [];
-
-  if (method === 'GET') return envelope(policies.map((name, at) => ({ id: `policy-${String(at + 1)}`, name })));
-
-  if (id === undefined) held.policies.set(app, [...policies, named('name')]);
-
-  return envelope({ id: id ?? `policy-${String(policies.length + 1)}` });
-}
-
 /** `creates` is appended only by a POST that really made something: proof a resumed run creates nothing twice. */
 async function api(url: URL, request: Request): Promise<Response> {
   const path = `${url.pathname.replace('/client/v4', '')}${url.search}`;
@@ -669,21 +648,6 @@ async function api(url: URL, request: Request): Promise<Response> {
 
     return envelope({ id: named('id') });
   }
-
-  if (path.endsWith('/access/apps') && request.method === 'GET') {
-    return envelope(held.apps.map((domain) => ({ id: `app-${domain}`, domain })));
-  }
-
-  if (path.endsWith('/access/apps')) {
-    held.apps.push(named('domain'));
-    held.creates.push(`access:${named('domain')}`);
-
-    return envelope({ id: `app-${named('domain')}` });
-  }
-
-  const policyPath = /\/access\/apps\/([^/]+)\/policies(?:\/([^/]+))?$/.exec(path);
-
-  if (policyPath !== null) return accessPolicy(request.method, policyPath, named);
 
   if (path.endsWith('/workers/subdomain')) return envelope({ subdomain: SUBDOMAIN });
 

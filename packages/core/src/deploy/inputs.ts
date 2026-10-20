@@ -15,8 +15,8 @@ export interface DeployInputs {
   readonly accountId: string;
   readonly instanceName: string;
   readonly address: DeployAddress;
+  /** The person's Cloudflare email: the first owner's, and the deployment's admin. */
   readonly ownerEmail: string;
-  readonly accessEmails: readonly string[];
   /** Names only; values are in the vault. */
   readonly providerKeyNames: readonly string[];
   /** Needs Workers Paid (SELF-DEPLOY.md). */
@@ -46,7 +46,6 @@ export const DeployInputsSchema: v.GenericSchema<DeployInputs> = v.object({
     }),
   ]),
   ownerEmail: v.pipe(v.string(), v.email()),
-  accessEmails: v.array(v.pipe(v.string(), v.email())),
   providerKeyNames: v.array(v.pipe(v.string(), v.regex(/^[A-Z][A-Z0-9_]*$/u))),
   sandbox: v.boolean(),
   // Optional: a record written before mail reads as a deployment without it.
@@ -89,6 +88,15 @@ export const DeploymentRecordSchema: v.GenericSchema<DeploymentRecord> = v.objec
 
 /** Minted by the run; the page shows them once. */
 export const MINTED_SECRETS: readonly string[] = ['CREDENTIAL_ENCRYPTION_KEY', 'WEBHOOK_ROUTE_SECRET', 'JWT_SECRET'];
+
+/** Required only of a deployment with the computer. */
+export const COMPUTER_SECRETS: readonly string[] = ['DEVBOX_REGISTRY_TOKEN'];
+
+/** The first owner's one-time seat, as the deployment's built-in sign-in reads it (`firstOwnerLinkSecret`). */
+export const FIRST_OWNER_LINK_SECRET = 'KINU_FIRST_OWNER_LINK';
+
+/** How long the setup link creates the owner. */
+export const FIRST_OWNER_LINK_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function promptedSecrets(manifest: ReleaseManifest): readonly string[] {
   return manifest.secrets

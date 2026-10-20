@@ -113,6 +113,11 @@ const RECORD_KEY = 'run.record';
 /** Not a secret, so not under the `secret.` prefix; the wipe leaves it. */
 const TOKEN_EXPIRES_KEY = 'run.token_expires_at';
 
+/** The first owner's setup link and its lapse: shown to the run's holder until then, never in a row or the vault. */
+const SEAT_KEY = 'run.owner_seat';
+
+const SeatSchema = v.object({ link: v.string(), expiresAt: v.number() });
+
 /** How long a run may hold tokens idle: an hour so a person can fix billing in another tab and retry. */
 const VAULT_TTL_MS = 3_600_000;
 
@@ -237,12 +242,16 @@ export class DeployRunDO extends DurableObject<Env> {
     const steps = this.rows();
     const facts = factsFrom(steps);
 
+    const seat = v.safeParse(SeatSchema, await this.ctx.storage.get(SEAT_KEY));
+    const live = seat.success && seat.output.expiresAt > Date.now();
+
     return {
       runId: await this.runId(),
       state: await this.runState(),
       address: facts.get(FACT_ADDRESS) ?? '',
       version: await this.ctx.storage.get<string>(VERSION_KEY) ?? '',
       steps,
+      setupLink: live ? seat.output : null,
     };
   }
 
@@ -459,6 +468,7 @@ export class DeployRunDO extends DurableObject<Env> {
           transport: bearerTransport(token),
           artifact,
           vault: this.vault(),
+          seat: { hold: async (link, expiresAt) => { await this.ctx.storage.put(SEAT_KEY, { link, expiresAt }); } },
           update,
           facts: factsFrom(this.rows()),
           http: (url, headers) => fetch(url, { headers }),

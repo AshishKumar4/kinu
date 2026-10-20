@@ -23,7 +23,7 @@ const DEPLOY_STATE_COOKIE = '__Host-kinu_deploy_state';
 
 const INPUTS: DeployInputs = {
   accountId: DEPLOY_FAKE_ACCOUNT, instanceName: 'kinu', address: { kind: 'workers-dev', hostname: '', zoneId: '' },
-  ownerEmail: 'owner@example.com', accessEmails: ['owner@example.com'], providerKeyNames: [], sandbox: false,
+  ownerEmail: 'owner@example.com', providerKeyNames: [], sandbox: false,
 };
 
 const ADDRESS = `kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev`;
@@ -164,6 +164,33 @@ describe('a guided self-deployment', () => {
     }).toEqual({ large: true, peakUnderReset: true, peakByMember: true, batched: true });
   });
 
+  // kinu.run 2026-10-20: a declined consent or a refused scope came back as "That is not an authorization this flow
+  // started.", and a refused account listing as a bare route error.
+  it('brings Cloudflare\'s own refusal to the page: a declined consent, a refused code, a refused read', async () => {
+    await env.DEPLOY_FAKE.reset();
+
+    const run = await mintedRun();
+    const declined = await env.DEPLOY_DOOR_PROBE.hit('GET', '/deploy/callback?error=access_denied&error_description=The%20resource%20owner%20denied%20the%20request.');
+    const leg = await authorizeLeg(run);
+    const refusedCode = await env.DEPLOY_DOOR_PROBE.hit('GET', `/deploy/callback?code=not-issued&state=${encodeURIComponent(leg.state)}`, { cookie: `${DEPLOY_STATE_COOKIE}=${sha256Hex(leg.state)}` });
+    const signedIn = await authorizeLeg(run);
+
+    await callback(signedIn.state, sha256Hex(signedIn.state));
+    await env.DEPLOY_FAKE.refuseOnce({ path: '/accounts?', status: 403, code: 9109, message: 'Unauthorized to access requested resource' });
+    const listing = await env.DEPLOY_DOOR_PROBE.hit('GET', `/api/deploy/runs/${run.runId}/accounts`, { authorization: `Bearer ${run.runKey}` });
+    const params = (location: string) => Object.fromEntries(new URL(location, 'https://kinu.probe.workers.dev').searchParams);
+
+    expect({
+      declined: { status: declined.status, page: params(declined.location) },
+      refusedCode: { status: refusedCode.status, page: params(refusedCode.location) },
+      listing: { status: listing.status, body: listing.body },
+    }).toEqual({
+      declined: { status: 302, page: { error: 'access_denied', error_description: 'The resource owner denied the request.' } },
+      refusedCode: { status: 302, page: { error: 'token_exchange_failed', error_description: expect.stringContaining('that authorization code is not one this server issued') } },
+      listing: { status: 502, body: expect.stringContaining('Unauthorized to access requested resource') },
+    });
+  });
+
   it('loses an unfinished run\'s tokens when its lifetime ends, and deletes an object that never ran a step', async () => {
     await env.DEPLOY_FAKE.reset();
 
@@ -192,7 +219,7 @@ describe('a guided self-deployment', () => {
       idle: { left, alarm: await idle.alarmAt(), admits: await idle.admits(untouched.runKey) },
     }).toEqual({
       expired: { state: 'expired', ledger: true, held: [] },
-      idle: { left: { runId: '', state: 'collecting', address: '', version: '', steps: [] }, alarm: 0, admits: false },
+      idle: { left: { runId: '', state: 'collecting', address: '', version: '', steps: [], setupLink: null }, alarm: 0, admits: false },
     });
   });
 });

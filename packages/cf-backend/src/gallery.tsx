@@ -7560,6 +7560,7 @@ const GALLERY_UPDATE_RUN: DeploySnapshot = {
     { id: "address", seq: 4, title: "Bind the address", state: "pending", attempt: 0, detail: "", notes: [], failure: null, facts: {} },
     { id: "smoke", seq: 5, title: "Check it answers", state: "pending", attempt: 0, detail: "", notes: [], failure: null, facts: {} },
   ],
+  setupLink: null,
 };
 
 /** Before the OAuth client is registered; `?state=configured` shows sign-in. */

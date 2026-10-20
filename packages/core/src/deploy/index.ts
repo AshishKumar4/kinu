@@ -39,17 +39,17 @@ export {
 } from './cloudflare';
 
 export {
-  ACCESS_TOKEN_KEY, DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET,
-  DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, MINTED_SECRETS,
+  ACCESS_TOKEN_KEY, COMPUTER_SECRETS, DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET,
+  DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET, MINTED_SECRETS,
   REFRESH_TOKEN_KEY, promptedSecrets,
   type DeployAddress, type DeployAddressKind, type DeployInputs, type DeploymentRecord,
 } from './inputs';
 
 export {
-  FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
+  FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
   FACT_UPLOAD_PEAK, FACT_VERSION_ID,
   FACT_WORKERS_SUBDOMAIN, kvFact,
-  type ArtifactSource, type DeployContext, type DeployFacts, type DeploySecretVault, type HttpGet,
+  type ArtifactSource, type DeployContext, type DeployFacts, type DeployOwnerSeat, type DeploySecretVault, type HttpGet,
 } from './context';
 
 export { deployPlan, type DeployStep } from './steps';

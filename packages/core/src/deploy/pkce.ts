@@ -14,12 +14,15 @@ export const CLI_DEPLOY_REDIRECT_PORT = 8899;
 
 export const CLI_DEPLOY_REDIRECT_URI = `http://localhost:${String(CLI_DEPLOY_REDIRECT_PORT)}/oauth/callback`;
 
-/** Each scope serves a step; `offline_access` is what yields the refresh token. */
+/** Each scope serves a step, named by Cloudflare's OAuth catalog id (`GET /oauth/scopes`): the authorize endpoint refuses
+ *  the old colon names (`invalid_scope`, "not allowed to request scope 'account:read'", kinu.run 2026-10-20). The three
+ *  mail scopes are the client's optional ones, which the person may leave unticked on Cloudflare's consent screen.
+ *  `offline_access` yields the refresh token. */
 export const CLOUDFLARE_DEPLOY_SCOPES: readonly string[] = [
-  'account:read', 'user:read',
-  'workers:write', 'workers_scripts:write', 'workers_routes:write', 'workers_kv:write',
-  'r2:write', 'vectorize:write', 'ai:write', 'aig:write', 'aig:run',
-  'secrets_store:write', 'access:write', 'zone:read', 'dns_records:edit',
+  'user-details.read', 'account-settings.read',
+  'workers-scripts.write', 'workers-routes.write', 'workers-kv-storage.write',
+  'workers-r2.write', 'vectorize.write', 'aig.write', 'zone.read', 'dns.write',
+  'zone-settings.write', 'email-routing-rule.write', 'email-sending.write',
   'offline_access',
 ];
 

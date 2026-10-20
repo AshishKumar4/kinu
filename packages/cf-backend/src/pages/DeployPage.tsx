@@ -69,7 +69,6 @@ function inputsFrom(answers: Answers, zones: readonly { id: string; name: string
       ? { kind: "zone", hostname: answers.hostname, zoneId: answers.zoneId }
       : { kind: "workers-dev", hostname: "", zoneId: "" },
     ownerEmail: answers.ownerEmail,
-    accessEmails: [answers.ownerEmail],
     providerKeyNames: Object.entries(answers.keys).filter(([, value]) => value !== "").map(([name]) => name),
     sandbox: answers.sandbox,
     mailDomain: zones.find((zone) => zone.id === answers.mailZoneId)?.name ?? "",

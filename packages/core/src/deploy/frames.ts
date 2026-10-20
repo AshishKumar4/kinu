@@ -56,6 +56,8 @@ export interface DeploySnapshot {
   readonly address: string;
   readonly version: string;
   readonly steps: readonly DeployStepRow[];
+  /** The first owner's one-time link once the run minted it, until it lapses. */
+  readonly setupLink: { readonly link: string; readonly expiresAt: number } | null;
 }
 
 export const DeploySnapshotSchema: v.GenericSchema<DeploySnapshot> = v.object({
@@ -64,6 +66,7 @@ export const DeploySnapshotSchema: v.GenericSchema<DeploySnapshot> = v.object({
   address: v.string(),
   version: v.string(),
   steps: v.array(DeployStepRowSchema),
+  setupLink: v.nullable(v.object({ link: v.string(), expiresAt: v.number() })),
 });
 
 const DeployProgressSchema = v.variant('kind', [

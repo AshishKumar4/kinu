@@ -8,18 +8,20 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/index';
 import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
-  FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
+  FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
   FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
-  DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, MINTED_SECRETS,
-  REFRESH_TOKEN_KEY,
+  COMPUTER_SECRETS, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
+  FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
 import { HealthAnswerSchema } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
+import { randomToken } from '../utils/crypto';
+import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
 import { mailStep } from './mail';
 
@@ -70,14 +72,13 @@ const BASE64_ALPHABET = new TextEncoder()
 
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
   return [
-    accountStep(),
+    accountStep(manifest),
     kvStep(manifest),
     bucketStep(manifest),
     vectorizeStep(manifest),
     gatewayStep(),
-    accessStep(),
     seedStep(manifest),
-    secretsStep(manifest),
+    secretsStep(),
     uploadStep(manifest),
     addressStep(inputs),
     // After the address: the catch-all names the Worker the upload made, and a failure here leaves it answering.
@@ -88,12 +89,19 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
   ];
 }
 
-function accountStep(): DeployStep {
+function accountStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'account',
     title: 'Read the account',
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
+        // Before anything is made: a run that would stop at its secrets must not leave storage behind it.
+        const missing = missingSecrets(manifest, context.inputs);
+
+        if (missing.length > 0) {
+          return yield* Effect.die(new Error(`this release requires ${missing.join(', ')}, which no answer supplied`));
+        }
+
         const account = yield* Effect.promise(async () => cloudflareResult(
           context.transport,
           { method: 'GET', path: `/accounts/${context.inputs.accountId}` },
@@ -103,8 +111,9 @@ function accountStep(): DeployStep {
         const name = account.name ?? context.inputs.accountId;
 
         context.facts.set(FACT_ACCOUNT_NAME, name);
+        context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
 
-        // Settled first: the Access application is keyed by hostname.
+        // Settled first: the first owner's setup link and the Worker's own origin name it.
         if (context.inputs.address.kind === 'zone') {
           context.facts.set(FACT_ADDRESS, context.inputs.address.hostname);
 
@@ -296,72 +305,6 @@ function gatewayStep(): DeployStep {
   };
 }
 
-/** The Access policy that names who may sign in: the owner and the addresses they listed. */
-const OWNERS_POLICY = 'Owners';
-
-function accessStep(): DeployStep {
-  return {
-    id: 'access',
-    title: 'Set up sign-in',
-    run(context: DeployContext): Effect.Effect<string, KinuError> {
-      return Effect.gen(function* () {
-        const hostname = context.facts.get(FACT_ADDRESS);
-
-        if (hostname === undefined) return yield* Effect.die(new Error('the account step settled no address for the Access application'));
-
-        const emails = new Set([context.inputs.ownerEmail, ...context.inputs.accessEmails]);
-        const base = `/accounts/${context.inputs.accountId}/access/apps`;
-
-        const apps = yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          { method: 'GET', path: base },
-          v.array(v.object({ id: v.string(), domain: v.optional(v.string()) })),
-        ));
-
-        const held = apps.find((app) => app.domain === hostname);
-
-        const appId = held?.id ?? (yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          {
-            method: 'POST',
-            path: base,
-            body: { name: `Kinu ${context.inputs.instanceName}`, domain: hostname, type: 'self_hosted', session_duration: '24h' },
-          },
-          IdSchema,
-        ))).id;
-
-        context.facts.set(FACT_ACCESS_APP, appId);
-        context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
-
-        // Found and updated, never added again: a second sitting keeps one Owners policy, at today's addresses.
-        const policies = yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          { method: 'GET', path: `${base}/${appId}/policies` },
-          v.array(v.object({ id: v.string(), name: v.optional(v.string()) })),
-        ));
-
-        const owners = policies.find((policy) => policy.name === OWNERS_POLICY);
-
-        yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          {
-            method: owners === undefined ? 'POST' : 'PUT',
-            path: owners === undefined ? `${base}/${appId}/policies` : `${base}/${appId}/policies/${owners.id}`,
-            body: {
-              name: OWNERS_POLICY,
-              decision: 'allow',
-              include: [...emails].map((email) => ({ email: { email } })),
-            },
-          },
-          v.object({ id: v.optional(v.string()) }),
-        ));
-
-        return `One-time PIN sign-in for ${emails.size} address(es).`;
-      });
-    },
-  };
-}
-
 function seedStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'seed',
@@ -414,7 +357,7 @@ function seedStep(manifest: ReleaseManifest): DeployStep {
   };
 }
 
-function secretsStep(manifest: ReleaseManifest): DeployStep {
+function secretsStep(): DeployStep {
   return {
     id: 'secrets',
     title: 'Mint the deployment secrets',
@@ -436,21 +379,35 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
         }
 
         const supplied = context.inputs.providerKeyNames.length;
+        const address = context.facts.get(FACT_ADDRESS);
 
-        const missing = manifest.secrets
-          .filter((secret) => secret.required && secret.handling === 'prompted')
-          .filter((secret) => !MINTED_SECRETS.includes(secret.name))
-          .map((secret) => secret.name)
-          .filter((name) => !context.inputs.providerKeyNames.includes(name));
+        if (address === undefined) return yield* Effect.die(new Error('the account step settled no address for the setup link'));
+        yield* Effect.promise(async () => mintFirstOwnerLink(context, address));
 
-        if (missing.length > 0) {
-          return yield* Effect.die(new Error(`this release requires ${missing.join(', ')}, which no answer supplied`));
-        }
-
-        return `${MINTED_SECRETS.length} secret(s) minted, ${supplied} supplied.`;
+        return `${MINTED_SECRETS.length} secret(s) minted, ${supplied} supplied, and a one-time setup link for ${context.inputs.ownerEmail}.`;
       });
     },
   };
+}
+
+/** What the release requires and this run neither mints nor was given, for the features it deploys: the computer's registry
+ *  token is asked only of a run that deploys the computer. */
+function missingSecrets(manifest: ReleaseManifest, inputs: DeployInputs): readonly string[] {
+  return manifest.secrets
+    .filter((secret) => secret.required && secret.handling === 'prompted')
+    .filter((secret) => !MINTED_SECRETS.includes(secret.name) && !inputs.providerKeyNames.includes(secret.name))
+    .filter((secret) => inputs.sandbox || !COMPUTER_SECRETS.includes(secret.name))
+    .map((secret) => secret.name);
+}
+
+/** The first owner's seat (docs/SELF-DEPLOY-FLOW.md § 9): the Worker holds the token's digest, its lapse and the owner's
+ *  email; the run keeps the token to show its link, and nothing else holds it. */
+async function mintFirstOwnerLink(context: DeployContext, address: string): Promise<void> {
+  const token = randomToken(32);
+  const expiresAt = Date.now() + FIRST_OWNER_LINK_MS;
+
+  await context.vault.write(FIRST_OWNER_LINK_SECRET, firstOwnerLinkSecret(token, expiresAt, context.inputs.ownerEmail));
+  await context.seat.hold(`https://${address}/login?setup=${token}`, expiresAt);
 }
 
 /** Asset session first, then one walk: assets go out in bounded batches, modules are kept
@@ -952,7 +909,7 @@ async function versionMetadata(
     if (value !== null) bindings.push({ type: 'plain_text', name: declared.name, text: value });
   }
 
-  for (const name of [...MINTED_SECRETS, ...context.inputs.providerKeyNames]) {
+  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...context.inputs.providerKeyNames]) {
     const value = await context.vault.read(name);
 
     if (value !== null) bindings.push({ type: 'secret_text', name, text: value });
