@@ -78,5 +78,5 @@ test('a look at a slate an earlier turn previewed is its check; with no preview 
 // dashboards trial 3 turn 8 (rc22): a comment about a screenshot is no browser.
 test('a program that only says "screenshot" opens no browser', () => {
   expect(prototypeSteps([call('// confirm the slate serves data (screenshot may just be racing the load)\nconst days = await workspace.slates.logs.days();')], ['logs'])).toEqual([]);
-  expect(prototypeSteps([{ name: 'shell', args: JSON.stringify({ command: 'chromium --headless --screenshot http://localhost:8000' }) }], ['logs'])).toHaveLength(1);
+  expect(prototypeSteps([{ name: 'shell', args: JSON.stringify({ command: 'chromium --screenshot http://localhost:8000' }) }], ['logs'])).toHaveLength(1);
 });
