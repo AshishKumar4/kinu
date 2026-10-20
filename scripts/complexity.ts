@@ -8,17 +8,17 @@
  * branches belong to it, so a 3-branch handler inside a 40-branch dispatcher
  * scores 4 and 41 rather than 44 twice.
  *
- * The counted set is oxlint's `eslint/complexity`, construct for construct, and
- * that is a measurement rather than a design note. `complexity.test.ts` runs
- * `oxlint` with `complexity: max 0` over the SAME file list this gate reads and
- * joins the two results on the function's byte offset. Measured 2026-09-01,
- * oxlint 1.78.0: 47,994 functions here, every one of them reported by oxlint at
- * the same offset with the SAME number — 0 missing, 0 different. oxlint emits
- * 626 entries this census does not: 601 class field initializers (`readonly x =
- * 3` is not a function) and 25 bodiless declarations, TS overload signatures and
- * `abstract` members. All 626 score 1, so none of them can reach the budget.
- * Two independent implementations, one number. The constructs, each probed
- * against oxlint 1.78.0 on 2026-09-01:
+ * The number is oxlint's `eslint/complexity`, the linter already in this
+ * repository: one run with `complexity: max 0` over the SAME file list this
+ * gate reads reports every function's count, joined to this walk on the
+ * function's byte offset. The walk only names: the lock keys on a qualified
+ * name, which oxlint does not give. Until 2026-10-20 the gate counted with a
+ * twin of oxlint's rule and its suite proved the two equal over the whole tree
+ * (47,994 functions, 0 missing, 0 different, 2026-09-01); one counter now. A
+ * function the walk finds and oxlint does not measure fails the run. oxlint
+ * also reports class field initializers and bodiless declarations, which are
+ * not functions here and score 1. The constructs it counts, as probed against
+ * oxlint 1.78.0 on 2026-09-01:
  *
  *   if / for / for-in / for-of / while / do-while / catch / ternary   +1 each
  *   a `case` with a test (`default` adds nothing)                     +1 each
@@ -84,7 +84,9 @@
  * scores 34 against a line of 39, measured the same day.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import * as v from 'valibot';
 
@@ -114,50 +116,92 @@ const CALLABLE = {
 
 const isCallable = (type: string): boolean => Object.hasOwn(CALLABLE, type);
 
-/** Node types that are one branch each, whatever they hold. `LogicalExpression`
- *  counts every operator, `??` included: each one is a second path through the
- *  expression. An `AssignmentPattern` is the branch taken when the argument is
- *  absent. */
-const BRANCHING = {
-  AssignmentPattern: true,
-  CatchClause: true,
-  ConditionalExpression: true,
-  DoWhileStatement: true,
-  ForInStatement: true,
-  ForOfStatement: true,
-  ForStatement: true,
-  IfStatement: true,
-  LogicalExpression: true,
-  WhileStatement: true,
-} satisfies Record<string, true>;
+/** oxlint with every category off and `complexity` reporting every function: what the gate counts with. */
+const OXLINT_CONFIG = {
+  categories: { correctness: 'off', suspicious: 'off', pedantic: 'off', perf: 'off', style: 'off', restriction: 'off', nursery: 'off' },
+  rules: { complexity: ['error', { max: 0 }] },
+};
 
-/** What one node adds to the function that encloses it. */
-function decisions(node: SyntaxNode): number {
-  const { raw } = node;
+/** oxlint's JSON report, as far as the count is read from it. */
+const OxlintReportSchema = v.object({
+  diagnostics: v.array(v.looseObject({
+    message: v.string(), filename: v.string(), labels: v.array(v.looseObject({ span: v.looseObject({ offset: v.number() }) })),
+  })),
+});
 
-  if (Object.hasOwn(BRANCHING, raw.type)) return 1;
+/** The count in oxlint's `complexity` message: "`name` has a complexity of 7." */
+const REPORTED_COUNT = /has a complexity of (\d+)\./u;
 
-  // A `default` clause is the fall-through, not a decision.
-  if (raw.type === 'SwitchCase') return raw.test === null ? 0 : 1;
+/**
+ * oxlint's complexity of every function in `files`, paths under `dir`: by file, then by the function's byte offset.
+ * One run over the whole list; a run that reports nothing readable throws, rather than measure an empty tree.
+ */
+export function oxlintCounts(dir: string, files: readonly string[]): Map<string, Map<number, number>> {
+  const scratch = mkdtempSync(join(tmpdir(), 'kinu-complexity-'));
+  const config = join(scratch, 'oxlint.json');
 
-  if (raw.type === 'AssignmentExpression') {
-    return raw.operator === '&&=' || raw.operator === '||=' || raw.operator === '??=' ? 1 : 0;
+  try {
+    writeFileSync(config, JSON.stringify(OXLINT_CONFIG));
+
+    const run = Bun.spawnSync([join(root, 'node_modules/.bin/oxlint'), '-c', config, '-f', 'json', ...files], {
+      cwd: dir, env: process.env, stdout: 'pipe', stderr: 'pipe',
+    });
+
+    const report = v.safeParse(OxlintReportSchema, JSON.parse(run.stdout.toString() || 'null'));
+
+    if (!report.success) throw new Error(`oxlint gave no complexity report (exit ${String(run.exitCode)}): ${run.stderr.toString().slice(0, 800)}`);
+    const byFile = new Map<string, Map<number, number>>();
+
+    for (const diagnostic of report.output.diagnostics) {
+      const count = REPORTED_COUNT.exec(diagnostic.message)?.[1];
+      const offset = diagnostic.labels[0]?.span.offset;
+
+      if (count === undefined || offset === undefined) continue;
+      const counts = byFile.get(diagnostic.filename) ?? new Map<number, number>();
+
+      counts.set(offset, Number(count));
+      byFile.set(diagnostic.filename, counts);
+    }
+
+    return byFile;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
+ * UTF-16 index -> UTF-8 byte offset for one file. The walk's spans are JS string indices and oxlint's are bytes; this
+ * tree's docstrings are full of em dashes, so on a 30 KB source the two differ by hundreds of positions.
+ */
+function byteOffsets(text: string): Int32Array {
+  const offsets = new Int32Array(text.length + 1);
+  let bytes = 0;
+
+  for (let index = 0; index < text.length; index += 1) {
+    offsets[index] = bytes;
+    const code = text.codePointAt(index) ?? 0;
+
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code < 0x10000) bytes += 3;
+    else {
+      bytes += 4;
+      offsets[index + 1] = bytes;
+      index += 1;
+    }
   }
 
-  // `a?.b` and `f?.()` each carry their own short circuit.
-  if (raw.type === 'MemberExpression' || raw.type === 'CallExpression') return raw.optional ? 1 : 0;
+  offsets[text.length] = bytes;
 
-  return 0;
+  return offsets;
 }
 
 /** One measured function. */
 export interface Measured {
   readonly file: string;
   readonly line: number;
-  /** Byte offset of the function node, which is the key the equivalence check
-   *  in `complexity.test.ts` joins on: oxlint reports the same offset for the
-   *  same function, so the two measurements are compared per function rather
-   *  than per line, where an overload pair or an inline callback would collide. */
+  /** Where the function node starts, as a JS string index (the walk's span; oxlint's byte offset is converted from
+   *  it): per function rather than per line, where an overload pair or an inline callback would collide. */
   readonly offset: number;
   /** Qualified within its file: `Class.method`, `outer>inner`, `render>useMemo`. */
   readonly name: string;
@@ -233,16 +277,16 @@ function labelOf(fn: SyntaxNode): string {
 }
 
 /**
- * Every function in one file, with its complexity.
+ * Every function in one file, named, with the complexity oxlint measured for it (`counts`, by byte offset).
  *
- * The walk descends once. A nested callable is visited as its own function and
- * its interior never reaches the enclosing counter, which is what makes the
- * number per-function rather than per-file.
+ * The walk descends once. A nested callable is visited as its own function, which is what makes the number
+ * per-function rather than per-file.
  */
-export function measureFile(file: string, text: string): Measured[] {
+export function measureFile(file: string, text: string, counts: ReadonlyMap<number, number>): Measured[] {
   const { root: tree, lineAt } = parse(file, text);
   const found: Measured[] = [];
   const used = new Map<string, number>();
+  const bytes = byteOffsets(text);
 
   const visit = (node: SyntaxNode, enclosing: string | undefined): void => {
     if (!isCallable(node.type)) {
@@ -260,22 +304,13 @@ export function measureFile(file: string, text: string): Measured[] {
     used.set(qualified, seen);
     const name = seen === 1 ? qualified : `${qualified}#${String(seen)}`;
 
-    let complexity = 1;
+    const complexity = counts.get(bytes[node.start] ?? node.start);
 
-    const inner = (current: SyntaxNode): void => {
-      for (const child of current.children) {
-        if (isCallable(child.type)) {
-          visit(child, name);
-          continue;
-        }
-
-        complexity += decisions(child);
-        inner(child);
-      }
-    };
-
-    inner(node);
+    // Never a guess: a function oxlint did not measure has no number this gate may report.
+    if (complexity === undefined) throw new Error(`oxlint measured no function at ${file}:${String(lineAt(node.start))} (${name})`);
     found.push({ file, line: lineAt(node.start), offset: node.start, name, complexity });
+
+    for (const child of node.children) visit(child, name);
   };
 
   visit(tree, undefined);
@@ -283,11 +318,12 @@ export function measureFile(file: string, text: string): Measured[] {
   return found;
 }
 
-/** Every function in the corpus, worst first. */
-export function census(files: ReadonlyMap<string, string>): Measured[] {
+/** Every function in the corpus, worst first: `files` by their path under `dir`, as oxlint reads them there. */
+export function census(files: ReadonlyMap<string, string>, dir = root): Measured[] {
+  const counts = oxlintCounts(dir, [...files.keys()]);
   const found: Measured[] = [];
 
-  for (const [file, text] of files) found.push(...measureFile(file, text));
+  for (const [file, text] of files) found.push(...measureFile(file, text, counts.get(file) ?? new Map()));
 
   return found.sort((a, b) => b.complexity - a.complexity
     || a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
