@@ -4,8 +4,8 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
 import {
-  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability, type RuntimeFacts,
-  type SecretsInContext,
+  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MailInContext, type MissingCapability,
+  type RuntimeFacts, type SecretsInContext,
 } from '../prompting/volatile-context';
 import type { ActiveRoster, ShownLesson } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
@@ -85,6 +85,8 @@ export interface DynamicContextInput {
   readonly failingSlates?: () => readonly string[];
   /** The owner's secrets granted to the workspace, as it last read them. */
   readonly secrets?: SecretsInContext;
+  /** The agent's unread mail, read once per turn by the caller; absent where it has no box. */
+  readonly mail?: ActiveRoster<MailInContext>;
 }
 
 export function subordinateDelegatesOf(
@@ -129,6 +131,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     liveHeadRuns: reads.liveHeadRuns(),
     subordinateDelegates: input.subordinateDelegates?.(),
     approvals: input.approvals?.(),
+    ...(input.mail !== undefined && { mail: input.mail }),
     failingSlates: input.failingSlates?.(),
     ...(input.secrets !== undefined && { secrets: input.secrets }),
     missingCapabilities: [

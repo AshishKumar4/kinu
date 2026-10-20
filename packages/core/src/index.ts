@@ -32,7 +32,7 @@ export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-t
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
   type RunTurnSources, type TurnSourcesBundle, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
-  type TurnTools,
+  type TurnReads, type TurnTools,
 } from './orchestrator/turn-assembly';
 
 export {
@@ -876,7 +876,7 @@ export { toolDescription } from './utils/tool-description';
 export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
-  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability, type SecretsInContext,
+  DynamicContextLedger, agentDynamicContext, mailInContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MailInContext, type RuntimeFacts, type MissingCapability, type SecretsInContext,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';

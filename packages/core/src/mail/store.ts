@@ -177,9 +177,7 @@ export class MailStore {
       ? this.readableBy(caller).map((box) => box.path)
       : [this.readablePath(caller, query.box)].filter((path) => path !== null);
 
-    const listing = this.list(query, paths);
-
-    return query.unread === true ? { ...listing, threads: listing.threads.filter((thread) => thread.unread) } : listing;
+    return this.list(query, paths);
   }
 
   async readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null> {
@@ -391,8 +389,8 @@ export class MailStore {
     if (row !== undefined) this.deps.sql.exec('INSERT INTO mail_fts (rowid, subject, sender, body) VALUES (?, ?, ?, ?)', row.rowid, subject, sender, body);
   }
 
-  /** `only`: just these boxes, an agent's (the ones it reads). */
-  list(query: MailListQuery, only?: readonly string[]): MailListing {
+  /** `only`: just these boxes, an agent's (the ones it reads). Only the threads it answers are summarized. */
+  list(query: MailListQuery & { readonly unread?: boolean }, only?: readonly string[]): MailListing {
     const where: string[] = [];
     const bindings: (string | number)[] = [];
 
@@ -420,14 +418,16 @@ export class MailStore {
       bindings.push(ftsQuery(query.query));
     }
 
-    const ids = rows(v.object({ id: v.string(), latest: v.number() }), this.deps.sql.exec(
-      `SELECT t.id, (SELECT MAX(at) FROM mail_messages m WHERE m.thread_id = t.id) AS latest FROM mail_threads t WHERE ${where.join(' AND ')}
-       ORDER BY latest DESC`, ...bindings,
+    const ids = rows(v.object({ id: v.string(), latest: v.number(), unread: v.number() }), this.deps.sql.exec(
+      `SELECT t.id, (SELECT MAX(at) FROM mail_messages m WHERE m.thread_id = t.id) AS latest,
+         EXISTS (SELECT 1 FROM mail_messages u WHERE u.thread_id = t.id AND u.direction = 'in' AND u.read = 0) AS unread
+       FROM mail_threads t WHERE ${where.join(' AND ')} ORDER BY latest DESC`, ...bindings,
     )).filter((row) => query.before === undefined || row.latest < query.before);
 
-    const threads = ids.map((row) => this.summary(row.id)).filter((summary): summary is MailThreadSummary => summary !== null);
+    const shown = ids.filter((row) => query.unread !== true || row.unread === 1).slice(0, query.limit ?? 50);
+    const threads = shown.map((row) => this.summary(row.id)).filter((summary): summary is MailThreadSummary => summary !== null);
 
-    return { threads: threads.slice(0, query.limit ?? 50), unread: threads.filter((thread) => thread.unread).length };
+    return { threads, unread: ids.filter((row) => row.unread === 1).length };
   }
 
   private messages(threadId: string): Message[] {

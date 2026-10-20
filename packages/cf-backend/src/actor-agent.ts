@@ -112,7 +112,7 @@ import {
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
-  type ActiveSkillSet,
+  type ActiveSkillSet, type TurnReads,
   type PlanDecisionOutcome,
   type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type AskingAgent, type OwnerAnswer,
@@ -369,12 +369,13 @@ async function slateMember(
   return null;
 }
 
-/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, and the account's facts. */
+/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, the account's facts, its mail. */
 interface TurnMemoryReads {
   readonly memoryTail: string | undefined;
   /** Absent: the actor's own active skills for the turn. */
   readonly activeSkills?: ActiveSkillSet | null;
   readonly accountFacts?: readonly Fact[];
+  readonly mail?: TurnReads['mail'];
 }
 
 /**
@@ -3620,7 +3621,7 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly reads: TurnMemoryReads;
     readonly surface: TurnSurface | null;
   }): DynamicContext {
-    const { memoryTail, accountFacts, activeSkills } = step.reads;
+    const { memoryTail, accountFacts, activeSkills, mail } = step.reads;
     const held = this.heldDynamicOf(actor.reference);
     const extras = reach.kind === 'workspace' ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
@@ -3647,6 +3648,7 @@ export abstract class ActorAgent extends Agent<Env> {
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,
       approvals: extras.approvals,
+      ...(mail !== undefined && { mail }),
       ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });
   }
