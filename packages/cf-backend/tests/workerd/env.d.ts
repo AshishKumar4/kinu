@@ -235,6 +235,7 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   redeliverJobWake(workspace: string, jobId: string): Promise<void>;
   jobWatchState(workspace: string): Promise<import('./hire-shapes').JobWatchState>;
   jobRows(workspace: string): Promise<import('./hire-shapes').JobRow[]>;
+  processTicks(workspace: string): Promise<string[]>;
   /** Keeps the isolate's diagnostics from here on; `relayLost` reads them. */
   watchRelays(workspace: string): Promise<void>;
   /** The cause the room told once it lost a turn's live relay. */
