@@ -1,10 +1,14 @@
-/** Home-page background driven by the roster's counts via `useRosterActivity`. */
+/**
+ * The new-workspace page's background, driven by the roster's counts via `useRosterActivity`. No chat has it: Home is the
+ * assistant's chat, on the plain ground. `<html data-background>` (the gallery's design bar) picks its temperament under
+ * review: unnamed, as it ships; `quiet`, fainter, held to the edges and still unless the pointer moves; `none`, no field.
+ */
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import { APP_ROUTES, routeTemplateOf, type ReportedRoute } from '@kinu.run/core';
 import type { ArtFrame, KeepOut } from '@kinu.run/core/web/art';
-import { type Field, type MeshActivity, type MeshMode, NeuralMesh } from '@kinu.run/core/web/neural-mesh';
+import { type Field, type MeshActivity, type MeshMode, type MeshTemperamentName, NeuralMesh } from '@kinu.run/core/web/neural-mesh';
 import { groundTextElements } from '@kinu.run/core/web/ground-text';
 import { useMediaQuery } from '@/hooks/use-media-query';
 import { useRosterActivity } from '@/hooks/use-workspace-roster';
@@ -24,12 +28,23 @@ const RESOLUTION = 1;
 const RAIL_QUERY = '(min-width: 48rem)';
 
 const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
-  [APP_ROUTES.home]: true,
   [APP_ROUTES.newWorkspace]: true,
 };
 
+type BackgroundChoice = MeshTemperamentName | 'none';
+
+function backgroundChoice(): BackgroundChoice {
+  const named = document.documentElement.dataset.background;
+
+  return named === 'quiet' || named === 'none' ? named : 'today';
+}
+
 interface AppBackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
+  /** Frames drawn since mount: a resting page's count stands still. */
+  renders(): number;
+  /** Nothing moving: a quiet picture draws no frame until something does. */
+  settled(): boolean;
   frameTimes(): FrameTimes;
   time(): number;
   mode(): MeshMode;
@@ -54,7 +69,7 @@ declare global {
 }
 
 /** `known` outlives the tissue so a decision that arrived on another route still flashes on return. */
-function Tissue({ known }: { readonly known: { current: MeshActivity } }): ReactElement {
+function Tissue({ known, temperament }: { readonly known: { current: MeshActivity }; readonly temperament: MeshTemperamentName }): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
   const wide = useMediaQuery(RAIL_QUERY);
   const hoverable = useMediaQuery('(hover: hover)');
@@ -65,6 +80,7 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
   useEffect(() => {
     known.current = { working, decisions };
     living.current?.art().setActivity(known.current);
+    living.current?.wake();
   }, [known, working, decisions]);
 
   useEffect(() => {
@@ -105,7 +121,7 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
     };
 
     const tissue = (aspect: number): NeuralMesh => {
-      picture = new NeuralMesh({ seed: BACKGROUND_SEED, aspect, width: host.getBoundingClientRect().width, field: field(), activity: known.current });
+      picture = new NeuralMesh({ seed: BACKGROUND_SEED, aspect, width: host.getBoundingClientRect().width, field: field(), activity: known.current, temperament });
 
       return picture;
     };
@@ -127,6 +143,7 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
       },
       events: { failed: 'app.background_webgpu_failed', faulted: 'app.background_webgpu_faulted', fallbackFailed: 'app.background_fallback_failed' },
       canvasClassName: 'absolute inset-0 size-full',
+      settled: (art) => art.settled(),
     });
 
     const align = (): void => {
@@ -148,7 +165,11 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
       if (event.propertyName === 'width') onScroll();
     };
 
-    const changes = new MutationObserver(onMutation);
+    // Its own canvas's changes are not the page's: drawing a frame must not ask for another.
+    const changes = new MutationObserver((records) => {
+      if (records.some((record) => !host.contains(record.target))) onMutation();
+    });
+
     changes.observe(shell, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
     shell.addEventListener('scroll', onScroll, { capture: true, passive: true });
     shell.addEventListener('transitionend', onTransition);
@@ -166,6 +187,7 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
 
       if (press) mounted.art().click(x, y);
       else mounted.art().setPointer(x, y);
+      mounted.wake();
     };
 
     const onMove = onPointer(false);
@@ -173,6 +195,7 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
 
     const onLeave = (): void => {
       mounted.art().clearPointer();
+      mounted.wake();
     };
 
 
@@ -186,6 +209,8 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
 
     const handle: AppBackgroundHandle & Partial<AppBackgroundStepping> = {
       renderer: () => mounted.renderer(),
+      renders: () => mounted.renders(),
+      settled: () => mounted.art().settled(),
       frameTimes: () => mounted.frameTimes(),
       time: () => mounted.time(),
       mode: () => mounted.art().mode(),
@@ -219,21 +244,31 @@ function Tissue({ known }: { readonly known: { current: MeshActivity } }): React
 
       if (window.__kinuAppBackground === handle) delete window.__kinuAppBackground;
     };
-  }, [known, wide, hoverable, calm]);
+  }, [known, wide, hoverable, calm, temperament]);
 
   return (
     <div
       ref={hostRef}
       data-app-background
       aria-hidden="true"
-      className="pointer-events-none fixed inset-0 -z-10 [filter:blur(.4px)] [mask-image:radial-gradient(ellipse_55%_55%_at_58%_50%,rgba(0,0,0,.7),black_100%)]"
+      data-background-temperament={temperament}
+      className={`pointer-events-none fixed inset-0 -z-10 [filter:blur(.4px)] ${MASK[temperament]}`}
     />
   );
 }
 
+/** Quiet, the middle all but empties: the field lives at the page's edges and fades well before the copy. */
+const MASK: Record<MeshTemperamentName, string> = {
+  today: '[mask-image:radial-gradient(ellipse_55%_55%_at_58%_50%,rgba(0,0,0,.7),black_100%)]',
+  quiet: '[mask-image:radial-gradient(ellipse_62%_62%_at_58%_50%,transparent_35%,rgba(0,0,0,.6)_70%,black_100%)]',
+};
+
 export function AppBackground(): ReactElement | null {
   const { pathname } = useLocation();
   const known = useRef<MeshActivity>({ working: false, decisions: 0 });
+  const choice = backgroundChoice();
 
-  return SHOWN_ROUTES[routeTemplateOf(pathname)] === true ? <Tissue known={known} /> : null;
+  if (choice === 'none' || SHOWN_ROUTES[routeTemplateOf(pathname)] !== true) return null;
+
+  return <Tissue known={known} temperament={choice} />;
 }

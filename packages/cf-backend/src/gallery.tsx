@@ -7506,7 +7506,7 @@ function DeviceSandboxFrame() {
 
 /** The shipped shell as App.tsx composes it; the background's contrast and UX gate are measured here. */
 async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
-  const { default: HomePage } = await import("@/pages/HomePage");
+  const { default: HomePage, NewWorkspacePage } = await import("@/pages/HomePage");
 
   return {
     entries: [new URLSearchParams(location.search).get("path") ?? "/"],
@@ -7520,6 +7520,7 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
           <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates" />} />
           <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared" />} />
+          <Route path={APP_ROUTES.newWorkspace} element={<NewWorkspacePage />} />
         </Route>
       </Routes>
     ),
