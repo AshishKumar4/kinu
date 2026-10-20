@@ -163,8 +163,7 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('approval_consumed'), approvalId: v.string(),
     actor: v.string(), command: v.string(), executor: v.string() }),
   v.object({ ...BaseFields, type: v.literal('error'), message: v.string(), details: v.optional(v.unknown()) }),
-  v.object({ ...BaseFields, type: v.literal('turn_end'), turnIndex: v.number(),
-    workMode: v.optional(v.picklist(['plan', 'build'])), usage: v.optional(UsageSchema) }),
+  v.object({ ...BaseFields, type: v.literal('turn_end'), turnIndex: v.number(), usage: v.optional(UsageSchema) }),
   v.object({ ...BaseFields, type: v.literal('run_end'), reason: v.optional(v.string()), error: v.optional(v.string()) }),
 ]);
 

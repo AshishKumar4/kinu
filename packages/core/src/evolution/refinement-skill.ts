@@ -15,7 +15,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 
 import { vfsDirname } from '../utils/vfs-helpers';
 import { writeConditionally } from '../vfs/conditional-write';
-import { changeStanding } from './change-standing';
+import { changeOwners, changeStanding } from './change-standing';
 import { Effect, Result } from 'effect';
 import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import {
@@ -255,8 +255,7 @@ export function settleDreamSkill(
   route: RefinementRoute,
 ): Promise<{ readonly state: 'applied' | 'rolled_back' | 'pending'; readonly reason?: string }> {
   return settle(Effect.gen(function* () {
-    const owners = { sql: deps.control.sql, actor: deps.control.rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
-    const standing = changeStanding(owners, deps.facts, { request, route })?.standing;
+    const standing = changeStanding(changeOwners(deps), deps.facts, { request, route })?.standing;
     const vfs = deps.skillsVfs;
 
     if (standing === 'waiting') return { state: 'pending' as const };

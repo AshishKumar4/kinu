@@ -189,28 +189,6 @@ describe('openTurnRun / closeTurnRun', () => {
     // The failure reaches diagnostics: a lost history row stays visible.
     expect(logger.emitted.map((line) => line.event)).toEqual(['turn.start_events_failed', 'turn.end_events_failed']);
   });
-
-describe('turn_end workMode', () => {
-  test('a completed turn carries the mode it ran in', () => {
-    const rec = recorder();
-    closeTurnRun(rec, 'run-plan', { turnIndex: 0, reason: 'completed', workMode: 'plan' });
-    closeTurnRun(rec, 'run-build', { turnIndex: 1, reason: 'completed', workMode: 'build' });
-
-    const plan = rec.read('run-plan').find((e) => e.type === 'turn_end');
-    const build = rec.read('run-build').find((e) => e.type === 'turn_end');
-    expect(plan).toMatchObject({ type: 'turn_end', workMode: 'plan' });
-    expect(build).toMatchObject({ type: 'turn_end', workMode: 'build' });
-  });
-
-  test('no caller-supplied mode writes no invented one', () => {
-    // A row with no mode looks exactly like this, and the cadence query reads
-    // its absence as outside the denominator, never as build.
-    const rec = recorder();
-    closeTurnRun(rec, 'run-plain', { turnIndex: 0, reason: 'completed' });
-    const end = rec.read('run-plain').find((e) => e.type === 'turn_end');
-    expect(end && !('workMode' in end)).toBe(true);
-  });
-});
 });
 
 describe('snapshotCompletedTurn', () => {

@@ -1690,7 +1690,7 @@ export class ChatSession {
     };
 
     if (end.error) outcome.error = end.error;
-    closeTurnRun(this.eventRecorder, runId, { ...outcome, workMode: this.actorSession.workMode });
+    closeTurnRun(this.eventRecorder, runId, outcome);
 
     return () => {
       claimClosed?.();

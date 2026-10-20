@@ -14,6 +14,7 @@ import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import type { RunEventRecorder } from '../events/recorder';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
+import { parseJsonValue } from '../utils/json';
 
 export type ScaffoldDecisionEvents = Pick<RunEventRecorder, 'actorId' | 'emit'>;
 
@@ -75,6 +76,22 @@ export async function writeScaffoldVersion(rt: Pick<AgentRuntime, 'identity' | '
   await writeText(rt.agentStateVfs, `${path}.v${String(version)}`, source);
 }
 
+
+const PromotionSchema = v.object({ fromVersion: v.number(), toVersion: v.number() });
+
+/** The version `version` replaced, and when, from its latest promotion; null for one no promotion made current. */
+export function replacedBy(sql: SqlExecutor, actor: ActorHandle, version: number): { readonly replaced: number; readonly at: number } | null {
+  actor.assertCurrent();
+
+  const promotions = sql<{ payload: string; ts: string }>`SELECT payload, ts FROM run_events
+    WHERE actor_id = ${actor.actorId} AND type = 'scaffold_promotion' ORDER BY ts DESC`
+    .map((row) => ({ ...v.parse(PromotionSchema, parseJsonValue(row.payload)), at: Date.parse(row.ts) }))
+    .filter((promotion) => promotion.toVersion === version);
+
+  const latest = promotions[0];
+
+  return latest === undefined ? null : { replaced: latest.fromVersion, at: latest.at };
+}
 
 /**
  * Apply a promotion decision. 'promote' moves the pointer atomically and then

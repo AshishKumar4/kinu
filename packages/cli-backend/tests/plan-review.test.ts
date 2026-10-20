@@ -94,12 +94,10 @@ function planBroadcasts(events: readonly SessionEvent[]) {
     : []);
 }
 
-function turnModes(agent: LocalAgentSession): string[] {
-  return agent.listRuns().items
-    .map((run) => run.runId)
-    .reverse()
-    .flatMap((runId) => agent.getRunEvents(runId)
-      .flatMap((event) => event.type === 'turn_end' && event.workMode !== undefined ? [event.workMode] : []));
+/** The mode each turn ran in, oldest first, as its claim recorded it. */
+function turnModes(rt: ReturnType<typeof createCLIRuntime>): string[] {
+  return rt.storage.sql<{ work_mode: string }>`SELECT work_mode FROM actor_turn_claims
+    WHERE actor_id = ${rt.actor.actorId} ORDER BY claimed_at, rowid`.map((row) => row.work_mode);
 }
 
 function fileResults(events: readonly SessionEvent[]) {
@@ -116,7 +114,7 @@ describe('LocalAgentSession — plan review', () => {
   test('one plan through hold, revision, a lost acceptance and its replay, then a dismissed plan', async () => {
     const write = (path: string) => ({ call: 'file', input: { op: 'write', path: `vfs://home/main/${path}`, content: path } });
 
-    const { db, agent, events, taken } = session([
+    const { db, rt, agent, events, taken } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
       { answer: 'Plan submitted for review.' },
       write('held.txt'), { answer: 'I cannot implement before the plan is decided.' },
@@ -177,7 +175,7 @@ describe('LocalAgentSession — plan review', () => {
       await agent.send('Do the other thing.', { id: crypto.randomUUID() });
 
       expect(fileResults(events).map((result) => result.type === 'tool-result' && result.success)).toEqual([false, true, true, true, true]);
-      expect(turnModes(agent)).toEqual(['plan', 'plan', 'build', 'build', 'plan', 'build', 'plan', 'build']);
+      expect(turnModes(rt)).toEqual(['plan', 'plan', 'build', 'build', 'plan', 'build', 'plan', 'build']);
     } finally {
       await agent.end();
       db.close();
@@ -237,7 +235,7 @@ describe('LocalAgentSession — plan review', () => {
   test('a plan-mode harness turn carrying a refiner\'s proposal cannot submit it as a plan', async () => {
     const proposal = '{"scope":"workspace","edits":[{"kind":"prompt_section","sectionId":"state/output-format","source":"Stop after one line."}]}';
 
-    const { db, agent, events } = session([
+    const { db, rt, agent, events } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: `# Prompt edits\n${proposal}` }] } },
       { answer: 'Could not submit.' },
     ]);
@@ -249,7 +247,7 @@ describe('LocalAgentSession — plan review', () => {
       });
       await agent.settleBackgroundWork();
 
-      expect(turnModes(agent)).toEqual(['plan']);
+      expect(turnModes(rt)).toEqual(['plan']);
       expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
         .toMatchObject({ success: false, reason: 'bad_input' });
       expect(await agent.getActivePlanReview()).toBeNull();
@@ -266,7 +264,7 @@ describe('LocalAgentSession — plan review', () => {
       const running = Promise.withResolvers<void>();
       const started = Promise.withResolvers<void>();
 
-      const { db, agent, taken } = session([
+      const { db, rt, agent, taken } = session([
         { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
         { answer: 'Plan submitted for review.' },
         { answer: 'Still on the other thing.', waitFor: running.promise, onTaken: started.resolve },
@@ -289,7 +287,7 @@ describe('LocalAgentSession — plan review', () => {
         await agent.settleBackgroundWork();
 
         expect(taken).toHaveLength(3);
-        expect(turnModes(agent)).toEqual(['plan', 'build']);
+        expect(turnModes(rt)).toEqual(['plan', 'build']);
         expect(await agent.getActivePlanReview()).toMatchObject({ status: 'dismissed' });
       } finally {
         await agent.end();
