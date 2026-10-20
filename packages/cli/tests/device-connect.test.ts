@@ -55,7 +55,7 @@ afterEach(async () => {
   }
 
   for (const home of daemonHomes.splice(0)) {
-    const daemon = recordedIn(join(home, 'pc-agent.pid'));
+    const daemon = recordedIn(join(home, 'pc-agent.pid'), home);
 
     if (daemon !== null) await killAndAwaitExit(daemon);
   }

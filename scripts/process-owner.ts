@@ -5,6 +5,7 @@
  * (`bench-teardown.ts`) and the test scratch homes judge their owners with it.
  */
 import { tolerate } from '@kinu.run/core/obs';
+import { hostGenerationReader } from '../packages/cli-backend/src/process-generation';
 import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -42,12 +43,14 @@ export function procUid(pid: number | string, name = ''): number | undefined {
   return tolerate(() => tolerate(() => statSync(`/proc/${String(pid)}/${name}`).uid, 'esrch'), 'enoent');
 }
 
-/** Field 22 of `/proc/<pid>/stat`, counted after the parenthesised command name, which may hold
- *  spaces; undefined once the process is gone. */
-export function processStartTicks(pid: number): number | undefined {
-  const stat = procStat(pid);
+const GENERATIONS = hostGenerationReader();
 
-  return stat === undefined ? undefined : Number(stat.startTicks);
+/** The pid's start ticks, the generation Linux names a run of it by (cli-backend's process-generation.ts, the one reader the
+ *  config lock and test cleanup use too); undefined once the process is gone, or off Linux. */
+export function processStartTicks(pid: number): number | undefined {
+  const probe = GENERATIONS?.platform === 'linux' ? GENERATIONS.read(pid) : undefined;
+
+  return probe?.state === 'read' ? Number(probe.identity) : undefined;
 }
 
 /** Chrome's handlers daemonize outside its group; their database is rooted by the launch's CHROME_CONFIG_HOME. */

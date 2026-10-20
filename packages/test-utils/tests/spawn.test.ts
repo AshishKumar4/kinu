@@ -1,8 +1,9 @@
 // `killAndAwaitExit` stands between a teardown and the release of a directory a recorded process writes in, so it
 // must end the process whatever it does with SIGTERM, return only once the process has exited, and never touch a
-// stranger that holds the recorded pid now.
+// stranger that holds the recorded pid now. A fixture's process names its fixture (here FIXTURE in its environment, as
+// a daemon's names its home); a stranger names none.
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENT_MODE_ENV } from '../src/ambient-env';
 import { present } from '../src/present';
@@ -16,9 +17,10 @@ async function exited(pid: number): Promise<boolean> {
   return state === '' || state.startsWith('Z');
 }
 
-/** Spawns `cmd` and resolves once it prints `ready`, its sign that it is set up. */
-async function started(cmd: readonly string[]): Promise<Bun.Subprocess<'ignore', 'pipe', 'inherit'>> {
-  const child = spawnTest([...cmd], { stdin: 'ignore', stdout: 'pipe', stderr: 'inherit' });
+/** Spawns `cmd` as `fixture`'s process (none names no fixture) and resolves once it prints `ready`, its sign that it is
+ *  set up. */
+async function started(cmd: readonly string[], fixture?: string): Promise<Bun.Subprocess<'ignore', 'pipe', 'inherit'>> {
+  const child = spawnTest([...cmd], { stdin: 'ignore', stdout: 'pipe', stderr: 'inherit', env: { ...process.env, FIXTURE: fixture } });
   const { value } = await child.stdout.getReader().read();
 
   expect(new TextDecoder().decode(value)).toContain('ready');
@@ -27,52 +29,66 @@ async function started(cmd: readonly string[]): Promise<Bun.Subprocess<'ignore',
 }
 
 test('a recorded process that ignores SIGTERM is killed, and has exited when the call settles', async () => {
-  const pidfile = join(scratchDir('kill-recorded'), 'daemon.pid');
-  const child = await started(['sh', '-c', "trap '' TERM; echo ready; exec sleep 30"]);
+  const fixture = scratchDir('kill-recorded');
+  const pidfile = join(fixture, 'daemon.pid');
+  const child = await started(['sh', '-c', "trap '' TERM; echo ready; exec sleep 30"], fixture);
   writeFileSync(pidfile, `${String(child.pid)}\n`);
 
-  await killAndAwaitExit(present(recordedIn(pidfile), 'the record'));
+  await killAndAwaitExit(present(recordedIn(pidfile, fixture), 'the record'));
 
   expect(await exited(child.pid)).toBe(true);
   await child.exited;
   expect(child.signalCode).toBe('SIGKILL');
 });
 
-test('a pid held by a process that started after its record was written is left alone', async () => {
-  const pidfile = join(scratchDir('kill-stranger'), 'daemon.pid');
+// The record once judged a holder by its start against the file's time, with 2 s of slack: a stranger given the pid
+// within those 2 s was killed.
+test('a pid a stranger holds is never recorded, however soon after the record it started', async () => {
+  const fixture = scratchDir('kill-stranger');
+  const pidfile = join(fixture, 'daemon.pid');
   const stranger = await started(['sh', '-c', 'echo ready; exec sleep 30']);
+
   writeFileSync(pidfile, `${String(stranger.pid)}\n`);
-  // The record is a minute older than the process that holds its pid now.
-  const written = new Date(Date.now() - 60_000);
-  utimesSync(pidfile, written, written);
 
-  await killAndAwaitExit(present(recordedIn(pidfile), 'the record'));
-
+  expect(recordedIn(pidfile, fixture)).toBeNull();
   expect(await exited(stranger.pid)).toBe(false);
   stranger.kill('SIGKILL');
   await stranger.exited;
 });
 
+test('a record whose pid another run holds now kills nothing', async () => {
+  const fixture = scratchDir('kill-reused');
+  const holder = await started(['sh', '-c', 'echo ready; exec sleep 30'], fixture);
+
+  await killAndAwaitExit({ pid: holder.pid, generation: 'an earlier run of this pid' });
+
+  expect(await exited(holder.pid)).toBe(false);
+  holder.kill('SIGKILL');
+  await holder.exited;
+});
+
 test('with group, every process in the recorded group has exited when the call settles', async () => {
-  const pidfile = join(scratchDir('kill-group'), 'state');
-  const leader = await started(['setsid', 'sh', '-c', 'sleep 30 & sleep 30 & echo ready; wait']);
+  const fixture = scratchDir('kill-group');
+  const pidfile = join(fixture, 'state');
+  const leader = await started(['setsid', 'sh', '-c', 'sleep 30 & sleep 30 & echo ready; wait'], fixture);
   writeFileSync(pidfile, `pid=${String(leader.pid)}\n`);
   const members = (await runToExit(['pgrep', '-g', String(leader.pid)])).stdout.split('\n').filter((line) => line !== '').map(Number);
 
   expect(members.some((member) => member !== leader.pid)).toBe(true);
 
-  await killAndAwaitExit(present(recordedIn(pidfile, /^pid=(\d+)$/mu), 'the record'), { group: true });
+  await killAndAwaitExit(present(recordedIn(pidfile, fixture, /^pid=(\d+)$/mu), 'the record'), { group: true });
 
   for (const member of members) expect(await exited(member)).toBe(true);
   await leader.exited;
 });
 
 test('with group, a recorded pid that leads no group is refused, and nothing is killed', async () => {
-  const pidfile = join(scratchDir('kill-leaderless'), 'state');
-  const child = await started(['sh', '-c', 'echo ready; exec sleep 30']);
+  const fixture = scratchDir('kill-leaderless');
+  const pidfile = join(fixture, 'state');
+  const child = await started(['sh', '-c', 'echo ready; exec sleep 30'], fixture);
   writeFileSync(pidfile, `pid=${String(child.pid)}\n`);
 
-  const refused = killAndAwaitExit(present(recordedIn(pidfile, /^pid=(\d+)$/mu), 'the record'), { group: true });
+  const refused = killAndAwaitExit(present(recordedIn(pidfile, fixture, /^pid=(\d+)$/mu), 'the record'), { group: true });
   await expect(refused).rejects.toMatchObject({ code: 'io' });
   await expect(refused).rejects.toThrow(String(child.pid));
 

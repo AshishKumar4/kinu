@@ -23,7 +23,7 @@ function newProjectDir(): string {
 
 afterEach(async () => {
   for (const home of homes.splice(0)) {
-    const daemon = recordedIn(join(home, 'daemon.pid'));
+    const daemon = recordedIn(join(home, 'daemon.pid'), home);
 
     if (daemon !== null) await killAndAwaitExit(daemon);
   }

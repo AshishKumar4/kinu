@@ -1,5 +1,6 @@
 /**
- * Which run of a process a pid names. Pids are reused, so a holder recorded by pid alone is "live" again the moment
+ * Which run of a process a pid names: the one host reader the config lock, the agent lease, test cleanup
+ * (test-utils `recordedIn`) and the scripts' process owners use. Host-only, so it stays out of the shared packages. Pids are reused, so a holder recorded by pid alone is "live" again the moment
  * an unrelated process gets its number; the generation tells one run from a later one given the same pid. Linux reads
  * `/proc/<pid>/stat` field 22 (start ticks since boot); Darwin hashes `/bin/ps -p <pid> -o lstart=` under `LC_ALL=C`
  * (no shell, no locale drift). Other systems read none.
