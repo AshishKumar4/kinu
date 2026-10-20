@@ -30,6 +30,7 @@ export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }
 
   return (
     <div className="min-w-0">
+      {mail === null && <button type="button" data-mail-back onClick={onBack} className="mb-3 flex items-center gap-1 p-meta p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>}
       {resource.status === "loading" && <div className="p-card p-5" role="status" aria-label="Loading thread"><Loader /></div>}
       {resource.status === "error" && <LoadFailure what="this thread" message={resource.message} onRetry={reload} className="p-card p-4" />}
       {mail !== null && <Reader key={`${id}:${String(drafts)}`} mail={mail} box={boxes.find((box) => box.path === mail.thread.path)} owner={owner} drafts={drafts} onBack={onBack} onChanged={reload} />}
@@ -56,6 +57,10 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
     ? [{ label: "Delete", icon: <TrashIcon size={15} />, danger: true, onSelect: () => change(true) }]
     : [{ label: "Restore", icon: <TrayIcon size={15} />, onSelect: () => change(false) }];
 
+  let reader = box === undefined ? "" : mailBoxLabel(box);
+
+  if (box?.kind === "person") reader = box.workspace === null ? "no assistant yet" : "Kinu";
+
   return (
     <article data-mail-reader={thread.id} aria-busy={busy !== null} className="p-card min-w-0 space-y-4 px-5 py-5 lg:px-6">
       <button type="button" data-mail-back onClick={onBack} className="flex items-center gap-1 p-meta p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>
@@ -66,7 +71,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
         </div>
         <div className="flex flex-wrap gap-1.5">
           <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2 font-mono">{box?.address ?? thread.path}</span>
-          {box !== undefined && <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2">{box.kind === "person" ? "Kinu" : mailBoxLabel(box)}</span>}
+          {box !== undefined && <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2">{reader}</span>}
         </div>
       </header>
       {thread.important !== null && <p data-mail-why className="p-row-text p-text-2">{thread.important}</p>}

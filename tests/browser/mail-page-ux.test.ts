@@ -27,14 +27,19 @@ async function view(page: Page, name: string): Promise<void> {
 }
 
 async function pick(page: Page, label: string, words: string): Promise<void> {
-  await page.click(`[aria-label="${label}"]`);
-  await page.waitForSelector('[role="option"]');
-  await page.$$eval('[role="option"]', (options, wanted) => {
-    const option = options.find((item) => item.textContent?.trim() === wanted);
+  const selector = `[aria-label="${label}"]`;
+  await page.click(selector);
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((option) => option.checkVisibility()));
 
-    if (!(option instanceof HTMLElement)) throw new Error(`no choice ${wanted}`);
-    option.click();
-  }, words);
+  for (const option of await page.$$('[role="option"]')) {
+    if (!await option.evaluate((node, wanted) => node.checkVisibility() && node.textContent?.trim() === wanted, words)) continue;
+    await option.click();
+    expect(await page.$eval(selector, (trigger) => trigger.textContent ?? '')).toContain(words);
+
+    return;
+  }
+
+  throw new Error(`no choice ${words}`);
 }
 
 async function action(page: Page, words: string): Promise<void> {
@@ -57,9 +62,9 @@ describe('Mail', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '', 390);
       expect(await page.$$eval('[aria-label="Mail views"] [role="tab"]', (tabs) => tabs.map((tab) => tab.getAttribute('data-segment')))).toEqual(['important', 'all', 'sent', 'drafts', 'trash']);
-      expect(await page.$eval('[data-segment="important"]', (tab) => tab.textContent)).toContain('2');
+      expect(await page.$eval('[data-segment="important"]', (tab) => tab.textContent)).toContain('3');
       expect(await page.$eval('[data-segment="drafts"]', (tab) => tab.textContent)).toContain('2');
-      expect(await rows(page)).toEqual(['t-priya', 't-registrar', 't-lisbon']);
+      expect(await rows(page)).toEqual(['t-priya', 't-github', 't-registrar', 't-lisbon']);
       await view(page, 'sent');
       expect(await rows(page)).toContain('t-dana');
       await view(page, 'drafts');
@@ -171,16 +176,24 @@ describe('Mail', () => {
     });
   });
 
-  test('an unverified owner claim is labelled; HTML cannot execute or fetch a remote image', async () => {
+  test('an unverified owner claim is labelled; HTML is sealed and remote images are blocked', async () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&view=all&thread=t-forged');
       await reader(page, 't-forged');
       expect(await page.$eval('[data-mail-unverified-banner]', (banner) => banner.textContent)).toContain('Not verified · claims to be you');
       const fetched: string[] = [];
-      page.on('request', (request) => { if (request.url().startsWith('https://avatars.githubusercontent.com/')) fetched.push(request.url()); });
+      const blocked: string[] = [];
+      page.on('requestfinished', (request) => { if (request.url().startsWith('https://avatars.githubusercontent.com/')) fetched.push(request.url()); });
+      page.on('requestfailed', (request) => { if (request.url().startsWith('https://avatars.githubusercontent.com/')) blocked.push(request.failure()?.errorText ?? ''); });
       await page.click('[data-mail-thread="t-github"]');
       await reader(page, 't-github');
       expect(await page.$eval('iframe[data-mail-sealed]', (iframe) => ({ sandbox: iframe.getAttribute('sandbox'), sealed: iframe.getAttribute('srcdoc')?.includes("default-src 'none'") }))).toEqual({ sandbox: '', sealed: true });
+      const frame = await (await page.$('iframe[data-mail-sealed]'))?.contentFrame();
+
+      if (frame === null || frame === undefined) throw new Error('no sealed mail frame');
+      await frame.waitForFunction(() => document.readyState === 'complete');
+      expect(await frame.$eval('img', (img) => img instanceof HTMLImageElement && img.naturalWidth === 0)).toBe(true);
+      expect(blocked).toContain('net::ERR_BLOCKED_BY_CSP');
       expect(fetched).toEqual([]);
       await page.close();
     });
