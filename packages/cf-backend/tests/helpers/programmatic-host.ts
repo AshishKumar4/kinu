@@ -264,18 +264,18 @@ export const SCRIPT_EXPORTS = {
     passThroughOnException: () => { throw new Error('unexpected supervisor pass-through'); },
   }), { OrchestratorAgent: OBJECT_NAMESPACE }),
   /**
-   * An owned workspace's egress (`KinuEgress` in src/server.ts) over the same handler and no vault, so a placeholder is
+   * An owned workspace's egress (`KinuEgress` in src/egress/outbound.ts) over the same policy and no vault, so a placeholder is
    * refused. Loaded at its first request: `outbound` reaches `cloudflare:email` through `agents`, which a case mocks first.
    */
   KinuEgress: ({ props }: { readonly props: unknown }) => ({
     fetch: async (request: Request): Promise<Response> => {
-      const { handleContainerEgress, parseEgressPrincipal } = await import('../../src/egress/outbound');
-      const params = parseEgressPrincipal({ props });
-      const viewer = params !== undefined && 'principal' in params;
+      const { parseEgressPrincipal } = await import('../../src/egress/outbound');
+      const { forwardEgress } = await import('../../src/egress/policy');
+      const principal = parseEgressPrincipal({ props });
 
-      EGRESS_FETCHES.push({ url: request.url, principal: viewer ? 'viewer' : 'owner', actorId: params === undefined || viewer ? null : params.actorId ?? null });
+      EGRESS_FETCHES.push({ url: request.url, principal: principal?.as ?? 'owner', actorId: principal?.actorId ?? null });
 
-      return await handleContainerEgress(request, NO_VAULT, params, undefined);
+      return await forwardEgress(request, NO_VAULT, principal, { self: undefined, github: () => ({ waitUntil: () => undefined, record: async () => undefined }), seam: 'container' });
     },
     connect: (): never => { throw new Error('no suite over this host opens a socket through the egress'); },
   }),

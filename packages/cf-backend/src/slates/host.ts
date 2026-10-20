@@ -13,7 +13,7 @@ import {
   escapeHtml, keptSlateContext, publicPage, sharedBuildRefusal, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
-  type SlateFileChange, type SlateOperation,
+  type SlateFileChange, type SlateOperation, type EgressPrincipal,
 } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { attempt, ERROR_CODES, KinuError, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
@@ -22,7 +22,7 @@ import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
-import { codemodeEgress } from '../codemode-egress';
+import { codemodeEgress } from '../codemode-egress-mint';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 import { PersonalParts, type PartConnections } from './part-runs';
 
@@ -635,7 +635,8 @@ export class SlateHost {
     const actor = unshared ? await this.deps.browserActor(caller) : null;
     // Shared, it reaches the network as no one: its own preview hosts too, and it holds and spends none of the owner's secrets.
     const ownerUserId = unshared ? this.deps.ownerUserId?.() ?? null : null;
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: unshared, ownerUserId });
+    const principal: EgressPrincipal = unshared ? { as: 'owner', workspace: this.deps.workspace, actorId: actor, ownerUserId } : { as: 'viewer', workspace: this.deps.workspace, actorId: null };
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ principal });
     const secrets = unshared ? await this.deps.secrets?.() ?? {} : {};
 
     if (caller.workMode === 'build' && globalOutbound === null) {
