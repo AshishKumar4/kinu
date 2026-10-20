@@ -408,5 +408,16 @@
     "gallery_listings",
     "gallery_reports",
     "gallery_stars"
+  ],
+  "mailname": [
+    "mail_name"
+  ],
+  "mailbox": [
+    "mail_addresses",
+    "mail_allow",
+    "mail_attachments",
+    "mail_box",
+    "mail_messages",
+    "mail_threads"
   ]
 }
