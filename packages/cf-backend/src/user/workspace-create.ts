@@ -14,7 +14,7 @@ import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller, WorkspaceSeed } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import type { WorkspaceRegistration, WorkspaceRegistrationSource } from './workspaces';
-import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
+import { indexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import { isOwnedByAnotherAccount } from './workspace-ownership';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -128,7 +128,7 @@ export function createCloudWorkspaceForUser<Id>(
       yield* Effect.promise(async () => initializeOrchestrator(initialization));
       // Index only after claimOwner succeeds: the DO name is global, roster rows are per-account.
       // Non-fatal: the registry row is the truth and the drilldown reconciles from it.
-      yield* Effect.promise(async () => indexNewWorkspace(env, {
+      yield* Effect.promise(async () => indexWorkspace(env, {
         userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
       }));
 
@@ -140,7 +140,7 @@ export function createCloudWorkspaceForUser<Id>(
       const err = Cause.squash(failed);
       // Only reached for a row this create inserted (`active` returned above), so undo is safe.
       // A rollback failure is recorded separately; the original fault still propagates.
-      yield* logged('workspace.create_rollback_unexpected', { doing: 'undoing a failed workspace create', otherwise: 'unavailable' }, rollbackRegistration({ env, userId, userDO, caller, entry, cause: err }), { workspace: entry.name });
+      yield* logged('workspace.create_rollback_unexpected', { doing: 'undoing a failed workspace create', otherwise: 'unavailable' }, rollbackRegistration({ userId, userDO, caller, entry, cause: err }), { workspace: entry.name });
 
       return yield* Effect.failCause(failed);
     }));
@@ -152,8 +152,7 @@ export function createCloudWorkspaceForUser<Id>(
  * `releaseWorkspaceReservation` (never contacts it); otherwise `removeWorkspace`, which fails
  * closed and leaves the rows standing (recorded, tolerated). A release failure propagates.
  */
-function rollbackRegistration<Id>(input: {
-  env: CreateCloudWorkspaceEnv<Id>;
+function rollbackRegistration(input: {
   userId: string;
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
@@ -161,14 +160,15 @@ function rollbackRegistration<Id>(input: {
   cause: unknown;
 }): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
-    const { env, userId, userDO, caller, entry } = input;
+    const { userId, userDO, caller, entry } = input;
     const contested = isOwnedByAnotherAccount({ cause: input.cause });
 
     const undo = contested
       ? Effect.promise(() => userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt))
       : Effect.promise(() => userDO.removeWorkspace(caller, entry.name, userId));
 
-    const undone = yield* Effect.catchCause(Effect.as(undo, true), (failed) => {
+    // Either undo forgets the workspace in the control plane's index as it removes the row (`UserWorkspaces`).
+    yield* Effect.catchCause(undo, (failed) => {
       const failure = toKinuError({
         doing: contested
           ? 'releasing the roster row a failed create reserved'
@@ -183,14 +183,8 @@ function rollbackRegistration<Id>(input: {
         diagnostics.failure('workspace.create_rollback_failed', failure, {
           workspace: entry.name, contested,
         });
-
-        return false;
       });
     });
-
-    if (!undone) return;
-    // Unconditional: tombstoning a row that was never written is a no-op.
-    yield* Effect.promise(() => unindexWorkspace(env, { userId, name: entry.name }));
   });
 }
 

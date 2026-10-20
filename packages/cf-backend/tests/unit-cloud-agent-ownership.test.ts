@@ -305,7 +305,8 @@ describe('cloud agent ownership safety', () => {
     expect(calls).not.toContain('soul');
     // Indexing after the claim means the rollback leaves no index row it cannot remove.
     expect(index.observed).toEqual([]);
-    expect(index.forgotten).toEqual([`${USER_ID}/jarvis`]);
+    // The registry's release forgets it in the index itself (unit-registry-index-feed); this one is a stand-in.
+    expect(index.forgotten).toEqual([]);
   });
 
   test('a release the roster refuses propagates, and the create still answers with its OWN failure', async () => {
