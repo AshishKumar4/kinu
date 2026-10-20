@@ -2572,6 +2572,7 @@ export {
   connectEndedOf,
   type ConnectEnded,
   ConnectEndedSchema,
+  ConnectRunSchema,
   type ReportedRoute,
   REPORTED_ROUTES,
   routeTemplateOf,

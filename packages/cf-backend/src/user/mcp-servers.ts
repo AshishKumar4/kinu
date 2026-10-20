@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
+  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -171,6 +171,11 @@ interface McpServerUnavailable {
 export interface UserMcpServersHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
   readonly mcp: MCPClientManager;
   readonly vault: Pick<UserCredentials, 'sealMcpHeaders' | 'openMcpHeaders' | 'getAuthHeaders'>;
+}
+
+/** Where a server's sign-in keeps the run it was begun for, until its callback takes it. */
+function connectRunKey(serverId: string): string {
+  return `mcp-connect-run:${serverId}`;
 }
 
 /** The account's MCP servers. */
@@ -955,7 +960,33 @@ export class UserMcpServers {
     }
   }
 
-  /** The sign-in's end, as the finish page says it: the server by its name, and why it did not connect. */
+  /**
+   * A sign-in begun for `run`, the starting page's id (`ConnectRunSchema`): the server's sign-in address, minted afresh
+   * when its last one was used or refused, and the run its callback's finish page names. A server that is connected,
+   * or signs in by its token, waits for no sign-in.
+   */
+  userMcp_beginConnect(caller: UserCaller, id: string, run: string): Promise<{ authUrl: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.host.requireTier(caller, 'mcp.manage'));
+      const parsed = v.safeParse(ConnectRunSchema, run);
+
+      if (!parsed.success) return yield* new KinuError('bad_input', 'A sign-in starts from the page that asks for it.');
+      yield* Effect.promise(async () => this.joinActivation());
+      const server = (yield* Effect.promise(async () => this.userMcp_list(caller))).find((summary) => summary.id === id);
+
+      if (server === undefined) return yield* new KinuError('missing', 'This account has no such MCP server.');
+
+      if (server.status === 'ready') return yield* new KinuError('bad_input', `${server.name} is connected already.`);
+      const result = yield* Effect.promise(async () => this.host.mcp.connectToServer(id));
+
+      if (result.state !== 'authenticating' || !result.authUrl) return yield* new KinuError('bad_input', `${server.name} waits for no sign-in.`);
+      yield* Effect.promise(async () => this.host.ctx.storage.put(connectRunKey(id), parsed.output));
+
+      return { authUrl: result.authUrl };
+    }));
+  }
+
+  /** The sign-in's end, as the finish page says it: its run, the server by its name, and why it did not connect. */
   async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<ConnectEnded> {
     await this.host.requireTier(caller, 'mcp.manage');
 
@@ -964,6 +995,7 @@ export class UserMcpServers {
       await this.joinActivation();
       const req = new Request(url);
       const result = await this.host.mcp.handleCallbackRequest(req);
+      const run = await this.connectRun(result.serverId);
 
       if (result.authSuccess) {
         // Awaited in its own try: tokens are already saved, so a connect failure is not an auth failure.
@@ -972,22 +1004,34 @@ export class UserMcpServers {
         catch (cause) {
           diagnostics.failure('mcp.connect_failed', toKinuError({ doing: 'establishing an authorized MCP connection', cause, otherwise: 'unavailable' }));
 
-          return { service: this.serverName(result.serverId), error: 'Signed in, but the MCP server did not accept the connection yet.' };
+          return { run, service: this.serverName(result.serverId), error: 'Signed in, but the MCP server did not accept the connection yet.' };
         }
 
         await this.readMcpToolList(result.serverId);
         await this.assistantConnectionsChanged();
 
-        return { service: this.serverName(result.serverId), error: null };
+        return { run, service: this.serverName(result.serverId), error: null };
       }
 
-      return { service: this.serverName(result.serverId), error: result.authError ?? 'The MCP server refused the sign-in.' };
+      return { run, service: this.serverName(result.serverId), error: result.authError ?? 'The MCP server refused the sign-in.' };
     } catch (cause) {
       const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
       diagnostics.failure('mcp.oauth_callback_failed', error);
 
-      return { service: 'the MCP server', error: renderThrownChain({ cause: error }) };
+      // No server named, so no run: the page that began it learns nothing, and the finish page says so.
+      return { run: null, service: 'the MCP server', error: renderThrownChain({ cause: error }) };
     }
+  }
+
+  /** The run a sign-in of `serverId` was begun for, taken: one callback ends one run. */
+  private async connectRun(serverId: string | null | undefined): Promise<string | null> {
+    if (serverId === null || serverId === undefined) return null;
+    const key = connectRunKey(serverId);
+    const run = v.safeParse(ConnectRunSchema, await this.host.ctx.storage.get(key));
+
+    await this.host.ctx.storage.delete(key);
+
+    return run.success ? run.output : null;
   }
 
   /** A server's name as the person gave it, for words about it. */

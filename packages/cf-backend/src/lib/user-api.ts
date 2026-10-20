@@ -432,9 +432,12 @@ export const listCloudflareGateways = () =>
 
 export const selectCloudflareGateway = (id: string | null) => settle(putCloudflareSelection('/cloudflare/gateway', id));
 
-/** Connects a Cloudflare login's Workers AI to this account (`beginConnect` runs it): a connect, never a sign-in, so a
- *  login under another email attaches here rather than signing in as another account. Cloudflare asks which login. */
-export const CLOUDFLARE_CONNECT_PATH = `/auth/cloudflare/start?${new URLSearchParams({ intent: 'connect', prompt: 'login' }).toString()}`;
+/** Connects a Cloudflare login's Workers AI to this account, for the run `beginConnect` began: a connect, never a
+ *  sign-in, so a login under another email attaches here rather than signing in as another account. Cloudflare asks
+ *  which login. */
+export function cloudflareConnectPath(run: string): string {
+  return `/auth/cloudflare/start?${new URLSearchParams({ intent: 'connect', prompt: 'login', run }).toString()}`;
+}
 
 export interface McpServerInput {
   name?: string;
@@ -453,6 +456,10 @@ export const listMcpPresets = () => settle(api(v.array(McpPresetAvailabilitySche
 
 export const addMcpServer   = (input: McpServerInput) =>
   settle(api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input));
+
+/** An MCP server's sign-in begun for `run`: its sign-in address, which its callback ends with that run. */
+export const beginMcpConnect = (id: string, run: string) =>
+  settle(api(v.object({ authUrl: v.string() }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/connect`, { run }));
 
 export const removeMcpServer = (id: string) =>
   settle(api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`));

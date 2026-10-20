@@ -43,6 +43,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_connectedPresets'
   | 'userMcp_handleOAuthCallback'
+  | 'userMcp_beginConnect'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
@@ -544,6 +545,19 @@ userRoutes.all('/api/user/mcp/servers/:id', async (c, next) => {
   c.set('key', decodeURIComponent(rawParam(c, 'id')));
   await next();
 });
+
+// A sign-in begun from a page, for its run: the server's sign-in address, which its callback ends with that run.
+userRoutes.post('/api/user/mcp/servers/:id/connect', (c) => settle(Effect.gen(function* () {
+  const body = v.safeParse(v.object({ run: v.string() }), yield* Effect.promise(async () => safeJson(c.req.raw, JsonValueSchema)));
+
+  if (!body.success) return err(400, 'Body must be { run }');
+
+  return yield* Effect.tryPromise({
+    // Its own id: the `:id` middleware above matches the server's path alone, not this one under it.
+    try: async () => json({ body: await c.get('stub').userMcp_beginConnect(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.output.run) }),
+    catch: (cause) => authoredRefusal({ doing: 'beginning this MCP server\'s sign-in', cause }),
+  });
+})));
 
 userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({
   try: async () => {

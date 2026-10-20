@@ -276,7 +276,7 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
-    allowedTools: ["create_issue"], authUrl: galleryAuthorizeUrl("linear"),
+    allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
     error: null, presetId: null,
   },
   {
@@ -304,7 +304,7 @@ if (mcpPresetVariant === "connected") {
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
-      authUrl: galleryAuthorizeUrl("Cloudflare"), error: null,
+      authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
       presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
@@ -432,45 +432,9 @@ const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", l
 /** `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it. */
 const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
 
-/** The finish page's own address (`&service=`, `&error=`), as a connect's callback writes it. */
+/** The finish page's own address (`&run=`, `&service=`, `&error=`), as a connect's callback writes it. A visual fixture:
+ *  the connects themselves run through the Worker's own callbacks, in the live-app rows. */
 const CONNECTED_AT = connectedPath(connectEndedOf(new URLSearchParams(location.search)));
-
-/** Services whose sign-in a finish page in another tab of this gallery ended, by name: the callback's stand-in, which
- *  stores the grant before it sends the tab to the finish page. Shared through this origin's storage. */
-const SIGNED_IN_KEY = "gallery-mcp-signed-in";
-
-if (frame === "connected" && new URLSearchParams(location.search).get("error") === null) {
-  const named = new URLSearchParams(location.search).get("service");
-
-  if (named !== null) localStorage.setItem(SIGNED_IN_KEY, JSON.stringify([...signedInServices(), named]));
-}
-
-/** A sign-in's start on this gallery: its provider's consent page stands in for the provider's own. */
-function galleryAuthorizeUrl(service: string): string {
-  return `${location.origin}${location.pathname}?${new URLSearchParams({ frame: "authorize", service }).toString()}`;
-}
-
-/** The provider's consent page: approved, the provider sends the tab to the server's callback, which stores the grant
- *  and ends on the finish page; declined, the callback ends there with the provider's refusal. */
-function GalleryAuthorize() {
-  const service = new URLSearchParams(location.search).get("service") ?? "the service";
-  const end = (error: string | null) => { location.assign(`${location.pathname}?frame=connected&${connectedPath({ service, error }).split("?")[1] ?? ""}`); };
-
-  return (
-    <div className="flex h-screen flex-col items-center justify-center gap-3 p-bg p-text text-sm" data-gallery-authorize={service}>
-      <p>{service} asks to connect to your Kinu account.</p>
-      <div className="flex gap-2">
-        <button type="button" data-authorize="approve" className="rounded-md border p-border px-3 py-1" onClick={() => { end(null); }}>Approve</button>
-        <button type="button" data-authorize="deny" className="rounded-md border p-border px-3 py-1" onClick={() => { end("The person declined."); }}>Deny</button>
-      </div>
-    </div>
-  );
-}
-
-/** The names a finish page in this gallery said signed in. */
-function signedInServices(): string[] {
-  return v.parse(v.array(v.string()), JSON.parse(localStorage.getItem(SIGNED_IN_KEY) ?? "[]"));
-}
 
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
@@ -485,17 +449,9 @@ const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 /** `&chatgpt=signed-in`: the account holds a ChatGPT sign-in, so its entry offers the disconnect; OpenAI refuses the revoke. */
 let settingsChatGptSignedIn = new URLSearchParams(location.search).get("chatgpt") === "signed-in";
 
-/** Whether the account holds a ChatGPT plan: the machine stores it once the person approves in the sign-in's tab, where
- *  the provider's consent page stands in. */
-function chatgptSignedIn(): boolean {
-  return settingsChatGptSignedIn || signedInServices().includes("ChatGPT");
-}
-
 function galleryChatGptStatus() {
-  const signedIn = chatgptSignedIn();
-
   return {
-    signedIn, email: signedIn ? "owner@example.com" : null, planEnabled: signedIn,
+    signedIn: settingsChatGptSignedIn, email: settingsChatGptSignedIn ? "owner@example.com" : null, planEnabled: settingsChatGptSignedIn,
     pending: false, lastFailure: null, firstSignIn: false,
   };
 }
@@ -514,7 +470,6 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
 
   if (route === "/api/user/chatgpt" && method === "DELETE") {
     settingsChatGptSignedIn = false;
-    localStorage.setItem(SIGNED_IN_KEY, JSON.stringify(signedInServices().filter((name) => name !== "ChatGPT")));
 
     return fixtureJson({ unrevoked: query === "revoke=1" ? "OpenAI refused to revoke the refresh_token: The refresh token has already been used." : null });
   }
@@ -522,14 +477,14 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
   if (path === "/api/user/chatgpt") {
     return fixtureJson(CHATGPT_DEVICE
       ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: null }
-      : { device: null, status: null, account: chatgptSignedIn() ? { email: "owner@example.com" } : null, machineSignIn: null });
+      : { device: null, status: null, account: settingsChatGptSignedIn ? { email: "owner@example.com" } : null, machineSignIn: null });
   }
 
-  // Open, not signed in: the plan arrives only once the person approves in the sign-in's tab.
   if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
     if (!CHATGPT_DEVICE) return fixtureJson({ state: "waiting_for_machine" });
+    settingsChatGptSignedIn = true;
 
-    return fixtureJson({ state: "open", authorizeUrl: galleryAuthorizeUrl("ChatGPT"), device: GALLERY_DEVICE });
+    return fixtureJson({ state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE });
   }
 
   if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") return fixtureJson({ cancelled: true });
@@ -638,7 +593,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       models: [
         ...WORKERS_AI_MODELS,
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-        ...chatgptSignedIn() ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
+        ...settingsChatGptSignedIn ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
         ...settingsSavedCredentials.has("groq.bearer")
           ? [{ spec: "groq/llama-3.3-70b-versatile", label: "Llama 3.3 70B", provider: "groq", reasoningEfforts: [] }]
           : [],
@@ -704,6 +659,19 @@ function mcpPresetsFixture(): Response {
   ]);
 }
 
+/** A sign-in begun from a page: the row's own sign-in address, as the account answers it. Each begin's body is exposed so
+ *  the gate can check which run it was begun for, newest last. */
+function mcpConnectFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  const connecting = /^\/api\/user\/mcp\/servers\/([^/]+)\/connect$/u.exec(path);
+
+  if (connecting === null || method !== "POST") return null;
+  const row = galleryMcpRows.find((each) => each.id === decodeURIComponent(connecting[1] ?? ""));
+
+  localStorage.setItem("gallery-mcp-connects", `${localStorage.getItem("gallery-mcp-connects") ?? ""}${typeof body === "string" ? body : ""}\n`);
+
+  return row?.authUrl ? fixtureJson({ authUrl: row.authUrl }) : fixtureJson({ error: "waits for no sign-in" }, 400);
+}
+
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/mcp/presets") return mcpPresetsFixture();
 
@@ -733,7 +701,8 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
 
     const id = `srv-add-${String(galleryMcpRows.length + 1)}`;
 
-    const authUrl = signIn ? galleryAuthorizeUrl(name) : null;
+    // On this origin, so a tab sent to the sign-in loads nothing from a provider.
+    const authUrl = signIn ? `${location.origin}/gallery-sign-in/${id}` : null;
 
     // Exposed so the gate can check the posted payload.
     localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
@@ -753,12 +722,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
   }
 
   if (path === "/api/user/mcp/servers") {
-    // A server another tab signed in is ready here, as the account's server list says once its tokens are stored.
-    const signedIn = new Set(signedInServices());
-
-    return fixtureJson(v.parse(v.array(McpServerSummarySchema), galleryMcpRows.map((row) => (signedIn.has(row.name)
-      ? { ...row, status: "ready" as const, toolsCount: 21, authUrl: null }
-      : row))));
+    return fixtureJson(v.parse(v.array(McpServerSummarySchema), galleryMcpRows));
   }
 
   return null;
@@ -942,6 +906,7 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
+  mcpConnectFixture,
   mcpServersFixture,
   deviceRowsFixture,
   pluginsFixture,
@@ -8075,10 +8040,8 @@ async function mount() {
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // `&step=0..3` picks the wizard panel.
     ["welcome", { node: <WelcomeFrame />, entries: [WELCOME_ROUTE] }],
-    // Where every connect ends: what a server's callback sends its tab to.
+    // Where every connect ends, as a server's callback sends its tab there.
     ["connected", { node: <ConnectedPage />, entries: [CONNECTED_AT] }],
-    // A provider's consent page, the network seam's stand-in: `&service=` is what asks to connect.
-    ["authorize", { node: <GalleryAuthorize />, entries: ["/"] }],
     // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],

@@ -18,7 +18,8 @@ import { ChatHistoryEntrySchema, rowText, TurnClaimFrameSchema } from '@kinu.run
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
-import { DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
+import { apiJson, DESKTOP, withLiveApp, type LiveApp } from './live-app-harness';
+import { CONSENT_CHOICE, startConsentingProvider } from './consenting-oauth';
 import { recordDeadEnds } from '../evals/src/browser';
 import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
 import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
@@ -162,8 +163,28 @@ interface KeptTabVerdict {
   readonly workPresence: readonly boolean[];
 }
 
+/** What a page said of a connect's end (`data-connect-ended`), or null while it said nothing. */
+type ConnectSaid = 'connected' | 'failed' | null;
+
+/** The connect row: an MCP server that signs in, against a provider that asks the person (consenting-oauth.ts), through
+ *  the Worker's own callback and the account's own storage. Statuses are the account's server list's. */
+interface ConnectVerdict {
+  /** Setup walked to its tools step by its own Next, popups blocked, a server added and approved in that tab: the
+   *  address the tab came back to, and the server's status then. */
+  readonly sameTab: { readonly back: string; readonly status: string };
+  /** A finish page for another run, opened while a sign-in waited in its helper tab: whether the helper was still open,
+   *  and what the starting page said. */
+  readonly planted: { readonly helperOpen: boolean; readonly said: ConnectSaid };
+  /** The person declined: whether the helper closed, what the page said, the server's status, and whether its row
+   *  offered the sign-in again. */
+  readonly denied: { readonly helperClosed: boolean; readonly said: ConnectSaid; readonly status: string; readonly signInOffered: boolean };
+  /** That sign-in, run again and approved: what the page said, and the server's status. Null where none was offered. */
+  readonly retried: { readonly said: ConnectSaid; readonly status: string } | null;
+}
+
 export interface TierVerdicts {
   bootFailure: string | null;
+  connect: ConnectVerdict | null;
   liveIndicator: LiveIndicatorVerdict | null;
   openedMidTurn: OpenedMidTurnVerdict | null;
   reconnect: ReconnectVerdict | null;
@@ -1663,6 +1684,140 @@ async function measureSlateUi(newPage: LiveApp['newPage'], origin: string, heard
   }
 }
 
+/** A wait across a page load under `vite dev`: one load took 97-102 s, cold or warm, on a box at load 13 of 24 cores
+ *  (2026-10-23, /mnt/local/kinu/tmp/connect-live/warm.ts). A sign-in's end crosses two, so three loads' time. */
+const ACROSS_PAGE_LOADS_MS = 300_000;
+
+const ServerRowsSchema = v.array(v.looseObject({ id: v.string(), name: v.string(), status: v.string() }));
+
+/** The account's server named `name`, as its server list says it. */
+async function listedServer(origin: string, name: string): Promise<{ readonly id: string; readonly status: string }> {
+  const listed = await named(`the account's server list, for ${name}`, async () => apiJson(origin, '/api/user/mcp/servers'));
+  const row = v.parse(ServerRowsSchema, listed).find((each) => each.name === name);
+
+  if (row === undefined) throw new Error(`the account lists no MCP server ${name}`);
+
+  return row;
+}
+
+/** What `page` says of its last connect's end. */
+async function connectSaid(page: Page): Promise<ConnectSaid> {
+  return v.parse(v.nullable(v.picklist(['connected', 'failed'])), await page.evaluate(() => document.querySelector('[data-connect-ended]')?.getAttribute('data-connect-ended') ?? null));
+}
+
+/** Adds the server `name` at `serverUrl` from the MCP panel `page` shows. */
+async function addCustomServer(page: Page, name: string, serverUrl: string): Promise<void> {
+  await pressButton(page, 'button', 'Add custom server');
+  await page.waitForSelector('input[placeholder="github"]');
+  await page.type('input[placeholder="github"]', name);
+  await page.type('input[placeholder="https://mcp.example.com/v1"]', serverUrl);
+  await pressButton(page, 'button', 'Add server');
+}
+
+/** The helper tab a click starts a sign-in in, at the provider's consent page; `closed` settles as it closes. */
+async function signInHelper(page: Page, press: () => Promise<void>): Promise<{ readonly helper: Page; readonly closed: Promise<void> }> {
+  const opened = page.browser().waitForTarget((target) => target.opener() === page.target(), { timeout: ACROSS_PAGE_LOADS_MS });
+
+  await press();
+  const helper = await (await named('the sign-in tab', async () => opened)).page();
+
+  if (helper === null) throw new Error('the sign-in opened no tab');
+  const closed = new Promise<void>((resolve) => { helper.once('close', () => { resolve(); }); });
+
+  await named('the provider\'s consent page', async () => helper.waitForSelector(`[${CONSENT_CHOICE}]`, { timeout: ACROSS_PAGE_LOADS_MS }));
+
+  return { helper, closed };
+}
+
+/** The person's answer on the provider's consent page. A DOM click, as `pressButton` presses: puppeteer's own waits on
+ *  the renderer's answer to the mouse, which a navigation to another origin can leave unanswered. */
+async function consent(page: Page, choice: 'approve' | 'deny'): Promise<void> {
+  await page.$eval(`[${CONSENT_CHOICE}="${choice}"]`, (link) => { if (link instanceof HTMLElement) link.click(); });
+}
+
+/** Whether `closed` settled within the time a finish page has to load and close its tab. */
+async function closedSoon(closed: Promise<void>): Promise<boolean> {
+  return Promise.race([closed.then(() => true), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, ACROSS_PAGE_LOADS_MS); })]);
+}
+
+/** Walks setup to its tools step by its own Next, as a person does: `?step=` is never typed in. */
+async function walkToTools(page: Page, origin: string): Promise<void> {
+  await page.goto(`${origin}/welcome`, { waitUntil: 'load' });
+  const shown = `document.querySelector('[data-welcome-step]:not([aria-hidden="true"])')?.getAttribute('data-welcome-step') ?? null`;
+
+  for (let pressed = 0; ; pressed += 1) {
+    await until(page, 'a setup step', `${shown} !== null`);
+    const step = v.parse(v.string(), await page.evaluate(shown));
+
+    if (step === 'tools') return;
+
+    if (pressed === 8) throw new Error(`setup never reached its tools step; it shows ${step}`);
+    await pressButton(page, 'button', await page.$('[data-mail-not-now]') === null ? 'Next' : 'Not now');
+    await until(page, `setup past its ${step} step`, `${shown} !== ${JSON.stringify(step)}`);
+  }
+}
+
+/**
+ * The connect row. Its first sign-in runs in the tab itself (a blocked popup) from setup's tools step, reached by Next;
+ * the rest run in a helper tab from the account's MCP page: a finish page for another run is opened while one waits,
+ * the person declines, then signs in again and approves.
+ */
+async function measureConnect(newPage: LiveApp['newPage'], origin: string): Promise<ConnectVerdict> {
+  const provider = startConsentingProvider();
+  const setup = await newPage();
+  const panel = await newPage();
+
+  try {
+    await walkToTools(setup, origin);
+    // A popup blocker's answer: no helper tab, so the connect runs here.
+    await setup.evaluate(() => { window.open = () => null; });
+    await addCustomServer(setup, 'Samehub', provider.serverUrl);
+    await named('the consent page in the setup tab', async () => setup.waitForSelector(`[${CONSENT_CHOICE}="approve"]`, { timeout: ACROSS_PAGE_LOADS_MS }));
+    await consent(setup, 'approve');
+    await named('the setup tab back from its sign-in', async () => setup.waitForFunction((at: string) => location.origin === at && document.querySelector('[data-welcome-step]') !== null, { timeout: ACROSS_PAGE_LOADS_MS }, origin));
+    const back = new URL(setup.url());
+    const sameTab = { back: back.pathname + back.search + back.hash, status: (await listedServer(origin, 'Samehub')).status };
+
+    await named('the MCP page to load', async () => panel.goto(`${origin}/user/settings/mcp`, { waitUntil: 'load' }));
+    await until(panel, 'the MCP page', `[...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Add custom server')`);
+    const first = await signInHelper(panel, async () => addCustomServer(panel, 'Denyhub', provider.serverUrl));
+
+    // Opened by no script, so it stays: it names a run that is not the panel's.
+    const planted = await newPage();
+
+    await named('the planted finish page to load', async () => planted.goto(`${origin}/connected?run=${crypto.randomUUID()}&service=Denyhub`, { waitUntil: 'load' }));
+    await until(planted, 'the planted finish page', `document.querySelector('[data-connect-finished]') !== null`);
+    // A broadcast reaches every tab of the origin within a frame or two; a second is many.
+    await new Promise((resolve) => { setTimeout(resolve, 1000); });
+    const plantedSaw = { helperOpen: !first.helper.isClosed(), said: await connectSaid(panel) };
+
+    await planted.close();
+    await consent(first.helper, 'deny');
+    const helperClosed = await named('the declined sign-in\'s tab to close', async () => closedSoon(first.closed));
+
+    await until(panel, 'the panel to say how the sign-in ended', `document.querySelector('[data-connect-ended]') !== null`);
+    const deniedSaid = await connectSaid(panel);
+    const denyhub = await listedServer(origin, 'Denyhub');
+    // The panel's list read after the end, as a person sees it.
+    await named('the MCP page to reload', async () => panel.reload({ waitUntil: 'load' }));
+    await until(panel, 'the MCP page listing Denyhub', `document.querySelector('[data-mcp-server="${denyhub.id}"]') !== null`);
+    const signIn = `[data-mcp-server="${denyhub.id}"] [data-mcp-sign-in]`;
+    const denied = { helperClosed, said: deniedSaid, status: denyhub.status, signInOffered: await panel.$(signIn) !== null };
+
+    if (!denied.signInOffered) return { sameTab, planted: plantedSaw, denied, retried: null };
+    const again = await signInHelper(panel, async () => panel.click(signIn));
+
+    await consent(again.helper, 'approve');
+    await named('the approved sign-in\'s tab to close', async () => closedSoon(again.closed));
+    await until(panel, 'the panel to say the sign-in connected', `document.querySelector('[data-connect-ended="connected"]') !== null`);
+
+    return { sameTab, planted: plantedSaw, denied, retried: { said: await connectSaid(panel), status: (await listedServer(origin, 'Denyhub')).status } };
+  } finally {
+    await named('the connect row\'s pages to close', async () => Promise.all([setup.close(), panel.close()]));
+    await provider.stop();
+  }
+}
+
 /** Presses the button showing `words` among those `buttons` selects. */
 async function pressButton(page: Page, buttons: string, words: string): Promise<void> {
   await page.$$eval(buttons, (found, label) => {
@@ -2066,7 +2221,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'stop-then-send', 'new-chat-stop', 'slate-ui', 'provider-wait', 'state',
+  'stop-then-send', 'new-chat-stop', 'slate-ui', 'provider-wait', 'connect', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -2087,7 +2242,7 @@ export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
 export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
-    unsentAnswer: null, bootFailure: null,
+    unsentAnswer: null, bootFailure: null, connect: null,
     controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, state: null,
   };
 
@@ -2158,6 +2313,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stopProbe)); },
         'new-chat-stop': async () => { observed.newChatStop = await attempt('new-chat-stop', () => measureNewChatStop(newPage, origin, openingHeld)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
+        'connect': async () => { observed.connect = await attempt('connect', () => measureConnect(newPage, origin)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };

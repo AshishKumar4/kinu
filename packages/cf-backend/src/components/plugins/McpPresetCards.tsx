@@ -9,7 +9,7 @@ import {
   MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
 } from "@kinu.run/core";
 import { addMcpServer, removeMcpServer, type McpServerInput } from "@/lib/user-api";
-import { beginConnect, type ConnectRun } from "@/lib/connect-window";
+import { beginConnect, signInMcpServer, type ConnectRun } from "@/lib/connect-window";
 import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
@@ -40,7 +40,7 @@ function PresetMenu({ preset, status, onSignIn, onRemove }: {
   preset: McpPreset;
   status: McpServerSummary['status'];
   /** Present while the server waits for its sign-in: runs it again, as Add did. */
-  onSignIn: (() => void) | null;
+  onSignIn: (() => Promise<void>) | null;
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -63,7 +63,7 @@ function PresetMenu({ preset, status, onSignIn, onRemove }: {
         <div role="menu" className="absolute right-0 z-10 mt-1 w-40 p-card border p-border p-1.5 p-shadow-menu">
           {onSignIn !== null && (
             <button type="button" role="menuitem" data-plugin-sign-in className={item}
-              onClick={() => { setOpen(false); onSignIn(); }}>
+              onClick={() => { setOpen(false); detach(Effect.promise(onSignIn)); }}>
               <SignInIcon size={14} /> Sign in
             </button>
           )}
@@ -113,7 +113,9 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
       const result = await addMcpServer(input);
 
       if (result.authUrl && connect !== undefined) {
-        connect.start(result.authUrl, (ended) => { onChanged(); onConnected?.(ended); });
+        const failed = await signInMcpServer(connect, result.id, (ended) => { onChanged(); onConnected?.(ended); });
+
+        if (failed !== null) setErr(failed);
       } else {
         connect?.cancel();
       }
@@ -152,9 +154,13 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
   let trailing: ReactNode;
 
   if (server !== undefined) {
-    const { authUrl } = server;
-    // A server still waiting for its sign-in keeps the way back to it: the sign-in it was given, in a tab opened now.
-    const signInAgain = authUrl === null ? null : () => { beginConnect().start(authUrl, (ended) => { onChanged(); onConnected?.(ended); }); };
+    // A preset that signs in and is not connected keeps the way to its sign-in: begun again for a run of its own, in a
+    // tab opened now, whether its last one waits, was declined or failed.
+    const signInAgain = !signIn || server.status === 'ready' ? null : async () => {
+      const failed = await signInMcpServer(beginConnect(), server.id, (ended) => { onChanged(); onConnected?.(ended); });
+
+      if (failed !== null) setErr(failed);
+    };
 
     trailing = <PresetMenu preset={preset} status={server.status} onSignIn={signInAgain} onRemove={remove} />;
   } else if (asking) {

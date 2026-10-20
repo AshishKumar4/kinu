@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIcon } from "@phosphor-icons/react";
 import type { ConnectEnded, McpTransport } from "@kinu.run/core";
-import { beginConnect } from "@/lib/connect-window";
+import { beginConnect, signInMcpServer } from "@/lib/connect-window";
 import { addMcpServer, removeMcpServer } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { Status } from "@/components/ui/Status";
@@ -39,6 +39,9 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
     reload();
   }, [reload]);
 
+  // Why the last sign-in could not begin, before any tab ran it.
+  const setSignInFailed = useCallback((error: string) => { setEnded({ run: null, service: 'The MCP server', error }); }, []);
+
   const { ask, dialog } = useConfirmation();
 
   const remove = useCallback((id: string, name: string) => ask({
@@ -61,12 +64,12 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
       </div>
 
       {ended !== null && ended.error === null && (
-        <div className="p-card p-3 text-xs flex items-center gap-2 p-success">
+        <div className="p-card p-3 text-xs flex items-center gap-2 p-success" data-connect-ended="connected">
           <CheckIcon size={14} /> Connected to {ended.service}. Discovering tools…
         </div>
       )}
       {ended !== null && ended.error !== null && (
-        <div className="p-card p-3 text-xs flex items-center gap-2 p-danger">
+        <div className="p-card p-3 text-xs flex items-center gap-2 p-danger" data-connect-ended="failed">
           <WarningIcon size={14} /> {ended.service} did not connect: {ended.error}
         </div>
       )}
@@ -98,7 +101,11 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                   <div className="ml-auto flex items-center gap-2">
                     {s.authUrl && (
                       <button
-                        type="button" onClick={() => { if (s.authUrl) beginConnect().start(s.authUrl, connected); }}
+                        type="button" data-mcp-sign-in onClick={() => detach(Effect.promise(async () => {
+                          const failed = await signInMcpServer(beginConnect(), s.id, connected);
+
+                          if (failed !== null) setSignInFailed(failed);
+                        }))}
                         className="text-xs px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
                       >
                         <ArrowSquareOutIcon size={11} /> Authorize
@@ -177,7 +184,11 @@ export function AddServerCard({ onCancel, onAdded, onConnected }: {
       }));
 
       // Known only now: a custom server may or may not sign in. Opened after the add, a blocked helper runs it in this tab.
-      if (result.authUrl) beginConnect().start(result.authUrl, onConnected);
+      if (result.authUrl) {
+        const failed = yield* Effect.promise(async () => signInMcpServer(beginConnect(), result.id, onConnected));
+
+        if (failed !== null) setErr(failed);
+      }
 
       onAdded();
     }), (failed) => Effect.sync(() => {

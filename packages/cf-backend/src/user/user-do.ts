@@ -801,6 +801,10 @@ export class UserDO extends Agent<Env> {
     return this.mcpServers.userMcp_handleOAuthCallback(caller, url);
   }
 
+  userMcp_beginConnect(caller: UserCaller, id: string, run: string): ReturnType<UserMcpServers['userMcp_beginConnect']> {
+    return this.mcpServers.userMcp_beginConnect(caller, id, run);
+  }
+
   chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     return this.chatgpt.chatgptPlan(caller);
   }

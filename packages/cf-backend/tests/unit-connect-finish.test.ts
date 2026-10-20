@@ -39,4 +39,31 @@ describe('an MCP server\'s sign-in ends on the finish page', () => {
       harness.close();
     }
   });
+
+  test('a sign-in begun from a page is begun for the server its address names, and the run the page sent', async () => {
+    const begun: { id: string; run: string }[] = [];
+
+    const stub = userAccount({
+      async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+      userMcp_beginConnect: async (_caller: UserCaller, id: string, run: string) => {
+        begun.push({ id, run });
+
+        return { authUrl: 'https://mcp.example.com/authorize' };
+      },
+    });
+
+    const env: UserRoutesEnv<string> = {
+      UserDO: { idFromName: (name) => name, get: () => stub },
+      OrchestratorAgent: { idFromName: (name) => name, get: () => workspaceObject({}) },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    };
+
+    const run = '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162';
+
+    const answered = await serveFamily(userRoutes, { identity: IDENTITY, ctx: { waitUntil() {} } })(
+      new Request('https://kinu.example.com/api/user/mcp/servers/srv%2Done/connect', { method: 'POST', body: JSON.stringify({ run }), headers: { 'content-type': 'application/json' } }), env,
+    );
+
+    expect({ status: answered?.status, begun }).toEqual({ status: 200, begun: [{ id: 'srv-one', run }] });
+  });
 });

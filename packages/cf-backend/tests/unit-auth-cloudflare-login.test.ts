@@ -131,6 +131,9 @@ interface CloudflareHandoff {
   authorizeUrl: string;
 }
 
+/** The run a connect's starting page names, which its finish page names back. */
+const CONNECT_RUN = '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162';
+
 async function startCloudflareLogin(
   env: AuthRoutesEnv<string>, prompt?: 'login', connect?: { readonly session: string },
 ): Promise<CloudflareHandoff> {
@@ -138,7 +141,10 @@ async function startCloudflareLogin(
 
   if (prompt) start.searchParams.set('prompt', prompt);
 
-  if (connect !== undefined) start.searchParams.set('intent', 'connect');
+  if (connect !== undefined) {
+    start.searchParams.set('intent', 'connect');
+    start.searchParams.set('run', CONNECT_RUN);
+  }
 
   const response = await authPages(new Request(start, connect === undefined ? {} : { headers: { cookie: connect.session } }), env);
 
@@ -265,7 +271,7 @@ describe('connecting Cloudflare attaches to the account that asked, and signs no
         credentials: Object.fromEntries(accounts.credentialsOf),
         profiled: accounts.profiled,
       }).toEqual({
-        location: `${ORIGIN}${connectedPath({ service: 'Cloudflare', error: null })}`,
+        location: `${ORIGIN}${connectedPath({ run: CONNECT_RUN, service: 'Cloudflare', error: null })}`,
         session: null,
         credentials: { [accountA ?? '']: ['cf-a', 'cf-b'] },
         profiled: ['a@example.com'],
@@ -283,12 +289,31 @@ describe('connecting Cloudflare attaches to the account that asked, and signs no
     try {
       const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
       const session = (sessionCookieIn(signedIn) ?? '').split(';')[0] ?? '';
-      const unsigned = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start?intent=connect`), env);
+      const unsigned = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start?intent=connect&run=${CONNECT_RUN}`), env);
       // Its session gone by the callback: the grant is attached to nobody, and the finish page says why.
       const ended = await completeCloudflareLogin(env, await startCloudflareLogin(env, 'login', { session }));
 
       expect({ unsigned: unsigned?.status, ended: new URL(ended.headers.get('location') ?? '').searchParams.get('error'), credentials: [...accounts.credentialsOf.values()].flat() })
         .toEqual({ unsigned: 401, ended: 'The Kinu account that started connecting is no longer signed in here.', credentials: ['cf-a'] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // Review finding (2026-10-23): a finish page took any broadcast of its kind, so a stale tab or a forged callback link
+  // could end another tab's connect. A start names its page's run, and one without a run is no connect.
+  test('a connect start that names no run is refused before Cloudflare is asked', async () => {
+    const { env } = setupEnv();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
+
+    try {
+      const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
+      const session = (sessionCookieIn(signedIn) ?? '').split(';')[0] ?? '';
+      const started = async (run: string) => authPages(new Request(`${ORIGIN}/auth/cloudflare/start?intent=connect${run}`, { headers: { cookie: session } }), env);
+
+      expect({ none: (await started(''))?.status, malformed: (await started('&run=tab-1'))?.status, named: (await started(`&run=${CONNECT_RUN}`))?.status })
+        .toEqual({ none: 400, malformed: 400, named: 302 });
     } finally {
       globalThis.fetch = originalFetch;
     }

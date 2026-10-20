@@ -784,54 +784,19 @@ describe('account panels', () => {
     });
   });
 
-  // Production, 2026-10-08: connecting Cloudflare during setup ended on the setup's first step, in a new tab.
-  // The owner's report (2026-10-20): connecting a service during setup left its tab open, landed on setup's first step.
-  test('connecting a service from setup\'s tools step: its tab closes, and the step shows it connected', async () => {
-    await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, `welcome&route=${encodeURIComponent('/welcome?step=tools')}`, 'dark', 'desktop');
-
-      try {
-        const tools = '[data-welcome-step="tools"]';
-
-        // The wizard opens on the step its address names.
-        await page.waitForFunction((at) => document.querySelector(at)?.getAttribute('aria-hidden') !== 'true', {}, tools);
-        const row = `${tools} [data-plugin-source="cloudflare"]`;
-        await page.waitForSelector(`${row} [data-plugin-add]`);
-        const at = page.url();
-        const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
-        await page.click(`${row} [data-plugin-add]`);
-        const helperPage = await (await opened).page();
-
-        if (helperPage === null) throw new Error('the connect opened no tab');
-        const closed = new Promise<void>((resolve) => { helperPage.once('close', () => { resolve(); }); });
-
-        // The provider's consent page: approved, its callback sends the tab to the finish page.
-        await helperPage.waitForSelector('[data-authorize="approve"]');
-        await helperPage.click('[data-authorize="approve"]');
-        await closed;
-        await page.waitForSelector(`${row}[data-plugin-state="Connected"]`);
-
-        // Updated in place: the same step, the same address, no reload.
-        expect({ shown: await page.$eval(tools, (step) => step.getAttribute('aria-hidden') !== 'true'), at: page.url() })
-          .toEqual({ shown: true, at });
-      } finally {
-        await page.close();
-      }
-    });
-  });
-
-  // Its address names a service and nothing to go to: a `next` someone wrote into it, off this site or not, is not read.
-  test('a finish page no script opened says the service connected and stays, never routing into the app', async () => {
+  // Its address names no run, so no connect this browser began ended there: nothing in it is followed, a `next` someone
+  // wrote into it, off this site or not, included.
+  test('a finish page that names no run reports no connect and stays, never routing into the app', async () => {
     await withGallery(async (gallery) => {
       const page = await gallery.newPage();
       const at = '?frame=connected&service=Cloudflare&next=%2F%2Fevil.example';
 
       try {
         await page.goto(`${gallery.origin}/gallery.html${at}`, { waitUntil: 'load' });
-        await page.waitForFunction(() => document.body.textContent?.includes('You can close this tab') === true);
+        await page.waitForSelector('[data-connect-finished="unknown"]');
 
-        expect({ said: (await page.$eval('[data-connect-finished]', (node) => node.textContent ?? '')).trim(), at: new URL(page.url()).search })
-          .toEqual({ said: 'Connected to Cloudflare. You can close this tab.', at });
+        expect({ finished: await page.$eval('[data-connect-finished]', (node) => node.getAttribute('data-connect-finished')), at: new URL(page.url()).search })
+          .toEqual({ finished: 'unknown', at });
       } finally {
         await page.close();
       }

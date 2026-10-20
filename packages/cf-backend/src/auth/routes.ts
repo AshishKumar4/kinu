@@ -7,7 +7,7 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
-import { connectedPath, objectNamed, sanitizeReturnTo } from '@kinu.run/core';
+import { connectedPath, ConnectRunSchema, objectNamed, sanitizeReturnTo } from '@kinu.run/core';
 import { escapeHtml, json, KINU_USER_AGENT, nonEmptyString, scopeList, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
@@ -217,6 +217,10 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
     // A connect attaches what the provider grants to the account asking, and signs nobody in.
     const connecting = url.searchParams.get('intent') === 'connect';
+    // The starting page's run, kept in the state alone: the provider never sees it, so it cannot name it.
+    const run = v.safeParse(ConnectRunSchema, url.searchParams.get('run'));
+
+    if (connecting && !run.success) return html('Nothing to connect', '<p>A connect starts from the page that asks for it.</p>', { status: 400 });
 
     if (connecting && !CONNECTS.has(provider.id)) return html('Nothing to connect', `<p>Kinu keeps nothing from ${escapeHtml(provider.label)} to connect.</p>`, { status: 404 });
     const connectFor = connecting ? (yield* Effect.promise(async () => requestIdentity(request, env)))?.userId ?? null : null;
@@ -237,6 +241,7 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
       returnTo,
       redirectUri,
       connectFor,
+      connectRun: run.success ? run.output : null,
     }));
 
     const authorizationUrl = new URL(as.authorization_endpoint);
@@ -290,15 +295,15 @@ function completeOAuth<Id>(
     if (!state) return html('Sign in failed', '<p>The sign-in response came back without its state. Return to <a href="/login">sign in</a> and try again.</p>', { status: 400 });
 
     let stage = 'state';
-    // A connect that fails after its state was read still ends on the finish page.
-    let connecting = false;
+    // A connect that fails after its state was read still ends on the finish page, naming its run.
+    let connecting: { readonly run: string | null } | null = null;
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       const savedState = yield* Effect.promise(async () => consumeOAuthState(
         env.AUTH_KV, state, provider.id, readCookie(request, OAUTH_STATE_COOKIE_NAME),
       ));
 
-      connecting = savedState.connectFor !== null;
+      connecting = savedState.connectFor === null ? null : { run: savedState.connectRun };
 
       stage = 'metadata';
       const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
@@ -322,7 +327,7 @@ function completeOAuth<Id>(
       if (savedState.connectFor !== null) {
         stage = 'connect';
 
-        return yield* connectGranted({ request, env, ctx, account: savedState.connectFor, tokens, provider });
+        return yield* connectGranted({ request, env, ctx, account: savedState.connectFor, run: savedState.connectRun, tokens, provider });
       }
 
       stage = 'profile';
@@ -355,8 +360,8 @@ function completeOAuth<Id>(
       }), { provider: providerId, stage, reason: failure.reason, detail: failure.log });
 
       // A connect ends on the finish page whatever happened, in its own words.
-      if (connecting) {
-        return redirect(new URL(connectedPath({ service: provider.label, error: failure.reason }), url.origin).toString());
+      if (connecting !== null) {
+        return redirect(new URL(connectedPath({ run: connecting.run, service: provider.label, error: failure.reason }), url.origin).toString());
       }
 
       return html('Sign in failed', `
@@ -380,7 +385,7 @@ const CONNECTS = new Map([['cloudflare', attachCloudflareWorkersAI]]);
  */
 function connectGranted<Id>(input: {
   readonly request: Request; readonly env: AuthRoutesEnv<Id>; readonly ctx: Pick<ExecutionContext, 'waitUntil'>;
-  readonly account: string; readonly tokens: CloudflareTokenPayload; readonly provider: OAuthProviderConfig;
+  readonly account: string; readonly run: string | null; readonly tokens: CloudflareTokenPayload; readonly provider: OAuthProviderConfig;
 }): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
     const { request, env, provider } = input;
@@ -392,7 +397,7 @@ function connectGranted<Id>(input: {
       ? yield* Effect.match(attach(env, input.ctx, input.account, input.tokens), { onFailure: (failure) => failure.message, onSuccess: () => null })
       : 'The Kinu account that started connecting is no longer signed in here.';
 
-    return redirect(new URL(connectedPath({ service: provider.label, error }), origin).toString(), { headers: { 'cache-control': 'no-store' } });
+    return redirect(new URL(connectedPath({ run: input.run, service: provider.label, error }), origin).toString(), { headers: { 'cache-control': 'no-store' } });
   });
 }
 

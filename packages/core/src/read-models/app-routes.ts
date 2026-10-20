@@ -44,27 +44,38 @@ export const APP_ROUTES = {
   connected: '/connected',
 } as const;
 
-/** What a connect's finish page tells the tab that started it, over the `CONNECT_CHANNEL` broadcast: the service as
- *  the page names it ("Cloudflare", an MCP server's name), and why it did not connect, null when it did. */
-export const ConnectEndedSchema = v.object({ service: v.string(), error: v.nullable(v.string()) });
+/**
+ * What a connect's finish page tells the tab that started it, over the `CONNECT_CHANNEL` broadcast: the run it ends,
+ * the service as the page names it ("Cloudflare", an MCP server's name), and why it did not connect, null when it did.
+ * The run is the starting page's own unpredictable id, carried to the server with the connect's start and bound to its
+ * OAuth state there, so a finish page that no callback reached names no run, and one run's end is no other run's.
+ */
+export const ConnectEndedSchema = v.object({ run: v.nullable(v.string()), service: v.string(), error: v.nullable(v.string()) });
 
 export type ConnectEnded = v.InferOutput<typeof ConnectEndedSchema>;
+
+/** A connect run's id as its start carries it to the server: unpredictable, so no other page or provider can name it. */
+export const ConnectRunSchema = v.pipe(v.string(), v.uuid());
 
 /** The same-origin broadcast a finish page answers on: it needs no opener, which a provider's pages may cut. */
 export const CONNECT_CHANNEL = 'kinu-connected';
 
-/** Where a connect run in a helper tab ends, for every connect: the finish page, naming `service` and why it failed. */
+/** Where a connect ends, for every connect: the finish page, naming its run, the service and why it failed. */
 export function connectedPath(ended: ConnectEnded): string {
   const query = new URLSearchParams({ service: ended.service });
+
+  if (ended.run !== null) query.set('run', ended.run);
 
   if (ended.error !== null) query.set('error', ended.error.slice(0, 300));
 
   return `${APP_ROUTES.connected}?${query.toString()}`;
 }
 
-/** The finish page's own reading of its address, as `connectedPath` wrote it. */
+/** The finish page's own reading of its address, as `connectedPath` wrote it; a run that is no run's id is none. */
 export function connectEndedOf(search: URLSearchParams): ConnectEnded {
-  return { service: search.get('service') ?? 'the service', error: search.get('error') };
+  const run = v.safeParse(ConnectRunSchema, search.get('run'));
+
+  return { run: run.success ? run.output : null, service: search.get('service') ?? 'the service', error: search.get('error') };
 }
 
 type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];

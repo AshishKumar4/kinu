@@ -36,6 +36,8 @@ export interface OAuthStateInput {
   /** A connect's: the account whose session started it, which the callback attaches to and must still be signed in
    *  as. Absent, the run is a sign-in. */
   connectFor?: string | null;
+  /** A connect's run, the starting page's own id (`ConnectRunSchema`), which its finish page names. */
+  connectRun?: string | null;
 }
 
 /** Provider echoes `state`; the browser carries `binding` in a cookie. Both are needed to spend the
@@ -83,6 +85,7 @@ const OAuthStateSchema = v.object({
   /** SHA-256 of the binding; the record never holds the binding itself. */
   bindingHash: v.string(),
   connectFor: v.optional(v.nullable(v.string()), null),
+  connectRun: v.optional(v.nullable(v.string()), null),
   createdAt: v.number(),
   expiresAt: v.number(),
 });
@@ -127,6 +130,7 @@ export async function createOAuthState(
     redirectUri: input.redirectUri,
     bindingHash: await sha256Hex(binding),
     connectFor: input.connectFor ?? null,
+    connectRun: input.connectRun ?? null,
     createdAt: now,
     expiresAt,
   };
