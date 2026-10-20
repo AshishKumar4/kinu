@@ -29,6 +29,12 @@
  * On the same product the old read gave 143-154 MB or 165-170 MB as the race fell (b9c667740, 5724b7472); at settlement
  * it read 171.6-183.0 MB over 15 runs on 0d3f6491a. See {@link LONG_TURN_ALLOCATED_BOUND_BYTES}.
  *
+ * The idle row bounds data alone since 2026-10-20, and reports beside it the code V8 compiled for the step's turns. It
+ * bounded the live total at 4.0 MB in the workspace's isolate, against 2.55-2.58 MB read on 2026-10-12; by 44ce0e110 that
+ * read 3.9-4.0 MB, which snapshots at setup and idle split into 3.4 MB of code and 0.5-0.6 MB of data. The code had spent
+ * the margin a leak was to trip, and streaming the memory lane's structured call (667221f68, 0.2 MB more code and 15 kB
+ * more data) tripped it. Main's total, 6.6 MB under 7.9 MB, was 3.7 MB of code. See {@link IDLE_DATA_BOUND_BYTES}.
+ *
  * The planting probe proves each session reads the isolate it names: a buffer planted in one is found there, whole, and
  * in no other. Until 2026-10-12 it subtracted live heap totals, which any work crossing the read moves: red in 4 of 20
  * runs on 009c51396 and 8 of 20 on 8a71331cb (armada 20261012091025-eb23b0d7, 20261012091030-301e97ae), each reading
@@ -62,7 +68,7 @@ import * as v from 'valibot';
 import { ownerCaller } from '../packages/core/src/safety/workspace-capability';
 import { workersAiBinding } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
 import { buildAgentBundle } from '../packages/cf-backend/vite-agent-bundle';
-import { inspect, inspectAll, type Allocations, type HeapMakeup, type Inspector } from './worker-heap/inspector';
+import { inspect, inspectAll, type Allocations, type HeapMakeup, type Inspector, type LiveHeap } from './worker-heap/inspector';
 import { REPO_ROOT } from './repo-root';
 
 
@@ -223,11 +229,14 @@ export const LONG_TURN_ALLOCATED_BOUND_BYTES = 295_000_000;
  *  the turns ran: an admission answers once its turn is queued, and the read caught the third in flight with nine queued.
  *  Read once all twelve ended and settled, 2026-10-12: 2.55-2.58 MB in the workspace's and 6.57-6.58 MB in main's over 10
  *  runs (armada 20261012110831-e3858893, 20261012111603-1a3edf49), main's the twelve answers its conversation keeps.
- *  On 44ce0e110, 2026-10-20, the workspace's read 3.9-4.0 MB over 5 runs: by snapshots at setup and idle, 3.0 MB code V8
- *  compiled during the turns and 0.3 MB data. Streaming the memory lane's structured call (667221f68) compiles 0.11 MB
- *  more there and keeps no more data: 4.1-4.2 MB over 7 runs. The workspace's bound is that and 0.8 MB, which one answer
- *  kept a turn, 2.4 MB, still trips. */
-export const IDLE_RETAINED_BOUND_BYTES = { workspace: 5_000_000, main: 7_900_000 } as const;
+ *  Those totals were bounded at 4.0 MB and 7.9 MB until 2026-10-20; since then the data alone is (the header says why).
+ *  Over 6 runs on b3afff5ab, 2026-10-20: 568-573 kB of data in the workspace's and 2873-2906 kB in main's, beside 3.6 and
+ *  3.7 MB of code; over 3 on 44ce0e110, before the memory lane's call streamed, 542-561 and 2900-2904 kB, beside 3.4 and
+ *  3.7 MB. Each bound is about the highest data read and 0.4 MB, two of the step's answers. Red on b3afff5ab, 2 runs each:
+ *  an answer of 0.2 MB kept a turn in each isolate, 2976-2977 kB in the workspace's and 5305-5308 kB in main's; the
+ *  driver answering the memory lane's structured call with prose, whose three log lines a turn the inspector's console
+ *  kept, 2951-2956 kB in the workspace's. */
+export const IDLE_DATA_BOUND_BYTES = { workspace: 1_000_000, main: 3_300_000 } as const;
 
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
@@ -406,6 +415,16 @@ function beyond(after: Isolates<number>, before: Isolates<number>): Isolates<num
   return { workspace: after.workspace - before.workspace, main: after.main - before.main };
 }
 
+/** {@link beyond}, the code V8 compiled meanwhile apart from the data. */
+function retainedApart(after: Isolates<LiveHeap>, before: Isolates<LiveHeap>): HeapMeasurement['idleRetained'] {
+  const data = (heap: LiveHeap) => heap.live - heap.code;
+
+  return {
+    data: beyond({ workspace: data(after.workspace), main: data(after.main) }, { workspace: data(before.workspace), main: data(before.main) }),
+    code: beyond({ workspace: after.workspace.code, main: after.main.code }, { workspace: before.workspace.code, main: before.main.code }),
+  };
+}
+
 /** Planted in each isolate in turn at the end of the run, under a marker of its own, and found by that marker: a gate
  *  that read the wrong isolate, or none, would bound nothing there. */
 export const PLANTED_BYTES = 4_000_000;
@@ -423,8 +442,9 @@ function plantingAssets(directory: string): string {
 export interface HeapMeasurement {
   /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
   readonly stepLive: Isolates<number>;
-  /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
-  readonly idleRetained: Isolates<number>;
+  /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup: its data, and apart from it the
+   *  code V8 compiled for those turns. */
+  readonly idleRetained: { readonly data: Isolates<number>; readonly code: Isolates<number> };
   /** What a workspace holds live after each of two batches of {@link HEADS} heads was hosted and released, beyond before it. */
   readonly headsRetained: readonly number[];
   /** What a workspace holds live per finished task helper after {@link HELPERS} settle, beyond before them. */
@@ -556,7 +576,8 @@ export async function measure(): Promise<HeapMeasurement> {
       sessions.push(workspace);
       const stepIsolates = { workspace, main: await inspect(port, `${ISOLATE_NAMES.main} in the step's workspace`, mainOf(stepWorkspace)) };
       sessions.push(stepIsolates.main);
-      const setUp = await inEach(stepIsolates, async (session) => await session.liveHeap());
+      const setUpSplit = await inEach(stepIsolates, async (session) => await session.liveSplit());
+      const setUp = { workspace: setUpSplit.workspace.live, main: setUpSplit.main.live };
       const setupMakeup = await inEach(stepIsolates, async (session) => await session.makeup());
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await inEach(stepIsolates, async (session) => { await session.sampleAllocations(); });
@@ -568,7 +589,8 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask('/main-idle?workspace=heap');
       await ask('/quiesce?workspace=heap');
       const bindingTurnsAllocated = await inEach(stepIsolates, async (session) => await session.allocations());
-      const idle = await inEach(stepIsolates, async (session) => await session.liveHeap());
+      const idleSplit = await inEach(stepIsolates, async (session) => await session.liveSplit());
+      const idle = { workspace: idleSplit.workspace.live, main: idleSplit.main.live };
       const answered = streamsOpened;
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`);
       const parked = ask('/turn?workspace=heap&text=parked');
@@ -755,7 +777,7 @@ export async function measure(): Promise<HeapMeasurement> {
 
       const planted = { workspace: await plant('workspace'), main: await plant('main') };
 
-      return { screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: retainedApart(idleSplit, setUpSplit), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       for (const session of sessions) session.close();
     }
@@ -839,6 +861,11 @@ function screenshotFindings(turn: ScreenshotTurn): string[] {
 
 function mb(bytes: number): string {
   return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+/** For a figure whose bound is under a megabyte or two, which {@link mb} would read to a tenth of it. */
+function kb(bytes: number): string {
+  return `${(bytes / 1e3).toFixed(0)} kB`;
 }
 
 function printAllocations(workload: string, allocated: Allocations): void {
@@ -971,8 +998,8 @@ async function main(args: readonly string[]): Promise<number> {
       findings.push(`a parked step holds ${mb(measured.stepLive[isolate])} live in ${where} at ${transcript()}, over ${mb(STEP_LIVE_BOUND_BYTES[isolate])}`);
     }
 
-    if (measured.idleRetained[isolate] > IDLE_RETAINED_BOUND_BYTES[isolate]) {
-      findings.push(`the idle workspace holds ${mb(measured.idleRetained[isolate])} in ${where} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES[isolate])}`);
+    if (measured.idleRetained.data[isolate] > IDLE_DATA_BOUND_BYTES[isolate]) {
+      findings.push(`the idle workspace holds ${kb(measured.idleRetained.data[isolate])} of data in ${where} after ${transcript()}, over ${kb(IDLE_DATA_BOUND_BYTES[isolate])}`);
     }
 
     if (measured.longTurnGrowth[isolate] > LONG_TURN_GROWTH_BOUND_BYTES[isolate]) {
@@ -1017,14 +1044,16 @@ async function main(args: readonly string[]): Promise<number> {
 
   // Every figure, red or green, so two runs compare.
   console.log(`${GATE}: ${inEachIsolate(measured.live.setUp)} live after setup, a parked step holds ${inEachIsolate(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${inEachIsolate(measured.idleRetained)} after them, `
+    + `${transcript()}, the idle workspace holds ${kb(measured.idleRetained.data.workspace)} of data (main's isolate `
+    + `${kb(measured.idleRetained.data.main)}) and ${inEachIsolate(measured.idleRetained.code)} of code compiled for them, `
     + `${String(HEADS.count)} released heads leave ${measured.headsRetained.map((bytes) => mb(bytes)).join(' then ')}, a finished helper `
     + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
     + `own hire ${mb(measured.waitingParentLive)}, a ${steps} peaks at ${inEachIsolate(measured.longTurnPeak)} used, grows `
     + `${inEachIsolate(measured.longTurnGrowth)} live and allocates ${inEachIsolate(allocated)}; no wasm on the static graph, every module ASCII, every request Latin-1`);
   console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; a hired '
     + 'helper\'s own Worker Loader isolate, where its turns run (the helper rows read the workspace\'s); the agent sessions of the cold, long-turn '
-    + 'and helpers\' workspaces, picked as the step\'s main is but never planted; and memory outside V8 (compiled wasm, SQLite pages)');
+    + 'and helpers\' workspaces, picked as the step\'s main is but never planted; the code V8 compiles for the step\'s turns, which the idle '
+    + 'row reports and does not bound; and memory outside V8 (compiled wasm, SQLite pages)');
 
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
