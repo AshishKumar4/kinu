@@ -99,7 +99,9 @@ export { MAIL_LABEL_PATTERN, isMailLabel, mailAddressOf, mailLabelOf, parseMailR
 
 export type * from './mail/mailbox-api';
 
-export { MailStore, type MailBlobs, type MailStoreDeps, type ParsedMail } from './mail/store';
+export { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_VIEWS, MAIL_WAKES, MAIL_WOKE } from './mail/mailbox-api';
+
+export { MailStore, type MailBlobs, type ParsedMail } from './mail/store';
 
 export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
 
@@ -107,15 +109,15 @@ export { MAIL } from './operations/mail';
 
 export { mailHostRedirect } from './mail/host';
 
-export { inboundBody, isAutoReplyEmail, mailThreadText, stripQuotedReply } from './mail/words';
+export { inboundBody, isAutoReplyEmail, mailThreadText, replySubject, splitQuotedReply, stripQuotedReply } from './mail/words';
 
 export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/handed';
 
 export { mailInContext } from './mail/in-context';
 
-export { MailTriageLane, triageMail, type MailTriageDeps, type MailTriageRun } from './mail/triage';
+export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
-export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
+export { createEmailThreadDispatcher, mailboxEmail, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
 
 export { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorDeps, type MonitorRunResult } from './monitor/incidents';
 
@@ -1041,7 +1043,7 @@ export { craftPreference, craftPreferences } from './craft/preference';
 export { activateReplayedScaffold } from './scaffold/replay-gate';
 
 export {
-  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn, type ReplayVerdict,
+  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn,
 } from './scaffold/replay';
 
 export { type CraftCall } from './craft/in-episode';
@@ -1123,8 +1125,10 @@ export {
 } from './execution/device-terminal';
 
 export {
-  DeviceScreenHub, screenFromSocket, readScreenData,
+  DeviceScreenHub, screenFromSocket,
 } from './execution/device-screen';
+
+export { readScreenData, screenDataFrames } from './execution/device-screen-data';
 
 export {
   nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
@@ -1165,6 +1169,8 @@ export {
 } from './tools/inline-executor';
 
 export { explainSandboxError } from './tools/sandbox-errors';
+
+export { stoppedProgram } from './execution/program-stop';
 
 export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
@@ -1895,7 +1901,7 @@ export {
   listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
-export { activateDreamSkills } from './evolution/refinement-skill';
+export { activateDreamSkills, dreamSkillsHidden } from './evolution/refinement-skill';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 

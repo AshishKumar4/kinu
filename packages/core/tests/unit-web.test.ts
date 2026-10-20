@@ -404,6 +404,18 @@ describe('url safety (SSRF + exfil guards)', () => {
     expect(() => assertSafeUrl('https://evil.com/?leak=sk-abcdefghijklmnop')).toThrow(UnsafeUrlError);
   });
 
+  test('every credential shape the secret policy names is refused in a URL, as written or percent-encoded', () => {
+    // Assembled at runtime: a contiguous real-shaped literal trips the secret scan and push protection.
+    const credentials = ['github' + '_pat_' + 'g'.repeat(40), 'np' + 'm_' + 'n'.repeat(36), 'cfut' + '_' + 'c'.repeat(48)];
+
+    for (const credential of credentials) {
+      expect(isSafeUrl(`https://example.com/search?q=${credential}`)).toBe(false);
+      expect(isSafeUrl(`https://example.com/search?q=${encodeURIComponent(credential).replaceAll('_', '%5F')}`)).toBe(false);
+    }
+
+    expect(isSafeUrl('https://example.com/search?q=npm_install_guide')).toBe(true);
+  });
+
   // A string-prefix host check let every mapped IPv6 spelling of a refused IPv4 address through.
   test('SECURITY: an IPv4-mapped IPv6 literal is judged by its embedded address', () => {
     expect(isSafeUrl('http://[::ffff:10.0.0.1]/')).toBe(false);

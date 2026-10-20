@@ -1,6 +1,6 @@
 # Self-evolution redesign
 
-Status: approved by the owner on 2026-10-02, with revisions. Once built, it replaces the turn, session and lifetime loops in [EVOLUTION.md](./EVOLUTION.md).
+Status: approved by the owner on 2026-10-02, with revisions. Once built, it replaces the turn, session and lifetime loops in [EVOLUTION.md](./EVOLUTION.md). Its proposer and GEPA search (§3) are superseded by the dream that [EVOLUTION.md](./EVOLUTION.md) describes; where this document names GEPA, read the dream's drafts measured by the judge-only comparison (§4).
 
 ## The goal and what is wrong today
 
@@ -85,7 +85,7 @@ A struggle cluster targets its tool's description or schema text. An edit carrie
 
 The section store becomes one store, `artifact_versions(actor_id, artifact_id, version, body, status, parent, rationale)`, with ids such as `section:state/verification`, `tool:file.description`, `tool:file.schema` and `namespace:agent`; tool and namespace text has no per-agent store today. The scaffold keeps `scaffold_versions`. Prompt assembly reads each artifact's current version, or its bundled source.
 
-**GEPA is the search** (`evolution/gepa/`). Its reflective mutation and candidate set stay: the deep-tier reflection model reads the motivating turns with their reasons or struggles and proposes a mutation, and the Pareto frontier keeps candidates that win on different turns. Its metric changes from a rollout to the judge-only comparison below, scored per recorded turn, so the search executes nothing.
+**GEPA was the search**, superseded with §3: a dream drafts each edit, and the judge-only comparison below measures it. GEPA (`evolution/gepa/`) is deleted.
 
 ## 4. Pre-live tests: nothing touches the workspace
 
@@ -93,7 +93,7 @@ Neither check runs the agent on the workspace, so neither changes it.
 
 **Static checks.** The size caps and schema rule above, the misevolution gate (`safety/misevolution.ts`), the per-family prompt token budget and the section parse. A scaffold also passes its four gates and its own `agent.test.js`, run in an isolated sandbox against a scripted host: a fake model, in-memory files, no live tools or memory.
 
-**Judge-only comparison** (GEPA's metric). The decision model reads one recorded turn, its reason or struggle, the old artifact text and the new one, and answers two questions: `fixes` (would the new text have prevented this failure?) and `harms` (would the new text make this turn worse?).
+**Judge-only comparison** (GEPA's metric, kept for the dream's drafts). The decision model reads one recorded turn, its reason or struggle, the old artifact text and the new one, and answers two questions: `fixes` (would the new text have prevented this failure?) and `harms` (would the new text make this turn worse?).
 
 - The bad set is the motivating turns, plus up to 10 other recent turns with the same reason or the same tool's struggles. A bad turn scores `fixes`.
 - The regression set is the 30 most recent turns rated 4 or 5 that used the edited artifact, thumbs-up turns first, frozen when the search starts. A regression turn scores 1 − `harms`. Inside the search, it stops GEPA overfitting to the bad turns: a mutation that breaks good turns loses.

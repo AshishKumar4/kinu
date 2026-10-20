@@ -9,6 +9,7 @@ import type { EmailOutbox, EmailSender, OutboundEmailMessage } from '../events/e
 import { Cause, Effect } from 'effect';
 import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
 import * as v from 'valibot';
+import { replySubject } from './words';
 
 const EmailThreadAddrSchema = v.object({
   to: v.string(),
@@ -33,10 +34,6 @@ export interface EmailSendContext {
   outbox: EmailOutbox;
 }
 
-function replySubject(subject: string): string {
-  return /^\s*re:/i.test(subject) ? subject : `Re: ${subject}`;
-}
-
 /** RFC 5322 §3.6.4 threading; `boundedReferences` keeps the chain under the 998-octet line limit
  *  receivers may enforce. */
 function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): EmailThreadingHeaders {
@@ -47,6 +44,22 @@ function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references
   return {
     'In-Reply-To': inReplyTo,
     References: boundedReferences(addr.references, inReplyTo) ?? inReplyTo,
+  };
+}
+
+/**
+ * A message a person or an approved agent sends from their Mailbox, as the Email Sending binding takes it. The service
+ * writes the Message-ID and refuses one set here; the Mailbox keeps the one the binding answers (`EmailOutbox`'s `sentAs`).
+ */
+export function mailboxEmail(message: {
+  readonly from: string; readonly to: readonly string[]; readonly cc: readonly string[]; readonly subject: string; readonly text: string;
+  readonly inReplyTo: string | null;
+}): OutboundEmailMessage {
+  const headers = threadingHeaders({ message_id: message.inReplyTo, references: null });
+
+  return {
+    from: message.from, to: [...message.to], ...(message.cc.length > 0 && { cc: [...message.cc] }), subject: message.subject, text: message.text,
+    ...(Object.keys(headers).length > 0 && { headers: { ...headers } }),
   };
 }
 

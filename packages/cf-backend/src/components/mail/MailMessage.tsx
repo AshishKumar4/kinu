@@ -1,20 +1,13 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { SealCheckIcon, ShieldWarningIcon, ArrowUpRightIcon } from "@phosphor-icons/react";
-import { sandboxedHtml, type MailBox, type MailMessageView } from "@kinu.run/core";
+import { sandboxedHtml, splitQuotedReply, type MailBox, type MailMessageView } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { mailTime } from "./ImportantMailRow";
 
-export function quotedMail(text: string): { own: string; quote: string | null } {
-  const lines = text.split("\n");
-  const at = lines.findIndex((line) => /^On .+ wrote:$/u.test(line) || line.startsWith(">"));
-
-  return at < 0 ? { own: text, quote: null } : { own: lines.slice(0, at).join("\n").trimEnd(), quote: lines.slice(at).join("\n") };
-}
-
 export function mailExcerpt(text: string): string {
-  const lines = quotedMail(text).own.split("\n").map((line) => line.trim()).filter(Boolean);
+  const lines = splitQuotedReply(text).own.split("\n").map((line) => line.trim()).filter(Boolean);
   const greeting = /^(hi|hello|hey)\b[^.!?]{0,24},$/iu.test(lines[0] ?? "");
 
   return (greeting ? lines.slice(1) : lines).join(" ");
@@ -22,7 +15,7 @@ export function mailExcerpt(text: string): string {
 
 export function MailBody({ text }: { text: string }) {
   const [shown, setShown] = useState(false);
-  const { own, quote } = quotedMail(text);
+  const { own, quote } = splitQuotedReply(text);
 
   return (
     <div className="space-y-2">

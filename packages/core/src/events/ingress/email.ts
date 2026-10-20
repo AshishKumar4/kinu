@@ -12,6 +12,7 @@ import type { EmailAttachmentMeta, EmailPayload, EventId } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import type { SqlExec } from '../../types/primitives';
 import type { MissingCapability } from '../../types/dynamic-context';
+import type { MailWoke } from '../../mail/mailbox-api';
 import { argumentDigest } from '../../safety/argument-digest';
 import { tryConsumeWebhookRateLimit } from './rate-limit';
 import { Effect } from 'effect';
@@ -90,7 +91,7 @@ export interface EmailThreadAddr {
 /** What the Mailbox hands the workspace whose agent an arrival woke. */
 export interface MailArrival {
   /** On whose word it woke the agent: the verified owner's, or untrusted input. */
-  woke: 'owner' | 'input';
+  woke: MailWoke;
   /** The From address Cloudflare's verdict passed. */
   from: string;
   /** The box address it reached. */
@@ -107,7 +108,7 @@ export interface MailArrival {
 }
 
 export type MailAdmission =
-  | { admitted: true; event_id: EventId; duplicate: boolean; woke: 'owner' | 'input'; thread: EmailThreadAddr | null }
+  | { admitted: true; event_id: EventId; duplicate: boolean; woke: MailWoke; thread: EmailThreadAddr | null }
   | { admitted: false; reason: string };
 
 export interface MailAdmissionDeps {

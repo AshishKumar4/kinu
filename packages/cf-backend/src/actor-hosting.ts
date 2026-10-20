@@ -18,7 +18,7 @@ import {
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type SeatedActor, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
-  type WriteObserver, actorPolicy, isSubordinateOrigin, type TierRefusals,
+  type WriteObserver, actorPolicy, isSubordinateOrigin, type TierRefusals, currentOperationProfile, providerAccounts,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
@@ -193,6 +193,11 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         reportModelCall: (report) => { seams.reportModelCall(report); },
         modelOperations: seams.modelOperations,
         currentTurn: (reference) => seams.currentTurn(reference),
+        // Its lanes call on the account its chat does: its own choice, else the workspace's, else the catalog's.
+        accounts: () => providerAccounts({
+          actor: bound.handle.config.getProviderAccounts(), workspace: seams.directory.main().config.getProviderAccounts(),
+          catalog: currentOperationProfile(bound.handle)?.inputs?.envelope.catalog.accounts,
+        }),
         // Built with the runtime, which lives as long as this actor stays bound.
         refusals: seams.refusals(bound.handle),
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },

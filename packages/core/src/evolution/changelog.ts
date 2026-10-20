@@ -27,6 +27,7 @@ import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
 import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { AgentWorkspaceStore } from '../identity/agent-workspaces';
+import { workspaceSkillName } from '../skills/discover';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.number(),
@@ -262,7 +263,7 @@ function routeLabel(route: RefinementRoute): string {
     case 'fact': return `Remember ${route.target}`;
     case 'prompt_section':
     case 'tool_description': return `Reword ${artifactLabel(route.target.replace(/@\d+$/u, ''))}`;
-    case 'skill': return `The ${route.target.split('/').at(-2) ?? route.target} skill`;
+    case 'skill': return `The ${workspaceSkillName(route.target) ?? route.target} skill`;
     case 'subagent_spec': return `A spec for ${route.target || 'a subagent'}`;
   }
 }

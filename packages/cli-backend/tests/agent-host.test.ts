@@ -50,7 +50,7 @@ import {
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
-import type { ModelInfo, SessionEvent } from '@kinu.run/core';
+import type { ModelInfo, ProviderDeps, SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -1380,6 +1380,45 @@ describe('LocalAgentHost', () => {
       const agent = await taskHire(host, team, { role: 'task', roleLabel: 'task', task: 'Say done.', mode: 'build' });
 
       expect(agent.report.status).toBe('completed');
+    } finally {
+      await host.close();
+    }
+  });
+
+  // The InternalFish audit: a local hire read its own account choice, then the catalog's, so one that chose none fell to
+  // the default account where its workspace had chosen `work`. Cloud hires inherit the workspace's (`providerAccounts`).
+  test("a hire that chose no provider account calls on its workspace's", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const model = new TestLanguageModelV2({ provider: 'fake', modelId: 'fake-model', doStream: async () => ({ stream: textStream('done', { inputTokens: 1, outputTokens: 1, totalTokens: 2 }) }) });
+    const scopes: Pick<ProviderDeps, 'accountFor'>[] = [];
+
+    const fixed = fixedModelResolver(model);
+
+    const modelResolver: LocalModelResolver = {
+      ...fixed,
+      withCallScope: (scope) => {
+        scopes.push(scope);
+
+        return modelResolver;
+      },
+    };
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { modelResolver });
+
+    try {
+      (await host.acquire('root')).setProviderAccount('openai', 'work');
+      const team = await host.team('root');
+      const before = scopes.length;
+      await team.create({ name: 'helper', role: 'task', mission: 'Help.' });
+      const answered = awaitTurns(host, 'root/helper', 1);
+      await team.assign({ name: 'helper', task: 'Say done.', mode: 'build' });
+      await answered;
+
+      const hired = scopes.slice(before).map((scope) => present(scope.accountFor, 'a call scope')('openai'));
+
+      expect(hired.length).toBeGreaterThan(0);
+      expect(new Set(hired)).toEqual(new Set(['work']));
     } finally {
       await host.close();
     }

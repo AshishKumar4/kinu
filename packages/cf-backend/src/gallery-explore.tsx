@@ -20,6 +20,8 @@ const ExploreWorkspacePage = lazy(() => import("@/pages/ExploreWorkspacePage"));
 
 const WorkspacePage = lazy(() => import("@/pages/WorkspacePage"));
 
+const NewWorkspacePage = lazy(async () => ({ default: (await import("@/pages/HomePage")).NewWorkspacePage }));
+
 const NOW = Date.now();
 
 const DAY = 864e5;
@@ -142,6 +144,13 @@ function installExploreFixture(): void {
 
     if (url.pathname === "/api/user/assistant") return Response.json({ workspace: assistant ? ASSISTANT.name : null });
 
+    // A workspace made by hand: its body is kept on the page as `data-explore-created` for a test to read.
+    if (url.pathname === "/api/user/workspaces" && request.method === "POST") {
+      document.documentElement.dataset.exploreCreated = JSON.stringify(await request.json());
+
+      return Response.json({ name: "api-worker-9c1d", displayName: "API Worker", createdAt: NOW, lastVisited: NOW }, { status: 201 });
+    }
+
     if (url.pathname === "/api/user/workspaces" && assistant) {
       if (query.get("at") === "assistant") await new Promise((resolve) => setTimeout(resolve, 1500));
       const page = v.parse(RosterPageSchema, await (await next(input, init)).json());
@@ -186,6 +195,7 @@ export function exploreFrame(frame: string) {
         <Route element={<Layout />}>
           <Route path="/explore" element={loading(<ExplorePage />)} />
           <Route path="/explore/workspaces/:blueprint" element={loading(<ExploreWorkspacePage />)} />
+          <Route path="/new" element={loading(<NewWorkspacePage />)} />
           {search.get("at") === "assistant" && <Route path="/workspace/:agentId" element={loading(<WorkspacePage />)} />}
           <Route index element={<div className="h-full" data-gallery-home />} />
           <Route path="*" element={<div className="h-full" data-gallery-blank />} />

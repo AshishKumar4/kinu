@@ -33,7 +33,11 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     onExhausted: ({ error: _error, ...refusal }) => { input.session.read().reportBudgetRefusal(refusal); },
   });
 
-  const engine = new EvolutionEngine(input.runtime, historyTurnPairs(input.history), { governor: budget });
+  const engine = new EvolutionEngine(input.runtime, historyTurnPairs(input.history), {
+    governor: budget,
+    // Read when a turn is rated, by which time the session holds its trust authority.
+    approvals: { get: (path) => input.session.read().instructionApproval(path) },
+  });
 
   engine.onEvent((event) => { input.session.read().reportEvolutionEvent(event); });
 

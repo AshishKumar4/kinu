@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, MAIL_LABEL_PATTERN, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
+import { APP_ROUTES, MAIL_LABEL_PATTERN, MAIL_VIEWS, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
 import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
-import { MailRow, mailBoxLabel } from "@/components/mail/MailRow";
+import { MAIL_VIEW_LABEL, MailRow, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
 import { Compose } from "@/components/mail/MailEditor";
 import { PageHeader, PAGE_BODY } from "@/components/ui/PageHeader";
@@ -19,9 +19,7 @@ import { useAccount } from "@/hooks/use-account";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { claimMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
 
-const VIEWS: readonly MailView[] = ["important", "all", "sent", "drafts", "trash"];
 
-const LABELS: Record<MailView, string> = { important: "Important", all: "All", sent: "Sent", drafts: "Drafts", trash: "Trash" };
 
 function Claim({ email, onClaimed }: { email: string; onClaimed: () => void }) {
   const [username, setUsername] = useState(email.split("@")[0].toLowerCase());
@@ -60,7 +58,7 @@ interface Inbox {
 }
 
 function mailLocation(params: URLSearchParams, boxes: readonly MailBox[], splat: string | undefined) {
-  const view = VIEWS.find((name) => name === params.get("view")) ?? "important";
+  const view = MAIL_VIEWS.find((name) => name === params.get("view")) ?? "important";
   const address = params.get("address");
   const path = params.get("path") ?? boxes.find((box) => box.address === address || box.path === address)?.path;
   const query = params.get("q") ?? "";
@@ -172,14 +170,14 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
       {navigation.error !== null && <p role="alert" className="mt-3 p-row-text p-danger">{navigation.error}</p>}
       <div className="mt-5 grid grid-cols-[minmax(0,1fr)] items-start gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
         <div className={`max-w-full overflow-x-auto ${controls}`}>
-          <Segmented label="Mail views" value={view} onChange={(next) => at({ view: next })} segments={VIEWS.map((id) => {
+          <Segmented label="Mail views" value={view} onChange={(next) => at({ view: next })} segments={MAIL_VIEWS.map((id) => {
             let count = 0;
 
             if (id === "important" && !waiting) count = loaded?.important ?? 0;
 
             if (id === "drafts") count = loaded?.drafts ?? 0;
 
-            return count > 0 ? { id, label: LABELS[id], count } : { id, label: LABELS[id] };
+            return count > 0 ? { id, label: MAIL_VIEW_LABEL[id], count } : { id, label: MAIL_VIEW_LABEL[id] };
           })} />
         </div>
         <div className={`items-center gap-2 lg:justify-end ${controls}`}>

@@ -15,7 +15,7 @@ import {
   GitBranchIcon, IdentificationCardIcon, MagnifyingGlassIcon, NotePencilIcon, PaperclipIcon, PaperPlaneTiltIcon, PencilSimpleIcon, SealCheckIcon,
   ShieldWarningIcon, SparkleIcon, TrashIcon, TrayIcon, XIcon,
 } from "@phosphor-icons/react";
-import { cardWords, mainPanelAgent, type PanelAgent, type TurnLiveness, type WorkMode } from "@kinu.run/core";
+import { cardWords, MAIL_VIEWS, mainPanelAgent, splitQuotedReply, type MailView, type PanelAgent, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import { WorkspaceBarActions, WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MessageView } from "@/components/MessageView";
@@ -34,8 +34,9 @@ import { Choice, inputCls } from "@/components/ui/form";
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
-import { MailSendBody, type MailSend } from "@/components/mail/MailSendBody";
-import { mailExcerpt as firstLine, quotedMail as quoted, MailBody as Body, SealedMailHtml as SealedHtml } from "@/components/mail/MailMessage";
+import { MailSendBody } from "@/components/mail/MailSendBody";
+import { MAIL_VIEW_LABEL } from "@/components/mail/MailRow";
+import { mailExcerpt as firstLine, MailBody as Body, SealedMailHtml as SealedHtml } from "@/components/mail/MailMessage";
 import type { ImportantMail } from "@/lib/mail-api";
 
 const NOW = Date.now();
@@ -146,10 +147,11 @@ const SCOUT_EARLIER = "Hi Dana,\n\nNothing changes on your side: /hooks/v2 check
 const DANA_NOW = `Hi again,\n\nSince Tuesday afternoon every delivery to /hooks/v2 gets a 500 back. Our retries have given up on about 2,300 events (order.created and order.refunded). The response body is just "Internal Server Error".\n\nIs something down on your side? We can replay from our dashboard once it's fixed.\n\nDana\n\nOn ${quotedDay(NOW - 4 * DAY)}, scout <scout.api-worker.ashish@kinu.run> wrote:\n${SCOUT_EARLIER.split("\n").map((line) => `> ${line}`).join("\n")}`;
 
 /** The reply scout drafted for Dana: what the approval card holds. */
-const SCOUT_REPLY: MailSend & { readonly text: string } = {
-  agent: "scout",
+const SCOUT_REPLY = {
+  by: "scout",
   from: "scout.api-worker.ashish@kinu.run",
   to: ["dana@northwind.io"],
+  cc: [],
   subject: "Re: Webhook deliveries to /hooks/v2 failing with 500 since Tuesday",
   text: "Hi Dana,\n\nYou're right, and it's ours. Tuesday's release renamed the database binding the webhook route reads, so every delivery to /hooks/v2 failed before it was stored. Nothing you sent was processed twice.\n\nThe fix is on staging now and goes to production within the hour. Please replay the failed deliveries from your dashboard after 16:00 UTC. I'll check that they land and write back.\n\nscout, for Ashish Kumar Singh",
 };
@@ -285,18 +287,14 @@ export const THREADS: readonly Thread[] = [
 ];
 
 
-const VIEWS = ["important", "all", "sent", "drafts", "trash"] as const;
-
-type View = (typeof VIEWS)[number];
-
-const VIEW_LABEL: Record<View, string> = { important: "Important", all: "All", sent: "Sent", drafts: "Drafts", trash: "Trash" };
+type View = MailView;
 
 /** A `Segmented` choice, with its count only when there is one to show. */
 function choice<T extends string>(id: T, label: string, count: number): { id: T; label: string; count?: number } {
   return count > 0 ? { id, label, count } : { id, label };
 }
 
-const viewOf = (named: string | null): View => VIEWS.find((each) => each === named) ?? "important";
+const viewOf = (named: string | null): View => MAIL_VIEWS.find((each) => each === named) ?? "important";
 
 function inView(thread: Thread, view: View): boolean {
   if (view === "trash") return thread.trashed !== undefined;
@@ -611,7 +609,7 @@ function MailPage() {
         <div className="mt-5 grid grid-cols-[minmax(0,1fr)] items-start gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
           <div className={`max-w-full overflow-x-auto ${thread === null ? "flex" : "hidden lg:flex"}`}>
             <Segmented label="Mail views" value={view} onChange={(next) => { setView(next); setOpen(null); }}
-              segments={VIEWS.map((id) => choice(id, VIEW_LABEL[id], counts[id] ?? 0))} />
+              segments={MAIL_VIEWS.map((id) => choice(id, MAIL_VIEW_LABEL[id], counts[id] ?? 0))} />
           </div>
           <div className={`items-center gap-2 lg:justify-end ${thread === null ? "flex" : "hidden lg:flex"}`}>
             <label className="relative min-w-0 flex-1 lg:max-w-72">
@@ -624,7 +622,7 @@ function MailPage() {
                 options={[{ value: "all", label: "All addresses" }, ...ADDRESSES.map((each) => ({ value: each.id, label: each.label }))]} />
             </div>
           </div>
-          <section aria-label={VIEW_LABEL[view]} className={thread === null ? "" : "hidden lg:block"}>
+          <section aria-label={MAIL_VIEW_LABEL[view]} className={thread === null ? "" : "hidden lg:block"}>
             {waiting ? (
               <div data-mail-no-assistant className="p-card flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
                 <p className="p-row-text p-text-2">No assistant yet</p>
@@ -721,7 +719,7 @@ function MailPill({ thread, mail, onOpen }: { thread: Thread; mail: Mail; onOpen
   return (
     <EventRow icon={EnvelopeSimpleIcon} tone={owner ? "p-accent" : "p-text-3"} label={owner ? "Your mail" : "Mail"}
       source={owner ? undefined : mail.from.name}
-      body={owner ? firstLine(mail.text) : thread.subject} detail={cardWords(quoted(mail.text).own)} state="seen"
+      body={owner ? firstLine(mail.text) : thread.subject} detail={cardWords(splitQuotedReply(mail.text).own)} state="seen"
       hooks={{ "data-mail-pill": owner ? "owner" : "input" }}
       action={(
         <button type="button" onClick={onOpen} title="Open it in the Agent tab" aria-label="Open it in the Agent tab"

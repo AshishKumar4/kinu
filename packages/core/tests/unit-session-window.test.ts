@@ -75,6 +75,28 @@ describe('SessionWindow — the open window', () => {
     expect(present(win.claim(), 'the claimed window').turns).toEqual([turn]);
   });
 
+  test('a credential in a shell command or an eval program is stored redacted, in every projection of the call', () => {
+    const win = newStore();
+    // Assembled at runtime: a contiguous real-shaped literal trips the secret scan and push protection.
+    const cloudflare = 'cfut' + '_' + 'a'.repeat(48);
+    const jwt = ['eyJ' + 'h'.repeat(24), 'eyJ' + 'p'.repeat(24), 's'.repeat(20)].join('.');
+    const npm = 'np' + 'm_' + 'n'.repeat(36);
+    const db = 'postgres' + '://kinu:' + 'hunter22hunter22' + '@db.internal:5432/app';
+
+    win.append(aTurn(0, {
+      toolCalls: [
+        compactToolCall({ name: 'shell', args: { command: `CLOUDFLARE_API_TOKEN=${cloudflare} wrangler deploy` }, result: `connected to ${db}` }),
+        compactToolCall({ name: 'eval', args: { code: `await fetch('https://api.example.com', { headers: { authorization: '${jwt}', npm: '${npm}' } });` } }),
+        compactToolCall({ name: 'shell', args: { command: `cat ~/.npmrc > /home/main/${npm}.txt` } }),
+      ],
+    }), { awaitsFollowup: true });
+
+    const stored = JSON.stringify(present(win.claim(), 'the claimed window').turns);
+
+    for (const secret of [cloudflare, jwt, npm, 'hunter22hunter22']) expect(stored).not.toContain(secret);
+    expect(stored).toContain('<redacted>');
+  });
+
   test('settling the window does not discard a turn still waiting to be graded', () => {
     const win = newStore();
     win.append(aTurn(0), { awaitsFollowup: true });

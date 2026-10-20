@@ -143,17 +143,21 @@ describe('a filed message wakes only as the Mailbox decided, and never for a mac
 
     expect(await routeInboundMail(inbound('ashish@kinu.run'), quiet)).toMatchObject({ outcome: 'filed', woke: false });
 
-    const again = deps(delivery('input', { duplicate: true }));
-
-    await routeInboundMail(inbound('ashish@kinu.run'), again);
 
     const machine = deps(delivery('input'));
 
     await routeInboundMail(inbound('ashish@kinu.run', { 'Auto-Submitted': 'auto-replied' }), machine);
     await routeInboundMail(inbound('ashish@kinu.run', { 'List-Id': '<kinu.kinu-run.github.com>' }), machine);
-    expect([quiet.woken, again.woken, machine.woken]).toEqual([[], [], []]);
+    expect([quiet.woken, machine.woken]).toEqual([[], []]);
     expect(machine.delivered).toHaveLength(2);
   });
+});
+
+test('a redelivery is handed to its workspace again, which admits it once: a handoff lost after filing is not lost', async () => {
+  const again = deps(delivery('owner', { duplicate: true }));
+
+  expect(await routeInboundMail(inbound('ashish@kinu.run'), again)).toMatchObject({ outcome: 'filed', woke: true });
+  expect(again.woken.map((each) => [each.woke, each.instruction])).toEqual([['owner', 'Ship the fix.']]);
 });
 
 describe('new mail in the person\'s box goes to their assistant to triage', () => {

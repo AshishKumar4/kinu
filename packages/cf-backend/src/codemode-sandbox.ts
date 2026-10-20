@@ -8,10 +8,10 @@ import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
   explainSandboxError, nestedMembers, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
   NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, decodeJsonValue, relayedAnswer,
-  type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
+  type CraftedToolSource, type ExecuteResult, type Executor, type ProgramStop, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, stoppedProgram } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
 import { EGRESS_FAILURE_HEADER } from './egress/send-out';
@@ -101,7 +101,8 @@ function reachableAsWritten(provider: ResolvedProvider): ResolvedProvider {
 }
 
 export interface ProgramLaunch {
-  run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult>;
+  /** `deadlineMs`: the sandbox ends the program after this long; absent, nothing but completion does. */
+  run(source: string, providers: ResolvedProvider[], opts?: { readonly deadlineMs?: number }): Promise<ProgramResult>;
 }
 
 export interface CodemodeLauncherProps {
@@ -109,14 +110,18 @@ export interface CodemodeLauncherProps {
   readonly egress: CodemodeEgressProps | null;
   /** The program's bindings, `env.NAME` and `process.env.NAME`: the owner's secrets granted to its workspace. */
   readonly env: Readonly<Record<string, string>>;
+  /** The sandbox ends the program after this long; absent, nothing but completion does. */
+  readonly deadlineMs?: number;
 }
 
 /** Launches in a request of its own, so no program holds a workspace slot (D10). */
 export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: WorkerLoader }, CodemodeLauncherProps> {
   async run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult> {
-    const { kinuNode, egress, env } = this.ctx.props;
+    const { kinuNode, egress, env, deadlineMs } = this.ctx.props;
 
-    const worker = await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode, env });
+    const worker = await programWorker({
+      loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode, env, timeout: deadlineMs ?? NO_TIMER_DEADLINE_MS,
+    });
 
     return await worker.execute(`async () => { ${SANDBOX_CONSOLE_PRELUDE}\n return await (\n${normalizeCode(source)}\n)(); }`, providers.map(reachableAsWritten));
   }
@@ -130,10 +135,11 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
  * `environment` is read for each run, so a secret granted or revoked since is as it stands.
  */
 export function codemodeLauncher(props: Omit<CodemodeLauncherProps, 'env'>, environment: () => Promise<Readonly<Record<string, string>>>): ProgramLaunch {
-  return { run: async (source, providers) => {
+  return { run: async (source, providers, opts) => {
     const env = await environment();
+    const deadline = opts?.deadlineMs === undefined ? {} : { deadlineMs: opts.deadlineMs };
 
-    return await launched(exports.CodemodeLauncher({ props: { ...props, env } }).run(source, providers));
+    return await launched(exports.CodemodeLauncher({ props: { ...props, env, ...deadline } }).run(source, providers));
   } };
 }
 
@@ -143,14 +149,15 @@ export async function jobContextAnswers(): Promise<void> {
   await exports.CodemodeLauncher({ props: { kinuNode: false, egress: null, env: {} } }).answer();
 }
 
-/** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
- *  by the detach window and the platform CPU limit. */
+/** No work deadline unless the caller set one, where codemode's default is 60 s: a node agent's whole scaffold loop is
+ *  one program, bounded by the detach window and the platform CPU limit. */
 async function programWorker(input: {
   readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean; readonly env: Readonly<Record<string, string>>;
+  readonly timeout: number;
 }): Promise<DynamicWorkerExecutor> {
   return new DynamicWorkerExecutor({
     loader: input.loader,
-    timeout: NO_TIMER_DEADLINE_MS,
+    timeout: input.timeout,
     globalOutbound: input.egress,
     bindings: { ...input.env },
     modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE, [BROWSER_CLIENT_MODULE]: await browserClientSource() } : {},
@@ -195,32 +202,37 @@ export class KinuSandboxExecutor {
 export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
   return {
     languages: ['javascript'],
-    async execute(code: string, providers: HostProvider[]): Promise<ExecuteResult> {
-      try {
-        const normalized = Array.isArray(providers)
-          ? providers
-          : [{ name: 'codemode', fns: providers }];
-
-        const bridged = normalized.map((provider) => ({
-          name: provider.name,
-          fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
-            name,
-            async (...args: unknown[]) => await relayedAnswer(fn(...args.map((value) => decodeJsonValue({ value })))),
-          ])),
-        }));
-
-        const res = await launch.run(code, bridged);
-        const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
-        const output: ExecuteResult = { result };
-
-        if (res.error !== undefined) output.error = res.error;
-
-        if (res.logs !== undefined) output.logs = res.logs;
-
-        return output;
-      } catch (e) {
-        return { result: undefined, error: renderThrownChain({ cause: e }) };
-      }
+    execute(code: string, providers: HostProvider[], opts?: ProgramStop): Promise<ExecuteResult> {
+      // The sandbox ends a program at its deadline; a stop answers here at once, as the program may still be running.
+      return stoppedProgram(() => runtimeProgram(launch, code, providers, opts?.deadlineMs), opts);
     },
   };
+}
+
+async function runtimeProgram(launch: ProgramLaunch, code: string, providers: HostProvider[], deadlineMs: number | undefined): Promise<ExecuteResult> {
+  try {
+    const normalized = Array.isArray(providers)
+      ? providers
+      : [{ name: 'codemode', fns: providers }];
+
+    const bridged = normalized.map((provider) => ({
+      name: provider.name,
+      fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
+        name,
+        async (...args: unknown[]) => await relayedAnswer(fn(...args.map((value) => decodeJsonValue({ value })))),
+      ])),
+    }));
+
+    const res = await launch.run(code, bridged, deadlineMs === undefined ? {} : { deadlineMs });
+    const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
+    const output: ExecuteResult = { result };
+
+    if (res.error !== undefined) output.error = res.error;
+
+    if (res.logs !== undefined) output.logs = res.logs;
+
+    return output;
+  } catch (e) {
+    return { result: undefined, error: renderThrownChain({ cause: e }) };
+  }
 }

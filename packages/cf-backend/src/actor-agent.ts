@@ -143,6 +143,7 @@ import {
   loadProfileAuthorityInputs,
   resolveTurnProfile, resolveRoutingProfile, ownProfileChoices, ancestorPins, createAgentConfigStore, type PinnedProfile,
   activeOperationProfile, captureOperationProfile, currentOperationProfile, runOperationProfile, withOperationProfile,
+  providerAccounts, type ProviderAccounts,
   inTurnSurface, scopedTurnSurface, TurnSurface,
   type OperationProfile,
   toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
@@ -912,8 +913,7 @@ export abstract class ActorAgent extends Agent<Env> {
     getCredentialsRevision: () => this.account.credentialsRevision(),
     onProviderWait: (info) => { this.noteProviderWait(info); },
     onModelAttempt: (info) => { this.noteModelAttempt(info); },
-    // The catalog's choice of each provider's account, under this workspace's own.
-    accounts: () => ({ ...currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts, ...this.config.getProviderAccounts() }),
+    accounts: () => this.providerAccounts(),
     // A cold workspace serves the account's last listing swept under the same keys, and sweeps behind its turn.
     storedListing: {
       read: (accounts) => this.account.storedProviderListing(accounts),
@@ -2324,6 +2324,14 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
+  /** The workspace's choice of each provider's account, over the catalog's (`providerAccounts`); this is the main actor. */
+  private providerAccounts(): ProviderAccounts {
+    return providerAccounts({
+      actor: this.config.getProviderAccounts(), workspace: this.config.getProviderAccounts(),
+      catalog: currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts,
+    });
+  }
+
   protected get rt(): CFRuntime {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
@@ -2336,6 +2344,7 @@ export abstract class ActorAgent extends Agent<Env> {
         boxUse: this.boxUse,
         resolveProfile: () => this.routingProfile(),
         currentTurn: (reference) => this.currentTurnOf(reference),
+        accounts: () => this.providerAccounts(),
         refusals: this.tierRefusals,
         contextPlane: {
           actorId: this.actorHandle().actorId,

@@ -13,12 +13,13 @@ const { describe, expect, test } = require('bun:test');
 
 const { scratchDir } = require('@kinu.run/test-utils');
 
-const { branchOf, sessionFacts } = require('../src/daemon/session-facts.js');
+const { sessionFacts } = require('../src/daemon/session-facts.js');
 
-/** ps and lsof as a Mac prints them, `answers` by the command's first two words. */
+/** ps and lsof as a Mac prints them, `answers` by the command's first four words (one process's `lsof -a -p <pid>`),
+ *  else its first two. */
 function macSpawn(answers) {
   return (argv) => {
-    const said = answers[argv.slice(0, 2).join(' ')] ?? answers[argv[0]] ?? '';
+    const said = answers[argv.slice(0, 4).join(' ')] ?? answers[argv.slice(0, 2).join(' ')] ?? answers[argv[0]] ?? '';
 
     return { stdout: new Response(said).body, exited: Promise.resolve(0), kill: () => {} };
   };
@@ -46,7 +47,7 @@ describe("a PC's session row", () => {
     });
   });
 
-  test("a folder's branch, as git symbolic-ref says it: from a parent's repository, a worktree's, and none when detached", () => {
+  test("a row's branch, as git symbolic-ref says it: from a parent's repository, a worktree's, and none when detached", async () => {
     const repo = scratchDir('session-facts-branch');
     const worktree = scratchDir('session-facts-worktree');
 
@@ -60,7 +61,19 @@ describe("a PC's session row", () => {
     fs.mkdirSync(path.join(detached, '.git'));
     fs.writeFileSync(path.join(detached, '.git', 'HEAD'), '5107e3ecd0000000000000000000000000000000\n');
 
-    expect([path.join(repo, 'packages', 'core'), worktree, detached, scratchDir('session-facts-none')].map(branchOf))
-      .toEqual(['next-rc', 'feat/rows', null, null]);
+    const folders = [path.join(repo, 'packages', 'core'), worktree, detached, scratchDir('session-facts-none')];
+
+    // Each shell at its prompt, a login one too: its own folder is the row's.
+    const facts = await sessionFacts(folders.map((_, at) => ({ id: `pty-${String(at)}`, pid: 700 + at })), {
+      platform: 'darwin',
+      spawn: macSpawn({
+        ps: folders.map((_, at) => `  ${String(700 + at)}     1   ${String(700 + at)} -zsh`).join('\n'),
+        ...Object.fromEntries(folders.map((folder, at) => [`lsof -a -p ${String(700 + at)}`, `p${String(700 + at)}\nfcwd\nn${folder}`])),
+      }),
+    });
+
+    expect([...facts.values()].map((row) => ({ branch: row.branch, running: row.running }))).toEqual([
+      { branch: 'next-rc', running: null }, { branch: 'feat/rows', running: null }, { branch: null, running: null }, { branch: null, running: null },
+    ]);
   });
 });

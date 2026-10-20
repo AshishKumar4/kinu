@@ -136,7 +136,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive,
-  activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
   type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
@@ -1676,6 +1676,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await activateReplayedScaffold(this.refinementDeps.control);
     }
 
+    // After the activation above, so a cold turn takes in what it just put in the root.
+    const hidesSkills = dreamSkillsHidden(this.refinementDeps.approvals?.list() ?? [], actor.stores.config, cold);
+
     const reports: SubordinateReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
@@ -1687,7 +1690,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // A role imposing another mode (a planner on a Build message) runs that mode's tools.
     const { workMode } = resolved.profile;
     let built = this.actorTools(actor, reach, workMode, scope);
-    const sources = await this.actorSources(actor, reach.actor, { surface, resolved, artifacts: overrides, tools: built.turn }, planes);
+    const sources = await this.actorSources(actor, reach.actor, { surface, resolved, artifacts: overrides, tools: built.turn, hidesSkills }, planes);
 
     // Eval declares the turn's external tools in the description it is built with, and the tools above were built
     // before this turn read them.
@@ -2053,7 +2056,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         resolve: (spec) => (reach.kind === 'workspace' ? this.turnModel(spec) : this.ownedModelServices.resolveModel(spec)),
         routed: routedModelReads(providers),
       },
-      skills: vfsTurnSkills(runtime.storage.vfs, actor.stores.config, trust),
+      skills: vfsTurnSkills(runtime.storage.vfs, actor.stores.config, trust, turn?.hidesSkills),
       profileInputs: async () => inputs,
       choices,
       ancestors: () => this.ancestorProfiles(actor.handle) ?? [],
@@ -2724,6 +2727,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
+        // Whether a dream's skill is in effect, for the rater's list of changes the turn ran with.
+        ...(this.refinementDeps.approvals !== undefined && { approvals: this.refinementDeps.approvals }),
       });
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;

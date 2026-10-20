@@ -110,6 +110,18 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
     expect(store.readableBy({ ...caller, workspace: 'personal-assistant', mainActorId: 'actor-kinu', actorId: 'actor-kinu' }).map((box) => box.path)).not.toContain('');
   });
 
+  test('a redelivery is filed once but woken as the first was, so a handoff that failed after filing is made again', async () => {
+    open('probe@ashishkumarsingh.com');
+    const first = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'bounce@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
+    const again = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'bounce@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
+
+    expect(again).toMatchObject({
+      duplicate: true, messageId: first.messageId, threadId: first.threadId, headerId: first.headerId, woke: 'owner',
+      wake: first.wake, instruction: first.instruction, references: first.references, attachments: first.attachments,
+    });
+    expect((await store.thread(first.threadId))?.messages).toHaveLength(1);
+  });
+
   test('another verified sender on the same domain is not the owner: by default a box wakes for its owner only', async () => {
     open('probe@ashishkumarsingh.com');
     const delivery = await delivered({ raw: raw('second-local-part-pass'), envelopeFrom: 'x@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
@@ -146,15 +158,6 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
 
     expect(delivery).toMatchObject({ verified: false, woke: null, wake: null });
     expect((await store.thread(delivery.threadId))?.messages[0]).toMatchObject({ verified: false, text: 'Since Tuesday every delivery gets a 500.' });
-  });
-
-  test('a redelivered Message-ID is filed and woken once', async () => {
-    open('probe@ashishkumarsingh.com');
-    const first = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
-    const again = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
-
-    expect(again).toMatchObject({ duplicate: true, messageId: first.messageId, woke: null });
-    expect(store.list({ view: 'all' }).threads).toHaveLength(1);
   });
 
   test('a +tag reaches the same box and is kept as the address it was delivered to', async () => {
@@ -283,5 +286,42 @@ describe('Trash', () => {
     expect(store.list({ view: 'trash' }).threads).toEqual([]);
     expect(blobs.held.size).toBe(0);
     expect(store.list({ view: 'all', query: 'probe' }).threads).toEqual([]);
+  });
+});
+
+describe('what a sent message shows, and what replies to it reach', () => {
+  test('its state is the outbox\'s, however its send went; the reply that names the service\'s Message-ID joins its thread', async () => {
+    const outbox = new Map<string, 'pending' | 'sent' | 'dlq'>();
+
+    store = new MailStore({
+      sql: db, blobs, domain: 'kinu.run', now: () => clock, id: () => { next += 1;
+
+ return `id-${String(next)}`; }, parse: parseMail,
+      digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')), sendState: (messageId) => outbox.get(messageId) ?? null,
+    });
+    open('ashish@kinu.run');
+
+    const { view } = await store.queue({ path: '', to: ['dana@northwind.io'], subject: 'Webhook signing', text: 'We moved to the Northwind-Signature header.' });
+    const shown = async () => (await store.messageView(view.threadId, view.id))?.sendState;
+
+    expect(await shown()).toBe('queued');
+    outbox.set(view.id, 'pending');
+    expect(await shown()).toBe('queued');
+    outbox.set(view.id, 'sent');
+    expect(await shown()).toBe('sent');
+    outbox.set(view.id, 'dlq');
+    expect(await shown()).toBe('failed');
+
+    store.sentAs(view.id, '<0100019a2b3c.4d5e@email.cloudflare.net>');
+
+    const reply = await delivered({
+      raw: new TextEncoder().encode([
+        'From: Dana Whitfield <dana@northwind.io>', 'To: ashish@kinu.run', 'Subject: Re: Webhook signing', 'Message-ID: <signing-ack@northwind.io>',
+        'In-Reply-To: <0100019a2b3c.4d5e@email.cloudflare.net>', 'Content-Type: text/plain; charset=utf-8', '', 'Thanks, deploying the change now.',
+      ].join('\r\n')),
+      envelopeFrom: 'dana@northwind.io', recipient: toPerson,
+    });
+
+    expect(reply.threadId).toBe(view.threadId);
   });
 });

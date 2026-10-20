@@ -133,7 +133,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 | `mail.read(threadOrMessageId)` | observe | messages with text bodies and attachment metadata, marked untrusted (§4) |
 | `mail.draft({ to, cc?, subject, text, replyTo?, attach? })` | effect, no approval | a draft in the box, shown to the owner in Mail |
 | `mail.send(draftIdOrMessage)` | effect, approval | sends as the actor's own address (rules below) |
-| `mail.update(id, { read?, important?, trashed? })` | effect, own box only | `important` is the reason; only the Personal assistant sets it, on the person's box |
+| `mail.update(id, { read?, important? })` | effect, own box only; a Plan turn may | `important` is the reason; only the Personal assistant sets it, on the person's box |
+| `mail.trash(id, { restore? })` | effect, own box only; never in a Plan turn | a Plan turn may follow what mail asked, and Trash empties itself after 30 days |
 
 **What an agent can read:**
 
@@ -243,6 +244,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 - **Delivery status:** a Queues subscription feeds bounced, complained and rejected events into each message's status.
 - **Automatic pause:** an account whose complaint rate passes 0.1% stops sending until the owner looks.
 
+
+**Redelivery (built).** Email Routing delivers a message again when it is unsure the first delivery took. The Mailbox files a Message-ID once, but answers a redelivery as it answered the first: the same wake, the same words. The router therefore hands it to the workspace again, because the handoff may be what failed after filing. The workspace admits it once, since its event log dedupes on the Message-ID (`email-round-trip.test.ts`: no second receipt, no second turn).
 ## 5. Deliverability and DNS
 
 **For kinu.run** (these are the owner's actions in the Cloudflare dashboard, or through the API with their token):
@@ -260,6 +263,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 - That replaces today's check, which passes on any rule line that mentions the Worker and proves no DNS (`scripts/infra-cloudflare.ts:1208`).
 - **Plan limits:** the Workers Free plan can receive mail but can send only to verified addresses. The step says so.
 
+
+**Sending (built).** The Mailbox hands the Email Sending binding `mailboxEmail(...)`: From, To, Cc, the subject, the text and, for a reply, In-Reply-To and References. It sets no Message-ID: the service writes one and refuses one set by the sender (refused in production on 2026-10-05). The Message-ID the binding answers is kept as the message's own (`EmailOutbox` `sentAs`, `MailStore.sentAs`), so a reply that names it joins the thread. The outbox is the only record of a send: a message's shown state is read from it (pending is queued, sent, dead-lettered is failed), and the row keeps only whether it is a draft.
 ## 6. Cost and limits, for the record
 
 | Item | Limit or cost |
@@ -336,8 +341,8 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
    - It picks what is Important and writes the reason. It drafts replies for the owner to send as themselves.
    - It sends nothing as the person.
    - Built (`core/src/mail/triage.ts`): new mail in the person's box that is not their own verified instruction waits for triage: its thread is queued in `mail_untriaged`. The router tells the box's reader, the assistant, and the assistant's workspace runs a pass outside any turn (`triageOwnerMail`). Nudges that arrive during a pass owe one more pass, not one each. The assistant's install also starts a pass, for mail that came before it.
-   - A pass takes the waiting threads newest first, ten a round, at most four rounds. Each thread is one fast-tier call (`oneShotOn('fast')`). The model gets the assistant's soul, the owner's sign-in address, and the thread as `mailThreadText` renders it, sealed. It answers `{important, reason, reply}`.
-   - The pick is recorded through `updateFor`, and a pick either way takes the thread off the queue. The reason is one line, at most 280 characters. A reply, when one is due, is left through `draftFor`, signed with the assistant's name. It goes to the newest inbound sender, with the thread's own subject, whatever the answer says. A thread the person already drafted in, or whose newest mail came from the owner's own address, gets no draft. Nothing is sent: the person sends a draft from Drafts.
+   - A pass reads the waiting threads ten at a time, newest first, and keeps reading until the queue holds only threads it could not answer this pass; a backlog is emptied in one pass, not left for the next mail. Each thread is one fast-tier call (`oneShotOn('fast')`). The model gets the assistant's soul, the owner's sign-in address, and the thread as `mailThreadText` renders it, sealed. It answers `{important, reason, reply}`.
+   - Each read carries the thread's version, `mail_untriaged.since`, which moves forward at every arrival, even two in one millisecond. The pick and the reply are applied together through `triagedFor`, in one synchronous step, and only if the thread still waits at that version. Otherwise nothing is written: mail that arrived while the model read the thread leaves it waiting, and the pass reads it again with that mail. A pick either way takes the thread off the queue; `mail.update` no longer does. The reason is one line, at most 280 characters. A reply, when one is due, is left as a draft signed with the assistant's name. The Mailbox addresses it to the newest inbound sender, under the thread's own subject (`replySubject`, the one `Re:` rule); the model gives only its words. A thread the person already drafted in, or whose newest mail came from the owner's own address, gets no draft. Nothing is sent: the person sends a draft from Drafts.
    - A thread the model cannot answer (the tier is down) stays waiting and is tried at the next pass. One it answers in no shape is settled as not Important, so mail written to confuse it cannot cost a call at every later arrival. Both are logged as `mail.triage_failed`. New mail in a settled thread makes it wait again.
    - The Important view and the footer's badge read `important`, so they show the picks as soon as a pass records them.
 3. **Drafts in the reading pane.** A thread with the assistant's draft offers "Open Personal assistant's draft" beside Reply. The person reads it, edits it and sends it.
@@ -496,7 +501,7 @@ CREATE INDEX IF NOT EXISTS mail_threads_trashed ON mail_threads (trashed_at) WHE
 -- The person's threads with mail their assistant has not yet picked Important or not on (§8).
 CREATE TABLE IF NOT EXISTS mail_untriaged (
   thread_id   TEXT    PRIMARY KEY REFERENCES mail_threads (id),
-  since       INTEGER NOT NULL                -- its newest such mail
+  since       INTEGER NOT NULL                -- its newest such mail's time, and its version: never the same twice
 );
 
 -- One message, as received or written. Large parts and the raw message live in R2 under the account.

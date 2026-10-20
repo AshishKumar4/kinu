@@ -312,7 +312,9 @@ export class EvolutionEngine {
     // counts, so a thumb cleared later falls back to it.
     const reading = graded || followup === null || decide === undefined ? null : await rateTurn(decide, {
       request: turn.userMessage, actions: renderActions(turn.toolCalls), answer: turn.assistantResponse, followup,
-      changes: dreamChangesFor(this.rt.storage.sql, this.rt.actor, turn.artifacts ?? null),
+      changes: dreamChangesFor({
+        sql: this.rt.storage.sql, actor: this.rt.actor, ...(this.config.approvals !== undefined && { approvals: this.config.approvals }),
+      }, turn.artifacts ?? null),
     }, turn.toolCalls.length);
 
     const effective = (): EffectiveRating | null => {

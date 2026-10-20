@@ -7,6 +7,7 @@ import {
   type AdvisorRecoverySnapshot, type AgentFigures, type AgentReport, type HostedActor, type SerializedMessage, type SessionEvent, type TurnEndEvent,
   type SubordinateReportLedger, type SubordinateReportStatus, type TaskTurnEnding, type WorkMode, type ResolvedTurnProfile,
   type RemoteReceipt, type ReplyToCommentToolDeps, type StoredRow, type SubmitPlanToolDeps, type TurnCraftLedger,
+  providerAccounts,
 } from '@kinu.run/core';
 
 import { attempt, diagnostics, hold, logged, settle, settleLoggedSync } from '@kinu.run/core/obs';
@@ -422,8 +423,9 @@ export function facetTurnSources(turn: {
 
   const registry = turn.models({
     userDO: brokeredCredentials(turn.workspace, prepared.credentialsRevision),
-    accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
-      ?? prepared.sources.profileInputs.envelope.catalog.accounts?.[provider],
+    accountFor: (provider) => providerAccounts({
+      actor: actor.stores.config.getProviderAccounts(), workspace: prepared.accounts, catalog: prepared.sources.profileInputs.envelope.catalog.accounts,
+    })[provider],
     appTitle: 'Kinu',
     onProviderWait: waits.wait,
     onModelAttempt: (info) => {

@@ -44,10 +44,6 @@ const REFINEMENT_STAGES = [
 
 export type RefinementStage = (typeof REFINEMENT_STAGES)[number];
 
-export const REFINEMENT_EDIT_KINDS = [
-  'fact', 'prompt_section', 'tool_description', 'skill', 'subagent_spec',
-] as const;
-
 /** Exported so the refiner's brief states the same floor the parse enforces. */
 export const MIN_EDIT_RATIONALE = 40;
 
@@ -90,6 +86,9 @@ const RefinementEditSchema = v.variant('kind', [
     rationale: RationaleSchema,
   }),
 ]);
+
+/** Read off the variant, so a kind is declared once, with its fields. */
+export const REFINEMENT_EDIT_KINDS = RefinementEditSchema.options.map((option) => option.entries.kind.literal);
 
 /** `strictObject` at every level: a permissive parse would drop unknown fields such as `scope` and apply the edit in a way nobody wrote. */
 export const RefinementProposalSchema = v.strictObject({

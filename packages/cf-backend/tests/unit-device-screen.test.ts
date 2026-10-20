@@ -4,22 +4,12 @@
  * stream ends reaching the other side. The daemon's frames are made by the daemon's own encoder.
  */
 import { describe, expect, test } from 'bun:test';
-import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_FRAMES, DEVICE_METHOD, DEVICE_SCREEN_PATH, readScreenData, type JsonValue,
+  DEVICE_CONNECT_PATH, DEVICE_FRAMES, DEVICE_METHOD, DEVICE_SCREEN_PATH, readScreenData, screenDataFrames, type JsonValue,
 } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 import { CAPABLE_HELLO, createTestUserDO, provisionTestWorkspace, testOwner, type AcceptedSocket, type TestUserDO } from './helpers/user-do';
-
-/** The daemon's screen module, CommonJS as the daemon runs it, read at its boundary. */
-const DaemonScreenSchema = v.object({ screenFrames: v.pipe(v.function(), v.returns(v.array(v.instance(Uint8Array)))) });
-
-const { screenFrames: daemonFrames } = v.parse(DaemonScreenSchema, createRequire(import.meta.url)('../../pc-agent/src/daemon/screen.js'));
-
-function screenDataFrames(stream: number, bytes: Uint8Array): Uint8Array[] {
-  return daemonFrames(stream, bytes);
-}
 
 const WORKSPACE = 'screen-workspace';
 

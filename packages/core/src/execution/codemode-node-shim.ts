@@ -5,6 +5,7 @@
  */
 
 import { SLATE_PROGRAM_MEMBERS } from '../slates/rpc';
+import { walkedPath } from '../vfs/workspace-path';
 
 export const KINU_NODE_MODULE_NAME = 'kinu-node.js';
 
@@ -35,17 +36,15 @@ function refusalOf(result) {
     && (result.success === false || typeof result.reason === 'string') ? result.error : null;
 }
 
-/** A relative path joined onto the working root, as the host would resolve it; an absolute, empty or root:// one as given. */
+/** The file plane's own join (vfs/workspace-path.ts): a relative path onto the working root, its components left for the
+ *  plane to walk, so a link's '..' lands where the link's target is, as file.write's does. */
+const walkedPath = ${walkedPath.toString()};
+
+/** A path as the host resolves it; an empty or root:// one as given. */
 function resolveAt(cwd, path) {
   const text = String(path);
-  if (text === '' || text.startsWith('/') || /^[^\s/:]+:\/\//.test(text)) return text;
-  const segments = [];
-  for (const segment of (cwd + '/' + text).split('/')) {
-    if (segment === '' || segment === '.') continue;
-    if (segment === '..') segments.pop();
-    else segments.push(segment);
-  }
-  return '/' + segments.join('/');
+  if (text === '' || /^[^\s/:]+:\/\//.test(text)) return text;
+  return walkedPath(text, cwd);
 }
 
 /** The platform's process object plus a working directory: the root relative paths resolve against. */

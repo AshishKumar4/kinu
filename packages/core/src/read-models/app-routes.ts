@@ -4,6 +4,8 @@
 /** Every path `App.tsx` routes; `home` is `/`. */
 export const APP_ROUTES = {
   home: '/',
+  /** A new workspace's mission, its own page: Home is the assistant's chat once the owner has one. */
+  newWorkspace: '/new',
   userSettings: '/user/settings',
   welcome: '/welcome',
   workspaces: '/workspaces',

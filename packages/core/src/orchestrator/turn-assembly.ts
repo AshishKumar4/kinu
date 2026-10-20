@@ -26,6 +26,7 @@ import { parseModelSpec, type CacheRetention } from '../providers/types';
 import type { ModelCallSpend, ModelOperationSink } from '../events/model-call';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActiveSkillSet } from '../skills/types';
+import type { DiscoverOpts } from '../skills/discover';
 import { withTaskPlan, type TaskPlanContext } from '../tools/task-plan-scope';
 import { withToolText, type ToolTextOverrides } from '../tools/tool-text';
 import { withFamilyToolNotes } from '../prompting/tool-families';
@@ -122,8 +123,9 @@ export interface TurnTools {
 /** A one-shot run brings its tools and brief; the actor brings the rest. */
 export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTools' | 'wiredToolNames' | 'codemodeCapabilities' | 'brief'>;
 
-export function vfsTurnSkills(vfs: VFS, config: TurnSkillsConfig, trust: InstructionTrustResolver): TurnAssemblySources['skills'] {
-  return (userText, roleSkills, limits) => resolveTurnSkills({ vfs, config, userText, roleSkills, trust, limits });
+/** `hides`: the skills this turn's reader does not index yet (`dreamSkillsHidden`). */
+export function vfsTurnSkills(vfs: VFS, config: TurnSkillsConfig, trust: InstructionTrustResolver, hides?: DiscoverOpts['hides']): TurnAssemblySources['skills'] {
+  return (userText, roleSkills, limits) => resolveTurnSkills({ vfs, config, userText, roleSkills, trust, limits, ...(hides !== undefined && { hides }) });
 }
 
 export interface TurnAssemblyRequest {

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-20",
-  "files": 3591,
-  "functions": 94843,
+  "files": 3594,
+  "functions": 94911,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -123,10 +123,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
-      "complexity": 30
-    },
-    {
-      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 30
     },
     {
@@ -415,6 +411,10 @@
     },
     {
       "key": "packages/core/src/evolution/refinement-lane.ts#plan>gen",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 25
     },
     {

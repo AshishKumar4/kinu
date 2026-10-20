@@ -28,7 +28,6 @@ const {
   CANCEL_METHOD,
   PTY_OUTPUT_FRAME,
   PTY_EXIT_FRAME,
-  SESSION_COMMAND,
 } = require('../src/index.js');
 
 const { createSessions, TERMINAL_NAME } = require('../src/pty.js');
@@ -172,8 +171,8 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     await ws.response('rpc-abcdefghij-2');
 
     // The raw tier's own argv, from sandbox.plan: a shell running one command,
-    // and the command is "become an interactive shell".
-    expect(plans[0].argv).toEqual(['bash', '-c', SESSION_COMMAND]);
+    // and the command is "become an interactive shell", reading the session's rc and naming its history.
+    expect(plans[0].argv).toEqual(['bash', '-c', expect.stringMatching(/^KINU_SESSION_HISTORY='[^']+\/pty-[\w-]+\.history' exec bash --rcfile '[^']+\/session\.bashrc' -i$/u)]);
     // The terminal this daemon just allocated, carried through the tier's own
     // environment allow-list rather than assumed by the program.
     expect(plans[0].env.TERM).toBe(TERMINAL_NAME);
@@ -367,6 +366,21 @@ describe("a workspace's named sessions", () => {
       .toEqual({ resumed: true, pid: true, first: true, detachedSent: false });
   });
 
+  // The computer names a new session by the same sequence (packages/devbox/src/sessions.ts): a PC's took `shell 2`
+  // even with no `shell` left, and refused a seventeenth session by a cap nothing measured.
+  test('a new session takes the first free name in the computer\'s sequence, with no cap on how many', async () => {
+    const { ctx } = context();
+    const ws = fakeWs();
+    const [first] = await call(ws, ctx, { id: 'rpc-seq-list', method: 'ptyList', workspace: WORKSPACE, params: [] });
+
+    await call(ws, ctx, { id: 'rpc-seq-rename', method: 'ptyRename', workspace: WORKSPACE, params: [first.id, 'build'] });
+    const names = [];
+
+    for (let n = 0; n < 17; n += 1) names.push((await call(ws, ctx, { id: `rpc-seq-create-${String(n)}`, method: 'ptyCreate', workspace: WORKSPACE, params: [] })).name);
+
+    expect({ first: names[0], second: names[1], count: names.length, last: names.at(-1) }).toEqual({ first: 'shell', second: 'shell 2', count: 17, last: 'shell 17' });
+  });
+
   test('a socket gone detaches every session, and a workspace lists, names and closes only its own', async () => {
     const { ctx, sessions } = context();
     const ws = fakeWs();
@@ -384,6 +398,35 @@ describe("a workspace's named sessions", () => {
     const left = await call(ws, ctx, { id: 'rpc-named-list3', method: 'ptyList', workspace: WORKSPACE, params: [] });
 
     expect({ shellEnded: sessions.has(first.id), left: left.map((session) => session.name) }).toEqual({ shellEnded: false, left: ['dev server'] });
+  });
+
+  // A raw session's shell runs as the owner: with their HOME, what was typed into it went to ~/.bash_history, and an rc
+  // naming its own HISTFILE took it there just the same.
+  test("a session keeps its own history across its shells, and none reaches the owner's, whatever their rc names", async () => {
+    const owner = path.join(SHELL_HOME, '.owner_history');
+    const rc = path.join(SHELL_HOME, '.bashrc');
+
+    fs.writeFileSync(rc, `HISTFILE=${owner}\n`);
+    const { ctx, sessions } = context();
+    const ws = fakeWs();
+    const [first] = await call(ws, ctx, { id: 'rpc-hist-list', method: 'ptyList', workspace: WORKSPACE, params: [] });
+
+    await call(ws, ctx, { id: 'rpc-hist-open1', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, params: [80, 24, first.id] });
+    handle({ type: PTY_INPUT_FRAME, session: first.id, data: Buffer.from('echo kept-$((40 + 2))\r').toString('base64') }, ws, ctx);
+    await ws.until(() => ws.output().includes('kept-42'));
+    await endAll(sessions);
+
+    const again = fakeWs();
+
+    await call(again, ctx, { id: 'rpc-hist-open2', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, params: [80, 24, first.id] });
+    handle({ type: PTY_INPUT_FRAME, session: first.id, data: Buffer.from('fc -ln -1; echo listed-$((1 + 1))\r').toString('base64') }, again, ctx);
+    await again.until(() => again.output().includes('listed-2'));
+
+    const answer = { recalled: again.output().includes('echo kept-$((40 + 2))'), owner: fs.existsSync(owner), ownerDefault: fs.existsSync(path.join(SHELL_HOME, '.bash_history')) };
+
+    // The rest of the file runs with no rc of the owner's.
+    fs.rmSync(rc);
+    expect(answer).toEqual({ recalled: true, owner: false, ownerDefault: false });
   });
 
   test('a daemon restart brings a session back under its name, in its folder, with a fresh shell', async () => {

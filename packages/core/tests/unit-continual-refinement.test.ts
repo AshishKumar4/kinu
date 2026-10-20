@@ -1,4 +1,4 @@
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Continual refinement end to end over the real owners. Asserts: an LLM proposal
  * never moves live behaviour by itself; writes land only in existing stores; a crash
@@ -19,7 +19,7 @@ import { initTurnRatingTables, rateTurn } from '../src/evolution/ratings';
 import { dreamChangesFor, renderWatch } from '../src/evolution/watch';
 import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import {
-  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, toolArtifact, turnArtifacts,
+  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
 } from '../src/evolution/artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../src/tools/registry';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
@@ -56,7 +56,10 @@ import {
   advanceRefinementLane as advanceLane, dreamRequest, requestRefinement, type RefinementLaneStep,
 } from '../src/evolution/refinement-lane';
 import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../src/identity/evolution-helpers';
-import { activateDreamSkills } from '../src/evolution/refinement-skill';
+import { activateDreamSkills, dreamSkillsHidden } from '../src/evolution/refinement-skill';
+import { createAgentConfigStore, type AgentConfigStore } from '../src/config/store';
+import { resolveTurnSkills } from '../src/orchestrator/turn-surface';
+import { renderSkillsIndexSection } from '../src/skills/render';
 import { idleDream, refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present } from '@kinu.run/test-utils';
 import { createLineLogger, renderThrownChain, setDiagnosticsSink } from '../src/obs/index';
@@ -515,6 +518,33 @@ describe('refinement request — durable, and behaviourally inert', () => {
 });
 
 describe('the refiner — bounded references, prior history, strict typed answer', () => {
+  test('the dreamer reads each section and tool text as the agent reads it now, and both briefs put a skill last', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const evolved = `${INCUMBENT.trimEnd()} Answer in one line when the owner asks a yes-or-no question.`;
+    stageArtifact(fx.rt.storage.sql, fx.rt.actor, { artifactId: ARTIFACT, body: evolved, rationale: 'an earlier dream', evidence: { turns: ['t'], reason: 'incorrect' } });
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+
+    const edit = { kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'three corrected turns asked for a one-line yes or no' } as const;
+    const { port, requests } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'shorter yes-or-no answers', edits: [edit] }));
+    const reviews: string[] = [];
+
+    const deps = fx.deps(port, undefined, undefined, (review, edits) => {
+      reviews.push(review);
+
+      return acceptEvery(review, edits);
+    });
+
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const brief = requests[0]?.task ?? '';
+
+    expect(brief).toContain(evolved);
+    expect(brief).toContain(BUILTIN_TOOL_DESCRIPTIONS.file);
+
+    for (const text of [brief, reviews[0] ?? '']) expect(text).toContain('a memory fact, and a skill last');
+  });
+
   test('the brief and the review name the picks the turns switched from or corrected, with their descriptions now', async () => {
     const fx = fixture();
     fx.rt.craftStore.create({ name: 'csv_sum', description: 'Sums one column of a CSV file', code: 'async () => 0' });
@@ -549,12 +579,12 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const [brief, review] = [requests[0]?.task ?? '', reviews[0] ?? ''];
 
     for (const text of [brief, review]) {
-      expect(text).toContain('## Skills and tools picked, then switched from or corrected');
-      expect(text).toContain('  - skill `report-writing`, then `slates`: 1 time');
-      expect(text).toContain('  - tool `csv_sum`, then `csv_total`: 1 time');
-      expect(text).toContain('  - skill `report-writing`: (not trusted, so its description is withheld)');
-      expect(text).toContain('  - skill `slates`: Build any interface the user asks for');
-      expect(text).toContain('  - tool `csv_total`: Totals every column of a CSV file');
+      // The two switches, the description of each pick now, and none for a skill nobody trusted.
+      for (const named of ['report-writing', 'slates', 'csv_sum', 'csv_total', 'Build any interface the user asks for', 'Totals every column of a CSV file', 'Sums one column of a CSV file']) {
+        expect(text).toContain(named);
+      }
+
+      expect(text).not.toContain('Write a weekly report');
     }
 
     expect(brief).toContain('says when it applies, and when a similar one fits instead');
@@ -1573,13 +1603,13 @@ describe('the watch: a reply that rejects a dream\'s change', () => {
 
   test('a turn lists the dream changes it ran with, each as what it is', async () => {
     const { fx, text, fact } = await dreamt();
-    const changes = dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, [text]);
+    const changes = dreamChangesFor({ sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals }, [text]);
 
     expect(changes.map((change) => change.id).sort()).toEqual([fact, text].sort());
     expect(changes.find((change) => change.id === text)?.describe).toStartWith(`the ${TARGET_ID} prompt section was reworded; it now reads: "${CANDIDATE.slice(0, 40)}`);
     expect(changes.find((change) => change.id === fact)?.describe).toBe(`the agent remembers ${FACT_EDIT.key}: "one line"`);
     // A turn that ran without the section's new version is not held to it.
-    expect(dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, []).map((change) => change.id)).toEqual([fact]);
+    expect(dreamChangesFor({ sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals }, []).map((change) => change.id)).toEqual([fact]);
   });
 
   test('the rater is asked about the listed changes only when there are any, and names the one rejected', async () => {
@@ -1612,7 +1642,7 @@ describe('the watch: a reply that rejects a dream\'s change', () => {
     rate(fx, since + 2_000, { score: 5, corrected: 0, artifacts: [text] });
     rate(fx, since + 3_000, { score: 1, corrected: 0.6, artifacts: [text], rejects: fact });
 
-    const lines = renderWatch(fx.rt.storage.sql, fx.rt.actor).split('\n');
+    const lines = renderWatch({ sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals }).split('\n');
     const line = (id: string) => present(lines.find((entry) => entry.includes(`(${id})`)) ?? null, id);
 
     expect(line(text)).toStartWith(`  - the ${TARGET_ID} prompt section, reworded (${text}), in effect: 3 rated turns ran with it, mean 3.3 with 1 corrected; the 3 rated before it, mean `);
@@ -1625,6 +1655,28 @@ describe('the watch: a reply that rejects a dream\'s change', () => {
     await requestRefinement(fx.deps(port), { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(fx.deps(port));
     expect(requests[0]?.task).toContain(`## What changed since, and how the turns went\n\n${lines.join('\n')}`);
+  });
+
+  test('a skill a cold turn made trusted is a change in effect: the rater is asked about it, and an explicit stop reverts it', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
+    const owners = { sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals };
+    const skill = `skill:${BREVITY_PATH}`;
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    expect(renderWatch(owners)).toContain(`(${skill}), waiting for a cold turn`);
+
+    await activateDreamSkills(deps);
+    await advanceRefinementLane(deps);
+    expect(dreamChangesFor(owners, []).map((change) => change.id)).toContain(skill);
+    expect(renderWatch(owners)).toContain(`(${skill}), in effect`);
+
+    rate(fx, Date.now() + 60_000, { score: 1, corrected: 0.95, artifacts: [], rejects: skill });
+    await refinementPass(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
+    expect(fx.approvals.get(BREVITY_PATH)?.decision).toBe('revoked');
+    expect(renderWatch(owners)).toContain(`(${skill}), reverted`);
   });
 
   test('an explicit stop reverts the change it names before the next dream; a mild or an earlier rejection does not', async () => {
@@ -2017,8 +2069,12 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     const tool = toolArtifact('shell', 'description');
     const shell = () => artifactOverrides(currentArtifacts(fx.rt.storage.sql, fx.rt.actor)).tools.descriptions.shell;
 
-    expect(requests[0]?.task).toMatch(/- shell: description \d+ bytes, schema \d+ bytes/u);
-    expect(requests[0]?.task).toMatch(/- agents: description \d+ bytes\n/u);
+    // Both of the tool's texts, as the agent reads them now.
+    expect(requests[0]?.task).toContain(BUILTIN_TOOL_DESCRIPTIONS.shell);
+    expect(requests[0]?.task).toMatch(/### shell schema \(\d+ bytes\)/u);
+    // A tool with no field descriptions shows its description alone.
+    expect(requests[0]?.task).toMatch(/### agents description \(\d+ bytes\)/u);
+    expect(requests[0]?.task).not.toContain('### agents schema');
     expect(briefs[0]).toContain(`### Edit 0: tool_description ${tool} (artifact_versions)`);
     expect(briefs[0]).toContain('Measured: the decision model judged it to fix 1.00');
     expect(briefs[0]).toMatch(/The prompt sections and tool texts are \d+ bytes, against \d+ as bundled/u);
@@ -2305,6 +2361,32 @@ describe('a cold turn is what makes a dream\'s skill live', () => {
     return { fx, deps, store, id: opened.id, staged: refinementStagingPath(opened.id, 'brevity') };
   }
 
+  test('a dream skill one agent\'s cold turn publishes moves no warm sibling\'s skills index; its own next cold turn takes it in', async () => {
+    const { fx, deps } = await stagedFixture();
+    const hired = createAgentConfigStore(fx.rt.storage.sql, 'actor-hired', () => {});
+    const main = fx.rt.actor.config;
+
+    // The skills index a turn of `config`'s agent renders into its prompt prefix, over the one shared skills root.
+    const indexOf = async (config: AgentConfigStore, cold: boolean) => renderSkillsIndexSection((await resolveTurnSkills({
+      vfs: fx.rt.agentStateVfs, config, userText: 'the next request', limits: { contextWindow: null, modelOutputLimit: null },
+      trust: (path, content) => fx.approvals.trustOf(path, content), hides: dreamSkillsHidden(fx.approvals.list(), config, cold),
+    })).available);
+
+    // The hired agent's segment opened before the dream's skill landed.
+    const before = await indexOf(hired, true);
+    expect(before).not.toContain('brevity');
+
+    // The main agent's cold turn puts the skill in the shared root, and its own index takes it in.
+    await activateDreamSkills(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
+    expect(await indexOf(main, true)).toContain('brevity');
+
+    // The hired agent's warm turns read the bytes they read before; its next cold turn takes the skill in.
+    expect(await indexOf(hired, false)).toBe(before);
+    expect(await indexOf(hired, true)).toContain('brevity');
+    expect(await indexOf(hired, false)).toContain('brevity');
+  });
+
   test('a crash between the trust row and the file is repaired at the next cold turn, never by the lane', async () => {
     const { fx, deps, store, id, staged } = await stagedFixture();
 
@@ -2412,25 +2494,54 @@ describe('a hard kill at `gated` is still settled', () => {
 });
 
 describe('promotion never half-lands — the read-back is what allows the unlink', () => {
-  /** A file plane whose write of one path misbehaves. */
+  /** A file plane whose create of one path misbehaves. */
   function saboteur(
     rt: AgentRuntime,
     path: string,
     mode: 'throw' | 'tear',
   ): () => void {
     const vfs = rt.agentStateVfs;
-    const real = vfs.writeFile.bind(vfs);
-    vfs.writeFile = async (written: string, data: Uint8Array) => {
-      if (written !== path) return real(written, data);
+    const real = present(vfs.writeFileIfRevision?.bind(vfs), 'a revisioned plane');
+    vfs.writeFileIfRevision = async (written: string, data: Uint8Array, expected: VfsRevision) => {
+      if (written !== path) return real(written, data, expected);
 
       if (mode === 'throw') throw new Error('disk full');
 
       // A torn write.
-      return real(written, new TextEncoder().encode('\ntruncated'));
+      return real(written, new TextEncoder().encode('\ntruncated'), expected);
     };
 
-    return () => { vfs.writeFile = real; };
+    return () => { vfs.writeFileIfRevision = real; };
   }
+
+  test('an owner\'s file written after the publisher found none is kept, and the skill stays staged', async () => {
+    const { fx, deps, store, id, path } = await staged();
+    const owners = `${BREVITY_SKILL}\nthe owner's own.`;
+    const vfs = fx.rt.agentStateVfs;
+    const real = vfs.stat.bind(vfs);
+    let landed = false;
+
+    // The owner's write lands between the publisher's look at the target, which finds nothing, and its write.
+    vfs.stat = async (looked: string, options?: Parameters<VFS['stat']>[1]) => {
+      const found = await real(looked, options);
+
+      if (looked === BREVITY_PATH && found === null && !landed) {
+        landed = true;
+        await writeSkill(fx.rt, BREVITY_PATH, owners);
+      }
+
+      return found;
+    };
+
+    await activateDreamSkills(deps);
+    vfs.stat = real;
+
+    expect(landed).toBe(true);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(owners);
+    expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
+    await advanceRefinementLane(deps);
+    expect(store.get(id)?.stage).toBe('evaluating');
+  });
 
   async function staged() {
     const fx = fixture();
@@ -2738,6 +2849,8 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     const resumed = rail.port();
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;
+    // A staged text edit, whose standing its settle reads from the versions' table.
+    store.record(stuck.id, 'requested', { routes: [{ kind: 'prompt_section', owner: 'artifact_versions', target: `${ARTIFACT}@1`, disposition: 'staged' }] });
     void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'gated' WHERE id = ${stuck.id}`;
     void fx.rt.storage.sql`ALTER TABLE artifact_versions RENAME TO artifact_versions_away`;
     expect(owed()).not.toBeNull();
