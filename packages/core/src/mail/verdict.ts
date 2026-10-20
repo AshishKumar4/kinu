@@ -17,7 +17,7 @@ const AUTHSERV_ID = 'mx.cloudflare.net';
 /** Cloudflare's own Received field, which opens the header block of every message its MX delivers. */
 const CLOUDFLARE_RECEIVED = /\bby cloudflare-email\.net\b/iu;
 
-export interface MailVerdict {
+interface MailVerdict {
   readonly verified: boolean;
   /** The one From address, lowercased; null when the message has none, or more than one. */
   readonly from: string | null;
