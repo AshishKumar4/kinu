@@ -175,25 +175,25 @@ describe("resolveModelDefaults — signed out, a provider's key alone", () => {
   test("an OpenRouter key with no chosen model lands on OpenRouter's own default", async () => {
     const out = await runResolveLLM({ providers: { openrouter: { apiKey: "or-test" } } });
 
-    expect(out).toEqual({ spec: `openrouter/${OPENROUTER_DEFAULT_MODEL}`, endpoint: null });
+    expect(out).toEqual({ spec: `openrouter/${OPENROUTER_DEFAULT_MODEL}`, endpoint: null, missing: null });
   });
 });
 
 describe("resolveModelDefaults — signed-in Cloudflare AI", () => {
   test("defaults to the platform's Workers AI model, served through the account", async () => {
     const out = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN });
-    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
+    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null, missing: null });
   });
 
   test("honors a configured workers-ai model; non-workers-ai specs keep the platform default", async () => {
     const pinned = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/@cf/meta/llama-4" });
-    expect(pinned).toEqual({ spec: "workers-ai/@cf/meta/llama-4", endpoint: null });
+    expect(pinned).toEqual({ spec: "workers-ai/@cf/meta/llama-4", endpoint: null, missing: null });
 
     const partner = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/minimax/m3" });
-    expect(partner).toEqual({ spec: "workers-ai/minimax/m3", endpoint: null });
+    expect(partner).toEqual({ spec: "workers-ai/minimax/m3", endpoint: null, missing: null });
 
     const gateway = await runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "my-gateway/openai/gpt-4.1" });
-    expect(gateway).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
+    expect(gateway).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null, missing: null });
   });
 
   test("signed-in Cloudflare AI remains the default when unrelated BYO keys exist", async () => {
@@ -203,7 +203,7 @@ describe("resolveModelDefaults — signed-in Cloudflare AI", () => {
       providers: { openai: { apiKey: "sk-test" } },
     });
 
-    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
+    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null, missing: null });
   });
 
   // Item 11.2: with every BYO credential and no chosen model, the native Workers AI model still wins.
@@ -220,7 +220,7 @@ describe("resolveModelDefaults — signed-in Cloudflare AI", () => {
       },
     });
 
-    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null });
+    expect(out).toEqual({ spec: `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`, endpoint: null, missing: null });
   });
 
   // A local Ollama accepts `@cf/deepseek-ai/…` and serves something else, so the local endpoint
@@ -244,7 +244,7 @@ describe("resolveModelDefaults — signed-in Cloudflare AI", () => {
       origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, providers: { openaiCompat: compat },
     }, { defaultModel: "openai-compat/gpt-oss:20b" });
 
-    expect(local).toEqual({ spec: "openai-compat/gpt-oss:20b", endpoint: null });
+    expect(local).toEqual({ spec: "openai-compat/gpt-oss:20b", endpoint: null, missing: null });
   });
 
   test("an openai-compatible endpoint's extraHeaders overrides the API key's Authorization", async () => {
@@ -266,7 +266,7 @@ describe("resolveModelDefaults — signed-in Cloudflare AI", () => {
       providers: { openai: { apiKey: "sk-test" } },
     }, { defaultModel: "openai/gpt-5.5" });
 
-    expect(out).toEqual({ spec: "openai/gpt-5.5", endpoint: null });
+    expect(out).toEqual({ spec: "openai/gpt-5.5", endpoint: null, missing: null });
   });
 
   test("an explicit direct endpoint keeps precedence over the signed-in proxy", async () => {
@@ -299,12 +299,12 @@ describe("resolveModelDefaults — registry-only providers", () => {
   for (const registry of registryOnly) {
     test(registry.name, async () => {
       const out = await runResolveLLM({}, { env: { KINU_MODEL: registry.spec } });
-      expect(out).toEqual({ spec: registry.spec, endpoint: null });
+      expect(out).toEqual({ spec: registry.spec, endpoint: null, missing: null });
     });
   }
 
   test("nothing configured — signed out or expired — names no model", async () => {
-    expect(await runResolveLLM({})).toEqual({ spec: null, endpoint: null });
+    expect(await runResolveLLM({})).toEqual({ spec: null, endpoint: null, missing: null });
 
     const expired = await runResolveLLM({
       origin: CLOUD_ORIGIN,
@@ -312,7 +312,19 @@ describe("resolveModelDefaults — registry-only providers", () => {
       tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(),
     });
 
-    expect(expired).toEqual({ spec: null, endpoint: null });
+    expect(expired).toEqual({ spec: null, endpoint: null, missing: null });
+  });
+
+  // The SquareYak audit: a signed-out machine with a base URL and no auth header threw out of resolveModelDefaults, and
+  // the readiness Home renders with recognised only an older message, so Home crashed instead of offering setup.
+  test("a base URL with no auth header, and nothing else to serve, is a setup not finished: Home reads not set up", async () => {
+    const half = { KINU_BASE_URL: "https://llm.example/v1" };
+
+    expect(await runResolveLLM({}, { env: half })).toEqual({ spec: null, endpoint: null, missing: expect.any(String) });
+    expect(await runConfigScript({}, half, `
+      import { isLocalModelConfigured } from './packages/cli/src/agent-create.ts';
+      console.log(JSON.stringify(isLocalModelConfigured()));
+    `)).toBe(false);
   });
 
   test("requireModelDefaults names the fixes when a model is mandatory", async () => {
