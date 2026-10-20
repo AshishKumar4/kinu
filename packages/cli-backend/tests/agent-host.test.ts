@@ -307,6 +307,16 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
   return { model, parked: parked.promise, aborted: aborted.promise };
 }
 
+/** A turn's stream that holds until the turn is aborted. */
+function parkedStream(signal: AbortSignal | undefined): ReadableStream<LanguageModelV2StreamPart> {
+  return new ReadableStream<LanguageModelV2StreamPart>({
+    start(controller) {
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      signal?.addEventListener('abort', () => { controller.error(signal.reason); }, { once: true });
+    },
+  });
+}
+
 /** A root's brief that hires a child, whose mission hires the grandchild; `NESTED.work` is the grandchild's own. */
 const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one helper for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
 
@@ -341,14 +351,7 @@ function nestedHireModel(park: boolean) {
       if (prompt.includes(NESTED.work) && park) {
         parked.resolve();
 
-        return {
-          stream: new ReadableStream<LanguageModelV2StreamPart>({
-            start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] });
-              options.abortSignal?.addEventListener('abort', () => { controller.error(options.abortSignal?.reason); }, { once: true });
-            },
-          }),
-        };
+        return { stream: parkedStream(options.abortSignal) };
       }
 
       if (!answered && prompt.includes(NESTED.child) && !prompt.includes(NESTED.work) && !hired.has('child')) {
@@ -2087,6 +2090,41 @@ describe('LocalAgentHost', () => {
 
       expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Auditor');
       expect(childConfigValue(dbPath, 'helper', 'name_origin')).toBe('user');
+    } finally {
+      await host.close();
+    }
+  });
+
+  // One lifecycle (core hireLifecycle): the first work a hire is given titles it as it is admitted, before its turn runs, on
+  // this machine as in the cloud; a later message never does.
+  test('the first brief a hire is given titles it as it is admitted, before its turn runs', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    const parked = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async () => textAnswer('acknowledged', usage),
+      // Every turn holds until it is aborted, so only the admission can have titled the hire.
+      doStream: async (options) => ({ stream: parkedStream(options.abortSignal) }),
+    });
+
+    const { host } = makeHost(state, parked, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    try {
+      const team = await host.team('root');
+
+      await team.create({ name: 'helper' });
+
+      const before = childConfigValue(dbPath, 'helper', 'display_name');
+
+      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+      expect(before).not.toBe('Audit the coupon checkout');
+
+      await team.message({ name: 'helper', content: 'Rename yourself to something else', mode: 'build' });
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
     } finally {
       await host.close();
     }

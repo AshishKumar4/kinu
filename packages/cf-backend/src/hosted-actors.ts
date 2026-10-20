@@ -1,9 +1,9 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { actorPolicy, assignmentDelivery, publishSubordinateReport, type Delivery, type OwedAdmission, type ConversationRecall, type HeadReport, isSubordinateOrigin, type SubordinateReportLedger, type CodemodeBuilder, type SeatedActor, type ServedStores, type TierId } from '@kinu.run/core';
+import { actorPolicy, hireLifecycle, type HireLifecyclePorts, type SeatedHire, publishSubordinateReport, type OwedAdmission, type ConversationRecall, type HeadReport, type SubordinateReportLedger, type CodemodeBuilder, type SeatedActor, type ServedStores, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
@@ -201,10 +201,6 @@ function delegatedHeadInput(
   };
 }
 
-function refusal(refused: boolean, error: () => KinuError): Effect.Effect<void, KinuError> {
-  return refused ? Effect.fail(error()) : Effect.void;
-}
-
 /** `ActorHostDeps.runtimeFor` is `createCFRuntime` here, but core types it `AgentRuntime`. */
 function cfRuntimeOf(actor: SeatedActor, what: string): Effect.Effect<CFRuntime, KinuError> {
   const runtime = actor.runtime;
@@ -212,69 +208,36 @@ function cfRuntimeOf(actor: SeatedActor, what: string): Effect.Effect<CFRuntime,
   return isCFRuntime(runtime) ? Effect.succeed(runtime) : Effect.fail(new KinuError('unsupported', `${what} must run on the cf runtime`));
 }
 
-/** Admit work and report the delivery branch; only this actor knows whether a turn is live. */
-function admitHostedTask(
-  seams: HostedActorSeams,
-  reference: ActorReference,
-  input: {
-    readonly kind: 'task' | 'message';
-    readonly body: string;
-    readonly mode: WorkMode;
-    readonly deliverable?: string;
-    readonly inheritedContext?: SubordinateInheritedContext;
-    readonly creationId?: string;
-    readonly messageId?: string;
-    readonly idempotencyKey?: string;
-  },
-): Effect.Effect<{ id: string; admitted: boolean } & SubordinateHandoff, KinuError> {
-  const admitAs = async (actor: SeatedActor): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> => {
-    const busy = seams.turnInFlight(actor.reference);
+/** The hire lifecycle's ports over this workspace's one host (core `hireLifecycle`). */
+/** A hire seated on the workspace's host, its turn's liveness the workspace's to know. */
+interface HostedHire extends SeatedHire {
+  readonly actor: SeatedActor;
+}
 
-    const admission: Parameters<typeof admitSubordinateTask>[1] = {
-      fromWorkspace: actor.record.workspaceId,
-      kind: input.kind,
-      body: input.body,
-      mode: input.mode,
-      now: Date.now(),
-    };
+function hostedLifecyclePorts(seams: HostedActorSeams, parent: () => BoundActor): HireLifecyclePorts<HostedHire> {
+  const seated = (actor: SeatedActor): HostedHire => ({
+    actor, handle: actor.handle, exec: seams.exec, turnInFlight: () => seams.turnInFlight(actor.reference),
+  });
 
-    if (input.deliverable) admission.deliverable = input.deliverable;
+  return {
+    parent: () => parent(),
+    directory: seams.directory,
+    describe: (actorId) => seams.host.describe(actorId),
+    born: async (reference, _name, seed) => {
+      await seams.host.run(reference, { kind: 'actor' }, (actor) => {
+        seed(actor.stores.config);
 
-    if (input.inheritedContext) admission.inheritedContext = input.inheritedContext;
-
-    if (input.creationId !== undefined) admission.creationId = input.creationId;
-
-    if (input.messageId !== undefined) admission.messageId = input.messageId;
-
-    if (input.idempotencyKey !== undefined) admission.idempotencyKey = input.idempotencyKey;
-    const log = new EventLog(seams.exec, actor.handle);
-    const brief = log.query({ variant: 'subordinate_task', limit: 1 }).length === 0;
-
-    // Admitted and owed to the agent as one: the row is the record, the delivery what opens its turn.
-    const result = await seams.deliver(actor, () => {
-      const admitted = admitSubordinateTask(log, admission);
-      const delivery: Delivery | null = admitted.admitted ? assignmentDelivery(log, { id: admitted.id, body: input.body.trim(), mode: input.mode, from: seams.hirerName(actor) }) : null;
-
-      return { value: admitted, delivery };
-    });
-
-    // The first work an agent is given is its brief: its stand-in title shows at once, before the turn that opens its
-    // chat names it from the same words. A later message ("Continue") never titles it.
-    if (result.admitted && brief && (await titleActorFromMessage(actor.handle, input.body)).changed) seams.announce(actor);
-
-    return {
-      ...result,
-      ...describeSubordinateHandoff({
-        admission: result,
-        turnInFlight: busy,
-        live: readSubordinateLiveStatus(seams.exec, actor.handle),
-      }),
-    };
+        return Promise.resolve();
+      });
+    },
+    asHire: (reference, _name, body) => seams.host.run(reference, { kind: 'actor' }, async (actor) => await body(seated(actor))),
+    deliver: (hire, admit) => seams.deliver(hire.actor, admit),
+    hirerName: (hire) => seams.hirerName(hire.actor),
+    announce: (hire) => { seams.announce(hire.actor); },
+    retireJobs: (actorId) => seams.retireJobs(actorId),
+    roster: (hirer) => seams.roster(seams.host.bindStores(hirer)),
+    retire: (owner, retirement) => seams.host.retire(owner, retirement),
   };
-
-  return refusal(input.creationId !== undefined && input.creationId !== seams.directory.retained(reference.actorId)?.creationId,
-    () => new KinuError('denied', 'The birth assignment belongs to a different actor creation.'))
-    .pipe(Effect.andThen(Effect.promise(() => seams.host.run(reference, { kind: 'actor' }, admitAs))));
 }
 
 function hostedHirer(seams: HostedActorSeams, child: BoundActor): BoundActor {
@@ -495,94 +458,12 @@ export async function hostedAutoTitle(seams: HostedActorSeams, actor: BoundActor
   return title === null ? titled.mission : null;
 }
 
-/** One actor's child substrate: every verb is a call on the workspace's one host. */
+/** One actor's child substrate: core's one hire lifecycle, every act a call on the workspace's one host. */
 export function hostedSubordinateRuntime(
   seams: HostedActorSeams,
   parent: () => BoundActor,
 ): SubordinateRuntime {
-  const registerChild = (
-    input: SubordinateSeed & { creationId: string },
-    action: 'register' | 'cancelCreation',
-  ): Effect.Effect<ActorReference, KinuError> => Effect.suspend(() => {
-    const owner = parent();
-
-    return refusal(action === 'register' && delegationExhausted(hostedDelegationBudget(seams, owner)),
-      () => new KinuError('denied', 'This actor cannot create a subordinate below its delegation depth.'))
-      .pipe(Effect.andThen(Effect.sync(() => seams.directory.apply(owner.reference, seams.directory.storagePath(owner.reference), {
-        action, name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime,
-      }).reference)));
-  });
-
-  const resolve = (name: string): Effect.Effect<ActorReference, KinuError> => Effect.suspend(() => {
-    const owner = parent();
-
-    const entry = seams.directory.apply(owner.reference, seams.directory.storagePath(owner.reference), {
-      action: 'resolve', name,
-    });
-
-    return refusal(!isSubordinateOrigin(entry.origin), () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
-      .pipe(Effect.as(entry.reference));
-  });
-
-  /** Runs `body` as the named hire. */
-  const asHire = <Result>(name: string, body: (reference: ActorReference) => Promise<Result>): Effect.Effect<Result, KinuError> =>
-    resolve(name).pipe(Effect.flatMap((reference) => Effect.promise(() => body(reference))));
-
-  return {
-    spawn: (input) => settle(registerChild(input, 'register').pipe(Effect.tap((reference) => Effect.promise(() =>
-      // The child's own config rows only; the parent's roster row is core's (`createTeamToolDeps`),
-      // one writer per fact.
-      seams.host.run(reference, { kind: 'actor' }, (actor) => {
-        actor.stores.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
-        actor.stores.config.setRoleSelection(input.role);
-        actor.stores.config.setAssignedTier(input.tier ?? null);
-
-        return Promise.resolve();
-      }))))),
-    cancelBirth: (input) => settle(registerChild(input, 'cancelCreation')),
-    assign: (name, input) => settle(resolve(name).pipe(Effect.flatMap((reference) => admitHostedTask(seams, reference, { kind: 'task' as const, ...input })))),
-    status: (name) => settle(asHire(name, (reference) => seams.host.run(reference, { kind: 'actor' }, async (actor) =>
-      readSubordinateLiveStatus(seams.exec, actor.handle)))),
-    message: (name, content, mode) => settle(resolve(name).pipe(Effect.flatMap((reference) => admitHostedTask(seams, reference, { kind: 'message', body: content, mode })))),
-    rename: (name, displayName, nameOrigin) => settle(asHire(name, (reference) => seams.host.run(reference, { kind: 'actor' }, async (actor) => {
-      actor.stores.config.setDisplayNameOrigin(displayName, nameOrigin);
-    }))),
-    /** Wipe removes rows, home and state subtree; archive keeps them. */
-    dismiss: (name, { keepHistory, interrupt }, reference) => settle(Effect.gen(function* () {
-      // Its subtree's jobs stop first, or none retires.
-      const stoppedJobs: string[] = [];
-      const refused: string[] = [];
-
-      for (const descendant of [...subordinateDescendants(seams.directory.list(), reference.actorId).map((record) => record.actorId), reference.actorId]) {
-        const retirement = yield* Effect.promise(() => seams.retireJobs(descendant));
-
-        stoppedJobs.push(...retirement.stopped);
-        refused.push(...retirement.refused);
-      }
-
-      yield* refusal(refused.length > 0, () => new KinuError('unavailable',
-        `${name} keeps running: nothing confirmed its job(s) ${refused.join(', ')} stopped${stoppedJobs.length === 0 ? '' : `; ${stoppedJobs.join(', ')} stopped`}.`));
-      yield* Effect.promise(() => retireDescendants(seams, reference, keepHistory));
-      yield* Effect.promise(() => seams.host.retire(parent().reference, actorRetirementFor({ reference, name, keepHistory, interrupt })));
-
-      return { stoppedJobs };
-    })),
-  };
-}
-
-async function retireDescendants(seams: HostedActorSeams, below: ActorReference, keepHistory: boolean): Promise<void> {
-  for (const descendant of subordinateDescendants(seams.directory.list(), below.actorId)) {
-    const hirer = seams.directory.retained(descendant.parentActorId ?? '');
-
-    if (hirer === null) continue;
-    const roster = seams.roster(seams.host.bindStores(actorReferenceOf(hirer)));
-
-    if (roster.get(descendant.name)?.status !== 'dismissed') roster.dismiss(descendant.name, Date.now());
-
-    await seams.host.retire(actorReferenceOf(hirer), actorRetirementFor({
-      reference: actorReferenceOf(descendant), name: descendant.name, keepHistory, interrupt: true,
-    }));
-  }
+  return hireLifecycle(hostedLifecyclePorts(seams, parent));
 }
 
 /** Heads, swarm nodes and steer branches are run actors. */
