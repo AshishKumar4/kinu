@@ -187,8 +187,8 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
             <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
             <input value={query} onChange={(event) => { setQuery(event.target.value); at({ q: event.target.value || null }); }} placeholder="Search mail" aria-label="Search mail" data-mail-search className={`${inputCls} h-[34px] py-0 pl-8`} />
           </label>
-          <div className="w-40 shrink-0" data-mail-address><Choice label="Address" value={path ?? "all"} onChange={(next) => at({ path: next === "all" ? null : next, address: null })}
-            options={[{ value: "all", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) }))]} /></div>
+          <div className="w-40 shrink-0" data-mail-address><Choice label="Address" value={path ?? "*"} onChange={(next) => at({ path: next === "*" ? null : next, address: null })}
+            options={[{ value: "*", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) }))]} /></div>
         </div>
         <section className={opened === null ? "min-w-0" : "hidden min-w-0 lg:block"}>
           {waiting ? <div data-mail-no-assistant className="p-card flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
