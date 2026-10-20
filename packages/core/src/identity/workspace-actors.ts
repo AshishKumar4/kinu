@@ -12,8 +12,16 @@ export interface WorkspaceActorAuthority {
   readonly ownerUserId: string | null;
 }
 
+/** A hired agent's origin, one the roster lists and reaches by name: the owner's, an agent's, an evolution lane's. */
+export const SUBORDINATE_ORIGINS = ['user', 'agent', 'evolution'] as const;
+
+export type SubordinateOrigin = (typeof SUBORDINATE_ORIGINS)[number];
+
+/** What a parent creates a child as: a hire, or a swarm worker, which no roster lists. */
+const CHILD_ORIGINS = [...SUBORDINATE_ORIGINS, 'swarm'] as const;
+
 /** Who made an agent, which decides its preset: `system` is main, `swarm` a swarm worker, `evolution` a background agent. */
-const ACTOR_ORIGINS = ['system', 'user', 'agent', 'swarm', 'evolution'] as const;
+const ACTOR_ORIGINS = ['system', ...CHILD_ORIGINS] as const;
 
 export type ActorOrigin = (typeof ACTOR_ORIGINS)[number];
 
@@ -30,8 +38,8 @@ export interface ActorProfile {
 }
 
 /** A hired agent: a chat of its own, reached by name through the roster. */
-export function isSubordinateOrigin(origin: ActorOrigin): origin is 'user' | 'agent' | 'evolution' {
-  return origin === 'user' || origin === 'agent' || origin === 'evolution';
+export function isSubordinateOrigin(origin: ActorOrigin): origin is SubordinateOrigin {
+  return SUBORDINATE_ORIGINS.some((subordinate) => subordinate === origin);
 }
 
 /** Read as a home `actorHomeName` derives from a key (`main`, `sub-<key>`, `head-<key>`), so never one's own. */
@@ -130,8 +138,8 @@ export interface CreateWorkspaceActor {
 const CreationFields = { creationId: v.pipe(v.string(), v.nonEmpty()), name: v.pipe(v.string(), v.nonEmpty()), lifetime: v.picklist(['durable', 'task']) };
 
 export const ChildActorOperationSchema = v.union([
-  v.strictObject({ action: v.literal('register'), ...CreationFields, origin: v.picklist(['user', 'agent', 'swarm', 'evolution']) }),
-  v.strictObject({ action: v.literal('cancelCreation'), ...CreationFields, origin: v.picklist(['user', 'agent', 'swarm', 'evolution']) }),
+  v.strictObject({ action: v.literal('register'), ...CreationFields, origin: v.picklist(CHILD_ORIGINS) }),
+  v.strictObject({ action: v.literal('cancelCreation'), ...CreationFields, origin: v.picklist(CHILD_ORIGINS) }),
   v.strictObject({ action: v.literal('resolve'), name: v.pipe(v.string(), v.nonEmpty()) }),
   v.strictObject({ action: v.literal('resolveStorage'), storageKey: v.pipe(v.string(), v.nonEmpty()) }),
   v.strictObject({ action: v.literal('resolveCreation'), creationId: v.pipe(v.string(), v.nonEmpty()) }),
