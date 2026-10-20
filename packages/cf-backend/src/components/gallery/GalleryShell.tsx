@@ -1,6 +1,6 @@
 /**
- * The Gallery's frame. It is public discovery: signed in, the app's own shell; signed out, a bar with the Kinu mark and
- * Sign in over the same page body. Its pages ask `useGallerySignedIn` whether Fork and Star may act or must sign in first.
+ * A listed slate's page's frame. It is public: signed in, the app's own shell; signed out, a bar with the Kinu mark and
+ * Sign in over the same page body. The page asks `useGallerySignedIn` whether Fork and Star may act or must sign in first.
  */
 import { createContext, useContext, useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";

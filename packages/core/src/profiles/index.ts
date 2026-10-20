@@ -32,11 +32,11 @@ export {
 } from './model-route';
 
 export {
-  providerListingOf, providerSnapshotOf, ProviderListingCache,
-  type ProviderListing,
+  KeptProviderListingSchema, providerListingOf, providerSnapshotOf, ProviderListingCache,
+  type ProviderListing, type StoredProviderListing,
 } from './provider-catalog';
 
-export { fastAssignment, fastCandidatesOf, type FastCandidate } from './fast-tier';
+export { fastAssignment, fastCandidatesOf } from './fast-tier';
 
 export { agentRoleSwitch } from './agent-role-switch';
 

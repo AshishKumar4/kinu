@@ -149,6 +149,35 @@ describe('a page read as a person sees it', () => {
     expect(shown(chart, 'growth', [100])).toBe(false);
   });
 
+  // office trial 5 of rc22 (2620e7c05): the page is the chart, its bars and its axis two flex rows straight in the body.
+  test('a flex chart drawn straight in the page reads each bar over its label, and no bar of the row under it', async () => {
+    const bars = TEAMS.map((_, index) => `<div style="flex:1;text-align:center">${String(100 * (index + 1))}<div style="height:${String(20 * (index + 1))}px;background:#888"></div></div>`).join('');
+    const axis = TEAMS.map((team) => `<div style="flex:1;text-align:center">${team}</div>`).join('');
+    const sight = await read(`<h3>p95 by hour</h3><div id="chart" style="display:flex;align-items:flex-end">${bars}</div><div id="xlabels" style="display:flex">${axis}</div><p style="text-align:left">7</p>`);
+
+    expect(shown(sight, 'growth', [200])).toBe(true);
+    expect(shown(sight, 'growth', [100])).toBe(false);
+    expect(shown(sight, 'design', [7])).toBe(false);
+  });
+
+  // office trial 1 of rc22: the name is the cell's own text, a block of detail under it longer than a label's budget.
+  test('a cell naming a team before a line of detail is its label, and its row the team\'s part', async () => {
+    const sight = await read(`<table><tr><th>Team</th><th>Budget</th></tr>${TEAMS.map((team, index) => `<tr><td>${team}<div>${index === 2 ? '50 seats with phone and chat support' : 'basics'}</div></td><td>${String(1000 * (index + 1))}</td></tr>`).join('')}</table>`);
+
+    expect(shown(sight, 'platform', [3000])).toBe(true);
+    expect(shown(sight, 'growth', [2000])).toBe(true);
+    expect(shown(sight, 'growth', [3000])).toBe(false);
+  });
+
+  // office trial 2 (Muse) of the Luna-vs-Muse run: a grid of three columns, each team's cells side by side, no row element.
+  test('a flat grid\'s row is the cells beside the team\'s, in its own band', async () => {
+    const sight = await read(`<div style="display:grid;grid-template-columns:repeat(3, 1fr)">${TEAMS.map((team, index) => `<div>${team}</div><div>${String(1000 * (index + 1))}</div><div>${String(10 * (index + 1))}</div>`).join('')}</div>`);
+
+    expect(shown(sight, 'growth', [2000, 20])).toBe(true);
+    expect(shown(sight, 'growth', [1000])).toBe(false);
+    expect(shown(sight, 'platform', [3000, 30])).toBe(true);
+  });
+
   test('figures read whatever their grouping and sign, to the cent', () => {
     for (const text of ['$1,641.00', '1641', 'spent 1,641']) expect(shows(text, 1641)).toBe(true);
 

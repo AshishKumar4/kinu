@@ -97,7 +97,7 @@ Each is a change to something that exists; none lands without approval.
 1. **Home** (`/`): with the assistant installed, Home is its chat and Today, in place of "What do you wanna work on?", the Setup card and Recent. Without it, Home is unchanged.
 2. **New workspace** (the pencil beside the mark): today it goes to Home's mission prompt. With the assistant installed it opens that prompt on the Workspaces page instead.
 3. **The assistant's workspace in the sidebar**: not listed among Workspaces, because it is Home.
-4. **Gallery in the nav** becomes Explore. `/gallery` stays, and a listed slate's page `/gallery/:workspace/:slate` is unchanged; the Gallery's list page becomes Explore filtered to apps.
+4. **Gallery in the nav** becomes Explore. A listed slate's page `/gallery/:workspace/:slate` is unchanged. The Gallery's list page is deleted (owner, 2026-10-20: "why keep gallery page if we are getting explore now?"): `/gallery` redirects to `/explore?kind=app`, and `/api/gallery` answers only a listed slate's page, its picture, its star and its report.
 5. **Devices in the nav** moves to an icon in the sidebar footer. Its page and Settings › Devices are unchanged.
 6. **The account menu at the top left** (the Kinu mark and caret) moves to the footer; the mark becomes a link Home. Its items are unchanged.
 7. **The folded rail's account initial** opens the account menu instead of going to Settings, and Mail and Devices join it.

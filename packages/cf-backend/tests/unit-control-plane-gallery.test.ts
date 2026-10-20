@@ -21,7 +21,8 @@ async function plane() {
     });
   }
 
-  const listed = async () => (await index.galleryPage(caller, { q: '', sort: 'new', category: null, page: 0 }, null)).listings.map((each) => each.workspace).sort();
+  const listed = async () => (await index.explorePage(caller, { q: '', kind: 'app', sort: 'new', category: null, page: 0 }, null)).items
+    .flatMap((item) => (item.kind === 'app' ? [item.app.workspace] : [])).sort();
 
   return { index, caller, listed };
 }

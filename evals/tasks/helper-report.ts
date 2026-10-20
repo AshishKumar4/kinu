@@ -123,11 +123,12 @@ product has the slowest median first response and by how many minutes it trails 
 
       await verifier.check('the-report-woke-a-new-turn', async () => ({ pass: seen.woken, evidence: { hired: seen.hired, woken: seen.woken } }));
 
-      await verifier.check('names-the-slowest-product-and-the-gap', async () => {
-        const last = verifier.replies.at(-1) ?? '';
-
-        return { pass: last.includes(SLOWEST) && new RegExp(`\\b${GAP}\\b`).test(last), evidence: { expected: { product: SLOWEST, gap: GAP }, replies: verifier.recentReplies() } };
-      });
+      // A reply of this turn names both: a housekeeping reply after it (a helper dismissed on a later wake, delegation
+      // trial 2 of rc22) does not take the answer back.
+      await verifier.check('names-the-slowest-product-and-the-gap', async () => ({
+        pass: verifier.replies.some((reply) => reply.includes(SLOWEST) && new RegExp(`\\b${GAP}\\b`).test(reply)),
+        evidence: { expected: { product: SLOWEST, gap: GAP }, replies: verifier.recentReplies() },
+      }));
     },
   }, {
     prompt: 'Show me those medians as a bar chart here in the chat.',

@@ -29,6 +29,8 @@ function account({ mailDown = false } = {}) {
   const config = new Map<string, string>();
   const active: string[] = [];
   const counted: string[] = [];
+  // A make that fails at its seed, once, as an orchestrator that did not answer fails.
+  const failing = { seed: false };
   // `homeWhenListed`: the workspace Home named as this one was listed on the roster.
   const births: { name: string; steps: string[]; soul: string; seed: WorkspaceSeed | null; homeWhenListed: string | null }[] = [];
 
@@ -38,16 +40,30 @@ function account({ mailDown = false } = {}) {
     async listCredentials(_caller: UserCaller) { return []; },
     async ensureWorkspaceCapability() {},
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
+      // As the account answers a name it already lists: as it is, not made again.
+      if (active.includes(name)) return { entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7 }, status: 'active' as const };
       active.push(name);
       births.push({ name, steps: [], soul: '', seed: null, homeWhenListed: config.get('assistant') ?? null });
 
       return { entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7 }, status: 'created' as const };
     },
     async releaseWorkspaceReservation() { return true; },
-    async removeWorkspace() {},
+    // As the account removes one (`workspaces.ts`): off the roster, and no longer the assistant if it was.
+    async removeWorkspace(_caller: UserCaller, name: string) {
+      active.splice(active.indexOf(name), 1);
+
+      if (config.get('assistant') === name) config.delete('assistant');
+    },
     async getConfig(_caller: UserCaller, key: string) { return config.get(key) ?? null; },
-    async setConfig(_caller: UserCaller, key: string, value: string) { config.set(key, value); },
+    async claimConfig(_caller: UserCaller, key: string, proposed: string) {
+      const held = config.get(key) ?? proposed;
+
+      config.set(key, held);
+
+      return held;
+    },
     async listActiveWorkspaces(_caller: UserCaller) { return active.map((name) => ({ name, displayName: name, createdAt: 7 })); },
+    async userMcp_connectedPresets(_caller: UserCaller) { return ['github']; },
     async getProfile(_caller: UserCaller) {
       return { email: 'ashish@cloudflare.com', displayName: 'Ashish', createdAt: 1, lastSeenAt: 1, onboardedAt: null, workspaceCount: active.length };
     },
@@ -76,6 +92,12 @@ function account({ mailDown = false } = {}) {
     },
     async seedBlueprint(seed: WorkspaceSeed) {
       step('seed');
+
+      if (failing.seed) {
+        failing.seed = false;
+        throw new Error('the workspace did not answer');
+      }
+
       born().seed = seed;
     },
     async resetWorkspaceBaseline() {
@@ -102,6 +124,10 @@ function account({ mailDown = false } = {}) {
 
   const authority: InstallAuthority = userDO;
 
+  // One provider stand-in while any install runs, so installs at once share it.
+  let installing = 0;
+  const originalFetch = globalThis.fetch;
+
   const install = async (id: string, body: Partial<InstallBody>) => {
     const owner = await testOwner();
 
@@ -114,10 +140,8 @@ function account({ mailDown = false } = {}) {
         },
       }));
 
-    const originalFetch = globalThis.fetch;
-
     // No reachable provider: the menu falls back to the native Workers AI default, as production creates do.
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    if (installing++ === 0) globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
       const response = present(await serveFamily(family)(new Request(`https://kinu.run/api/user/blueprints/${id}/install`, {
@@ -126,11 +150,13 @@ function account({ mailDown = false } = {}) {
 
       return { status: response.status, body: await response.json() };
     } finally {
-      globalThis.fetch = originalFetch;
+      if (--installing === 0) globalThis.fetch = originalFetch;
     }
   };
 
-  return { install, births, config, active, counted, home: async () => installedAssistant(authority, await testOwner()) };
+  const removal = async (name: string) => { await userDO.removeWorkspace(await testOwner(), name, USER_ID); };
+
+  return { install, births, config, active, counted, failing, removal, home: async () => installedAssistant(authority, await testOwner()) };
 }
 
 const InstalledSchema = v.object({ workspace: v.string() });
@@ -138,8 +164,7 @@ const InstalledSchema = v.object({ workspace: v.string() });
 describe('installing a workspace blueprint', () => {
   test('the Personal assistant is born with its soul, focus layout, name and schedules before its first turn, and becomes Home', async () => {
     const owner = account();
-    // 08:30 in UTC+2 is 06:30 UTC.
-    const answer = await owner.install('personal-assistant', { agent: 'Jarvis', brief: '08:30', utcOffsetMinutes: 120, home: true });
+    const answer = await owner.install('personal-assistant', { agent: 'Jarvis', brief: '08:30', timeZone: 'Europe/Berlin', home: true });
     const { workspace } = v.parse(InstalledSchema, answer.body);
     const birth = present(owner.births[0], 'the assistant');
 
@@ -150,10 +175,12 @@ describe('installing a workspace blueprint', () => {
     expect(birth.seed).toEqual({
       blueprint: 'personal-assistant', layout: 'focus', agent: 'Jarvis',
       schedules: [
-        { label: 'Daily brief', cron: '30 6 * * *', prompt: expect.stringContaining("Write Ashish's brief for today") },
-        { label: 'GitHub check', cron: '*/15 * * * *', prompt: expect.stringContaining('GitHub tools') },
-        { label: 'Gmail check', cron: '*/15 * * * *', prompt: expect.stringContaining("Ashish's Gmail") },
+        { label: 'Daily brief', cron: '30 8 * * *', timeZone: 'Europe/Berlin', prompt: expect.stringContaining("Write Ashish's brief for today") },
+        { label: 'GitHub check', cron: '*/15 * * * *', connection: 'github', prompt: expect.stringContaining('GitHub tools') },
+        { label: 'Gmail check', cron: '*/15 * * * *', connection: 'google', prompt: expect.stringContaining("Ashish's Gmail") },
       ],
+      // The account holds GitHub as it installs: its check is armed at the seed, Gmail's when the owner connects it.
+      connected: ['github'],
     });
     expect(await owner.home()).toBe(workspace);
     // Named Home before it was listed, so the roster's first frame of it already says Home.
@@ -163,7 +190,7 @@ describe('installing a workspace blueprint', () => {
 
   test('an assistant that could not be handed the owner\'s mail is still installed, and Home', async () => {
     const owner = account({ mailDown: true });
-    const answer = await owner.install('personal-assistant', { utcOffsetMinutes: 0 });
+    const answer = await owner.install('personal-assistant', { timeZone: 'UTC' });
 
     expect(answer.status).toBe(201);
     expect(await owner.home()).toBe(v.parse(InstalledSchema, answer.body).workspace);
@@ -171,36 +198,63 @@ describe('installing a workspace blueprint', () => {
 
   test('installing the assistant again opens the one the owner has; once it is removed, Home has none and a new one is made', async () => {
     const owner = account();
-    const first = v.parse(InstalledSchema, (await owner.install('personal-assistant', { utcOffsetMinutes: 0 })).body).workspace;
+    const first = v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace;
 
-    expect(v.parse(InstalledSchema, (await owner.install('personal-assistant', { utcOffsetMinutes: 0 })).body).workspace).toBe(first);
+    expect(v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace).toBe(first);
     expect(owner.births).toHaveLength(1);
 
-    owner.active.splice(0);
+    await present(owner.removal, 'removal')(first);
     expect(await owner.home()).toBeNull();
-    await owner.install('personal-assistant', { utcOffsetMinutes: 0 });
+    expect(v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace).not.toBe(first);
     expect(owner.births).toHaveLength(2);
+  });
+
+  // The rc27 review: each install read "no assistant yet" and made its own, so two tabs, or a retried request, made two.
+  test('installs at once make one assistant and both answer it', async () => {
+    const owner = account();
+    const answers = await Promise.all([1, 2].map(async () => owner.install('personal-assistant', { timeZone: 'UTC' })));
+    const named = answers.map((answer) => v.parse(InstalledSchema, answer.body).workspace);
+
+    expect(named[0]).toBe(named[1]);
+    expect(owner.births).toHaveLength(1);
+    expect(owner.active).toEqual([named[0]]);
+    expect(await owner.home()).toBe(named[0]);
+  });
+
+  test('a make that failed leaves no assistant behind, and the next install makes the one', async () => {
+    const owner = account();
+
+    owner.failing.seed = true;
+    expect((await owner.install('personal-assistant', { timeZone: 'UTC' })).status).toBe(500);
+    expect(owner.active).toEqual([]);
+    expect(owner.config.get('assistant')).toBeUndefined();
+
+    const made = v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace;
+
+    expect(owner.active).toEqual([made]);
+    expect(await owner.home()).toBe(made);
   });
 
   test("another blueprint keeps its own layout and the owner's title, Home stays as it was, and a count Explore missed undoes nothing", async () => {
     const owner = account();
-    const answer = await owner.install('release-manager', { displayName: 'API Worker v2 release', utcOffsetMinutes: -420 });
+    const answer = await owner.install('release-manager', { displayName: 'API Worker v2 release', timeZone: 'America/Los_Angeles' });
     const birth = present(owner.births[0], 'the release workspace');
 
     expect(answer.status).toBe(201);
     expect(birth.steps).toContain('title:API Worker v2 release');
-    expect(birth.seed).toEqual({ blueprint: 'release-manager', layout: 'workbench', agent: 'Release', schedules: [] });
+    expect(birth.seed).toEqual({ blueprint: 'release-manager', layout: 'workbench', agent: 'Release', schedules: [], connected: ['github'] });
     expect(birth.steps).not.toContain('mail');
     expect(await owner.home()).toBeNull();
     expect(birth.homeWhenListed).toBeNull();
     expect(owner.counted).toEqual([]);
   });
 
-  test('a blueprint Kinu does not keep is refused as missing, and a body without the owner\'s offset is refused', async () => {
+  test('a blueprint Kinu does not keep is refused as missing, and a body without a time zone the runtime knows is refused', async () => {
     const owner = account();
 
-    expect((await owner.install('pricing-watch', { utcOffsetMinutes: 0 })).status).toBe(404);
+    expect((await owner.install('pricing-watch', { timeZone: 'UTC' })).status).toBe(404);
     expect((await owner.install('personal-assistant', { brief: '08:00' })).status).toBe(400);
+    expect((await owner.install('personal-assistant', { brief: '08:00', timeZone: 'Mars/Olympus_Mons' })).status).toBe(400);
     expect(owner.births).toHaveLength(0);
   });
 });

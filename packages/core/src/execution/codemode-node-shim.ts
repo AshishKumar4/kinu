@@ -54,11 +54,21 @@ export function createProcess(cwd) {
   return globalThis.process ? Object.setPrototypeOf(own, globalThis.process) : own;
 }
 
-/** A Node-shaped error from a host refusal: the errno code the refusal names (else the fallback), and the path. */
-function fsError(fallback, refusal, path, syscall) {
-  const named = /^(E[A-Z]+): /.exec(refusal);
-  const code = named ? named[1] : fallback;
-  const text = named ? refusal.slice(named[0].length) : refusal;
+/** A refusal's error and its reason, or null for a value. */
+function refusedOf(result) {
+  const error = refusalOf(result);
+  return error === null ? null : { error, reason: typeof result.reason === 'string' ? result.reason : null };
+}
+
+/** The errno a refusal's reason stands for when its text names none. Only a stated absence is ENOENT: a read that was
+ *  refused or could not be made says nothing of whether the file is there, so an append never reads it as empty. */
+const ERRNO_OF_REASON = { missing: 'ENOENT', denied: 'EACCES', bad_input: 'EINVAL', unsupported: 'ENOTSUP', timeout: 'ETIMEDOUT', cancelled: 'ECANCELED' };
+
+/** A Node-shaped error from a host refusal: the errno its text names, else its reason's, else EIO; and the path. */
+function fsError(refused, path, syscall) {
+  const named = /^(E[A-Z]+): /.exec(refused.error);
+  const code = named ? named[1] : (ERRNO_OF_REASON[refused.reason] || 'EIO');
+  const text = named ? refused.error.slice(named[0].length) : refused.error;
   const error = new Error(code + ': ' + text + (path === undefined || text.includes("'" + path + "'") ? '' : ', ' + syscall + " '" + path + "'"));
   error.code = code;
   error.errno = -1;
@@ -126,8 +136,8 @@ function makeFs(workspace, cwd) {
   async function readBase64(path) {
     const target = resolveAt(cwd, path);
     const read = await workspace.fs.text(target, { encoding: 'base64' });
-    const refused = refusalOf(read);
-    if (refused) throw fsError('ENOENT', refused, target, 'open');
+    const refused = refusedOf(read);
+    if (refused) throw fsError(refused, target, 'open');
     return read;
   }
   async function readFile(path, options) {
@@ -136,8 +146,8 @@ function makeFs(workspace, cwd) {
     if (encoding === 'base64') return await readBase64(path);
     const target = resolveAt(cwd, path);
     const text = await workspace.fs.text(target);
-    const refused = refusalOf(text);
-    if (refused) throw fsError('ENOENT', refused, target, 'open');
+    const refused = refusedOf(text);
+    if (refused) throw fsError(refused, target, 'open');
     return text;
   }
   /** A string is written as its text; bytes, or a string named base64, as the bytes exactly. */
@@ -147,9 +157,11 @@ function makeFs(workspace, cwd) {
     const result = typeof data === 'string' && encoding !== 'base64'
       ? await workspace.fs.write(target, data)
       : await workspace.fs.write(target, typeof data === 'string' ? data : toBase64(bytesOf(data)), { encoding: 'base64' });
-    const refused = refusalOf(result);
-    if (refused) throw fsError('EACCES', refused, target, 'open');
+    const refused = refusedOf(result);
+    if (refused) throw fsError(refused, target, 'open');
   }
+  // Read, joined, written whole: a file that is not there starts empty, and any other failed read fails the append
+  // before anything is written.
   async function appendFile(path, data) {
     let current = new Uint8Array(0);
     try {
@@ -169,8 +181,8 @@ function makeFs(workspace, cwd) {
     // A listing comes a page at a time; Node's is the whole directory.
     for (let offset = 0; ;) {
       const page = await workspace.fs.list(target, { offset });
-      const refused = refusalOf(page);
-      if (refused) throw fsError('ENOENT', refused, target, 'scandir');
+      const refused = refusedOf(page);
+      if (refused) throw fsError(refused, target, 'scandir');
       names.push(...page.entries);
       if (!page.truncated || page.truncated.next >= page.truncated.total || page.entries.length === 0) break;
       offset = page.truncated.next;
@@ -185,8 +197,8 @@ function makeFs(workspace, cwd) {
   async function stat(path) {
     const target = resolveAt(cwd, path);
     const found = await workspace.fs.stat(target);
-    const refused = refusalOf(found);
-    if (refused) throw fsError('ENOENT', refused, target, 'stat');
+    const refused = refusedOf(found);
+    if (refused) throw fsError(refused, target, 'stat');
     return {
       size: found.size,
       mtimeMs: found.mtimeMs,
@@ -198,7 +210,7 @@ function makeFs(workspace, cwd) {
   }
   async function run(command, path, syscall) {
     const outcome = await execParts(workspace, command, {});
-    if (outcome.exitCode !== 0) throw fsError('EIO', outcome.stderr.trim() || outcome.stdout.trim() || ('exit ' + outcome.exitCode), path, syscall);
+    if (outcome.exitCode !== 0) throw fsError({ error: outcome.stderr.trim() || outcome.stdout.trim() || ('exit ' + outcome.exitCode), reason: null }, path, syscall);
   }
   const onPath = (path, command, syscall) => {
     const target = resolveAt(cwd, path);
@@ -217,10 +229,20 @@ function makeFs(workspace, cwd) {
   async function access(path) {
     await stat(path);
   }
+  /** False only for a file stated absent; a stat that failed otherwise fails, as it says nothing either way. */
+  async function exists(path) {
+    try {
+      await stat(path);
+      return true;
+    } catch (cause) {
+      if (cause && cause.code === 'ENOENT') return false;
+      throw cause;
+    }
+  }
   const promises = {
     readFile, writeFile, appendFile, readdir, stat, lstat: stat, mkdir, rm, unlink, rmdir,
     copyFile, rename, access,
-    exists: async (path) => refusalOf(await workspace.fs.stat(resolveAt(cwd, path))) === null,
+    exists,
   };
   const callbackForm = (fn) => (...args) => {
     const callback = typeof args[args.length - 1] === 'function' ? args.pop() : null;

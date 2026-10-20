@@ -137,7 +137,7 @@ export const RunEventSchema = v.variant('type', [
     trigger: v.picklist(['repeated_call', 'repeated_failure', 'no_progress']),
     step: v.number(), tool: v.optional(v.string()), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('profile_resolution'),
-    durationMs: v.number(), providerCache: v.picklist(['hit', 'joined', 'miss']),
+    durationMs: v.number(), providerCache: v.picklist(['hit', 'joined', 'miss', 'stored']),
     providerRevision: v.string(), unavailableProviders: v.number(),
     catalogVersion: v.number(), authority: v.picklist(['local', 'account']) }),
   v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
@@ -648,20 +648,6 @@ export class RunEventRecorder {
       SELECT json_extract(payload, '$.userMessage') AS text FROM run_events
       WHERE actor_id = ${this.actorId} AND type = 'run_start' AND json_valid(payload) AND json_extract(payload, '$.turn.metadata.kinuAuthor') = 'operator'
       ORDER BY rowid DESC LIMIT 1`[0]?.text ?? null);
-  }
-
-  /** Auto-GEPA's durable denominator. Rows without `workMode` count nothing; a turn in the same
-   *  millisecond as `sinceTs` counts as before, so a re-driven pass does not recount. */
-  completedWorkTurns(sinceTs: string | null): number {
-    this.actor.assertCurrent();
-
-    const rows = this.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM run_events
-      WHERE actor_id = ${this.actorId} AND type = ${'turn_end' satisfies RunEventType}
-        AND (${sinceTs} IS NULL OR ts > ${sinceTs})
-        AND json_extract(payload, '$.workMode') != 'plan'`;
-
-    return rows[0]?.n ?? 0;
   }
 
   stepFinish(runId: string, stepIndex: number): Extract<RunEvent, { type: 'step_finish' }> | null {

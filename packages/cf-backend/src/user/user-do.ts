@@ -30,7 +30,7 @@ import { rawPath, rethrow } from '../api/context';
 import { tenantDrive } from '../drive/tenant';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
-import type { McpPresetAvailability, McpServerSummary } from '@kinu.run/core';
+import type { McpPresetAvailability, McpServerSummary, ProviderListing } from '@kinu.run/core';
 import {
   acceptRosterSocket, isRosterSocket, rosterForeground, rosterGone, rosterSockets, sendForeground, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterQuery,
 } from './roster';
@@ -237,6 +237,10 @@ export class UserDO extends Agent<Env> {
 
   setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
     return this.profile.setConfig(caller, key, value);
+  }
+
+  claimConfig(caller: UserCaller, key: string, proposed: string): Promise<string> {
+    return this.profile.claimConfig(caller, key, proposed);
   }
 
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
@@ -491,6 +495,14 @@ export class UserDO extends Agent<Env> {
     return this.credentials.getCredentialsRevision(caller);
   }
 
+  storedProviderListing(caller: UserCaller, accounts: string): Promise<ProviderListing | null> {
+    return this.credentials.storedProviderListing(caller, accounts);
+  }
+
+  keepProviderListing(caller: UserCaller, revision: number, accounts: string, listing: ProviderListing): Promise<void> {
+    return this.credentials.keepProviderListing(caller, revision, accounts, listing);
+  }
+
   /**
    * What a workspace's model settings were read under, in one call: its profile catalog's version and its credentials'
    * revision. A workspace asks it as a turn opens, since a change does not wake one at rest, and reads again only what moved.
@@ -723,6 +735,10 @@ export class UserDO extends Agent<Env> {
 
   userMcp_warmConnections(caller: UserCaller): ReturnType<UserMcpServers['userMcp_warmConnections']> {
     return this.mcpServers.userMcp_warmConnections(caller);
+  }
+
+  userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
+    return this.mcpServers.userMcp_connectedPresets(caller);
   }
 
   userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {

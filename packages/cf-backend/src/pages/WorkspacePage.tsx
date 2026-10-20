@@ -615,7 +615,7 @@ interface FocusIdentity {
 }
 
 /** A workspace's page, the one its route names; Home names the assistant's (`workspace`): its chat, with nothing above it. */
-export interface WorkspacePageProps {
+interface WorkspacePageProps {
   readonly workspace?: string;
   readonly identity?: FocusIdentity;
   /** The layout the caller already knows, drawn until the workspace's own status says: Home's assistant is `focus`. */

@@ -23,7 +23,7 @@ export { buildCfWebSearchProvider } from './provider-factory';
 
 export { USER_WEB_SEARCH_PATH, USER_WEB_SEARCH_TEST_PATH, WebSearchRequestSchema, routeWebSearch } from './search-route';
 
-export { bindingWebSearch, chainWebSearch, type DeploymentSearch, type WebSearch, type WebSearchChain, type WebSearchDeps } from './search-chain';
+export { bindingWebSearch, chainWebSearch, type DeploymentSearch, type WebSearch, type WebSearchChain } from './search-chain';
 
 export { refusedResolution, assertSafeUrl, isSafeUrl, UnsafeUrlError, type HostResolver } from './url-safety';
 

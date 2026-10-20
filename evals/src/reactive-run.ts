@@ -2,7 +2,7 @@
 import type { EvalAccount, RunEvent } from '@kinu.run/core';
 import { Seeded } from '../tasks/seeded';
 import { runTurn } from './harness';
-import { LAST_SEGMENTS, REACTIVE_ARMS, reactiveReply, THUMB_RATE, type ArmRun, type ReactiveArm, type SegmentResult } from './reactive';
+import { armEvolution, LAST_SEGMENTS, REACTIVE_ARMS, reactiveReply, THUMB_RATE, type ArmRun, type ReactiveArm, type SegmentResult } from './reactive';
 import type { KinuPublicSession } from './session';
 import { ARMS, openWorkspace } from './target';
 import { prepareTrialAccount } from './slot';
@@ -108,8 +108,12 @@ export async function runArm(input: {
 
     const end = await satisfaction(session);
     const rated = end.n - mid.n;
+    const evolution = armEvolution(await session.evolution());
+    say(`dreams ${JSON.stringify(evolution.dreams)}, edits ${JSON.stringify(evolution.edits)}, ${String(evolution.activations)} activated`);
 
-    return { arm: input.arm, seed: input.seed, segments, lastSatisfaction: rated > 0 ? (end.sum - mid.sum) / rated : null, spend: await session.spend() };
+    return {
+      arm: input.arm, seed: input.seed, segments, lastSatisfaction: rated > 0 ? (end.sum - mid.sum) / rated : null, spend: await session.spend(), evolution,
+    };
   } finally {
     await session.teardown();
   }

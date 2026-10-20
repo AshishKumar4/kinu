@@ -190,7 +190,7 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(logger.emitted.map((line) => line.event)).toEqual(['turn.start_events_failed', 'turn.end_events_failed']);
   });
 
-describe('turn_end workMode — the durable GEPA-cadence field', () => {
+describe('turn_end workMode', () => {
   test('a completed turn carries the mode it ran in', () => {
     const rec = recorder();
     closeTurnRun(rec, 'run-plan', { turnIndex: 0, reason: 'completed', workMode: 'plan' });

@@ -86,7 +86,7 @@ describe('Explore', () => {
 
       const asked = await installed(assistant);
 
-      expect(asked).toEqual({ id: 'personal-assistant', body: { agent: 'Kinu', brief: '08:00', home: true, utcOffsetMinutes: expect.any(Number) } });
+      expect(asked).toEqual({ id: 'personal-assistant', body: { agent: 'Kinu', brief: '08:00', home: true, timeZone: expect.any(String) } });
       // Home: the fixture marks it, and draws no Home of its own.
       await assistant.waitForSelector('[data-gallery-home]', SOON);
       await assistant.close();
@@ -97,7 +97,7 @@ describe('Explore', () => {
       await release.click('input[aria-label="Workspace name"]', { count: 3 });
       await release.type('input[aria-label="Workspace name"]', 'API Worker v2 release');
       await release.click('[data-install-confirm]');
-      expect(await installed(release)).toEqual({ id: 'release-manager', body: { displayName: 'API Worker v2 release', utcOffsetMinutes: expect.any(Number) } });
+      expect(await installed(release)).toEqual({ id: 'release-manager', body: { displayName: 'API Worker v2 release', timeZone: expect.any(String) } });
     });
   });
 

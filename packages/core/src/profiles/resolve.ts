@@ -40,8 +40,11 @@ const ProviderCatalogSnapshotSchema = v.looseObject({
   })), []),
   /** Declared levels by spec; a model absent here declares none. */
   reasoningEfforts: v.optional(v.record(v.string(), v.array(v.picklist(REASONING_EFFORTS))), {}),
-  /** What an unset fast tier may run on, cheapest first (`fast-tier.ts`). */
-  fast: v.optional(v.array(v.strictObject({ model: v.string(), contextWindow: v.optional(v.number()) })), []),
+  /** What an unset fast tier may run on, cheapest first (`fast-tier.ts`). A snapshot frozen before the windows moved
+   *  to `contextWindows` names each candidate's own, which no reader uses. */
+  fast: v.optional(v.array(v.object({ model: v.string() })), []),
+  /** Each model's window, by spec, where the catalog states one; the fast pick's floor reads the main model's here. */
+  contextWindows: v.optional(v.record(v.string(), v.number()), {}),
 });
 
 /** Input-side on purpose: `unavailableProviders` is optional to emit. */
@@ -61,7 +64,8 @@ export interface ProfileAuthorityInputs {
   provider: ProviderCatalogSnapshot;
 }
 
-export type ProviderCacheOutcome = 'hit' | 'joined' | 'miss';
+/** `stored`: the account's last listing, served while a sweep runs behind it. */
+export type ProviderCacheOutcome = 'hit' | 'joined' | 'miss' | 'stored';
 
 export interface ProviderSnapshotRead {
   readonly snapshot: ProviderCatalogSnapshot;
@@ -264,7 +268,7 @@ function checkedAuthority(input: ProfileAuthorityInputs): Effect.Effect<CheckedA
     const effortFor = (spec: string, wanted: ReasoningEffort): ReasoningEffort | null =>
       declaredReasoningEffort(wanted, provider.reasoningEfforts[specWithoutAccount(spec)]);
 
-    const autoFast = fastAssignment(provider.fast, defaultAssignment) ?? undefined;
+    const autoFast = fastAssignment(provider.fast, defaultAssignment, provider.contextWindows) ?? undefined;
 
     return {
       envelope,

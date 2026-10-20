@@ -378,10 +378,13 @@ worker.all('/client-node-stubs.ts', viteDevAsset);
 
 worker.all(`${AGENT_BUNDLE_DIRECTORY}/*`, () => new Response('Not found', { status: 404 }));
 
+// The Gallery's list is Explore's apps (owner, 2026-10-20); its address goes there, and a listed slate's page stays.
+worker.get('/gallery', (c) => c.redirect(`${APP_ROUTES.explore}?kind=app`));
+
 // Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority.
-// The Gallery, a live share's entry and a shared slate's part frames are only their shell: their own routes decide what a
-// visitor reads, and whom a share admits.
-for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, '/gallery']) worker.all(path, appShell);
+// A listed slate's page, a live share's entry and a shared slate's part frames are only their shell: their own routes
+// decide what a visitor reads, and whom a share admits.
+for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);
 
 for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
 

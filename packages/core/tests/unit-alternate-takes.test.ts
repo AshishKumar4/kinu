@@ -69,7 +69,6 @@ describe('recordTakePick — the preference signal', () => {
 
     const row = present(listTurnRatings(sql, actor)[0], 'the pick rating');
     expect(row).toMatchObject({ score: 2, corrected: 1, source: 'take_pick' });
-    // The chosen take is the correction follow-up GEPA optimizes toward.
     expect(row.followup).toBe('alternative approach');
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ chosenNodeId: alt, winnerNodeId: alt });
   });

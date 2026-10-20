@@ -4,9 +4,7 @@
  * The pages are the product's own: Layout, WorkspacePage over the gallery's socket, AttentionStack in the composer;
  * only the reads are answered here. `&roster=assistant` gives the sidebar the workspaces the assistant runs.
  */
-import type { ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
-import { CloudIcon, EnvelopeSimpleIcon, GithubLogoIcon, SunHorizonIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import type { UIMessage } from "ai";
 import {
@@ -79,20 +77,6 @@ export const ASSISTANT_ROSTER: RosterEntry[] = [
   })),
 ];
 
-/** The ones the assistant made and checks on. */
-/** One thing the assistant watches: the bar under its name counts them and says when the next brief comes. */
-interface Watch {
-  readonly id: string;
-  readonly label: string;
-  /** What it watches, in a few words: a repository, a mailbox, a calendar. */
-  readonly what: string;
-  /** Its last finding, from the turn its last firing began. */
-  readonly found: string | null;
-  readonly last: number | null;
-  readonly next: number | null;
-  readonly icon: ReactNode;
-}
-
 const clock = (when: number) => new Date(when).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
 /** `8:00`, `tomorrow 8:00`, or a date. */
@@ -106,24 +90,11 @@ function whenNext(when: number, now: number): string {
   return new Date(when).toLocaleDateString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }
 
-const WATCHING: readonly Watch[] = [
-  {
-    id: "w-brief", label: "Morning brief", what: "each morning", icon: <SunHorizonIcon size={13} />,
-    found: MOMENT === "firstrun" ? null : "Sent at 8:00: 2 waiting on you, 3 important.", last: MOMENT === "firstrun" ? null : at(8, 0), next: at(8, 0) + 864e5,
-  },
-  {
-    id: "w-github", label: "GitHub", what: "kinu-run/kinu reviews and mentions", icon: <GithubLogoIcon size={13} />,
-    found: MOMENT === "firstrun" ? null : "1 review requested, 3 mentions in issues.", last: MOMENT === "firstrun" ? null : ago(9), next: NOW + 6 * MIN,
-  },
-  {
-    id: "w-mail", label: "Mail", what: "ashish@kinu.run and Gmail", icon: <EnvelopeSimpleIcon size={13} />,
-    found: MOMENT === "firstrun" ? null : "14 since yesterday, 3 important.", last: MOMENT === "firstrun" ? null : ago(30), next: null,
-  },
-  {
-    id: "w-cloudflare", label: "Cloudflare", what: "kinu-run's Workers: errors and deploys", icon: <CloudIcon size={13} />,
-    found: MOMENT === "firstrun" ? null : "api-worker 5xx at 0.02%; kinu-staging deployed at 07:40.", last: MOMENT === "firstrun" ? null : ago(4), next: NOW + 6 * MIN,
-  },
-];
+/** What the assistant watches: the bar under its name counts them. */
+const WATCHING = ["Morning brief", "GitHub", "Mail", "Cloudflare"] as const;
+
+/** Tomorrow's morning brief, which the bar says is next. */
+const NEXT_BRIEF = at(8, 0) + 864e5;
 
 const said = (text: string) => [{ type: "text" as const, text }];
 
@@ -231,9 +202,7 @@ function focusRpc(base: SocketCall): SocketCall {
 
 /** What the bar says of Kinu: what it watches, and when it next speaks up. */
 function AssistantLine() {
-  const brief = WATCHING.find((watch) => watch.id === "w-brief");
-
-  return <>Watching {WATCHING.length}{brief?.next !== null && brief?.next !== undefined && <> · brief {whenNext(brief.next, NOW)}</>}</>;
+  return <>Watching {WATCHING.length} · brief {whenNext(NEXT_BRIEF, NOW)}</>;
 }
 
 /** Home: the assistant's chat in the focus layout, with nothing above it. The brief arrives as a message in it. */

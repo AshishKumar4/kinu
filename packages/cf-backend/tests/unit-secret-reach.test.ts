@@ -378,8 +378,8 @@ describe("a job's values are read for it, or its launch fails", () => {
     const unreachable = { ...TEST_USER_ENV, UserDO: { idFromName: (name: string) => name, get: () => ({ revealedSecretsFor: async (): Promise<never> => { throw new Error('connection lost'); } }) } };
 
     expect(await revealedForJob(answering, params)).toEqual({ DATABASE_PASSWORD: DB_VALUE });
-    await expect(revealedForJob(unreachable, params)).rejects.toThrow('asking the account');
-    await expect(revealedForJob(answering, undefined)).rejects.toThrow('not yet configured');
+    await expect(revealedForJob(unreachable, params)).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(revealedForJob(answering, undefined)).rejects.toMatchObject({ code: 'unavailable' });
   });
 });
 
@@ -413,9 +413,9 @@ describe("an owner's call whose account does not answer does not run short of it
       },
     }, environment);
 
-    await expect(box.exec('env', {})).rejects.toThrow('asking the account');
-    await expect(environment('keep', 'owner')).rejects.toThrow('asking the account');
-    await expect(environment('run', 'owner')).rejects.toThrow('asking the account');
+    await expect(box.exec('env', {})).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(environment('keep', 'owner')).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(environment('run', 'owner')).rejects.toMatchObject({ code: 'unavailable' });
     expect(seen).toEqual([]);
   });
 

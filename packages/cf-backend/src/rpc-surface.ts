@@ -110,6 +110,7 @@ const USER_DO_METHODS = [
   'getAuthHeaders',
   'getCodexStatus',
   'getConfig',
+  'claimConfig',
   'getCredentialEndpoint',
   'getDeviceFileView',
   'getWorkspaceTitle',
@@ -196,6 +197,7 @@ const USER_DO_METHODS = [
   'userMcp_cancelCall',
   'userMcp_githubRefresh',
   'userMcp_handleOAuthCallback',
+  'userMcp_connectedPresets',
   'userMcp_list',
   'userMcp_presets',
   'userMcp_remove',
@@ -212,6 +214,8 @@ const USER_DO_METHODS = [
   'watchDeviceStatus',
   'revokeAllCliTokens',
   'getCredentialsRevision',
+  'storedProviderListing',
+  'keepProviderListing',
   'getSettingsRevision',
   'shareCards_put',
   'shareCards_remove',
@@ -276,6 +280,10 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
+  // The account's install, DO-to-DO (`workspace-create.ts`): a blueprint's layout, agent and owner schedules.
+  'seedBlueprint',
+  // The account, DO-to-DO, when the owner's connections change (`user/mcp-servers.ts`).
+  'connectionsChanged',
   'blueprintBundle',
   'readBlueprint',
   'shareBlueprintWith',

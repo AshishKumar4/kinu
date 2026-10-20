@@ -74,7 +74,7 @@ describe('definePromptSection — rendering', () => {
 });
 
 describe('definePromptSection — a missing slot fails loudly', () => {
-  // A runtime source (store row, GEPA rewrite) has no compile-time contract, so the runtime check must hold.
+  // A runtime source (store row, dream rewrite) has no compile-time contract, so the runtime check must hold.
   const fromStore = storedSource('A {{present}} B {{absent}} C');
 
   test('throws, naming the section and the slot, instead of rendering empty', () => {

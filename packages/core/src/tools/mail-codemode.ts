@@ -10,7 +10,7 @@ import { mailSendText, type MailSend } from '../safety/approval-kind';
 import type { ApprovalSpend, ApprovalSpendOutcome } from '../safety/approval-gate';
 import { sha256Hex } from '../safety/argument-digest';
 import { attempt, diagnostics, KinuError, settle } from '../obs/index';
-import { mailInContext, type MailInContext } from '../mail/in-context';
+import { MAX_MAIL_IN_CONTEXT, mailInContext, type MailInContext } from '../mail/in-context';
 import type { ActiveRoster } from '../types/dynamic-context';
 import { serve, type Served } from '../operations/operation';
 import { codemodeNamespace } from './operation-surfaces';
@@ -36,7 +36,7 @@ export interface MailDeps {
 export function unreadMailForTurn(mail: MailDeps, workspace: string): Promise<ActiveRoster<MailInContext> | undefined> {
   return settle(Effect.catch(
     attempt({ doing: 'reading the agent\'s unread mail for its turn', otherwise: 'unavailable' }, async () => mailInContext(
-      await mail.mailbox().findFor(mail.caller(), { view: 'all', unread: true, limit: 5 }),
+      await mail.mailbox().findFor(mail.caller(), { view: 'all', unread: true, limit: MAX_MAIL_IN_CONTEXT }),
     )),
     (failure) => Effect.sync(() => {
       diagnostics.failure('mail.context_read_failed', failure, { workspace });

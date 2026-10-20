@@ -1,8 +1,8 @@
 /**
- * `/api/gallery/*` and `/api/explore/*`: the Gallery's apps and Explore's apps and workspaces, before the session gate.
- * Anyone may read them; starring and reporting take a signed-in person. A listing's picture is served only while it is
- * listed, and only the digest it lists. Their index is the control plane's (core slates/gallery.ts), asked with the
- * Worker's own capability on each person's behalf.
+ * `/api/explore/*` and `/api/gallery/*`: Explore's apps and workspaces, and a listed app's own page, before the session
+ * gate. Anyone may read them; starring and reporting take a signed-in person. A listing's picture is served only while
+ * it is listed, and only the digest it lists. Their index is the control plane's (core slates/gallery.ts), asked with
+ * the Worker's own capability on each person's behalf.
  */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
@@ -29,8 +29,9 @@ galleryRoutes.use('/api/explore/*', async (c, next) => crossSiteRejection(c.req.
 
 const NO_STORE = { 'cache-control': 'no-store' };
 
-const Query = v.object({
+const ExploreQuery = v.object({
   q: v.optional(v.pipe(v.string(), v.maxLength(200)), ''),
+  kind: v.optional(v.picklist(EXPLORE_KINDS)),
   sort: v.optional(v.picklist(GALLERY_SORTS), 'trending'),
   category: v.optional(v.picklist(GALLERY_CATEGORIES)),
   page: v.optional(v.pipe(v.string(), v.transform(Number), v.safeInteger(), v.minValue(0), v.maxValue(GALLERY_LAST_PAGE)), '0'),
@@ -49,19 +50,6 @@ async function gallery(env: Env): Promise<{ readonly plane: DurableObjectStub<Co
 async function viewerOf(c: Context<FamilyEnv<Env, object>>): Promise<string | null> {
   return (await requestIdentity(c.req.raw, c.env))?.email.trim().toLowerCase() ?? null;
 }
-
-galleryRoutes.get('/api/gallery', async (c) => {
-  const query = v.safeParse(Query, Object.fromEntries(new URL(c.req.url).searchParams));
-
-  if (!query.success) return err(400, 'The Gallery is asked by sort, page, category and words');
-  const { q, sort, category, page } = query.output;
-
-  const { plane, caller } = await gallery(c.env);
-
-  return json({ body: await plane.galleryPage(caller, { q, sort, category: category ?? null, page }, await viewerOf(c)) }, { headers: NO_STORE });
-});
-
-const ExploreQuery = v.object({ ...Query.entries, kind: v.optional(v.picklist(EXPLORE_KINDS)) });
 
 galleryRoutes.get('/api/explore', async (c) => {
   const query = v.safeParse(ExploreQuery, Object.fromEntries(new URL(c.req.url).searchParams));

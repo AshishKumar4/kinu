@@ -309,7 +309,15 @@ export class EvalVerifier {
 
   /** This turn's tool calls: each one's name and its arguments as the model sent them, whole. */
   async turnToolCalls(): Promise<{ name: string; args: string }[]> {
-    const events = await this.leadEvents();
+    return await this.callsOf(await this.leadEvents());
+  }
+
+  /** The tool calls the trial's turns before this one made, as {@link turnToolCalls} reads them. */
+  async earlierToolCalls(): Promise<{ name: string; args: string }[]> {
+    return await this.callsOf((await this.#session.runEvents()).filter((event) => Date.parse(event.timestamp) < this.#startedAt));
+  }
+
+  private async callsOf(events: readonly RunEvent[]): Promise<{ name: string; args: string }[]> {
     const inputs = callInputs(events, await this.stepMessages(events));
 
     return events

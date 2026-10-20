@@ -1,7 +1,7 @@
 /**
  * Explore: one feed of apps to open (listed slates, the Gallery's) and workspaces to install (workspace blueprints),
  * Kinu's own first. `/api/explore` answers both kinds ranked together; a workspace blueprint has a page of its own and
- * an install. The Gallery's routes stay as they are.
+ * an install. An app's own page is the Gallery's (`/gallery/:workspace/:slate`).
  */
 import * as v from "valibot";
 import { Effect } from "effect";
@@ -44,7 +44,7 @@ export interface InstallChoice {
 /** Installs a workspace blueprint as a new workspace of yours; the Personal assistant may also become your Home. */
 export function installBlueprint(id: string, choice: InstallChoice): Promise<string> {
   return settle(Effect.map(request(InstalledSchema, `/api/user/blueprints/${encodeURIComponent(id)}/install`, {
-    method: "POST", json: { ...choice, utcOffsetMinutes: -new Date().getTimezoneOffset() },
+    method: "POST", json: { ...choice, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
   }), (installed) => installed.workspace));
 }
 

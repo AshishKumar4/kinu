@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import {
-  type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
+  KeptProviderListingSchema, type ProviderListing, safeJsonParse, type Credential, CLAUDE_CRED_KEY, CODEX_CRED_KEY, baseCredentialKey, claudeCodeFrom, createClaudeOAuthClient, startClaudeSignIn, subscriptionIssuer, renewableLogin, rotateLogin, usableLogin, type LoginRenewal, type SubscriptionIssuer, decodeCodexAccountId, type JsonValue, type OAuthCredential, parseJsonValue, ownerCaller, type UserCaller, type ResolvedCaller, credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution, validateCredential, validateCredentialKey, createCredentialCipher, type CredentialCipher, revocationEndpointFor, revokeOAuthGrant, type DisconnectOutcome, isModelInferenceCredentialKey, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, accountIdFromCloudflareCredential, cloudflareAIGatewayId, cloudflareAccountsFromCredential, cloudflareWorkersAIBaseURL, fetchCloudflareAIGateways, isCloudflareAIGatewayId, isCloudflareCredentialExpiring, isCloudflareCredentialUsable, refreshCloudflareCredential, withCloudflareAccount, type CloudflareAccount, type CloudflareAIGatewaySummary, type CredentialSummary, CLOUDFLARE_WEB_SEARCH_CRED_KEY, grantsWebSearch, storedCredentialKey,
 } from '@kinu.run/core';
 import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -309,6 +309,36 @@ export class UserCredentials {
     )[0]);
 
     return row.success ? row.output.revision : 0;
+  }
+
+  /** The last complete provider listing kept, if it was swept under the credentials as they stand and under `accounts`,
+   *  the canonical {provider: account} a workspace lists under; else none, and the asker sweeps. */
+  async storedProviderListing(caller: UserCaller, accounts: string): Promise<ProviderListing | null> {
+    await this.host.requireTier(caller, 'credentials.model');
+
+    const row = this.host.sqlx<{ listing: string }>(
+      `SELECT listing FROM user_provider_listing WHERE id = 1 AND credentials_revision = ? AND accounts = ?`,
+      this.credentialsRevision(), accounts,
+    )[0];
+
+    const kept = row === undefined ? null : v.safeParse(KeptProviderListingSchema, safeJsonParse(row.listing));
+
+    return kept?.success === true ? kept.output : null;
+  }
+
+  /** Keeps a workspace's complete listing, swept under `revision` and `accounts`, unless the credentials moved meanwhile:
+   *  a listing from before a key changed is never kept. */
+  async keepProviderListing(caller: UserCaller, revision: number, accounts: string, listing: ProviderListing): Promise<void> {
+    await this.host.requireTier(caller, 'credentials.model');
+
+    const kept = v.parse(KeptProviderListingSchema, listing);
+
+    if (revision !== this.credentialsRevision()) return;
+    this.host.sqlx(
+      `INSERT INTO user_provider_listing (id, credentials_revision, accounts, listing) VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET credentials_revision = excluded.credentials_revision, accounts = excluded.accounts, listing = excluded.listing`,
+      revision, accounts, JSON.stringify(kept),
+    );
   }
 
   bumpCredentialsRevision(): void {

@@ -52,6 +52,33 @@ describe('Settings › Secrets', () => {
     });
   });
 
+  test('the rows are the one copy of a pasted .env: a row edited keeps its edit when more lines are pasted', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=${SETTINGS}&secrets=empty`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-secrets-empty]');
+
+      await page.click('[data-add-secrets] [role="tab"]:nth-child(2)');
+      await page.type('textarea[aria-label="A .env file"]', 'WEBHOOK_SECRET=whsec-one\n');
+      await page.waitForSelector('input[aria-label="Hosts WEBHOOK_SECRET may be sent to"]');
+      await page.type('input[aria-label="Hosts WEBHOOK_SECRET may be sent to"]', 'hooks.example.dev');
+
+      // A later line for the same name takes its value; the hosts typed into its row stay.
+      await page.type('textarea[aria-label="A .env file"]', 'WEBHOOK_SECRET=whsec-two\nSENTRY_TOKEN=st\n');
+      await page.waitForSelector('[data-secret-row="1"]');
+
+      const value = (label: string) => page.$eval(`input[aria-label="${label}"]`, (input) => (input instanceof HTMLInputElement ? input.value : ''));
+
+      expect(await page.$$eval('[data-secret-row] input[aria-label="Secret name"]', (inputs) => inputs.map((input) => (input instanceof HTMLInputElement ? input.value : ''))))
+        .toEqual(['WEBHOOK_SECRET', 'SENTRY_TOKEN']);
+      expect([await value('Value of WEBHOOK_SECRET'), await value('Hosts WEBHOOK_SECRET may be sent to')]).toEqual(['whsec-two', 'hooks.example.dev']);
+      // Nothing is left behind in the box to overwrite the rows later.
+      expect(await page.$eval('textarea[aria-label="A .env file"]', (box) => (box instanceof HTMLTextAreaElement ? box.value : ''))).toBe('');
+      await page.close();
+    });
+  });
+
   test("letting a workspace's agents read a value asks first, and only the owner's yes turns it on", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
