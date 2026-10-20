@@ -7,7 +7,6 @@
  */
 import { isToolUIPart, type UIMessage } from "ai";
 import * as v from "valibot";
-import type { JsonValue } from "@kinu.run/core";
 import { groupMessageParts, phaseCalls, PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY } from "@kinu.run/core";
 import { galleryChatWindow, galleryServerPush, seedGalleryChat } from "@/gallery-agent-stub";
 
@@ -290,7 +289,7 @@ const NamePhasesSchema = v.tuple([v.object({ messageId: v.string(), actor: v.opt
 
 /** As the workspace answers `namePhases`: each ask recorded on the page. A running turn's answer is not committed, so
  *  none is found; a settled one's, with `&lines=asked`, has its lines stamped a moment later and its room shown it again. */
-export function longTurnNamePhases(args?: unknown[]): JsonValue {
+export function longTurnNamePhases(args?: unknown[]): boolean {
   const [{ messageId }] = v.parse(NamePhasesSchema, args);
   const root = document.documentElement;
   const settled = !params.has("at") && params.get("live") !== "1";

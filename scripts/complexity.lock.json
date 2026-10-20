@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-20",
   "files": 3630,
-  "functions": 95728,
+  "functions": 95767,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -44,10 +44,6 @@
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
-    },
-    {
-      "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
-      "complexity": 37
     },
     {
       "key": "packages/core/src/strategy/swarm.ts#swarmValidity",

@@ -104,15 +104,15 @@ import {
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory, ownerAsks,
   DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubordinateInspectionRequestSchema,
-  type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
-  type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type SubordinateInspectionResult, type AccountUsage,
+  type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
+  type OwedIntent, type PlanReviewDecision, type ProfileCatalogEnvelope, type SlateSummary, type SubordinateInspectionRequest, type SubordinateInspectionResult, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry } from "@kinu.run/core";
-import { answeringRpc, wireOf, workspaceRpc, type SocketCall, type WorkspaceAnswer, type WorkspaceAnswers, type WorkspaceRpc } from "@/lib/workspace-rpc";
+import { answeringRpc, wireOf, type SocketCall, type WorkspaceAnswer, type WorkspaceAnswers, type WorkspaceRpc } from "@/lib/workspace-rpc";
 import { QUIET_ACTIVITY, UNRATED_WEEK } from "@/components/landing/landing-fixtures";
 import type { ComputerSizeState } from "@/computer-size";
 import { BoxSizeSchema, type BoxSize } from "@kinu.run/devbox/sizes";
-import type { BackgroundJob } from "@kinu.run/core/protocol";
+import type { BackgroundJob, SubordinateView } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { formatWorkspaceError, type WorkspaceErrors } from "@kinu.run/core";
@@ -123,7 +123,7 @@ import type {
   ChatHistoryEntry, ChatHistoryPage, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
-  AccountSpend, ChangelogEntry, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
+  AccountSpend, ChangelogEntry, FilesPage, InspectedWork, PendingAction, PendingDeviceConsent, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { ModelTestResult, UserDevice } from "@/lib/user-api";
 import { ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
@@ -161,13 +161,13 @@ const SHELL_MACHINES = {
   mounts: [
     { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
     { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
-    ...(SHELL_PC === null ? [] : [{ name: "device", prefix: "device.*", live: SHELL_PC !== "offline", policy: { readOnly: false, consistency: "live-shared" }, reason: null }]),
+    ...(SHELL_PC === null ? [] : [{ name: "device", prefix: "device.*", live: SHELL_PC !== "offline", policy: { readOnly: false, consistency: "live-shared" }, reason: null } satisfies EnvironmentInfo]),
   ],
   executors: [
     ...(SHELL_PC === null ? [] : [{
       name: "device", kind: "device", available: SHELL_PC !== "offline", configured: true, active: SHELL_PC !== "offline", status: "active", label: GALLERY_PC.label,
       capabilities: ["shell", "npm", "git", "fs_owned", "process_spawn"],
-    }]),
+    } satisfies ExecutorInfo]),
     {
       name: "computer", kind: "computer", available: true, configured: true, active: true, status: "active",
       capabilities: ["shell", "npm", "git", "fs_owned", "net_inbound", "process_long"],
@@ -177,7 +177,7 @@ const SHELL_MACHINES = {
       capabilities: ["javascript", "typescript", "python", "shell", "npm", "fs_shared"],
     },
   ],
-};
+} satisfies { readonly mounts: EnvironmentInfo[]; readonly executors: ExecutorInfo[] };
 
 // Declared before the shell mounts so the app background attaches its stepping controls here only (tests/browser/app-background-ux.test.ts).
 window.__kinuGalleryStepping = true;
@@ -1666,60 +1666,57 @@ const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 
 const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-/**
- * The Agents-SDK RPC transport, answered in-page from a table so socket-gated pages render without a worker.
- * Non-agent sockets (vite HMR) fall through to the real WebSocket.
- */
-const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
-  getWorkspaceSnapshot: {
-    status: {
-      id: "agent_01j9x7q2m4apiworker", name: "api-worker-health-9935d3",
-      displayName: "API Worker", purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
-      soul: "# API Worker\n\nI look after the api Worker: its deploys, its database and its logs. I read the logs before I guess.\n",
-      createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
-      messageCount: 48, model: "opencode-go/muse-spark-1.3-contributor", forkLineage: null, reasoningEffort: "medium",
-    },
-    tools: { builtIn: [], crafted: [] },
-    memoryContent: "",
-    // The full-screen explorer reads its tree off the snapshot.
-    mcts: MCTS_ROWS,
-    timeline: [], executors: SHELL_COMPUTER || SHELL_PC !== null ? SHELL_MACHINES.executors : [], executorOutputs: [],
-    lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
-    // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
-    chat: {
-      name: "api-worker-health-9935d3", actorId: "agent_01j9x7q2m4apiworker", displayName: "API Worker", role: "default",
-      mission: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
-      model: { model: "opencode-go/muse-spark-1.3-contributor", source: "workspace" }, reasoningEffort: "medium",
-      activePlan: null, messageCount: 48, pendingSteers: [],
-    },
-    branchRuns: [],
-    tabPresence: { explorations: true, work: true },
-    slates: [],
-    turnClaim: { kind: "settled" },
-  },
-  getStoredModelSpec: "opencode-go/muse-spark-1.3-contributor",
-  getShellApprovalMode: "strict",
-  getEvolutionChangelog: { entries: [], unseen: 0 },
-});
+type WorkspaceSnapshot = WorkspaceAnswer<"getWorkspaceSnapshot">;
 
-const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
+/** The workspace as its snapshot opens it. Non-agent sockets (vite HMR) fall through to the real WebSocket. */
+const WORKSPACE_SNAPSHOT: WorkspaceSnapshot = {
+  status: {
+    name: "api-worker-health-9935d3",
+    displayName: "API Worker", purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
+    soul: "# API Worker\n\nI look after the api Worker: its deploys, its database and its logs. I read the logs before I guess.\n",
+    createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
+    messageCount: 48, model: "opencode-go/muse-spark-1.3-contributor", forkLineage: null, reasoningEffort: "medium",
+    layout: "workbench", roleId: "default", tierId: "default", context: null,
+  },
+  tools: { builtIn: [], crafted: [], executors: [] },
+  memoryContent: "",
+  executors: SHELL_COMPUTER || SHELL_PC !== null ? SHELL_MACHINES.executors : [], executorOutputs: [],
+  lastActiveExecutor: SHELL_COMPUTER ? "computer" : null,
+  // Mirrors the server snapshot: the load replaces state wholesale, so an omitted field is `undefined`.
+  chat: {
+    name: "api-worker-health-9935d3", actorId: "agent_01j9x7q2m4apiworker", displayName: "API Worker", role: "default",
+    mission: "The api Worker on Cloudflare: keep it deployed, healthy and fast.",
+    model: { model: "opencode-go/muse-spark-1.3-contributor", source: "workspace" }, reasoningEffort: "medium",
+    activePlan: null, messageCount: 48, pendingSteers: [],
+  },
+  branchRuns: [],
+  tabPresence: { explorations: true, work: true },
+  slates: [],
+  turnClaim: { kind: "settled" },
+};
 
 /** `snapshot` with its workspace agent's chat changed by `patch`, as the server's snapshot carries it. */
-function withChat(snapshot: JsonObject, patch: JsonObject): JsonObject {
-  return { ...snapshot, chat: { ...v.parse(JsonObjectSchema, snapshot.chat), ...patch } };
+function withChat(snapshot: WorkspaceSnapshot, patch: Partial<WorkspaceSnapshot["chat"]>): WorkspaceSnapshot {
+  return { ...snapshot, chat: { ...snapshot.chat, ...patch } };
 }
 
 const WORKSPACE_PAGE_NAME = new URLSearchParams(location.search).get("ws") ?? "api-worker";
 
-// `&ws=handwrought-walnut-4166c321` is the untitled row: its snapshot answers a blank displayName.
-if (WORKSPACE_PAGE_NAME === "handwrought-walnut-4166c321") {
-  const snapshot = v.parse(JsonObjectSchema, AGENT_RPC_DATA.getWorkspaceSnapshot);
+/** The snapshot the page opens on: `&ws=handwrought-walnut-4166c321` is the untitled row, whose snapshot answers a blank displayName. */
+const OPENING_SNAPSHOT: WorkspaceSnapshot = WORKSPACE_PAGE_NAME === "handwrought-walnut-4166c321"
+  ? withChat({
+    ...WORKSPACE_SNAPSHOT,
+    status: { ...WORKSPACE_SNAPSHOT.status, name: "handwrought-walnut-4166c321", displayName: "", soul: "" },
+  }, { name: "handwrought-walnut-4166c321", displayName: "", mission: "" })
+  : WORKSPACE_SNAPSHOT;
 
-  AGENT_RPC.set("getWorkspaceSnapshot", withChat({
-    ...snapshot,
-    status: { ...v.parse(JsonObjectSchema, snapshot.status), name: "handwrought-walnut-4166c321", displayName: "", soul: "" },
-  }, { name: "handwrought-walnut-4166c321", displayName: "", mission: "" }));
-}
+/** The Agents-SDK socket's own reads, answered in-page so socket-gated pages render without a worker. */
+const AGENT_ANSWERS: WorkspaceAnswers = {
+  getWorkspaceSnapshot: () => OPENING_SNAPSHOT,
+  getStoredModelSpec: () => ({ spec: "opencode-go/muse-spark-1.3-contributor" }),
+  getShellApprovalMode: () => ({ mode: "strict" }),
+  getEvolutionChangelog: () => ({ entries: [], unseenCount: 0, seenAt: 0 }),
+};
 
 class GalleryAgentSocket extends EventTarget implements WebSocket {
   static readonly CONNECTING = 0;
@@ -1770,14 +1767,8 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
     if (request.type !== "rpc" || !request.method) return;
     const method = request.method;
 
-    const answerRpc = async (): Promise<JsonValue> => {
-      const agent = AGENT_RPC.get(method);
-
-      if (agent !== undefined) return agent;
-
-      // Everything else as the gallery answers it, typed, with Column C's exploration stores; a method it does not answer is refused.
-      return v.parse(JsonValueSchema, await wireOf(FORK_ANSWERS)<JsonValue>(method, request.args ?? []) ?? null);
-    };
+    // As the gallery answers it, typed, with Column C's exploration stores; a method it does not answer is refused.
+    const answerRpc = async (): Promise<JsonValue> => v.parse(JsonValueSchema, await wireOf({ ...FORK_ANSWERS, ...AGENT_ANSWERS })<JsonValue>(method, request.args ?? []) ?? null);
 
     // As the Agents SDK frames a call's outcome: its result, or its failure for the client to reject with.
     const reply = (body: JsonObject) => {
@@ -1852,10 +1843,6 @@ window.addEventListener("gallery:push-frame", (event: Event) => {
 interface GalleryMessage extends UIMessage { createdAt?: number }
 
 function msg(message: GalleryMessage): GalleryMessage { return message; }
-
-function rpcResult(value: JsonValue): Response {
-  return new Response(JSON.stringify(value));
-}
 
 const MESSAGES: UIMessage[] = [
   // The owner typed a mission, not a message, so this must never wear their bubble.
@@ -2139,10 +2126,7 @@ function maybeRefuseCreate(): void {
 }
 
 /* The `workspacepage` frame's additional-agent roster, mutated by the real page; only the chat stays inert (`agentchats` covers send). */
-const GALLERY_SUBS: {
-  name: string; actorId: string; displayName: string; role: string; origin: string;
-  status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
-}[] = [];
+const GALLERY_SUBS: (SubordinateView & { actorId: string })[] = [];
 
 
 const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "panel";
@@ -2167,7 +2151,7 @@ if (AGENTS_PANEL) {
     msg({ id: "ca-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Two routes still read env.DB themselves; both are in routes/webhooks.ts." }] }),
   ], hostedActorSocketPath("binding-auditor"));
 
-  const docs = {
+  const docs: SubordinateView & { actorId: string } = {
     name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", origin: "user",
     lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
   };
@@ -2536,14 +2520,14 @@ function galleryQuestions(): AskingAgent[] {
   }];
 }
 
-function galleryCloseQuestions(status: "answered" | "dismissed", answers: readonly OwnerAnswer[] | null): JsonValue {
+function galleryCloseQuestions(status: "answered" | "dismissed", answers: readonly OwnerAnswer[] | null): WorkspaceAnswer<"dismissOwnerQuestions"> {
   const root = document.documentElement.dataset;
 
   root.galleryQuestions = status;
   root.galleryAnswers = JSON.stringify(answers);
   queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwnerQuestions"] })); });
 
-  return null;
+  return { closed: 1 };
 }
 
 /** `?transcript=asked`: the turn that asked, ending on its call. */
@@ -2578,7 +2562,7 @@ function galleryOwedIntents(): readonly OwedOwnerIntent[] {
   return [];
 }
 
-function galleryOweIntent(intent: OwedOwnerIntent): JsonValue {
+function galleryOweIntent(intent: OwedOwnerIntent): OwedIntent {
   document.documentElement.dataset.galleryOwedIntents = JSON.stringify([...galleryOwedIntents(), intent]);
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listOwedIntents"] }));
 
@@ -2616,7 +2600,7 @@ function galleryRevertConversation(entryId: string): void {
   galleryServerPush(JSON.stringify({ type: "cf_agent_chat_messages", messages: kept }));
 }
 
-type GalleryListing = { readonly kind: "held" } | { readonly kind: "listed"; readonly value: JsonValue };
+type GalleryListing = { readonly kind: "held" } | { readonly kind: "listed"; readonly value: WorkspaceAnswer<"getExposedPorts"> };
 
 function galleryPortListing(executor: string | undefined): GalleryListing | null {
   const flags = document.documentElement.dataset;
@@ -2691,13 +2675,13 @@ let annotationSavesAsked = 0;
 
 let annotationSavesInFlight = 0;
 
-async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
+async function galleryAnnotationSave(args?: unknown[]): Promise<WorkspaceAnswer<"savePlanReviewAnnotations">> {
   const [, , annotations] = v.parse(v.tuple([v.string(), v.number(), v.array(v.looseObject({ text: v.optional(v.string()) }))]), args);
   // The store's own admission, so the gallery refuses what the workspace would.
   const carried = galleryAgentPlan.annotations.filter((note) => note.revision !== undefined);
   const admitted = admitReviewAnnotations({ value: annotations, kept: carried });
 
-  if (Result.isFailure(admitted)) return { ok: false, error: admitted.failure.error };
+  if (Result.isFailure(admitted)) return { ok: false, error: admitted.failure.error, plan: galleryAgentPlan };
   const root = document.documentElement;
 
   annotationSavesAsked += 1;
@@ -2713,71 +2697,68 @@ async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
 
   annotationSavesInFlight -= 1;
 
-  const ok = !(ANNOTATION_SAVES === "fail-first" && annotationSavesAsked === 1);
-
-  if (!ok) return { ok, error: "the plan store is busy" };
+  if (ANNOTATION_SAVES === "fail-first" && annotationSavesAsked === 1) return { ok: false, error: "the plan store is busy", plan: galleryAgentPlan };
 
   const landed = v.parse(v.array(v.array(v.string())), JSON.parse(root.dataset.galleryAnnotationsSaved ?? "[]"));
 
   root.dataset.galleryAnnotationsSaved = JSON.stringify([...landed, annotations.map((annotation) => annotation.text ?? "")]);
   galleryAgentPlan = { ...galleryAgentPlan, annotations: [...carried, ...admitted.success] };
 
-  return { ok, plan: v.parse(JsonValueSchema, galleryAgentPlan) };
+  return { ok: true, plan: galleryAgentPlan };
 }
 
 
-/* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
-const WORKSPACE_PAGE_RPC = new Map(Object.entries({
-  getExecutorFiles: workspaceListing,
-  namePhases: longTurnNamePhases,
+type OwnedWork = WorkspaceAnswer<"listWorkspaceWork">["tasks"][number];
+
+/** The workspace's own agent as Work names it: the owner is the workspace's name, as `createMain({ name: this.name })` registers it, never "main". */
+const PAGE_OWNER: OwnedWork["owner"] = { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] };
+
+/** `dataset.workMoved`: a task written during an outage. */
+const WORK_WRITTEN_IN_OUTAGE: OwnedWork = {
+  owner: PAGE_OWNER, plan: null,
+  tasks: [{ id: "t14", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+};
+
+const WORK_BOARD: OwnedWork = {
+  owner: PAGE_OWNER, plan: null,
+  tasks: [
+    galleryTask(1, "Read the database by its new binding in openDb", "active", ["done", "done", "active", "open"]),
+    galleryTask(6, "Write the release note for the binding fix", "open", ["open", "open"]),
+    galleryTask(9, "Alert when /api 5xx passes 1%", "open"),
+    galleryTask(10, "Reproduce the /api/health 500", "done", ["done", "done", "done"]),
+  ],
+};
+
+const AGENTS_WORK: OwnedWork[] = [{
+  owner: { actorId: galleryActorId("binding-auditor"), name: "binding-auditor", title: "Binding auditor", retired: false, path: ["binding-auditor"] }, plan: null,
+  tasks: [{ id: "t1", parentId: null, title: "Audit every route for env.DB", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+}, {
+  owner: { actorId: "swarm-actor-h1", name: "root-merge-1-h1", title: "workers/api/src/routes/webhooks.ts", retired: false, path: null }, plan: null,
+  tasks: [{ id: "t1", parentId: null, title: "Move the webhook route onto openDb", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+}];
+
+/* The reads the first-visit inspector policy decides on, each typed as the workspace answers it. */
+const PAGE_TABLE_ANSWERS: WorkspaceAnswers = {
+  getExecutorFiles: (...args) => workspaceListing(args),
+  namePhases: (...args) => longTurnNamePhases(args),
   listAlternateTakes: () => (TAKE_COUNT > 0 ? { [galleryTakes.turnId ?? ""]: galleryTakes } : {}),
-  pickAlternateTake: galleryPickTake,
-  getWorkspaceSnapshot: () => {
-    const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
-
-    const chat = v.parse(JsonObjectSchema, snapshot.chat);
-
-    return withChat({ ...snapshot, slates: gallerySlates().slates }, {
-      activePlan: v.parse(JsonValueSchema, galleryAgentPlan),
-      messageCount: HISTORY_ROWS > 0 ? seededGalleryChatRows() + HISTORY_ROWS : v.parse(v.number(), chat.messageCount),
-    });
-  },
+  pickAlternateTake: (...args) => galleryPickTake(args),
   listSlates: gallerySlates,
   getActivePlanReview: () => galleryAgentPlan,
   // The Work tab draws this read, not `getActivePlanReview`. The owner is the workspace's name: `createMain({ name: this.name })` registers it, never "main".
   // `dataset.workMoved`: a task written during an outage.
-  listWorkspaceWork: () => ({
-    plans: [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] },
-      plan: galleryAgentPlan, tasks: [],
-    }],
+  listWorkspaceWork: (): WorkspaceAnswer<"listWorkspaceWork"> => ({
+    plans: [{ owner: PAGE_OWNER, plan: galleryAgentPlan, tasks: [] }],
     tasks: [
-      ...document.documentElement.dataset.workMoved === "1" ? [{
-        owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
-        tasks: [{ id: "t14", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
-      }] : [],
-      ...BOARD_FULL ? [{
-        owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] }, plan: null,
-        tasks: [
-          galleryTask(1, "Read the database by its new binding in openDb", "active", ["done", "done", "active", "open"]),
-          galleryTask(6, "Write the release note for the binding fix", "open", ["open", "open"]),
-          galleryTask(9, "Alert when /api 5xx passes 1%", "open"),
-          galleryTask(10, "Reproduce the /api/health 500", "done", ["done", "done", "done"]),
-        ],
-      }] : [],
-      ...AGENTS_PANEL ? [{
-        owner: { actorId: galleryActorId("binding-auditor"), name: "binding-auditor", title: "Binding auditor", retired: false, path: ["binding-auditor"] }, plan: null,
-        tasks: [{ id: "t1", parentId: null, title: "Audit every route for env.DB", status: "active", updatedAt: 1, note: null, subtasks: [] }],
-      }, {
-        owner: { actorId: "swarm-actor-h1", name: "root-merge-1-h1", title: "workers/api/src/routes/webhooks.ts", retired: false, path: null }, plan: null,
-        tasks: [{ id: "t1", parentId: null, title: "Move the webhook route onto openDb", status: "active", updatedAt: 1, note: null, subtasks: [] }],
-      }] : [],
+      ...document.documentElement.dataset.workMoved === "1" ? [WORK_WRITTEN_IN_OUTAGE] : [],
+      ...BOARD_FULL ? [WORK_BOARD] : [],
+      ...AGENTS_PANEL ? AGENTS_WORK : [],
     ],
   }),
   listWorkspaceAgents: galleryWorkspaceAgents,
-  getWorkspaceGitHub: (args?: unknown[]) => {
+  getWorkspaceGitHub: (refresh) => {
     const root = document.documentElement;
-    root.dataset.galleryGitHubReads = `${root.dataset.galleryGitHubReads ?? ""}${v.parse(v.tuple([v.boolean()]), args)[0] ? "R" : "r"}`;
+    root.dataset.galleryGitHubReads = `${root.dataset.galleryGitHubReads ?? ""}${refresh === true ? "R" : "r"}`;
 
     return GALLERY_GITHUB;
   },
@@ -2788,15 +2769,14 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
 
     return { drawn: true, refusal: null };
   },
-  renameMainChat: (args?: unknown[]) => {
-    GALLERY_MAIN_TITLE.value = v.parse(v.tuple([v.string()]), args)[0];
+  renameMainChat: (title) => {
+    GALLERY_MAIN_TITLE.value = title;
     rosterMoved();
 
     return { title: GALLERY_MAIN_TITLE.value };
   },
   // As the server does: the stopped worker settles aborted, which the panel reads as stopped, and the roster read moves.
-  stopSwarmWorker: (args?: unknown[]) => {
-    const [headId] = v.parse(v.tuple([v.string()]), args);
+  stopSwarmWorker: (headId) => {
     const at = GALLERY_AGENTS.findIndex((agent) => agent.open.kind === "node" && agent.open.nodeId === headId && agent.activity === "working");
     const agent = GALLERY_AGENTS[at];
 
@@ -2804,21 +2784,17 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       GALLERY_AGENTS[at] = { ...agent, activity: "stopped" };
       queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents"] })); });
     }
-
-    return null;
   },
   // Without an answer the strip hides Work on first paint.
   getWorkspaceTabPresence: () => ({ work: true, explorations: true }),
   // Each slate's preview is its own page on the gallery's preview origin, served by a test or a capture. An answer's
   // page is served by the runner, so it reports its height; these slates stand for a server of their own.
-  previewSlate: (args?: unknown[]) => {
-    const [id] = v.parse(v.tuple([v.string()]), args);
-
+  previewSlate: (id) => {
     return { ok: true, value: { url: new URL(id, SLATE_GALLERY_URL).href, port: 8789, sized: ephemeralSlateAddress(id) !== null } };
   },
   // Keeping an answer's page: the kept slate is listed under the page's title, and the listing moves.
-  slate: (args?: unknown[]) => {
-    const [operation] = v.parse(v.tuple([v.object({ op: v.literal("save"), page: v.string() })]), args);
+  slate: (asked) => {
+    const operation = v.parse(v.object({ op: v.literal("save"), page: v.string() }), asked);
     const kept = { id: "errors-by-route", title: operation.page === "pg-a1/errors" ? "500s by route" : operation.page };
 
     GALLERY_KEPT_PAGES.push(kept);
@@ -2827,10 +2803,8 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
     return { ok: true, value: kept };
   },
   listPendingConsents: galleryConsents,
-  decideDeferredApprovals: galleryDecideDeferred,
+  decideDeferredApprovals: (...args) => galleryDecideDeferred(args),
   inspectWork: galleryOwedWork,
-  // The seed is the whole conversation, so the storage walk is exhausted at once.
-  getChatHistoryPage: () => ({ status: "end", items: [] }),
   listFileCheckpoints: () => REVERT_LISTING,
   planFileRestore: () => ({
     dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id,
@@ -2839,31 +2813,22 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   restoreFileCheckpoint: () => ({
     dir: REVERT_CHECKPOINT.dir, id: REVERT_CHECKPOINT.id, files: [], preRestoreId: "5afe70",
   }),
-}));
+};
 
-/** Wrapped so `null` stays free to mean "not mine" while the answer itself may be anything serialisable. */
-type GalleryAnswer = { readonly value: unknown } | null;
-
-function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
-  if (method === "inspectSubordinate") {
-    return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
-  }
-
-  if (method === "dismissPlanReview") {
+/** The plan under review as the workspace answers its reads and decisions; each decision recorded on the page. */
+const PLAN_ANSWERS: WorkspaceAnswers = {
+  inspectSubordinate: (request) => galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, request), [galleryAgentPlan]),
+  dismissPlanReview: () => {
     document.documentElement.dataset.galleryPlanDismissed = "1";
     galleryAgentPlan = { ...galleryAgentPlan, status: "dismissed", updatedAt: Date.now() };
 
-    return { value: { ok: true, plan: galleryAgentPlan } };
-  }
+    return { ok: true, plan: galleryAgentPlan };
+  },
+  decidePlanReview: (_id, _revision, decision, feedback) => galleryPlanDecided(decision, feedback),
+};
 
-  if (method !== "decidePlanReview") return null;
-
-  const [, , decision, feedback] = v.parse(
-    v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
-    args,
-  );
-
-  // What the store sends the agent: the revision's own comments, rendered by the review.
+/** What the store sends the agent on a decision: the revision's own comments, rendered by the review. */
+function galleryPlanDecided(decision: PlanReviewDecision, feedback: string | undefined): WorkspaceAnswer<"decidePlanReview"> {
   const sent = decision === "request_changes" ? [reviewFeedbackText(galleryAgentPlan.annotations), feedback ?? ""].filter(Boolean).join("\n\n") : feedback ?? "";
 
   document.documentElement.dataset.galleryPlanFeedback = sent;
@@ -2875,7 +2840,7 @@ function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
     updatedAt: Date.now(),
   };
 
-  return { value: { ok: true, plan: galleryAgentPlan, queued: true } };
+  return { ok: true, plan: galleryAgentPlan, queued: true };
 }
 
 /** Named as the workspace names an owner's chat: from its opening words, else its role, numbered past every name had. */
@@ -2883,25 +2848,33 @@ function galleryChatName(opening: string | null): string {
   return mintAgentName({ brief: opening, role: "task" }, () => (name) => GALLERY_SUBS.some((sub) => sub.name === name));
 }
 
-function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
-  if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
+/** A model or effort pick, recorded so a gate can read which actor it wrote. */
+function noteModelCall(method: "setModel" | "setReasoningEffort", args: readonly unknown[]): void {
+  const root = document.documentElement;
+  const calls: unknown[] = JSON.parse(root.dataset.galleryModelCalls ?? "[]");
 
-  // Recorded so a gate can read which actor a pick wrote.
-  if (method === "setModel" || method === "setReasoningEffort") {
-    const root = document.documentElement;
-    const calls: unknown[] = JSON.parse(root.dataset.galleryModelCalls ?? "[]");
+  calls.push({ method, args });
+  root.dataset.galleryModelCalls = JSON.stringify(calls);
+}
 
-    calls.push({ method, args });
-    root.dataset.galleryModelCalls = JSON.stringify(calls);
+/** The workspace's subordinate roster as the real page moves it: made, renamed, dismissed and read. */
+const ROSTER_ANSWERS: WorkspaceAnswers = {
+  listSubordinates: () => [...GALLERY_SUBS],
+  setModel: (...args) => {
+    noteModelCall("setModel", args);
 
-    return { value: method === "setModel" ? { ok: true, spec: args?.[0] } : { ok: true, effort: args?.[0] ?? null } };
-  }
+    return { ok: true, spec: args[0] };
+  },
+  setReasoningEffort: (...args) => {
+    noteModelCall("setReasoningEffort", args);
 
-  if (method === "createSubordinateAgent") {
+    return { ok: true, effort: args[0] };
+  },
+  createSubordinateAgent: (opening) => {
     maybeRefuseCreate();
-    const name = galleryChatName(v.is(v.string(), args?.[0]) ? args[0] : null);
+    const name = galleryChatName(opening ?? null);
 
-    const entry = {
+    const entry: SubordinateView & { actorId: string } = {
       name, actorId: galleryActorId(name), displayName: codenameFor(name), role: "agent", nameOrigin: "auto", origin: "user", lifetime: "durable",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
@@ -2917,11 +2890,9 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       updatedAt: NOW,
     };
 
-    return { value: { name, displayName: "", subordinate: entry } };
-  }
-
-  if (method === "renameSubordinateAgent") {
-    const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
+    return { name, displayName: "", subordinate: entry };
+  },
+  renameSubordinateAgent: (name, displayName) => {
     const entry = GALLERY_SUBS.find((sub) => sub.name === name);
 
     if (RENAME_FAILS) throw new Error("Connection closed");
@@ -2930,29 +2901,23 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     entry.displayName = displayName;
     rosterMoved();
 
-    return { value: { ok: true, name, displayName, subordinate: { ...entry } } };
-  }
-
-  if (method === "dismissSubordinate") {
-    const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
+    return { ok: true, name, displayName, subordinate: { ...entry } };
+  },
+  dismissSubordinate: (name, keepHistory) => {
     const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
 
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
     rosterMoved();
 
-    return { value: { ok: true, name, historyKept: keepHistory ?? true } };
-  }
-
-  if (method !== "getActorSnapshot") return null;
-
+    return { ok: true, name, historyKept: keepHistory ?? true };
+  },
   // Answered by the root; the header renders the roster title, never `mission`.
-  const [name] = v.parse(v.tuple([v.string()]), args);
-  const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
-  // A fixture's agent (the binding auditor) is answered as itself, so its pane is its own actor's.
-  const actor = latest?.name ?? name;
+  getActorSnapshot: (name) => {
+    const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
+    // A fixture's agent (the binding auditor) is answered as itself, so its pane is its own actor's; no name is the workspace's own.
+    const actor = latest?.name ?? name ?? WORKSPACE_PAGE_NAME;
 
-  return {
-    value: {
+    return {
       name: actor,
       actorId: galleryActorId(actor),
       displayName: latest?.displayName ?? "",
@@ -2963,9 +2928,9 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       activePlan: galleryAgentPlan,
       messageCount: 0,
       pendingSteers: [],
-    } satisfies ActorSnapshot,
-  };
-}
+    };
+  },
+};
 
 new MutationObserver(() => {
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getExposedPorts"] }));
@@ -3032,7 +2997,7 @@ function galleryReadFault(flag: string | undefined, message = "Network connectio
   if (flag === "1") throw new Error(message);
 }
 
-async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
+async function galleryHistoryPage(args?: unknown[]): Promise<ChatHistoryPage> {
   const request = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema), limit: v.number() })]), args);
   const { cursor, limit } = request[0];
   const asks = document.documentElement.dataset;
@@ -3122,14 +3087,12 @@ function rosterMoved(): void {
   queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
 }
 
-async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
+async function galleryRevert(args?: unknown[]): Promise<void> {
   // The choice the dialog sent: a chat-only rewind tells the agent what its turns left on the computer.
   const chosen = v.safeParse(v.object({ chatOnly: v.boolean() }), args?.[1]);
 
   document.documentElement.dataset.galleryRevertChatOnly = chosen.success ? String(chosen.output.chatOnly) : "unsaid";
   galleryRevertConversation(v.parse(v.string(), args?.[0]));
-
-  return null;
 }
 
 /** The first `name` event whose detail parses as `schema` and is `mine`. */
@@ -3222,7 +3185,7 @@ window.addEventListener("gallery:arrive-ask", () => {
 const ASKS_HELD = new URLSearchParams(location.search).get("asksHold") === "1";
 
 /** The workspace queue as `&asks=` sets it, less what the stack has decided. */
-async function galleryPendingActions(): Promise<JsonValue> {
+async function galleryPendingActions(): Promise<PendingAction[]> {
   const asked = new URLSearchParams(location.search).get("asks");
   const decided = (document.documentElement.dataset.galleryDecided ?? "").split(",");
   const arrived = document.documentElement.dataset.galleryArrived === "1" ? LATE_ASKS : [];
@@ -3235,7 +3198,7 @@ async function galleryPendingActions(): Promise<JsonValue> {
     await released.promise;
   }
 
-  return v.parse(JsonValueSchema, asks.filter((action) => !decided.includes(action.id)));
+  return asks.filter((action) => !decided.includes(action.id));
 }
 
 const DecisionsSchema = v.array(v.tuple([v.string(), v.string()]));
@@ -3244,7 +3207,7 @@ const DecisionsSchema = v.array(v.tuple([v.string(), v.string()]));
  * Each decision as the agent is sent it, in order (`data-gallery-decisions`); the queue then moves, as the store's write
  * moves it. `&decide=refused`: the first decision is refused, as a store that could not record it answers.
  */
-function galleryDecideDeferred(args?: unknown[]): JsonValue {
+function galleryDecideDeferred(args?: unknown[]): WorkspaceAnswer<"decideDeferredApprovals"> {
   const [ids, decision] = v.parse(v.tuple([v.array(v.string()), v.string()]), args);
   const root = document.documentElement.dataset;
 
@@ -3268,9 +3231,9 @@ function galleryDecideDeferred(args?: unknown[]): JsonValue {
   return { decided: ids };
 }
 
-const TWO_CONSENTS = [
-  { consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1, command: "git push origin main" },
-  { consentId: "c-2", deviceLabel: "laptop", method: "exec", createdAt: 2, command: "bun run deploy" },
+const TWO_CONSENTS: PendingDeviceConsent[] = [
+  { consentId: "c-1", deviceId: "dev-studio", deviceLabel: "studio", method: "exec", createdAt: 1, command: "git push origin main" },
+  { consentId: "c-2", deviceId: "dev-laptop", deviceLabel: "laptop", method: "exec", createdAt: 2, command: "bun run deploy" },
 ];
 
 /**
@@ -3278,7 +3241,7 @@ const TWO_CONSENTS = [
  * would show a reader a different command. `&consent=two`: two devices' commands, each resolution held until
  * `gallery:consent-settle` `{ id, failed? }`, and a resolved one no longer listed.
  */
-function galleryConsents(): JsonValue {
+function galleryConsents(): PendingDeviceConsent[] {
   const asked = new URLSearchParams(location.search).get("consent");
   const root = document.documentElement.dataset;
   const resolved = (root.galleryConsentsResolved ?? "").split(",");
@@ -3289,16 +3252,16 @@ function galleryConsents(): JsonValue {
 
   if (asked !== "waiting" && asked !== "spoofed") return [];
 
-  return [{ consentId: "c-1", deviceLabel: "studio", method: "exec", createdAt: 1,
+  return [{ consentId: "c-1", deviceId: "dev-studio", deviceLabel: "studio", method: "exec", createdAt: 1,
     command: asked === "spoofed" ? "rm -rf ./build \u202E\u2066gpj.x\u200B" : "git push origin main" }];
 }
 
 const ConsentSettleSchema = v.object({ id: v.string(), failed: v.optional(v.string()) });
 
-async function galleryResolveConsent(args?: unknown[]): Promise<JsonValue> {
+async function galleryResolveConsent(args?: unknown[]): Promise<{ ok: boolean }> {
   const [id] = v.parse(v.tuple([v.string(), v.string()]), args);
 
-  if (new URLSearchParams(location.search).get("consent") !== "two") return {};
+  if (new URLSearchParams(location.search).get("consent") !== "two") return { ok: true };
 
   const settled = await galleryEvent("gallery:consent-settle", ConsentSettleSchema, (asked) => asked.id === id);
 
@@ -3307,15 +3270,16 @@ async function galleryResolveConsent(args?: unknown[]): Promise<JsonValue> {
 
   root.galleryConsentsResolved = `${root.galleryConsentsResolved ?? ""},${id}`;
 
-  return {};
+  return { ok: true };
 }
 
 const JobsAnswerSchema = v.object({ at: v.number(), label: v.optional(v.string()), failed: v.optional(v.string()) });
 
-function heldJob(at: number, label: string | undefined): JsonValue {
+function heldJob(at: number, label: string | undefined): WorkspaceAnswer<"listBackgroundJobs"> {
   return [{
     id: `bgjob-held-${String(at)}`, kind: "shell", label: label ?? null, workMode: "build", status: "running",
-    result: null, error: null, createdAt: NOW - 60e3, settledAt: null,
+    result: null, error: null, createdAt: NOW - 60e3, attemptStartedAt: NOW - 60e3, settledAt: null,
+    epoch: 0, retriedBy: null, resumeAfter: null, serves: null,
   }];
 }
 
@@ -3324,7 +3288,7 @@ function heldJob(at: number, label: string | undefined): JsonValue {
  * `gallery:jobs-answer` `{ at, label?, failed? }`, `at` counting held reads from 0, and answers one running job named
  * `label` or fails with `failed`. Otherwise there are none.
  */
-async function galleryJobsRead(): Promise<JsonValue> {
+async function galleryJobsRead(): Promise<WorkspaceAnswer<"listBackgroundJobs">> {
   if (new URLSearchParams(location.search).get("jobs") !== "held") return [];
   const root = document.documentElement.dataset;
 
@@ -3344,7 +3308,7 @@ async function galleryJobsRead(): Promise<JsonValue> {
  * The plan decision, as `&decision=` asks: `held` until `gallery:decision-answer`, or `fail-first` failing the first
  * attempt. `data-gallery-decisions` counts the decisions sent.
  */
-async function galleryDecidePlan(args?: unknown[]): Promise<JsonValue> {
+async function galleryDecidePlan(args?: unknown[]): Promise<WorkspaceAnswer<"decidePlanReview">> {
   const root = document.documentElement.dataset;
   const sent = Number(root.galleryDecisions ?? "0") + 1;
   const asked = new URLSearchParams(location.search).get("decision");
@@ -3355,27 +3319,25 @@ async function galleryDecidePlan(args?: unknown[]): Promise<JsonValue> {
 
   if (asked === "fail-first" && sent === 1) throw new Error("review-fixture-rpc-failed");
 
-  if (asked === "owed") {
-    const [target] = v.parse(v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"])]), args);
+  const [target, , decision, feedback] = v.parse(v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]), args);
 
-    return galleryOweIntent({ id: "owed-decision", kind: "decision", target, actor: null });
-  }
-
-  return v.parse(JsonValueSchema, galleryPlanRpc("decidePlanReview", args)?.value ?? null);
+  return asked === "owed" ? galleryOweIntent({ id: "owed-decision", kind: "decision", target, actor: null }) : galleryPlanDecided(decision, feedback);
 }
 
-async function galleryAnswerQuestions(args?: unknown[]): Promise<JsonValue> {
+async function galleryAnswerQuestions(args?: unknown[]): Promise<OwedIntent | null> {
   const [target, answers, actor] = v.parse(v.tuple([v.string(), OwnerAnswersSchema, v.optional(v.nullable(v.string()))]), args);
 
   if (new URLSearchParams(location.search).get("answer") === "owed") {
     return galleryOweIntent({ id: "owed-answers", kind: "answers", target, actor: actor ?? null });
   }
 
-  return galleryCloseQuestions("answered", answers);
+  galleryCloseQuestions("answered", answers);
+
+  return null;
 }
 
 /** Settles a stranded turn as the server does: the claim frame says so, and `data-gallery-recoveries` counts the asks. */
-async function galleryRecoverTurn(): Promise<JsonValue> {
+async function galleryRecoverTurn(): Promise<WorkspaceAnswer<"recoverStrandedTurn">> {
   const root = document.documentElement.dataset;
 
   root.galleryRecoveries = String(Number(root.galleryRecoveries ?? "0") + 1);
@@ -3383,7 +3345,8 @@ async function galleryRecoverTurn(): Promise<JsonValue> {
   // The settling write names the reads it moves, as the server's statement does.
   galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: readsWrittenBy("UPDATE actor_turn_claims SET outcome = ?") }));
 
-  return null;
+  // The stranded claim is sealed, its outcome unknown, as the server settles one nobody is executing.
+  return { recovered: "sealed" };
 }
 
 const OWED_CLAIM = {
@@ -3397,11 +3360,11 @@ const OWED_TURNS = [{ claim: { ...OWED_CLAIM, turnId: "turn-live", epoch: 1 }, a
 
 /** `&owed=all`'s work read: one turn this activation runs and one it stranded on its third attempt until a recovery
  *  settles it, and effects owed each way, folded by core's own projection as the workspace's read folds its stores. */
-function galleryOwedWork(): JsonValue {
+function galleryOwedWork(): readonly InspectedWork[] {
   if (new URLSearchParams(location.search).get("owed") !== "all") return [];
   const recovered = document.documentElement.dataset.galleryRecoveries !== undefined;
 
-  return v.parse(JsonValueSchema, inspectWork({
+  return inspectWork({
     claims: OWED_TURNS.filter(({ claim }) => !recovered || claim.turnId !== "turn-stranded").map((owed) => ({ ...owed, actor: null })),
     agentTurns: [],
     executing: new Set(["turn-live"]),
@@ -3415,61 +3378,59 @@ function galleryOwedWork(): JsonValue {
       },
     ],
     now: NOW,
-  }));
+  });
 }
 
 /** What went to the running turn rather than opening one. */
-async function galleryMidTurnSend(args?: unknown[]): Promise<JsonValue> {
+async function galleryMidTurnSend(args?: unknown[]): Promise<void> {
   const asks = document.documentElement.dataset;
 
   asks.galleryMidTurnSends = `${asks.galleryMidTurnSends ?? ""}${v.parse(v.string(), args?.[0])}\n`;
-
-  return {};
 }
 
 /** Where a send landed: a turn read it, or none did while `data-gallery-handed-back` is set, as when a Stop came first. */
-async function galleryAwaitSend(): Promise<JsonValue> {
+async function galleryAwaitSend(): Promise<WorkspaceAnswer<"awaitSend">> {
   if (document.documentElement.dataset.galleryHandedBack === "1") return { status: "none" };
 
   return { status: "settled", turnId: "gallery-turn", landed: "turn", outcome: "completed" };
 }
 
 /** Stop's cancel, held while `data-gallery-cancel-held` is set, until `gallery:release-cancel`. */
-async function galleryCancelWork(): Promise<JsonValue> {
+async function galleryCancelWork(): Promise<WorkspaceAnswer<"cancelCurrentWork">> {
   if (document.documentElement.dataset.galleryCancelHeld === "1") {
     await new Promise((released) => { window.addEventListener("gallery:release-cancel", released, { once: true }); });
   }
 
-  return {};
+  return { ok: true, abortedTools: 0, deviceCommands: [] };
 }
 
 /** `&clear=refused`: a turn is running, so the server refuses and keeps every message. */
-async function galleryClearConversation(): Promise<JsonValue> {
+async function galleryClearConversation(): Promise<void> {
   if (new URLSearchParams(location.search).get("clear") === "refused") throw new Error(CLEAR_NEEDS_IDLE);
   galleryClearChat("");
-
-  return null;
 }
 
 /** The page's conversation writes, and the reads the gallery answers only after a wait it controls. */
-const ASYNC_PAGE_RPC = new Map<string, (args?: unknown[]) => Promise<JsonValue>>([
-  ...(HISTORY_ROWS > 0 ? [["getChatHistoryPage", galleryHistoryPage] as const] : []),
-  ["savePlanReviewAnnotations", galleryAnnotationSave],
-  ["revertConversation", galleryRevert],
-  ["clearConversation", galleryClearConversation],
-  ["send", galleryMidTurnSend],
-  ["awaitSend", galleryAwaitSend],
-  ["cancelCurrentWork", galleryCancelWork],
-  ["resolveDeviceConsent", galleryResolveConsent],
-  ["listBackgroundJobs", galleryJobsRead],
-  ["listPendingActions", galleryPendingActions],
-  ["listOwnerQuestions", async () => v.parse(JsonValueSchema, galleryQuestions())],
-  ["listOwedIntents", async () => v.parse(JsonValueSchema, galleryOwedIntents())],
-  ["answerOwnerQuestions", galleryAnswerQuestions],
-  ["dismissOwnerQuestions", async () => galleryCloseQuestions("dismissed", null)],
-  ["decidePlanReview", galleryDecidePlan],
-  ["recoverStrandedTurn", galleryRecoverTurn],
-]);
+/** The page's answers that wait on the page: a held read, a release, a decision arriving. */
+const ASYNC_PAGE_ANSWERS: WorkspaceAnswers = {
+  // `&history=N` pages its stored rows; otherwise the seed is the whole conversation, so the walk is exhausted at once.
+  getChatHistoryPage: (...args) => (HISTORY_ROWS > 0 ? galleryHistoryPage(args) : { status: "end", items: [] }),
+  savePlanReviewAnnotations: (...args) => galleryAnnotationSave(args),
+  revertConversation: (...args) => galleryRevert(args),
+  clearConversation: galleryClearConversation,
+  send: (...args) => galleryMidTurnSend(args),
+  awaitSend: galleryAwaitSend,
+  cancelCurrentWork: galleryCancelWork,
+  resolveDeviceConsent: (...args) => galleryResolveConsent(args),
+  listBackgroundJobs: galleryJobsRead,
+  listPendingActions: galleryPendingActions,
+  listOwnerQuestions: galleryQuestions,
+  listOwedIntents: galleryOwedIntents,
+  answerOwnerQuestions: (...args) => galleryAnswerQuestions(args),
+  dismissOwnerQuestions: () => galleryCloseQuestions("dismissed", null),
+  decidePlanReview: (...args) => galleryDecidePlan(args),
+  recoverStrandedTurn: galleryRecoverTurn,
+};
 
 /** The first read as `&terminal=denied`, `&snapshot=failed` or `&snapshot=held` asks for it: never, failing, or on release. */
 async function snapshotGate(): Promise<void> {
@@ -3495,68 +3456,6 @@ async function snapshotGate(): Promise<void> {
   });
 }
 
-const workspacePageRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  const waited = ASYNC_PAGE_RPC.get(method);
-
-  if (waited !== undefined) return rpcResult(await waited(args)).json<T>();
-
-  const plan = galleryPlanRpc(method, args);
-
-  if (plan) return rpcResult(v.parse(JsonValueSchema, plan.value)).json<T>();
-
-  if (new URLSearchParams(location.search).has("workspaceFault")) {
-    const state = document.documentElement.dataset;
-    const reads = ["getExecutorFiles", "getWorkspaceSnapshot", "getMemoryContent"];
-
-    if (reads.includes(method)) galleryReadFault(state.workspaceFault);
-    const revision = state.workspaceRevision ?? "before";
-
-    if (method === "getExecutorFiles") return rpcResult({ path: "/", entries: [
-      { name: `${revision}.txt`, isDir: false, size: 12, mtimeMs: revision === "before" ? 1 : 2 },
-    ] }).json<T>();
-
-    if (method === "listMounts") return rpcResult([]).json<T>();
-
-    // `data-workspace-revision="empty"`: the workspace remembers nothing.
-    const memory = revision === "empty" ? "" : `Memory ${revision}`;
-
-    if (method === "getMemoryContent") return rpcResult(memory).json<T>();
-
-    if (method === "getWorkspaceSnapshot") {
-      const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
-
-      return rpcResult(withChat({ ...snapshot, memoryContent: memory }, { activePlan: v.parse(JsonValueSchema, galleryAgentPlan) })).json<T>();
-    }
-  }
-
-  if (method === "getWorkspaceSnapshot") await snapshotGate();
-
-  const roster = galleryRosterRpc(method, args);
-
-  if (roster) return rpcResult(v.parse(JsonValueSchema, roster.value)).json<T>();
-
-  const listing = method === "getExposedPorts" ? galleryPortListing(v.parse(v.optional(v.string()), args?.[0])) : null;
-
-  if (listing?.kind === "held") return new Promise<T>(() => {});
-
-  if (listing?.kind === "listed") return rpcResult(listing.value).json<T>();
-
-  const page = WORKSPACE_PAGE_RPC.get(method);
-
-  if (page !== undefined) return rpcResult(v.parse(JsonValueSchema, page(args))).json<T>();
-
-  if ((SHELL_COMPUTER || SHELL_PC !== null) && method === "listMounts") return rpcResult(v.parse(JsonValueSchema, SHELL_MACHINES.mounts)).json<T>();
-
-  return agentPageFallback<T>(method, args);
-};
-
-async function agentPageFallback<T>(method: string, args: unknown[] | undefined): Promise<T> {
-  const agent = AGENT_RPC.get(method);
-
-  if (agent !== undefined) return rpcResult(agent).json<T>();
-
-  return wireOf(FORK_ANSWERS)<T>(method, args);
-}
 
 /** A named-preset search. `prove` because its resolved axes are the least guessable from its name. */
 // `lean/Api/Sessions.lean` is invented along with the sessions table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
@@ -4347,6 +4246,79 @@ function stepAtATime(transcript: NodeTranscriptView | null, before: string | und
 const FORK_ANSWERS: WorkspaceAnswers = { ...GALLERY_ANSWERS, ...explorationAnswers() };
 
 const forkRpc = answeringRpc(FORK_ANSWERS);
+
+/**
+ * `&workspaceFault=`: the Files, snapshot and memory reads fail as `data-workspace-fault` says, and answer as
+ * `data-workspace-revision` says once they recover; `empty`, the workspace remembers nothing.
+ */
+function faultedAnswers(): WorkspaceAnswers {
+  const state = document.documentElement.dataset;
+  const revision = () => state.workspaceRevision ?? "before";
+  const memory = () => (revision() === "empty" ? "" : `Memory ${revision()}`);
+
+  return {
+    getExecutorFiles: () => {
+      galleryReadFault(state.workspaceFault);
+
+      return { path: "/", entries: [{ name: `${revision()}.txt`, type: "file", size: 12, mtimeMs: revision() === "before" ? 1 : 2 }] };
+    },
+    listMounts: () => [],
+    getMemoryContent: () => {
+      galleryReadFault(state.workspaceFault);
+
+      return memory();
+    },
+    getWorkspaceSnapshot: () => {
+      galleryReadFault(state.workspaceFault);
+
+      return withChat({ ...OPENING_SNAPSHOT, memoryContent: memory() }, { activePlan: galleryAgentPlan });
+    },
+  };
+}
+
+/** A sandbox's ports as the frame's flags hold them (`galleryPortListing`); any other machine's, as the gallery answers. */
+function exposedPorts(executor: string | undefined): Promise<WorkspaceAnswer<"getExposedPorts">> | WorkspaceAnswer<"getExposedPorts"> {
+  const listing = galleryPortListing(executor);
+
+  if (listing?.kind === "held") return new Promise(() => {});
+
+  return listing?.kind === "listed" ? listing.value : { ports: [] };
+}
+
+/**
+ * The workspace page's answers, each typed as the workspace answers it: the gallery's, the socket's own, the page's
+ * table, its ports, roster and plan, and the reads that wait on the page, each over the one before.
+ */
+function pageAnswers(): WorkspaceAnswers {
+  const shell = SHELL_COMPUTER || SHELL_PC !== null;
+
+  const read: WorkspaceAnswers = {
+  ...FORK_ANSWERS,
+  ...AGENT_ANSWERS,
+  listMounts: () => (shell ? SHELL_MACHINES.mounts : []),
+  ...PAGE_TABLE_ANSWERS,
+  getWorkspaceSnapshot: async () => {
+    await snapshotGate();
+
+    return withChat({ ...OPENING_SNAPSHOT, slates: gallerySlates().slates }, {
+      activePlan: galleryAgentPlan,
+      messageCount: HISTORY_ROWS > 0 ? seededGalleryChatRows() + HISTORY_ROWS : OPENING_SNAPSHOT.chat.messageCount,
+    });
+  },
+  getExposedPorts: exposedPorts,
+  ...ROSTER_ANSWERS,
+  };
+
+  const faulted = new URLSearchParams(location.search).has("workspaceFault") ? { ...read, ...faultedAnswers() } : read;
+
+  return { ...faulted, ...PLAN_ANSWERS, ...ASYNC_PAGE_ANSWERS };
+}
+
+const PAGE_ANSWERS = pageAnswers();
+
+const workspacePageRpc = answeringRpc(PAGE_ANSWERS);
+
+const workspacePageWire = wireOf(PAGE_ANSWERS);
 
 /** The surface focuses `runs[0]`, so each frame puts its subject first, selected by root id rather than index. */
 function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): WorkspaceAnswers {
@@ -5891,7 +5863,7 @@ const workRpc = galleryRpc(WORK_ANSWERS);
 function PlanReviewFrame() {
   return (
     <div data-gallery-plan-review className="p-bg p-text h-screen">
-      <PlanReviewView plan={galleryAgentPlan} rpc={workspaceRpc(workspacePageRpc)} owedIntents={galleryOwedIntents()} />
+      <PlanReviewView plan={galleryAgentPlan} rpc={workspacePageRpc} owedIntents={galleryOwedIntents()} />
     </div>
   );
 }
@@ -6210,11 +6182,11 @@ const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 /** The workspace page's Files: the drive frame's tree, as it is before anything moves. */
 const PAGE_TREE = seedCompositeTree(false);
 
-function workspaceListing(args?: unknown[]): JsonValue {
+function workspaceListing(args?: unknown[]): FilesPage {
   const [, path, { from, hidden }] = v.parse(FILES_REQUEST_ARGS, args ?? []);
   const dir = path === "" ? "/" : path;
 
-  return v.parse(JsonValueSchema, filesPage(dir, shownEntries(PAGE_TREE.get(dir) ?? [], dir, hidden), from));
+  return filesPage(dir, shownEntries(PAGE_TREE.get(dir) ?? [], dir, hidden), from);
 }
 
 const FILES_TEXT = {
@@ -6269,24 +6241,21 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
     { name: "computer", prefix: "computer.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
   ];
 
-  const filesRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    const dirOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
-    const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+  const dirOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
+  const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
-    if (method === "listMounts") return rpcResult(v.parse(JsonValueSchema, mounts)).json<T>();
-
-    if (method === "getExecutorFiles") {
-      const [execName, path, { from, hidden }] = v.parse(FILES_REQUEST_ARGS, args ?? []);
-
+  const filesRpc = galleryRpc({
+    listMounts: () => mounts,
+    getExecutorFiles: (execName, path, request) => {
       noteListing(path);
 
-      if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
+      if (execName !== "workspace") return { error: `Executor "${execName}" has no listing here` };
       const asked = path === "" ? "/" : path;
       // As `read-models/files.ts` mountLanding resolves it; `/pc` lands on itself.
       const dir = asked === PC_MOUNT ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
 
-      if (entries !== undefined) return rpcResult(v.parse(JsonValueSchema, filesPage(dir, shownEntries(entries, dir, hidden), from))).json<T>();
+      if (entries !== undefined) return filesPage(dir, shownEntries(entries, dir, request?.hidden ?? false), request?.from ?? 0);
 
       // In the words of `deviceFiles`' path guard.
       const error = dir.startsWith(PC_MOUNT)
@@ -6295,35 +6264,27 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
           + `consent tier to reach it, list '${dir.slice(PC_MOUNT.length) || "/"}'`
         : `ENOENT: ${dir}`;
 
-      return rpcResult({ error }).json<T>();
-    }
-
-    if (method === "readExecutorFile") {
-      const [, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      return { error };
+    },
+    readExecutorFile: (_executor, path) => {
       const content = contents.get(path);
 
       if (deferPreview && previewReads.current++ === 0) {
         heldPreviewContent.current = content ?? "";
         heldPreview.current = Promise.withResolvers<{ content: string; revision: number }>();
 
-        return heldPreview.current.promise.then((answer) => rpcResult(answer).json<T>());
+        return heldPreview.current.promise;
       }
 
-      return rpcResult(content === undefined
-        ? { error: "binary file — not previewable" }
-        : { content, revision: 1 }).json<T>();
-    }
-
-    if (method === "renameExecutorFile") {
-      const [, from, to] = v.parse(v.tuple([v.string(), v.string(), v.string()]), args ?? []);
+      return content === undefined ? { error: "binary file — not previewable" } : { content, revision: 1 };
+    },
+    renameExecutorFile: (_executor, from, to) => {
       const listing = store.get(dirOf(from)) ?? [];
       const entry = listing.find((e) => e.name === nameOf(from));
 
-      if (!entry) return rpcResult({ error: `no such file or directory: ${from}` }).json<T>();
+      if (!entry) return { error: `no such file or directory: ${from}` };
 
-      if ((store.get(dirOf(to)) ?? []).some((e) => e.name === nameOf(to))) {
-        return rpcResult({ error: `${to} already exists` }).json<T>();
-      }
+      if ((store.get(dirOf(to)) ?? []).some((e) => e.name === nameOf(to))) return { error: `${to} already exists` };
 
       store.set(dirOf(from), sortDirEntries([
         ...listing.filter((e) => e !== entry),
@@ -6345,16 +6306,12 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
       if (content !== undefined) { contents.set(to, content); contents.delete(from); }
 
-      return rpcResult({ ok: true }).json<T>();
-    }
-
-    if (method === "deleteExecutorFile") {
-      const [, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      return { ok: true };
+    },
+    deleteExecutorFile: (_executor, path) => {
       const listing = store.get(dirOf(path)) ?? [];
 
-      if (!listing.some((e) => e.name === nameOf(path))) {
-        return rpcResult({ error: `no such file or directory: ${path}` }).json<T>();
-      }
+      if (!listing.some((e) => e.name === nameOf(path))) return { error: `no such file or directory: ${path}` };
 
       store.set(dirOf(path), listing.filter((e) => e.name !== nameOf(path)));
 
@@ -6365,11 +6322,9 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
 
       contents.delete(path);
 
-      return rpcResult({ ok: true }).json<T>();
-    }
-
-    return stubRpc<T>(method, args);
-  };
+      return { ok: true };
+    },
+  });
 
   // Echoes each command line ending in LF, like a program: the pane must convert it to CR LF and keep a pasted multi-line command as one call.
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
@@ -6414,7 +6369,7 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
           executors={executors} executorOutputs={executorOutputs}
           onExecute={runCommand} lastActiveExecutor="workspace"
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
-          rpc={workspaceRpc(filesRpc)}
+          rpc={filesRpc}
           // The frame's route names it, as the workspace page names its own: a machine connected here is granted to it.
           workspace={DRIVE_WORKSPACE}
         />
@@ -7077,7 +7032,7 @@ function AgentTabFrame() {
     <div className="p-bg min-h-screen flex justify-center">
       <div data-gallery-inspector className="w-[380px] max-w-full min-h-screen border-x p-border p-sidebar px-4 py-5">
         <AgentSurface snapshot={{ status: "ready", value: BRAIN_STATUS }} memory={fresh ? [] : AGENT_TAB_NOTES} memoryContent={fresh ? "" : BRAIN_MEMORY}
-          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={fresh ? workspaceRpc(workspacePageRpc) : evolutionRpc} workspace={WORKSPACE_PAGE_NAME} />
+          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={fresh ? workspacePageRpc : evolutionRpc} workspace={WORKSPACE_PAGE_NAME} />
       </div>
     </div>
   );
@@ -7640,7 +7595,7 @@ function routedPage(entry: string, path: string, page: React.ReactNode, height =
 
 /** Routed: the page builds back-links and breadcrumbs from `agentId`. */
 async function settingsFrame(): Promise<MountedFrame> {
-  serveGalleryRpc(workspacePageRpc);
+  serveGalleryRpc(workspacePageWire);
 
   return routedPage("/workspace/api-worker/settings", "/workspace/:agentId/:view", <WorkspacePage />);
 }
@@ -7777,7 +7732,7 @@ async function workspacePageFrame(): Promise<MountedFrame> {
   // Not a static import: that would fold the home page's chunk into the gallery's, which the setup modal's test holds apart.
   const { default: HomePage } = await import("@/pages/HomePage");
 
-  serveGalleryRpc(workspacePageRpc);
+  serveGalleryRpc(workspacePageWire);
 
   const transcript = new URLSearchParams(location.search).get("transcript");
 
@@ -7804,7 +7759,7 @@ async function workspacePageFrame(): Promise<MountedFrame> {
 
 /** `&agent=<name>` opens on that agent's chat. */
 function workspaceShellFrame(): MountedFrame {
-  serveGalleryRpc(workspacePageRpc);
+  serveGalleryRpc(workspacePageWire);
   const agent = new URLSearchParams(location.search).get("agent");
 
   return {
@@ -7864,24 +7819,33 @@ function SnapshotRaceFrame() {
   </>;
 }
 
-const snapshotRaceRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+/** The reads a snapshot race moves, at the revision `data-snapshot-race-revision` names: the snapshot's own, or `current`. */
+function raceReads() {
   const current = document.documentElement.dataset.snapshotRaceRevision === "current";
-  const memoryContent = current ? "current memory" : "snapshot memory";
-  const executors = current ? [{ name: "current-executor", type: "workspace", cwd: "/workspace" }] : [];
-  const activePlan = current ? v.parse(JsonValueSchema, { ...galleryAgentPlan, id: "current-plan" }) : null;
-  const tabPresence = { work: current, explorations: false };
-  const slates = current ? [{ id: "current-slate", title: "Current slate" }] : [];
-  const seeded = { memoryContent, executors, tabPresence, slates };
 
-  if (method === "getWorkspaceSnapshot") {
-    const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
+  const executors: ExecutorInfo[] = current
+    ? [{ name: "current-executor", kind: "workspace", capabilities: [], available: true, configured: true, active: true, status: "active" }]
+    : [];
+
+  const slates: SlateSummary[] = current ? [{ id: "current-slate", title: "Current slate" }] : [];
+
+  return {
+    memoryContent: current ? "current memory" : "snapshot memory",
+    executors,
+    activePlan: current ? { ...galleryAgentPlan, id: "current-plan" } : null,
+    tabPresence: { work: current, explorations: false },
+    slates,
+  };
+}
+
+/** The page's answers, with the snapshot held until `gallery:release-snapshot` under `data-snapshot-race-hold="1"`. */
+const SNAPSHOT_RACE_ANSWERS: WorkspaceAnswers = {
+  ...PAGE_ANSWERS,
+  getWorkspaceSnapshot: async () => {
+    const { activePlan, ...seeded } = raceReads();
     const held = document.documentElement.dataset.snapshotRaceHold === "1";
     const displayName = held ? "held snapshot" : "initial snapshot";
-
-    const answer = withChat({
-      ...snapshot, ...seeded,
-      status: { ...v.parse(JsonObjectSchema, snapshot.status), displayName },
-    }, { displayName, activePlan });
+    const answer = withChat({ ...OPENING_SNAPSHOT, ...seeded, status: { ...OPENING_SNAPSHOT.status, displayName } }, { displayName, activePlan });
 
     if (held) {
       document.documentElement.dataset.snapshotRaceWaiting = "1";
@@ -7890,18 +7854,13 @@ const snapshotRaceRpc: SocketCall = async <T,>(method: string, args?: unknown[])
       });
     }
 
-    return rpcResult(answer).json<T>();
-  }
-
-  const reads: JsonObject = {
-    getMemoryContent: memoryContent, getExecutors: executors,
-    getActivePlanReview: activePlan, getWorkspaceTabPresence: tabPresence,
-    listSlates: { slates, problems: [] },
-  };
-
-  const value = Object.hasOwn(reads, method) ? reads[method] : undefined;
-
-  return value === undefined ? workspacePageRpc<T>(method, args) : rpcResult(value).json<T>();
+    return answer;
+  },
+  getMemoryContent: () => raceReads().memoryContent,
+  getExecutors: () => raceReads().executors,
+  getActivePlanReview: () => raceReads().activePlan,
+  getWorkspaceTabPresence: () => raceReads().tabPresence,
+  listSlates: () => ({ slates: raceReads().slates, problems: [] }),
 };
 
 let qualityLiveRatings = 0;
@@ -7934,7 +7893,7 @@ function QualityLiveFrame() {
 }
 
 function snapshotRaceFrame(): MountedFrame {
-  serveGalleryRpc(snapshotRaceRpc);
+  serveGalleryRpc(wireOf(SNAPSHOT_RACE_ANSWERS));
 
   return { entries: ["/"], node: <SnapshotRaceFrame /> };
 }
@@ -8041,19 +8000,19 @@ async function mount() {
     }],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
     ["qualitylive", () => {
-      serveGalleryRpc(workspacePageRpc);
+      serveGalleryRpc(workspacePageWire);
 
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
     ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
-    ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageRpc))],
+    ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageWire))],
     ["explore", () => Promise.resolve(exploreFrame("explore"))],
     ["explore-workspace", () => Promise.resolve(exploreFrame("explore-workspace"))],
     ["focus-workspace", () => {
       seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
 
-      return Promise.resolve(focusWorkspaceFrame(workspacePageRpc, WORKSPACE_PAGE_NAME));
+      return Promise.resolve(focusWorkspaceFrame(workspacePageWire, WORKSPACE_PAGE_NAME));
     }],
   ]);
 

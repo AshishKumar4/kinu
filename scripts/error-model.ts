@@ -276,7 +276,7 @@ export const DECLARED = byFile([
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
     ['packages/cf-backend/src/gallery-parts.tsx', ['previewRpc'],
       'a gallery fixture that mirrors the previewSlate RPC answer'],
-    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'storedConfigFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
+    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'storedConfigFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'dismissPlanReview', 'galleryPlanDecided', 'setModel', 'setReasoningEffort', 'renameSubordinateAgent', 'dismissSubordinate', 'galleryCancelWork', 'galleryResolveConsent', 'renameExecutorFile', 'deleteExecutorFile', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
       'gallery fixtures that mirror RPC, HTTP and model-test answers'],
     ['packages/cf-backend/src/hooks/use-workspace-reads.ts', ['dismissSubordinate'],
       'the dismissSubordinate RPC answer as the hook passes it on'],
