@@ -666,6 +666,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     // The rename reply can close the editor before the deferred reads_changed notice refreshes the sidebar.
     await settledAfter(page, renameLedger, 'renameSubordinateAgent', 'listWorkspaceAgents');
     await renameLedger.stop();
+    // The counter is the sidebar's, drawn once its workspaces have arrived, as the return below waits for them too.
+    await until(page, "the sidebar's workspace list", SIDEBAR_LISTED);
     await page.click('[data-agents-counter]');
     await painted(page);
 

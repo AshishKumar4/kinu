@@ -92,6 +92,16 @@ export const CHAT_COMPOSER_LIVE = `[...document.querySelectorAll('#chat textarea
 /** The workspace bar's chats, Main first. */
 export const CHATS = 'nav[aria-label="Chats"]';
 
+/** The workspace bar drawn in its layout. Until the page knows the layout (the workspace's opening read, or the account's
+ *  list of workspaces) the bar is bare, `data-layout="pending"`: no chats, no inspector toggle. A cold load after a reset
+ *  answers those reads after the composer is live, and a press then found no tab (staging rc28, 2026-10-20). */
+const WORKSPACE_BAR_DRAWN = `document.querySelector('[data-workspace-bar]:not([data-layout="pending"])') !== null`;
+
+/** Waits for the bar a person reads before pressing anything on it. */
+export async function barDrawn(page: Page): Promise<void> {
+  await until(page, 'the workspace bar, drawn', WORKSPACE_BAR_DRAWN);
+}
+
 /** The opening every flow gives a chat it starts: the bar's + asks for one, and the scripted model answers it. */
 const NEW_CHAT_OPENING = 'Reply with one word: ready.';
 
@@ -232,6 +242,7 @@ export async function openWorkspacePage(target: FlowTarget, path: string): Promi
   // first paint, so there is never a zero-connection window to wait for.
   await page.goto(`${target.origin}${path}`, { waitUntil: 'load' });
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+  await barDrawn(page);
 
   return page;
 }
@@ -267,6 +278,7 @@ export async function startNewChat(page: Page): Promise<void> {
   const ledger = await frameLedger(page);
 
   try {
+    await barDrawn(page);
     await page.click(`${CHATS} a[aria-label="New chat"]`);
     await until(page, 'the new-chat question', `document.querySelector('[data-new-chat] textarea') !== null`);
     await page.type('[data-new-chat] textarea', NEW_CHAT_OPENING);
@@ -853,6 +865,8 @@ export async function pressUntil(page: Page, input: {
  *  own control first. A column that refuses to open is B8's finding, and
  *  nothing behind it can be measured. */
 export async function openInspector(page: Page): Promise<void> {
+  await barDrawn(page);
+
   const outcome = await pressUntil(page, {
     names: OPEN_NAMES, read: INSPECTOR_WIDTH, box: INSPECTOR_PANEL, reached: (width) => width > INSPECTOR_SHUT_PX,
   });
