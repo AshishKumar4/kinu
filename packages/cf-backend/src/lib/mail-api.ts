@@ -6,7 +6,7 @@ import * as v from "valibot";
 import { settle } from "@kinu.run/core/obs";
 import { request } from "./http";
 
-export const ImportantMailSchema = v.object({
+const ImportantMailSchema = v.object({
   /** Opens `/mail?thread=<id>`. */
   thread: v.string(),
   from: v.object({ name: v.string(), address: v.string() }),
@@ -18,8 +18,6 @@ export const ImportantMailSchema = v.object({
   at: v.number(),
   unread: v.boolean(),
 });
-
-export type ImportantMail = v.InferOutput<typeof ImportantMailSchema>;
 
 const ImportantSchema = v.object({ unread: v.number(), items: v.array(ImportantMailSchema) });
 

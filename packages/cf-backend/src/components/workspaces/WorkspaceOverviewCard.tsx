@@ -53,10 +53,12 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       to={`/workspace/${workspace.name}`}
       className="p-card flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated"
     >
+      {/* Its primary slate's picture; without one, its logo on the same recessed ground as Explore's tiles (`Cover`). */}
       <SlatePicture workspace={workspace.name} slate={pictured} className="block aspect-[16/10] w-full border-b p-border object-cover object-top"
         fallback={(
-          <span className="flex h-14 items-end border-b p-border p-recessed px-4 pb-2">
-            <WorkspaceLogo title={title} logo={workspace.logo} size={32} />
+          // One column on a phone: no row to line up with, so the logo's ground stays short there.
+          <span className="flex aspect-[3/1] w-full items-center justify-center border-b p-border p-recessed sm:aspect-[16/10]">
+            <WorkspaceLogo title={title} logo={workspace.logo} size={36} />
           </span>
         )} />
       <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">

@@ -901,13 +901,13 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ href: a.getAttribute('href'), current: a.getAttribute('aria-current') })));
 
-              // Account settings is reached from the account menu at the head
-              // of the rail, so the nav carries no row of its own for it.
-              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/devices', '/drive', '/gallery', '/plugins', '/workspaces']);
+              // Settings, Mail and Devices are the sidebar footer's: the account
+              // menu, and the icons beside it. The nav carries no row for them.
+              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/drive', '/explore', '/plugins', '/workspaces']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the account
-              // menu at its head, the roster eyebrow above the rows.
+              // menu in its footer, the roster eyebrow above the rows.
               const rail = await home.evaluate(() => document.querySelector('aside')?.innerText ?? '');
               expect(rail).toContain('WORKSPACES');
               expect(rail).toContain('API Worker');
@@ -920,7 +920,7 @@ describe('account panels', () => {
               const rows = await navPaint(home);
               const open = rows.find((row) => row.label === 'Home');
               const hovered = rows.find((row) => row.label === 'Workspaces');
-              const resting = rows.find((row) => row.label === 'Devices');
+              const resting = rows.find((row) => row.label === 'Plugins');
 
               expect(hovered?.background).not.toBe(resting?.background);
               expect(hovered?.background).not.toBe(open?.background);

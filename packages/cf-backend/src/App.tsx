@@ -135,6 +135,8 @@ export default function App() {
         </Route>
         {/* Public discovery: the app's shell signed in, a bar with Sign in signed out (GalleryShell). */}
         <Route element={<GalleryShell />}>
+          {/* Explore opens today's Gallery until the Explore page lands on its own route (feat/explore). */}
+          <Route path={APP_ROUTES.explore} element={<Page label="gallery"><GalleryPage /></Page>} />
           <Route path={APP_ROUTES.gallery} element={<Page label="gallery"><GalleryPage /></Page>} />
           <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
         </Route>
