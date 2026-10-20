@@ -6,7 +6,7 @@
 import { useCallback, useState } from "react";
 import { Button } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretRightIcon, KeyIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
-import { parseDotenv, positionWords } from "@kinu.run/core";
+import { positionWords } from "@kinu.run/core";
 import { Card, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -19,7 +19,7 @@ import {
   deleteSecret, grantSecret, listSecrets, putSecrets, revokeSecretGrant, setSecretDestination, type SecretSummary,
 } from "@/lib/user-api";
 import {
-  AUTHORIZATION, BLANK, hostList, PositionField, rowsReady, secretEntries, SecretRows, withProvider, WorkspaceAdder, WorkspaceChooser,
+  BLANK, hostList, PositionField, rowsReady, secretEntries, SecretRows, takeDotenvLines, WorkspaceAdder, WorkspaceChooser,
   type ChosenWorkspace, type SecretDraft,
 } from "@/components/secrets/SecretRows";
 
@@ -167,13 +167,22 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
 
 type AddMode = "one" | "env";
 
-/** One secret, or every line of a pasted .env, each with its hosts, allowed in the workspaces chosen. */
+/** One secret, or every line of a pasted .env, each with its hosts, allowed in the workspaces chosen. The rows are the
+ *  one copy: the .env box holds only the line still being typed, each finished line taken into them. */
 function AddSecrets({ onSaved }: { onSaved: () => void }) {
   const [mode, setMode] = useState<AddMode>("one");
   const [rows, setRows] = useState<SecretDraft[]>([BLANK]);
-  const [pasted, setPasted] = useState("");
+  const [typing, setTyping] = useState("");
   const [workspaces, setWorkspaces] = useState<ChosenWorkspace[]>([]);
   const { busy, error, run } = useLabelledStep(onSaved);
+
+  const take = (text: string, done: boolean) => {
+    const taken = takeDotenvLines(rows, text, done);
+
+    setRows(taken.rows);
+    setTyping(taken.left);
+  };
+
   const saving = busy !== null;
   const ready = rowsReady(rows);
   const count = secretEntries(rows).length;
@@ -186,21 +195,18 @@ function AddSecrets({ onSaved }: { onSaved: () => void }) {
       event.preventDefault();
       run("save", async () => {
         await putSecrets(secretEntries(rows), workspaces.map(({ workspace }) => workspace));
-        setRows([BLANK]);
-        setPasted("");
+        setRows(mode === "one" ? [BLANK] : []);
+        setTyping("");
       });
     }}>
       <Segmented<AddMode> label="How to add" value={mode}
         segments={[{ id: "one", label: "One secret" }, { id: "env", label: "Paste .env" }]}
-        onChange={(next) => { setMode(next); setRows([BLANK]); setPasted(""); }} />
+        onChange={(next) => { setMode(next); setRows(next === "one" ? [BLANK] : []); setTyping(""); }} />
 
       {mode === "env" && (
-        <textarea {...SECRET_REGION} value={pasted} rows={5} spellCheck={false} aria-label="A .env file"
+        <textarea {...SECRET_REGION} value={typing} rows={5} spellCheck={false} aria-label="A .env file"
           placeholder={"OPENAI_API_KEY=sk-…\nDATABASE_PASSWORD=…"}
-          onChange={(e) => {
-            setPasted(e.target.value);
-            setRows(parseDotenv(e.target.value).map((entry) => withProvider({ name: entry.name, value: entry.value, hosts: "", position: AUTHORIZATION })));
-          }}
+          onChange={(e) => { take(e.target.value, false); }} onBlur={(e) => { take(e.target.value, true); }}
           className={`${inputCls} font-mono`} />
       )}
 
