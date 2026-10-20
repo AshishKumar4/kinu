@@ -147,25 +147,31 @@ function feed(search: URLSearchParams): Response {
   return Response.json({ items: items.slice(0, PAGE_SIZE), next: items.length > PAGE_SIZE ? 1 : null });
 }
 
-/** `/api/explore*` answered from the feed above; anything else goes on. */
+/** A blueprint by id, as the feed lists it. */
+const blueprintOf = (id: string) => ITEMS.flatMap((item) => (item.kind === "workspace" && item.workspace.id === id ? [item.workspace] : []))[0];
+
+/** `/api/explore*` answered from the feed above, and an install answered as made: its body is kept on the page as
+ *  `data-explore-installed` for a test to read. Anything else goes on. */
 function installExploreFixture(): void {
   const next = window.fetch.bind(window);
 
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    const [, , area, kind, id, action] = url.pathname.split("/");
 
     if (url.pathname === "/api/explore") return feed(url.searchParams);
-    const [, , , , id, action] = url.pathname.split("/");
 
-    if (url.pathname.startsWith("/api/explore/workspaces/") && id !== undefined) {
-      const found = ITEMS.find((item) => item.kind === "workspace" && item.workspace.id === id);
+    if (area === "explore" && kind === "workspaces" && id !== undefined) {
+      const found = blueprintOf(decodeURIComponent(id));
 
-      if (found?.kind !== "workspace") return Response.json({ error: "No such workspace blueprint" }, { status: 404 });
+      return found === undefined ? Response.json({ error: "No such workspace blueprint" }, { status: 404 }) : Response.json(pageOf(found));
+    }
 
-      if (action === "install" && request.method === "POST") return Response.json({ workspace: id });
+    if (area === "user" && kind === "blueprints" && id !== undefined && action === "install" && request.method === "POST") {
+      document.documentElement.dataset.exploreInstalled = JSON.stringify({ id: decodeURIComponent(id), body: await request.json() });
 
-      return Response.json(pageOf(found.workspace));
+      return Response.json({ workspace: `${decodeURIComponent(id)}-4f2a` }, { status: 201 });
     }
 
     return next(input, init);
