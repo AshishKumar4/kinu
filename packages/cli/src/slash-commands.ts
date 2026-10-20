@@ -1,7 +1,7 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
 import { fmtUsd, limitLines, MAIN_ACCOUNT, SERVER_COMPACTION_MIN_TOKENS, specWithoutAccount, usageTotal, type CompactOutcome } from '@kinu.run/core';
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type StagedSkillView, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus } from './agent-client';
 import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -58,7 +58,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/models', description: 'List configured model providers', requires: 'localControls', run: modelsCommand },
   { name: '/memory', description: 'Show the agent\'s memory', run: memoryCommand },
   { name: '/changelog', description: 'Review what the agent changed about itself; revert one by number', usage: '/changelog [revert <n>]', run: changelogCommand },
-  { name: '/refine', description: 'Review fixes staged from corrected turns; approve or reject each', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
+  { name: '/refine', description: 'Dreams over rated turns, and what each changed', usage: '/refine [now]', run: refineCommand },
   { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
   { name: '/tree', description: 'Show the swarm search tree', run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
@@ -78,7 +78,6 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
   { name: '/always', description: 'Choose skills that are always active', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
-  { name: '/trials', description: 'Turn live trials of evolved edits on or off for this agent', usage: '/trials [on|off]', run: trialsCommand },
   { name: '/advisor', description: 'Turn the advisor on or off, or set what it reports. On, it adds one model call per turn', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
   { name: '/exit', description: 'Leave the chat', aliases: ['/quit'], run: exitCommand },
   { name: '/cancel', description: 'Close the open overlay', hidden: true, run: cancelCommand },
@@ -115,7 +114,7 @@ function instructionState(row: InstructionSourceRow): string {
   if (row.reason !== undefined) return `not readable: ${row.reason}`;
 
   switch (row.decision) {
-    case 'approved': return 'approved';
+    case 'approved': return row.byDream ? 'added by a dream' : 'approved';
     case 'revoked': return 'refused';
     case 'none': return 'not decided';
   }
@@ -207,10 +206,7 @@ export type SlashOutcome =
 
 const ADVISOR_USAGE = `Usage: /advisor on | off | severity <${ADVISOR_SEVERITIES.join(' | ')}>`;
 
-const REFINE_USAGE =
-  'Usage: /refine | /refine now | /refine show <n> <edit>\n'
-  + `       /refine <${REFINEMENT_DECISIONS.join('|')}> <n> <edit> <digest>\n`
-  + '  n and edit are the indexes /refine prints; digest is what /refine show prints.';
+const REFINE_USAGE = 'Usage: /refine | /refine now';
 
 function helpCommand({ client }: SlashContext): SlashOutcome {
   return { kind: 'text', text: commandHelp(client) };
@@ -390,55 +386,10 @@ async function changelogCommand({ client, rest }: SlashContext): Promise<SlashOu
 }
 
 async function refineCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {
-  const [sub, ...args] = rest.filter((token) => token);
+  const [sub] = rest.filter((token) => token);
 
   if (sub === 'now') {
     return { kind: 'text', text: renderRefinementRequest(await client.requestRefinement()) };
-  }
-
-  if (sub === 'show') {
-    const located = resolveRefinementEdit(await client.refinements(), args[0], args[1]);
-
-    if (!located.ok) return { kind: 'text', text: located.error };
-    const shown = await client.showRefinement(located.id, located.index);
-
-    return {
-      kind: 'text',
-      text: shown.ok ? renderStagedSkill(shown.view, located.requestRef, located.editRef) : shown.error,
-    };
-  }
-
-  const decision = sub === undefined
-    ? undefined
-    : REFINEMENT_DECISIONS.find((candidate) => candidate === sub);
-
-  if (decision !== undefined) {
-    const [requestRef, editRef, token] = args;
-    const located = resolveRefinementEdit(await client.refinements(), requestRef, editRef);
-
-    if (!located.ok) return { kind: 'text', text: located.error };
-
-    if (token === undefined) {
-      return {
-        kind: 'text',
-        text: `Read it first: /refine show ${located.requestRef} ${located.editRef}\n`
-          + `Then repeat the digest it prints: /refine ${decision} ${located.requestRef} ${located.editRef} <digest>\n`,
-      };
-    }
-
-    const result = await client.decideRefinement({
-      requestId: located.id,
-      routeIndex: located.index,
-      expectedDigest: token,
-      decision,
-    });
-
-    return {
-      kind: 'text',
-      text: result.ok
-        ? `${result.detail}\n\n${renderRefinementRequest(result.request)}`
-        : `Could not ${decision}: ${result.error}`,
-    };
   }
 
   if (sub !== undefined) return { kind: 'text', text: REFINE_USAGE };
@@ -801,20 +752,6 @@ async function advisorCommand({ client, rest }: SlashContext): Promise<SlashOutc
   };
 }
 
-async function trialsCommand({ client, rest }: SlashContext): Promise<SlashOutcome> {
-  const [sub, ...extra] = rest.filter((token) => token).map((token) => token.toLowerCase());
-
-  if (extra.length > 0 || (sub !== undefined && sub !== 'on' && sub !== 'off')) return { kind: 'text', text: 'Usage: /trials [on|off]' };
-  const config = sub === undefined ? await client.getEvolutionConfig() : await client.setEvolutionConfig({ liveTrials: sub === 'on' });
-
-  return {
-    kind: 'text',
-    text: config.liveTrials
-      ? 'Live trials: on. A waiting edit runs against the current text on half of this agent\'s cache segments until the ratings decide.'
-      : 'Live trials: off. Edits that pass the pre-live tests wait in the changelog. /trials on runs them.',
-  };
-}
-
 function exitCommand(): SlashOutcome {
   return { kind: 'exit' };
 }
@@ -996,70 +933,11 @@ export function renderTakesText(set: AlternateTakeSet): string {
   return lines.join('\n');
 }
 
-/** Unbounded on purpose: this is the approval surface. */
-function renderStagedSkill(view: StagedSkillView, requestRef: string, editRef: string): string {
-  return [
-    `Staged skill for ${view.target}`,
-    `digest ${view.digest}`,
-    view.intact
-      ? ''
-      : 'WARNING: these bytes are not the ones the refinement recorded. '
-        + 'Re-run the refinement before approving.',
-    '',
-    view.source,
-    '',
-    `Approve:  /refine approve ${requestRef} ${editRef} ${view.digest}`,
-    `Reject:   /refine reject ${requestRef} ${editRef} ${view.digest}`,
-  ].filter((line, index) => line !== '' || index > 2).join('\n');
-}
-
-type LocatedRefinementEdit =
-  | { readonly ok: true; readonly id: string; readonly index: number;
-      readonly requestRef: string; readonly editRef: string }
-  | { readonly ok: false; readonly error: string };
-
-/** By listing index, against a re-fetched listing. */
-function resolveRefinementEdit(
-  view: RefinementListing,
-  requestRef: string | undefined,
-  editRef: string | undefined,
-): LocatedRefinementEdit {
-  const n = Number.parseInt(requestRef ?? '', 10);
-  const edit = Number.parseInt(editRef ?? '', 10);
-
-  if (!Number.isInteger(n) || n < 1 || !Number.isInteger(edit) || edit < 1) {
-    return { ok: false, error: REFINE_USAGE };
-  }
-
-  const request = view.requests[n - 1];
-
-  if (!request) {
-    return { ok: false, error: `No refinement ${n}. /refine lists ${view.requests.length}.` };
-  }
-
-  if (!request.routes[edit - 1]) {
-    return {
-      ok: false,
-      error: `Refinement ${n} has no edit ${edit}. It lists ${request.routes.length}.`,
-    };
-  }
-
-  return {
-    ok: true, id: request.id, index: edit - 1,
-    requestRef: String(n), editRef: String(edit),
-  };
-}
-
 function renderRefinementRoute(route: RefinementRoute, index: number): string {
   const where = route.owner === '' ? 'no owning authority' : route.owner;
 
-  // Offered only while the decision is still the owner's.
-  const decide = route.disposition === 'pending_owner_approval'
-    ? '  ← /refine show to read it, then approve|reject'
-    : '';
-
   return `      ${index + 1}. ${route.kind} → ${route.target || '(none)'} `
-    + `[${route.disposition}] · ${where}${decide}`
+    + `[${route.disposition}] · ${where}`
     + (route.reason === undefined ? '' : `\n         ${route.reason}`);
 }
 

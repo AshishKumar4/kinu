@@ -79,7 +79,6 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
     sessionWindow: store,
     reviewTurn: async () => {},
     onSessionComplete: async () => {},
-    runDueEvolution: async () => {},
     recordRecovery: () => {},
     deferTurnReview: (turn, followup, opts) => store.enqueueReview(turn, followup, opts),
     runDeferredTurnReviews: async () => ({ reviewed: 0, refused: [] }),

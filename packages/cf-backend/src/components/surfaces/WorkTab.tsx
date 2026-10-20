@@ -7,7 +7,7 @@ import { useCallback, useMemo } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
-  SparkleIcon, CaretRightIcon, ShieldWarningIcon,
+  CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, jobPhase, taskTreePhase, timeAgo, type InspectedWork } from "@kinu.run/core";
@@ -30,8 +30,6 @@ const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
 const PENDING_HOME = {
   deferred_action: { surface: null, cta: "answer it in the chat" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent" },
-  // A skill the agent wrote waits in the Agent tab's journal, where it is approved or declined.
-  change_approval: { surface: "Agent", cta: "decide in Agent" },
   // The row is the deep link: it opens the plan's own page.
   plan_review: { surface: null, cta: "open the review" },
 } satisfies Record<PendingActionKind, { surface: SurfaceKind | null; cta: string | null }>;
@@ -39,7 +37,6 @@ const PENDING_HOME = {
 const PENDING_ICON = {
   deferred_action: ShieldWarningIcon,
   scaffold_version: GitBranchIcon,
-  change_approval: SparkleIcon,
   plan_review: NotePencilIcon,
 } satisfies Record<PendingActionKind, typeof ClockIcon>;
 

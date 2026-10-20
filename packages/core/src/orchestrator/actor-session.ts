@@ -124,6 +124,8 @@ export interface ActorExecutionInput {
   /** The store operations `chat.tools` run, which its scaffold's machines run too; null where this session holds no
    *  machine (an agent's isolate, whose programs run on the workspace). */
   readonly stores: ServedStores | null;
+  /** `<artifactId>@<version>` of each promoted text the turn assembled from, recorded once on its admission. */
+  readonly artifactVersions?: readonly string[];
 }
 
 const RequestCacheSchema = v.looseObject({ cache: v.optional(PromptCacheRouteSchema) });
@@ -339,7 +341,7 @@ export class ActorSession {
     return this.lastStep()?.recordedAt ?? null;
   }
 
-  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and a live trial's segment both use. */
+  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and staged evolution both use. */
   promptCacheCold(keptAliveUntil: number | null): boolean {
     const last = this.lastStep();
 
@@ -794,6 +796,7 @@ export class ActorSession {
       program = prepared.program;
       const claim = await this.admitClaim(reserved, program, prepared.selection, input);
       active.claim = claim;
+      this.orchestrator.acc.artifactVersions = input.artifactVersions ?? [];
 
       active.trace = this.options.turns?.().admitted({ turnId: claim.turnId, epoch: claim.epoch }, active.startedAt, (span) => {
         span.setAttribute('kinu.turn.mode', this.mode);

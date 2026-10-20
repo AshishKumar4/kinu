@@ -30,6 +30,9 @@ const FileEditSchema = v.strictObject({
   new_text: described(v.string(), 'The replacement; empty deletes.'),
 });
 
+/** How a whole file's content is given: as text, or as base64 of its bytes, which a file that is not UTF-8 text keeps. */
+const Encoding = v.optional(described(v.picklist(['utf8', 'base64']), 'utf8 (the default) as text; base64, the file\'s bytes exactly, for a file that is not text.'));
+
 /** Interpolated, so the help states the window the executor shows. */
 const READ_WINDOW = `${String(FILE_READ_LINES)} lines or ${String(FILE_READ_MAX_CHARS)} characters, whichever ends first`;
 
@@ -45,14 +48,14 @@ export const FILE = {
   }),
   text: fileOp({
     name: 'text',
-    help: 'A text file whole, as a string, with no line numbers and nothing cut; a later write or edit counts it as read in full. For a program, which holds the value: the file tool reads a window.',
+    help: 'A file whole, as a string, with no line numbers and nothing cut; a later write or edit counts it as read in full. For a program, which holds the value: the file tool reads a window.',
     impact: 'observe',
-    input: v.strictObject({ path: Path }),
+    input: v.strictObject({ path: Path, encoding: Encoding }),
     output: v.string(),
   }),
   edit: fileOp({
     name: 'edit',
-    help: 'Replace text in a file you have read, every edit applied together or none; refused when the file changed since.',
+    help: 'Replace text in a file you have read since the conversation was last compacted, every edit applied together or none; refused when the file changed since.',
     impact: 'mutate',
     input: v.strictObject({ path: Path, edits: described(v.pipe(v.array(FileEditSchema), v.minLength(1)), 'Matched against the file as last read.') }),
     output: v.strictObject({ ...Written, applied: v.array(v.strictObject({ line: v.number(), removedLines: v.number(), addedLines: v.number() })) }),
@@ -61,7 +64,7 @@ export const FILE = {
     name: 'write',
     help: 'Create a file, or replace one you have read whole.',
     impact: 'mutate',
-    input: v.strictObject({ path: Path, content: v.string() }),
+    input: v.strictObject({ path: Path, content: v.string(), encoding: Encoding }),
     output: v.strictObject({ ...Written, bytes: v.number(), action: v.picklist(['created', 'replaced']) }),
   }),
   list: fileOp({

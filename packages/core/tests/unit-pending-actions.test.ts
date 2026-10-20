@@ -13,8 +13,7 @@ import { SLATE_READ_MODELS } from '../src/slates/read-models';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 const EMPTY: PendingActionInputs = {
-  scaffoldVersions: [], deferredActions: [],
-  changeApprovals: { count: 0, latestAt: 0 }, pendingPlans: [],
+  scaffoldVersions: [], deferredActions: [], pendingPlans: [],
 };
 
 function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
@@ -45,20 +44,6 @@ describe('buildPendingActions', () => {
     expect(action.title).toContain('v8');
   });
 
-  test('skills waiting on the owner are ONE row that points at the journal, not N rows', () => {
-    const actions = buildPendingActions({ ...EMPTY, changeApprovals: { count: 3, latestAt: 6000 } });
-
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({ kind: 'change_approval', at: 6000 });
-    expect(actions[0].title).toContain('3');
-  });
-
-  test('one waiting skill is singular', () => {
-    const [action] = buildPendingActions({ ...EMPTY, changeApprovals: { count: 1, latestAt: 1 } });
-
-    expect(action.title).toBe('A skill the agent wrote waits for your approval');
-  });
-
   test('a command an agent parked on the owner is a needs-you row, raised by that agent', () => {
     const [action] = buildPendingActions({ ...EMPTY, deferredActions: [parked({ actor: 'actor-courier' })] });
     expect(action).toEqual({
@@ -85,12 +70,11 @@ describe('buildPendingActions', () => {
     const actions = buildPendingActions({
       scaffoldVersions: [{ version: 8, status: 'pending', rationale: 'r', written_at: 5000 }],
       deferredActions: [parked({ requestedAt: 6000 })],
-      changeApprovals: { count: 2, latestAt: 4000 },
       pendingPlans: [],
     });
 
     expect(actions.map((a) => a.kind)).toEqual([
-      'deferred_action', 'scaffold_version', 'change_approval',
+      'deferred_action', 'scaffold_version',
     ]);
   });
 });
@@ -178,13 +162,11 @@ describe('what the inspector opens for on its own', () => {
     expect(needsTheUser(made)).toBe(false);
 
     const note: PendingAction = {
-      id: 'change-approvals', kind: 'change_approval', title: 'A skill the agent wrote waits for your approval',
+      id: 'scaffold-v8', kind: 'scaffold_version', title: 'Scaffold v8 is waiting to be promoted or rolled back',
       detail: null, at: 1790199280964,
     };
 
-    for (const kind of ['change_approval', 'scaffold_version'] as const) {
-      expect(needsTheUser({ ...nothing, pendingActions: [{ ...note, kind }] })).toBe(false);
-    }
+    expect(needsTheUser({ ...nothing, pendingActions: [note] })).toBe(false);
 
     for (const status of ['changes_requested', 'approved', 'superseded'] as const) {
       expect(needsTheUser({ ...nothing, activePlan: plan(status) })).toBe(false);
@@ -198,8 +180,7 @@ describe('the attention stack the chat shows', () => {
 
   test('is what holds the person and every consent, newest first, from the reads Work shows', () => {
     const asks = ownerAsks({
-      pendingActions: [row('push', 'deferred_action', 30), row('v8', 'scaffold_version', 90), row('plan', 'plan_review', 10),
-        row('skill', 'change_approval', 80)],
+      pendingActions: [row('push', 'deferred_action', 30), row('v8', 'scaffold_version', 90), row('plan', 'plan_review', 10)],
       pendingConsents: [consent('c-1', 40)],
     });
 

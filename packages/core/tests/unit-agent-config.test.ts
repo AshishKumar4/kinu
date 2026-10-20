@@ -179,15 +179,6 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getSleepTimeComputeEnabled()).toBe(true);
   });
 
-  test('liveTrials: defaults OFF; only the owner\'s true turns them on', () => {
-    const c = setup();
-    expect(c.getLiveTrials()).toBe(false);
-    c.setLiveTrials(true);
-    expect(c.getLiveTrials()).toBe(true);
-    c.set(AGENT_CONFIG_KEYS.liveTrials, 'yes');
-    expect(c.getLiveTrials()).toBe(false);
-  });
-
   test('changelogSeenAt: 0 until marked, then sticks', () => {
     const c = setup();
     expect(c.getChangelogSeenAt()).toBe(0);
@@ -247,7 +238,6 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setShellApprovalMode('allow_all'),
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'device' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
-    (c) => c.setLiveTrials(true),
     (c) => c.setHoldsPlans(),
     (c) => c.setHoldsTurns(),
     (c) => c.setHoldsQuestions(),

@@ -266,18 +266,6 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "artifact_trials@packages/core/src/evolution/artifact-schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "trial_id TEXT NOT NULL",
-    "artifact_id TEXT NOT NULL",
-    "version INTEGER NOT NULL",
-    "status TEXT NOT NULL CHECK (status IN (${sqlCheckList(TRIAL_STATUSES)}))",
-    "looks INTEGER NOT NULL DEFAULT 0",
-    "started_at INTEGER NOT NULL",
-    "decided_at INTEGER",
-    "verdict TEXT",
-    "PRIMARY KEY (actor_id, trial_id)"
-  ],
   "artifact_versions@packages/core/src/evolution/artifact-schema.ts": [
     "actor_id TEXT NOT NULL",
     "artifact_id TEXT NOT NULL",
@@ -842,32 +830,6 @@
     "at INTEGER NOT NULL",
     "PRIMARY KEY (kind, workspace, item, email)"
   ],
-  "gepa_candidates@packages/core/src/evolution/gepa/persistence.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "run_id TEXT NOT NULL",
-    "parent_id TEXT",
-    "source TEXT NOT NULL",
-    "scores_json TEXT NOT NULL",
-    "feedback_json TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "iteration INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
-  ],
-  "gepa_runs@packages/core/src/evolution/gepa/persistence.ts": [
-    "actor_id TEXT NOT NULL",
-    "run_id TEXT NOT NULL",
-    "target TEXT NOT NULL",
-    "target_ref TEXT",
-    "started_at INTEGER NOT NULL",
-    "ended_at INTEGER",
-    "status TEXT NOT NULL CHECK (status IN ('running','completed','aborted'))",
-    "stop_reason TEXT",
-    "winner_id TEXT",
-    "metric_calls INTEGER NOT NULL DEFAULT 0",
-    "iterations INTEGER NOT NULL DEFAULT 0",
-    "PRIMARY KEY (actor_id, run_id)"
-  ],
   "github_items@packages/core/src/github/activity.ts": [
     "repo TEXT NOT NULL",
     "number INTEGER NOT NULL",
@@ -974,6 +936,7 @@
     "path TEXT NOT NULL",
     "digest TEXT NOT NULL",
     "decision TEXT NOT NULL CHECK (decision IN ('approved', 'revoked'))",
+    "origin TEXT NOT NULL DEFAULT 'owner' CHECK (origin IN ('owner', 'dream'))",
     "PRIMARY KEY (actor_id, scope, path)"
   ],
   "kinu_agent_identity@packages/core/src/vfs/agent-home.ts": [
@@ -1155,6 +1118,7 @@
     "turn_ids TEXT NOT NULL",
     "debt_key TEXT",
     "proposal TEXT",
+    "review_json TEXT",
     "routes TEXT NOT NULL",
     "detail TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
@@ -1480,14 +1444,6 @@
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "trial_turns@packages/core/src/evolution/artifact-schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "trial_id TEXT NOT NULL",
-    "turn_id TEXT NOT NULL",
-    "segment_id TEXT NOT NULL",
-    "at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, trial_id, turn_id)"
-  ],
   "triggers@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -1530,6 +1486,8 @@
     "answer TEXT NOT NULL",
     "followup TEXT",
     "scaffold_version INTEGER",
+    "artifacts_json TEXT",
+    "rejects TEXT",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],

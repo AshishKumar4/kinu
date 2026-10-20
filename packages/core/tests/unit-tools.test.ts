@@ -4,6 +4,9 @@ import { createFileCodemodeProvider } from '../src/tools/file-operations';
 import { buildToolSurface, type CodemodeSurface } from '../src/tools/builtins';
 import { serveMemory } from '../src/tools/memory-operations';
 import { describe, test, expect } from 'bun:test';
+import { createSandboxExecutor } from '../src/execution/sandbox';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
 import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
@@ -409,6 +412,31 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     await shellTool.execute({ command: 'echo hi' });
     await shellTool.execute({ command: 'echo hi', runtime: 'workspace' });
     expect(escalations.snapshot().escalations).toEqual(before);
+  });
+
+  // rc22 release evals (coding): a computer command's cwd written as the workspace names the computer's files.
+  test("a computer command's cwd written as the workspace names it is refused with the computer's own path, before it runs", async () => {
+    const { rt } = createTestRuntime();
+    const ran: string[] = [];
+    const unreachable = async (): Promise<never> => { throw new Error('the command alone reaches the computer'); };
+
+    const router = new DefaultExecutionRouter();
+
+    router.register(createSandboxExecutor({
+      ...sandboxHandleLifecycle,
+      readFile: unreachable, writeFile: unreachable, listFiles: unreachable, deleteFile: unreachable,
+      exposePort: unreachable, unexposePort: unreachable, getExposedPorts: unreachable,
+      exec: async (command) => {
+        ran.push(command);
+
+        return { stdout: 'ran', stderr: '', exitCode: 0 };
+      },
+    }));
+    const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, executionRouter: router }).shell) };
+
+    await expect(shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' })).rejects
+      .toThrow('cwd "/computer/workspace/true-myth" is the workspace\'s name for computer\'s /workspace/true-myth; on computer it is "/workspace/true-myth"');
+    expect(ran).toEqual([]);
   });
 
   test('gated run commands return an error the MODEL can act on', async () => {

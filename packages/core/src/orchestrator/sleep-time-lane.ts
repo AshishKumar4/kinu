@@ -58,6 +58,8 @@ export interface SleepTimeLaneDeps {
   readonly transactionSync: <T>(write: () => T) => T;
   /** Wakes the actor at `nextWakeAt`. */
   readonly armWake: () => void;
+  /** An idle wake's first work, before its facts: the dream's `idle` trigger. Never rejects. */
+  readonly idle?: () => Promise<void>;
   readonly workspace: string;
   /**
    * The account's memory, where one is wired: the pass reads its facts and proposes to it, never writes it. Cloudflare
@@ -185,6 +187,9 @@ export class SleepTimeLane {
         return false;
       }
 
+      const idle = this.deps.idle;
+
+      if (idle !== undefined) yield* Effect.promise(() => idle());
       yield* this.compute(window);
 
       return true;

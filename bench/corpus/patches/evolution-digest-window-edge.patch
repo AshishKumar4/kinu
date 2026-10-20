@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
-index 4aa6576ce..31049997b 100644
+index 65b18ae..49bcd12 100644
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -740,7 +740,7 @@ export class EvolutionEngine {
+@@ -646,7 +646,7 @@ export class EvolutionEngine {
      }
  
      // Session-end changelog digest over the ledgers; never blocks.
@@ -10,4 +10,4 @@ index 4aa6576ce..31049997b 100644
 +    this.emitChangelogDigest(session.endedAt);
    }
  
-   /**
+   private emitChangelogDigest(since: number): void {

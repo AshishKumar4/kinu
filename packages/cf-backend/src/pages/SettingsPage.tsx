@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, CheckIcon,
-  ShieldIcon, KeyIcon, SparkleIcon,
+  ShieldIcon, KeyIcon,
   DownloadSimpleIcon, EyeIcon, ChatsCircleIcon, TrashIcon,
 } from "@phosphor-icons/react";
 import {
@@ -368,8 +368,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
         <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
 
-        <GepaOptimizationCard rpc={rpc} />
-
         <Card title="Main's conversation" icon={ChatsCircleIcon}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
@@ -458,6 +456,10 @@ const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
   none: "not decided",
 };
 
+function decisionWord(row: InstructionSourceRow): string {
+  return row.byDream ? "added by a dream" : DECISION_WORD[row.decision];
+}
+
 /** Approval binds the exact bytes: any later edit stops matching the digest and drops the file back to reference material. */
 function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -540,7 +542,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
         <div className="space-y-1">
           {rows.map((row) => {
             const opened = open?.path === row.path ? open : null;
-            const state = row.reason === undefined ? DECISION_WORD[row.decision] : `not readable: ${row.reason}`;
+            const state = row.reason === undefined ? decisionWord(row) : `not readable: ${row.reason}`;
             const followed = row.decision === "approved";
             const readWord = opened === null ? "Read" : "Hide";
 
@@ -669,44 +671,6 @@ function WorkspaceBackupCard({
       </FilledButton>
       {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
       {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
-    </Card>
-  );
-}
-
-function GepaOptimizationCard({
-  rpc,
-}: {
-  rpc: WorkspaceRpc;
-}) {
-  const [running, setRunning] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const run = useCallback(() => detach(Effect.gen(function* () {
-    setRunning(true);
-    setMsg('Searching for a better agent loop. This can take a few minutes.');
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const r = yield* Effect.promise(() => rpc('runOptimization', []));
-
-      if (r.kind === 'idle') setMsg('No low-rated turns in the last 14 days to learn from.');
-      else if (r.version !== null) setMsg(`Proposed scaffold v${r.version} (${r.detail}). Promote it in the Agent tab, under How it's changing.`);
-      else setMsg(`No edit passed: ${r.detail}.`);
-    }), showing((chain) => {
-      setMsg(`Optimisation failed: ${chain}`);
-    })), Effect.sync(() => {
-      setRunning(false);
-    }));
-  })), [rpc]);
-
-  return (
-    <Card title="Scaffold self-tuning" icon={SparkleIcon}>
-      <p className="p-meta p-text-3">
-        Searches for a better agent loop, judged against your recent low-rated and satisfied turns without
-        running it, and may propose one for you to promote. Each run makes several model calls. Past runs and what
-        each found are in a workspace's Agent tab, under How it's changing.
-      </p>
-      <FilledButton onClick={run} disabled={running}>{running ? 'Optimising…' : 'Run optimisation'}</FilledButton>
-      {msg && <div className="p-meta p-text-2 mt-1">{msg}</div>}
     </Card>
   );
 }

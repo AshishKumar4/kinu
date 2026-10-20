@@ -34,10 +34,10 @@ it('a workspace whose repair refuses answers every call with one message that sa
   const chat = await probe.chat(workspace);
 
   expect(JSON.parse(chat.connected)).toMatchObject({ reason: 'unavailable', body: expect.stringContaining(REFUSED) });
-  expect(JSON.parse(chat.answered)).toMatchObject({ id: 'refused-send', body: expect.stringContaining('trial_turns.segment_id') });
+  expect(JSON.parse(chat.answered)).toMatchObject({ id: 'refused-send', body: expect.stringContaining('turn_struggles.errors') });
   expect(await probe.wake(workspace)).toBe('returned');
   expect(await probe.exported(workspace)).toContain(REFUSED);
-  expect(await probe.walked(workspace)).toMatchObject({ refused: expect.stringContaining('trial_turns'), agents: [] });
+  expect(await probe.walked(workspace)).toMatchObject({ refused: expect.stringContaining('turn_struggles'), agents: [] });
 });
 
 it('a reshaped table is rebuilt on a Durable Object keeping its rows, its rowids and the rows that refer to it', async () => {

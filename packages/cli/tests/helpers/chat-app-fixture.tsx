@@ -25,7 +25,6 @@ import { endedNearSilence } from '../../../../scripts/row-verdicts';
 
 const EVOLUTION: EvolutionConfigView = {
   learning: true,
-  liveTrials: false,
   advisorEnabled: false,
   advisorMinSeverity: 'concern',
 };
@@ -147,8 +146,6 @@ export function fakeClient(options: FakeClientOptions) {
     describeTools: async () => ({ builtIn: [], crafted: [] }),
     changelog: async () => ({ entries: [], unseenCount: 0 }),
     refinements: async () => ({ requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no unresolved corrections — nothing is owed a refinement' } }),
-    decideRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
-    showRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
     requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
     revertChangelogEntry: async () => ({ ok: false }),
     readMemory: async () => '',

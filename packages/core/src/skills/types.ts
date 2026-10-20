@@ -40,6 +40,8 @@ export type SkillBodyRef =
 /** Header plus body location; admission re-reads one source to derive body, policy, and trust. */
 export interface DiscoveredSkill extends SkillHeader {
   bodyRef: SkillBodyRef;
+  /** A workspace file trusted for the bytes discovery read, owner's or dream's: its index line states its description. */
+  readonly trusted?: true;
 }
 
 /**
@@ -98,7 +100,7 @@ export function skillReference(name: string): string {
   return vfsReference(skillViewPath(name));
 }
 
-/** Index line for a workspace or Drive file: provenance only, no unapproved description. */
+/** Index line for an untrusted workspace or Drive file: provenance only, no unapproved description. */
 export function workspaceSkillIndexLine(name: string, source: SkillSource = 'vfs'): string {
   const origin = source === 'shared' ? 'shared drive skill' : 'workspace skill';
 

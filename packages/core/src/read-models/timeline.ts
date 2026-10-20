@@ -14,7 +14,7 @@ import { boundedInt } from '../utils/bounds';
 
 type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'swarm' | 'scaffold' | 'shadow-eval'
-  | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa'
+  | 'craft' | 'reflection' | 'head-split' | 'head-merge'
   | 'curriculum' | 'trigger' | 'event-ingress' | 'background' | 'error' | 'abort' | 'recovery' | 'other';
 
 export interface TimelineSpan {
@@ -47,8 +47,6 @@ function classifyEvolutionType(type: string): TimelineKind {
   if (type === 'consolidation' || type === 'craft_discovered') return 'craft';
 
   if (type === 'fiber_recovered') return 'recovery';
-
-  if (type.startsWith('gepa')) return 'gepa';
 
   if (type.startsWith('curriculum')) return 'curriculum';
 

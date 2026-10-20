@@ -64,11 +64,19 @@ Where the daemon's screen comes from depends on the system:
 
 - **macOS: a small screen helper the daemon runs, speaking to it over stdio.** It captures with ScreenCaptureKit and
   drives input with `CGEventPost`, and the daemon turns that into RFB as it does on Linux.
-  - It ships as Swift source in the release. `kinu desktop share` compiles it with `swiftc` into
-    `~/.kinu/desktop/kinu-screen`, a path that stays put across daemon updates, so macOS keeps the permissions it gave.
-  - **setup** means there is no `swiftc` (the Command Line Tools: `xcode-select --install`).
-  - **permission** is macOS's own Screen Recording and Accessibility prompts. They attach to the helper, and a rebuilt
-    helper asks again.
+  - It ships as Swift source inside the daemon file (`packages/pc-agent/src/daemon/mac-screen.js`), speaking the Linux
+    helper's protocol (`screen-helper.js`). `kinu desktop share` has the daemon compile it with `xcrun swiftc` into
+    `~/.kinu/desktop/kinu-screen`, a path that stays put across daemon updates, and again only when its source changes.
+  - The daemon maps the viewer's X keysyms to macOS key codes (the ANSI layout), and the helper posts them, with the
+    pointer, button and wheel, as CGEvents: modifiers held while either of their keys is, Caps Lock toggled, click
+    counts for double and triple clicks, and everything the viewer left down let up when it goes. Frames are
+    ScreenCaptureKit's main display at 15 fps, JPEG at 0.7.
+  - **none**: macOS older than ScreenCaptureKit (12.3). **setup**: no `swiftc` (the Command Line Tools:
+    `xcode-select --install`), or never shared. **permission**: macOS's own Screen Recording and Accessibility
+    prompts. macOS applies a grant only to a helper started after it, so the first share usually ends asking for
+    both in System Settings, and the second succeeds.
+  - Which process macOS's prompts name, the helper or the daemon that starts it, is unmeasured: macOS attributes a
+    child's access to its responsible process.
   - Rejected: relaying the system's Screen Sharing. It would make Kinu hold a VNC password for the Mac, and it leaves a
     VNC server listening on TCP 5900. The Mac proof (`packages/pc-agent/scripts/mac-held-proof.sh`) measures what that
     server binds to.
@@ -97,15 +105,21 @@ Where the daemon's screen comes from depends on the system:
 - The daemon keeps named sessions per workspace (`packages/pc-agent/src/daemon/terminals.js`), in `terminals.json`
   beside `device.json`: each one's id, name and the folder its shell opened in. Device protocol 4 also adds `ptyList`,
   `ptyCreate`, `ptyRename` and `ptyClose`, which mirror the computer's session calls. The hub turns them into the same
-  `TerminalSession` rows the strip reads (`listDeviceSessions` and its siblings on the workspace). The daemon reports
-  `open` (a shell runs now) and, on Linux, `running` (the foreground program, from `/proc`). It reads no last command,
-  port or branch.
+  `TerminalSession` rows the strip reads (`listDeviceSessions` and its siblings on the workspace).
+- Each row says what the computer's does (1019-aa), read from the system
+  (`packages/pc-agent/src/daemon/session-facts.js`): `open` (a shell runs now), the folder its shell or foreground
+  program is in, the program in its foreground, the ports a process under it listens on, that folder's branch, and on
+  Linux whether a program waits for an answer (from `/proc`, the computer's test). A Mac reads them with `ps` and
+  `lsof`, and can't tell a waiting program. The last command's exit is never shown: it needs shell integration in the
+  owner's own rc files, which Kinu doesn't edit. A chosen PC with a waiting program reads "Needs input", as the
+  computer does.
 - `ptyOpen` names the session. A pane's upgrade carries a fresh single-use token, never the session's id, so the id
   being known doesn't let anyone attach. One pane at a time: a second pane on an attached session is refused.
 - A pane closing sends `PTY_DETACH`, and the shell keeps running. Its newest 64 KiB of output is kept and shown first
   to the next pane, and its window is set to that pane's. A tunnel drop detaches every session the same way. A daemon
   restart or update ends the shells; each comes back as a fresh shell under its name, in the folder it last opened in,
-  as the computer's do after a restart (D90). The daemon doesn't follow a `cd` after the shell opens.
+  as the computer's do after a restart (D90). The folder a listing finds is kept, so a restart brings the session back
+  where it was last seen, not where it opened.
 - A shell opened under a confinement other than the open's own (the owner flipped the Sandbox switch since) is ended
   and opened again under the new one, never handed back.
 - Keying by the proven workspace, which the hub puts on every frame, keeps a workspace from naming, listing or
@@ -137,7 +151,9 @@ Each has a recommendation, which is the default unless the owner says otherwise.
    vendored client in Chrome. No system's source ships in it, so every PC reports none.
 2. Named PC sessions in the daemon, and the strip reading them (device protocol 4, with the screen: one step from 3).
 3. Linux portal source in the daemon, and `kinu desktop share` (no protocol change).
-4. The macOS helper, and its build and a measured run in the Mac proof.
+4. The macOS helper, and its build and a measured run in the Mac proof. Written and parsed (Swift 6.1's parser, on
+   Linux), never compiled or run: no Mac runs here. Until the Mac proof's screen section passes on a Mac, a Mac
+   reports no screen (`MAC_SCREEN_PROVEN` in `mac-screen.js`).
 
 Each ships in a daemon release, which the hub pushes to every connected PC whose owner left updates on.
 
@@ -156,5 +172,5 @@ Each ships in a daemon release, which the hub pushes to every connected PC whose
 - Not measured:
   - A share on a person's own logged-in desktop, where the daemon runs as a user service.
   - Frame rate and input latency over the tunnel.
-  - All of macOS: the helper's build, its permissions, and what Screen Sharing's listener binds to. Armada has no Mac;
-    the Mac proof measures them on the owner's.
+  - All of macOS: the helper's build, its permissions and which process they name, a served frame, input, and what
+    Screen Sharing's listener binds to. Armada has no Mac; the Mac proof measures them on the owner's.

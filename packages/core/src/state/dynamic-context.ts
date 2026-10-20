@@ -47,7 +47,7 @@ export function dynamicReads(stores: AgentStores, sql: SqlExecutor, actor: Actor
       recentTopK: holds.holdEach(['agent_facts'], (k: number) => stores.facts.recentTopK(k)),
       all: holds.hold(['agent_facts'], () => stores.facts.all()),
     },
-    // recordLesson and corroborateLessonsForTurn.
+    // recordLesson.
     recoveryFindings: holds.hold(['lessons'], () => listRecoveryFindings(sql, actor)),
     toolLessons: (tools) => lessons(tools.join('\n')),
     // BackgroundJobStore's create, settle, fail, cancel, reclaim, deferResume, dismiss and clear.

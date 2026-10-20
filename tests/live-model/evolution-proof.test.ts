@@ -633,18 +633,12 @@ describe('Evolution Proof', () => {
       expect(scores.has(t.name)).toBe(true);
     }
 
-    // Memory itself: the birth record survived the reopen, and carries no
-    // lesson or reflection heading, because this window corroborated none. The
-    // absence is asserted beside the reason for it rather than left to a
-    // character count that cannot tell it from a truncated write.
+    // Memory itself: the birth record survived the reopen.
     const memory = await rt.memory.read('memory/MEMORY.md');
 
     if (!memory) throw new Error('the workspace lost memory/MEMORY.md between birth and this read');
     console.log(`    Memory (${memory.length} chars): ${JSON.stringify(memory.slice(0, 120))}`);
     expect(memory).toContain('# evolution-proof');
-    expect(rt.storage.sql<{ source: string }>`
-      SELECT source FROM lessons WHERE actor_id = ${rt.actor.actorId}
-        AND source IN ('turn_reflection', 'session_reflection')`).toEqual([]);
 
     // Indexing rides an append, so an all-accepted window indexes nothing —
     // reported, and the reason is the line above.

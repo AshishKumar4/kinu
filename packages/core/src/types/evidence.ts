@@ -6,12 +6,6 @@ export const EVIDENCE_BUDGETS = {
   storedAssistantResponse: 16_000,
   storedFollowup: 8_000,
 
-  gepaInstanceInput: 1_600,
-  gepaInstanceEvidence: 3_200,
-  gepaInstanceFeedback: 3_200,
-  /** Head-only truncation, not a window: a rewrite of code with an elided middle has a hole. */
-  gepaParentSource: 16_000,
-
   replayTask: 6_000,
 
   outcomeUserMessage: 4_000,

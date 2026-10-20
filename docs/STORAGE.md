@@ -530,13 +530,11 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Struggles and tool lessons | `turn_struggles`, `tool_lessons` | `core/src/evolution/struggles.ts` |
 | Lessons | `lessons`, `pattern_extractions` | `core/src/evolution/lessons.ts` |
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
-| GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
 | Swarm search | `search_nodes`, `mcts_search_runs` (durable checkpoints) | `core/src/mcts/schemas.ts`, `search-store.ts` |
 | Alternate takes | `alternate_takes` (a settled `/branch` redirect) | `core/src/mcts/takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs), `exploration_objectives` (what each objective measures) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
-| Live trials | `artifact_trials`, `trial_turns` | `core/src/evolution/trials.ts` |
 | Turn lifecycle | `actor_turn_claims` (`preparing` from the claim, `admitted` once bound to its program and context; `withdrawn_through`, the epoch through which a Retry of the turn's answer withdrew its executions' output; the facts it was prepared with and the profile it bound), `agent_sequence` (one sequence an agent, over its chat turns, runs and reports: a claim's epoch is its capability) and the session tables above | `core/src/orchestrator/actor-claims.ts` |
 | Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`; a call that runs more of a turn holds only while it holds that opening), `actor_executions` (each execution an agent opened here, by turn and run, with its newest opening's epoch: a close runs only if it names that execution under that epoch) | `core/src/subordinates/deliveries.ts`, `core/src/subordinates/turn-fence.ts` |
 | Once-only effects | `tool_effect_claims` (a receipt, started until its result is kept, kept where its effect commits and keyed on its run; an agent's isolate keeps none for a call whose effect commits in the workspace, and the workspace prunes a run's receipts as the run settles, a delivered run's as it takes the run's end), `effect_tombstones` | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |

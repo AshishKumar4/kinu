@@ -14,18 +14,17 @@ import { renderFactValue, type FactsStore } from '../memory/facts';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
-import { listGepaRuns } from './gepa/persistence';
-import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
-import { parseTrialVerdict } from './trial-rules';
+import { artifactLabel, artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
+import { revertDreamSkill } from './refinement-skill';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
-  type RefinementDisposition, type RefinementStage,
+  type RefinementDeps, type RefinementDisposition, type RefinementRoute, type RefinementStage, type RefinementTrigger,
 } from './refinement';
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { AgentWorkspaceStore } from '../identity/agent-workspaces';
 
 const ScaffoldRunEventSchema = v.object({
@@ -34,7 +33,7 @@ const ScaffoldRunEventSchema = v.object({
 });
 
 const CHANGELOG_ENTRY_KINDS = [
-  'scaffold', 'fact', 'gepa', 'ratings', 'artifact', 'refinement', 'workspace',
+  'scaffold', 'fact', 'ratings', 'artifact', 'refinement', 'workspace',
 ] as const;
 
 export type ChangelogEntryKind = (typeof CHANGELOG_ENTRY_KINDS)[number];
@@ -44,7 +43,9 @@ export type ChangelogRevertAction =
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] }
   /** `<artifactId>@<version>`; versions are numbered per artifact. */
-  | { type: 'artifact_revert'; target: string };
+  | { type: 'artifact_revert'; target: string }
+  /** `<requestId>#<routeIndex>`: a dream's skill, staged or in effect. */
+  | { type: 'skill_revert'; target: string };
 
 export interface ChangelogEntry {
   /** Derived from the source ledger row; safe for revert-by-id. */
@@ -53,16 +54,11 @@ export interface ChangelogEntry {
   /** Epoch ms; drives ordering and the unseen count. */
   at: number;
   summary: string;
-  /** Evidence numbers: the trial's interval, the judge's counts. */
+  /** Evidence numbers: the judge's counts. */
   evidence: string;
   /** Only when a real revert path exists and the change is still in effect. */
   revert?: ChangelogRevertAction;
   scaffoldVersion?: number;
-  /**
-   * Only on a skill route still `pending_owner_approval`, so decided rows never
-   * offer the action. Surfaces fetch bytes via `showRefinement` and pass back its digest.
-   */
-  decision?: { requestId: string; routeIndex: number };
   /** A run that moved nothing (a refused refinement); excluded by `changesOnly`. */
   noChange?: boolean;
   /** Child rows of an aggregate card. */
@@ -77,6 +73,7 @@ const ChangelogRevertActionSchema: v.GenericSchema<ChangelogRevertAction> = v.va
   v.object({ type: v.literal('fact_forget'), target: v.string() }),
   v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
   v.object({ type: v.literal('artifact_revert'), target: v.string() }),
+  v.object({ type: v.literal('skill_revert'), target: v.string() }),
 ]);
 
 /** A changelog entry as a client reads it over the wire, its aggregate's rows within it. */
@@ -88,7 +85,6 @@ export const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() =
   evidence: v.string(),
   revert: v.optional(ChangelogRevertActionSchema),
   scaffoldVersion: v.optional(v.number()),
-  decision: v.optional(v.object({ requestId: v.string(), routeIndex: v.number() })),
   noChange: v.optional(v.boolean()),
   items: v.optional(v.array(ChangelogEntrySchema)),
   workspace: v.optional(v.string()),
@@ -252,55 +248,40 @@ function factAggregate(
   };
 }
 
-function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  return listGepaRuns(sql, actor, limit)
-    .filter((r) => r.status === 'completed')
-    .map((r) => ({
-      id: `gepa:${r.runId}`,
-      kind: 'gepa' as const,
-      at: r.endedAt ?? r.startedAt,
-      summary: 'Tuned my own instructions',
-      evidence: `GEPA self-optimization pass over ${r.target}` +
-        (r.winnerId ? `: found a better candidate (${r.winnerId})` : ': kept the current') +
-        ` · ${r.iterations} iterations · ${r.metricCalls} metric calls` +
-        (r.stopReason ? ` · ${r.stopReason}` : ''),
-    }));
-}
-
 const ARTIFACT_SUMMARY: Record<ArtifactStatus, string> = {
-  current: 'I reworded my own',
-  candidate: 'I have new wording waiting for a trial of my',
-  trial: 'I am trialling new wording for my',
-  rolled_back: 'I reverted new wording for my',
-  historical: 'I replaced earlier wording for my',
+  current: 'I reworded',
+  staged: 'After the next pause, I will reword',
+  rolled_back: 'I reverted new wording for',
+  historical: 'I replaced earlier wording for',
 };
 
-/** One entry per version: its turns and judge numbers, and once decided, the trial's arms and interval. */
-function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  const verdicts = new Map(sql<{ artifact_id: string; version: number; verdict: string | null }>`
-    SELECT artifact_id, version, verdict FROM artifact_trials WHERE actor_id = ${actor.actorId} AND verdict IS NOT NULL`
-    .map((row) => [`${row.artifact_id}@${String(row.version)}`, row.verdict === null ? null : parseTrialVerdict(row.verdict)]));
+/** What one routed edit changes, as the owner reads it. */
+function routeLabel(route: RefinementRoute): string {
+  switch (route.kind) {
+    case 'fact': return `Remember ${route.target}`;
+    case 'prompt_section':
+    case 'tool_description': return `Reword ${artifactLabel(route.target.replace(/@\d+$/u, ''))}`;
+    case 'skill': return `The ${route.target.split('/').at(-2) ?? route.target} skill`;
+    case 'subagent_spec': return `A spec for ${route.target || 'a subagent'}`;
+  }
+}
 
+/** One entry per version: its turns and judge numbers. */
+function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   return listArtifactVersions(sql, actor).slice(0, limit).map((row) => {
     const key = `${row.artifactId}@${String(row.version)}`;
-    const verdict = verdicts.get(key);
     const judged = row.evidence === null ? '' : ` · ${String(row.evidence.turns.length)} turns (${row.evidence.reason})`;
-
-    const trial = verdict === undefined || verdict === null ? '' : ` · trial ${verdict.decision}: ${verdict.why}, satisfaction `
-      + `${verdict.satisfaction.diff.toFixed(2)} [${verdict.satisfaction.lo.toFixed(2)}, ${verdict.satisfaction.hi.toFixed(2)}] over `
-      + `${String(verdict.segments.candidate)}/${String(verdict.segments.incumbent)} segments, corrected `
-      + `${verdict.corrected.candidate.toFixed(2)} vs ${verdict.corrected.incumbent.toFixed(2)}`;
 
     const entry: ChangelogEntry = {
       id: `artifact:${key}:${row.status}`,
       kind: 'artifact',
       at: row.decidedAt ?? row.writtenAt,
-      summary: `${ARTIFACT_SUMMARY[row.status]} ${row.artifactId}`,
-      evidence: `v${String(row.version)}: ${row.rationale}${judged}${trial}`,
+      summary: `${ARTIFACT_SUMMARY[row.status]} ${artifactLabel(row.artifactId)}`,
+      evidence: `v${String(row.version)}: ${row.rationale}${judged}`,
     };
 
-    // Only a version a turn can still read has something to undo.
-    if (row.status === 'current' || row.status === 'candidate' || row.status === 'trial') entry.revert = { type: 'artifact_revert', target: key };
+    // Only a version a turn reads, or will, has something to undo.
+    if (row.status === 'current' || row.status === 'staged') entry.revert = { type: 'artifact_revert', target: key };
 
     return entry;
   });
@@ -321,23 +302,28 @@ function workspaceEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): 
 const SOURCE_PREVIEW_CHARS = 1_200;
 
 const REFINEMENT_STAGE_PROSE = {
-  requested: 'I have a review of my own recent failures queued',
-  planning: 'I am reviewing my own recent failures',
-  gated: 'I recorded what you told me from my own recent failures',
-  evaluating: 'I am testing a change I proposed to myself',
-  applied: 'I changed how I work, and the trials backed it',
-  rolled_back: 'I proposed a change to how I work and the trials refused it',
-  refused: 'I reviewed my own recent failures and changed nothing',
+  requested: 'A dream is queued',
+  planning: 'I am dreaming over my recent turns',
+  gated: 'A dream is routing what it drafted',
+  evaluating: 'A dream\'s changes take effect after the next pause',
+  applied: 'I dreamt and changed how I work',
+  rolled_back: 'I dreamt, and the change was undone',
+  refused: 'I dreamt and changed nothing',
 } satisfies Record<RefinementStage, string>;
 
 /** The three non-refusals are distinct kinds of "not live yet". */
 const REFINEMENT_DISPOSITION_PROSE = {
   applied: 'in effect now',
-  pending_trials: 'pending held-out trials',
-  pending_owner_approval: 'staged, waiting for your approval',
+  staged: 'takes effect after the next pause',
   refused: 'refused by a gate',
   rejected: 'rejected by you',
 } satisfies Record<RefinementDisposition, string>;
+
+const DREAM_TRIGGER: Record<RefinementTrigger, string> = {
+  explicit: 'you asked for it',
+  cadence: 'five new turns since the last dream',
+  idle: 'the agent was idle',
+};
 
 /**
  * An aggregate card per refinement; children carry the reverts through each
@@ -345,17 +331,15 @@ const REFINEMENT_DISPOSITION_PROSE = {
  */
 function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   return createRefinementStore(sql, actor).list(limit).map((request) => {
-    const trigger = request.trigger === 'explicit'
-      ? 'you asked for it'
-      : 'unresolved low-rated turns accumulated';
+    const trigger = DREAM_TRIGGER[request.trigger];
 
     const turns = `${String(request.turnIds.length)} rated turn${request.turnIds.length === 1 ? '' : 's'}`;
 
     const items: ChangelogEntry[] = request.routes.map((route, index) => {
-      // An excerpt; the full file comes only from `showRefinement`.
+      // An excerpt; a skill in effect is read whole at its path.
       const edit = request.proposal?.edits[index];
 
-      const source = edit?.kind === 'prompt_section' || edit?.kind === 'skill'
+      const source = edit?.kind === 'prompt_section' || edit?.kind === 'tool_description' || edit?.kind === 'skill'
         ? edit.source
         : undefined;
 
@@ -363,8 +347,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
         id: `refinement:${request.id}:${String(index)}`,
         kind: 'refinement',
         at: request.updatedAt,
-        summary: `${route.kind} -> ${route.target || '(no target)'}: `
-          + REFINEMENT_DISPOSITION_PROSE[route.disposition],
+        summary: `${routeLabel(route)}: ${REFINEMENT_DISPOSITION_PROSE[route.disposition]}`,
         evidence: `${route.owner === '' ? 'no owning authority' : `owner ${route.owner}`}`
           + (route.reason === undefined ? '' : ` · ${route.reason}`)
           + (source === undefined
@@ -374,17 +357,16 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
               : source}`),
       };
 
-      // Only while the decision is still owed.
-      if (route.disposition === 'pending_owner_approval' && route.kind === 'skill') {
-        item.decision = { requestId: request.id, routeIndex: index };
-      }
-
       if (route.disposition === 'applied' && route.kind === 'fact') {
         item.revert = { type: 'fact_forget', target: route.target };
       }
 
-      if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
+      if (route.disposition === 'staged' && route.owner === 'artifact_versions') {
         item.revert = { type: 'artifact_revert', target: route.target };
+      }
+
+      if (route.disposition === 'staged' && route.kind === 'skill' && request.stage !== 'rolled_back') {
+        item.revert = { type: 'skill_revert', target: `${request.id}#${String(index)}` };
       }
 
       return item;
@@ -473,7 +455,6 @@ export function buildChangelog(
 
       const entries = [
         ...scaffoldEntries(sql, actor),
-        ...gepaEntries(sql, actor, limit),
         ...artifactEntries(sql, actor, limit),
         ...refinementEntries(sql, actor, limit),
         ...workspaceEntries(sql, actor, limit),
@@ -511,20 +492,12 @@ export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenA
   return listUnseenChangelog(sql, actor, seenAt).length;
 }
 
-/**
- * The changes that wait on the owner: a skill the agent wrote for itself, held until they approve it. Everything else
- * in the journal it did by itself and only records (facts learned, turns rated, a tuning run, a trial's
- * verdict, a refinement applied or refused), so none of it is a request (the owner, 2026-10-16). A pending scaffold
- * is the queue's own row.
- */
-export function awaitingTheOwner(entries: readonly ChangelogEntry[]): ChangelogEntry[] {
-  return entries.flatMap((entry) => [...(entry.decision === undefined ? [] : [entry]), ...awaitingTheOwner(entry.items ?? [])]);
-}
-
 export interface ChangelogRevertContext {
   rt: AgentRuntime;
   facts: FactsStore;
   events: ScaffoldDecisionEvents;
+  /** The trust authority and skills plane a dream's skill lives in; absent, its revert is refused and says so. */
+  skills?: Pick<RefinementDeps, 'approvals' | 'skillsVfs'>;
 }
 
 export interface ChangelogRevertResult {
@@ -555,7 +528,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
     const pending = getPendingScaffold(sql, actor);
 
     if (!pending || pending.version !== version) {
-      return { ok: false, error: `scaffold v${version} is no longer the pending under trial` };
+      return { ok: false, error: `scaffold v${version} is no longer the pending one` };
     }
 
     const result = await applyPromotionDecision(rt, pending, 'rollback', events);
@@ -582,7 +555,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
-/** A candidate or trial is discarded; a promoted version falls back to the one it replaced, or to the bundled text. */
+/** A staged version is discarded; a current one falls back to the one it replaced, or to the bundled text. */
 function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId: string, version: number): ChangelogRevertResult {
   const row = artifactVersion(sql, actor, artifactId, version);
 
@@ -592,13 +565,9 @@ function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId:
     return { ok: false, error: `${artifactId} v${String(version)} is already ${row.status}: nothing to revert` };
   }
 
-  if (row.status === 'trial') {
-    void sql`UPDATE artifact_trials SET status = 'reverted', decided_at = ${Date.now()}
-      WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND version = ${version} AND status = 'running'`;
-  }
-
   revertArtifact(sql, actor, artifactId, version);
   markStoreChanged(sql);
+  diagnostics.event('dream.text_reverted', { change: `${artifactId}@${String(version)}` });
 
   return { ok: true, detail: row.status === 'current' && row.parent === null ? `${artifactId} is back on its built-in wording` : `reverted ${artifactId} v${String(version)}` };
 }
@@ -628,6 +597,18 @@ function changelogRevert(ctx: ChangelogRevertContext, action: ChangelogRevertAct
         if (at <= 0 || !Number.isInteger(version) || version <= 0) return { ok: false, error: `invalid artifact target: ${action.target}` };
 
         return revertArtifactVersion(ctx.rt.storage.sql, ctx.rt.actor, action.target.slice(0, at), version);
+      }
+
+      case 'skill_revert': {
+        const at = action.target.lastIndexOf('#');
+        const routeIndex = Number(action.target.slice(at + 1));
+
+        if (at <= 0 || !Number.isInteger(routeIndex) || routeIndex < 0) return { ok: false, error: `invalid skill target: ${action.target}` };
+
+        if (ctx.skills === undefined) return { ok: false, error: 'this host wires no trust authority, so no skill can be reverted here' };
+        const skills = ctx.skills;
+
+        return yield* Effect.promise(() => revertDreamSkill(ctx.rt, skills, { requestId: action.target.slice(0, at), routeIndex }));
       }
 
       case 'fact_forget': {

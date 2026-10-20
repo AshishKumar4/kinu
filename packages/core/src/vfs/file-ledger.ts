@@ -1,6 +1,7 @@
 import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Per-turn file ledger: read-before-write gating and per-edit outcome counts.
+ * An actor's file ledger: read-before-write gating, and each turn's edit outcome counts. A read counts until the
+ * conversation it is in is compacted (`forgetReads`), across the turns between: a wake that starts a new turn keeps it.
  * A `write` that overwrites needs the whole file read (contiguous prefix coverage); an `edit` needs only part.
  */
 
@@ -93,14 +94,19 @@ export class TurnFileLedger {
   /** Not cleared by `reset()`: a per-turn identity would count an agent's own re-edits as collisions. */
   private readonly author = newWriteAuthor();
 
+  /** A new turn: its edit outcomes are counted afresh; what was read still counts. */
   reset(): void {
-    this.seen.clear();
-    this.seenPaths.clear();
     this.attempts = 0;
     this.applied = 0;
     this.failures.clear();
     this.failedPaths.clear();
     this.recoveredPaths.clear();
+  }
+
+  /** The conversation was compacted: what a read showed may no longer be in view, so no read counts any more. */
+  forgetReads(): void {
+    this.seen.clear();
+    this.seenPaths.clear();
   }
 
   observeWhole(path: string, content: string, revision?: VfsRevision): void {

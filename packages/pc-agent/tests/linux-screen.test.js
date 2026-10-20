@@ -76,7 +76,7 @@ describe("a Linux PC's screen source", () => {
     const kept = JSON.parse(fs.readFileSync(file, 'utf8'));
 
     expect({ shared, changes, kept: { token: kept.token, width: kept.width, height: kept.height }, mode: (fs.statSync(file).mode & 0o777).toString(8) }).toEqual({
-      shared: { ok: true, why: '' }, changes: ['setup', 'permission', 'ready'], kept: { token: 'tok-1', width: 1280, height: 800 }, mode: '600',
+      shared: { ok: true, why: '' }, changes: ['setup', 'setup', 'permission', 'ready'], kept: { token: 'tok-1', width: 1280, height: 800 }, mode: '600',
     });
   });
 
@@ -158,7 +158,7 @@ describe("a Linux PC's screen source", () => {
     await made.reread();
 
     expect({ shared: await sharing, file: fs.existsSync(file), desktop: made.desktop() }).toEqual({
-      shared: { ok: false, why: 'sharing was turned off while the prompt was up' }, file: false, desktop: { state: 'setup', detail: expect.any(String) },
+      shared: { ok: false, why: 'sharing was turned off while the share was asked for' }, file: false, desktop: { state: 'setup', detail: expect.any(String) },
     });
   });
 
@@ -181,6 +181,19 @@ describe("a Linux PC's screen source", () => {
     await expect(made.open({ onFrame: () => {}, onEnd: () => {} })).rejects.toThrow('sharing was not allowed on this PC');
 
     expect({ desktop: made.desktop().state, changes: changes.slice(1) }).toEqual({ desktop: 'setup', changes: ['permission', 'setup'] });
+  });
+
+  test('a frame the helper draws before it says it is ready is the screen\'s first, not dropped', async () => {
+    const home = scratchDir('linux-screen-early');
+    const { made, file } = source({ accepts: 'tok-1', next: 'tok-2', width: 4, height: 2, early: { width: 4, height: 2, jpeg: 'ffd8ffd9' }, frames: [], log: path.join(home, 'helper.log') }, home);
+    const drawn = Promise.withResolvers();
+
+    fs.writeFileSync(file, JSON.stringify({ token: 'tok-1', width: 4, height: 2 }));
+    const screen = await made.open({ onFrame: drawn.resolve, onEnd: () => {} });
+    const frame = await drawn.promise;
+
+    screen.close();
+    expect({ serial: frame.serial, jpeg: frame.jpeg.toString('hex') }).toEqual({ serial: 1, jpeg: 'ffd8ffd9' });
   });
 
   test('a PC never shared opens nothing, and says how to share it', () => {

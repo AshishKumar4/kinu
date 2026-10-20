@@ -24,9 +24,11 @@ const TERMINAL_ALREADY_OPEN = 'that terminal is already open in another tab';
 /** A session as the daemon keeps it (packages/pc-agent/src/daemon/terminals.js): its id, name and folder. */
 const DeviceSessionRecordSchema = v.object({ id: v.string(), name: v.string(), cwd: v.nullable(v.string()) });
 
-/** A session as the daemon lists it: whether a shell runs in it now, and what that shell runs. */
+/** A session as the daemon lists it: the computer's row but for the last command, which needs the owner's shell rc
+ *  (1019-aa). A daemon of before 1019-aa lists no ports, branch or waiting. */
 const DeviceSessionSchema = v.object({
   id: v.string(), name: v.string(), cwd: v.string(), open: v.boolean(), running: v.nullable(v.string()),
+  ports: v.optional(v.array(v.number()), []), branch: v.optional(v.nullable(v.string()), null), needsInput: v.optional(v.boolean(), false),
 });
 
 /** Control round-trip timeout, not the terminal's life; also the default for every other
@@ -170,7 +172,7 @@ export class UserTerminals {
   async listDeviceSessions(caller: UserCaller, agentName: string, deviceId: string): Promise<TerminalSession[]> {
     const listed = await this.sessionCall({ caller, agentName, deviceId, method: DEVICE_METHOD.ptyList, params: [] }, v.array(DeviceSessionSchema));
 
-    return listed.map((session) => ({ ...session, last: null, ports: [], branch: null, needsInput: false }));
+    return listed.map((session) => ({ ...session, last: null }));
   }
 
   async openDeviceSession(caller: UserCaller, agentName: string, deviceId: string, name?: string): Promise<SessionRecord> {

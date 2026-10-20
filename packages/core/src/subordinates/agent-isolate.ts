@@ -2,7 +2,6 @@ import type { AgentFigures } from '../read-models/agent-figures';
 import type { ContextMeasures } from '../events/recorder';
 import type { JSONSchema7, UIMessage } from 'ai';
 import type { CompletedTurn } from '../evolution/types';
-import type { TrialTurn } from '../evolution/trial-rules';
 import type { TurnFacts } from '../orchestrator/turn-facts';
 import type { ContextFill } from '../read-models/context-fill';
 import type { InlineSteer } from '../read-models/transcript';
@@ -101,8 +100,6 @@ export interface PreparedAgentTurn {
   readonly ownerLane: Pick<TurnReach, 'askOwner' | 'submitPlan' | 'replyToComment'>;
   readonly dynamic: DynamicContext;
   readonly reviewsTurns: boolean;
-  /** The live trial's arm the turn runs, when the workspace's own agent runs one; recorded with its completed turn. */
-  readonly trial?: TrialTurn;
   readonly missionLabels?: readonly string[];
   /** What the workspace decided as the turn opened; the agent keeps the first it is told for a turn. */
   readonly facts: TurnFacts;

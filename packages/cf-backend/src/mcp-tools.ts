@@ -111,7 +111,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string, answer: McpAn
   server.registerTool(
     "get_evolution_status",
     {
-      description: "Return what evolution has in flight: the scaffold proposal awaiting the owner, the live trial, and the edits waiting for one.",
+      description: "Return what evolution has in flight: the scaffold proposal awaiting the owner, and the edits staged for the next fresh turn.",
       inputSchema: {},
     },
     async () => answer("get_evolution_status", async () => {

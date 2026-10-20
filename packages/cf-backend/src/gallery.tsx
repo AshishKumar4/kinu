@@ -116,9 +116,9 @@ import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
-  FileCheckpointEntry, FileCheckpointListing, ForkRunParams, GepaRunSummary,
+  FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
-  AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
+  AccountSpend, ChangelogEntry, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { ModelTestResult, UserDevice } from "@/lib/user-api";
 import { ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
@@ -1976,8 +1976,6 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
 
   if (method === "listTriggers") return rpcResult({ triggers: [] }).json<T>();
 
-  if (method === "getGepaRun") return rpcResult({ run: null, candidates: [], pareto: [] }).json<T>();
-
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
 
   return rpcResult({}).json<T>();
@@ -2023,11 +2021,12 @@ function gallerySessions(method: string, args: readonly unknown[]): readonly Ter
   return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
 }
 
-/** The PC's sessions (1014-t) as its daemon keeps them: its shell, and a build running in another. Its daemon reads no
- *  last command, port or branch. */
+/** The PC's sessions (1014-t) as its daemon lists them (1019-aa): its shell, a dev server on a port, and a deploy asking
+ *  a question. Its daemon reads no last command: that needs the owner's shell rc. */
 const GALLERY_DEVICE_SESSIONS: TerminalSession[] = [
-  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: null, needsInput: false },
-  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "cargo", last: null, ports: [], branch: null, needsInput: false },
+  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: "main", needsInput: false },
+  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main", needsInput: false },
+  { id: "pty-deploy", name: "deploy", cwd: "/Users/ashish/work/storefront/infra", open: true, running: "npm", last: null, ports: [], branch: "main", needsInput: true },
 ];
 
 function galleryDeviceSessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
@@ -3085,14 +3084,14 @@ const PLAN_ASKS: PendingAction[] = [{
   planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
 }];
 
-/** `&asks=mixed`: one of each kind that waits on the owner, and a version under trial that waits on nobody. */
+/** `&asks=mixed`: one of each kind that waits on the owner, and a scaffold version that waits on nobody. */
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/routes/webhooks.ts", detail: null, at: NOW - 150_000, write: { path: "src/routes/webhooks.ts" } },
   ...PLAN_ASKS,
   { id: "plan:binding-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit the binding of every route", detail: "Submitted by binding-auditor", at: NOW - 200_000,
     planRef: { owner: "binding-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("binding-auditor") },
-  { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
+  { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is waiting to be promoted or rolled back", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
 /** A change a share of issue-triage made on the owner's access, for Sam, as the queue lists it. */
@@ -4126,57 +4125,13 @@ const QUALITY_WINDOW = {
   rated: 26, thumbs: 6, turns: 35,
 };
 
-/** Typed so the fixtures track `GepaRunSummary`, its stop reasons included. */
-const GEPA_RUNS = [
-  {
-    runId: "gepa_2", target: "scaffold", targetRef: null, startedAt: NOW - 3 * 864e5, endedAt: NOW - 3 * 864e5 + 6e5,
-    status: "completed", stopReason: "no_improvement_possible", winnerId: "cand_2b", iterations: 6, metricCalls: 48,
-  },
-  {
-    runId: "gepa_1", target: "scaffold", targetRef: null, startedAt: NOW - 12 * 864e5, endedAt: NOW - 12 * 864e5 + 9e5,
-    status: "completed", stopReason: "iterations_exhausted", winnerId: "cand_1c", iterations: 4, metricCalls: 32,
-  },
-] satisfies GepaRunSummary[];
-
-const GEPA_DETAIL = {
-  run: GEPA_RUNS[0],
-  candidates: [
-    { id: "cand_2a", parentId: null, aggregateScore: 0.61, scores: { i1: 0.6, i2: 0.55, i3: 0.68 }, createdAt: NOW - 3 * 864e5 },
-    { id: "cand_2b", parentId: "cand_2a", aggregateScore: 0.78, scores: { i1: 0.81, i2: 0.72, i3: 0.81 }, createdAt: NOW - 3 * 864e5 },
-    { id: "cand_2c", parentId: "cand_2a", aggregateScore: 0.44, scores: { i1: 0.4, i2: 0.51, i3: 0.41 }, createdAt: NOW - 3 * 864e5 },
-  ],
-  pareto: [{ candidateId: "cand_2b", instanceId: "i1", score: 0.81 }, { candidateId: "cand_2a", instanceId: "i3", score: 0.68 }],
-};
-
-const GEPA_OLDER_DETAIL = {
-  run: GEPA_RUNS[1],
-  candidates: [
-    { id: "cand_1a", parentId: null, aggregateScore: 0.52, scores: { i1: 0.5, i2: 0.49, i3: 0.57 }, createdAt: NOW - 12 * 864e5 },
-    { id: "cand_1c", parentId: "cand_1a", aggregateScore: 0.66, scores: { i1: 0.7, i2: 0.6, i3: 0.68 }, createdAt: NOW - 12 * 864e5 },
-  ],
-  pareto: [{ candidateId: "cand_1c", instanceId: "i1", score: 0.7 }],
-};
-
 const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
 
   if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
-  if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
-
   // A record: the blanket `[]` reads as a changelog that failed to load.
   if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
-
-  if (method === "getGepaRun") {
-    const [runId] = v.parse(v.tuple([v.string()]), args);
-
-    // `&gepa=held`: the newer run's candidates wait for `gallery:release-gepa`, as a slow read would.
-    if (runId === "gepa_2" && new URLSearchParams(location.search).get("gepa") === "held") {
-      await new Promise((resolve) => { window.addEventListener("gallery:release-gepa", resolve, { once: true }); });
-    }
-
-    return rpcResult(runId === "gepa_2" ? GEPA_DETAIL : GEPA_OLDER_DETAIL).json<T>();
-  }
 
   if (method === "getFacts") return rpcResult([
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
@@ -5685,28 +5640,50 @@ const BACKGROUND_JOBS: BackgroundJob[] = [
   },
 ];
 
+/** The Agent tab's journal: a dream that changed how the agent works, one that changed nothing, and a fact it kept. */
 const CHANGELOG = {
   seenAt: NOW - 30e5,
   unseenCount: 2,
   entries: [
     {
-      id: "cl_1", kind: "scaffold", at: NOW - 10e5, scaffoldVersion: 8, revert: true,
-      summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
-      evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie",
+      id: "refinement:refine-a1:applied", kind: "refinement", at: NOW - 10e5,
+      summary: "I dreamt and changed how I work",
+      evidence: "applied · workspace scope · five new turns since the last dream · reviewed 5 rated turns",
+      items: [
+        {
+          id: "refinement:refine-a1:0", kind: "refinement", at: NOW - 10e5,
+          summary: "Reword the shell tool's description: takes effect after the next pause",
+          evidence: "owner artifact_versions · accepted by the dream's reviewer",
+          revert: { type: "artifact_revert", target: "tool:shell.description@1" },
+        },
+        {
+          id: "refinement:refine-a1:1", kind: "refinement", at: NOW - 10e5,
+          summary: "The release-notes skill: takes effect after the next pause",
+          evidence: "owner instruction_approvals · staged where no prompt reads it",
+          revert: { type: "skill_revert", target: "refine-a1#1" },
+        },
+        {
+          id: "refinement:refine-a1:2", kind: "refinement", at: NOW - 10e5,
+          summary: "Remember user.answer_length: in effect now",
+          evidence: "owner agent_facts · the user's own words: \"keep answers to one line unless I ask\"",
+          revert: { type: "fact_forget", target: "user.answer_length" },
+        },
+      ],
     },
     {
-      id: "cl_3", kind: "fact", at: NOW - 50e5, scaffoldVersion: null, revert: true,
+      id: "fact:computer.staging_db", kind: "fact", at: NOW - 50e5,
       summary: "Remembered: staging still binds the sessions database as DB",
-      evidence: null,
+      evidence: "",
+      revert: { type: "fact_forget", target: "computer.staging_db" },
     },
     {
-      id: "cl_4", kind: "refinement", at: NOW - 6e5, scaffoldVersion: null,
-      summary: "Reviewed my own recent failures and changed nothing",
-      evidence: "refused · workspace scope · reviewed 3 turns",
+      id: "refinement:refine-a0:refused", kind: "refinement", at: NOW - 60e5,
+      summary: "I dreamt and changed nothing",
+      evidence: "refused · workspace scope · the agent was idle · reviewed 3 rated turns",
       noChange: true,
     },
   ],
-};
+} satisfies { seenAt: number; unseenCount: number; entries: ChangelogEntry[] };
 
 /** Without it a waiting decision lights nothing while a running job carries a digit. */
 const PENDING_ACTIONS: PendingAction[] = [
@@ -5737,11 +5714,6 @@ const PENDING_ACTIONS: PendingAction[] = [
     id: "scaffold-v8", kind: "scaffold_version", at: NOW - 10e5,
     title: "Scaffold v8 is waiting to be promoted or rolled back",
     detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
-  },
-  {
-    id: "change-approvals", kind: "change_approval", at: NOW - 10e5,
-    title: "A skill the agent wrote waits for your approval",
-    detail: null,
   },
 ];
 

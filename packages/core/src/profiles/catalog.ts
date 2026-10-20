@@ -8,6 +8,8 @@ import planner from "../prompts/role-planner.md" with { type: 'text' };
 import auditor from "../prompts/role-auditor.md" with { type: 'text' };
 import designer from "../prompts/role-designer.md" with { type: 'text' };
 import advisor from "../prompts/role-advisor.md" with { type: 'text' };
+import dreamer from "../prompts/role-dreamer.md" with { type: 'text' };
+import dreamReviewer from "../prompts/role-dream-reviewer.md" with { type: 'text' };
 import * as v from 'valibot';
 import { definePromptSection } from '../prompting/template';
 
@@ -226,6 +228,23 @@ export const SYSTEM_ROLE_DEFINITIONS = {
     description: 'Reviews one finished turn and says at most one thing about it.',
     instructions: definePromptSection('role/advisor', '', advisor.trimEnd()).render({}),
     tier: MODEL_ROUTE_POLICY.advisor.tier,
+    preset: 'audit',
+    allowedTools: [],
+    spawns: [],
+  },
+  // A dream's two agents (evolution/refinement-lane.ts): the deep tier drafts, the fast tier judges the draft.
+  dreamer: {
+    description: 'Drafts the edits a dream proposes from the turns it reads.',
+    instructions: definePromptSection('role/dreamer', '', dreamer.trimEnd()).render({}),
+    tier: 'deep',
+    preset: 'ideate',
+    spawns: [],
+    plan: true,
+  },
+  dream_reviewer: {
+    description: 'Judges the edits a dream drafted for quality, effectiveness and size.',
+    instructions: definePromptSection('role/dream_reviewer', '', dreamReviewer.trimEnd()).render({}),
+    tier: 'fast',
     preset: 'audit',
     allowedTools: [],
     spawns: [],

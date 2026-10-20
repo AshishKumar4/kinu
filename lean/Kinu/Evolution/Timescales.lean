@@ -1,7 +1,7 @@
 /-
   Kinu.Evolution.Timescales — abstract evolution postconditions.
-  Sources: packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn,
-  #EvolutionEngine.onSessionComplete and #EvolutionEngine.runDueEvolution.
+  Sources: packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn
+  and #EvolutionEngine.onSessionComplete.
   Rollback, memory deletion and failed/vetoed mutations are not actions below;
   monotonicity holds only under the declared transition relation. The budget
   product is an abstract measure, not the production evolution scheduler.

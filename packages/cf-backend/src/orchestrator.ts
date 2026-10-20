@@ -24,7 +24,7 @@ import {
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
-  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifactBodies, withToolText,
+  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
@@ -135,13 +135,12 @@ import {
   type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
-  previewScaffoldLive, runOptimization,
-  decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
-  type RefinementListing, type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult,
+  previewScaffoldLive,
+  activateDreamSkills, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
+  type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
-  type ProposerOutcome, type ScaffoldDecisionResult,
+  type ScaffoldDecisionResult,
   type ScaffoldVersionView, type EvolutionStatus,
   readScaffoldVersion,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
@@ -151,7 +150,6 @@ import {
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, aggregateScore, type GepaRunSummary,
   qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -214,7 +212,7 @@ import {
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
-  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -257,7 +255,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -1666,9 +1664,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const planes = this.turnPlanes(key.actorId, runtime, reach.actor);
     const resolved = await this.surfaceProfile(actor, turn, opened);
 
-    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
-    const artifacts = turnArtifactBodies(runtime.storage.sql, actor.handle, { ...(lane.opening ?? { answerId: '', cacheCold: false }), main: lane.opening !== undefined && reach.actor.kind === 'workspace' });
-    const overrides = artifactOverrides(artifacts.bodies);
+    // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
+    const cold = lane.opening?.cacheCold ?? false;
+    const overrides = artifactOverrides(turnArtifacts(runtime.storage.sql, actor.handle, cold));
+
+    // A dream's skills land in the workspace's skills root, which every turn's index reads, so only this agent's own
+    // cold turn writes them.
+    if (cold && actor.handle.actorId === this.rt.actor.actorId) await activateDreamSkills(this.refinementDeps);
     const reports: SubordinateReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
@@ -1694,7 +1696,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       resolved, tools, stores: built.stores, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
       // `agent` / `llm` are reachable only inside `eval`: derived from the namespaces its programs reach.
       codemodeCapabilities: (asked) => (reach.actor.kind === 'workspace' ? codemodeCapabilitiesFor(this.ownNamespaces(asked)) : []),
-      ...(artifacts.trial !== null && { trial: artifacts.trial }),
     });
 
     // Last, once its surface stands: a turn whose tools could not be described opened nothing.
@@ -3660,6 +3661,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       llm: () => this.rt.fastLlm ?? this.rt.llm,
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
       armWake: () => { this.armDurableWake(); }, workspace: this.name,
+      idle: () => idleDream(this.refinementDeps, this.engine.recordsTurns),
       // Reads the account and proposes to it; the owner accepts what is kept.
       account: () => this.account.ownedMemory({ by: 'background' }),
     });
@@ -4900,12 +4902,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private pendingActions(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): PendingAction[] {
-    const awaiting = getChangesAwaitingTheOwner(this.boundSql, this.rt.actor);
-
     return buildPendingActions({
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
-      changeApprovals: { count: awaiting.length, latestAt: awaiting[0]?.at ?? Date.now() },
       // Each agent's plans are its own isolate's (main's included).
       pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
     });
@@ -4946,7 +4945,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Id-addressed against a fresh digest so a shifted list cannot revert the wrong row. */
   @callable()
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    return await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder }, id);
+    return await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder, skills: this.refinementDeps }, id);
   }
 
   /** Claimed take sets keyed by their turn's assistant message id. */
@@ -5019,7 +5018,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, actor: this.rt.actor, turnPair: (messageId) => this.mainTurnPair(messageId), engine: this.engine, inbox: this.workspaceAgentDeliveries().signals },
+      { sql: this.boundSql, actor: this.rt.actor, turnPair: (messageId) => this.mainTurnPair(messageId), inbox: this.workspaceAgentDeliveries().signals },
       takeId, nodeId);
 
     this.logActivity('take_pick', `${outcome.changedAnswer ? 'alternate' : 'delivered'} (${nodeId})`);
@@ -5197,7 +5196,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         }
       }
 
-      // The thumb wins over the model's rating of this turn and, when down, corroborates provisional lessons.
+      // The thumb wins over the model's rating of this turn.
       yield* Effect.promise(async () => settleLogged('feedback.explicit_apply_failed', { doing: 'recording a thumb in the rating ledger', otherwise: 'io' }, () => this.engine.applyExplicitFeedback(messageId, feedback), { messageId }));
 
       return { ok: true, messageId, feedback, rescored };
@@ -5217,17 +5216,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
-  /** One search of the proposer on `target` (default the scaffold); see `runOptimization` in evolution/control.ts. */
-  @callable()
-  async runOptimization(target?: string): Promise<ProposerOutcome> {
-    return runOptimization(this.scaffoldControl, target);
-  }
-
-  @callable()
-  async getGepaRuns(limit = 20): Promise<GepaRunSummary[]> {
-    return listGepaRuns(this.boundSql, this.actorHandle(), limit);
-  }
-
   /** Satisfaction per day, oldest first, with its interval: the Quality tab's series (evolution/ratings.ts). */
   @callable()
   async getQuality(days = 30): Promise<QualityDay[]> {
@@ -5238,41 +5226,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async getQualityWindow(days = 7): Promise<QualityWindow> {
     return qualityWindow(this.boundSql, this.actorHandle(), { days });
-  }
-
-  /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
-  @callable()
-  getGepaRun(runId: string): Promise<{
-    run: GepaRunSummary | null;
-    candidates: Array<{
-      id: string; parentId: string | null; source: string;
-      scores: Record<string, number>; feedback: Record<string, string>;
-      aggregateScore: number; createdAt: number;
-    }>;
-    pareto: Array<{ candidateId: string; instanceId: string; score: number }>;
-  }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.sync(() => {
-        const run = listGepaRuns(this.boundSql, this.actorHandle(), 200).find((r) => r.runId === runId) ?? null;
-
-        const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
-          id: c.id, parentId: c.parentId, source: c.source,
-          scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
-          aggregateScore: aggregateScore(c), createdAt: c.createdAt,
-        }));
-
-        // The membership table is core's; no raw SELECT across the package boundary.
-        const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
-
-        return { run, candidates, pareto };
-      }), (failed) => Effect.gen({ self: this }, function* () {
-        const error = Cause.squash(failed);
-
-        if (classify({ cause: error }) !== 'sqlite-missing-table') return yield* Effect.failCause(failed);
-
-        return { run: null, candidates: [], pareto: [] };
-      }));
-    }));
   }
 
   /** The store the change-set reads, as the session user whose plane the root actor's is. */
@@ -5896,7 +5849,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
     const reads = {
       getExecutors: () => this.getExecutors(),
-      getGepaRuns: () => this.getGepaRuns(),
       getHeadRuns: () => this.getHeadRuns(),
       getMctsTree: () => this.getMctsTree(),
       getQuality: () => this.getQuality(),
@@ -7264,24 +7216,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       async () => { await refinementPass(this.refinementDeps); }, { workspace: this.name }));
 
     return view;
-  }
-
-  /**
-   * Owner decision on one staged edit; the only path by which a proposed skill becomes trusted.
-   * `interactive` in the RPC gate and absent from model-facing tools, so agent bytes cannot self-authorise.
-   */
-  @callable()
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    return await decideRefinementRoute(this.refinementDeps, input);
-  }
-
-  /**
-   * The whole staged file for one edit plus the digest a decision must quote back.
-   * `interactive`: carries proposed instruction bytes. Never truncated; the modal renders it.
-   */
-  @callable()
-  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return showRefinementRoute(this.refinementDeps, { requestId, routeIndex });
   }
 
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */

@@ -14,12 +14,11 @@ import {
   type JsonObject,
   type JsonValue,
   AlternateTakeSetSchema, BranchTurnResultSchema, ChangelogRevertResultSchema, EvolutionChangelogViewSchema,
-  FileCheckpointListingSchema, PendingDeviceConsentSchema, RefinementDecisionResultSchema, ResolvedDeviceConsentSchema,
+  FileCheckpointListingSchema, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
   EvolutionConfigViewSchema, ProviderAccountsSchema, ReasoningEffortViewSchema, ReasoningEffortWriteSchema, SetModelResultSchema,
   StoredModelSpecSchema,
-  RefinementListingSchema, RefinementRequestViewSchema, StagedSkillResultSchema, TakePickOutcomeSchema,
-  type RefinementDecisionInput, type RefinementDecisionResult, type RefinementRequestView,
-  type StagedSkillResult,
+  RefinementListingSchema, RefinementRequestViewSchema, TakePickOutcomeSchema,
+  type RefinementRequestView,
   type ModelTestResult,
 } from '@kinu.run/core';
 import { attempt, detach, diagnostics, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
@@ -588,25 +587,6 @@ export class CloudAgentClient implements AgentClient {
     ]));
   }
 
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    return v.parse(
-      RefinementDecisionResultSchema,
-      // Spelled out: the RPC argument channel is JSON and a readonly interface is not.
-      await this.callRpc('decideRefinement', [{
-        requestId: input.requestId,
-        routeIndex: input.routeIndex,
-        expectedDigest: input.expectedDigest,
-        decision: input.decision,
-      }]),
-    );
-  }
-
-  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return v.parse(
-      StagedSkillResultSchema,
-      await this.callRpc('showRefinement', [requestId, routeIndex]),
-    );
-  }
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     const input = v.parse(SubordinateInspectionRequestSchema, request);
 
