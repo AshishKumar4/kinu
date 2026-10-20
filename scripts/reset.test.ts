@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { deployedConfig } from './infra-manifest';
-import { LATEST_RESET_KEY, pendingReset, releaseVerdicts, type Reset, ResetSchema, type ResetTarget, type Serving, wipe } from './reset';
+import { LATEST_RESET_KEY, pendingReset, releaseVerdicts, type Reset, ResetSchema, type ResetTarget, type Serving, BuiltClassesSchema, validationBuild, wipe } from './reset';
 
 const config = deployedConfig('staging');
 
@@ -304,5 +304,40 @@ describe('a release plans the tables it changed', () => {
 
     expect(changed).toEqual([{ table: 'old_state', change: 'removed' }]);
     expect(verdicts.map((verdict) => verdict.table)).toEqual(['old_state']);
+  });
+});
+
+// rc28, 2026-10-20: wrangler refuses a version that binds a class its deploy has not provisioned, so the version uploaded
+// before a reset leaves out each class the target does not bind yet, with everything that names it, and nothing else.
+describe('the build the pre-reset validation uploads', () => {
+  const serving: Serving = { versionId: 'v1', bound: new Map([['OrchestratorAgent', 'ns-1'], ['KinuDevbox', 'ns-2']]) };
+  const orchestrator = { name: 'ORCHESTRATOR', class_name: 'OrchestratorAgent' };
+  const mailName = { name: 'MAILNAME', class_name: 'MailNameDO' };
+  const theirs = { name: 'OTHER', class_name: 'TheirDO', script_name: 'another-worker' };
+  const sqlite = { type: 'durable-object', storage: 'sqlite' } as const;
+  const tombstone = { type: 'durable-object', state: 'deleted' } as const;
+  const devboxImage = { class_name: 'KinuDevbox', image: 'devbox' };
+  const mailImage = { class_name: 'MailboxDO', image: 'mail' };
+  const fields = { name: 'kinu-staging', main: 'index.js', vars: { EMAIL_DOMAIN: 'staging.kinu.run' } };
+
+  test("leaves out each class the target does not bind, its binding, export and container, and keeps every other field", () => {
+    const built = v.parse(BuiltClassesSchema, {
+      ...fields, durable_objects: { bindings: [orchestrator, mailName, theirs] }, containers: [devboxImage, mailImage],
+      exports: { OrchestratorAgent: sqlite, KinuDevbox: sqlite, MailNameDO: sqlite, MailboxDO: sqlite, CodexEgress: tombstone },
+    });
+
+    expect(validationBuild(built, serving)).toEqual({
+      withheld: ['MailNameDO', 'MailboxDO'],
+      config: {
+        ...fields, durable_objects: { bindings: [orchestrator, theirs] }, containers: [devboxImage],
+        exports: { OrchestratorAgent: sqlite, KinuDevbox: sqlite, CodexEgress: tombstone },
+      },
+    });
+  });
+
+  test('a build that adds no class is uploaded as it was built', () => {
+    const known = { ...fields, durable_objects: { bindings: [orchestrator] }, exports: { OrchestratorAgent: sqlite }, containers: [devboxImage] };
+
+    expect(validationBuild(v.parse(BuiltClassesSchema, known), serving)).toEqual({ config: known, withheld: [] });
   });
 });

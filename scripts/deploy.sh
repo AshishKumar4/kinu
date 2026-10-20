@@ -786,13 +786,28 @@ join_alongside() {
 # which serves with none of the classes the reset deleted (L26). A refusal is the
 # build's verdict, never asked again (L27). A reset finishing an earlier one has
 # a placeholder serving and nothing left to keep up, so its deploy is its first
-# reading.
+# reading. A version cannot bind a Durable Object class its deploy has not yet
+# provisioned (rc28's MailNameDO, 2026-10-20), so the version uploaded is the
+# build with the classes new to the target left out (reset.ts `validation`): the
+# same script, whose bindings the deploy after the reset adds, and the report
+# names them.
 if [ "$KINU_RESET" = "1" ] && [ "${KINU_PENDING_RESET:-none}" = "none" ]; then
   KINU_VALIDATE_LOG="$(mktemp -t kinu-validate.XXXXXX.log)"
-  echo "Running: npx wrangler versions upload ${KINU_WRANGLER_ARGS[*]} (log → $KINU_VALIDATE_LOG)"
-  upload "$KINU_VALIDATE_LOG" npx wrangler versions upload "${KINU_WRANGLER_ARGS[@]}"
+  KINU_VALIDATE_CONFIG="$(dirname "$KINU_BUILT_CONFIG")/wrangler.validate.json"
+  if ! KINU_WITHHELD="$(bun "$KINU_ROOT/scripts/reset.ts" validation "$KINU_ENV" "$KINU_BUILT_CONFIG" "$KINU_VALIDATE_CONFIG")"; then
+    wait "$KINU_ALONGSIDE_PID"
+    publish_red "the classes $KINU_WORKER binds could not be read, so this build's version was not validated and nothing was deleted"
+    return 1
+  fi
+  read -ra KINU_WITHHELD_CLASSES <<< "$KINU_WITHHELD"
+  echo "Running: npx wrangler versions upload --config $KINU_VALIDATE_CONFIG ${KINU_WRANGLER_ARGS[*]} (log → $KINU_VALIDATE_LOG)"
+  if [ "${#KINU_WITHHELD_CLASSES[@]}" -ne 0 ]; then
+    echo "  without the bindings of ${KINU_WITHHELD_CLASSES[*]}, which $KINU_WORKER does not bind yet"
+  fi
+  upload "$KINU_VALIDATE_LOG" npx wrangler versions upload --config "$KINU_VALIDATE_CONFIG" "${KINU_WRANGLER_ARGS[@]}"
   KINU_VALIDATED=$?
-  report startup validated "$(startup_reading "$KINU_VALIDATE_LOG")"
+  rm -f "$KINU_VALIDATE_CONFIG"
+  report startup validated "$(startup_reading "$KINU_VALIDATE_LOG")" "${KINU_WITHHELD_CLASSES[@]}"
   if [ "$KINU_VALIDATED" -ne 0 ]; then
     wait "$KINU_ALONGSIDE_PID"
     publish_red "$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"

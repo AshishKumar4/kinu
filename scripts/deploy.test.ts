@@ -151,6 +151,14 @@ if [[ "$1" == */scripts/release-build.ts ]]; then
   [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ] && exit 0
   exit 86
 fi
+if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "validation" ]; then
+  if [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
+    (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/reset.ts')}" "\${@:2}")
+    exit $?
+  fi
+  cp "$4" "$5"
+  exit 0
+fi
 if [[ "$1" == */scripts/reset.ts ]] && [ "$2" = "pending" ]; then
   if [ -n "$KINU_DEPLOY_INFRA_PRELOAD" ]; then
     (cd "${REPO_ROOT}" && PATH=/usr/local/bin:/usr/bin:/bin "${process.execPath}" --preload "$KINU_DEPLOY_INFRA_PRELOAD" "${join(REPO_ROOT, 'scripts/reset.ts')}" "\${@:2}")
@@ -198,6 +206,8 @@ interface DeployRun {
   readonly uploadRuns?: readonly UploadRun[];
   /** What `wrangler versions upload` says before a reset; a version the validator took, by default. */
   readonly validation?: UploadRun;
+  /** The Durable Object classes the fixture build declares and binds; none by default. */
+  readonly buildBinds?: readonly string[];
 }
 
 interface UploadRun {
@@ -254,6 +264,9 @@ function accountFixture(fixture: string, pendingReset: string, account: DeployAc
     at: '2026-10-09T16:49:13.363Z', placeholderVersion: '9c840710', classes: [], applications: [], state: 'done',
   }));
 
+  // The classes the account has provisioned, as its served version binds them: what the fake wrangler lets a version bind.
+  if (account?.live.state === 'deployed') writeFileSync(join(fixture, 'provisioned'), account.live.bindings.flatMap((binding) => (binding.target === undefined ? [] : [binding.target])).join('\n'));
+
   if (account !== undefined) {
     const cloudflare = join(REPO_ROOT, 'scripts/infra-cloudflare.ts');
 
@@ -283,7 +296,7 @@ mock.module(${JSON.stringify(cloudflare)}, () => ({
 /** The runtime catalog the fixture build pins (NIMBUS_RUNTIME_CATALOG_SHA256). */
 const FIXTURE_CATALOG = 'c'.repeat(64);
 
-function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined, validation: UploadRun = { says: 'success', status: 0 }): void {
+function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undefined, validation: UploadRun = { says: 'success', status: 0 }, buildBinds: readonly string[] = []): void {
   if (uploadRuns === undefined) return;
   const build = join(fixture, 'packages', 'cf-backend', 'dist');
   const downloads = join(build, 'client', 'downloads');
@@ -293,12 +306,19 @@ function uploadFixture(fixture: string, uploadRuns: readonly UploadRun[] | undef
   mkdirSync(join(build, 'worker-release'));
   mkdirSync(join(fixture, 'packages', 'cli'));
   writeFileSync(join(fixture, 'packages', 'cli', 'package.json'), '{"version":"1.0.0"}');
+
+  const classes = buildBinds.length === 0 ? {} : {
+    durable_objects: { bindings: buildBinds.map((name) => ({ name: name.toUpperCase(), class_name: name })) },
+    exports: Object.fromEntries(buildBinds.map((name) => [name, { type: 'durable-object', storage: 'sqlite' }])),
+  };
+
   writeFileSync(join(build, 'kinu', 'wrangler.json'), JSON.stringify({
     targetEnvironment: 'staging', name: 'kinu-staging', vars: { CLI_PUBLIC_ORIGIN: 'https://fixture.invalid', NIMBUS_RUNTIME_CATALOG_SHA256: FIXTURE_CATALOG },
     r2_buckets: [
       { binding: 'RELEASES_BUCKET', bucket_name: 'fixture-releases' }, { binding: 'BACKUP_BUCKET', bucket_name: 'fixture-backups' },
       { binding: 'NIMBUS_RUNTIME_CACHE', bucket_name: 'fixture-runtime-cache' },
     ],
+    ...classes,
   }));
 
   for (const file of ['kinu-version.json', 'release.json', 'kinu-worker-1.0.0+testsha.tar.gz.sha256',
@@ -336,6 +356,7 @@ async function runDeploy({
   account,
   uploadRuns,
   validation,
+  buildBinds,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
@@ -363,7 +384,7 @@ async function runDeploy({
 
   if (existsSync(uploadHelper)) writeFileSync(join(fixture, 'scripts', 'deploy-upload.sh'), readFileSync(uploadHelper));
 
-  uploadFixture(fixture, uploadRuns, validation);
+  uploadFixture(fixture, uploadRuns, validation, buildBinds);
 
   executable(join(fixture, "node_modules", ".bin", "bun"), commandStub("bun"));
   executable(join(fixture, "bash"), commandStub("bash"));
@@ -387,6 +408,15 @@ printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 if [ "$KINU_DEPLOY_UPLOAD_FIXTURE" = "1" ]; then
   if [ "$2" = "r2" ]; then exit 0; fi
   if [ "$2" = "versions" ] && [ "$3" = "upload" ]; then
+    config="$KINU_DEPLOY_ROOT/packages/cf-backend/dist/kinu/wrangler.json"
+    if [ "$4" = "--config" ]; then config="$5"; fi
+    # Wrangler's rule: a version cannot bind a class its deploy has not provisioned.
+    refused="$("${process.execPath}" -e 'const fs = require("fs"); const config = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!fs.existsSync(process.argv[2])) process.exit(0); const held = new Set(fs.readFileSync(process.argv[2], "utf8").split("\\n")); const binding = (config.durable_objects?.bindings ?? []).find((entry) => !held.has(entry.class_name)); if (binding) process.stdout.write(binding.name + " " + binding.class_name);' "$config" "$KINU_DEPLOY_ROOT/provisioned")"
+    if [ -n "$refused" ]; then
+      read -r binding class <<< "$refused"
+      echo "✘ [ERROR] Durable Object binding '$binding' references class '$class', which is declared in exports but not yet provisioned."
+      exit 1
+    fi
     cat "$KINU_DEPLOY_ROOT/validate.out"
     exit "$(cat "$KINU_DEPLOY_ROOT/validate.status")"
   fi
@@ -662,21 +692,40 @@ describe("deploy gate", () => {
   describe('the validator reads a reset build before the reset deletes anything', () => {
     /** Wrangler 4.145's refusal of 89759ebcc on staging, 2026-10-13 (release-deploy-staging.log, lines 897-902). */
     const STARTUP_REFUSED = '✘ [ERROR] Your Worker failed validation because it exceeded startup limits.\n   - Error: Script startup exceeded CPU time limit.\n   [code: 10021]';
-    const VALIDATE = 'MUTATE npx wrangler versions upload --tag testsha --message kinu staging testsha';
+    /** The version upload, of the build as reset.ts `validation` wrote it beside the built config. */
+    const VALIDATE = /^MUTATE npx wrangler versions upload --config \S+\/dist\/kinu\/wrangler\.validate\.json --tag testsha --message kinu staging testsha$/u;
+    const validated = (events: readonly string[]) => events.findIndex((event) => VALIDATE.test(event));
     const DEPLOY = 'MUTATE npx wrangler deploy --tag testsha --message kinu staging testsha';
     const wipe = (events: readonly string[]) => events.findIndex((event) => event.startsWith('bun scripts/reset.ts wipe'));
 
     test('the version upload, then the reset, then the deploy of that build', async () => {
       const run = await runDeploy({ option: '--reset', account: resetAccount(), uploadRuns: [{ says: 'success', status: 0 }] });
-      const validated = run.events.indexOf(VALIDATE);
+      const upload = validated(run.events);
       // Beside the version upload, and in place before anything is deleted.
       const artifact = run.events.findIndex((event) => event.startsWith('MUTATE npx wrangler r2 object put'));
 
-      expect(validated, run.stdout).toBeGreaterThanOrEqual(0);
-      expect(validated).toBeLessThan(wipe(run.events));
+      expect(upload, run.stdout).toBeGreaterThanOrEqual(0);
+      expect(upload).toBeLessThan(wipe(run.events));
       expect({ published: artifact >= 0, beforeTheWipe: artifact < wipe(run.events) }).toEqual({ published: true, beforeTheWipe: true });
       expect(wipe(run.events)).toBeLessThan(run.events.indexOf(DEPLOY));
       expect(run.report).toContain('startup validated 412');
+    });
+
+    // rc28, 2026-10-20: the build added MailNameDO and MailboxDO, and wrangler refuses a version that binds a class its
+    // deploy has not provisioned, so the validator refused every reset that adds a class, --bootstrap included.
+    test('a build that adds a class is validated without its binding, then deployed with it, and the report names it', async () => {
+      const account = resetAccount();
+      const served = account.live.state === 'deployed' ? account.live.bindings.flatMap((binding) => (binding.target === undefined ? [] : [binding.target])) : [];
+
+      const run = await runDeploy({
+        option: '--reset', account, uploadRuns: [{ says: 'success', status: 0 }], buildBinds: [...served.slice(0, 2), 'AddedFixtureDO'],
+      });
+
+      expect(validated(run.events), `${run.stdout}\n${run.stderr}`).toBeGreaterThanOrEqual(0);
+      expect(validated(run.events)).toBeLessThan(wipe(run.events));
+      expect(wipe(run.events)).toBeLessThan(run.events.indexOf(DEPLOY));
+      // The classes it left out ride the reading into the report.
+      expect(run.report).toContain('startup validated 412 AddedFixtureDO');
     });
 
     test('a version the validator refuses deletes nothing and deploys nothing', async () => {
@@ -687,7 +736,7 @@ describe("deploy gate", () => {
 
       expect(run.status).not.toBe(0);
       // A refusal is the build's verdict, never asked again (L27).
-      expect(run.events.filter((event) => event === VALIDATE)).toHaveLength(1);
+      expect(run.events.filter((event) => VALIDATE.test(event))).toHaveLength(1);
       expect(wipe(run.events)).toBe(-1);
       expect(run.uploads).toEqual([]);
       expect(run.report).toContain('startup validated refused');
@@ -709,14 +758,14 @@ describe("deploy gate", () => {
       const run = await runDeploy({ option: '--reset', pendingReset: account.reset.tag, account, uploadRuns: [{ says: 'success', status: 0 }] });
 
       expect(run.events).toContain(DEPLOY);
-      expect(run.events).not.toContain(VALIDATE);
+      expect(validated(run.events)).toBe(-1);
     });
 
     test('a deploy with no reset uploads no version first: a refused deploy leaves the target as it was', async () => {
       const run = await runDeploy({ uploadRuns: [{ says: 'success', status: 0 }] });
 
       expect(run.events).toContain(DEPLOY);
-      expect(run.events).not.toContain(VALIDATE);
+      expect(validated(run.events)).toBe(-1);
       expect(run.uploads).toHaveLength(1);
     });
   });
