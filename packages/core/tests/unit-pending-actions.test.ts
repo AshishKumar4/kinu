@@ -13,7 +13,7 @@ import { SLATE_READ_MODELS } from '../src/slates/read-models';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
 const EMPTY: PendingActionInputs = {
-  scaffoldVersions: [], deferredActions: [], pendingPlans: [],
+  deferredActions: [], pendingPlans: [],
 };
 
 function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
@@ -27,21 +27,6 @@ function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
 describe('buildPendingActions', () => {
   test('nothing waiting is an empty queue', () => {
     expect(buildPendingActions(EMPTY)).toEqual([]);
-  });
-
-  test('a scaffold version under trial is a decision, not a status', () => {
-    const [action] = buildPendingActions({
-      ...EMPTY,
-      scaffoldVersions: [
-        { version: 8, status: 'pending', rationale: 'shorter tool preamble', written_at: 9000 },
-        { version: 7, status: 'current', rationale: 'the live one', written_at: 8000 },
-      ],
-    });
-
-    expect(action).toMatchObject({
-      id: 'scaffold-v8', kind: 'scaffold_version', detail: 'shorter tool preamble', at: 9000,
-    });
-    expect(action.title).toContain('v8');
   });
 
   test('a command an agent parked on the owner is a needs-you row, raised by that agent', () => {
@@ -68,14 +53,11 @@ describe('buildPendingActions', () => {
 
   test('the queue is newest-first across every kind', () => {
     const actions = buildPendingActions({
-      scaffoldVersions: [{ version: 8, status: 'pending', rationale: 'r', written_at: 5000 }],
       deferredActions: [parked({ requestedAt: 6000 })],
-      pendingPlans: [],
+      pendingPlans: [{ owner: 'main', actor: 'actor-main', id: 'p', revision: 1, content: '# Ship it', updatedAt: 7000 }],
     });
 
-    expect(actions.map((a) => a.kind)).toEqual([
-      'deferred_action', 'scaffold_version',
-    ]);
+    expect(actions.map((a) => a.kind)).toEqual(['plan_review', 'deferred_action']);
   });
 });
 
@@ -161,13 +143,6 @@ describe('what the inspector opens for on its own', () => {
 
     expect(needsTheUser(made)).toBe(false);
 
-    const note: PendingAction = {
-      id: 'scaffold-v8', kind: 'scaffold_version', title: 'Scaffold v8 is waiting to be promoted or rolled back',
-      detail: null, at: 1790199280964,
-    };
-
-    expect(needsTheUser({ ...nothing, pendingActions: [note] })).toBe(false);
-
     for (const status of ['changes_requested', 'approved', 'superseded'] as const) {
       expect(needsTheUser({ ...nothing, activePlan: plan(status) })).toBe(false);
     }
@@ -180,7 +155,7 @@ describe('the attention stack the chat shows', () => {
 
   test('is what holds the person and every consent, newest first, from the reads Work shows', () => {
     const asks = ownerAsks({
-      pendingActions: [row('push', 'deferred_action', 30), row('v8', 'scaffold_version', 90), row('plan', 'plan_review', 10)],
+      pendingActions: [row('push', 'deferred_action', 30), row('plan', 'plan_review', 10)],
       pendingConsents: [consent('c-1', 40)],
     });
 
@@ -201,7 +176,7 @@ describe('the attention stack the chat shows', () => {
   });
 
   test('holds exactly what holds the inspector open', () => {
-    const quiet = { pendingActions: [row('v8', 'scaffold_version', 1)], pendingConsents: [], activePlan: null, ownerQuestions: [] };
+    const quiet = { pendingActions: [], pendingConsents: [], activePlan: null, ownerQuestions: [] };
     const parkedOne = { ...quiet, pendingActions: [row('push', 'deferred_action', 1)] };
 
     expect([ownerAsks(quiet).length > 0, needsTheUser(quiet), ownerAsks(parkedOne).length > 0, needsTheUser(parkedOne)])

@@ -91,7 +91,7 @@ test('an effect is the owner\'s decision card, with its payload, and no part of 
   queue.slateEffect('call-1', EFFECT);
 
   const [card] = buildPendingActions({
-    scaffoldVersions: [], deferredActions: queue.list(),
+    deferredActions: queue.list(),
     pendingPlans: [],
   });
 

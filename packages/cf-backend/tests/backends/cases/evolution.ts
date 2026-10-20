@@ -153,7 +153,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a proposed scaffold waits for the owner, who can roll it back',
+    title: 'a proposed scaffold can be discarded before it runs',
     async run(backend) {
       const { surface } = backend;
       pendingScaffold(backend, 'answer in the owner language');

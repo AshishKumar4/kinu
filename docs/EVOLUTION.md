@@ -133,7 +133,7 @@ An edit that passed the pre-live tests is staged (`stageArtifact`, `core/src/evo
 
 The owner's revert does not wait: a staged version is discarded, and a current one gives way to the version it replaced, or to the bundled text, from the next turn, at the cost of one cache rewrite.
 
-The scaffold's pending proposal is replayed against recorded turns ("Scaffold replay" below) before it can run. A pass becomes current at the next turn whose prompt cache is cold, before that turn's program is chosen (`activateReplayedScaffold`, beside `turnArtifacts` on both hosts), so that turn runs it. The promotion goes through `applyPromotionDecision`, which re-runs the misevolution check against the on-disk file before it swaps. The owner can still decide a pending version by hand (`applyScaffoldDecision`).
+The scaffold's pending proposal is replayed against recorded turns ("Scaffold replay" below) before it can run. A pass becomes current at the next turn whose prompt cache is cold, before that turn's program is chosen (`activateReplayedScaffold`, beside `turnArtifacts` on both hosts), so that turn runs it. The promotion goes through `applyPromotionDecision`, which re-runs the misevolution check against the on-disk file before it swaps. Nothing about it waits on the owner: the Agent tab lists the versions with their diffs, and the owner's changelog revert discards a pending version or sends a current one back.
 
 ### Scaffold replay
 

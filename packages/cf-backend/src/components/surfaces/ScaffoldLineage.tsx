@@ -1,12 +1,11 @@
-import { Effect, Cause } from 'effect';
+import { Effect } from 'effect';
 import { useState, useCallback, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
-import { PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
+import { PlayIcon } from "@phosphor-icons/react";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
-import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
+import { showing, detach } from "@kinu.run/core/obs";
 import { Status, type StatusTone } from "@/components/ui/Status";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
@@ -38,11 +37,10 @@ function DiffView({ diff }: { diff: ScaffoldDiff }) {
   );
 }
 
-/** A scaffold version's diff, read for that version and again each time `readAgain` moves: a slower answer for a
- *  version no longer shown is never drawn. */
-export function ScaffoldVersionDiff({ rpc, version, readAgain }: { rpc: WorkspaceRpc; version: number; readAgain: number }) {
+/** A scaffold version's diff, read for that version: a slower answer for a version no longer shown is never drawn. */
+export function ScaffoldVersionDiff({ rpc, version }: { rpc: WorkspaceRpc; version: number }) {
   const load = useCallback(() => rpc("getScaffoldDiff", [version]), [rpc, version]);
-  const { resource: detail, reload } = useAsyncResource(load, undefined, `${String(version)}:${String(readAgain)}`);
+  const { resource: detail, reload } = useAsyncResource(load, undefined, String(version));
 
   if (detail.status === "ready") return <DiffView diff={detail.value} />;
 
@@ -60,10 +58,7 @@ interface ScaffoldLineageProps {
 
 export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const [selected, setSelected] = useState<number | null>(null);
-  // Each decision moves the selected diff's base, so it is read again.
-  const [decisions, setDecisions] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
-  const [decideErr, setDecideErr] = useState<string | null>(null);
   const [previewTask, setPreviewTask] = useState("");
   const [previewOut, setPreviewOut] = useState<string | null>(null);
 
@@ -73,20 +68,8 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const versions = lastValue(lineage) ?? [];
 
   const select = useCallback((version: number) => {
-    setSelected(version); setPreviewOut(null); setDecideErr(null);
+    setSelected(version); setPreviewOut(null);
   }, []);
-
-  const decide = useCallback((mode: "promote" | "rollback") => detach(Effect.gen(function* () {
-    setBusy(mode);
-    setDecideErr(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => rpc("applyScaffoldDecision", [mode]));
-      reload();
-      setDecisions((made) => made + 1);
-    }), (failed) => Effect.sync(() => {
-      const e = Cause.squash(failed); setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); })), Effect.sync(() => { setBusy(null); }));
-  })), [rpc, reload]);
 
   const runPreview = useCallback(() => detach(Effect.gen(function* () {
     if (selected == null || !previewTask.trim()) return;
@@ -101,8 +84,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     })), Effect.sync(() => { setBusy(null); }));
   })), [rpc, selected, previewTask]);
 
-  const selectedV = versions.find((v) => v.version === selected);
-  const isPending = selectedV?.status === "pending";
   let notice: ReactNode = null;
 
   if (lineage.status === "error" && versions.length === 0) {
@@ -135,7 +116,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
           {selected != null && (
             <div className="space-y-3 pt-1">
-              <ScaffoldVersionDiff rpc={rpc} version={selected} readAgain={decisions} />
+              <ScaffoldVersionDiff rpc={rpc} version={selected} />
 
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
@@ -152,19 +133,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                 )}
               </div>
 
-              {isPending && (
-                <div className="flex items-center gap-2">
-                  <FilledButton disabled={busy !== null} onClick={() => decide("promote")}>
-                    {busy === "promote" ? <Loader size="sm" /> : <CheckCircleIcon size={13} />}
-                    Promote v{selected}
-                  </FilledButton>
-                  <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => decide("rollback")}
-                    icon={busy === "rollback" ? <Loader size="sm" /> : <ArrowUUpLeftIcon size={13} />}>
-                    Roll back
-                  </Button>
-                </div>
-              )}
-              {decideErr && <div className="p-t-status p-danger">{decideErr}</div>}
             </div>
           )}
         </div>
