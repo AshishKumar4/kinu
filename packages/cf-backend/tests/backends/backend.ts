@@ -51,7 +51,7 @@ type SameCall =
   | 'listBackgroundJobs' | 'jobResult' | 'cancelBackgroundJob'
   | 'createTimerTrigger' | 'cancelTrigger'
   | 'listRuns' | 'getRunEvents'
-  | 'markChangelogSeen' | 'revertChangelogEntry' | 'getEvolutionStatus' | 'applyScaffoldDecision'
+  | 'markChangelogSeen' | 'revertChangelogEntry' | 'getEvolutionStatus'
   | 'latestAlternateTakes' | 'pickAlternateTake'
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
@@ -224,7 +224,6 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
       markChangelogSeen: () => agent.markChangelogSeen(),
       revertChangelogEntry: (id) => agent.revertChangelogEntry(id),
       getEvolutionStatus: () => agent.getEvolutionStatus(),
-      applyScaffoldDecision: (mode) => agent.applyScaffoldDecision(mode),
       latestAlternateTakes: () => agent.latestAlternateTakes(),
       pickAlternateTake: (takeId, nodeId) => agent.pickAlternateTake(takeId, nodeId),
       getActivePlanReview: () => agent.getActivePlanReview(),
@@ -379,7 +378,6 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       markChangelogSeen: async () => session.markChangelogSeen(),
       revertChangelogEntry: (id) => session.revertChangelogEntry(id),
       getEvolutionStatus: async () => session.getEvolutionStatus(),
-      applyScaffoldDecision: (mode) => session.applyScaffoldDecision(mode),
       latestAlternateTakes: async () => session.latestAlternateTakes(),
       pickAlternateTake: (takeId, nodeId) => session.pickAlternateTake(takeId, nodeId),
       getActivePlanReview: () => session.getActivePlanReview(),

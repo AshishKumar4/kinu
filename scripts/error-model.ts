@@ -332,8 +332,6 @@ export const DECLARED = byFile([
       'cancelTrigger\'s answer over RPC, HTTP and the CLI schema'],
     ['packages/core/src/evolution/changelog.ts', ['revertScaffoldVersion', 'revertArtifactVersion', 'executeChangelogRevert', 'changelogRevert', 'revertChangelogEntryById'],
       'the changelog revert answer over RPC to the UI and the CLI'],
-    ['packages/core/src/evolution/control.ts', ['applyScaffoldDecision', 'ScaffoldDecisionResult', 'output'],
-      'scaffold decision answers over RPC to the UI and the CLI'],
     ['packages/core/src/evolution/refinement-skill.ts', ['revertDreamSkill'],
       'a dream skill\'s revert answer, through the changelog revert over RPC to the UI and the CLI'],
     ['packages/core/src/orchestrator/agent-self-host.ts', ['setCurriculumTaskStatus'],

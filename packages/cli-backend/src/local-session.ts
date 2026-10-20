@@ -84,9 +84,9 @@ import { ActorSession, type ActorTurnLease,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, getEvolutionStatus, recordedTurns, type RecordedTurn,
+  getEvolutionStatus, recordedTurns, type RecordedTurn,
   type ScaffoldControl,
-  type ScaffoldDecisionResult, createScaffoldCandidateSurface,
+  createScaffoldCandidateSurface,
   type EvolutionStatus,
   activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
   type RefinementLaneStep,
@@ -2221,15 +2221,6 @@ export class LocalAgentSession {
 
   getEvolutionStatus(): EvolutionStatus {
     return getEvolutionStatus(this.rt.storage.sql, this.rt.actor);
-  }
-
-  /** The owner's decision on the pending scaffold; a promote swaps the live scaffold, so model-bound state is dropped. */
-  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-    const result = await applyScaffoldDecision(this.scaffoldControl, mode);
-
-    this.invalidateModelState();
-
-    return result;
   }
 
   /** `host.history`: a read-only, budgeted page, resolved per call. */

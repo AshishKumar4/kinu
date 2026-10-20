@@ -161,14 +161,13 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       expect(await surface.getEvolutionStatus()).toMatchObject({
         pendingScaffold: { version: 1, rationale: 'answer in the owner language' }, waiting: [],
       });
-      expect(await surface.applyScaffoldDecision('rollback')).toEqual({ action: 'rollback', fromVersion: 1, newCurrentVersion: 0 });
+      expect(await surface.revertChangelogEntry('scaffold:v1:pending')).toMatchObject({ ok: true });
 
       // cf writes v0 as a precondition of its first turn, the CLI at session start: the candidate is the case's.
       const status = await surface.getEvolutionStatus();
 
       expect(status.pendingScaffold).toBeNull();
       expect(status.versions.find((row) => row.version === 1)?.status).toBe('rolled_back');
-      await expect(surface.applyScaffoldDecision('rollback')).rejects.toThrow('no pending scaffold');
     },
   },
   {

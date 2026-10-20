@@ -133,13 +133,12 @@ import {
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
-  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
+  getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive,
   activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
   type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
-  type ScaffoldDecisionResult,
   type ScaffoldVersionView, type EvolutionStatus,
   readScaffoldVersion,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
@@ -5042,12 +5041,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async getEvolutionStatus(): Promise<EvolutionStatus> {
     return getEvolutionStatus(this.boundSql, this.rt.actor);
-  }
-
-  /** The owner's decision on the pending scaffold proposal. */
-  @callable()
-  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-    return applyScaffoldDecision(this.scaffoldControl, mode);
   }
 
   /**
