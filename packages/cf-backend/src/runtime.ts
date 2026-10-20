@@ -16,7 +16,7 @@ import {
   createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
-  createRoutedModelLane, routedLlm, bindRoute,
+  createRoutedModelLane, routedLlm, bindRoute, type ModelLaneComponents,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -35,7 +35,7 @@ import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from "./computer-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
 import { previewHostSuffix } from "@kinu.run/core";
-import { createDecisionPort } from "@kinu.run/core";
+import { createDecisionPort, createStructuredDecider, decisionPortOf } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
@@ -290,11 +290,17 @@ export function createCFRuntime(
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
-  const profileLane = (source: FixedTierSource): RoutedLLM | undefined => createProfileLaneLLM({
+  const laneOf = (source: FixedTierSource): ModelLaneComponents | undefined => profileLaneComponents({
     agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
     refusals: hooks.refusals,
     modelOperations: hooks.modelOperations,
   });
+
+  const profileLane = (source: FixedTierSource): RoutedLLM | undefined => {
+    const lane = laneOf(source);
+
+    return lane === undefined ? undefined : createRoutedModelLane(actor.actor, source, lane);
+  };
 
   // The one required lane: `AgentRuntime.llm` is not optional.
   const noProfile = async (): Promise<never> => {
@@ -552,6 +558,7 @@ export function createCFRuntime(
   }, machineShells));
 
   const resolveTurnProfile = hooks.resolveProfile;
+  const fastLane = laneOf('fast');
 
   const runtime: CFRuntime = {
     actor: actor.actor,
@@ -563,13 +570,13 @@ export function createCFRuntime(
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
-    ...(resolveTurnProfile !== undefined && {
-      decide: createDecisionPort({
+    ...(resolveTurnProfile !== undefined && fastLane !== undefined && {
+      decide: decisionPortOf(createDecisionPort({
         run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
         model: async () => (await resolveTurnProfile()).decisionModel,
         report: hooks.reportModelCall,
         refusals: hooks.refusals,
-      }),
+      }), createStructuredDecider(actor.actor, fastLane)),
     }),
     executionRouter,
     shell,
@@ -674,12 +681,12 @@ interface ProfileLaneOptions {
 }
 
 /** Only a completed call reports: a thrown seam was not billed. */
-function createProfileLaneLLM(options: ProfileLaneOptions): RoutedLLM | undefined {
-  const { actor, resolveProfile, source, report, refusals } = options;
+function profileLaneComponents(options: ProfileLaneOptions): ModelLaneComponents | undefined {
+  const { resolveProfile, source, report, refusals } = options;
 
   if (!resolveProfile) return undefined;
 
-  return createRoutedModelLane(actor.actor, source, {
+  return {
     resolveProfile,
     refusals,
     attemptOf: (spec) => {
@@ -695,7 +702,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): RoutedLLM | undefine
         resolve: (spec) => registry.resolveModel(spec, actorAffinity({ name: options.agent.name, workspaceId: options.actor.actor.workspaceId })),
       }, serving);
     }, route, { report, operations: options.modelOperations }),
-  });
+  };
 }
 
 /** A lane's `fibers` row, the CLI's own, outlives the activation running it; the next one re-drives it
