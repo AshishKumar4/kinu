@@ -6,6 +6,7 @@ import { stableStringify } from '../safety/argument-digest';
 import { evidenceWindow, EVIDENCE_BUDGETS } from '../utils/evidence-window';
 import { decodeJsonValue, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { fnv1a64 } from '../utils/fnv1a';
+import { detached } from '../utils/text';
 
 export interface ToolCallInput {
   toolCallId?: string;
@@ -18,10 +19,6 @@ export interface ToolCallInput {
 const ACTION_TARGET_CHARS = 80;
 
 const TargetSchema = v.pipe(v.string(), v.trim(), v.nonEmpty());
-
-/** A copy of its own: a kept slice, or a rope over slices, pins the whole argument or result string it was cut from (V8
- *  and JavaScriptCore alike), and re-slicing a concatenation still does on JavaScriptCore. UTF-16 code units copy exactly. */
-const detached = (text: string): string => Buffer.from(text, 'utf16le').toString('utf16le');
 
 function actionTarget(args: JsonObject): string {
   for (const key of ['path', 'op', 'command', 'code']) {

@@ -11,6 +11,12 @@ export function withoutBom(text: string): string {
   return text.startsWith(BOM) ? text.slice(1) : text;
 }
 
+/** A copy of its own: a kept slice, or a rope over slices, pins the whole argument or result string it was cut from (V8
+ *  and JavaScriptCore alike), and re-slicing a concatenation still does on JavaScriptCore. UTF-16 code units copy exactly. */
+export function detached(text: string): string {
+  return Buffer.from(text, 'utf16le').toString('utf16le');
+}
+
 export function headEnd(text: string, len: number): number {
   const splitsPair = len > 0 && len < text.length
     && isHigh(text.charCodeAt(len - 1)) && isLow(text.charCodeAt(len));
