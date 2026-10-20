@@ -135,7 +135,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive,
-  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
   type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
@@ -2682,7 +2682,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.peerHub.nextRetryAt(),
       this.emailOutbox.nextRetryAt(),
       this.reactionsDueAt(now),
-      nextEvolutionAnswerAt(this.boundSql, this.actorHandle().actorId),
       this.nextWarmAt(),
       // Sleep-time triggers (phase `alarm.sleep_time`); answers only while an unprocessed turn is recorded,
       // and the phase releases that record whenever it refuses.
@@ -4674,18 +4673,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Each agent's failure is its own: the re-arm below retries it, since the fold still answers due.
         yield* this.drainDueReactions(now);
       })));
-
-      await tick.span('alarm.evolution_answer', async (span) => {
-        let failed = false;
-
-        const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
-          failed = true;
-          span.fail(failure);
-          diagnostics.failure('refinement.answer_wake_failed', failure);
-        });
-
-        if (!failed) span.setAttribute('kinu.evolution_answer_due', step !== null);
-      });
 
       // Durable re-drive of pending outbound peer messages (eviction recovery and backoff retries).
       await tick.span('alarm.peer_dispatch', (span) => settle(Effect.catchCause(

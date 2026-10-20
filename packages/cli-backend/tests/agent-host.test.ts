@@ -2243,67 +2243,6 @@ describe('LocalAgentHost', () => {
     expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
   });
 
-  test('a refiner answer with no waiter runs the lane at once, without waiting for a turn', async () => {
-    const { state, project } = makeRoots();
-    const dbPath = await seedAgent(state, 'root');
-    const child = reportingChildModel('Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}');
-    const { host } = makeHost(state, child.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
-    const team = await host.team('root');
-    await team.spawn({ name: 'ask-refiner-x1', role: 'researcher', mission: 'Propose refinements.', mode: 'build' });
-
-    const seed = workspaceDatabase(dbPath);
-    const actorId = present(seed.query<{ actor_id: string }, []>('SELECT actor_id FROM actor_subordinates LIMIT 1').get(), 'the root').actor_id;
-    const now = Date.now();
-    seed.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
-    seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
-    seed.close();
-
-    const stage = () => {
-      const view = new Database(dbPath, { readonly: true });
-      const row = view.query<{ stage: string }, []>("SELECT stage FROM refinement_requests WHERE id = 'refine-1'").get();
-      view.close();
-
-      return row?.stage ?? null;
-    };
-
-    // The answer's pass is held until close() has begun: close() must join it before ending the session.
-    const root = await host.acquire('root');
-    const runEvolutionAnswer = root.runEvolutionAnswer.bind(root);
-    const end = root.end.bind(root);
-    const held = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const order: string[] = [];
-
-    root.runEvolutionAnswer = async (at) => {
-      held.resolve();
-      await release.promise;
-      await runEvolutionAnswer(at);
-      order.push('answer routed');
-    };
-
-    root.end = async () => {
-      order.push('session ended');
-      await end();
-    };
-
-    await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
-    // The helper the lane hires is task-lived, and durable verbs refuse one: so it becomes one after the handoff.
-    const helper = workspaceDatabase(dbPath);
-    helper.run(`UPDATE workspace_actors SET origin = 'evolution', lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
-    helper.close();
-    await held.promise;
-    const closing = host.close();
-    release.resolve();
-    await closing;
-
-    expect(order).toEqual(['answer routed', 'session ended']);
-
-    expect(stage()).not.toBe('requested');
-  });
-
   // 2026-10-01: the TUI's agents hub read its helpers once, when it opened, and went stale: the CLI host told its clients
   // nothing when a write moved a read. Each write to the workspace's file names the reads it moves, as a workspace object does.
   test('scheduled client updates refresh the hired roster, workspace name and dismissal', async () => {

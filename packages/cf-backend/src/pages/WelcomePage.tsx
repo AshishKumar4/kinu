@@ -8,7 +8,7 @@ import {
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
 import {
-  APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID,
+  APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID, suggestedMailUsername,
 } from "@kinu.run/core";
 import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -25,8 +25,16 @@ import { useAccount } from "@/hooks/use-account";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { signedInWith } from "@/lib/shared-api";
 import { useElementSize } from "@/hooks/use-element-size";
+import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
+import { createMailAddress, readMailBoxes } from "@/lib/mail-api";
 
-const LAST_STEP = ONBOARDING_STEPS.length - 1;
+/** Where Mail's step sits in the whole list, so a setup opened past it can step back when it is not offered. */
+const MAIL_STEP = ONBOARDING_STEPS.findIndex((each) => each.id === 'mail');
+
+/** Setup's steps: Mail's only where the deployment has mail and the person may create an address and has none. */
+function stepsFor(mail: boolean): typeof ONBOARDING_STEPS[number][] {
+  return ONBOARDING_STEPS.filter((each) => mail || each.id !== 'mail');
+}
 
 const SHOWCASE: { Icon: PhosphorIcon; title: string; copy: string }[] = [
   {
@@ -82,9 +90,16 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const profile = lastValue(account.profile);
   // Named so the empty field says why: production's one sign-in, Cloudflare, shares no name for most accounts.
   const provider = lastValue(useAsyncResource(signedInWith).resource);
+  // Read once: the step stays offered while setup runs, even after it creates the address. Offered while it reads.
+  const mail = useAsyncResource(readMailBoxes).resource;
+  const mailBoxes = lastValue(mail);
+  const offerMail = mail.status === "loading" || (mailBoxes?.enabled === true && mailBoxes.canCreate);
+  const steps = stepsFor(offerMail);
+  const LAST_STEP = steps.length - 1;
   // `?step=` names the step to open on: a sign-in that left this page returns to the step it left from.
   const [search] = useSearchParams();
-  const opened = ONBOARDING_STEPS.findIndex((candidate) => candidate.id === search.get("step"));
+  const opened = steps.findIndex((candidate) => candidate.id === search.get("step"));
+  const [mailSkipped, setMailSkipped] = useState(false);
 
   // `null` until touched, so a slow profile load never overwrites an edit.
   const [step, setStep] = useState(() => (opened >= 0 ? opened : Math.min(Math.max(0, initialStep), LAST_STEP)));
@@ -100,6 +115,14 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const stepHeight = stepSize.size.h === 0 ? null : stepSize.size.h;
 
   const displayName = name ?? profile?.displayName ?? '';
+  // The name typed a step before is the one it is offered from.
+  const address = useMailUsername(profile === null ? null : suggestedMailUsername({ displayName, email: profile.email }));
+  const onMail = steps[step]?.id === 'mail';
+
+  // Read as not offered after setup opened on a later step: the steps after it moved up one.
+  useEffect(() => {
+    if (mail.status !== "loading" && !offerMail) setStep((at) => (at > MAIL_STEP ? at - 1 : at));
+  }, [mail.status, offerMail]);
 
   useEffect(() => setReached((most) => Math.max(most, step)), [step]);
 
@@ -113,7 +136,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     setRevealed(false);
 
     return undefined;
-  }, [step]);
+  }, [step, LAST_STEP]);
 
   // Same mark as the sidebar: first letter of the typed name, stored name, then email.
   const named = displayName.trim() || (profile?.email ?? '');
@@ -161,8 +184,26 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       account.reload();
     }
 
+    // Next is the address: made with its mailbox at once, unless the person said not now.
+    if (onMail && !mailSkipped) {
+      setBusy(true);
+
+      const failure = yield* Effect.matchCause(Effect.promise(() => createMailAddress(address.username)), {
+        onSuccess: () => null,
+        onFailure: (failed) => renderThrownChain({ cause: Cause.squash(failed) }),
+      });
+
+      setBusy(false);
+
+      if (failure !== null) {
+        setError(failure);
+
+        return;
+      }
+    }
+
     setStep((s) => Math.min(s + 1, LAST_STEP));
-  })), [step, name, profile, account]);
+  })), [step, name, profile, account, onMail, mailSkipped, address.username, LAST_STEP]);
 
   return (
     <div className="fixed inset-0 p-bg overflow-y-auto">
@@ -171,7 +212,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
         <h1 className="p-display text-[26px] leading-8 text-center">Let's set up your account</h1>
 
         <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
-          {ONBOARDING_STEPS.map((s, i) => (
+          {steps.map((s, i) => (
             <li key={s.id} aria-current={i === step ? 'step' : undefined}>
               <span className={`block h-1.5 rounded-full transition-all ${stepDotCls(i, step)}`} />
             </li>
@@ -187,7 +228,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
             className="flex items-start transition-transform duration-300 ease-out"
             style={{ transform: `translateX(-${step * 100}%)` }}
           >
-            {ONBOARDING_STEPS.map((s, i) => (
+            {steps.map((s, i) => (
               <div
                 key={s.id}
                 className="w-full shrink-0 max-h-[62vh] overflow-y-auto px-5 py-5 sm:px-8 sm:py-7"
@@ -209,6 +250,16 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                         <p className="mt-2 text-xs p-text-3">{provider} didn't share a name.</p>
                       )}
                     </div>
+                  </div>
+                )}
+
+                {s.id === 'mail' && (
+                  <div className="space-y-3">
+                    <MailAddressField domain={mailBoxes?.domain ?? ''} username={address.username} state={address.state} onChange={address.setUsername} disabled={busy || mailSkipped} />
+                    <button type="button" data-mail-not-now aria-pressed={mailSkipped} onClick={() => setMailSkipped((skipped) => !skipped)}
+                      className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
+                      {mailSkipped ? "Create it after all" : "Not now"}
+                    </button>
                   </div>
                 )}
 
@@ -252,7 +303,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
                   Skip setup
                 </button>
-                <FilledButton disabled={busy} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
+                <FilledButton disabled={busy || (onMail && !mailSkipped && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
                 </FilledButton>
               </div>

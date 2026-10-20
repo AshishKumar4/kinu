@@ -7,13 +7,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
-import { durableStamps, initMailNameTables, isMailLabel, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
-
-/** Labels no account may claim: the mailbox names mail systems and people expect to reach a deployment's operator. */
-const RESERVED_LABELS: ReadonlySet<string> = new Set([
-  'postmaster', 'abuse', 'admin', 'administrator', 'noreply', 'no-reply', 'mail', 'mailer-daemon', 'ops', 'dmarc', 'security',
-  'support', 'root', 'www', 'hostmaster', 'webmaster', 'info', 'help', 'billing',
-]);
+import { durableStamps, initMailNameTables, mailUsernameRefusal, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
 
 const ClaimRow = v.object({
   label: v.string(), user_id: v.string(), kind: v.picklist(['username', 'alias']), target_path: v.nullable(v.string()),
@@ -51,7 +45,7 @@ export class MailNameDO extends DurableObject<Env> {
 
   /** Claims the label for `userId`; the holder already is that account when it answers. A reserved label is refused. */
   async claim(label: string, userId: string, kind: 'username' | 'alias' = 'username', targetPath: string | null = null): Promise<MailNameClaim> {
-    if (!isMailLabel(label) || RESERVED_LABELS.has(label)) return settleSync(Effect.fail(new KinuError('bad_input', `"${label}" cannot be an address.`)));
+    if (mailUsernameRefusal(label) !== null) return settleSync(Effect.fail(new KinuError('bad_input', `"${label}" cannot be an address.`)));
     const held = await this.lookup();
 
     if (held !== null) {

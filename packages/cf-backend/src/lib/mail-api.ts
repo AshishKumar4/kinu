@@ -36,7 +36,12 @@ const BoxSchema = v.object({
   workspace: v.nullable(v.string()), actorId: v.nullable(v.string()), wake: v.picklist(MAIL_WAKES),
 }) satisfies v.GenericSchema<unknown, MailBox>;
 
-const BoxesSchema = v.object({ enabled: v.boolean(), address: v.nullable(v.string()), canClaim: v.boolean(), boxes: v.array(BoxSchema) });
+/** `domain`: the deployment's mail domain, null where mail is off. `canCreate`: the person has no address and may create one. */
+const BoxesSchema = v.object({ enabled: v.boolean(), domain: v.nullable(v.string()), address: v.nullable(v.string()), canCreate: v.boolean(), boxes: v.array(BoxSchema) });
+
+const UsernameSchema = v.object({ username: v.string(), available: v.boolean(), refusal: v.nullable(v.picklist(["invalid", "reserved", "taken"])) });
+
+export type MailUsername = v.InferOutput<typeof UsernameSchema>;
 
 export type MailBoxes = v.InferOutput<typeof BoxesSchema>;
 
@@ -64,8 +69,14 @@ export function readMailBoxes(): Promise<MailBoxes> {
   return settle(request(BoxesSchema, "/api/user/mail/boxes"));
 }
 
-export function claimMailAddress(username: string): Promise<{ address: string }> {
-  return settle(request(v.object({ address: v.string() }), "/api/user/mail/claim", { method: "POST", json: { username } }));
+/** Whether `username` may be the person's, as they type it: holds nothing. */
+export function checkMailUsername(username: string): Promise<MailUsername> {
+  return settle(request(UsernameSchema, `/api/user/mail/address?username=${encodeURIComponent(username)}`));
+}
+
+/** The person's address and its mailbox, made at once; the one they have if they have one. */
+export function createMailAddress(username: string): Promise<{ address: string }> {
+  return settle(request(v.object({ address: v.string() }), "/api/user/mail/address", { method: "POST", json: { username } }));
 }
 
 export function listMailThreads(query: MailListQuery): Promise<MailListing> {

@@ -49,7 +49,7 @@ export interface RuntimeComponents {
 
 /** Lanes are derived getters but callers assign them; an assignment pins and wins over routing thereafter. */
 interface PinnedLanes {
-  judge?: LLM;
+  judge?: RoutedLLM;
   fast?: RoutedLLM;
 }
 
@@ -88,7 +88,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     identity,
     craftStore,
     get judgeModel() { return pinned.judge ?? routed.judge; },
-    set judgeModel(model: LLM | undefined) { pinned.judge = model; },
+    set judgeModel(model: RoutedLLM | undefined) { pinned.judge = model; },
     get fastLlm() { return pinned.fast ?? routed.fast; },
     set fastLlm(model: RoutedLLM | undefined) { pinned.fast = model; },
     ...(components.decide !== undefined && { decide: components.decide }),

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, MAIL_LABEL_PATTERN, MAIL_VIEWS, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
+import { APP_ROUTES, MAIL_VIEWS, suggestedMailUsername, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
 import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
 import { MAIL_VIEW_LABEL, MailRow, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
@@ -17,27 +17,27 @@ import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { useAccount } from "@/hooks/use-account";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { claimMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
+import { createMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
+import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
 
 
 
-function Claim({ email, onClaimed }: { email: string; onClaimed: () => void }) {
-  const [username, setUsername] = useState(email.split("@")[0].toLowerCase());
-  const { busy, error, run } = useLabelledStep(onClaimed);
+/** Where the mailbox would be, for a person with no address yet: the address they create, as setup offers it. */
+function CreateAddress({ domain, suggested, onCreated }: { domain: string; suggested: string | null; onCreated: () => void }) {
+  const { username, setUsername, state } = useMailUsername(suggested);
+  const { busy, error, run } = useLabelledStep(onCreated);
 
-  const claim = (event: FormEvent<HTMLFormElement>): void => {
+  const create = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    run("Claiming", async () => { await claimMailAddress(username); });
+    run("Creating", async () => { await createMailAddress(username); });
   };
 
   return (
-    <form onSubmit={claim} className="p-card mt-5 max-w-sm space-y-3 p-4">
-      <label className="block space-y-1 p-row-text p-text-2">Username
-        <input value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} aria-label="Username" autoComplete="username" autoCapitalize="none"
-          pattern={MAIL_LABEL_PATTERN} maxLength={20} required disabled={busy !== null} className={inputCls} />
-      </label>
+    <form data-mail-create onSubmit={create} className="p-card mt-5 max-w-md space-y-3 p-4">
+      <h2 className="p-row-text font-medium p-text">Your email address</h2>
+      <MailAddressField domain={domain} username={username} state={state} onChange={setUsername} disabled={busy !== null} />
       {error !== null && <p role="alert" className="p-row-text p-danger">{error}</p>}
-      <FilledButton type="submit" disabled={busy !== null}>{busy === null ? "Claim address" : "Claiming…"}</FilledButton>
+      <FilledButton type="submit" disabled={busy !== null || state !== "available"}>{busy === null ? "Create address" : "Creating…"}</FilledButton>
     </form>
   );
 }
@@ -219,8 +219,10 @@ export default function MailPage() {
         <PageHeader icon={<EnvelopeSimpleIcon size={22} />} title="Mail" />
         {boxes.resource.status === "loading" && <div role="status" aria-label="Loading mail" className="mt-5"><Loader /></div>}
         {account !== null && !account.enabled && <p data-mail-off className="mt-5 p-row-text p-text-2">Mail is off on this deployment.</p>}
-        {account?.enabled === true && account.canClaim && profile.status !== "loading" && <Claim email={person?.email ?? ""} onClaimed={boxes.reload} />}
-        {account?.enabled === true && !account.canClaim && <p className="mt-5 p-row-text p-text-2">Addresses on this deployment are its operators' only.</p>}
+        {account?.enabled === true && account.canCreate && person !== null && (
+          <CreateAddress domain={account.domain ?? ""} suggested={suggestedMailUsername(person)} onCreated={boxes.reload} />
+        )}
+        {account?.enabled === true && !account.canCreate && <p className="mt-5 p-row-text p-text-2">Addresses on this deployment are its operators' only.</p>}
       </>}
       {boxes.resource.status === "error" && <LoadFailure what="your addresses" message={boxes.resource.message} onRetry={boxes.reload} className="mt-5" />}
     </div></div>

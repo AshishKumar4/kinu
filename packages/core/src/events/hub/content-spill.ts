@@ -1,4 +1,4 @@
-import { exists, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Oversize event bodies are written to the receiver's file plane and the path rides the payload.
  *  Content-addressed, so a redelivered event renders a byte-identical brief. */
 
@@ -7,12 +7,11 @@ import { sha256Hex } from '../../safety/argument-digest';
 import { EVENT_BRIEF_MAX_CHARS } from './visibility';
 import { Effect } from 'effect';
 import { diagnostics, renderCauseChain, settle, toKinuError } from '../../obs/index';
-import { ensureDir } from '../../utils/vfs-helpers';
-
-const EVENT_CONTENT_DIR = '.kinu/event-content';
+import { publishContent } from '../../utils/vfs-helpers';
+import { SPILL_DIRS } from '../../context-budget';
 
 export function eventContentPath(content: string): string {
-  return `${EVENT_CONTENT_DIR}/${sha256Hex(content, 24)}.txt`;
+  return `${SPILL_DIRS.eventContent}/${sha256Hex(content, 24)}.txt`;
 }
 
 export type SpilledContent =
@@ -25,11 +24,9 @@ export function spillEventContent(vfs: VFS, content: string): Promise<SpilledCon
   const path = eventContentPath(content);
 
   return settle(Effect.tryPromise({
+    // The brief promises the whole body at this path, so other bytes there are written over with it.
     try: async (): Promise<SpilledContent> => {
-      if (!(await exists(vfs, path))) {
-        await ensureDir(vfs, EVENT_CONTENT_DIR);
-        await writeText(vfs, path, content);
-      }
+      await publishContent(vfs, { directory: SPILL_DIRS.eventContent, path, bytes: new TextEncoder().encode(content), otherBytes: 'rewrite' });
 
       return { path };
     },

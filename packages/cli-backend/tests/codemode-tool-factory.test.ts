@@ -125,6 +125,28 @@ describe('createNodeCodemodeToolFactory — external tools', () => {
   });
 });
 
+// The InternalFish audit: the cloud's program held every tool to the role's reach while the local one bound whatever it
+// was handed, so a caller that did not narrow its surface first reached what the role leaves out.
+describe('createNodeCodemodeToolFactory — the role reach', () => {
+  test("a program reaches only the native and external tools its role allows, as the cloud's does", async () => {
+    const answer = (said: string) => tool({ description: said, inputSchema: jsonSchema({ type: 'object', properties: {} }), execute: async () => said });
+
+    const surface = {
+      cwd: WORKSPACE_ROOT, stores: freshServedStores(), craftedTools: () => [],
+      native: { file: answer('native kept'), shell: answer('native dropped') },
+      external: () => ({ mcp_kept: answer('external kept'), mcp_dropped: answer('external dropped') }),
+    };
+
+    const run = toolExecute<{ code: string }, ExecuteToolResult>(createNodeCodemodeToolFactory({ reach: narrowToolSurface(['eval', 'file', 'mcp_kept']) })(surface));
+
+    const reached = await run({ code: `return await Promise.all(["file", "shell", "mcp_kept", "mcp_dropped"].map(async (name) => {
+      try { return await tools[name]({}); } catch { return "unreached " + name; }
+    }));` });
+
+    expect(reached.result).toEqual(['native kept', 'unreached shell', 'external kept', 'unreached mcp_dropped']);
+  });
+});
+
 describe('createNodeCodemodeToolFactory — console capture + implicit return', () => {
   test('saving a crafted tool makes the next call usable', async () => {
     let crafted: CraftedToolSource[] = [];

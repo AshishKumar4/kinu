@@ -1,5 +1,7 @@
 // Mock fetch for provider contract tests: records requests, scripts responses per call.
 import { asFetchFunction, copyHeaders } from '@kinu.run/core';
+import { KinuError, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 
 export interface RecordedRequest {
@@ -170,4 +172,16 @@ function isRequestMatcher(value: MockFetchHandler['match']): value is RequestMat
 
 function isResponder(value: MockFetchHandler['respond']): value is MockResponseFactory {
   return v.is(v.function(), value);
+}
+
+/**
+ * `answer` bound as workerd binds its own `fetch`: called as a method of another object (`deps.fetch(...)`) it throws
+ * "Illegal invocation", so a test reaches what only a deployment shows.
+ */
+export function workerdFetch(answer: typeof fetch): typeof fetch {
+  return asFetchFunction(function bound(this: typeof globalThis | undefined, input, init) {
+    if (this !== undefined && this !== globalThis) return settle(Effect.fail(new KinuError('unsupported', 'Illegal invocation')));
+
+    return answer(input, init);
+  });
 }
