@@ -1,7 +1,7 @@
 import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from "react";
-import { useParams, useLocation, Link, useMatch, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useLocation, Link, Navigate, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import type { OwedOwnerIntent, PlanReview, SignalCard, WorkspaceLayout } from "@kinu.run/core";
+import { APP_ROUTES, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -622,11 +622,17 @@ export default function WorkspacePage(props: WorkspacePageProps = {}) {
   const routed = useParams().agentId;
   const agentId = props.workspace ?? routed;
   const [gone, setGone] = useState<string | null>(null);
+  const home = useWorkspaceRoster().entries.some((entry) => entry.name === agentId && entry.home === true);
+  const own = useMatch(APP_ROUTES.workspace) !== null;
+  const { search, hash } = useLocation();
+
+  // The owner's assistant is Home: its own address opens Home, and its other pages are in its layout from the start.
+  if (props.workspace === undefined && home && own) return <Navigate to={{ pathname: APP_ROUTES.home, search, hash }} replace />;
 
   if (agentId !== undefined && gone === agentId) return <GoneWorkspace />;
 
   // Unmounting closes its socket and every read it polls.
-  return <OpenWorkspace key={agentId} onGone={setGone} {...props} />;
+  return <OpenWorkspace key={agentId} onGone={setGone} {...props} layout={props.layout ?? (home ? "focus" : undefined)} />;
 }
 
 /** Shown where its route is not (Home), a workspace still draws the phone's one bar. */

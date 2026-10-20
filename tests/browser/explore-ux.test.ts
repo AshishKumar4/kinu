@@ -1,7 +1,8 @@
 /**
  * Explore (`explore`, `explore-workspace`): the real pages over the gallery's Explore fixture (gallery-explore.tsx),
  * which answers `/api/explore` in the feed's own order. Kinu's own lead an unfiltered page and leave the feed below;
- * a kind or words show the feed alone. A blueprint's Install sends what its dialog chose, and the assistant goes Home.
+ * a kind or words show the feed alone. A blueprint's Install sends what its dialog chose, and the assistant goes Home;
+ * once it is theirs, the sidebar lists it nowhere and its own address opens Home.
  */
 import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
@@ -86,8 +87,8 @@ describe('Explore', () => {
       const asked = await installed(assistant);
 
       expect(asked).toEqual({ id: 'personal-assistant', body: { agent: 'Kinu', brief: '08:00', home: true, utcOffsetMinutes: expect.any(Number) } });
-      // Home: no route of Explore's draws it here.
-      await assistant.waitForSelector('[data-gallery-blank]', SOON);
+      // Home: the fixture marks it, and draws no Home of its own.
+      await assistant.waitForSelector('[data-gallery-home]', SOON);
       await assistant.close();
 
       const release = await freshPage(gallery, 'explore-workspace&id=release-manager&install=1', 'light', 'mobile');
@@ -124,6 +125,29 @@ describe('Explore', () => {
       const feed = await freshPage(gallery, 'explore&assistant=1', 'light', 'desktop');
 
       await feed.waitForSelector('[data-explore-hero="personal-assistant"] [data-explore-installed]', SOON);
+    });
+  });
+
+  test('the assistant they have is Home: the sidebar lists it nowhere, and its own address opens Home, never a workbench', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'explore&assistant=1', 'light', 'desktop');
+      const listed = () => page.$$eval('a[href^="/workspace/"]', (links) => links.map((link) => link.getAttribute('href')));
+
+      await page.waitForSelector('a[href^="/workspace/"]', SOON);
+      expect((await listed()).length).toBeGreaterThan(0);
+      expect(await listed()).not.toContain('/workspace/personal-assistant-4f2a');
+      await page.close();
+
+      const opened = await gallery.newPage();
+
+      await opened.evaluateOnNewDocument(() => {
+        new MutationObserver(() => {
+          if (document.querySelector('[data-workspace-bar]') !== null) document.documentElement.dataset.workbenchDrawn = '1';
+        }).observe(document, { childList: true, subtree: true });
+      });
+      await opened.goto(`${gallery.origin}/gallery.html?frame=explore&assistant=1&at=assistant`, { waitUntil: 'load' });
+      await opened.waitForSelector('[data-gallery-home]', SOON);
+      expect(await opened.$eval('html', (root) => root.dataset.workbenchDrawn ?? null)).toBeNull();
     });
   });
 });
