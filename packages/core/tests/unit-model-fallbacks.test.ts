@@ -119,6 +119,43 @@ describe('ModelCatalogSession.pricing', () => {
   });
 });
 
+// The SufficientKoala audit: the selected spec and every other kept apart caches, so a warmed model was looked up again
+// once selected, switching away and back looked the first up again, and meanwhile each read an unknown window and price.
+describe('ModelCatalogSession keeps one entry per spec', () => {
+  test('a model looked up once reads the same row whichever model is selected, with no second lookup', async () => {
+    const rows = new Map<string, ModelInfo>([
+      ['anthropic/claude-sonnet-4-6', { id: 'claude-sonnet-4-6', contextWindow: 1_000_000, cost: { input: 3, output: 15 } }],
+      ['openai/gpt-5.5', { id: 'gpt-5.5', contextWindow: 400_000, cost: { input: 5, output: 40 } }],
+    ]);
+
+    let selected = 'anthropic/claude-sonnet-4-6';
+    const asked: string[] = [];
+
+    const session = new ModelCatalogSession({
+      measured: () => null,
+      effectiveSpec: () => selected,
+      lookup: async (spec) => {
+        asked.push(spec);
+
+        return rows.get(spec) ?? null;
+      },
+    });
+
+    await session.resolved();
+    await session.warm(['openai/gpt-5.5']);
+    selected = 'openai/gpt-5.5';
+    const switched = { window: session.contextWindow(), price: session.pricing() };
+    selected = 'anthropic/claude-sonnet-4-6';
+    const back = { window: session.contextWindow(), price: session.pricing() };
+
+    expect({ switched, back, asked }).toEqual({
+      switched: { window: 400_000, price: { input: 5, output: 40 } },
+      back: { window: 1_000_000, price: { input: 3, output: 15 } },
+      asked: ['anthropic/claude-sonnet-4-6', 'openai/gpt-5.5'],
+    });
+  });
+});
+
 // KINU-045: admission reserves the answer allowance, so the catalog reports it or nothing, never a guess.
 describe('ModelCatalogSession.modelOutputLimit', () => {
   test('an operation awaits limits for its selected model instead of borrowing the chat cache', async () => {

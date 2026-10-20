@@ -31,12 +31,12 @@ export interface ModelCatalogRead {
   resolved(): Promise<ModelWindow>;
 }
 
-interface CachedEntry { spec: string; info: ModelInfo | null; lookup?: Promise<Exit.Exit<ModelInfo | null>> }
+/** One spec's catalog row once its held lookup lands; `settled` once it has, row or none. */
+interface CachedEntry { info: ModelInfo | null; settled: boolean; lookup?: Promise<Exit.Exit<ModelInfo | null>> }
 
+/** One entry per spec, whichever the turn selects: the effective spec only picks the entry read when none is named. */
 export class ModelCatalogSession {
-  private cached: CachedEntry | null = null;
-  /** Catalog entries of a tier's fallbacks. */
-  private readonly others = new Map<string, ModelInfo>();
+  private readonly entries = new Map<string, CachedEntry>();
 
   constructor(private readonly deps: {
     effectiveSpec: () => string;
@@ -52,19 +52,19 @@ export class ModelCatalogSession {
   }
 
   contextWindow(): number | null {
-    return this.windowOf(this.deps.effectiveSpec()).contextWindow;
+    return this.window().contextWindow;
   }
 
   /** Awaited before the provider is called, for decisions that refuse work. */
   resolved(): Promise<ModelWindow> {
-    return settle(this.resolvedOf(this.deps.effectiveSpec()));
+    return this.windowFor(this.deps.effectiveSpec());
   }
 
   /** The reads of one request, on the spec it resolved once. */
   at(spec: string): ModelCatalogRead {
     return Object.freeze({
-      window: () => this.windowOf(spec),
-      resolved: () => settle(this.resolvedOf(spec)),
+      window: () => this.window(spec),
+      resolved: () => this.windowFor(spec),
     });
   }
 
@@ -78,45 +78,30 @@ export class ModelCatalogSession {
   /** Whether `spec` calls tools, as its catalog row says: a row listing capabilities names tool calling among them, or
    *  the model calls none. Undefined while no row, or no list, says. */
   callsTools(spec?: string): boolean | undefined {
-    return this.infoOf(spec ?? this.deps.effectiveSpec())?.capabilities?.includes('tools');
+    return this.infoOf(spec)?.capabilities?.includes('tools');
   }
 
-  private infoOf(spec: string): ModelInfo | null {
-    return spec === this.deps.effectiveSpec() ? this.armed(spec).info : this.others.get(spec) ?? null;
-  }
-
-  /** As {@link contextFor}, the window alone: what a head or swarm node on `spec` is admitted against. */
+  /** As {@link contextFor}, the window alone: what a head or swarm node on `spec` is admitted against. Joins the held
+   *  lookup, keeping one catalog round trip, and answers its refusal. */
   windowFor(spec: string): Promise<ModelWindow> {
-    if (spec === this.deps.effectiveSpec()) return settle(this.resolvedOf(spec));
-    const known = this.others.get(spec);
-
-    if (known !== undefined) return Promise.resolve(this.windowFrom(spec, known));
-
-    return settle(Effect.map(this.lookup(spec, (info) => { if (info !== null) this.others.set(spec, info); }), (info) => this.windowFrom(spec, info)));
+    return settle(Effect.map(this.joined(this.armed(spec)), () => this.window(spec)));
   }
 
   window(spec?: string): ModelWindow {
-    const own = this.deps.effectiveSpec();
+    const named = spec ?? this.deps.effectiveSpec();
 
-    return spec === undefined || spec === own ? this.windowOf(own) : this.windowFrom(spec, this.others.get(spec) ?? null);
+    return this.windowFrom(named, this.armed(named).info);
   }
 
-  /** Null until the catalog lands or when it prices nothing; another `spec` only once warmed. */
+  /** Null until the catalog lands or when it prices nothing. */
   pricing(spec?: string): ModelPricing | null {
-    const own = this.deps.effectiveSpec();
-
-    if (spec === undefined || spec === own) return this.armed(own).info?.cost ?? null;
-
-    return this.others.get(spec)?.cost ?? null;
+    return this.infoOf(spec)?.cost ?? null;
   }
 
-  /** Warmed before the turn so each step prices at its model's rate; a refused one stays blended. */
+  /** Warmed before the turn so each step prices at its model's rate; a spec its catalog has not priced is asked again,
+   *  and a refused one stays blended. */
   warm(specs: readonly string[]): Promise<void> {
-    return settle(Effect.forEach(specs.filter((spec) => !this.others.has(spec)), (spec) => Effect.catchCause(Effect.gen({ self: this }, function* () {
-      const info = yield* this.lookup(spec);
-
-      if (info !== null) this.others.set(spec, info);
-    }), (failed) => Effect.sync(() => {
+    return settle(Effect.forEach(specs, (spec) => Effect.catchCause(this.joined(this.armed(spec, true)), (failed) => Effect.sync(() => {
       diagnostics.failure(
         'model.catalog_lookup_failed',
         toKinuError({ doing: 'price a fallback model', cause: Cause.squash(failed), otherwise: 'unavailable' }),
@@ -125,46 +110,43 @@ export class ModelCatalogSession {
     })), { concurrency: 'unbounded', discard: true }));
   }
 
-  /** The turn's model, or another `spec` once warmed, as `pricing` reads it. */
   acceptedMedia(spec?: string): ReadonlySet<MediaModality> {
     const named = spec ?? this.deps.effectiveSpec();
-    const info = this.infoOf(named);
 
-    return acceptedMediaForModel({ spec: named, catalogInputModalities: info?.inputModalities });
+    return acceptedMediaForModel({ spec: named, catalogInputModalities: this.infoOf(named)?.inputModalities });
   }
 
-  private armed(spec: string): CachedEntry {
-    if (this.cached?.spec !== spec) {
-      this.cached = { spec, info: null };
-      // Held, not left floating: a sync read arms it, and only `resolved` answers its refusal.
-      this.cached.lookup = hold(this.lookup(spec, info => {
-        if (info && this.cached?.spec === spec) this.cached.info = info;
-      }));
-    }
-
-    return this.cached;
+  private infoOf(spec?: string): ModelInfo | null {
+    return this.armed(spec ?? this.deps.effectiveSpec()).info;
   }
 
-  private windowOf(spec: string): ModelWindow {
-    return this.windowFrom(spec, this.armed(spec).info);
+  /** `spec`'s entry, its lookup armed on first sight; `again` re-arms one that settled with no row. */
+  private armed(spec: string, again = false): CachedEntry {
+    const known = this.entries.get(spec);
+
+    if (known !== undefined && !(again && known.settled && known.info === null)) return known;
+    const entry: CachedEntry = { info: null, settled: false };
+
+    // Held, not left floating: a sync read arms it, and only an awaited read answers its refusal.
+    entry.lookup = hold(Effect.ensuring(this.lookup(spec, (info) => { entry.info = info; }), Effect.sync(() => { entry.settled = true; })));
+    this.entries.set(spec, entry);
+
+    return entry;
+  }
+
+  /** The entry's held lookup, its refusal failing here. */
+  private joined(entry: CachedEntry): Effect.Effect<void> {
+    return Effect.gen(function* () {
+      const held = entry.lookup;
+
+      if (held !== undefined) yield* (yield* Effect.promise(() => held));
+    });
   }
 
   private windowFrom(spec: string, info: ModelInfo | null): ModelWindow {
     const window = modelWindow(info);
 
     return window.contextWindow === null ? { ...window, contextWindow: this.deps.measured(spec) } : window;
-  }
-
-  private resolvedOf(spec: string): Effect.Effect<ModelWindow> {
-    return Effect.gen({ self: this }, function* () {
-      // Joins the held lookup, keeping one catalog round trip.
-      const held = this.armed(spec).lookup;
-
-      // A held refusal is answered here, as the awaited read it was before.
-      if (held !== undefined) yield* (yield* Effect.promise(() => held));
-
-      return this.windowOf(spec);
-    });
   }
 
   private lookup(spec: string, accept?: (info: ModelInfo | null) => void): Effect.Effect<ModelInfo | null> {
