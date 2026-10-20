@@ -34,6 +34,7 @@ async function pick(page: Page, label: string, words: string): Promise<void> {
   for (const option of await page.$$('[role="option"]')) {
     if (!await option.evaluate((node, wanted) => node.checkVisibility() && node.textContent?.trim() === wanted, words)) continue;
     await option.click();
+    await page.waitForFunction((control, wanted) => document.querySelector(control)?.textContent?.includes(wanted), {}, selector, words);
     expect(await page.$eval(selector, (trigger) => trigger.textContent ?? '')).toContain(words);
 
     return;
