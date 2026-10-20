@@ -6,7 +6,9 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { simulateReadableStream } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createTestActors, unpricedLedger } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
@@ -106,13 +108,26 @@ describe('an endpoint model files every call it makes', () => {
 describe('a structured call', () => {
   const Fact = v.object({ key: v.string(), value: v.unknown(), note: v.optional(v.string()) });
 
+  const USAGE = { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } };
+
+  /** `text` as a model streams it, in pieces of `piece` characters `delay` ms apart, stopping as `finish` says. */
+  const streamed = (text: string, opts: { finish?: 'stop' | 'length'; piece?: number; delay?: number } = {}) => {
+    const piece = opts.piece ?? text.length;
+    const deltas = Array.from({ length: Math.ceil(text.length / Math.max(1, piece)) }, (_, at) => text.slice(at * piece, (at + 1) * piece));
+
+    const parts: LanguageModelV3StreamPart[] = [
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 't' },
+      ...deltas.map((delta): LanguageModelV3StreamPart => ({ type: 'text-delta', id: 't', delta })),
+      { type: 'text-end', id: 't' },
+      { type: 'finish', finishReason: { unified: opts.finish ?? 'stop', raw: undefined }, usage: USAGE },
+    ];
+
+    return { stream: simulateReadableStream({ chunks: parts, chunkDelayInMs: opts.delay ?? null }) };
+  };
+
   /** A model that answers `text`, stopping as `finish` says, having read 9 tokens and written 2. */
-  const answering = (text: string, finish: 'stop' | 'length' = 'stop') => new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: 'text' as const, text }], finishReason: { unified: finish, raw: undefined }, warnings: [],
-      usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
-    }),
-  });
+  const answering = (text: string, finish: 'stop' | 'length' = 'stop') => new MockLanguageModelV3({ doStream: async () => streamed(text, { finish }) });
 
   test('an answer off the schema is refused as wrong, and was billed like any answer', async () => {
     const { report, producers } = ledger();
@@ -133,6 +148,20 @@ describe('a structured call', () => {
 
     await expect(generateObjectReported({ model: answering('{"key":"build', 'length'), prompt: 'p' }, Fact, { spend: { source: 'fast', report } }))
       .rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  // Workers AI ended a 14k-token dreamer brief's non-streamed request at 10 minutes (408, 3046) while the same call
+  // streamed answered in 7 (2026-10-20): a provider ends a request that sends nothing for that long.
+  test('a call that reasons longer than a provider holds a silent request is answered, as it streams', async () => {
+    const { report, producers } = ledger();
+
+    const model = new MockLanguageModelV3({
+      doGenerate: async () => { throw new Error('Request timeout (HTTP 408, 3046)'); },
+      doStream: async () => streamed('{"key":"build.dir","value":"dist"}', { piece: 4, delay: 5 }),
+    });
+
+    expect(await generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Fact, { spend: { source: 'judge', report } })).toEqual({ key: 'build.dir', value: 'dist' });
+    expect(producers()).toEqual({ judge: { calls: 1, unmeasured: 0, usage: { input: 9, output: 2 } } });
   });
 
   // OpenAI's strict mode refuses a schema with an optional field or an open value before answering.
