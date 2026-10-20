@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { writeFileSync, unlinkSync, rmSync } from 'node:fs';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
-import { requireBuild } from '@kinu.run/core';
+import { requireBuild, stoppedProgram } from '@kinu.run/core';
 import { ISOLATED_BUN_FLAGS } from '@kinu.run/core';
 
 const subprocessResultSchema = v.variant('ok', [
@@ -62,7 +62,7 @@ export function createSandboxedExecutor(): Executor {
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
 
       if (providerList.some(p => Object.keys(p.fns).length > 0)) {
-        return executeInProcess(code, providerList);
+        return stoppedProgram(() => executeInProcess(code, providerList), opts);
       }
 
       // Apart on purpose: a verifier check cannot read its receipt, nor a probe the owner's project.

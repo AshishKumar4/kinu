@@ -399,6 +399,40 @@ describe("a program awaiting a host call past a minute still gets its answer", (
   });
 });
 
+describe("a program given a deadline is ended by the sandbox, whatever it awaits", () => {
+  test("one that waits on nothing of the host is ended at its deadline, inside the sandbox", async () => {
+    const clock = workerClock();
+    // `WorkerLoader` is a workerd binding with no constructible form; codemode reaches only `load`.
+    const loader: WorkerLoader = Object.create(inProcessWorkerLoader(clock));
+    const launcher = new CodemodeLauncher({ ...workerContext(), props: { kinuNode: false, egress: null, env: {}, deadlineMs: 30_000 } }, { LOADER: loader });
+    const run = launcher.run("async () => await new Promise(() => {})", []);
+
+    await clock.armed;
+    clock.advance(30_001);
+
+    expect(await run).toEqual({ result: undefined, error: "Execution timed out", logs: [] });
+  });
+
+  test("the runtime's executor hands its deadline to the launch, and a stop answers at once", async () => {
+    const asked: Array<{ readonly deadlineMs?: number } | undefined> = [];
+    const stop = new AbortController();
+
+    const executor = createRuntimeExecutor({
+      run: async (_source, _providers, opts) => {
+        asked.push(opts);
+
+        return await new Promise(() => {});
+      },
+    });
+
+    const run = executor.execute("async () => 1", [], { deadlineMs: 30_000, signal: stop.signal });
+    stop.abort(new Error("the replay passed its bound"));
+
+    expect(await run).toEqual({ result: undefined, error: "the program was stopped: the replay passed its bound" });
+    expect(asked).toEqual([{ deadlineMs: 30_000 }]);
+  });
+});
+
 /** A box whose desktop holds each action until its `killExec` ends it, as a held key's run does (D89). */
 function desktopBox() {
   const sent: Array<{ readonly driver: string; readonly execId?: string }> = [];

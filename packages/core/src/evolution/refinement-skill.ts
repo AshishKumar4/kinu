@@ -6,24 +6,22 @@ import { exists, readText as nimbusReadText, type VFS, writeText } from '@nimbus
 // a section does. Trust is written before the file: a trust row without a file is inert; a file without a trust row
 // is in the prompt as reference material.
 
-import { instructionDigest } from '../safety/instruction-trust';
+import { instructionDigest, type InstructionApproval } from '../safety/instruction-trust';
+import type { AgentConfigStore } from '../config/store';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
-import { BUILTIN_SKILL_NAMES, workspaceSkillPath } from '../skills/discover';
+import { BUILTIN_SKILL_NAMES, workspaceSkillName, workspaceSkillPath, type DiscoverOpts } from '../skills/discover';
 import { parseSkillFile, skillNameProblem } from '../skills/parse';
 import type { AgentRuntime } from '../types/agent-runtime';
 
 import { vfsDirname } from '../utils/vfs-helpers';
+import { writeConditionally } from '../vfs/conditional-write';
+import { changeStanding } from './change-standing';
 import { Effect, Result } from 'effect';
 import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import {
   createRefinementStore, refinementStagingPath,
   type RefinementDeps, type RefinementEdit, type RefinementRequest, type RefinementRoute,
 } from './refinement';
-
-/** Where the turn's skills index reads, so a dream's skill lands where discovery finds it. */
-function planeOf(deps: Pick<RefinementDeps, 'skillsVfs'>): VFS {
-  return deps.skillsVfs;
-}
 
 async function readText(vfs: VFS, path: string): Promise<string | null> {
   if (!await exists(vfs, path)) return null;
@@ -102,7 +100,7 @@ export async function routeSkill(
         + 'a dream must not talk over it. Propose a differently-named skill');
   }
 
-  const vfs = planeOf(deps);
+  const vfs = deps.skillsVfs;
 
   if (await exists(vfs, canonical)) {
     return refused(`${canonical} already exists: those bytes are the owner's or another `
@@ -151,12 +149,28 @@ export function activateDreamSkills(deps: RefinementDeps): Promise<void> {
 
         // Trust first; see the module header. A failed promotion stays staged for the next cold turn.
         if (standing === null) approvals.approve(route.target, route.digest, 'dream');
-        const promoted = yield* Effect.result(promoteStagedSkill(planeOf(deps), request, route));
+        const promoted = yield* Effect.result(promoteStagedSkill(deps.skillsVfs, request, route));
 
         if (Result.isSuccess(promoted) && promoted.success) diagnostics.event('dream.skill_applied', { change: route.target, dream: request.id });
       }
     }
   }));
+}
+
+/**
+ * Which dream skills a reader's turns index: at its own cold turn, every dream skill trusted now, kept as its pin; at a
+ * warm turn, its pin. Discovery passes over the rest, so a skill one agent's cold turn put in the shared skills root
+ * moves no warm agent's prompt prefix. A skill the owner trusts, or revokes, is the owner's: it moves every reader at once.
+ */
+export function dreamSkillsHidden(
+  approvals: readonly InstructionApproval[], config: Pick<AgentConfigStore, 'getDreamSkills' | 'setDreamSkills'>, cold: boolean,
+): NonNullable<DiscoverOpts['hides']> {
+  const dream = new Set(approvals.filter((row) => row.origin === 'dream' && row.decision === 'approved').map((row) => row.path));
+
+  if (cold) config.setDreamSkills([...dream].flatMap((path) => workspaceSkillName(path) ?? []));
+  const pinned = new Set(config.getDreamSkills().map(workspaceSkillPath));
+
+  return (file) => dream.has(file.path) && !pinned.has(file.path);
 }
 
 /**
@@ -197,13 +211,14 @@ function promoteStagedSkill(
           + 'something nobody reviewed');
       }
 
-      // Staging is untouched, so the next cold turn retries.
+      // Created only where no file is, in one call on the plane's side: bytes the owner wrote since the read above are
+      // refused, never overwritten. Staging is untouched, so the next cold turn retries.
       yield* Effect.tryPromise({
         try: async () => {
           await vfs.mkdir(vfsDirname(route.target), { recursive: true });
-          await writeText(vfs, route.target, source);
+          await writeConditionally(vfs, route.target, new TextEncoder().encode(source), { kind: 'absent' });
         },
-        catch: (cause) => `could not write ${route.target}: ${renderThrownChain({ cause })}`,
+        catch: (cause) => `could not create ${route.target}: ${renderThrownChain({ cause })}. The skill is still staged at ${staged}`,
       });
 
       // Read back: a torn or transformed write would be trusted but unreviewed.
@@ -240,17 +255,18 @@ export function settleDreamSkill(
   route: RefinementRoute,
 ): Promise<{ readonly state: 'applied' | 'rolled_back' | 'pending'; readonly reason?: string }> {
   return settle(Effect.gen(function* () {
-    const standing = deps.approvals?.get(route.target);
-    const vfs = planeOf(deps);
+    const owners = { sql: deps.control.sql, actor: deps.control.rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
+    const standing = changeStanding(owners, deps.facts, { request, route })?.standing;
+    const vfs = deps.skillsVfs;
 
-    if (standing === null || standing === undefined) return { state: 'pending' as const };
+    if (standing === 'waiting') return { state: 'pending' as const };
 
-    if (standing.decision === 'revoked' || standing.digest !== route.digest) {
+    if (standing === 'reverted') {
       yield* Effect.promise(() => discardSkillStaging(vfs, request, route));
 
       return {
         state: 'rolled_back' as const,
-        reason: standing.decision === 'revoked'
+        reason: deps.approvals?.get(route.target)?.decision === 'revoked'
           ? 'you revoked trust for these bytes'
           : 'the trust row moved to different bytes, so these are not in effect',
       };
@@ -295,7 +311,7 @@ export async function revertDreamSkill(
   }
 
   approvals.revoke(route.target);
-  const vfs = planeOf(skills);
+  const vfs = skills.skillsVfs;
   const file = await readText(vfs, route.target);
   const removed = file !== null && instructionDigest(file) === route.digest;
 

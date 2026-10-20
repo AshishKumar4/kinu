@@ -39,6 +39,8 @@ export interface DiscoverOpts {
   admissionTokens: number;
   /** Over the bytes read: a skill trusted for exactly them states its description in the index. */
   trust: InstructionTrustResolver;
+  /** A file this reader's turns do not index yet, passed over unread (`dreamSkillsHidden`); absent: none. */
+  hides?: (file: Pick<SkillFile, 'name' | 'path'>) => boolean;
 }
 
 /** The file a skill name loads from; `folder` is set for a `<name>/SKILL.md` folder. */
@@ -176,6 +178,8 @@ export function discoverSkills(
     );
 
     for (const { name, source, path } of yield* Effect.promise(() => listSkillFiles(vfs, onErr))) {
+      if (opts.hides?.({ name, path }) === true) continue;
+
       if (slots <= 0) { omitted += 1; continue; }
 
       slots -= 1;
@@ -264,6 +268,13 @@ export async function readSkillFile(
 
 export function workspaceSkillPath(name: string): string {
   return `${WORKSPACE_SKILLS_DIR}/${name}/${SKILL_FOLDER_FILE}`;
+}
+
+/** The name `workspaceSkillPath` placed at `path`; null for any other path. */
+export function workspaceSkillName(path: string): string | null {
+  const name = path.slice(`${WORKSPACE_SKILLS_DIR}/`.length, -`/${SKILL_FOLDER_FILE}`.length);
+
+  return name !== '' && workspaceSkillPath(name) === path && !name.includes('/') ? name : null;
 }
 
 /** Admission derives every active policy field from its own raw snapshot. */

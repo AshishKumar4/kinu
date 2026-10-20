@@ -13,6 +13,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 // user's own sentence in the reviewed turns.
 
 import { renderWatch } from './watch';
+import { changeStanding, type ChangeOwners } from './change-standing';
 import { confusedPicks, renderConfusedPicks } from './picks';
 import { discoverSkills } from '../skills/discover';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
@@ -20,7 +21,7 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
 import { scoreAuthoredEdit } from './judge';
-import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence, type ArtifactVersion } from './artifacts';
+import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { listTurnRatings, renderRating, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
@@ -379,7 +380,7 @@ function review(
       if (rounds.length === 0) {
         rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
 
-        if (!claim.record(reviewRounds(rounds))) return null;
+        if (!claim.record({ review: { rounds } } satisfies SettleRefinementPatch)) return null;
       }
 
       const latest = rounds[rounds.length - 1];
@@ -399,7 +400,7 @@ function review(
         if (Result.isFailure(judged)) return { refused: judged.failure };
         rounds[round] = { evidence: latest.evidence, verdicts: [...judged.success] };
 
-        if (!claim.record(reviewRounds(rounds))) return null;
+        if (!claim.record({ review: { rounds } } satisfies SettleRefinementPatch)) return null;
         continue;
       }
 
@@ -421,14 +422,9 @@ function review(
       proposal = revised.success;
       rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
 
-      if (!claim.record({ ...reviewRounds(rounds), proposal, detail: proposal.summary })) return null;
+      if (!claim.record({ review: { rounds }, proposal, detail: proposal.summary } satisfies SettleRefinementPatch)) return null;
     }
   });
-}
-
-/** The review so far, as the row records it. */
-function reviewRounds(rounds: RefinementRequest['review']['rounds']): SettleRefinementPatch {
-  return { review: { rounds } };
 }
 
 /** What the reviewer reads about each edit, measured before it is judged; a static gate's refusal routes it nowhere. */
@@ -488,6 +484,23 @@ function parseProposal(scope: RefinementScope) {
     return parsed.output.scope === scope ? Result.succeed(parsed.output) : Result.fail(`the dreamer proposed at ${parsed.output.scope} scope and this dream is ${scope} scope`);
   };
 }
+
+/** The stores a dream's changes live in, as this lane holds them. */
+function changeOwners(deps: RefinementDeps): ChangeOwners {
+  return { sql: deps.control.sql, actor: deps.control.rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
+}
+
+/** The owner's order for where a lesson goes, which the dreamer drafts by and the reviewer holds it to. */
+const EDIT_PRIORITY = 'Put a lesson in the first place that can carry it: a prompt section or a tool description, then a '
+  + 'memory fact, and a skill last. A skill is for a multi-step procedure that no prompt section or tool description '
+  + 'can carry; the owner does not want skills that could have been avoided.';
+
+/** The headings the dreamer's and the reviewer's briefs share. */
+const DREAM_BRIEF_HEADINGS = {
+  watch: '## What changed since, and how the turns went',
+  picks: '## Skills and tools picked, then switched from or corrected',
+  answer: '## Your answer',
+} as const;
 
 /** One of the nine error codes, so owner-visible refusals use the shared vocabulary. */
 const OFF_SCHEMA_ANSWER: ErrorCode = 'bad_input';
@@ -595,17 +608,18 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   const trajectory = reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n');
   const picks = await picksSection(deps, reviewed);
 
+  // Each as the agent reads it now, so an edit replaces the text in effect, not the bundled one.
+  const current = (label: string, text: string): string => `### ${label} (${String(Buffer.byteLength(text, 'utf8'))} bytes)\n${text.trimEnd()}`;
+
   const sections = PROMPT_SECTIONS
-    .map((section) => `  - ${section.id} (${String(Buffer.byteLength(section.source, 'utf8'))} bytes)`)
-    .join('\n');
+    .map((section) => current(section.id, artifactBody(sql, actor, sectionArtifact(section.id)) ?? section.source))
+    .join('\n\n');
 
   const tools = Object.keys(BUILTIN_TOOL_DESCRIPTIONS).map((tool) => {
-    const description = artifactBody(sql, actor, toolArtifact(tool, 'description')) ?? '';
     const schema = artifactBody(sql, actor, toolArtifact(tool, 'schema'));
 
-    return `  - ${tool}: description ${String(Buffer.byteLength(description, 'utf8'))} bytes`
-      + (schema === null ? '' : `, schema ${String(Buffer.byteLength(schema, 'utf8'))} bytes`);
-  }).join('\n');
+    return [current(`${tool} description`, artifactBody(sql, actor, toolArtifact(tool, 'description')) ?? ''), ...(schema === null ? [] : [current(`${tool} schema`, schema)])].join('\n\n');
+  }).join('\n\n');
 
   const facts = deps.facts.recentTopK(20);
 
@@ -630,13 +644,17 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     '## The artifacts you may address, and their owners',
     '',
-    'Registered prompt sections (`prompt_section`): replacing one costs every turn its bytes,',
-    'and a longer section must earn them with a strictly better measured score:',
+    EDIT_PRIORITY,
+    '',
+    'Registered prompt sections (`prompt_section`), each as it reads now: replacing one costs every turn its bytes,',
+    'and a longer section must earn them with a strictly better measured score.',
+    '',
     sections,
     '',
-    'Built-in tool texts (`tool_description`): what the agent reads about each tool on every turn, its',
-    'description or its input fields\' descriptions (`schema`, one JSON object). Change one where the turns show',
-    'the agent misusing that tool, or picking it where another fits; it costs every turn its bytes too:',
+    'Built-in tool texts (`tool_description`), each as it reads now: what the agent reads about each tool on every',
+    'turn, its description or its input fields\' descriptions (`schema`, one JSON object). Change one where the turns',
+    'show the agent misusing that tool, or picking it where another fits; it costs every turn its bytes too.',
+    '',
     tools,
     '',
     'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
@@ -644,8 +662,9 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     'quote is not in the trajectory is refused:',
     factLines,
     '',
-    'Skill files (`skill`): a procedure the agent follows when its description matches the work. An accepted',
-    'skill becomes trusted at the next turn whose prompt cache is cold, and the owner can revert it.',
+    'Skill files (`skill`): a procedure the agent follows when its description matches the work, and the last',
+    'resort: only a multi-step procedure that no prompt section or tool description can carry. An accepted skill',
+    'becomes trusted at the next turn whose prompt cache is cold, and the owner can revert it.',
     '',
     'Every description you write, for a skill or a tool, says when it applies, and when a similar one fits instead.',
     '',
@@ -657,17 +676,17 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     history || '  (this is the first refinement)',
     '',
-    '## What changed since, and how the turns went',
+    DREAM_BRIEF_HEADINGS.watch,
     '',
-    renderWatch(sql, actor) || '  (no earlier dream changed anything)',
+    renderWatch(changeOwners(deps)) || '  (no earlier dream changed anything)',
     '',
-    PICKS_HEADING,
+    DREAM_BRIEF_HEADINGS.picks,
     '',
     picks || NO_CONFUSED_PICKS,
     '',
     `## Files you may read yourself: ${contextRefs.length === 0 ? '(none in this workspace)' : contextRefs.join(', ')}`,
     '',
-    '## Your answer',
+    DREAM_BRIEF_HEADINGS.answer,
     '',
     `One JSON object carrying exactly these keys: ${answerKeys}, and no others. Every level is`,
     'strict: a key that is not named here refuses the whole proposal rather than being dropped, so',
@@ -753,6 +772,9 @@ async function renderReviewerBrief(
       'quality (is it right, and in the right place), effectiveness (would it have changed the turns that went wrong,',
       'without harming the ones that went well) and size (does it earn every byte it adds to every future turn).',
       '',
+      EDIT_PRIORITY,
+      'Reject a skill that an edit to a prompt section or a tool description would cover.',
+      '',
       `## The turns it read (${String(input.reviewed.length)})`,
       '',
       input.reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n') || '(none)',
@@ -761,11 +783,11 @@ async function renderReviewerBrief(
       '',
       dreamHistory(sql, rt.actor, request) || '  (this is the first dream)',
       '',
-      '## What changed since, and how the turns went',
+      DREAM_BRIEF_HEADINGS.watch,
       '',
-      renderWatch(sql, rt.actor) || '  (no earlier dream changed anything)',
+      renderWatch(changeOwners(deps)) || '  (no earlier dream changed anything)',
       '',
-      PICKS_HEADING,
+      DREAM_BRIEF_HEADINGS.picks,
       '',
       await picksSection(deps, input.reviewed) || NO_CONFUSED_PICKS,
       '',
@@ -779,7 +801,7 @@ async function renderReviewerBrief(
       'is 10% over the bundled size, a placeholder until a measurement of prompt sizes against the cache\'s cost sets it:',
       'an edit that grows them past it must shrink something else.',
       '',
-      '## Your answer',
+      DREAM_BRIEF_HEADINGS.answer,
       '',
       'One JSON object with one verdict per edit, by its number: `accept` routes it, `reject` drops it, and `revise`',
       'sends it back to its author once with your note, after which you judge it again. Every verdict carries a note.',
@@ -816,8 +838,6 @@ async function renderReviseBrief(
     ].join('\n'),
   };
 }
-
-const PICKS_HEADING = '## Skills and tools picked, then switched from or corrected';
 
 const NO_CONFUSED_PICKS = '  (no turn here switched picks, or was corrected after one)';
 
@@ -1028,19 +1048,27 @@ function settledStage(landed: number, undone: number): RefinementStage {
  * the guarded transition finds the row already moved.
  */
 /** A section edit is pending until a cold turn makes it current, or the owner discards it. */
-function sectionRouteState(versions: readonly ArtifactVersion[], target: string): 'pending' | 'rolled_back' | 'promoted' {
-  const row = versions.find((candidate) => `${candidate.artifactId}@${String(candidate.version)}` === target);
+/** A staged text or skill edit's state, as its owner holds it; null for any other route. */
+async function stagedRouteState(
+  deps: RefinementDeps, owners: ChangeOwners, request: RefinementRequest, route: RefinementRoute,
+): Promise<Awaited<ReturnType<typeof settleDreamSkill>> | null> {
+  if (route.disposition !== 'staged') return null;
 
-  if (row === undefined || row.decidedAt === null) return 'pending';
+  if (route.kind === 'skill') return await settleDreamSkill(deps, request, route);
 
-  return row.status === 'rolled_back' ? 'rolled_back' : 'promoted';
+  if (route.owner !== 'artifact_versions') return null;
+  const standing = changeStanding(owners, deps.facts, { request, route })?.standing;
+
+  if (standing === 'reverted') return { state: 'rolled_back' };
+
+  return { state: standing === 'in_effect' || standing === 'replaced' ? 'applied' : 'pending' };
 }
 
 async function settleRoutes(
   deps: RefinementDeps,
   request: RefinementRequest,
 ): Promise<RefinementRequestView | null> {
-  const versions = listArtifactVersions(deps.control.sql, deps.control.rt.actor);
+  const owners = changeOwners(deps);
   let promoted = 0;
   let rolledBack = 0;
   let rejected = 0;
@@ -1052,26 +1080,17 @@ async function settleRoutes(
   rejected = request.routes.filter((route) => route.disposition === 'rejected').length;
 
   for (const route of request.routes) {
-    if (route.disposition === 'staged' && route.owner === 'artifact_versions') {
-      const state = sectionRouteState(versions, route.target);
+    const settled = await stagedRouteState(deps, owners, request, route);
 
-      if (state === 'pending') pending += 1;
-      else if (state === 'rolled_back') rolledBack += 1;
-      else promoted += 1;
-      continue;
-    }
+    if (settled === null) continue;
 
-    if (route.disposition === 'staged' && route.kind === 'skill') {
-      const settled = await settleDreamSkill(deps, request, route);
+    if (settled.state === 'pending') {
+      pending += 1;
 
-      if (settled.state === 'pending') {
-        pending += 1;
-
-        // A promotion that cannot complete stays pending with its reason shown.
-        if (settled.reason !== undefined) blocked.push(settled.reason);
-      } else if (settled.state === 'rolled_back') rolledBack += 1;
-      else promoted += 1;
-    }
+      // A promotion that cannot complete stays pending with its reason shown.
+      if (settled.reason !== undefined) blocked.push(settled.reason);
+    } else if (settled.state === 'rolled_back') rolledBack += 1;
+    else promoted += 1;
   }
 
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);

@@ -1043,7 +1043,7 @@ export { craftPreference, craftPreferences } from './craft/preference';
 export { activateReplayedScaffold } from './scaffold/replay-gate';
 
 export {
-  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn, type ReplayVerdict,
+  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn,
 } from './scaffold/replay';
 
 export { type CraftCall } from './craft/in-episode';
@@ -1169,6 +1169,8 @@ export {
 } from './tools/inline-executor';
 
 export { explainSandboxError } from './tools/sandbox-errors';
+
+export { stoppedProgram } from './execution/program-stop';
 
 export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
@@ -1899,7 +1901,7 @@ export {
   listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
-export { activateDreamSkills } from './evolution/refinement-skill';
+export { activateDreamSkills, dreamSkillsHidden } from './evolution/refinement-skill';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 

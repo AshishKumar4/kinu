@@ -1,5 +1,6 @@
 
 import type { MissionGovernor } from '../mission-budget';
+import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import type * as v from 'valibot';
 import type { CompletedTurnSchema } from './session-window';
 
@@ -33,6 +34,8 @@ export interface EvolutionConfig {
   lifetimeEvolutionInterval: number;
   /** Reached only for turns carrying {@link CompletedTurn.missionLabels}. Absent = every review is ungoverned. */
   governor?: MissionGovernor;
+  /** The trust authority a dream's skill lives by, so the rater is asked about one in effect; absent: none is. */
+  approvals?: Pick<InstructionApprovalStore, 'get'>;
 }
 
 export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {

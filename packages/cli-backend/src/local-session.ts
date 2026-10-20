@@ -81,14 +81,14 @@ import { ActorSession, type ActorTurnLease,
   type DynamicContext,
   type RuntimeFacts,
   initWorkspaceSchema, initPendingSendTables, PendingSendStore,
-  InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
+  InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision, type InstructionApproval,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
   getEvolutionStatus, recordedTurns, type RecordedTurn,
   type ScaffoldControl,
   createScaffoldCandidateSurface,
   type EvolutionStatus,
-  activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
   type RefinementLaneStep,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
@@ -1681,6 +1681,9 @@ export class LocalAgentSession {
       await activateReplayedScaffold(this.refinementDeps.control);
     }
 
+    // After the activation above, so a cold turn takes in what it just put in the root.
+    this.turnHidesSkills = dreamSkillsHidden(this.instructionApprovals.list(), this.config, cold);
+
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
@@ -1719,6 +1722,9 @@ export class LocalAgentSession {
   /** The turn's evolved text; between turns, the promoted text. */
   private turnArtifacts: ReturnType<typeof artifactOverrides> | null = null;
 
+  /** The skills this session's segment does not index yet; set as each turn is prepared (`dreamSkillsHidden`). */
+  private turnHidesSkills: ReturnType<typeof dreamSkillsHidden> | undefined;
+
   private currentTurnArtifacts(): ReturnType<typeof artifactOverrides> {
     return this.turnArtifacts ?? artifactOverrides(currentArtifacts(this.rt.storage.sql, this.rt.actor));
   }
@@ -1749,7 +1755,7 @@ export class LocalAgentSession {
       backend: 'cli-local',
       executors: () => this.rt.executionRouter?.listExecutors() ?? [],
       config: this.config,
-      skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust),
+      skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust, this.turnHidesSkills),
       models: this.turnModels(),
       profileInputs: async () => {
         const inputs = await this.profiles().inputs();
@@ -2217,6 +2223,11 @@ export class LocalAgentSession {
   /** The newest answered turns as recorded, which a pending scaffold is replayed against (`scaffold/replay.ts`). */
   recordedTurns(limit?: number): Promise<RecordedTurn[]> {
     return recordedTurns(this.stores, limit);
+  }
+
+  /** The standing trust decision for an instruction path: the engine's reading of whether a dream's skill is in effect. */
+  instructionApproval(path: string): InstructionApproval | null {
+    return this.instructionApprovals.get(path);
   }
 
   getEvolutionStatus(): EvolutionStatus {
