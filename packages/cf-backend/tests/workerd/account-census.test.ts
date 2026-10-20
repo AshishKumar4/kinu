@@ -83,7 +83,7 @@ describe("deleting an account on real workerd, every store's census", () => {
       account: { user_workspaces: 1, user_devices: 1, user_credentials: 1, user_share_cards: 1, user_profile: 1 },
       mailbox: { mail_box: 1, mail_messages: 1, mail_attachments: 1 },
       mailName: { label: 'priya', user_id: priya.userId },
-      previewKeys: 2,
+      previewKeys: 1,
       controlPlane: { cp_users: 1, cp_workspaces: 1, cp_feedback: 2, cp_audit_naming: 1, gallery_stars: 1, gallery_installs: 1, feedback_objects: 1 },
       signIn: 1,
       danaWorkspace: { slate_share_users: 2, slate_share_users_revoked: 0, slate_viewer_requests: 0, slate_edit_marks: 1 },
