@@ -84,18 +84,6 @@ const NETWORK_REFUSED = 'chatgpt.com refused this server\'s network (HTTP 403 bl
 
 const CODEX_MODELS_TTL_MS = 5 * 60_000;
 
-/** All an egress route may carry for Codex. */
-export function codexEgressAllowed(input: { readonly method: string; readonly url: string }): boolean {
-  const url = URL.parse(input.url);
-
-  if (url?.protocol !== 'https:' || url.hostname !== 'chatgpt.com' || url.port !== '') return false;
-  const { pathname } = url;
-
-  if (input.method === 'GET') return pathname === '/backend-api/codex/models' || pathname === '/backend-api/wham/usage';
-
-  return input.method === 'POST' && pathname === '/backend-api/codex/responses';
-}
-
 export interface CodexProviderOptions {
   baseURL?: string;
   /** Transport for chatgpt.com when this runtime's egress is refused there (Workers). */

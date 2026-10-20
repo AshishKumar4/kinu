@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { objectNamed, DeviceDesktopSchema, DeviceHelloSchema, DeviceUpdateHelloSchema, DEVICE_FRAMES, NO_DESKTOP, type DeviceDesktop } from '@kinu.run/core';
 import {
-  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, codexEgressAllowed, chatgptEgressAllowed, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceExecOutput, NO_DEVICE_CONNECTED, watchedOutput, SEVERAL_DEVICES_CONNECTED, relayRefusal, type RelayedProvider, isWorkspaceName, nanoid, type DeviceCheckpointHint, type DeviceConsentRequest, type JsonObject, type JsonValue, CapabilityDeniedError, ownerCaller, type UserCaller, type ResolvedCaller, DeviceSocketHub, DeviceRequestLedger, type ClaimedDeviceRequest, type DeviceCancelOutcome, randomToken, sha256Hex, type DeviceChatGptStatus, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, readBuildStamp, BuildStampSchema, type BuildStamp, type DeviceUpdateFrame, type DeviceUpdateState, parseDeviceCancelAnswer, nextDeviceRequestId, DEVICE_METHOD, DEVICE_ERRORS, deviceFailure, deviceMethodHas, type DeviceTunnel, DEVICE_TIERS, effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause, summarizeDeviceAction, type DeviceStatus, type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
 } from '@kinu.run/core';
 import { attemptInItsWords, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -829,12 +829,11 @@ export class UserDevices {
     await this.host.requireTier(caller, 'credentials.model');
 
     return settle(Effect.gen({ self: this }, function* () {
-      const target = { method: request.method, url: request.url };
-      const allowed = codexEgressAllowed(target) || chatgptEgressAllowed(target);
-      const body = allowed && request.body !== null ? yield* attemptInItsWords('io', () => request.text()) : null;
+      const refused = relayRefusal(request.method, request.url);
+      const body = refused === null && request.body !== null ? yield* attemptInItsWords('io', () => request.text()) : null;
 
       // No await from here to the send.
-      if (!allowed) return yield* Effect.fail(new KinuError('denied', `the provider relay does not carry ${request.method} ${new URL(request.url).pathname}`));
+      if (refused !== null) return yield* Effect.fail(new KinuError('denied', refused));
 
       if (!this.isActiveDevice(deviceId)) return yield* Effect.fail(deviceFailure(DEVICE_ERRORS.disconnected, NO_DEVICE_CONNECTED));
 

@@ -5,7 +5,7 @@ import {
   DEFAULT_PROVIDER_RETRIES,
   OPENAI_CRED_KEY,
   catalogModelInfo,
-  codexEgressAllowed,
+  relayRefusal,
   createCodexProvider,
   createOpenAIProvider,
   createProviderRegistry,
@@ -268,7 +268,7 @@ describe('provider model catalogs', () => {
 
   });
 
-  test('the machine relay carries the Codex API and the plan usage /stats reads, nothing else', () => {
+  test('the machine relay carries the Codex API, the plan usage /stats reads and the ChatGPT plan API, nothing else', () => {
     const carried = [
       ['GET', 'https://chatgpt.com/backend-api/codex/models?client_version=1.0.0'],
       ['POST', 'https://chatgpt.com/backend-api/codex/responses'],
@@ -281,12 +281,18 @@ describe('provider model catalogs', () => {
       ['POST', 'https://chatgpt.com.example.com/backend-api/codex/responses'],
       ['POST', 'https://example.com/backend-api/codex/responses'],
       ['POST', 'https://chatgpt.com/backend-api/codex/responses/../../conversation'],
-    ].map(([method, url]) => [method, url, codexEgressAllowed({ method: method ?? '', url: url ?? '' })]);
+      ['POST', 'https://user:pass@chatgpt.com/backend-api/codex/responses'],
+      ['GET', 'https://api.openai.com/v1/models'],
+      ['POST', 'https://api.openai.com/v1/responses'],
+      ['POST', 'https://api.openai.com/v1/chat/completions'],
+    ].map(([method, url]) => [method, url, relayRefusal(method ?? '', url ?? '') === null]);
 
     expect(carried.filter(([, , allowed]) => allowed).map(([method, url]) => `${String(method)} ${String(url)}`)).toEqual([
       'GET https://chatgpt.com/backend-api/codex/models?client_version=1.0.0',
       'POST https://chatgpt.com/backend-api/codex/responses',
       'GET https://chatgpt.com/backend-api/wham/usage',
+      'GET https://api.openai.com/v1/models',
+      'POST https://api.openai.com/v1/responses',
     ]);
   });
 });
