@@ -95,7 +95,7 @@ function ThreadList({ resource, view, boxes, path, owner, reading, onOpen, onRet
 }
 
 function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   const route = useParams();
@@ -139,7 +139,9 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
       else next.set(key, value);
     }
 
-    navigation.run("Opening", async () => navigate(`${APP_ROUTES.mail}?${next.toString()}`, { replace: true }));
+    setParams(next, { replace: true });
+
+    if (opened !== null) navigation.run("Opening", async () => navigate(`${APP_ROUTES.mail}?${next.toString()}`, { replace: true }));
   };
 
   const back = (): void => {

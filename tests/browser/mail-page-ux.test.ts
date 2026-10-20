@@ -196,8 +196,16 @@ describe('Mail', () => {
       expect(await page.$eval('[data-mail-unverified-banner]', (banner) => banner.textContent)).toContain('Not verified · claims to be you');
       const fetched: string[] = [];
       const blocked: string[] = [];
+      const images = new Set<string>();
+      const network = await page.createCDPSession();
+      await network.send('Network.enable');
+      network.on('Network.requestWillBeSent', (event) => {
+        if (event.request.url.startsWith('https://avatars.githubusercontent.com/')) images.add(event.requestId);
+      });
+      network.on('Network.loadingFailed', (event) => {
+        if (event.blockedReason === 'csp' && images.has(event.requestId)) blocked.push(event.requestId);
+      });
       page.on('requestfinished', (request) => { if (request.url().startsWith('https://avatars.githubusercontent.com/')) fetched.push(request.url()); });
-      page.on('requestfailed', (request) => { if (request.url().startsWith('https://avatars.githubusercontent.com/')) blocked.push(request.failure()?.errorText ?? ''); });
       await page.click('[data-mail-thread="t-github"]');
       await reader(page, 't-github');
       expect(await page.$eval('iframe[data-mail-sealed]', (iframe) => ({ sandbox: iframe.getAttribute('sandbox'), sealed: iframe.getAttribute('srcdoc')?.includes("default-src 'none'") }))).toEqual({ sandbox: '', sealed: true });
@@ -206,7 +214,7 @@ describe('Mail', () => {
       if (frame === null || frame === undefined) throw new Error('no sealed mail frame');
       await frame.waitForFunction(() => document.readyState === 'complete');
       expect(await frame.$eval('img', (img) => img instanceof HTMLImageElement && img.naturalWidth === 0)).toBe(true);
-      expect(blocked).toContain('net::ERR_BLOCKED_BY_CSP');
+      expect(blocked).toHaveLength(1);
       expect(fetched).toEqual([]);
       await page.close();
     });
