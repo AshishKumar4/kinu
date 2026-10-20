@@ -79,6 +79,9 @@ const ITEMS: readonly ExploreItem[] = [
   }, []),
 ];
 
+/** Explore's apps as the Gallery lists them, so a listed slate's page opens on any of them (the whole app's frame). */
+export const EXPLORE_LISTINGS: readonly GalleryListing[] = ITEMS.flatMap((item) => (item.kind === "app" ? [item.app] : []));
+
 /** A blueprint's page: Kinu's own as the server makes it, and any other in the feed its card's words and a plain inside. */
 function pageOf(card: WorkspaceCard): BlueprintPage {
   const own = kinuBlueprint(card.id);

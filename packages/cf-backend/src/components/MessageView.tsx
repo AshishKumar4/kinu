@@ -12,6 +12,7 @@ import {
   ThumbsUpIcon, ThumbsDownIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
+import { settingsPath } from "@/components/SettingsRail";
 import { AskRecord } from "@/components/QuestionCard";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart, ReasoningUIPart } from "ai";
@@ -414,7 +415,7 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
       tone="p-warning"
       label="Machine"
       body={offline}
-      action={devices.length === 0 ? <Link to="/devices" className="mt-1 mr-2 shrink-0 p-row-text p-accent hover:underline">Connect</Link> : undefined}
+      action={devices.length === 0 ? <Link to={settingsPath("devices")} className="mt-1 mr-2 shrink-0 p-row-text p-accent hover:underline">Connect</Link> : undefined}
       hooks={{ "data-device-offline": String(devices.length) }}
     />
   );

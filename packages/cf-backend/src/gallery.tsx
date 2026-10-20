@@ -6,6 +6,8 @@ import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { answerPictures } from "@/lib/picture-src";
+import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
@@ -21,8 +23,7 @@ const IDLE_TURN: TurnLiveness = { kind: "idle" };
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
 import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@kinu.run/core/obs";
-import { Button } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Button } from "@/components/ui/Button";
 import {
   TrashIcon, BrainIcon, ListIcon,
 } from "@phosphor-icons/react";
@@ -4642,10 +4643,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Controls() {
   return (
     <div className="space-y-6 max-w-2xl">
-      {/* Kumo's `primary`/`destructive` force `!text-white` (2.4:1 on brass), so the filled action is FilledButton. */}
+      {/* The one Button's filled looks: primary, and the confirm dialog's destructive. */}
       <div className="flex flex-wrap items-center gap-3">
-        <FilledButton>FilledButton</FilledButton>
-        <FilledButton danger>danger</FilledButton>
+        <Button variant="primary" size="md">Primary</Button>
+        <Button variant="destructive" size="md">danger</Button>
         <Button variant="secondary" size="sm">Kumo secondary</Button>
         <Button variant="ghost" size="sm">Kumo ghost</Button>
         <button className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-quiet</button>
@@ -5364,7 +5365,7 @@ function GalleryModal() {
         onClose={() => {}}
         footer={<>
           <Button size="sm" variant="ghost">Cancel</Button>
-          <FilledButton danger>Remove</FilledButton>
+          <Button variant="destructive" size="md">Remove</Button>
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
@@ -7981,6 +7982,8 @@ function snapshotRaceFrame(): MountedFrame {
 
 
 async function mount() {
+  // Every frame's pictures are the gallery's own files: its server holds no picture routes.
+  answerPictures(galleryPicture);
   const document_ = publicDocument(frame);
 
   if (document_ !== null) {
@@ -8044,10 +8047,10 @@ async function mount() {
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
-    ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices", { node: <DevicesFrame />, entries: ["/user/settings#devices"] }],
     ["usermcp", { node: <UserMcpFrame />, entries: ["/user/settings/mcp"] }],
     ["characters", { node: <CharactersFrame />, entries: ["/"] }],
-    ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices-empty", { node: <DevicesFrame />, entries: ["/user/settings#devices"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);

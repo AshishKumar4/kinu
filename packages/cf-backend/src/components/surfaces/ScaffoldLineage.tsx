@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { useState, useCallback, type ReactNode } from "react";
-import { Button, Badge, Loader } from "@cloudflare/kumo";
+import { Badge, Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { PlayIcon } from "@phosphor-icons/react";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";

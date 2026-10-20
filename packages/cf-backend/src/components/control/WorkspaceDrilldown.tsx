@@ -3,10 +3,9 @@
  * confirms first, and binds to the owner the server resolved (`detail.userId`), never the URL.
  */
 import { useCallback, useState, type ReactNode } from 'react';
-import { Button } from '@cloudflare/kumo';
+import { Button } from "@/components/ui/Button";
 import { DeferredApprovalSchema, describeExecutionContext, executorLabel, revealMisrepresenting, type DeferredApproval } from '@kinu.run/core';
 import { TrashIcon, WarningIcon } from '@phosphor-icons/react';
-import { FilledButton } from '../ui/FilledButton';
 import { Modal } from '../ui/Modal';
 import { inputCls } from '../ui/form';
 import { Status } from '../ui/Status';
@@ -246,9 +245,9 @@ export function WorkspaceDrilldown(
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setPending(null)}>
               Cancel
             </Button>
-            <FilledButton danger={pending.danger} disabled={confirmBlocked} onClick={() => void runPending()}>
+            <Button variant={pending.danger ? "destructive" : "primary"} size="md" disabled={confirmBlocked} onClick={() => void runPending()}>
               {busy ? 'Working…' : confirmWord}
-            </FilledButton>
+            </Button>
           </>}
         >
           <div className="space-y-3">

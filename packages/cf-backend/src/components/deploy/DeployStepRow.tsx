@@ -1,10 +1,10 @@
 /** One deploy ledger row, shared by the guided page and the Updates page. */
 import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   ArrowClockwiseIcon, CheckCircleIcon, CircleIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { DeployStepRow } from "@kinu.run/core/deploy";
-import { FilledButton } from "@/components/ui/FilledButton";
 
 export function StepRow({ row, onRetry }: {
   row: DeployStepRow;
@@ -39,9 +39,9 @@ export function StepRow({ row, onRetry }: {
           )}
         </div>
         {row.state === "failed" && onRetry !== undefined && (
-          <FilledButton onClick={() => onRetry(row.id)} className="shrink-0">
+          <Button variant="primary" size="sm" onClick={() => onRetry(row.id)} className="shrink-0">
             <ArrowClockwiseIcon size={13} /> Retry this step
-          </FilledButton>
+          </Button>
         )}
       </div>
     </li>

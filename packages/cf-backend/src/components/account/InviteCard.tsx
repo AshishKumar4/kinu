@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
-import { UserPlusIcon } from "@phosphor-icons/react";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { builtinAuthStatus, createBuiltinLink, listBuiltinAccounts } from "@/lib/user-api";
@@ -36,7 +36,7 @@ export function InviteCard() {
   if (resource.status !== "ready" || !resource.value.enabled || !resource.value.owner) return null;
 
   return (
-    <Card title="Invite people" icon={UserPlusIcon}>
+    <Card title="Invite people">
       <Field label="Invite by email" hint="The link signs up this address only, once, within 7 days.">
         <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); }}>
           <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com"
@@ -49,7 +49,7 @@ export function InviteCard() {
       {invite !== null && (
         <div className="mt-3 flex items-center gap-2" data-invite-link>
           <code className="min-w-0 flex-1 truncate rounded-md border p-border p-fill px-3 py-2 font-mono p-row-text p-text select-all">{invite.url}</code>
-          <CopyButton value={invite.url} what="the invite link" size={14} className="p-btn-quiet inline-flex size-8 shrink-0 items-center justify-center" />
+          <CopyButton value={invite.url} what="the invite link" size={14} className={buttonClass({ iconOnly: true })} />
         </div>
       )}
       {invite !== null && (

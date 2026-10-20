@@ -2,8 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ArrowCounterClockwiseIcon, CameraIcon, MegaphoneIcon, RectangleIcon, EyeSlashIcon } from "@phosphor-icons/react";
-import { Button } from "@cloudflare/kumo";
-import { FilledButton } from "./ui/FilledButton";
+import { Button } from "@/components/ui/Button";
 import { Modal } from "./ui/Modal";
 import { inputCls } from "./ui/form";
 import { Cause, Effect } from "effect";
@@ -298,7 +297,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
     return (
       <div {...{ [FEEDBACK_OMIT_ATTR]: "1" }}>
         <Modal title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent" />}
-          footer={<FilledButton onClick={onClose} data-feedback-done>Done</FilledButton>}>
+          footer={<Button variant="primary" size="md" onClick={onClose} data-feedback-done>Done</Button>}>
           <p className="text-sm p-text-2" data-feedback-sent={send.id}>
             Thank you. Your report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
           </p>
@@ -322,9 +321,9 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
               onClick={sending ? stop : onClose} data-feedback-cancel={sending ? "stop" : "close"}>
               {sending ? "Stop" : "Cancel"}
             </Button>
-            <FilledButton onClick={submit} disabled={!sendable} data-feedback-send>
+            <Button variant="primary" size="md" onClick={submit} disabled={!sendable} data-feedback-send>
               {sendLabel(send.phase)}
-            </FilledButton>
+            </Button>
           </>
         }
       >

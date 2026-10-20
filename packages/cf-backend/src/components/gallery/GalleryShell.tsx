@@ -5,12 +5,12 @@
  * visitor does not have.
  */
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/Button";
 import { Outlet } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@cloudflare/kumo";
 import { detach, showing } from "@kinu.run/core/obs";
 import Layout from "@/components/layout";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AccountProvider } from "@/hooks/use-account";
@@ -33,7 +33,7 @@ function PublicShell() {
       <header className="flex h-12 shrink-0 items-center gap-3 border-b p-border px-3 sm:px-4">
         <a href="/" aria-label="Kinu home" className="flex shrink-0 items-center"><KinuLogo /></a>
         <span className="ml-auto" />
-        <FilledButton data-gallery-sign-in onClick={() => signInAndReturn()}>Sign in</FilledButton>
+        <Button variant="primary" size="sm" data-gallery-sign-in onClick={() => signInAndReturn()}>Sign in</Button>
       </header>
       <main className="min-h-0 flex-1"><Outlet /></main>
     </div>

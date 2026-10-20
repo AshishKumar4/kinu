@@ -7,7 +7,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Effect } from "effect";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { CheckIcon, CompassIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { GALLERY_CATEGORIES, GALLERY_SORTS, PERSONAL_ASSISTANT_ID, type GalleryCategory, type GallerySort } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
@@ -15,7 +16,8 @@ import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ExploreCard, exploreWorkspaceHref, KindBadge, Maker, Needs, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { EXPLORE_KINDS, readExplore, type ExploreItem, type ExploreKind, type ExplorePage, type WorkspaceCard } from "@/lib/explore-api";
-import { pageBody, PageHeader } from "@/components/ui/PageHeader";
+import { Page } from "@/components/ui/PageHeader";
+import { TILE_GRID } from "@/components/ui/Tiles";
 import { useSearchChoice } from "@/hooks/use-search-choice";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 
@@ -27,7 +29,7 @@ const chip = (on: boolean) => `rounded-full px-3 py-1 text-xs font-medium transi
 
 const quietChip = (on: boolean) => `rounded-full border px-3 py-1 text-xs transition-colors ${on ? "border-[var(--c-text-3)] p-text" : "p-border p-text-2 hover:bg-[var(--c-elevated)]"}`;
 
-const GRID = "grid grid-cols-1 gap-4 min-[520px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+const GRID = TILE_GRID;
 
 /** Kinu's lead blueprint, wide: what it is, what it needs, and Install. */
 function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights: readonly string[] }) {
@@ -184,9 +186,7 @@ export default function ExplorePage() {
   const [lead, ...also] = kinus;
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className={`space-y-6 ${pageBody("browse", "")}`}>
-        <PageHeader icon={<CompassIcon size={22} />} title="Explore" />
+    <Page icon={<CompassIcon size={22} />} title="Explore">
         {lead !== undefined && (
           <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
             <Hero workspace={lead} highlights={HERO_HIGHLIGHTS.get(lead.id) ?? []} />
@@ -201,7 +201,6 @@ export default function ExplorePage() {
             <Feed items={shown.items.filter((item) => !(item.kind === "workspace" && kinus.includes(item.workspace)))} next={shown.next} q={q} more={more} below={lead !== undefined} />
           )}
         </div>
-      </div>
-    </div>
+    </Page>
   );
 }

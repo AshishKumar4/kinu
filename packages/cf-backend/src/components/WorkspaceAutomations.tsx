@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { useState, useCallback } from "react";
-import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Badge, Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   LightningIcon, CheckIcon,
   PlusIcon, TrashIcon, WarningIcon, PlugIcon,
@@ -300,9 +300,9 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       busy={submitting}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <FilledButton onClick={submit} disabled={submitting || !label.trim()}>
+        <Button variant="primary" size="sm" onClick={submit} disabled={submitting || !label.trim()}>
           {submitting ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create"}
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="space-y-2">

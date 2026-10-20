@@ -12,11 +12,13 @@ import { APP_ROUTES } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import WorkspacePage from "@/pages/WorkspacePage";
 import UserSettingsPage from "@/pages/UserSettingsPage";
+import { settingsPath } from "@/components/SettingsRail";
 import MailPage from "@/pages/MailPage";
 import type { SocketCall } from "@/lib/workspace-rpc";
 import { seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
 import { ASSISTANT_THREAD, AssistantHome, assistantRpc } from "@/gallery-assistant";
-import { installExploreFixture } from "@/gallery-explore";
+import { EXPLORE_LISTINGS, installExploreFixture } from "@/gallery-explore";
+import { installGalleryFixture } from "@/gallery-listings";
 import { DriveRoute } from "@/gallery-drive";
 import { installMailPageFixture } from "@/gallery-mailpage";
 import { SelfDeployFlow } from "@/gallery-self-deploy";
@@ -26,13 +28,14 @@ const WorkspacesPage = lazy(() => import("@/pages/WorkspacesPage"));
 
 const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
 
-const DevicesPage = lazy(() => import("@/pages/DevicesPage"));
 
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
 
 const ExploreWorkspacePage = lazy(() => import("@/pages/ExploreWorkspacePage"));
 
 const WelcomePage = lazy(() => import("@/pages/WelcomePage"));
+
+const GallerySlatePage = lazy(() => import("@/pages/GallerySlatePage"));
 
 const NewWorkspacePage = lazy(async () => ({ default: (await import("@/pages/HomePage")).NewWorkspacePage }));
 
@@ -61,11 +64,11 @@ function Seeder({ transcript }: { transcript: (name: string) => void }) {
 const IN_PHONE = new URLSearchParams(location.search).get("device") === "frame";
 
 function Pages() {
-  // Keyed on the margins, so a page's body takes the direction asked for at once (PageHeader.tsx `pageBody`, `toolBody`).
-  const { layout, tools, background } = useDesign();
+  // Keyed on the background, so New workspace draws the field asked for at once (AppBackground.tsx).
+  const { background } = useDesign();
 
   return (
-    <Routes key={`${layout}/${tools}/${background}`}>
+    <Routes key={background}>
       <Route element={<Layout />}>
         <Route index element={<AssistantHome />} />
         <Route path={APP_ROUTES.workspaces} element={loading(<WorkspacesPage />)} />
@@ -77,7 +80,8 @@ function Pages() {
         <Route path={APP_ROUTES.explore} element={loading(<ExplorePage />)} />
         <Route path={APP_ROUTES.exploreWorkspace} element={loading(<ExploreWorkspacePage />)} />
         <Route path={APP_ROUTES.plugins} element={loading(<PluginsPage />)} />
-        <Route path={APP_ROUTES.devices} element={loading(<DevicesPage />)} />
+        <Route path={APP_ROUTES.gallerySlate} element={loading(<GallerySlatePage />)} />
+        <Route path={APP_ROUTES.devices} element={<Navigate to={settingsPath("devices")} replace />} />
         <Route path="/mail/*" element={<MailPage />} />
         <Route path="/workspace/:agentId" element={<WorkspacePage />} />
         <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />
@@ -112,6 +116,7 @@ export function appFrame(base: SocketCall, transcript: (name: string) => void) {
   serveGalleryRpc(<T,>(method: string, args?: unknown[]): Promise<T> => (onScreen === APP_ROUTES.home ? assistant<T>(method, args) : base<T>(method, args)));
   installExploreFixture();
   installMailPageFixture();
+  installGalleryFixture("whole", EXPLORE_LISTINGS);
   startDesign();
 
   return { entries: [new URLSearchParams(location.search).get("at") ?? APP_ROUTES.home], node: <WholeApp transcript={transcript} /> };

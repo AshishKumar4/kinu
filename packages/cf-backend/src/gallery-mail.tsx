@@ -9,7 +9,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { Badge, Button } from "@cloudflare/kumo";
+import { Badge } from "@cloudflare/kumo";
 import {
   ArrowBendUpLeftIcon, ArrowSquareOutIcon, ArrowUpRightIcon, BrainIcon, CaretLeftIcon, ChartLineUpIcon, CheckCircleIcon, EnvelopeSimpleIcon,
   GitBranchIcon, IdentificationCardIcon, MagnifyingGlassIcon, NotePencilIcon, PaperclipIcon, PaperPlaneTiltIcon, PencilSimpleIcon, SealCheckIcon,
@@ -27,7 +27,7 @@ import { AgentFaceIcon, ChatMascot, mascotColour, mascotSeed } from "@/component
 import { InspectorBar } from "@/components/surfaces/InspectorBar";
 import { Section } from "@/components/surfaces/shared";
 import { Avatar } from "@/components/ui/Avatar";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
 import { Choice, inputCls } from "@/components/ui/form";
@@ -468,7 +468,7 @@ function ReplyBox({ thread, opened, onSend }: { thread: Thread; opened: boolean;
       <p className="p-meta p-text-3">From {box.address}</p>
       <textarea value={text} onChange={(event) => setText(event.target.value)} rows={9} aria-label="Reply" className={`${inputCls} font-[inherit] leading-6`} />
       <div className="flex gap-2">
-        <FilledButton data-mail-send disabled={text.trim() === ""} onClick={() => { onSend(text); setText(null); }}><PaperPlaneTiltIcon size={14} />Send</FilledButton>
+        <Button variant="primary" size="md" data-mail-send disabled={text.trim() === ""} onClick={() => { onSend(text); setText(null); }}><PaperPlaneTiltIcon size={14} />Send</Button>
         <Button variant="ghost" size="sm" onClick={() => setText(null)}>Discard</Button>
       </div>
     </div>
@@ -532,7 +532,7 @@ function Compose({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title="New message" icon={<NotePencilIcon size={18} />} onClose={onClose} maxWidthClass="max-w-xl"
-      footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Discard</Button><FilledButton onClick={onClose}><PaperPlaneTiltIcon size={14} />Send</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Discard</Button><Button variant="primary" size="md" onClick={onClose}><PaperPlaneTiltIcon size={14} />Send</Button></div>}>
       <div data-mail-compose-form className="space-y-2">
         <div className="flex items-center gap-2 p-meta p-text-3" data-mail-from>From
           <div className="min-w-0 flex-1"><Choice label="From" value={from} onChange={setFrom} options={ADDRESSES.map((each) => ({ value: each.address, label: each.address }))} /></div>
@@ -549,7 +549,7 @@ function Compose({ onClose }: { onClose: () => void }) {
 function InstallAssistant({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><FilledButton onClick={onClose}>Install</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Button variant="primary" size="md" onClick={onClose}>Install</Button></div>}>
       <p data-mail-install className="p-row-text p-text-2">Kinu reads <span className="font-mono p-text">ashish@kinu.run</span>, picks what's important, and drafts your replies.</p>
     </Modal>
   );
@@ -601,9 +601,9 @@ function MailPage() {
         <header className="flex items-center gap-3">
           <EnvelopeSimpleIcon size={22} className="shrink-0 p-text-3" />
           <h1 className="p-display text-2xl">Mail</h1>
-          <FilledButton data-mail-compose onClick={() => setComposing(true)} className="ml-auto inline-flex items-center gap-1.5">
+          <Button variant="primary" size="md" data-mail-compose onClick={() => setComposing(true)} className="ml-auto inline-flex items-center gap-1.5">
             <NotePencilIcon size={15} />Compose
-          </FilledButton>
+          </Button>
         </header>
         {/* One grid for the controls and what they act on: views over the list, search and address over the reader. */}
         <div className="mt-5 grid grid-cols-[minmax(0,1fr)] items-start gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
@@ -626,7 +626,7 @@ function MailPage() {
             {waiting ? (
               <div data-mail-no-assistant className="p-card flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
                 <p className="p-row-text p-text-2">No assistant yet</p>
-                <FilledButton onClick={() => setInstalling(true)}>Set up your assistant</FilledButton>
+                <Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>
               </div>
             ) : (
               <div className="p-group">
@@ -745,7 +745,7 @@ function SendCard({ onAnswer }: { onAnswer: (answer: "sent" | "denied", text: st
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
           <Button size="sm" variant="ghost" onClick={() => onAnswer("denied", text)}><XIcon size={12} weight="bold" aria-hidden />Deny</Button>
           <Button size="sm" variant="secondary" onClick={() => setEditing(!editing)}><PencilSimpleIcon size={12} weight="bold" aria-hidden />{editing ? "Done" : "Edit"}</Button>
-          <FilledButton data-mail-approve onClick={() => onAnswer("sent", text)}><CheckCircleIcon size={12} weight="bold" aria-hidden />Approve and send</FilledButton>
+          <Button variant="primary" size="md" data-mail-approve onClick={() => onAnswer("sent", text)}><CheckCircleIcon size={12} weight="bold" aria-hidden />Approve and send</Button>
         </div>
       </div>
     </section>

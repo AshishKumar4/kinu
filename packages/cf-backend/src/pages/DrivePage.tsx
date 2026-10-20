@@ -20,7 +20,8 @@ import {
 } from "@kinu.run/core";
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { PageHeader, toolFrame, toolVariant } from "@/components/ui/PageHeader";
+import { ToolPage } from "@/components/ui/PageHeader";
+import { navRowCls } from "@/components/nav";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
@@ -88,10 +89,6 @@ function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly 
 
 const PLACE_ROW = "flex items-center gap-2.5 rounded-lg py-[7px] pl-2.5 pr-2 p-t-control transition-colors";
 
-const ROW_ON = "bg-[color-mix(in_srgb,var(--c-text)_8%,transparent)]";
-
-const ROW_HOVER = "hover:bg-[color-mix(in_srgb,var(--c-text)_5%,transparent)]";
-
 /** A folder's own folders, Skills first: the tree draws only what can be walked into. */
 function subfolders(entries: readonly DriveEntry[] | undefined, parent: string): DriveEntry[] {
   const isSkills = (entry: DriveEntry): boolean => joinDir(parent, entry.name) === DRIVE_SKILLS_DIR;
@@ -126,7 +123,7 @@ function FolderTree({ listings, parent, current, depth }: {
           <li key={path}>
             <Link to={folderHref(path)} aria-current={path === current ? "page" : undefined} data-drive-tree={path}
               style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
-              className={`flex items-center gap-1.5 rounded-lg py-[5px] pr-2 p-row-text transition-colors ${path === current ? `${ROW_ON} font-medium p-text` : `p-text-2 ${ROW_HOVER}`}`}>
+              className={`flex items-center gap-1.5 rounded-lg py-[5px] pr-2 p-row-text transition-colors ${navRowCls(path === current)}`}>
               <span className="flex w-3 shrink-0 justify-center p-text-4">{caret}</span>
               {skills
                 ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
@@ -142,10 +139,8 @@ function FolderTree({ listings, parent, current, depth }: {
 }
 
 /** From `lg`, the Drive's places in a column: My stuff with its folder tree, Slates, then Shared. */
-function DriveColumn({ tab, path, shown, places, unseen, titled }: {
+function DriveColumn({ tab, path, shown, places, unseen }: {
   tab: DriveTab; path: string; shown: DriveListing | null; places: readonly DriveTab[]; unseen: boolean;
-  /** The column names the place; with the page's own title row above it (`toolVariant`), it does not. */
-  titled: boolean;
 }) {
   // Drawn only from `lg`; the tree in it reads nothing while it is not drawn.
   const drawn = useMediaQuery("(min-width: 1024px)");
@@ -154,21 +149,13 @@ function DriveColumn({ tab, path, shown, places, unseen, titled }: {
   if (!drawn) return null;
 
   return (
-    <aside aria-label="Drive" className={`hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 lg:flex ${titled ? "pt-8" : "pt-2"}`}>
-      {titled && (
-        <div className="flex h-8 items-center gap-2.5 px-2.5">
-          <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-          <h1 className="p-display text-2xl">Drive</h1>
-        </div>
-      )}
-      <nav aria-label="Drive places" className={`space-y-0.5 ${titled ? "mt-6" : ""}`}>
+    <aside className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
+      <nav aria-label="Drive places" className="space-y-0.5">
         {PLACES.filter((each) => places.includes(each.id)).map((each) => {
           const active = each.id === tab;
           const here = active && (each.id !== "mine" || path === "/");
-          let tone = `p-text-2 ${ROW_HOVER}`;
-
-          if (here) tone = `${ROW_ON} p-text`;
-          else if (active) tone = `p-text ${ROW_HOVER}`;
+          // The sidebar's recipe; the place a folder is open under keeps its ink but not the fill.
+          const tone = navRowCls(here, active ? "p-text" : "p-text-2");
 
           return (
             <div key={each.id}>
@@ -193,23 +180,14 @@ function DriveColumn({ tab, path, shown, places, unseen, titled }: {
  * The page's head, one tree laid out twice: below `lg` the title, the switch, the search and the crumbs stack; from
  * `lg` the title and the places are the column's, and the crumbs share a row with New or the search.
  */
-function DriveHead({ tab, path, subtitle, places, unseen, search, action, titled }: {
+function DriveHead({ tab, path, subtitle, places, unseen, search }: {
   tab: DriveTab; path: string; subtitle: ReactNode; places: readonly DriveTab[]; unseen: boolean;
-  search: { readonly query: string; readonly set: (query: string) => void }; action: ReactNode;
-  /** Named here below `lg`, unless the page's own title row names it at every width. */
-  titled: boolean;
+  search: { readonly query: string; readonly set: (query: string) => void };
 }) {
   const isRoot = path === "/";
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] lg:[grid-template-areas:'crumbs_action_search']">
-      {titled && (
-        <header className="flex items-center gap-3 [grid-area:title] lg:hidden">
-          <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-          <h1 className="p-display text-2xl">Drive</h1>
-        </header>
-      )}
-      {action && <div className="ml-3 [grid-area:action]">{action}</div>}
       {places.length > 1 && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}
       {tab === "shared" && (
         <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
@@ -223,20 +201,6 @@ function DriveHead({ tab, path, subtitle, places, unseen, search, action, titled
       )}
     </div>
   );
-}
-
-/** Where Drive's title sits. */
-interface DriveTitle {
-  readonly row: ReactNode;
-  readonly inColumn: boolean;
-  readonly bodyTop: string;
-}
-
-/** In its column as it ships; on the title row every page has under any other tool variant. */
-function driveTitle(): DriveTitle {
-  if (toolVariant() === "today") return { row: null, inColumn: true, bodyTop: "pt-6 lg:pt-8" };
-
-  return { row: <div className="px-5 pt-6 sm:px-8 lg:pt-8"><PageHeader icon={<HardDrivesIcon size={22} />} title="Drive" /></div>, inColumn: false, bodyTop: "pt-2" };
 }
 
 /** Opening Shared with something new in it sees it, on every device; the library is read again so the dot goes. */
@@ -593,13 +557,7 @@ function landing({ tab, firstVisit, settled, nothingOwned, library }: Arrival): 
 }
 
 function subtitleOf(tab: DriveTab, path: string): ReactNode {
-  if (tab !== "mine") return null;
-
-  if (path === DRIVE_SKILLS_DIR) return "Every workspace you own uses these skills.";
-
-  if (path !== "/") return null;
-
-  return <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
+  return tab === "mine" && path === DRIVE_SKILLS_DIR ? "Every workspace you own uses these skills." : null;
 }
 
 function SectionList({ groups, titled = false, heading = "quiet" }: {
@@ -1011,26 +969,23 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
 
-  const title = driveTitle();
-
+  // A tool: the header row spans the places column and the content, as Mail's spans its list; each tab's body starts
+  // under it at the same y.
   return (
-    <div className={`flex h-full min-h-0 flex-col ${toolFrame()}`}>
-      {title.row}
-      <div className="flex min-h-0 flex-1">
-      <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} titled={title.inColumn} />
-      <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className={`px-5 pb-20 sm:px-8 ${title.bodyTop}`}>
-        <DriveHead titled={title.inColumn} tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }}
-          action={tab === "mine" && (
-            <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-              onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
-              onZip={(file) => {
-                const unpacked = file.name.replace(/\.zip$/iu, "");
+    <ToolPage icon={<HardDrivesIcon size={22} />} title="Drive" scrolls={false} actions={tab === "mine" && (
+      <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
+        onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
+        onZip={(file) => {
+          const unpacked = file.name.replace(/\.zip$/iu, "");
 
-                transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
-              }}
-              onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
-          )} />
+          transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
+        }}
+        onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
+    )}>
+      <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
+      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className="px-5 pb-20 pt-8 sm:px-8">
+        <DriveHead tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }} />
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
           copyStatus={copier.status} />
@@ -1051,7 +1006,6 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       </div>
 
       </div>
-      </div>
 
       {opened !== undefined && <FileDrawer path={joinDir(path, opened.name)} entry={opened} onClose={() => show("file", null)} />}
       {builtin !== undefined && <BuiltinSkillDrawer name={builtin} onClose={() => show("skill", null)} />}
@@ -1059,6 +1013,6 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         <DriveDialog dialog={dialog} folder={path} onClose={() => setDialog(null)} onListingChanged={listing.reload}
           onSharesChanged={(behind) => { if (behind === "pending") setListingPending(true); library.reload(); }} onSkillAdded={() => void afterSkillAdded()} />
       )}
-    </div>
+    </ToolPage>
   );
 }

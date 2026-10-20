@@ -1,9 +1,8 @@
 import { useId, useState, type FormEvent } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { ArrowBendUpLeftIcon, NotePencilIcon, PaperPlaneTiltIcon } from "@phosphor-icons/react";
 import { replySubject, type MailBox, type MailMessageView, type MailThreadView } from "@kinu.run/core";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { Choice, inputCls } from "@/components/ui/form";
 import { saveMailDraft, sendMail, type MailWrite } from "@/lib/mail-api";
@@ -47,7 +46,7 @@ export function Compose({ boxes, initialPath, onClose, onSaved }: {
       footer={<>
         <Button variant="ghost" size="sm" disabled={disabled} onClick={onClose}>Discard</Button>
         <Button variant="secondary" size="sm" type="submit" form={form} name="intent" value="draft" disabled={disabled}>{busy === "Saving" ? "Saving…" : "Save draft"}</Button>
-        <FilledButton type="submit" form={form} name="intent" value="send" disabled={disabled}><PaperPlaneTiltIcon size={14} />{busy === "Sending" ? "Sending…" : "Send"}</FilledButton>
+        <Button variant="primary" size="md" type="submit" form={form} name="intent" value="send" disabled={disabled}><PaperPlaneTiltIcon size={14} />{busy === "Sending" ? "Sending…" : "Send"}</Button>
       </>}>
       <form id={form} onSubmit={submit} data-mail-compose-form className="space-y-2">
         <div className="flex items-center gap-2 p-meta p-text-3" data-mail-from>From
@@ -118,7 +117,7 @@ export function ReplyBox({ mail, box, drafts, onChanged, onSent }: {
       <textarea value={text} onChange={(event) => setEditor({ text: event.target.value, draft: editor?.draft === true })} rows={9} aria-label="Reply" required disabled={busy !== null} className={`${inputCls} font-[inherit] leading-6`} />
       <Failure message={error} />
       <div className="flex flex-wrap gap-2">
-        <FilledButton data-mail-send type="submit" name="intent" value="send" disabled={busy !== null || text.trim() === ""}><PaperPlaneTiltIcon size={14} />{busy === "Sending" ? "Sending…" : "Send"}</FilledButton>
+        <Button variant="primary" size="md" data-mail-send type="submit" name="intent" value="send" disabled={busy !== null || text.trim() === ""}><PaperPlaneTiltIcon size={14} />{busy === "Sending" ? "Sending…" : "Send"}</Button>
         <Button variant="secondary" size="sm" type="submit" name="intent" value="draft" disabled={busy !== null || text.trim() === ""}>{busy === "Saving" ? "Saving…" : "Save draft"}</Button>
         <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => setEditor(null)}>Discard</Button>
       </div>

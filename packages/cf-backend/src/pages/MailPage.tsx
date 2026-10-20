@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, MAIL_VIEWS, suggestedMailUsername, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
 import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
 import { MAIL_VIEW_LABEL, MailRow, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
 import { Compose } from "@/components/mail/MailEditor";
-import { PageHeader, toolBody } from "@/components/ui/PageHeader";
+import { PageHeader, TOOL_FRAME } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
 import { Choice, inputCls } from "@/components/ui/form";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
@@ -37,7 +37,7 @@ function CreateAddress({ domain, suggested, onCreated }: { domain: string; sugge
       <h2 className="p-row-text font-medium p-text">Your email address</h2>
       <MailAddressField domain={domain} username={username} state={state} onChange={setUsername} disabled={busy !== null} />
       {error !== null && <p role="alert" className="p-row-text p-danger">{error}</p>}
-      <FilledButton type="submit" disabled={busy !== null || state !== "available"}>{busy === null ? "Create address" : "Creating…"}</FilledButton>
+      <Button variant="primary" size="md" type="submit" disabled={busy !== null || state !== "available"}>{busy === null ? "Create address" : "Creating…"}</Button>
     </form>
   );
 }
@@ -45,7 +45,7 @@ function CreateAddress({ domain, suggested, onCreated }: { domain: string; sugge
 function InstallAssistant({ address, onClose }: { address: string; onClose: () => void }) {
   return (
     <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent" />} onClose={onClose}
-      footer={<><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Link to={APP_ROUTES.explore} className="p-btn inline-flex h-6.5 items-center justify-center gap-1 px-2 text-xs">Install</Link></>}>
+      footer={<><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Link to={APP_ROUTES.explore} className={buttonClass({ variant: "primary", size: "sm" })}>Install</Link></>}>
       <p data-mail-install className="p-row-text p-text-2">Kinu reads <span className="font-mono p-text">{address}</span>, picks what's important, and drafts your replies.</p>
     </Modal>
   );
@@ -165,10 +165,10 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   return (
     <>
       <PageHeader icon={<EnvelopeSimpleIcon size={22} />} title="Mail">
-        <FilledButton data-mail-compose onClick={() => setComposing(true)}><NotePencilIcon size={15} />Compose</FilledButton>
+        <Button variant="primary" size="md" data-mail-compose aria-label="Compose" className={ICON_ON_PHONE} onClick={() => setComposing(true)}><NotePencilIcon size={16} /><span className="max-sm:hidden">Compose</span></Button>
       </PageHeader>
       {navigation.error !== null && <p role="alert" className="mt-3 p-row-text p-danger">{navigation.error}</p>}
-      <div className="mt-5 grid grid-cols-[minmax(0,1fr)] items-start gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
+      <div className="mt-8 grid grid-cols-[minmax(0,1fr)] items-start gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
         <div className={`max-w-full overflow-x-auto ${controls}`}>
           <Segmented label="Mail views" value={view} onChange={(next) => at({ view: next })} segments={MAIL_VIEWS.map((id) => {
             let count = 0;
@@ -190,7 +190,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
         </div>
         <section className={opened === null ? "min-w-0" : "hidden min-w-0 lg:block"}>
           {waiting ? <div data-mail-no-assistant className="p-card flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
-            <p className="p-row-text p-text-2">No assistant yet</p><FilledButton onClick={() => setInstalling(true)}>Set up your assistant</FilledButton>
+            <p className="p-row-text p-text-2">No assistant yet</p><Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>
           </div> : <>
             <ThreadList resource={inbox.resource} view={view} boxes={account.boxes} path={path} owner={owner} reading={reading} onOpen={choose} onRetry={inbox.reload} />
             {loaded !== null && <div className="mt-2 flex justify-between gap-2">
@@ -214,7 +214,7 @@ export default function MailPage() {
   const person = lastValue(profile);
 
   return (
-    <div data-mail-page className="h-full overflow-y-auto"><div className={toolBody()}>
+    <div data-mail-page className="h-full overflow-y-auto"><div className={TOOL_FRAME}>
       {account?.address != null ? <MailInbox account={account} owner={person?.email ?? ""} /> : <>
         <PageHeader icon={<EnvelopeSimpleIcon size={22} />} title="Mail" />
         {boxes.resource.status === "loading" && <div role="status" aria-label="Loading mail" className="mt-5"><Loader /></div>}

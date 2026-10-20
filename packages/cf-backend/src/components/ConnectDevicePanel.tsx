@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { DesktopTowerIcon, PlugIcon, WarningIcon } from "@phosphor-icons/react";
@@ -7,7 +8,6 @@ import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { registerDevice, type UserDevice } from "@/lib/user-api";
 import { Modal } from "@/components/ui/Modal";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { useDeviceRoster } from "@/hooks/use-device-roster";
 import { lastValue } from "@/hooks/use-async-resource";
@@ -154,7 +154,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
           className={`${inputCls} text-xs`}
           disabled={state.kind === "registering"}
         />
-        <FilledButton
+        <Button variant="primary" size="md"
           data-connect-start
           onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))}
           disabled={state.kind === "registering"}
@@ -162,7 +162,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
         >
           <PlugIcon size={12} />
           {state.kind === "registering" ? "Generating…" : "Get the connect command"}
-        </FilledButton>
+        </Button>
       </div>
     </div>
   );

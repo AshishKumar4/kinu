@@ -6,12 +6,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { DownloadSimpleIcon, KeyIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Choice, Field, inputCls } from "@/components/ui/form";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
@@ -45,7 +45,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
       footer={(
         <>
           <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <FilledButton onClick={() => detach(install())} disabled={busy || name.trim() === ""} data-install-confirm>{busy && <Loader size="sm" />}Install</FilledButton>
+          <Button variant="primary" size="md" onClick={() => detach(install())} disabled={busy || name.trim() === ""} data-install-confirm>{busy && <Loader size="sm" />}Install</Button>
         </>
       )}>
       <div className="space-y-4" data-install-dialog={page.workspace.id}>

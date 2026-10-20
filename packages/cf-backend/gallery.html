@@ -19,13 +19,10 @@
           ? stored
           : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
         const look = new URLSearchParams(location.search).get("look");
-        // `&layout=a|b`: the margin directions under review (PageHeader.tsx pageBody); `&background=quiet|none`, the
-        // new-workspace page's field (AppBackground.tsx).
-        const layout = new URLSearchParams(location.search).get("layout");
+        // `&background=quiet|none`: the new-workspace page's field under review (AppBackground.tsx).
         const background = new URLSearchParams(location.search).get("background");
         document.documentElement.setAttribute("data-mode", mode);
         if (look !== null) document.documentElement.setAttribute("data-theme", look);
-        if (layout !== null) document.documentElement.setAttribute("data-layout", layout);
         if (background !== null) document.documentElement.setAttribute("data-background", background);
         document.documentElement.style.colorScheme = mode;
       })();

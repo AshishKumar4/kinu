@@ -1,9 +1,9 @@
 /** Notes on a change-set, anchored to a file's words, lines or whole file, or to all the changes. */
 import { createContext, useContext } from "react";
+import { Button } from "@/components/ui/Button";
 import { PaperPlaneRightIcon } from "@phosphor-icons/react";
 import type { Annotation } from "@plannotator/ui/types";
 import { ALL_CHANGES_BLOCK, changeNoteAnchor, type ChangeNote, type DiffAnchor, type DiffSide } from "@kinu.run/core";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { annotationType } from "../annotation-type";
 
 export interface Picked {
@@ -257,9 +257,9 @@ export function SendFeedback({ className = "" }: { className?: string }) {
   if (notes === null || notes.notes.length === 0) return null;
 
   return (
-    <FilledButton className={`h-7 gap-1.5 px-2.5 text-xs ${className}`} onClick={notes.send} disabled={notes.sending} data-send-feedback>
+    <Button variant="primary" size="sm" className={className} onClick={notes.send} disabled={notes.sending} data-send-feedback>
       <PaperPlaneRightIcon size={13} weight="fill" />
       Send feedback
-    </FilledButton>
+    </Button>
   );
 }

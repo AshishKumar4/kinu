@@ -1,12 +1,9 @@
 import { Effect, Cause } from 'effect';
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
-import {
-  FloppyDiskIcon, BrainIcon, CheckIcon,
-  ShieldIcon, KeyIcon,
-  DownloadSimpleIcon, EyeIcon, ChatsCircleIcon, TrashIcon,
-} from "@phosphor-icons/react";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { FloppyDiskIcon, CheckIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
@@ -20,7 +17,6 @@ import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/co
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { CardSlot } from "@/components/ui/CardSlot";
@@ -124,7 +120,7 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
     <Field label="Logo">
       <div className="flex items-center gap-3" data-logo-field>
         <WorkspaceLogo title={title} logo={logo} size={40} />
-        <button type="button" onClick={redraw} disabled={drawing} className="p-btn-quiet inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
+        <button type="button" onClick={redraw} disabled={drawing} className={buttonClass({ size: "sm" })}>
           {drawing ? <><Loader size="sm" /> Drawing…</> : "Draw a new one"}
         </button>
       </div>
@@ -283,7 +279,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
 
         <div className="space-y-5">
-        <Card title="Identity" icon={BrainIcon}>
+        <Card title="Identity">
           <LogoField title={title} logo={logo} rpc={rpc} />
           <Field label="Display name">
             <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
@@ -312,7 +308,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         </Card>
 
 
-        <Card title="Advisor" icon={EyeIcon}>
+        <Card title="Advisor">
           <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
             {(value) => (
               <>
@@ -343,7 +339,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         </Card>
 
 
-        <Card title="Shell-command approval" icon={ShieldIcon}>
+        <Card title="Shell-command approval">
           <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
             {(value) => (
               <div className="grid grid-cols-3 gap-2">
@@ -368,7 +364,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
         <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
 
-        <Card title="Main's conversation" icon={ChatsCircleIcon}>
+        <Card title="Main's conversation">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
             <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
@@ -379,10 +375,10 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         {(dirty || saving || saved) && (
           <div className="sticky bottom-4 z-10 flex items-center justify-between gap-3 rounded-[14px] border p-border p-overlay py-2.5 pl-4 pr-2.5 p-shadow-menu animate-fade-in">
             <span className="p-row-text p-text-2">{saved && !dirty ? "Changes saved." : "You have unsaved changes."}</span>
-            <FilledButton onClick={save} disabled={saving || !dirty} className="px-3">
+            <Button variant="primary" size="sm" onClick={save} disabled={saving || !dirty} >
               {saved && !dirty ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
               <span>{saveLabel(saving, saved && !dirty)}</span>
-            </FilledButton>
+            </Button>
           </div>
         )}
       </div>
@@ -418,7 +414,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
 
   return (
-    <Card title="Standing approvals" icon={ShieldIcon}>
+    <Card title="Standing approvals">
       <p className="p-meta p-text-3">
         “Always” stops Kinu asking about this check in this environment. It does not give the agent any more access.
       </p>
@@ -529,7 +525,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   if (resource.status !== "error" && rows !== null && rows.length === 0 && !cursor) return null;
 
   return (
-    <Card title="Workspace instruction files" icon={ShieldIcon}>
+    <Card title="Workspace instruction files">
       <p className="p-meta p-text-3">
         Your agent can write these files. Kinu follows a file as instructions only when you approve its
         contents. After any edit it becomes reference material again until you approve it again.
@@ -660,15 +656,15 @@ function WorkspaceBackupCard({
   })), [rpc, workspace]);
 
   return (
-    <Card title="Backup" icon={DownloadSimpleIcon}>
+    <Card title="Backup">
       <p className="p-meta p-text-3">
         Download an archive of this workspace: transcripts, memory, files and evolution history. Restore it
         with <code className="font-mono">kinu import &lt;file&gt;</code>. Download one before you delete a
         workspace. The archive holds everything in the workspace, so keep it as safe as a password.
       </p>
-      <FilledButton onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
+      <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
         {busy ? "Exporting…" : "Download archive"}
-      </FilledButton>
+      </Button>
       {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
       {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
     </Card>
@@ -718,7 +714,7 @@ function AlwaysActiveSkillsCard({
   }, [names, save]);
 
   return (
-    <Card title="Always-active skills" icon={KeyIcon}>
+    <Card title="Always-active skills">
       <p className="p-meta p-text-3">
         Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, and it runs
         every turn without you typing /name.
@@ -742,7 +738,7 @@ function AlwaysActiveSkillsCard({
           onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
           className={inputCls + " text-xs"}
         />
-        <FilledButton onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</FilledButton>
+        <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</Button>
       </div>
       {err && <div className="p-meta p-danger mt-1">{err}</div>}
     </Card>

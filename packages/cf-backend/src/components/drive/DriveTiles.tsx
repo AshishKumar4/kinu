@@ -7,8 +7,9 @@ import {
 } from "@phosphor-icons/react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { WorkspaceLogo } from "@/components/Marks";
+import { TILE_GRID } from "@/components/ui/Tiles";
 
-export const GRID = "grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))] sm:gap-4";
+export const GRID = TILE_GRID;
 
 type DataAttributes = Readonly<Record<`data-${string}`, string>>;
 

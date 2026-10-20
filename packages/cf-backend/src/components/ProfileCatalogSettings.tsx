@@ -1,6 +1,6 @@
+import { Button } from "@/components/ui/Button";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Button } from '@cloudflare/kumo';
-import { BrainIcon, CaretRightIcon, CheckIcon, IdentificationCardIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
+import { CaretRightIcon, CheckIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import {
   BUILTIN_ROLE_DEFINITIONS,
   BUILTIN_SKILL_HEADERS,
@@ -36,7 +36,6 @@ import { lastValue, useAsyncResource, type AsyncResource } from '@/hooks/use-asy
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
-import { FilledButton } from './ui/FilledButton';
 import { Segmented } from './ui/Segmented';
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
@@ -294,11 +293,11 @@ export function ProfileCatalogSettings() {
 
   return (
     <>
-      <Card title="Tiers" icon={BrainIcon}>
+      <Card title="Tiers">
         {!draft || !envelope ? (
           <div className="flex items-center gap-2 p-row-text p-text-3">
             <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
-            {!busy && <Button size="xs" variant="secondary" onClick={load}>Retry</Button>}
+            {!busy && <Button size="sm" variant="secondary" onClick={load}>Retry</Button>}
             {error && <span className="p-danger">{error}</span>}
           </div>
         ) : (
@@ -429,8 +428,7 @@ export function ProfileCatalogSettings() {
       </Card>
 
       {(draft && envelope) && (
-        <Card title="Agent roles" icon={IdentificationCardIcon}
-          description="What each kind of agent is for: its brief, its model and what it may use.">
+        <Card title="Agent roles">
           <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
             {/* A scrolling tab strip below md, the accent-tinted list row at md and up. */}
             <nav ref={roleNav} aria-label="Agent roles"
@@ -524,7 +522,7 @@ export function ProfileCatalogSettings() {
             {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
             <div className="ml-auto flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save'}</FilledButton>
+              <Button variant="primary" size="sm" disabled={!dirty || busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save'}</Button>
             </div>
           </div>
         </div>
@@ -666,7 +664,7 @@ function RoleEditor(props: {
             {props.customized ? 'Customized' : origin} · <span className="p-annotation">{props.id}</span>
           </div>
         </div>
-        <Button size="xs" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
+        <Button size="sm" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
           {builtin ? 'Reset to built-in' : 'Delete role'}
         </Button>
       </div>

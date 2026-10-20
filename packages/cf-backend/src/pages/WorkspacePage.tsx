@@ -2,8 +2,8 @@ import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from "react";
 import { useParams, useLocation, Link, Navigate, useMatch, useNavigate, useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, ListIcon,
   WarningCircleIcon,
@@ -130,9 +130,9 @@ function ForkModal({
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <FilledButton onClick={submit} disabled={busy}>
+        <Button variant="primary" size="sm" onClick={submit} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">

@@ -3,17 +3,17 @@
  * and watches, its slates, its layout and soul), what it needs of yours and what it asks you before acting; and Install.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/Button";
 import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@cloudflare/kumo";
-import { ArrowsClockwiseIcon, CaretRightIcon, ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
@@ -96,7 +96,7 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
     <div className="mt-2 flex flex-wrap items-center gap-2">
       {installed
         ? <Link to={APP_ROUTES.home} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--c-accent)] px-3 text-[13px] font-semibold text-[var(--c-accent-on)]" data-blueprint-open><HouseIcon size={14} />Open on Home</Link>
-        : <FilledButton onClick={signedIn ? onInstall : () => signInAndReturn(hereAsking("install"))} data-blueprint-install><DownloadSimpleIcon size={14} />Install</FilledButton>}
+        : <Button variant="primary" size="md" onClick={signedIn ? onInstall : () => signInAndReturn(hereAsking("install"))} data-blueprint-install><DownloadSimpleIcon size={14} />Install</Button>}
       <button type="button" onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star
         className={`inline-flex h-8 items-center gap-1.5 rounded-lg border p-border px-3 text-[13px] transition-colors hover:p-text ${star.on ? "p-text" : "p-text-2"}`}>
         <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : undefined} />
@@ -163,12 +163,9 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-meta p-text-3">
               <Maker maker={workspace.maker} size={20} />
               <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} {workspace.installs === 1 ? "install" : "installs"}</span>
+              <span className="tabular-nums">Version {page.version} · updated {ago(page.updatedAt)}</span>
             </div>
             <BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />
-            <p className="mt-3 flex items-start gap-2 rounded-xl bg-[var(--c-neutral-tint)] px-3 py-2.5 p-meta p-text-2">
-              <ArrowsClockwiseIcon size={13} className="mt-0.5 shrink-0" />
-              {`${workspace.maker.kinu ? "Kept by Kinu. " : ""}Version ${page.version}, updated ${ago(page.updatedAt)}. Installing makes a workspace of your own: change anything in it, and later versions leave it as it is.`}
-            </p>
           </div>
         </div>
 
@@ -212,7 +209,6 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
                   <li key={ask} className="flex items-start gap-2.5 p-row-text p-text-2"><HandPalmIcon size={14} className="mt-0.5 shrink-0 p-accent" />{ask}</li>
                 ))}
               </ul>
-              <p className="p-meta p-text-3">Each is a card in Needs you. Allow one for good from its card, and take it back in Settings.</p>
             </Section>
           </div>
         </div>

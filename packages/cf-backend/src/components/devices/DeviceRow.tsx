@@ -1,8 +1,9 @@
+import { buttonClass } from "@/components/ui/Button";
 import { Effect } from 'effect';
 import { useState } from "react";
 import { startTransition } from "react";
 import {
-  PencilSimpleIcon, TrashIcon, WarningIcon, XIcon,
+  DesktopTowerIcon, PencilSimpleIcon, TrashIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
   renameDevice, revokeDeviceConsent, setDeviceSandboxTier,
@@ -11,15 +12,18 @@ import {
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
-import { composing } from "@/components/ui/form";
+import { composing, inputCls } from "@/components/ui/form";
+import { PluginTile } from "@/components/plugins/PluginRow";
+import { RowMenu } from "@/components/ui/RowMenu";
+import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 
-/** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
-const SANDBOX_MODE_COPY = {
-  sandboxed: "Sandboxed.",
-  raw: "Off.",
-  files_only: "Files only.",
+/** The hub enforces the same `effectiveDeviceMode`, so this word matches what it does. */
+const SANDBOX_WORD = {
+  sandboxed: "Sandboxed",
+  raw: "Sandbox off",
+  files_only: "Files only",
 } satisfies Record<DeviceMode, string>;
 
 const WHOLE_MACHINE_COPY = "Linked from /, so the agent has this whole machine: every file you can open, and its commands "
@@ -100,7 +104,7 @@ export function DeviceRow({
                 setAcknowledging(false);
               }))));
             }}
-            className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs">
+            className={buttonClass({ size: "sm" })}>
             {acknowledging ? "Acknowledging…" : "Acknowledge"}
           </button>
         </div>
@@ -149,95 +153,80 @@ export function DeviceRow({
     onDeviceChanged();
   });
 
+  const where = [device.hostname === null ? null : `${device.hostname}${device.os ? ` · ${device.os}` : ""}`, SANDBOX_WORD[mode]];
+
+  // A row as Plugins draws a connected server (design review 2026-10-20): its tile, name, one meta line, its status and
+  // its controls; what it reaches is under it.
   return (
-    <div className="px-4 py-3">
-      <div className="flex items-start gap-x-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
-        {editing === null ? (
-          <>
-            <span className="min-w-0 truncate p-row-text font-medium p-text">{device.label}</span>
-            <button onClick={() => setEditing(device.label)} title="Rename this device" className="p-text-3 hover:p-text">
-              <PencilSimpleIcon size={12} />
-            </button>
-          </>
-        ) : (
-          <input
-            autoFocus
-            value={editing}
-            onChange={(e) => setEditing(e.target.value)}
-            onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))}
-            onKeyDown={(e) => detach(Effect.promise(async () => {
-              if (composing(e.nativeEvent)) return;
+    <div data-device={device.id} className="py-3">
+      <div className="flex items-center gap-3">
+        <PluginTile icon={DesktopTowerIcon} />
+        <div className="min-w-0 flex-1">
+          {editing === null ? (
+            <div className="truncate p-row-text font-medium p-text">{device.label}</div>
+          ) : (
+            <input
+              autoFocus
+              value={editing}
+              onChange={(e) => setEditing(e.target.value)}
+              onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))}
+              onKeyDown={(e) => detach(Effect.promise(async () => {
+                if (composing(e.nativeEvent)) return;
 
-              if (e.key === "Enter") {
-                e.preventDefault();
-                setEditing(null);
-                await save();
-              }
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  setEditing(null);
+                  await save();
+                }
 
-              if (e.key === "Escape") setEditing(null);
-            }))}
-            aria-label="Device name"
-            className="px-1.5 py-0.5 rounded-sm border p-border p-fill p-text text-xs w-44"
-          />
-        )}
-        {device.hostname && <span className="min-w-0 truncate p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
+                if (e.key === "Escape") setEditing(null);
+              }))}
+              aria-label="Device name"
+              className={`${inputCls} h-7 w-52`}
+            />
+          )}
+          <div className="truncate p-meta p-text-3" data-sandbox-mode={mode} data-whole-machine={device.wholeMachine || undefined}>
+            {where.filter((part) => part !== null).join(" · ")}
+          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2.5">
+        <div className="flex shrink-0 items-center gap-3">
           {device.update === "required"
             ? <span role="status" data-device-update="required"><Status tone="warning">{DEVICE_UPDATE_COPY.required}</Status></span>
             : <Status tone={device.connected ? "success" : "neutral"}>{device.connected ? "Connected" : "Offline"}</Status>}
           <UpdateBadge device={device} />
-          <button onClick={onRevoke} title="Revoke device" aria-label="Revoke device" className="p-pill-icon -mr-1.5 hover:!p-danger"><TrashIcon size={13} /></button>
+          <Switch on={sandboxOn} label={`Sandbox on ${device.label}`} disabled={switching || device.wholeMachine}
+            onChange={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())} />
+          <RowMenu label={`${device.label} options`} items={[
+            { label: "Rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
+            { label: "Revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
+          ]} />
         </div>
       </div>
-      {device.update === "refused" && (
-        <p className="mt-1.5 p-meta p-text-3">Update to {device.servedVersion} refused: {device.updateRefusal}</p>
-      )}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <label className="inline-flex items-center gap-2 p-text">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={sandboxOn}
-            aria-label={`Sandbox on ${device.label}`}
-            disabled={switching || device.wholeMachine}
-            onClick={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())}
-            className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
-              sandboxOn ? "border-[var(--c-accent)] bg-[var(--c-accent)]" : "border-[var(--c-border-strong)] bg-[var(--c-fill)]"
-            }`}
-          >
-            <span className={`size-3 rounded-full transition-transform ${
-              sandboxOn ? "translate-x-3 bg-[var(--c-accent-on)]" : "translate-x-0.5 bg-[var(--c-text-3)]"
-            }`} />
-          </button>
-          <span className="font-medium">Sandbox</span>
-        </label>
-        {cannotSandbox && <Status tone="warning">Cannot sandbox</Status>}
-        {mode === "sandboxed" && <span className="p-text-3">GPU: {describeGpuNodes(sandbox.gpu)}</span>}
-      </div>
-      <span className="mt-1.5 p-meta p-text-3" data-sandbox-mode={mode} data-whole-machine={device.wholeMachine || undefined}>
-        {device.wholeMachine ? WHOLE_MACHINE_COPY : SANDBOX_MODE_COPY[mode]}
-      </span>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
-        {grants.length === 0 ? (
-          <span>No workspace uses it yet.</span>
-        ) : (
-          <>
-            <span>Workspace access:</span>
-            {grants.map((g) => (
-              <span key={g.agentName} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm p-fill">
-                {g.agentName}
-                <span className={g.policy === "allow" ? "p-text-3" : "p-danger"}>{g.policy === "allow" ? "Allowed" : "Denied"}</span>
-                <button onClick={() => detach(dropGrant(g.agentName))}
-                  title={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}
-                  className="p-text-3 hover:p-danger">
-                  <XIcon size={10} />
-                </button>
-              </span>
-            ))}
-          </>
-        )}
+      <div className="mt-1.5 space-y-1 pl-[52px] p-meta p-text-3">
+        {device.update === "refused" && <p>Update to {device.servedVersion} refused: {device.updateRefusal}</p>}
+        {device.wholeMachine && <p>{WHOLE_MACHINE_COPY}</p>}
+        {cannotSandbox && <p><Status tone="warning">Cannot sandbox</Status></p>}
+        {mode === "sandboxed" && <p>GPU: {describeGpuNodes(sandbox.gpu)}</p>}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {grants.length === 0 ? (
+            <span>No workspace uses it yet.</span>
+          ) : (
+            <>
+              <span>Workspace access:</span>
+              {grants.map((g) => (
+                <span key={g.agentName} className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 p-fill">
+                  {g.agentName}
+                  <span className={g.policy === "allow" ? "p-text-3" : "p-danger"}>{g.policy === "allow" ? "Allowed" : "Denied"}</span>
+                  <button onClick={() => detach(dropGrant(g.agentName))}
+                    title={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}
+                    className="p-text-3 hover:p-danger">
+                    <XIcon size={10} />
+                  </button>
+                </span>
+              ))}
+            </>
+          )}
+        </div>
       </div>
       {dialog}
     </div>

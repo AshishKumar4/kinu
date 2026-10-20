@@ -7,12 +7,12 @@
  * site, so the ticket's cookie reaches it inside the frame.
  */
 import { showing, detach } from "@kinu.run/core/obs";
+import { Button } from "@/components/ui/Button";
 import { slateFrameSrc, type LiveShareOpen } from "@kinu.run/core";
 import { Effect } from "effect";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { useSlateHostContext } from "@/components/slates/InlineSlate";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { usePartHost } from "@/hooks/use-part-host";
@@ -44,7 +44,7 @@ function SignInToOpen() {
   return (
     <main data-shared-sign-in className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="max-w-sm p-row-text p-text-2">This slate is shared with people by name. Sign in to open it.</p>
-      <FilledButton onClick={() => signInAndReturn()}>Sign in</FilledButton>
+      <Button variant="primary" size="md" onClick={() => signInAndReturn()}>Sign in</Button>
     </main>
   );
 }

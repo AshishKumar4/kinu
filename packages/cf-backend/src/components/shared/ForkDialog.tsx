@@ -2,12 +2,12 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { GitBranchIcon } from "@phosphor-icons/react";
 import { showing, detach } from "@kinu.run/core/obs";
 import { workspaceDisplayTitle, type BlueprintFork, type WorkspaceEntry } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { listWorkspaces } from "@/lib/user-api";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
@@ -78,9 +78,9 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton onClick={submit} disabled={busy || roster === null || (target === NEW_WORKSPACE && mission.trim() === "")}>
+        <Button variant="primary" size="md" onClick={submit} disabled={busy || roster === null || (target === NEW_WORKSPACE && mission.trim() === "")}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-        </FilledButton>
+        </Button>
       </>}
     >
       <p className="text-xs p-text-2 leading-relaxed">

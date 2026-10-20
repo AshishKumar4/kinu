@@ -332,10 +332,13 @@ body { background: var(--c-bg); color: var(--c-text); }
    heading pretending to be an interface; at 24px and up it is the product's
    voice, and it is the same voice the signed-out pages speak in. */
 .p-display  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.02em; }
-/* Mono, because a label is a name for the thing beside it and should not
-   compete with it for the same font. Letter-spacing is lower than a
-   proportional face needs: mono is already wide. */
-.p-eyebrow  { font-family: var(--font-mono); font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-text-3); }
+/* Every page's title, flows' included: 24/32 at 600 (design review 2026-10-20). */
+.p-page-title { font-family: var(--font-display); font-size: 1.5rem; line-height: 2rem; font-weight: 600; letter-spacing: -0.011em; color: var(--c-text); }
+/* The section label's look under its older name (design review 2026-10-20):
+   one label role, sentence case; mono is for code alone. */
+.p-eyebrow  { font-family: var(--font-ui); font-size: 0.8125rem; line-height: 20px; font-weight: 600; letter-spacing: 0; color: var(--c-text-2); }
+/* The section label at the sidebar's size: the rail's group names ("Workspaces"). */
+.p-label-sm { font-size: 0.75rem; line-height: 16px; }
 /* The annotation register — mono captions beside code and other identifiers
    a name is written about. Ordinary metadata and status moved to `.p-meta`
    and `.p-t-status`; what stays here names a technical object. */
@@ -419,13 +422,17 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow: hidden;
 }
 .p-group > * + * { border-top: 1px dashed var(--c-dash); }
+/* Inside a card (a Settings group, the mail reader), a group is its rows under that rule alone, never a second box
+   (design review 2026-10-20, "no nested cards"): the card's own edge and padding are the group's. */
+.p-card .p-group { border: 0; border-radius: 0; background: transparent; overflow: visible; }
 /* A `contents` wrapper (a CardSlot) draws no box, so its rows take the rule themselves. */
 .p-group > * + .contents > :first-child,
 .p-group > .contents > * + * { border-top: 1px dashed var(--c-dash); }
 
-/* A section label — names a block ("Mission", "Journal", "Identity") at the
-   panel-heading size, in the faint register that keeps it under the title. */
-.p-label { font-size: 0.9375rem; line-height: 22px; font-weight: 600; color: var(--c-text-4); }
+/* The one section label (design review 2026-10-20): names a group ("Profile",
+   "Installed", "Identity") in sentence case, no icon, 8 px above it. Every
+   page's groups and every Card take it; mono eyebrows stay off page bodies. */
+.p-label { font-family: var(--font-ui); font-size: 0.8125rem; line-height: 20px; font-weight: 600; letter-spacing: 0; color: var(--c-text-2); }
 
 /* ── Cards — quiet at rest; only cards that are actually interactive
       react (`p-card-hover`), and with a surface step, never an accent flood. ── */
@@ -602,6 +609,35 @@ body { background: var(--c-bg); color: var(--c-text); }
    therefore the one part of its library we do not use — the call sites
    render `FilledButton` (components/ui/FilledButton.tsx), which pairs these
    looks with Kumo's own `size="sm"` box. */
+/* ── The one button (components/ui/Button.tsx; design review 2026-10-20) ──
+   md 32 / sm 28, r8, 13/500; primary brass at 600, one per view. The legacy
+   .p-btn* names below draw the same shapes until their last caller moves. */
+.p-button {
+  display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid transparent; border-radius: 8px; white-space: nowrap; cursor: pointer;
+  font-family: var(--font-ui); font-size: 0.8125rem; line-height: 1.25rem; font-weight: 500;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out, transform 120ms ease-out;
+}
+.p-button-md { height: 32px; padding: 0 14px; }
+.p-button-sm { height: 28px; padding: 0 10px; }
+.p-button-md.p-button-icon { width: 32px; padding: 0; }
+.p-button-sm.p-button-icon { width: 28px; padding: 0; }
+.p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; }
+.p-button-primary:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
+.p-button-primary:active { transform: scale(0.98); }
+.p-button-secondary, .p-button-danger { background: var(--c-surface); border-color: var(--c-input-border); color: var(--c-text); }
+.p-button-secondary:hover, .p-button-danger:hover { background: var(--c-elevated); border-color: var(--c-border-strong); }
+.p-button-danger { color: var(--c-danger); }
+.p-button-ghost { color: var(--c-text-2); }
+.p-button-ghost:hover { background: var(--c-neutral-tint); color: var(--c-text); }
+.p-button-ghost[aria-pressed="true"] { background: var(--c-neutral-tint); color: var(--c-text); }
+.p-button-destructive { background: var(--c-danger); color: var(--c-accent-on); font-weight: 600; }
+.p-button-destructive:hover { background: color-mix(in srgb, var(--c-danger) 88%, #000); }
+.p-button:disabled { opacity: 0.45; cursor: default; transform: none; }
+.p-button-primary:disabled, .p-button-destructive:disabled { opacity: 1; background: var(--c-neutral-tint); color: var(--c-text-3); }
+.p-button:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .p-button:active { transform: none; } }
+
 .p-btn {
   background: var(--c-accent);
   color: var(--c-accent-on);
@@ -1577,7 +1613,6 @@ body > .annotation-toolbar {
   .p-t-control { font-size: 0.6875rem; }                     /* navigation & controls — 11px */
   .p-t-status  { font-size: 0.6875rem; }                     /* status labels — 11px */
   .p-t-code    { font-size: 0.78125rem; line-height: 1.55; } /* code — 12.5px */
-  .p-label     { font-size: 0.78125rem; line-height: 18px; } /* section label — 12.5px */
 
   .p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
     font-size: 11px; line-height: 16px;

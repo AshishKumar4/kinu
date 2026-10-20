@@ -4,7 +4,7 @@
  * access; one on the owner's access says so, and why.
  */
 import { useState } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { GALLERY_CATEGORIES, type GalleryCategory, type LiveShareRecord } from "@kinu.run/core";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { Switch } from "@/components/ui/Switch";

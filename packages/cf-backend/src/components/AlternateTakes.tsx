@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   ArrowLeftIcon, ArrowRightIcon, CaretDownIcon, CaretRightIcon, GitBranchIcon,
   CheckCircleIcon, WarningCircleIcon, XIcon,
@@ -98,9 +98,9 @@ function TakesComparison({ set, onPick, onClose }: {
       maxWidthClass="max-w-xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Keep current</Button>
-        <FilledButton onClick={useTake} disabled={busy || isCurrent}>
+        <Button variant="primary" size="sm" onClick={useTake} disabled={busy || isCurrent}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Recording…</span></> : pickWord}
-        </FilledButton>
+        </Button>
       </>}
     >
       <p className="text-xs p-text-3 leading-relaxed">

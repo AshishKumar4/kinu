@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { FlagIcon, FolderIcon, GitForkIcon, GithubLogoIcon, PlayIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, galleryPicturePath, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
@@ -15,7 +16,6 @@ import { SlatePicture } from "@/components/slates/SlatePicture";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { Avatar } from "@/components/ui/Avatar";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { hereAsking, signInAndReturn } from "@/lib/sign-in";
@@ -41,7 +41,7 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
       footer={(
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-          <FilledButton disabled={reason.trim() === "" || busy} data-gallery-report-send onClick={send}>Report</FilledButton>
+          <Button variant="primary" size="md" disabled={reason.trim() === "" || busy} data-gallery-report-send onClick={send}>Report</Button>
         </div>
       )}>
       <p className="p-row-text p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>
@@ -156,11 +156,11 @@ export default function GallerySlatePage() {
             </div>
             <p className="p-row-text p-text-2">{listing.line}</p>
             <div className="flex flex-wrap items-center gap-2">
-              <a href={listing.url} data-gallery-open className="p-btn inline-flex h-9 items-center gap-1.5 rounded-md px-5 text-sm font-medium"><PlayIcon size={14} weight="fill" />Open</a>
-              <Button size="base" variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereAsking("fork")))}>
+              <a href={listing.url} data-gallery-open className={buttonClass({ variant: "primary" })}><PlayIcon size={14} weight="fill" />Open</a>
+              <Button variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereAsking("fork")))}>
                 <GitForkIcon size={15} />Fork
               </Button>
-              <Button size="base" variant="ghost" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>
+              <Button variant="secondary" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>
                 <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
               </Button>
             </div>

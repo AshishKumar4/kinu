@@ -9,7 +9,8 @@
  * states (`SELF_DEPLOY_STATES`) and holds the look, mode and device.
  */
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
-import { Button, CloudflareLogo, Loader } from "@cloudflare/kumo";
+import { CloudflareLogo, Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   ArrowSquareOutIcon, ArrowsClockwiseIcon, CaretDownIcon, CaretRightIcon, CheckIcon, CircleIcon, CpuIcon, EnvelopeSimpleIcon, GlobeHemisphereWestIcon,
   LinkIcon, MagnifyingGlassIcon, TerminalWindowIcon, WarningCircleIcon,

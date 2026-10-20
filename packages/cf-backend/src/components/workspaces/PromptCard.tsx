@@ -1,6 +1,6 @@
+import { Button } from "@/components/ui/Button";
 import { useEffect, useRef, type FormEvent, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { composing } from "@/components/ui/form";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
@@ -66,10 +66,10 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
       {error && <div className="mx-6 mb-4 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
       <div className="flex items-center justify-end gap-2 px-6 pb-5">
         {attachments && <div className="-ml-2 mr-auto"><AttachButton attachments={attachments} disabled={busy} /></div>}
-        <FilledButton type="submit" disabled={busy || blocked} className="!h-10 !rounded-full px-5 p-t-control">
+        <Button variant="primary" size="md" type="submit" disabled={busy || blocked} >
           {busy && <Loader size="sm" />}
           {action}
-        </FilledButton>
+        </Button>
       </div>
     </form>
   );

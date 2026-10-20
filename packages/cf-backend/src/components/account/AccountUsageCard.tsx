@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ArrowsClockwiseIcon, ChartBarIcon, GaugeIcon } from "@phosphor-icons/react";
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react";
 import {
   fmtTokens, fmtUsd, limitHeading, limitUnreadText, limitWindowText, quotaWindowText, timeAgo, usageTotal,
   type AccountSpend, type AccountUsage, type LimitReport, type LimitWindow,
@@ -123,12 +123,12 @@ export function AccountUsageCard() {
 
   return (
     <>
-      <Card title="Limits · what each account has left" icon={GaugeIcon}>
+      <Card title="Limits · what each account has left">
         <CardSlot resource={usage.resource} what="your limits" onRetry={usage.reload}>
           {(value) => <LimitsTable usage={value} onRefresh={readAgain} />}
         </CardSlot>
       </Card>
-      <Card title="By account · API-equivalent cost" icon={ChartBarIcon}>
+      <Card title="By account · API-equivalent cost">
         <CardSlot resource={usage.resource} what="your usage" onRetry={usage.reload}>
           {(value) => <SpendTable usage={value} />}
         </CardSlot>

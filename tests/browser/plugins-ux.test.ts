@@ -50,10 +50,10 @@ async function captureOpenedTabs(page: Page): Promise<void> {
   });
 }
 
-/** The names in the Installed strip, in the order it draws them. */
-function installedStrip(page: Page): Promise<string[]> {
-  return page.$$eval('[data-installed-strip] [data-installed]',
-    (nodes) => nodes.map((node) => node.getAttribute('data-installed') ?? ''));
+/** The names in the Connected list, in the order it draws them. */
+function connectedList(page: Page): Promise<string[]> {
+  return page.$$eval('section[aria-label="Connected"] [data-plugin]',
+    (nodes) => nodes.map((node) => node.getAttribute('data-plugin') ?? ''));
 }
 
 /** The body the fixture recorded for the page's add POST. The fixture writes
@@ -113,10 +113,9 @@ describe('MCP presets', () => {
         );
         expect(await presetStatus(page, 'cloudflare')).toBe('Needs sign-in');
 
-        // The added server joins the strip of what the account holds, and the
-        // page still draws it once: its own preset row, not a second copy in
-        // the servers list.
-        await page.waitForFunction(() => document.querySelector('[data-installed="Cloudflare"]') !== null);
+        // The added server moves to what the account holds, and the page
+        // still draws it once: its own preset row, under Connected alone.
+        await page.waitForFunction(() => document.querySelector('section[aria-label="Connected"] [data-plugin="Cloudflare"]') !== null);
         expect(await page.$$('[data-plugin="Cloudflare"]')).toHaveLength(1);
       } finally {
         await page.close();
@@ -163,9 +162,9 @@ describe('MCP presets', () => {
         );
         expect(await presetStatus(page, 'github')).toBe('Connected');
 
-        // A token add is an add: the same row, and the same strip.
-        await page.waitForFunction(() => document.querySelector('[data-installed="GitHub"]') !== null);
-        expect(await installedStrip(page)).toContain('GitHub');
+        // A token add is an add: the same row, under Connected.
+        await page.waitForFunction(() => document.querySelector('section[aria-label="Connected"] [data-plugin="GitHub"]') !== null);
+        expect(await connectedList(page)).toContain('GitHub');
       } finally {
         await page.close();
       }
@@ -312,19 +311,20 @@ describe('MCP presets', () => {
 
             expect(drawn.filter((row) => row.preset).map((row) => row.name))
               .toEqual(['GitHub', 'Cloudflare', 'Gmail']);
-            // Services only, skills being in the Drive: the presets, then the
-            // account's own servers. The failed one is among them, so its line
+            // Services only, skills being in the Drive: what the account holds,
+            // then what it can add. The failed server is among them, so its line
             // (a failure, where the endpoint used to be) is under the same rule.
-            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Gmail', 'linear', 'notion']);
+            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'linear', 'notion', 'Gmail']);
 
             for (const row of drawn) {
               expect(row.text).not.toContain('http');
               expect(row.buttons).toBe(row.preset ? 1 : 0);
             }
 
-            // What the account holds, as the strip draws it: both connected
-            // presets and both servers of its own.
-            expect(await installedStrip(plugins)).toEqual(['GitHub', 'Cloudflare', 'linear', 'notion']);
+            // What the account holds, once each: both connected presets and both
+            // servers of its own; the catalog's last is under Add alone.
+            expect(await connectedList(plugins)).toEqual(['GitHub', 'Cloudflare', 'linear', 'notion']);
+            expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual(['Gmail']);
             
           } finally {
             await plugins.close();

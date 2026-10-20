@@ -1,11 +1,11 @@
 /** The blueprint half of the share dialog; a fork calls its forker's own surface. The live half is `LiveShareForm`. */
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import * as v from "valibot";
 import { BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath, type BlueprintInspection, type SlateAnswer, type SlateShareRecord } from "@kinu.run/core";
 import { settleSync, showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { inputCls } from "@/components/ui/form";
 import { SecretWarning } from "@/pages/BlueprintPage";
@@ -145,11 +145,11 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
           </p>
           <div className="flex items-center gap-2">
             <a href={blueprintPagePath(published.id)} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{link}</a>
-            <CopyButton value={link} what="the blueprint link" className="p-btn-quiet rounded p-1" />
+            <CopyButton value={link} what="the blueprint link" className={buttonClass({ size: "sm", iconOnly: true })} />
           </div>
           {published.users.length > 0 && <p className="p-text-3">It is in the Drive of {published.users.join(", ")}.</p>}
         </div>
-        <div className="flex justify-end"><FilledButton className="h-8 px-4 text-sm" onClick={onClose}>Done</FilledButton></div>
+        <div className="flex justify-end"><Button variant="primary" size="md" onClick={onClose}>Done</Button></div>
       </>
     );
   }
@@ -214,9 +214,9 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton className="h-8 px-4 text-sm" onClick={() => publish()} disabled={busy || version === null || inspection === null} data-blueprint-publish>
+        <Button variant="primary" size="sm"  onClick={() => publish()} disabled={busy || version === null || inspection === null} data-blueprint-publish>
           {busy ? <><Loader size="sm" /><span className="ml-1">Publishing…</span></> : "Publish"}
-        </FilledButton>
+        </Button>
       </div>
     </>
   );

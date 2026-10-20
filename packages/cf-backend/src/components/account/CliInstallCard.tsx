@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { TerminalIcon } from "@phosphor-icons/react";
 import { getCliSetup, type CliSetup } from "@/lib/user-api";
 import { Card } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -11,7 +10,7 @@ export function CliInstallCard() {
   useEffect(() => { getCliSetup().then(setCliSetup, () => setCliSetup(null)); }, []);
 
   return (
-    <Card title="Install" icon={TerminalIcon}>
+    <Card title="Install">
       <CommandCopy command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
     </Card>
   );

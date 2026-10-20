@@ -3,7 +3,7 @@
  * ship. Each is fontsource's latin variable cut (OFL, beside it in `gallery-fonts/`). `<html data-face>` names one, and
  * `data-face-scope` how far it reaches: `chat`, the assistant's prose and the person's bubble; `everywhere`, those and
  * every page's UI and display text (`--font-ui`, `--font-display`). The chat is sized so its x-height matches Schibsted
- * Grotesk's at today's 14.5px (each face's own OS/2 sxHeight) and led per face; the rest of the UI keeps its sizes.
+ * Grotesk's at today's 14.5px (each face's own OS/2 sxHeight) and led per face; the UI sets its roles at their own px.
  * Fragment Mono sets code in every case. Unnamed, every page is as it ships.
  */
 import interUrl from "@/gallery-fonts/inter-latin-opsz.woff2?url";
@@ -21,8 +21,8 @@ interface ChatFace {
   /** OS/2 sxHeight over unitsPerEm. */
   readonly xHeight: number;
   /**
-   * The face drawn this much of its size (`@font-face size-adjust`), at every size it sets and no other face's: Inter's
-   * x-height brought to Schibsted's, so a page keeps its density and nothing the sidebar or a tab strip holds is cut.
+   * The chat's copy of the face drawn this much of its size (`@font-face size-adjust`): Inter's x-height brought to
+   * Schibsted's, so the chat reads at the size it ships at. The UI sets the face unadjusted, at its roles' own px.
    */
   readonly sizeAdjust?: number;
   /** Line height at the workbench's prose size. */
@@ -65,14 +65,18 @@ function faceCss(name: ChatFaceName): string {
   if (face.family === null || face.url === null) return "";
   const adjust = face.sizeAdjust ?? 1;
   const ratio = SCHIBSTED_X_HEIGHT / (face.xHeight * adjust);
-  const stack = `"${face.family}", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"`;
+  const fallback = `-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"`;
+  const stack = `"${face.family}", ${fallback}`;
+  const chatStack = `"${face.family} Chat", ${fallback}`;
   const on = `:root[data-face="${name}"]`;
   const rem = (value: number) => `${(value * ratio).toFixed(4)}rem`;
+  const source = `src:url("${face.url}") format("woff2-variations");font-weight:100 900;font-style:normal;font-display:swap`;
 
   return [
-    `@font-face{font-family:"${face.family}";src:url("${face.url}") format("woff2-variations");font-weight:100 900;font-style:normal;font-display:swap;size-adjust:${(adjust * 100).toFixed(1)}%}`,
-    `${on} .prose-chat{font-family:${stack};font-size:${rem(SHIPPED.page.prose)};letter-spacing:${face.tracking}}`,
-    `${on} .p-t-chat{font-family:${stack};font-size:${rem(SHIPPED.page.bubble)}}`,
+    `@font-face{font-family:"${face.family}";${source}}`,
+    `@font-face{font-family:"${face.family} Chat";${source};size-adjust:${(adjust * 100).toFixed(1)}%}`,
+    `${on} .prose-chat{font-family:${chatStack};font-size:${rem(SHIPPED.page.prose)};letter-spacing:${face.tracking}}`,
+    `${on} .p-t-chat{font-family:${chatStack};font-size:${rem(SHIPPED.page.bubble)}}`,
     `${on} :is([data-workbench],.p-workbench) .prose-chat{font-size:${rem(SHIPPED.workbench.prose)};line-height:${String(face.leading)}}`,
     `${on} :is([data-workbench],.p-workbench) .prose-chat :is(h1,h2,h3){line-height:${String(face.leading)}}`,
     `${on} :is([data-workbench],.p-workbench) .p-t-chat{font-size:${rem(SHIPPED.workbench.bubble)}}`,
@@ -82,7 +86,7 @@ function faceCss(name: ChatFaceName): string {
   ].join("\n");
 }
 
-/** Once per page: every face's rules, which wait on `data-chat-font` to name one. */
+/** Once per page: every face's rules, which wait on `data-face` to name one. */
 export function installChatFaces(): void {
   if (document.querySelector("style[data-gallery-chat-fonts]") !== null) return;
   const style = document.createElement("style");

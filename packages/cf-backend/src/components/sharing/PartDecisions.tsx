@@ -6,9 +6,8 @@
  */
 import type { ReactNode } from "react";
 import { CheckIcon, EyeIcon, PlugIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { type ConsentAsk, type EffectAsk, type JsonValue } from "@kinu.run/core";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { rootWords, serverWords } from "./words";
 
@@ -45,7 +44,7 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
 
   return (
     <Modal title={changed ? `${slate} changed since you allowed it` : `Let ${slate} use your ${server}?`} icon={<PlugIcon size={18} className="p-accent" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><FilledButton data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</Button></div>}>
       {changed && <p data-consent-changed className="p-row-text p-text-2">Its code changed after you allowed it to use your {server}. Allow it again to keep seeing your part.</p>}
       <Lets
         yes={[
@@ -71,7 +70,7 @@ export function ApprovalDecision({ slate, ask, onApprove, onDecline }: {
 }) {
   return (
     <Modal title={`${slate} wants to make a change`} icon={<WarningCircleIcon size={18} className="p-warning" />} onClose={onDecline}
-      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="secondary" data-approval-decline onClick={onDecline}>Decline</Button><FilledButton data-approval-approve onClick={onApprove}>Approve once</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="secondary" data-approval-decline onClick={onDecline}>Decline</Button><Button variant="primary" size="sm" data-approval-approve onClick={onApprove}>Approve once</Button></div>}>
       <p className="p-row-text p-text-2"><strong data-approval-tool className="font-medium p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
       <Payload data-approval-payload value={ask.payload} />
       <p className="p-meta p-text-3">Only this change, with exactly this. It asks again for any other.</p>
@@ -88,7 +87,7 @@ export function ShowDecision({ label, value, onShow, onClose }: {
 }) {
   return (
     <Modal title="Show to everyone?" icon={<EyeIcon size={18} className="p-accent" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><FilledButton data-show-confirm onClick={onShow}>Show to everyone</FilledButton></div>}>
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><Button variant="primary" size="sm" data-show-confirm onClick={onShow}>Show to everyone</Button></div>}>
       <p className="p-row-text p-text-2">{label}</p>
       <Payload data-show-payload value={value} />
       <p data-show-final className="flex gap-2 p-row-text p-text"><WarningCircleIcon size={15} className="mt-0.5 shrink-0 p-warning" />Everyone who can open this slate sees exactly this. You can't take it back once it's shown.</p>

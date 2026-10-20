@@ -8,6 +8,7 @@ import * as v from "valibot";
 import { ONBOARDING_STEPS } from "@kinu.run/core";
 import Sidebar from "@/components/Sidebar";
 import { ACCOUNT_PANELS, AccountPanelModal } from "@/components/account/AccountPanelModal";
+import { NewWorkspaceIconButton } from "@/components/workspaces/NewWorkspaceButton";
 
 const HomePage = lazy(() => import("@/pages/HomePage"));
 
@@ -17,13 +18,17 @@ const WorkspacesPage = lazy(() => import("@/pages/WorkspacesPage"));
 
 const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
 
-const DevicesPage = lazy(() => import("@/pages/DevicesPage"));
+const UserSettingsPage = lazy(() => import("@/pages/UserSettingsPage"));
 
 const UserMcpPage = lazy(() => import("@/pages/UserMcpPage"));
 
+/** The app's frame as these pages meet it: the sidebar, and on a phone the app bar with its New (layout.tsx). */
 function Chrome({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+    <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+      <header className="flex h-14 shrink-0 items-center justify-end border-b p-border p-sidebar px-3 md:hidden">
+        <NewWorkspaceIconButton className="size-9 rounded-full" />
+      </header>
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>
@@ -46,8 +51,9 @@ export function PluginsFrame() {
   return <Chrome><PluginsPage /></Chrome>;
 }
 
+/** Settings' Devices section, where devices live (the old `/devices` address redirects there). */
 export function DevicesFrame() {
-  return <Chrome><DevicesPage /></Chrome>;
+  return <Chrome><UserSettingsPage /></Chrome>;
 }
 
 export function UserMcpFrame() {

@@ -15,6 +15,7 @@ import { JsonObjectSchema } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import WorkspacePage from "@/pages/WorkspacePage";
 import { seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
+import { GALLERY_PICTURE } from "@/gallery-pictures";
 import type { SocketCall } from "@/lib/workspace-rpc";
 
 const NOW = Date.now();
@@ -43,6 +44,9 @@ const overview = (o: Partial<WorkspaceOverview> & Pick<WorkspaceOverview, "activ
   decisionsWaiting: 0, hasUpdates: false, awaitsSettings: false, latestRun: null, slates: [], shares: [], plan: null, ...o,
 });
 
+/** A slate the workspace keeps, with its latest capture (gallery-pictures.ts names each). */
+const slate = (id: string, title: string, picture: string) => ({ id, title, picture, visibility: null });
+
 const entry = (name: string, displayName: string, visited: number, o: WorkspaceOverview | null): RosterEntry => ({
   name, displayName, createdAt: NOW - 20 * 864e5, lastVisited: NOW - visited, overview: o, decisions: o?.decisionsWaiting ?? 0, logo: null,
 });
@@ -55,27 +59,32 @@ export const ASSISTANT_ROSTER: RosterEntry[] = [
   ...(MOMENT === "firstrun" ? [] : [entry("api-worker-v2", "API Worker v2 release", 2 * MIN, overview({
     activity: "working", latestRun: { status: "running", task: "Cut release/v2 from main and write the notes", run: null },
     plan: { title: "Cut release/v2, write the notes, get staging green", done: 1, total: 4 },
+    slates: [slate("release", "Release v2", GALLERY_PICTURE.release)],
   }))]),
   entry("api-worker", "API Worker", 12 * MIN, overview({
     activity: "idle", decisionsWaiting: 1,
     latestRun: { status: "completed", task: "Read the sessions database as SESSIONS_DB, then deploy", run: null },
     plan: { title: "Read the sessions database as SESSIONS_DB", done: 4, total: 5 },
+    slates: [slate("workers-health", "Workers health", GALLERY_PICTURE.deploys), slate("incident", "Incident: sessions 500s", GALLERY_PICTURE.incident)],
   })),
   entry("kinu-issues", "Issue triage · kinu-run/kinu", 40 * MIN, overview({
     activity: "working",
     latestRun: { status: null, task: "Label this week's issues and answer the easy ones", run: null },
     plan: { title: "Label this week's issues and answer the easy ones", done: 9, total: 14 },
+    slates: [slate("pr-board", "PR review board", GALLERY_PICTURE.prBoard)],
   })),
   entry("do-sqlite", "Durable Objects SQLite report", 9 * HOUR, overview({
     activity: "idle",
     latestRun: { status: "completed", task: "What changed in Durable Objects SQLite storage this month", run: null },
     plan: { title: "What changed in Durable Objects SQLite storage this month", done: 6, total: 6 },
+    slates: [slate("report", "Durable Objects SQLite report", GALLERY_PICTURE.report)],
   })),
   entry("kinu-website", "Kinu website", 2 * 864e5, overview({
     activity: "idle", latestRun: { status: "error", task: "Lighthouse check of kinu.run before the release", run: null },
   })),
   entry("router-firmware", "Router firmware in Ghidra", 4 * 864e5, overview({
     activity: "unfinished", latestRun: { status: "completed", task: "Map the update routine's signature check", run: null },
+    slates: [slate("ghidra", "Update routine map", GALLERY_PICTURE.ghidra)],
   })),
 ];
 

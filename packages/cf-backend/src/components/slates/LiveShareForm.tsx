@@ -1,7 +1,8 @@
 /** The server grant is the read set plus the ticked set; the dialog renders, never decides. */
 import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import {
   CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, SquaresFourIcon, StopCircleIcon, UserCircleIcon,
   UsersIcon, WarningIcon,
@@ -9,7 +10,6 @@ import {
 import * as v from "valibot";
 import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
 import { ShareListing, type ListShare } from "./ShareListing";
@@ -175,12 +175,12 @@ function PrimaryAction({ reviewing, busy, canShare, canApprove, onShare, onAppro
   onShare: () => void;
   onApprove: () => void;
 }) {
-  if (reviewing) return <FilledButton className="h-8 px-4 text-sm" onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</FilledButton>;
+  if (reviewing) return <Button variant="primary" size="sm"  onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</Button>;
 
   return (
-    <FilledButton className="h-8 px-4 text-sm" onClick={onShare} disabled={!canShare} data-share-submit>
+    <Button variant="primary" size="sm"  onClick={onShare} disabled={!canShare} data-share-submit>
       {busy ? <><Loader size="sm" /><span className="ml-1">Sharing…</span></> : "Share"}
-    </FilledButton>
+    </Button>
   );
 }
 
@@ -460,7 +460,7 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
       </div>
       {row.mode === "owner" && row.stale && (
         <div className="pl-[26px]">
-          <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
+          <Button size="sm" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
         </div>
       )}
       {listing && row.mode === "own" && <div className="pl-[26px]"><ShareListing share={row} onList={(next) => actions.onList(row.id, next)} disabled={actions.disabled} /></div>}
@@ -511,7 +511,7 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
               <span className="block truncate p-meta p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
               {Object.keys(entry.root).length > 0 && <span className="block truncate p-meta p-text-3">{rootWords(entry.root)}</span>}
             </span>
-            <Button size="xs" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
+            <Button size="sm" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
           </li>
         ))}
       </ul>
@@ -807,11 +807,11 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           ) : (
             <div className="flex items-center gap-2">
               <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{created.url}</a>
-              <CopyButton value={created.url} what="the share link" className="p-btn-quiet rounded p-1" />
+              <CopyButton value={created.url} what="the share link" className={buttonClass({ size: "sm", iconOnly: true })} />
             </div>
           )}
         </div>
-        <div className="flex justify-end"><FilledButton className="h-8 px-4 text-sm" onClick={onClose}>Done</FilledButton></div>
+        <div className="flex justify-end"><Button variant="primary" size="md" onClick={onClose}>Done</Button></div>
       </>
     );
   }

@@ -183,10 +183,11 @@ async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport:
   // No tile runs a slate: a live frame on every visit would wake each workspace's sandbox.
   expect(await page.$$('[data-workspaces-view] iframe')).toHaveLength(0);
 
-  // The filter tabs sit in the control row. One create action is in reach, the sidebar's or, on a phone, the page's.
+  // The filter tabs sit in the control row. One create action is in reach: the sidebar's, or on a phone the app bar's
+  // (the page keeps none there; design review 2026-10-20).
   const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.getAttribute('data-segment')));
   expect(tabs).toEqual(['all', 'needs', 'working', 'idle']);
-  expect(await page.$$eval(':is(aside, main) :is(a, button)', (controls) => controls.filter((control) => (control.getAttribute('aria-label') ?? control.textContent?.trim()) === 'New workspace'
+  expect(await page.$$eval('a, button', (controls) => controls.filter((control) => (control.getAttribute('aria-label') ?? control.textContent?.trim()) === 'New workspace'
     && control instanceof HTMLElement && control.offsetParent !== null).length)).toBe(1);
 
   if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
@@ -976,9 +977,9 @@ describe('account panels', () => {
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the account
-              // menu in its footer, the roster eyebrow above the rows.
+              // menu in its footer, the roster's section label above the rows.
               const rail = await home.evaluate(() => document.querySelector('aside')?.innerText ?? '');
-              expect(rail).toContain('WORKSPACES');
+              expect(rail).toContain('Workspaces');
               expect(rail).toContain('API Worker');
               expect(await home.$('aside [data-account-menu]')).not.toBeNull();
               
@@ -1018,9 +1019,8 @@ describe('account panels', () => {
             );
             const body = await plugins.evaluate(() => document.body.innerText);
 
-            // Section eyebrows are uppercased by the CSS role, and innerText
-            // reads them as drawn.
-            for (const text of ['MCP SERVERS', 'github', 'Needs sign-in']) {
+            // Two lists, in sentence case: what the account holds and what it can add.
+            for (const text of ['Connected', 'Add', 'github', 'Needs sign-in']) {
               expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 
@@ -1144,9 +1144,10 @@ describe('what the Devices page says about a machine\'s history', () => {
 
 const MEMORY_SHOTS = evidenceDir('account-memory');
 
-// rc28 walkthrough: Models was headed Models twice, its card under the section's own heading.
+// rc28 walkthrough: Models was headed Models twice. The design review (2026-10-20): the active rail item names the section,
+// and nothing below it says that name again.
 describe('Settings sections', () => {
-  test("each is named once: no panel under a section's heading carries that heading again", async () => {
+  test("each is named once, by its rail item: no panel in the section carries that name again", async () => {
     await withGallery(async (gallery) => {
       const rail = await freshPage(gallery, 'usersettingsstate', 'dark', 'desktop');
       const sections = await rail.$$eval('[data-settings-section]', (links) => links.map((link) => link.getAttribute('data-settings-section') ?? ''));
@@ -1161,13 +1162,12 @@ describe('Settings sections', () => {
 
         try {
           await page.waitForSelector(`[data-settings-section="${section}"][aria-current="true"]`);
-          await page.waitForSelector('[data-settings-head] h2');
           await settleAccountFixture(page);
           repeated.push(...await page.evaluate((name) => {
-            const heading = document.querySelector('[data-settings-head] h2')?.textContent?.trim() ?? '';
-            const panels = [...document.querySelectorAll('h2, h3')].filter((title) => title.closest('[data-settings-head]') === null);
+            const label = document.querySelector(`[data-settings-section="${name}"][aria-current="true"]`)?.textContent?.trim() ?? '';
+            const panels = [...document.querySelectorAll('main h2, main h3')];
 
-            return panels.filter((title) => title.textContent?.trim() === heading).map(() => `${name}: ${heading}`);
+            return panels.filter((title) => title.textContent?.trim() === label).map(() => `${name}: ${label}`);
           }, section));
         } finally {
           await page.close();

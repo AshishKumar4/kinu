@@ -1,7 +1,6 @@
 /** Every workspace, a page at a time; filter and search are the owner's object's queries. List or tiles, in localStorage. */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { Button } from "@cloudflare/kumo";
 import { ListIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import { APP_ROUTES } from "@kinu.run/core";
@@ -9,8 +8,8 @@ import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hook
 import type { RosterFilterBucket } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
-import { pageBody, PageHeader } from "@/components/ui/PageHeader";
-import { NewWorkspaceButton } from "@/components/workspaces/NewWorkspaceButton";
+import { Page } from "@/components/ui/PageHeader";
+import { TILE_GRID } from "@/components/ui/Tiles";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 
 const VIEW_KEY = "kinu:workspaces-view";
@@ -25,6 +24,11 @@ function storedView(): View {
 
   return parsed.success ? parsed.output : "tiled";
 }
+
+const VIEWS = [
+  { id: "list", label: "List view", icon: <ListIcon size={14} /> },
+  { id: "tiled", label: "Tiled view", icon: <SquaresFourIcon size={14} /> },
+] as const satisfies readonly { id: View; label: string; icon: ReactNode }[];
 
 const BUCKET_IDS = ["all", "needs", "working", "idle"] as const;
 
@@ -87,16 +91,10 @@ export default function WorkspacesPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className={`space-y-6 ${pageBody("browse", "")}`}>
-        <PageHeader icon={<SquaresFourIcon size={22} />} title="Workspaces">
-          <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
-            icon={<ListIcon size={14} />} onClick={() => setView("list")} />
-          <Button variant="ghost" size="sm" aria-label="Tiled view" aria-pressed={view === "tiled"}
-            icon={<SquaresFourIcon size={14} />} onClick={() => setView("tiled")} />
-          {/* Beside the sidebar's own, the page's would say it twice; on a phone the sidebar is folded away. */}
-          <NewWorkspaceButton className="ml-2 h-8 px-3 text-sm md:hidden" />
-        </PageHeader>
+    // One column on a phone either way, and the app bar has its own New: the header keeps no action there.
+    <Page icon={<SquaresFourIcon size={22} />} title="Workspaces" actions={(
+      <div className="max-md:hidden"><Segmented label="View" value={view} onChange={setView} segments={VIEWS} /></div>
+    )}>
 
         {/* The filter on the left; what it left out, then the search, at the row's right end. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
@@ -147,7 +145,7 @@ export default function WorkspacesPage() {
                 ))}
               </div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className={TILE_GRID}>
                 {shown.map((workspace) => (
                   <WorkspaceOverviewCard key={workspace.name} workspace={workspace} variant="tile" />
                 ))}
@@ -156,7 +154,6 @@ export default function WorkspacesPage() {
             {hasMore && <NextPage onReached={loadMore} />}
           </section>
         )}
-      </div>
-    </div>
+    </Page>
   );
 }

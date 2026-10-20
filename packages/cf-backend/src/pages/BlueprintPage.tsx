@@ -3,6 +3,7 @@
  * A secret-shaped scan hit is reported by location, never content.
  */
 import { type WorkspaceEntry } from '@kinu.run/core';
+import { Button } from "@/components/ui/Button";
 import { showing, detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
@@ -11,7 +12,6 @@ import { Loader } from "@cloudflare/kumo";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
 import type { BlueprintView } from "@kinu.run/core";
 import { KinuLogo } from "@/components/ui/KinuLogo";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { personReaches, reachConnection } from "@/components/slates/ForkReachPanel";
 import { registerWorkspace } from "@/lib/user-api";
@@ -135,9 +135,9 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
                   A committed version of a slate. A fork runs in your workspace, as you, on your own connections. Nothing of the publisher's comes with it.
                 </p>
               </div>
-              <FilledButton onClick={fork} disabled={email === undefined} className="!h-9 shrink-0 !px-4 !text-sm">
+              <Button variant="primary" size="md" onClick={fork} disabled={email === undefined} className="shrink-0">
                 <GitBranchIcon size={15} /> Fork into Kinu
-              </FilledButton>
+              </Button>
             </div>
             <BlueprintBody view={view} />
           </>

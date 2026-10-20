@@ -1,8 +1,7 @@
 import { Effect } from "effect";
 import { useCallback, useState, type ReactNode } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { detach, showing } from "@kinu.run/core/obs";
-import { FilledButton } from "./FilledButton";
 import { Modal } from "./Modal";
 
 /** A second way to go ahead, offered beside the main one; the main one stays the default. */
@@ -66,9 +65,9 @@ export function ConfirmDialog({ title, icon, children, action, failed, onConfirm
             {busy === alternate.action ? `${alternate.action}…` : alternate.action}
           </Button>
         )}
-        <FilledButton danger={danger} {...(marker === undefined ? {} : { [marker]: "" })} onClick={() => confirm(action, onConfirm)} disabled={busy !== null}>
+        <Button variant={danger ? "destructive" : "primary"} size="md" {...(marker === undefined ? {} : { [marker]: "" })} onClick={() => confirm(action, onConfirm)} disabled={busy !== null}>
           {busy === action ? `${action}…` : action}
-        </FilledButton>
+        </Button>
       </>}>
       {children}
       {error !== null && (

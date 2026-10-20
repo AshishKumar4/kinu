@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ClockCounterClockwiseIcon, NotebookIcon, SealCheckIcon } from "@phosphor-icons/react";
+import { ClockCounterClockwiseIcon, SealCheckIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
 import { JsonValueSchema, type AccountMemoryProposal, type JsonValue } from "@kinu.run/core";
@@ -78,7 +78,7 @@ export function AccountMemoryCard() {
   );
 
   return (
-    <Card title="Account memory" icon={NotebookIcon}>
+    <Card title="Account memory">
       <CardSlot resource={resource} what="your account memory" onRetry={reload}>
         {(state) => (
           <div className="space-y-4" data-account-memory>

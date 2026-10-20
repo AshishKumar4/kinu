@@ -8,9 +8,9 @@
  * holds the same one nested frame (`SealedContent`), drawn only when the part is shown, and no state differs in frames.
  */
 import { useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/Button";
 import { EyeIcon, LockSimpleIcon, PlugIcon, SignInIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { PartAction, PartRunAnswer } from "@kinu.run/core";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { serverWords } from "./words";
 
 /** What the frame does for its viewer; the decisions among them open in the top page. */
@@ -47,7 +47,7 @@ function InPlace({ icon, said, action, onAct, ...data }: {
     <div {...data} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 rounded-lg p-recessed px-4 py-6 text-center">
       <span className="shrink-0 p-text-3">{icon}</span>
       <p className="max-w-sm p-row-text p-text-2">{said}</p>
-      {action !== null && <FilledButton onClick={onAct}>{action}</FilledButton>}
+      {action !== null && <Button variant="primary" size="sm" onClick={onAct}>{action}</Button>}
     </div>
   );
 }

@@ -72,7 +72,7 @@ function PresetMenu({ preset, status, onRemove }: {
   );
 }
 
-function PresetRow({ preset, server, appConfigured, onChanged }: {
+export function PresetRow({ preset, server, appConfigured, onChanged }: {
   preset: McpPreset;
   server: McpServerSummary | undefined;
   /** `undefined` while loading, treated as configured so a row never flickers to its fallback. */
@@ -191,23 +191,38 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   );
 }
 
+/** Whether the deployment registered a preset's own app: `undefined` while loading. */
+export type PresetAvailability = readonly { id: string; appConfigured: boolean }[] | undefined;
+
+/** The catalog's presets the account can still add: not added yet, and offered (its app, or a token fallback). */
+export function addablePresets(servers: readonly McpServerSummary[], availability: PresetAvailability): readonly McpPreset[] {
+  return MCP_PRESETS.filter((preset) => {
+    if (servers.some((s) => s.presetId === preset.id)) return false;
+
+    const appConfigured = availability?.find((a) => a.id === preset.id)?.appConfigured;
+
+    return !(preset.auth === 'oauth-app' && appConfigured === false && preset.tokenFallback === undefined);
+  });
+}
+
 /** Fragment so the caller owns layout. An unconfigured `oauth-app` preset without a token
- *  fallback appears only once added; while loading it renders as configured. */
-export function McpPresetCards({ servers, availability, onChanged }: {
+ *  fallback appears only once added; while loading it renders as configured. `unadded` draws
+ *  only the presets the account can still add (`addablePresets`). */
+export function McpPresetCards({ servers, availability, onChanged, unadded = false }: {
   servers: readonly McpServerSummary[];
-  availability: readonly { id: string; appConfigured: boolean }[] | undefined;
+  availability: PresetAvailability;
   onChanged: () => void;
+  unadded?: boolean;
 }) {
+  const addable = addablePresets(servers, availability);
+
   return (
     <>
       {MCP_PRESETS.map((preset) => {
         const server = servers.find((s) => s.presetId === preset.id);
         const appConfigured = availability?.find((a) => a.id === preset.id)?.appConfigured;
 
-        if (preset.auth === 'oauth-app' && appConfigured === false
-          && preset.tokenFallback === undefined && server === undefined) {
-          return null;
-        }
+        if (!addable.includes(preset) && (server === undefined || unadded)) return null;
 
         return (
           <PresetRow key={preset.id} preset={preset} server={server}

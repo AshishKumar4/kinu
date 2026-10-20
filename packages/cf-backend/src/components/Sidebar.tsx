@@ -178,7 +178,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
       <div className="relative min-h-0 flex-1 overflow-clip">
       <div className="p-slide" data-drilled={drilled || undefined}>
       <div className="h-full overflow-y-auto pt-2 pb-3" inert={drilled}>
-        <div className="px-5 pb-2 pt-4 p-eyebrow">
+        <div className="px-5 pb-2 pt-4 p-eyebrow p-label-sm p-text-3">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
         </div>
         {!listLoading && workspaces.length === 0 && !listError && (

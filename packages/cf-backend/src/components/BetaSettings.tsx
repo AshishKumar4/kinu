@@ -1,6 +1,5 @@
 /** Settings, Beta: off until turned on, in the profile catalog both backends read. */
 import { useState } from "react";
-import { GraphIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import { betaSwarms, SWARMS_BETA_SETTING, type ProfileCatalogEnvelope } from "@kinu.run/core";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
@@ -31,8 +30,7 @@ export function BetaSettings() {
   };
 
   return (
-    <Card title="Swarms" icon={GraphIcon}
-      description="An agent runs many short-lived nodes in parallel to explore a question, then judges what they found. Off, agents are not offered swarms and the Swarms tab is hidden.">
+    <Card title="Swarms">
       <CardSlot resource={resource} what="your beta settings" onRetry={reload}>
         {(envelope) => {
           const on = betaSwarms(envelope.catalog);

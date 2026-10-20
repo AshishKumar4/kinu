@@ -1,12 +1,11 @@
 /** Only the conversation is always revertible; workspace and sandbox files have no snapshot store. File restore is offered only when the device checkpoint store answers. */
 import { Cause, Effect } from 'effect';
 import { startTransition, useCallback, useEffect, useState } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -107,9 +106,9 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
             Revert conversation and device files
           </Button>
         )}
-        <FilledButton onClick={(...args: Parameters<typeof revertConversation>) => detach(Effect.promise(async () => revertConversation(...args)))} disabled={busy} data-revert-action="conversation">
+        <Button variant="primary" size="md" onClick={(...args: Parameters<typeof revertConversation>) => detach(Effect.promise(async () => revertConversation(...args)))} disabled={busy} data-revert-action="conversation">
           Revert conversation
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="space-y-2" data-revert-dialog={checked ? "ready" : "checking"}>
@@ -199,9 +198,9 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <FilledButton onClick={onConfirm} disabled={busy}>
+        <Button variant="primary" size="md" onClick={onConfirm} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="space-y-2">

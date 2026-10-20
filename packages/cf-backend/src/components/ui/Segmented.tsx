@@ -1,10 +1,12 @@
 /** Roving tabindex: the strip is one tab stop, arrows move inside it. */
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 interface SegmentOption<T extends string> {
   readonly id: T;
   readonly label: string;
   readonly count?: number;
+  /** Drawn alone, with the label as its name: two 28 px squares in a 32 px track (Workspaces' view). */
+  readonly icon?: ReactNode;
 }
 
 
@@ -63,9 +65,11 @@ export function Segmented<T extends string>({ label, segments, value, onChange }
             tabIndex={(focusId ?? value) === segment.id ? 0 : -1}
             onClick={() => onChange(segment.id)}
             onFocus={() => setFocusId(segment.id)}
-            className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 p-t-control${selected ? " p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : " p-text-3 hover:p-text"}`}
+            aria-label={segment.icon === undefined ? undefined : segment.label}
+            title={segment.icon === undefined ? undefined : segment.label}
+            className={`flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md p-t-control ${segment.icon === undefined ? "px-2.5 py-1.5" : "size-7"}${selected ? " p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : " p-text-3 hover:p-text"}`}
           >
-            {segment.label}
+            {segment.icon ?? segment.label}
             {segment.count !== undefined && (
               <span className={`p-meta tabular-nums ${selected ? "p-text-2" : "p-text-4"}`}>{segment.count}</span>
             )}

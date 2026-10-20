@@ -1,35 +1,41 @@
 /** The URL hash names the section; an unknown hash opens the first one. */
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
+import { APP_ROUTES } from "@kinu.run/core";
 import {
   BrainIcon, ChartBarIcon, DesktopIcon, DesktopTowerIcon, FlaskIcon, KeyIcon, MagnifyingGlassIcon, NotebookIcon, PaintBrushIcon, PlugIcon, TerminalIcon, UserCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
 import { tabCls } from "@/components/ui/form";
+import { navRowClsLg } from "@/components/nav";
 
-/** `about` is said only where the panels below do not already say what the section is for. */
+/** A section: its rail label, which names it on the page too (no head repeats it), and its icon. */
 interface SettingsSectionSpec {
   readonly label: string;
   readonly Icon: Icon;
-  readonly about?: string;
 }
 
 const SETTINGS_SECTIONS = {
   account: { label: "Account", Icon: UserCircleIcon },
-  appearance: { label: "Appearance", Icon: PaintBrushIcon, about: "Your theme follows you to every device you sign in on. Light or dark is this device's own." },
-  devices: { label: "Devices", Icon: DesktopTowerIcon, about: "Machines linked to this account. A workspace you approve can run commands on them." },
-  providers: { label: "Providers", Icon: PlugIcon, about: "Model access for every workspace you own." },
-  secrets: { label: "Secrets", Icon: KeyIcon, about: "Keys and tokens your agents use without seeing them, in the workspaces you choose. Add them here, never in chat." },
-  models: { label: "Models", Icon: BrainIcon, about: "Which model each tier and role uses, in every workspace you own. A change applies from the next turn." },
-  search: { label: "Web search", Icon: MagnifyingGlassIcon, about: "What your agents search the web with, in every workspace you own, and who pays for it." },
-  memory: { label: "Memory", Icon: NotebookIcon, about: "What every workspace and agent of yours reads alongside its own memory. Agents only propose: nothing is kept until you accept it." },
-  computer: { label: "Computer", Icon: DesktopIcon, about: "The size of every workspace's computer, unless the workspace chooses its own in its Environment tab." },
-  beta: { label: "Beta", Icon: FlaskIcon, about: "What is still being shaped, off until you turn it on, in every workspace you own." },
-  usage: { label: "Usage", Icon: ChartBarIcon, about: "What each provider account spent across every workspace you own, and the quota it has left." },
+  appearance: { label: "Appearance", Icon: PaintBrushIcon },
+  devices: { label: "Devices", Icon: DesktopTowerIcon },
+  providers: { label: "Providers", Icon: PlugIcon },
+  secrets: { label: "Secrets", Icon: KeyIcon },
+  models: { label: "Models", Icon: BrainIcon },
+  search: { label: "Web search", Icon: MagnifyingGlassIcon },
+  memory: { label: "Memory", Icon: NotebookIcon },
+  computer: { label: "Computer", Icon: DesktopIcon },
+  beta: { label: "Beta", Icon: FlaskIcon },
+  usage: { label: "Usage", Icon: ChartBarIcon },
   cli: { label: "CLI", Icon: TerminalIcon },
 } satisfies Record<string, SettingsSectionSpec>;
 
 type SettingsSection = keyof typeof SETTINGS_SECTIONS;
+
+/** A section's own address: Settings with the section in its hash. Devices lives here alone (design review 2026-10-20). */
+export function settingsPath(section: SettingsSection): string {
+  return `${APP_ROUTES.userSettings}#${section}`;
+}
 
 function isSettingsSection(id: string): id is SettingsSection {
   return Object.hasOwn(SETTINGS_SECTIONS, id);
@@ -39,17 +45,6 @@ export function settingsSection(hash: string): SettingsSection {
   const id = hash.startsWith("#") ? hash.slice(1) : hash;
 
   return isSettingsSection(id) ? id : "account";
-}
-
-export function SettingsSectionHead({ section }: { section: SettingsSection }) {
-  const { label, about }: SettingsSectionSpec = SETTINGS_SECTIONS[section];
-
-  return (
-    <header data-settings-head className="mb-5">
-      <h2 className="p-heading p-title p-text">{label}</h2>
-      {about !== undefined && <p className="mt-1 p-row-text p-text-3">{about}</p>}
-    </header>
-  );
 }
 
 export function SettingsRail({ active }: { active: SettingsSection }) {
@@ -62,7 +57,7 @@ export function SettingsRail({ active }: { active: SettingsSection }) {
 
   return (
     <nav ref={nav} aria-label="Settings sections"
-      className="p-tabstrip -mx-5 flex border-b p-border px-5 sm:-mx-8 sm:px-8 lg:mx-0 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:border-0 lg:px-0">
+      className="p-tabstrip -mx-5 flex border-b p-border px-5 sm:-mx-8 sm:px-8 max-lg:[mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)] lg:mx-0 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:border-0 lg:px-0">
       {Object.entries(SETTINGS_SECTIONS).map(([id, { label, Icon }]) => {
         const current = id === active;
 
@@ -72,11 +67,7 @@ export function SettingsRail({ active }: { active: SettingsSection }) {
             to={{ hash: `#${id}` }}
             data-settings-section={id}
             aria-current={current ? "true" : undefined}
-            className={`${tabCls} ${current ? "p-tab-active" : ""} lg:mb-0 lg:rounded-md lg:border-b-0 lg:px-3 lg:py-2 ${
-              current
-                ? "lg:bg-[var(--c-accent-subtle)] lg:text-[var(--c-accent-fg)]"
-                : "lg:text-[var(--c-text-2)] lg:hover:bg-[var(--c-neutral-tint)] lg:hover:text-[var(--c-text)]"
-            }`}
+            className={`${tabCls} ${current ? "p-tab-active" : ""} lg:mb-0 lg:border-b-0 lg:px-3 lg:py-[7px] ${navRowClsLg(current)}`}
           >
             <Icon size={15} className={current ? "" : "p-text-3"} /> {label}
           </Link>

@@ -1,5 +1,4 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { DesktopIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
@@ -132,10 +131,10 @@ export function ComputerSizeSettings() {
   };
 
   return (
-    <Card title="Size" icon={DesktopIcon} description="A change applies the next time a computer starts.">
+    <Card title="Size">
       <CardSlot resource={resource} what="the computer size" onRetry={reload}>
         {(account) => (
-          <Field label="Default size" hint={failure ?? (saving ? "Saving…" : undefined)}>
+          <Field label="Default size" hint={failure ?? (saving ? "Saving…" : "Applies the next time a computer starts.")}>
             <Choice
               label="Default computer size"
               value={account ?? DEFAULT_BOX_SIZE}

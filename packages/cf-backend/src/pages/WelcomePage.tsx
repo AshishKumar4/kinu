@@ -2,7 +2,8 @@
 import { Cause, Effect } from 'effect';
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import {
   AppWindowIcon, DesktopTowerIcon, SparkleIcon,
   type Icon as PhosphorIcon,
@@ -11,7 +12,6 @@ import {
   APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID, suggestedMailUsername,
 } from "@kinu.run/core";
 import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
@@ -246,7 +246,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                       {letter}
                     </div>
                     <div className="w-full flex-1">
-                      <DisplayNameField value={displayName} onChange={setName} saving={busy} />
+                      <DisplayNameField value={displayName} onChange={setName} saving={busy} bare />
                       {profile !== null && !profile.displayName && provider !== null && (
                         <p className="mt-2 text-xs p-text-3">{provider} didn't share a name.</p>
                       )}
@@ -295,18 +295,18 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
             {step < LAST_STEP ? (
               <div className="flex items-center gap-3">
                 <button type="button" disabled={busy} onClick={finish}
-                  className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
+                  className={buttonClass({ variant: "ghost" })}>
                   Skip setup
                 </button>
                 {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => setStep((s) => Math.min(s + 1, LAST_STEP))}>Not now</Button>}
-                <FilledButton disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
+                <Button variant="primary" size="md" disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
-                </FilledButton>
+                </Button>
               </div>
             ) : (
-              <FilledButton disabled={busy} onClick={finish}>
+              <Button variant="primary" size="md" disabled={busy} onClick={finish}>
                 {busy && <Loader size="sm" />} Finish setup
-              </FilledButton>
+              </Button>
             )}
           </div>
         </section>

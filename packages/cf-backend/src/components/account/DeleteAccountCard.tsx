@@ -1,13 +1,13 @@
 /** The confirm field applies `confirmsAccountDelete`, the same rule as the route. No rate limit by design; the typed phrase is the gate. */
 import { Effect } from "effect";
 import { startTransition, useState } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { WarningIcon } from "@phosphor-icons/react";
 import { confirmsAccountDelete } from "@kinu.run/core";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { deleteAccount } from "@/lib/user-api";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 
 export function DeleteAccountCard({ email }: { email: string }) {
@@ -40,7 +40,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
   };
 
   return (
-    <Card title="Delete this account" icon={WarningIcon}>
+    <Card title="Delete this account">
       <Field inline label="Start over">
         <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Delete account…</Button>
       </Field>
@@ -50,9 +50,9 @@ export function DeleteAccountCard({ email }: { email: string }) {
           footer={
             <>
               <Button variant="ghost" size="sm" onClick={close} disabled={busy}>Cancel</Button>
-              <FilledButton danger disabled={!confirmed || busy} onClick={(...args: Parameters<typeof run>) => detach(Effect.promise(async () => run(...args)))}>
+              <Button variant="destructive" size="sm" disabled={!confirmed || busy} onClick={(...args: Parameters<typeof run>) => detach(Effect.promise(async () => run(...args)))}>
                 {busy ? <Loader size="sm" /> : null} Delete everything
-              </FilledButton>
+              </Button>
             </>
           }
         >

@@ -1,4 +1,4 @@
-/** Buttons are not here: the filled action is `ui/FilledButton`, quiet buttons are Kumo's. */
+/** Buttons are not here: every button is `ui/Button`. */
 import type * as React from 'react';
 import { Select } from '@cloudflare/kumo';
 
@@ -15,24 +15,22 @@ export function composing(event: KeyboardEvent): boolean {
 
 export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control";
 
-export function Card({ title, icon: Icon, description, actions, children }: {
+/**
+ * A group: its name as the one section label above it (no icon, no sentence under it: a fact the control can't show is
+ * its field's one-line hint), and its rows in one card. `actions` sit on the label's row.
+ */
+export function Card({ title, actions, children }: {
   title: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  description?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  // Its name is a plain label above it, as the Agent tab's sections are, not a strip inside it (docs/APP-CONSISTENCY.md).
   return (
     <section className="space-y-2">
-      <header className="flex items-end gap-3 px-1">
-        <div className="min-w-0 flex-1">
-          <h2 className="flex items-center gap-2 p-label"><Icon size={14} className="shrink-0 p-text-3" />{title}</h2>
-          {description && <p className="mt-0.5 p-meta p-text-3">{description}</p>}
-        </div>
+      <header className="flex min-h-7 items-end gap-3">
+        <h2 className="min-w-0 flex-1 p-label">{title}</h2>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </header>
-      <div className="p-card space-y-5 px-5 py-5">{children}</div>
+      <div className="p-card space-y-5 p-5">{children}</div>
     </section>
   );
 }

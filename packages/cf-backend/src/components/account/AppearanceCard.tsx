@@ -4,7 +4,7 @@
  * the page is in. The section's own header titles it, so the card carries no header of its own.
  */
 import { useState } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { THEME_NAMES, type ThemeName } from "@kinu.run/core";

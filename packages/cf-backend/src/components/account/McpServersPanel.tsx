@@ -2,7 +2,8 @@
 import { Effect, Cause } from 'effect';
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIcon } from "@phosphor-icons/react";
 import type { McpTransport } from "@kinu.run/core";
 import { addMcpServer, removeMcpServer } from "@/lib/user-api";

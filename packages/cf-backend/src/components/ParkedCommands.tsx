@@ -6,10 +6,10 @@
  */
 import { Cause, Effect } from "effect";
 import { useCallback, useState, useSyncExternalStore } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { revealMisrepresenting, timeAgo, type Omitted, type PendingAction } from "@kinu.run/core";
 import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FileBody } from "@/components/surfaces/changes/ChangesPanel";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -199,10 +199,10 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
       {decidedLine && <div className="p-t-status p-text-3">{decidedLine}</div>}
 
       <div className="flex items-center justify-end gap-1.5 flex-wrap">
-        <FilledButton disabled={state.busy || chosen.size === 0}
+        <Button variant="primary" size="sm" disabled={state.busy || chosen.size === 0}
           onClick={() => detach(Effect.promise(async () => flow.decide("approved", [...chosen])))}>
           Approve {countLabel(chosen.size, actions.length)}
-        </FilledButton>
+        </Button>
         <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
           onClick={() => detach(Effect.promise(async () => flow.decide("always", [...chosen])))}
           title={saysAlways ? "Approve these, and allow each from now on as its row says." : "Approve these checks for this environment. Revoke under Settings → Standing approvals."}>

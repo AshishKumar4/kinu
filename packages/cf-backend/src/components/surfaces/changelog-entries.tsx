@@ -1,7 +1,8 @@
 import { Effect } from 'effect';
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType, ReactNode } from "react";
-import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   GitBranchIcon, BrainIcon,
   ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
@@ -227,7 +228,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
           )}
           {actions}
           {hasDetails && (
-            <Button size="sm" variant="ghost" {...({ 'shape': 'square' } satisfies Pick<ButtonProps, 'shape'>)} onClick={() => setExpanded((previous) => !previous)}
+            <Button size="sm" variant="ghost" onClick={() => setExpanded((previous) => !previous)}
               aria-expanded={expanded} aria-controls={detailsId}
               aria-label={expanded ? `Collapse ${entry.summary}` : `Expand ${entry.summary}`}
               icon={expanded ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />} />
