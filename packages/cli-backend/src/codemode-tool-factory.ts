@@ -129,7 +129,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
           const argValues: unknown[] = [
             workspace, toolBindings, sandboxConsole,
-            node.createRequire({ workspace, builtins: node.builtins, cwd: surface.cwd }),
+            node.createRequire({ workspace, machines: { computer: providerBindings['computer'] ?? null, device: providerBindings['device'] ?? null }, builtins: node.builtins, cwd: surface.cwd }),
             node.createProcess(surface.cwd), node,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];

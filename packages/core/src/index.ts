@@ -1240,7 +1240,7 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, type PathOwner,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps, removeWhole,
   type VfsMount, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
