@@ -5,9 +5,9 @@
  */
 
 import { CREDENTIALED_URL, credentialValueScanners, secretProvider } from './secret-patterns';
-import type { SecretPosition } from './egress-gate';
+import { EGRESS_PLACEHOLDER_PREFIX, type SecretPosition } from './egress-gate';
 
-export interface DotenvEntry {
+interface DotenvEntry {
   readonly name: string;
   readonly value: string;
 }
@@ -56,7 +56,7 @@ const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A
 
 /** A blank for the reader to fill (`<your-key>`), or the vault's own stand-in, which is no secret. */
 function isBenign(value: string): boolean {
-  return /<your-|placeholder/i.test(value) || value.startsWith('pxs1_');
+  return /<your-|placeholder/i.test(value) || value.startsWith(EGRESS_PLACEHOLDER_PREFIX);
 }
 
 /** Each secret in `text`: a `NAME=value` line whose name or value says so, a private key block, a provider-shaped value. */

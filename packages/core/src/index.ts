@@ -1531,7 +1531,7 @@ export {
 } from './safety/approval-gate';
 
 export {
-  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, revealHeader, revealUrl, positionWords,
+  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, isSecretName, egressPlaceholdersIn, revealHeader, revealUrl, positionWords,
   findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
   createScrubStream, SecretPositionSchema, type EgressSecretBinding, type EgressRequestFacts, type SecretPosition,
   type ScrubReplacement,
@@ -1547,7 +1547,7 @@ export {
 export {
   initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
   grantedSecrets, revealedSecrets, resolveEgressInjection,
-  type SecretSummary, type SecretGrant, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
+  type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
   type EgressInjectionResult, type EgressVaultDeps,
 } from './safety/egress-vault';
 
@@ -1581,10 +1581,10 @@ export {
 } from './identity/agent-workspaces';
 
 export {
-  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern, type SecretProvider,
+  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern,
 } from './safety/secret-patterns';
 
-export { parseDotenv, pastedSecrets, type DotenvEntry, type PastedSecret } from './safety/pasted-secrets';
+export { parseDotenv, pastedSecrets, type PastedSecret } from './safety/pasted-secrets';
 
 export {
   scanText, countDetections, secretSightings, type SecretFinding, type SecretSighting,

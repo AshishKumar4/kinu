@@ -6,7 +6,7 @@
 import type { SecretPosition } from './egress-gate';
 
 /** Whose credential a shape is: the variable its own SDKs read it from, and the hosts its API answers on. */
-export interface SecretProvider {
+interface SecretProvider {
   readonly name: string;
   readonly variable: string;
   readonly hosts: readonly string[];
@@ -15,6 +15,10 @@ export interface SecretProvider {
 }
 
 const AUTHORIZATION: SecretPosition = { kind: 'authorization' };
+
+const GITHUB: SecretProvider = { name: 'GitHub', variable: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], position: AUTHORIZATION };
+
+const OPENAI: SecretProvider = { name: 'OpenAI', variable: 'OPENAI_API_KEY', hosts: ['api.openai.com'], position: AUTHORIZATION };
 
 export interface SecretPattern {
   id: string;
@@ -37,13 +41,13 @@ export const CREDENTIALED_URL = /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s
 /** Each provider credential `provider-secret` unions: its pattern, and whose credential it is. */
 const PROVIDER_CREDENTIALS: readonly { readonly pattern: string; readonly provider: SecretProvider }[] = [
   { pattern: '[sr]k_live_[A-Za-z0-9]{16,}', provider: { name: 'Stripe', variable: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position: AUTHORIZATION } },
-  { pattern: 'gh[pousr]_[A-Za-z0-9]{36,}', provider: { name: 'GitHub', variable: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], position: AUTHORIZATION } },
-  { pattern: 'github_pat_[A-Za-z0-9_]{40,}', provider: { name: 'GitHub', variable: 'GITHUB_TOKEN', hosts: ['api.github.com', 'github.com'], position: AUTHORIZATION } },
+  { pattern: 'gh[pousr]_[A-Za-z0-9]{36,}', provider: GITHUB },
+  { pattern: 'github_pat_[A-Za-z0-9_]{40,}', provider: GITHUB },
   { pattern: 'xox[baprs]-[A-Za-z0-9-]{10,}', provider: { name: 'Slack', variable: 'SLACK_TOKEN', hosts: ['slack.com'], position: AUTHORIZATION } },
   { pattern: 'AIza[0-9A-Za-z_-]{35}', provider: { name: 'Google', variable: 'GOOGLE_API_KEY', hosts: ['*.googleapis.com'], position: { kind: 'query', name: 'key' } } },
   { pattern: 'npm_[A-Za-z0-9]{36}', provider: { name: 'npm', variable: 'NPM_TOKEN', hosts: ['registry.npmjs.org'], position: AUTHORIZATION } },
   { pattern: 'sk-ant-[A-Za-z0-9-]{20,}', provider: { name: 'Anthropic', variable: 'ANTHROPIC_API_KEY', hosts: ['api.anthropic.com'], position: { kind: 'header', name: 'x-api-key' } } },
-  { pattern: 'sk-proj-[A-Za-z0-9_-]{20,}', provider: { name: 'OpenAI', variable: 'OPENAI_API_KEY', hosts: ['api.openai.com'], position: AUTHORIZATION } },
+  { pattern: 'sk-proj-[A-Za-z0-9_-]{20,}', provider: OPENAI },
 ];
 
 /** Whose credential `value` is, by the provider shape it matches whole; null for one no shape names. */
@@ -145,7 +149,7 @@ const REDACTION_ONLY_PATTERNS: readonly SecretPattern[] = [
     id: 'openai-key',
     regex: /\bsk-[A-Za-z0-9]{20,}\b/g,
     message: 'OpenAI-shaped API key',
-    provider: { name: 'OpenAI', variable: 'OPENAI_API_KEY', hosts: ['api.openai.com'], position: AUTHORIZATION },
+    provider: OPENAI,
   },
   {
     id: 'bearer-token',
