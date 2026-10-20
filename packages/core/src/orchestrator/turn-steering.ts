@@ -10,6 +10,7 @@ import type { AgentSignal } from '../types/signals';
 import type { RecoveryFinding } from '../evolution/recovery';
 import type { Struggle } from '../evolution/struggles';
 import { fnv1a64 } from '../utils/fnv1a';
+import { detached } from '../utils/text';
 import {
   isJsonObject,
   type JsonObject,
@@ -89,10 +90,11 @@ function stableArgs(args: JsonObject): string {
   return JSON.stringify(sortJsonValue(args));
 }
 
+/** Kept for the turn, so a copy of its own: a slice of a long program pinned all of it, every distinct call's (#103). */
 function echoArgs(rendered: string): string {
-  return rendered.length <= ARGS_ECHO_MAX_CHARS
+  return detached(rendered.length <= ARGS_ECHO_MAX_CHARS
     ? rendered
-    : `${rendered.slice(0, ARGS_ECHO_MAX_CHARS)}...`;
+    : `${rendered.slice(0, ARGS_ECHO_MAX_CHARS)}...`);
 }
 
 /** Structural so steering depends on two monotone numbers, not on `TurnFileLedger`'s shape. */

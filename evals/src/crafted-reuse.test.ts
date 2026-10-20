@@ -4,7 +4,7 @@ import { invokedInTurn } from '../tasks/crafted-reuse';
 
 function cycle(at: number, invoked: string[]): RunEvent {
   return { type: 'craft_cycle', eventIndex: 1, runId: `run-${String(at)}`, timestamp: new Date(at).toISOString(),
-    crafted: [], invoked, reused: [], returned: 1, raised: 0, dropped: [] };
+    crafted: [], invoked, reused: [], returned: 1, raised: 0, broke: [] };
 }
 
 test('a lagging use counter does not erase this turn’s invocation', () => {

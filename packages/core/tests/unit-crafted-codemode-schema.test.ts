@@ -80,10 +80,12 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     expect(resolve().map((crafted) => crafted.name)).toEqual(['quadruple']);
   });
 
-  test('low-score tool is filtered BEFORE reaching the builder', () => {
+  test('a tool past the offered cap is cut BEFORE reaching the builder', () => {
     const { rt } = createTestRuntime();
+
+    for (let i = 0; i < 20; i++) rt.craftStore.create({ name: `t${String(i)}`, description: 'kept', code: 'async () => null' });
     rt.craftStore.create({ name: 'forgotten', description: 'old tool', code: 'async () => null' });
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'forgotten'`;
+    void rt.storage.sql`UPDATE crafted_tools SET offered = 40 WHERE name = 'forgotten'`;
     const capture = captureExecuteTool();
     actorTools(rt, { codemode: capture.builder });
 

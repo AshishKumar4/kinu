@@ -61,5 +61,7 @@ function userAccountModel(modelId: string, deps: ModelCallDeps): LanguageModelV4
     name: 'workers-ai',
     baseURL: placeholder,
     fetch: heardFetch(customFetch),
+    // Workers AI takes a `json_schema` response format on its chat models, as the binding sends one.
+    supportsStructuredOutputs: true,
   }).chatModel(modelId));
 }

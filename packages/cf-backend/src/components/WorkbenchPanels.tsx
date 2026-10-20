@@ -19,6 +19,8 @@ interface WorkbenchPanelsProps {
   readonly onInspector?: (control: InspectorControl | null) => void;
   /** Brings the inspector into view for a surface it opens. */
   readonly ref?: Ref<WorkbenchHandle>;
+  /** The `focus` layout's: the inspector opens only when asked, never for what waits on the person. */
+  readonly quiet?: boolean;
 }
 
 export interface WorkbenchHandle {
@@ -58,7 +60,7 @@ export function InspectorToggle({ control }: { control: InspectorControl }) {
   );
 }
 
-export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspector, onInspector }: WorkbenchPanelsProps) {
+export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspector, onInspector, quiet = false }: WorkbenchPanelsProps) {
   const [mobilePane, setMobilePane] = useState<"chat" | "workspace">("chat");
 
   const desktopPanels = useMediaQuery(DESKTOP_QUERY);
@@ -68,7 +70,7 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
     workspace,
     scope,
     mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
-    needsUser: needsTheUser(contents),
+    needsUser: !quiet && needsTheUser(contents),
   });
 
   const { reveal } = layout;

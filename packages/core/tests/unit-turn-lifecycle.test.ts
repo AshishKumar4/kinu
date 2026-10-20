@@ -147,8 +147,8 @@ describe('openTurnRun / closeTurnRun', () => {
     const acc = new TurnAccumulator();
 
     // The episode, as the calls were observed where they ran: craft in one call, reach for it in the next.
-    acc.ledgers.craft.note('create', { created: ['sum'], invoked: [], raised: [], returned: [], dropped: [] });
-    acc.ledgers.craft.note('call', { created: [], invoked: ['sum'], raised: [], returned: ['sum'], dropped: [] });
+    acc.ledgers.craft.note('create', { created: ['sum'], invoked: [], raised: [], returned: [] });
+    acc.ledgers.craft.note('call', { created: [], invoked: ['sum'], raised: [], returned: ['sum'] });
 
     closeTurnRun(rec, 'run-c', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',

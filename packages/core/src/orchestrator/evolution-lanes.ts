@@ -6,7 +6,7 @@
 //   Turn lane (outcome review): `settleTracked()` joins it, and all work a backend `track()`s, with no elapsed bound
 //     (owner ruling, 2026-08).
 //     A `oneShot` host defers it as a durable row drained by `runDeferredTurnReviews` at the next session open.
-//   Cadence lane (session/lifetime chain, the live trial and the proposer): one pass per settled turn, after the turn
+//   Cadence lane (session/lifetime chain and the dream): one pass per settled turn, after the turn
 //     lane (`settleEvolution`), never joined; only started by a host that can afford to finish it. Safe because the
 //     session window closes only after its pass settles (`CompletedTurnStore.claim`).
 
@@ -40,7 +40,7 @@ export interface EvolutionLanesDeps {
     | 'deferTurnReview'
     | 'runDeferredTurnReviews'
     | 'onSessionComplete'
-    | 'runDueEvolution'
+    | 'countCraftOffers'
   >;
   /** Absent: no governor wired. Present-but-unscoped is the normal uncapped turn. */
   budget?: MissionGovernor;
@@ -82,9 +82,6 @@ export class EvolutionLanes {
   private sessionEvolution: Promise<void> | null = null;
   /** The pass `startEvolution` last started. Deliberately not joined by `settleTracked`. */
   private evolution: Promise<void> = Promise.resolve();
-  /** Cadence lane: trial-drain latch, separate from the window pass so trials never run twice
-   *  and a no-op drain never hides a filled window. */
-  private evolutionPass: Promise<void> | null = null;
 
   constructor(private readonly lanes: EvolutionLanesDeps) {}
 
@@ -147,7 +144,8 @@ export class EvolutionLanes {
 
     // The append carries the review obligation; never dispatch inline here, or an eviction loses it and a
     // replay runs it twice.
-    const appendOpts = { awaitsFollowup, id: opts?.id };
+    // Its offers are facts about the turn, counted with its record, so a rating that fails cannot lose them.
+    const appendOpts = { awaitsFollowup, id: opts?.id, recorded: () => { this.lanes.engine.countCraftOffers(scoped); } };
     this.window.append(
       scoped,
       opts?.recordedAt === undefined ? appendOpts : { ...appendOpts, now: opts.recordedAt },
@@ -213,7 +211,7 @@ export class EvolutionLanes {
   }
 
   /**
-   * Cadence lane: the evolution pass (trial, then proposer), then the session/lifetime chain once the window reaches the interval.
+   * Cadence lane: the session/lifetime chain once the window reaches the interval, then the dream's lane.
    * The window is closed only after the chain settles. Never rejects. The window is claimed before any await:
    * `claim()` marks nothing, so a single tick is what keeps a second pass off it.
    */
@@ -238,12 +236,10 @@ export class EvolutionLanes {
   }
 
   /**
-   * The live trial's look first, so a decided trial frees the proposer this pass. The refinement lane runs last,
-   * whether or not a window was claimed; its trigger is durable debt.
+   * The dream's lane runs last, whether or not a window was claimed, since its trigger is durable debt; never while
+   * learning is off.
    */
   private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
-    await this.runDueEvolution();
-
     if (claimed) {
       await settleLogged('evolution.session_pass_failed', { doing: 'run the session evolution pass', otherwise: 'unavailable' }, () => this.lanes.engine.onSessionComplete({
           sessionId: `sess-${nanoid()}`,
@@ -256,7 +252,7 @@ export class EvolutionLanes {
       claimed.settle();
     }
 
-    await this.drainRefinementLane();
+    if (this.lanes.engine.recordsTurns) await this.drainRefinementLane();
   }
 
   /** At most one step; failures are absorbed since the request rows are durable. */
@@ -266,17 +262,6 @@ export class EvolutionLanes {
     if (!lane) return;
 
     await settleLogged('evolution.refinement_lane_failed', { doing: 'advance the continual-refinement lane', otherwise: 'unavailable' }, () => lane());
-  }
-
-  private runDueEvolution(): Promise<void> {
-    if (this.evolutionPass) return this.evolutionPass;
-
-    const pass = this.lanes.engine.runDueEvolution()
-      .finally(() => { this.evolutionPass = null; });
-
-    this.evolutionPass = pass;
-
-    return pass;
   }
 
   /**

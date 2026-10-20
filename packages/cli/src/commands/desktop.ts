@@ -109,8 +109,8 @@ const DesktopShareSchema = v.object({
 /** `kinu desktop share`: the daemon asks, in the desktop portal's own prompt, and this waits for the answer there. */
 function shareScreen(on: boolean): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
-    if (process.platform !== 'linux') {
-      console.error(`${ERR('✗')} Sharing this PC's screen comes to ${process.platform === 'darwin' ? 'macOS' : 'this system'} later; Linux shares it today.`);
+    if (process.platform !== 'linux' && process.platform !== 'darwin') {
+      console.error(`${ERR('✗')} This system shares no screen: Kinu shares a Linux PC's or a Mac's.`);
       process.exit(1);
     }
 
@@ -128,7 +128,9 @@ function shareScreen(on: boolean): Effect.Effect<void, KinuError> {
       return;
     }
 
-    console.log(`Allow sharing in the prompt on this PC's screen${DIM(' (choose the screen, then Share)')}`);
+    console.log(process.platform === 'darwin'
+      ? `Allow Kinu's screen helper in the prompts on this Mac${DIM(' (Screen Recording, then Accessibility; the first share builds the helper)')}`
+      : `Allow sharing in the prompt on this PC's screen${DIM(' (choose the screen, then Share)')}`);
 
     for (const deadline = Date.now() + SHARE_WAIT_MS; Date.now() < deadline;) {
       yield* Effect.promise(() => Bun.sleep(500));

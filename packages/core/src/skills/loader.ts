@@ -90,7 +90,7 @@ export function admitSkillsIndex(
   admissionTokens: number,
 ): SkillsIndex {
   const priced = [
-    ...discovery.skills.map((skill) => skill.bodyRef.kind === 'builtin'
+    ...discovery.skills.map((skill) => skill.bodyRef.kind === 'builtin' || skill.trusted === true
       ? skillIndexLine(skill)
       : workspaceSkillIndexLine(skill.name, skill.source)),
     ...discovery.unread.map(unreadSkillLine),

@@ -28,22 +28,28 @@ function children(dir: string): string[] {
   return [...new Set(names)];
 }
 
+/** Whether a call's options at `at` name base64, as `fs.text(path, { encoding })` and `fs.write(path, content, { encoding })` do. */
+function isBase64(args: readonly unknown[], at: number): boolean {
+  return v.is(v.object({ encoding: v.literal('base64') }), args[at]);
+}
+
 /** Each tool source `workspace.createTool` was sent, as the host receives it. */
 const created: string[] = [];
 
 const workspace = {
   name: 'workspace',
   fns: {
+    // As the file plane serves them: `encoding: 'base64'` reads and writes the file's bytes, here its UTF-8.
     'fs.text': async (...args: unknown[]) => {
       const path = text(args, 0);
       const stored = files.get(path);
 
       if (stored === undefined) throw new Error(`ENOENT: no such file: ${path}`);
 
-      return stored;
+      return isBase64(args, 1) ? Buffer.from(stored, 'utf8').toString('base64') : stored;
     },
     'fs.write': async (...args: unknown[]) => {
-      files.set(text(args, 0), text(args, 1));
+      files.set(text(args, 0), isBase64(args, 2) ? Buffer.from(text(args, 1), 'base64').toString('utf8') : text(args, 1));
 
       return 'ok';
     },

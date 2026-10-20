@@ -110,6 +110,12 @@ export class TurnAccumulator {
   lastFinishReason: string | undefined = undefined;
   /** The turn stopped on its question to the owner: its pending call is the end it meant, not a defect. */
   askedOwner = false;
+  /** The promoted text versions the turn assembled from (`ArtifactOverrides.versions`), set once it is admitted. */
+  artifactVersions: readonly string[] = [];
+  /** The scaffold version its program ran, 0 for the built-in loop, set once it is admitted. */
+  scaffoldVersion = 0;
+  /** The program's own throw, if it threw (`thrown` on its error event). */
+  scaffoldThrew: string | null = null;
   /** The turn's last request, for providers/cache-warming.ts. Held by reference, never copied. `fallback`: the spec that
    *  served it, where a fallback did. */
   lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage; readonly fallback: string | undefined } | undefined = undefined;
@@ -121,6 +127,8 @@ export class TurnAccumulator {
   readonly ledgers: TurnLedgers;
   /** The tool lessons a step listed, id to the revision shown. */
   private readonly lessons = new Map<string, number>();
+  /** The crafted tools a step's declarations offered. */
+  private readonly offered = new Set<string>();
   private gate: SpendGate | undefined;
 
   /** `evolving`: whether the turn under way evolves, read by its crafted-tool record. */
@@ -150,6 +158,9 @@ export class TurnAccumulator {
     this.lastRequest = undefined;
     this.lastFinishReason = undefined;
     this.askedOwner = false;
+    this.artifactVersions = [];
+    this.scaffoldVersion = 0;
+    this.scaffoldThrew = null;
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
@@ -158,6 +169,7 @@ export class TurnAccumulator {
     this.ledgers.escalations.reset();
     this.ledgers.craft.reset();
     this.lessons.clear();
+    this.offered.clear();
   }
 
   /** Restores totals without charging them again. */
@@ -176,6 +188,14 @@ export class TurnAccumulator {
 
   lessonsShown(): { id: string; revision: number }[] {
     return [...this.lessons].map(([id, revision]) => ({ id, revision }));
+  }
+
+  noteCraftedOffered(declarations: readonly { readonly name: string }[]): void {
+    for (const declaration of declarations) this.offered.add(declaration.name);
+  }
+
+  craftedOffered(): string[] {
+    return [...this.offered];
   }
 
   /** `undefined` when no step reported anything; a reported zero comes back as one. */

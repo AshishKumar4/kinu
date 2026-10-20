@@ -28,18 +28,14 @@ import {
   getEvolutionChangelog,
   qualitySeries,
   type QualityDay,
-  listGepaRuns,
   listRuns,
   listScaffoldVersions,
-  loadGepaCandidates,
   createTimerTrigger,
   workspaceSpend,
   type BackgroundJob,
   type ChatHistoryEntry,
   type EvolutionChangelogView,
-  type GepaCandidate,
   type RunListEntry,
-  type GepaRunSummary,
   type HeadRunView,
   type JsonObject,
   type ResolvedTurnProfile,
@@ -322,10 +318,6 @@ export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
   return readMainActor(name, (sql, actor) => new HeadJournal(sql, actor).listRuns(limit));
 }
 
-export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
-  return readMainActor(name, (sql, actor) => listGepaRuns(sql, actor, limit));
-}
-
 export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
   return withLocalDbAsync(name, async (db) => {
     const sql = makeSql(db);
@@ -376,19 +368,6 @@ export function getLocalFacts(name: string, limit = 100): Array<{
 
 export function getLocalQuality(name: string, days?: number): QualityDay[] {
   return withLocalDb(name, (db) => qualitySeries(makeSql(db), mainActor(db), days === undefined ? {} : { days }));
-}
-
-export interface LocalGepaRunDetail {
-  run: GepaRunSummary;
-  candidates: GepaCandidate[];
-}
-
-export function getLocalGepaRun(name: string, runId: string): LocalGepaRunDetail | null {
-  return readMainActor(name, (sql, actor) => {
-    const run = listGepaRuns(sql, actor, 250).find((candidate) => candidate.runId === runId) ?? null;
-
-    return run ? { run, candidates: loadGepaCandidates(sql, actor, runId) } : null;
-  });
 }
 
 /** Uses the live provider's toolchain probe so this listing matches the row the agent is given. */

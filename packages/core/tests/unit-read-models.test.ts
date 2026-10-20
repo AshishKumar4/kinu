@@ -293,9 +293,9 @@ describe('agent status', () => {
 
     expect(await getAgentStatus({
       sql, soul: () => workspaceSoul(bundle), actor, model: 'anthropic/claude-opus-5', reasoningEffort: 'high', name: 'fallback-name',
-      displayName: 'Jarvis',
+      displayName: 'Jarvis', layout: 'focus',
     })).toMatchObject({
-      name: 'jarvis', displayName: 'Jarvis', createdAt: 42, model: 'anthropic/claude-opus-5',
+      name: 'jarvis', displayName: 'Jarvis', createdAt: 42, model: 'anthropic/claude-opus-5', layout: 'focus',
       messageCount: 1, scaffoldVersion: 0, reasoningEffort: 'high', forkLineage: null,
       soul: '# Mine\n\n## Mission\n\nread the room and update it', purpose: 'read the room and update it',
     });
@@ -304,7 +304,7 @@ describe('agent status', () => {
 
   test('the scaffold version is the one the actor runs: not a pending proposal, not a rolled-back one', async () => {
     const { db, sql, actor } = workspace();
-    const shown = async () => (await getAgentStatus({ sql, soul: async () => null, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis' })).scaffoldVersion;
+    const shown = async () => (await getAgentStatus({ sql, soul: async () => null, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis', layout: 'workbench' })).scaffoldVersion;
 
     const version = (n: number, status: string) => {
       void sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (${actor.actorId}, ${n}, ${n}, ${'test'}, ${status})`;
@@ -328,7 +328,7 @@ describe('agent status', () => {
     await expect(getAgentStatus({
       sql, soul: async () => null,
       actor: other.actor, model: '', reasoningEffort: null, name: 'agent-7',
-      displayName: 'ignored',
+      displayName: 'ignored', layout: 'workbench',
     })).rejects.toThrow(/no such table/);
   });
 
@@ -509,22 +509,21 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  test('the tool list carries each crafted tool with its live score', async () => {
+  test('the tool list carries each crafted tool with its preference and choices', async () => {
     const { rt, db } = createTestRuntime();
     const sql = makeSql(db);
     // This UPDATE stands in for a real usage history on the crafted_tools row.
     await rt.craftStore.create({
       name: 'summarize', description: 'sum', code: 'x',
     });
-    void sql`UPDATE crafted_tools SET score = 0.9, uses = 7 WHERE name = 'summarize'`;
+    void sql`UPDATE crafted_tools SET offered = 8, chosen = 7, rated = 3, rating_sum = 2.4 WHERE name = 'summarize'`;
 
-    const list = getToolList(sql);
-    expect(list.crafted).toEqual([
-      { name: 'summarize', description: 'sum', qualityScore: 0.9, usageCount: 7 },
+    expect(getToolList(sql).crafted).toEqual([
+      { name: 'summarize', description: 'sum', qualityScore: (8 / 10) * (3.6 / 5), usageCount: 7 },
     ]);
-    // An unscored tool reads as the neutral prior, never as zero.
-    void sql`UPDATE crafted_tools SET score = 0.5, uses = 0 WHERE name = 'summarize'`;
-    expect(getToolList(sql).crafted[0]).toMatchObject({ qualityScore: 0.5, usageCount: 0 });
+    // A tool nothing has offered reads as the smoothing's prior, never as zero.
+    void sql`UPDATE crafted_tools SET offered = 0, chosen = 0, rated = 0, rating_sum = 0 WHERE name = 'summarize'`;
+    expect(getToolList(sql).crafted[0]).toMatchObject({ qualityScore: 0.3, usageCount: 0 });
     db.close();
   });
 });
@@ -879,12 +878,12 @@ describe('config plane', () => {
     db.close();
   });
 
-  test('an evolution write answers with the EFFECTIVE config; live trials are off until turned on', () => {
+  test('an evolution write answers with the EFFECTIVE config; learning is on until turned off', () => {
     const { db, config } = workspace();
-    expect(getEvolutionConfig(config).liveTrials).toBe(false);
-    const effective = setEvolutionConfig(config, { liveTrials: true });
-    expect(effective.liveTrials).toBe(true);
-    expect(getEvolutionConfig(config).liveTrials).toBe(true)
+    expect(getEvolutionConfig(config).learning).toBe(true);
+    const effective = setEvolutionConfig(config, { learning: false });
+    expect(effective.learning).toBe(false);
+    expect(getEvolutionConfig(config).learning).toBe(false);
     db.close();
   });
 });

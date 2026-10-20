@@ -2,13 +2,14 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The mutable scaffold on a local workspace through LocalAgentSession: a promoted scaffold drives the turn,
 // and a pending proposal resolves, so maybeEvolveScaffold's pending guard cannot deadlock the loop.
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { AgentRuntime, LLMProviderConfig } from '@kinu.run/core';
 import { CHAT_SESSION_ID, initWorkspaceSchema, WORKSPACE_RUN_ID } from '@kinu.run/core';
 import {
   initScaffoldTables, initAgentConfigTable,
-  getPendingScaffold, getCurrentScaffoldVersion,
+  getCurrentScaffoldVersion,
   INITIAL_SCAFFOLD_SOURCE,
 } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
@@ -99,8 +100,13 @@ async function installScaffold(
     VALUES (${rt.actor.actorId}, ${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;
 }
 
+/** What a passed replay records (`replayPendingScaffold`): the next cold turn promotes `version`. */
+function replayedPass(rt: ReturnType<typeof createCLIRuntime>, version: number): void {
+  rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'scaffold_replayed', version, turns: 1 });
+}
+
 for (const mode of ['promote', 'veto'] as const) {
-  test(`scaffold ${mode} shares the live and retained session event stream`, async () => {
+  test(`a replayed scaffold's ${mode} at a cold turn shares the live and retained session event stream`, async () => {
     const { db, rt, session, events, started } = await setup('unused');
     await started;
     await installScaffold(rt, {
@@ -111,19 +117,17 @@ for (const mode of ['promote', 'veto'] as const) {
     });
 
     try {
-      rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'scaffold', usage: { input: 3, output: 1 } });
-      const decision = await session.applyScaffoldDecision('promote');
-      expect(decision).toMatchObject({ action: mode === 'veto' ? 'rollback' : 'promote' });
-      rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'scaffold', usage: { input: 4, output: 2 } });
+      replayedPass(rt, 1);
+      await session.send('who answers?', { id: crypto.randomUUID() });
       await session.flushEvents();
       const retained = session.getRunEvents(WORKSPACE_RUN_ID);
-      const live = events.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
+      const live = events.flatMap((event) => event.type === 'run-event' && event.event.runId === WORKSPACE_RUN_ID ? [event.event] : []);
 
       expect(retained.map((event) => event.type)).toEqual([
-        'context_admitted', 'model_call', mode === 'veto' ? 'scaffold_rollback' : 'scaffold_promotion', 'model_call',
+        'context_admitted', 'scaffold_replayed', mode === 'veto' ? 'scaffold_rollback' : 'scaffold_promotion',
       ]);
       expect(live).toEqual(retained);
-      expect(new Set(retained.map((event) => event.eventIndex)).size).toBe(4);
+      expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(mode === 'veto' ? 0 : 1);
     } finally {
       await session.end();
       db.close();
@@ -131,7 +135,7 @@ for (const mode of ['promote', 'veto'] as const) {
   });
 }
 
-test('a failed scaffold event write reports the failure without reversing the decision', async () => {
+test('a failed scaffold event write reports the failure without reversing the promotion', async () => {
   const { db, rt, session } = await setup('unused');
   await installScaffold(rt, {
     version: 1, status: 'pending',
@@ -143,7 +147,8 @@ test('a failed scaffold event write reports the failure without reversing the de
   const restore = setDiagnosticsSink(logger);
 
   try {
-    expect(await session.applyScaffoldDecision('promote')).toMatchObject({ action: 'promote', newCurrentVersion: 1 });
+    replayedPass(rt, 1);
+    await session.send('who answers?', { id: crypto.randomUUID() });
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(1);
     expect(logger.emitted).toContainEqual(expect.objectContaining({ event: 'event.scaffold_decision_emit_failed', code: 'io' }));
   } finally {
@@ -252,7 +257,36 @@ describe('a promoted scaffold drives a local turn', () => {
   });
 });
 
-describe('a pending scaffold waits for the owner\'s decision', () => {
+describe('a turn records the scaffold it ran', () => {
+  const recorded = (rt: AgentRuntime) => rt.storage.sql<{ turn: string }>`SELECT turn FROM completed_turns ORDER BY created_at`
+    .map((row) => v.parse(v.object({ scaffold: v.optional(v.object({ version: v.number(), threw: v.optional(v.string()) })) }), JSON.parse(row.turn)).scaffold);
+
+  test('its version, and its program\'s own throw; a call it caught is not a throw', async () => {
+    const { rt, session } = await setup('the default loop answered');
+    // A turn is recorded only while the agent learns.
+    rt.actor.config.setLearning(true);
+
+    await installScaffold(rt, {
+      version: 1, status: 'current',
+      code: `async function run({ task }) {
+        const failed = await host.callTool('no_such_tool', {});
+        await host.emit({ type: 'text_delta', text: 'caught ' + JSON.stringify(failed).length });
+      }`,
+    });
+    await session.send('first', { id: crypto.randomUUID() });
+
+    await installScaffold(rt, { version: 2, status: 'current', code: `async function run() { throw new Error('the loop broke'); }` });
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'historical' WHERE version = 1`;
+    await session.send('second', { id: crypto.randomUUID() });
+
+    const [first, second] = recorded(rt);
+    expect(first).toEqual({ version: 1 });
+    expect(second?.version).toBe(2);
+    expect(second?.threw).toContain('the loop broke');
+  });
+});
+
+describe('a session opens over a scaffold', () => {
   test('opening a session heals a scaffold-less workspace (DO onStart parity)', async () => {
     // A workspace without scaffold/agent.js silently disables scaffold evolution; the session heals it as the DO does in onStart.
     // The session starts the heal as it opens, so the workspace is proved scaffold-less before it does.
@@ -265,21 +299,6 @@ describe('a pending scaffold waits for the owner\'s decision', () => {
     expect(await rt.identity.scaffold.exists()).toBe(true);
     expect((await rt.identity.scaffold.read()).length).toBeGreaterThan(0);
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
-  });
-
-  test('applyScaffoldDecision resolves a pending by hand', async () => {
-    const { rt, session } = await setup('unused');
-    await installScaffold(rt, {
-      version: 1, status: 'current', code: `async function* run(rt, task) { yield { type: 'chunk', data: 'v1' }; }`,
-    });
-    await installScaffold(rt, {
-      version: 2, status: 'pending', code: `async function* run(rt, task) { yield { type: 'chunk', data: 'v2' }; }`,
-    });
-
-    expect(session.getEvolutionStatus().pendingScaffold?.version).toBe(2);
-    expect(await session.applyScaffoldDecision('promote')).toMatchObject({ action: 'promote', newCurrentVersion: 2 });
-    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
-    expect(session.getEvolutionStatus().pendingScaffold).toBeNull();
   });
 });
 

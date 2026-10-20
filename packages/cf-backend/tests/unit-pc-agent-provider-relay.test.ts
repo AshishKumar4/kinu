@@ -4,8 +4,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type Subprocess } from 'bun';
 import { createRequire } from 'node:module';
-import { mkdirSync, openSync, readFileSync, watch, writeFileSync } from 'node:fs';
-import { once } from 'node:events';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createNetServer, type Server as NetServer } from 'node:net';
 import { TLSSocket } from 'node:tls';
@@ -48,15 +47,58 @@ const DEVICE_SIGN_IN = {
   scopes: ['chatgpt.tokens.use.direct', 'email', 'offline_access', 'openid', 'profile', 'resource.invoke'], savedAt: new Date().toISOString(),
 };
 
-/** Resolves once `path` contains `line`; each append the daemon makes is a change the watch sees. */
-async function logged(path: string, line: string): Promise<void> {
-  const watcher = watch(path);
+/**
+ * A daemon's output, read from its own stdout and stderr as it arrives: everything it has said, and a wait for a line.
+ * Never a file's change events: Bun's fs.watch dropped them under load, and a wait on one hung the contended
+ * Cloudflare rows for 480 s (tiers of 3f186d21e and 5e253536a, 2026-10-20). A pipe drops nothing.
+ */
+interface DaemonOutput {
+  /** Everything the daemon has written so far. */
+  text(): string;
+  /** Resolves once the daemon has written `line`; rejects, saying why, if its output ends without it. */
+  said(line: string): Promise<void>;
+}
 
-  try {
-    while (!readFileSync(path, 'utf8').includes(line)) await once(watcher, 'change');
-  } finally {
-    watcher.close();
-  }
+function readOutput(child: Subprocess<'ignore', 'pipe', 'pipe'>): DaemonOutput {
+  let text = '';
+  let ended = false;
+  const waiting: { line: string; resolve: () => void; reject: (error: Error) => void }[] = [];
+
+  const settle = () => {
+    const answered = waiting.filter((waiter) => ended || text.includes(waiter.line));
+
+    for (const waiter of answered) {
+      waiting.splice(waiting.indexOf(waiter), 1);
+
+      if (text.includes(waiter.line)) waiter.resolve();
+      else waiter.reject(new Error(`the daemon ended without writing ${waiter.line}: ${text.slice(-2000)}`));
+    }
+  };
+
+  const drain = async (stream: ReadableStream<Uint8Array>) => {
+    const decoder = new TextDecoder();
+
+    for await (const chunk of stream) {
+      text += decoder.decode(chunk, { stream: true });
+      settle();
+    }
+  };
+
+  // Ended, or broken: either way nothing more will arrive, and a wait for a line not yet written ends saying so.
+  const finish = () => {
+    ended = true;
+    settle();
+  };
+
+  Promise.all([drain(child.stdout), drain(child.stderr)]).then(finish, finish);
+
+  return {
+    text: () => text,
+    said: (line) => new Promise<void>((resolve, reject) => {
+      waiting.push({ line, resolve, reject });
+      settle();
+    }),
+  };
 }
 
 /** The hosts the proxy impersonates. */
@@ -228,18 +270,17 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
   let harness: TestUserDO;
   let upstream: ReturnType<typeof startUpstream>;
   let hub: ReturnType<typeof startHubBridge>;
-  let daemon: Subprocess;
-  let logPath: string;
+  let daemon: Subprocess<'ignore', 'pipe', 'pipe'>;
+  let output: DaemonOutput;
   let deviceId: string;
   let home: string;
   let root: string;
   let daemonEnv: NodeJS.ProcessEnv;
 
-  /** A daemon on the machine's home, logging to `log`. */
-  const startDaemon = (log: string) => {
-    const fd = openSync(log, 'a');
-
-    return Bun.spawn({ cmd: [process.execPath, DAEMON_PATH], env: daemonEnv, stdout: fd, stderr: fd, stdin: 'ignore' });
+  /** A daemon on the machine's home; what it writes is read into `output`. */
+  const startDaemon = () => {
+    daemon = Bun.spawn({ cmd: [process.execPath, DAEMON_PATH], env: daemonEnv, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
+    output = readOutput(daemon);
   };
 
   const signIn = () => v.parse(v.object({ accessToken: v.string(), refreshToken: v.string() }), JSON.parse(readFileSync(join(home, 'pc-agent.chatgpt.json'), 'utf8')));
@@ -259,17 +300,16 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'user-1', device: registered.deviceId, token: registered.token, origin: hub.origin, root: home }), { mode: 0o600 });
     writeFileSync(join(home, 'pc-agent.chatgpt.json'), JSON.stringify(DEVICE_SIGN_IN), { mode: 0o600 });
-    logPath = join(root, 'pc-agent.log');
 
     daemonEnv = {
       ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight'),
       HTTPS_PROXY: `http://127.0.0.1:${String(proxyPort)}`, NO_PROXY: '127.0.0.1,localhost', NODE_EXTRA_CA_CERTS: certs.ca,
     };
 
-    daemon = startDaemon(logPath);
+    startDaemon();
     await Promise.race([
       hub.connected(0),
-      daemon.exited.then((code) => { throw new Error(`daemon exited ${String(code)} before connecting: ${readFileSync(logPath, 'utf8').slice(-2000)}`); }),
+      daemon.exited.then((code) => { throw new Error(`daemon exited ${String(code)} before connecting: ${output.text().slice(-2000)}`); }),
     ]);
   });
 
@@ -315,7 +355,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
 
     for (let next = await reader.read(); !next.done; next = await reader.read()) rest += decoder.decode(next.value);
     expect(rest).toContain('response.completed');
-    expect(readFileSync(logPath, 'utf8')).not.toContain(ACCESS_TOKEN);
+    expect(output.text()).not.toContain(ACCESS_TOKEN);
   });
 
   test('a Stop drops the call to chatgpt.com, not just the answer', async () => {
@@ -367,7 +407,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     upstream.calls[before]?.answer?.end('event: response.completed\ndata: {"type":"response.completed"}\n\n');
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('response.completed');
-    expect(readFileSync(logPath, 'utf8')).not.toContain('device-at-1');
+    expect(output.text()).not.toContain('device-at-1');
   });
 
   test('a token api.openai.com refuses is rotated at auth.openai.com by the machine, and the call sent once more', async () => {
@@ -413,7 +453,7 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     daemon.kill('SIGTERM');
 
     // It says it waits on the rotation, rather than exiting with the spent token on disk.
-    expect(await Promise.race([logged(logPath, 'device.exit_draining').then(() => 'draining'), daemon.exited.then(() => 'exited')])).toBe('draining');
+    expect(await Promise.race([output.said('device.exit_draining').then(() => 'draining'), daemon.exited.then(() => 'exited')])).toBe('draining');
     hold.resolve();
     expect(await daemon.exited).toBe(0);
     const rotated = String(upstream.state.rotations);
@@ -424,13 +464,12 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
   // nothing is written, so the machine keeps the session it had.
   test('a second stop signal ends the rotation in flight unanswered, and the daemon exits without writing it', async () => {
     const owner = await testOwner();
-    const forcedLog = join(root, 'pc-agent.forced.log');
     const rotating = Promise.withResolvers<void>();
 
     // One daemon holds a machine: the suite's first goes before this one starts.
     daemon.kill('SIGTERM');
     await daemon.exited;
-    daemon = startDaemon(forcedLog);
+    startDaemon();
     await hub.connected(1);
     const kept = signIn();
     // Never answered: only the forced stop ends this rotation.
@@ -445,11 +484,11 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
 
     await rotating.promise;
     daemon.kill('SIGTERM');
-    await logged(forcedLog, 'device.exit_draining');
+    await output.said('device.exit_draining');
     daemon.kill('SIGTERM');
 
     expect(await daemon.exited).toBe(0);
-    expect(readFileSync(forcedLog, 'utf8')).toContain('device.exit_forced');
+    expect(output.text()).toContain('device.exit_forced');
     expect(signIn()).toEqual(kept);
   });
 });

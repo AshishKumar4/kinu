@@ -53,13 +53,10 @@ import Kinu
 #print axioms Kinu.Evolution.FullCraftLifecycle.extract_increases
 #print axioms Kinu.Evolution.FullCraftLifecycle.extract_contains
 #print axioms Kinu.Evolution.FullCraftLifecycle.update_preserves
-#print axioms Kinu.Evolution.FullCraftLifecycle.ema_bounded
 #print axioms Kinu.Evolution.FullCraftLifecycle.consolidation_never_empties
 #print axioms Kinu.Evolution.FullCraftLifecycle.consolidation_nonincreasing
 #print axioms Kinu.Evolution.FullCraftLifecycle.remove_nonincreasing
 #print axioms Kinu.Evolution.FullCraftLifecycle.full_lifecycle_nonempty
-#print axioms Kinu.Evolution.FullCraftLifecycle.ema_stays_bounded
-#print axioms Kinu.Evolution.FullCraftLifecycle.ema_nonneg
 #print axioms Kinu.Evolution.FullCraftLifecycle.below_threshold_filtered
 #print axioms Kinu.Evolution.FullCraftLifecycle.pipeline_preserves_nonempty
 

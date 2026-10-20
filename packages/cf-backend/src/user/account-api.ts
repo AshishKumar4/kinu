@@ -7,11 +7,16 @@ import { Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { authoredRefusal, settle } from '@kinu.run/core/obs';
-import { err, json, JsonValueSchema, safeJson, SecretPositionSchema, type ProviderEnv, type UserCaller } from '@kinu.run/core';
+import { err, json, JsonValueSchema, safeJson, SecretPositionSchema, type ObjectNamespace, type ProviderEnv, type UserCaller } from '@kinu.run/core';
+import { internalCaller, KINU_LISTINGS, type ControlSecretEnv } from '@kinu.run/core/control-plane';
+import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
+import type { ControlPlaneDO } from '../control-plane/control-plane-do';
+import type { IndexFeedSink } from '../control-plane/index-feed';
 import type { UserDO } from './user-do';
 import { listAvailableModels, testAvailableModel, type AvailableModelsEnv } from './available-models';
 import { readUserAccountUsage } from './account-usage';
 import { handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
+import { handleInstallRequest, installedAssistant } from './blueprint-install';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import { rawParam, type FamilyEnv } from '../api/context';
 
@@ -21,10 +26,13 @@ type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
+  | 'getConfig' | 'setConfig' | 'getProfile'
 >;
 
-export interface AccountApiEnv<Id> extends CreateWorkspaceEnv<Id>, ProviderEnv {
+export interface AccountApiEnv<Id> extends CreateWorkspaceEnv<Id>, ProviderEnv, ControlSecretEnv {
   UserDO: AvailableModelsEnv<Id>['UserDO'];
+  /** The control plane: its index feed, and Explore, which counts a blueprint's installs. */
+  ControlPlaneDO?: ObjectNamespace<Id, IndexFeedSink & Pick<ControlPlaneDO, 'exploreInstalled'>>;
 }
 
 /** The account a request reaches, as its family's gate named it. */
@@ -172,6 +180,20 @@ accountApi.get('/usage', async (c) => json({ body: await readUserAccountUsage({
 accountApi.post('/workspaces', async (c) => handleCreateWorkspaceRequest({
   request: c.req.raw, env: c.env, userId: c.get('account').userId, userDO: c.get('account').stub,
 }));
+
+accountApi.post('/blueprints/:id/install', async (c) => handleInstallRequest({
+  request: c.req.raw, env: c.env, userId: c.get('account').userId, userDO: c.get('account').stub, owner: c.get('owner'),
+  id: decodeURIComponent(rawParam(c, 'id')),
+  counted: async (blueprint) => {
+    const { ControlPlaneDO } = c.env;
+
+    if (ControlPlaneDO === undefined || !hasControlPlane({ ControlPlaneDO })) return;
+    await controlPlaneStub({ ControlPlaneDO }).exploreInstalled(await internalCaller(c.env), { kind: 'workspace', workspace: KINU_LISTINGS, item: blueprint, userId: c.get('account').userId });
+  },
+}));
+
+/** The workspace Home opens on: the owner's Personal assistant, while it is theirs. */
+accountApi.get('/assistant', async (c) => json({ body: { workspace: await installedAssistant(c.get('account').stub, c.get('owner')) } }));
 
 /** Answers ok for a workspace already gone: a delete repeated, or raced by another, is done (staging df49f4cc5, nine
  *  DELETEs of one workspace in 2 ms, eight answered 500; kinu-logs/evals-fast/FINDINGS.md F11). */

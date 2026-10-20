@@ -4,13 +4,13 @@ import * as v from 'valibot';
 export const OwnerWaitSchema = v.object({
   /** Stable across reads: what `agent.wakeWhenOwnerDone({ key })` names. */
   key: v.string(),
-  kind: v.picklist(['command', 'write', 'plan', 'workspace', 'consent', 'question']),
-  /** The ask in its own fields: the command, the file, the plan's title, the workspace's name, the device and its
-   *  command, or the questions asked. */
+  kind: v.picklist(['command', 'write', 'plan', 'consent', 'question']),
+  /** The ask in its own fields: the command, the file, the plan's title, the device and its command, or the
+   *  questions asked. */
   what: v.string(),
   /** Epoch ms it was asked at. */
   since: v.number(),
-  /** The agent that asked, by name; null for the workspace's own asks (a device consent, a proposed workspace). */
+  /** The agent that asked, by name; null for the workspace's own asks (a device consent). */
   askedBy: v.nullable(v.string()),
 });
 

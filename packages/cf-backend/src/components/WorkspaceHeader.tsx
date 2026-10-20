@@ -2,7 +2,7 @@
  *  bottom rule and the open tab's silhouette, and glides between tabs. */
 import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { GearIcon, PencilSimpleIcon, PlusIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
+import { ChatsCircleIcon, GearIcon, PencilSimpleIcon, PlusIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
 import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { composing } from "@/components/ui/form";
@@ -163,5 +163,46 @@ export function WorkspaceBarActions({ workspace, working, view, inspector, onAge
         aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
       {view === undefined && inspector && <InspectorToggle control={inspector} />}
     </>
+  );
+}
+
+/**
+ * The bar of a workspace in the `focus` layout: who you are talking to, and what they are doing, in place of the chat
+ * tabs; the tabs, the agents and the inspector one click away at its end.
+ */
+export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
+  workspace: { readonly name: string; readonly title: string; readonly logo?: string | null; readonly to: string };
+  /** The chat shown: the workspace's main agent unless another is open. */
+  agent: { readonly label: string; readonly seed: string; readonly colour: number; readonly activity?: PanelAgent["activity"] };
+  /** What it is doing now, or what it watches while idle. */
+  line: ReactNode;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+  /** Shows the chat tabs; absent when the workspace has one chat. */
+  tabs?: { readonly count: number; readonly show: () => void };
+}) {
+  return (
+    <header className="p-bar" data-workspace-bar data-layout="focus">
+      {leading && <div className="p-bar-menu">{leading}</div>}
+      <div className="flex min-w-0 flex-1 items-center gap-3 pl-4">
+        <Link to={workspace.to} className="flex min-w-0 items-center gap-2.5 rounded-lg py-1 pr-2 transition-colors hover:bg-[var(--c-neutral-tint)]"
+          title={`${workspace.title}: its agents, slates and plan`} data-focus-identity>
+          <ChatMascot seed={agent.seed} colour={agent.colour} activity={agent.activity} size={24} />
+          <span className="flex min-w-0 flex-col leading-tight">
+            <span className="truncate text-[14px] font-semibold tracking-[-0.01em] p-text">{agent.label}</span>
+            <span className="truncate text-[11.5px] p-text-3" data-focus-line>{line}</span>
+          </span>
+        </Link>
+      </div>
+      <div className="p-bar-trailing">
+        {tabs !== undefined && (
+          <button type="button" onClick={tabs.show} className="p-bar-icon relative" aria-label={`Show the ${String(tabs.count)} chats`} title="Show chats" data-focus-tabs>
+            <ChatsCircleIcon size={16} />
+            <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-[var(--c-elevated)] px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums p-text-2">{tabs.count}</span>
+          </button>
+        )}
+        {trailing}
+      </div>
+    </header>
   );
 }

@@ -4,7 +4,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, RoutedLLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   objectNamed,
   nimbusSessionShell, createShellSession,
@@ -16,7 +16,7 @@ import {
   createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
-  createRoutedModelLane, routedLlm, bindRoute,
+  createRoutedModelLane, routedLlm, bindRoute, type ModelLaneComponents,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -35,7 +35,7 @@ import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from "./computer-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
 import { previewHostSuffix } from "@kinu.run/core";
-import { createDecisionPort } from "@kinu.run/core";
+import { createDecisionPort, createStructuredDecider, decisionPortOf } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
@@ -196,6 +196,8 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 }
 
 export type CFRuntime = AgentRuntime & {
+  /** The reflection lane: routed, so it answers to a schema where a fast lane is absent. */
+  llm: RoutedLLM;
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
   localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
@@ -288,19 +290,24 @@ export function createCFRuntime(
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
-  const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
+  const laneOf = (source: FixedTierSource): ModelLaneComponents | undefined => profileLaneComponents({
     agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
     refusals: hooks.refusals,
     modelOperations: hooks.modelOperations,
   });
 
-  // The one required lane: `AgentRuntime.llm` is not optional.
-  const llm: LLM = profileLane('reflection') ?? {
-    async *stream() { yield ""; },
-    async complete(): Promise<string> {
-      throw new Error('reflection model lane has no active profile');
-    },
+  const profileLane = (source: FixedTierSource): RoutedLLM | undefined => {
+    const lane = laneOf(source);
+
+    return lane === undefined ? undefined : createRoutedModelLane(actor.actor, source, lane);
   };
+
+  // The one required lane: `AgentRuntime.llm` is not optional.
+  const noProfile = async (): Promise<never> => {
+    throw new Error('reflection model lane has no active profile');
+  };
+
+  const llm: RoutedLLM = profileLane('reflection') ?? { async *stream() { yield ""; }, complete: noProfile, object: noProfile };
 
   const schedule = createRealSchedule(access, sql, actor.actor);
   const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
@@ -394,6 +401,7 @@ export function createCFRuntime(
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: toolFiles, files: agentFileVfs, craftStore, shell, planes,
+      crafting: () => actor.actor.config.getCrafting(),
       sql,
       slate: hooks.slate,
     },
@@ -550,6 +558,7 @@ export function createCFRuntime(
   }, machineShells));
 
   const resolveTurnProfile = hooks.resolveProfile;
+  const fastLane = laneOf('fast');
 
   const runtime: CFRuntime = {
     actor: actor.actor,
@@ -561,13 +570,13 @@ export function createCFRuntime(
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
-    ...(resolveTurnProfile !== undefined && {
-      decide: createDecisionPort({
+    ...(resolveTurnProfile !== undefined && fastLane !== undefined && {
+      decide: decisionPortOf(createDecisionPort({
         run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
         model: async () => (await resolveTurnProfile()).decisionModel,
         report: hooks.reportModelCall,
         refusals: hooks.refusals,
-      }),
+      }), createStructuredDecider(actor.actor, fastLane)),
     }),
     executionRouter,
     shell,
@@ -672,12 +681,12 @@ interface ProfileLaneOptions {
 }
 
 /** Only a completed call reports: a thrown seam was not billed. */
-function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
-  const { actor, resolveProfile, source, report, refusals } = options;
+function profileLaneComponents(options: ProfileLaneOptions): ModelLaneComponents | undefined {
+  const { resolveProfile, source, report, refusals } = options;
 
   if (!resolveProfile) return undefined;
 
-  return createRoutedModelLane(actor.actor, source, {
+  return {
     resolveProfile,
     refusals,
     attemptOf: (spec) => {
@@ -693,7 +702,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
         resolve: (spec) => registry.resolveModel(spec, actorAffinity({ name: options.agent.name, workspaceId: options.actor.actor.workspaceId })),
       }, serving);
     }, route, { report, operations: options.modelOperations }),
-  });
+  };
 }
 
 /** A lane's `fibers` row, the CLI's own, outlives the activation running it; the next one re-drives it

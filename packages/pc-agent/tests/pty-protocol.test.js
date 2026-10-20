@@ -11,6 +11,8 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
+const fs = require('node:fs');
+
 const path = require('node:path');
 
 const { AwaitedList, scratchDir } = require('@kinu.run/test-utils');
@@ -93,8 +95,17 @@ function context() {
 
 const live = [];
 
-afterEach(() => {
-  while (live.length > 0) live.pop().closeAll();
+/**
+ * Ends every shell `sessions` holds and awaits each one's exit. A kill alone is not an exit: the shell stays this
+ * process's child until it is reaped, and the preload's check at the file's end found one still there on 2 of 7
+ * tiers (`left 1 process(es) ... bash -i`, kinu-20261020035607-956688e7).
+ */
+async function endAll(sessions) {
+  await Promise.all(sessions.detachAll().map((name) => sessions.close(name).ended));
+}
+
+afterEach(async () => {
+  while (live.length > 0) await endAll(live.pop());
 });
 
 describe('opening a terminal is a call, and the rest is a stream', () => {
@@ -277,6 +288,55 @@ describe("a workspace's named sessions", () => {
     return (await ws.response(frame.id)).result;
   };
 
+  // 1019-aa: a PC's row says what the computer's does, read from /proc: the folder its shell is in now (kept for a
+  // restart), that folder's branch, the ports a process under it listens on, and a program waiting for an answer.
+  test('a session lists the folder it is in, its branch, the ports under it, and a program waiting for input', async () => {
+    if (process.platform !== 'linux') return;
+    const { ctx } = context();
+    const ws = fakeWs();
+    const repo = scratchDir('pty-named-repo');
+    const say = (line) => handle({ type: PTY_INPUT_FRAME, session: opened.session, data: Buffer.from(line).toString('base64') }, ws, ctx);
+
+    fs.mkdirSync(path.join(repo, '.git'));
+    fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/feature/rows\n');
+    const opened = await call(ws, ctx, { id: 'rpc-named-facts', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, params: [80, 24] });
+
+    say(`python3 -c 'import socket, time; s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(); print("port", s.getsockname()[1], flush=True); time.sleep(60)' &\r`);
+    await ws.until(() => /port (\d+)/.test(ws.output()));
+    const port = Number(/port (\d+)/.exec(ws.output())[1]);
+
+    say(`cd ${repo} && read answer\r`);
+    await ws.until(() => ws.output().includes('read answer'));
+
+    // The list asked until the shell has done what it was told: each answer is a read of the system as it is then.
+    let asked = 0;
+
+    const listedWhen = async (holds) => {
+      for (;;) {
+        asked += 1;
+        const [row] = await call(ws, ctx, { id: `rpc-named-facts-${asked}`, method: 'ptyList', workspace: WORKSPACE, params: [] });
+
+        if (holds(row) || asked > 5000) return row;
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
+    };
+
+    const waiting = await listedWhen((row) => row.needsInput);
+
+    say('yes\rsleep 30\r');
+    const sleeping = await listedWhen((row) => row.running === 'sleep');
+
+    expect({
+      waiting: { cwd: waiting.cwd, branch: waiting.branch, ports: waiting.ports, needsInput: waiting.needsInput, running: waiting.running },
+      sleeping: { running: sleeping.running, needsInput: sleeping.needsInput },
+      kept: ctx.terminals.find(WORKSPACE, opened.session).cwd,
+    }).toEqual({
+      waiting: { cwd: repo, branch: 'feature/rows', ports: [port], needsInput: true, running: null },
+      sleeping: { running: 'sleep', needsInput: false },
+      kept: repo,
+    });
+  });
+
   test("a pane's detach keeps the shell and its newest output; the next open resumes that shell and shows it first", async () => {
     const { ctx } = context();
     const ws = fakeWs();
@@ -325,7 +385,8 @@ describe("a workspace's named sessions", () => {
     const ws = fakeWs();
     const opened = await call(ws, { sessions: firstLife, terminals: before, checkpoints: null }, { id: 'rpc-named-life1', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, cwd: folder, params: [80, 24, shell.id] });
 
-    firstLife.closeAll();
+    // The daemon ends, and its shells with it.
+    await endAll(firstLife);
     // The next daemon reads the same file and holds no shell.
     const after = createTerminalRecords({ file: records });
     const secondLife = createSessions({ log: () => {} });

@@ -562,7 +562,6 @@ export class AgentTurns {
       ownerLane: surface.ownerLane,
       dynamic: this.dynamic(turn, prepared),
       reviewsTurns: surface.reviewsTurns,
-      ...(surface.trial !== undefined && { trial: surface.trial }),
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
       facts,

@@ -7,10 +7,10 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import type { Database } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, BoundActor, LLM, ModelRouteResolution,
+  AgentRuntime, ActorHandle, BoundActor, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecOptions, ShellExecResult, OutputSpill, SpillOutcome, VfsMount,
 } from '@kinu.run/core';
-import type { Memory, Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
+import type { Memory, RoutedLLM, Schedule, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, chmodSync, writeSync } from 'node:fs';
@@ -44,7 +44,7 @@ import { hostWorkspaceExecutor } from './host-toolchain';
 import { agentHomeFiles, localFilePlane, localFileReach, spaceFiles, type LocalPlane } from './host-mount';
 import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@kinu.run/core';
-import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
+import { createDecisionPort, createStructuredDecider, decisionPortOf, restDecisionRun } from '@kinu.run/core';
 import { readLaunchDotenv } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, workersAiRoute,
@@ -96,6 +96,8 @@ export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
  * any session, but their usage belongs in the session's run-event log.
  */
 export interface CLIRuntime extends AgentRuntime {
+  /** The reflection lane: routed, so it answers to a schema where a fast lane is absent. */
+  llm: RoutedLLM;
   filesForActor: (actor: ActorHandle) => Promise<SessionFilePlane>;
   /** Gates shells and tool files, a head's too. */
   approvalPolicy: ShellApprovalPolicy;
@@ -109,8 +111,8 @@ export interface CLIRuntime extends AgentRuntime {
   ownFiles: VFS;
   plane: LocalPlane;
   memoryStore: MemoryStore;
-  setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
-  modelForRoute?: (resolution: ModelRouteResolution) => LLM;
+  setModelForRoute?(factory: (resolution: ModelRouteResolution) => RoutedLLM): void;
+  modelForRoute?: (resolution: ModelRouteResolution) => RoutedLLM;
   /** A facet's lanes share its parent's credential lookup and refusal notices. */
   attemptOf?: (spec: string) => Promise<ModelAttemptIdentity | null>;
   /** The actor's one notice state for its runtime's life; the session's titling says through it too. */
@@ -298,7 +300,7 @@ function buildCLIRuntime(
     },
   });
 
-  let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
+  let modelRouteFactory = (resolution: ModelRouteResolution): RoutedLLM => createLocalProviderLLM({
     llm: config.llm,
     defaultSpec: config.defaultSpec,
     affinity: actorAffinity(actor),
@@ -308,7 +310,7 @@ function buildCLIRuntime(
     spend: { source: resolution.source, report, operations },
   });
 
-  const modelForRoute = (resolution: ModelRouteResolution): LLM =>
+  const modelForRoute = (resolution: ModelRouteResolution): RoutedLLM =>
     modelRouteFactory(resolution);
 
   const attemptOf = (spec: string): Promise<ModelAttemptIdentity | null> => localResolver().attemptFor(spec);
@@ -326,14 +328,16 @@ function buildCLIRuntime(
 
   const decisionEndpoint = workersAiRoute(config.llm, config.cloud)?.auth;
 
-  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere, and
-  // with no Workers AI route, no turn is rated.
-  const decide = !/\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '') ? undefined : createDecisionPort({
-    run: restDecisionRun({ getAuth: async () => decisionEndpoint ?? null }),
+  // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere Clef
+  // refuses as unconnected, said once, and the fast tier answers what its measured agreement trusts it with.
+  const servesRun = /\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '');
+
+  const decide = decisionPortOf(createDecisionPort({
+    run: restDecisionRun({ getAuth: async () => (servesRun ? decisionEndpoint ?? null : null) }),
     model: async () => (await ensureProfile()).decisionModel,
     report,
     refusals,
-  });
+  }), createStructuredDecider(actor, modelLanes));
 
   const schedule: Schedule = {
     // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
@@ -462,10 +466,12 @@ function buildCLIRuntime(
     memory,
     craftStore,
     modelLanes,
-    ...(decide !== undefined && { decide }),
+    decide,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
   }), {
+    // The reflection lane as built here: routed, so it answers to a schema.
+    llm,
     stores,
     filesForActor,
     approvalPolicy,
@@ -484,7 +490,7 @@ function buildCLIRuntime(
     modelForRoute,
     attemptOf,
     refusals,
-    setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
+    setModelForRoute: (factory: (resolution: ModelRouteResolution) => RoutedLLM) => {
       modelRouteFactory = factory;
     },
     setProfileResolver: (resolve: (() => Promise<ResolvedTurnProfile>) | null) => {

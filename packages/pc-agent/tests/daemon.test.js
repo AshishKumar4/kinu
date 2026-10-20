@@ -99,35 +99,35 @@ function setup(opts = {}) {
 }
 
 /**
- * A git that holds the first staging it is asked for, a snapshot's `add`, until the test lets it go. The hold is
- * a directory the held git makes and the release a FIFO it reads, so each side waits on the other's act.
+ * A git that holds the first staging it is asked for, a snapshot's `add`, until the test lets it go. The hold and
+ * the release are each a FIFO, so each side waits on the other's act: the held git writes `held`, which a `cat` the
+ * test started reads and exits on, then reads `release`. Never a file-change event: Bun's fs.watch dropped one in
+ * 40 runs under load (2026-10-20, linux-screen.test.js), and a wait on it hangs the suite.
  */
 async function heldGit() {
   const dir = scratchDir('held-git');
-  const marker = path.join(dir, 'held');
+  const marker = path.join(dir, 'first');
+  const held = path.join(dir, 'held');
   const release = path.join(dir, 'release');
-  const made = await runToExit(['mkfifo', release]);
+  const made = await runToExit(['mkfifo', held, release]);
 
   if (made.exitCode !== 0) throw new Error(`mkfifo failed: ${made.stderr}`);
   const bin = path.join(dir, 'git');
   fs.writeFileSync(bin, [
     '#!/bin/bash',
-    `if [ "$1" = add ] && mkdir '${marker}' 2>/dev/null; then read -r _ < '${release}'; fi`,
+    `if [ "$1" = add ] && mkdir '${marker}' 2>/dev/null; then echo held > '${held}'; read -r _ < '${release}'; fi`,
     'exec git "$@"',
     '',
   ].join('\n'), { mode: 0o755 });
 
-  const held = Promise.withResolvers();
+  // Unreferenced: a test that never reaches the hold leaves no reader keeping the suite alive.
+  const reader = Bun.spawn(['cat', held], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
 
-  const watcher = fs.watch(dir, () => {
-    if (fs.existsSync(marker)) held.resolve();
-  });
-
-  watcher.unref();
+  reader.unref();
 
   return {
     bin,
-    held: held.promise.finally(() => { watcher.close(); }),
+    held: reader.exited,
     release: () => fs.promises.writeFile(release, 'go\n'),
   };
 }

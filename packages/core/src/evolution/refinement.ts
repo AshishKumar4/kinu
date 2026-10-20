@@ -5,6 +5,8 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 // activation, not clock; the row carries its pass's claim token so a revoked pass stops before
 // its next owner write.
 
+import type { RecordedTurn } from '../scaffold/replay';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
@@ -13,8 +15,10 @@ import { sqlCheckList } from '../identity/schema';
 import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import type { TemporaryAgentPort } from '../subordinates/temporary';
+import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
 import type { ScaffoldControl } from './control';
 import { JsonValueSchema, parseJsonValue } from '../utils/json';
+import { ArtifactEvidenceSchema } from './artifacts';
 import { fnv1a64 } from '../utils/fnv1a';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
@@ -24,7 +28,8 @@ import { listTurnRatings } from './ratings';
 import { workspaceSkillPath } from '../skills/discover';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
-const REFINEMENT_TRIGGERS = ['explicit', 'evolution_debt'] as const;
+/** A dream opens when the owner asks, every five new turns (`cadence`), or when the agent sits idle. */
+const REFINEMENT_TRIGGERS = ['explicit', 'cadence', 'idle'] as const;
 
 export type RefinementTrigger = (typeof REFINEMENT_TRIGGERS)[number];
 
@@ -40,7 +45,7 @@ const REFINEMENT_STAGES = [
 export type RefinementStage = (typeof REFINEMENT_STAGES)[number];
 
 export const REFINEMENT_EDIT_KINDS = [
-  'fact', 'prompt_section', 'skill', 'subagent_spec',
+  'fact', 'prompt_section', 'tool_description', 'skill', 'subagent_spec',
 ] as const;
 
 /** Exported so the refiner's brief states the same floor the parse enforces. */
@@ -65,6 +70,14 @@ const RefinementEditSchema = v.variant('kind', [
     rationale: RationaleSchema,
   }),
   v.strictObject({
+    kind: v.literal('tool_description'),
+    tool: NonEmpty,
+    /** The tool's own description, or its input fields' descriptions as one JSON object. */
+    part: v.picklist(['description', 'schema']),
+    source: NonEmpty,
+    rationale: RationaleSchema,
+  }),
+  v.strictObject({
     kind: v.literal('skill'),
     path: NonEmpty,
     source: NonEmpty,
@@ -85,7 +98,7 @@ export const RefinementProposalSchema = v.strictObject({
   edits: v.pipe(v.array(RefinementEditSchema), v.readonly()),
 });
 
-/** `fact` carries a quote checked against the reviewed trajectory: facts are written with no trial. */
+/** `fact` carries a quote checked against the reviewed trajectory: facts are written as they are reviewed. */
 export type RefinementEdit = Readonly<v.InferOutput<typeof RefinementEditSchema>>;
 
 export type RefinementProposal = Readonly<v.InferOutput<typeof RefinementProposalSchema>>;
@@ -113,6 +126,13 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
       rationale: RATIONALE_SLOT,
     },
     {
+      kind: 'tool_description',
+      tool: '<one built-in tool from the inventory above>',
+      part: 'description',
+      source: '<the whole replacement text, or for `schema` the whole JSON object of field descriptions>',
+      rationale: RATIONALE_SLOT,
+    },
+    {
       kind: 'skill',
       path: workspaceSkillPath('<name>'),
       source: '<the whole file>',
@@ -128,11 +148,11 @@ export const REFINEMENT_PROPOSAL_EXAMPLE: RefinementProposal = {
 };
 
 /**
- * Pending states differ: a fact is live now, a section awaits a trial, a skill awaits the owner.
- * `refused` is a deterministic gate; `rejected` is the owner declining.
+ * A fact is live now; a section, tool text or skill is staged for the next cold turn. `refused` is a deterministic gate
+ * or the dream's reviewer; `rejected` is the owner declining, by reverting.
  */
 const REFINEMENT_DISPOSITIONS = [
-  'applied', 'pending_trials', 'pending_owner_approval', 'refused', 'rejected',
+  'applied', 'staged', 'refused', 'rejected',
 ] as const;
 
 export type RefinementDisposition = (typeof REFINEMENT_DISPOSITIONS)[number];
@@ -144,8 +164,12 @@ export interface RefinementDeps {
   readonly facts: FactsStore;
   /** null: no roster substrate; requests stay `requested` for a host that can run them. */
   readonly refiner?: TemporaryAgentPort | null;
-  /** Absent means no owner surface; a skill edit says so. */
+  /** Absent means no trust authority; a skill edit is refused and says so. */
   readonly approvals?: InstructionApprovalStore;
+  /** The plane the turn's skills index reads, where a dream's skill lands and stages. */
+  readonly skillsVfs: VFS;
+  /** The agent's newest answered turns as recorded, which a pending scaffold is replayed against. */
+  readonly recordedTurns: () => Promise<RecordedTurn[]>;
 }
 
 const RefinementRouteSchema = v.object({
@@ -162,6 +186,41 @@ const RefinementRouteSchema = v.object({
 
 export type RefinementRoute = Readonly<v.InferOutput<typeof RefinementRouteSchema>>;
 
+/** What the reviewer read about one drafted edit: the measured evidence, or the hard gate that refused it. */
+const EditEvidenceSchema = v.object({
+  /** The edit's index in the proposal this round reviewed. */
+  edit: v.number(),
+  note: v.string(),
+  /** A static gate refused it (the size caps, misevolution, a quote not in the turns): it routes nowhere. */
+  refused: v.optional(v.string()),
+  /** A section's judge-only numbers, staged with it when it is accepted. */
+  artifact: v.optional(ArtifactEvidenceSchema),
+});
+
+const VerdictSchema = v.strictObject({
+  edit: v.number(),
+  verdict: v.picklist(['accept', 'reject', 'revise']),
+  note: v.pipe(v.string(), v.nonEmpty()),
+});
+
+/** The reviewer's answer: one verdict per drafted edit, by index. */
+export const DreamVerdictsSchema = v.strictObject({ verdicts: v.array(VerdictSchema) });
+
+export type DreamVerdict = Readonly<v.InferOutput<typeof VerdictSchema>>;
+
+/** One review of the current proposal: its evidence, then the reviewer's verdicts once it answers. */
+const ReviewRoundSchema = v.object({
+  evidence: v.array(EditEvidenceSchema),
+  verdicts: v.nullable(v.array(VerdictSchema)),
+});
+
+/** A dream's review: the first round, and a second after one revision. */
+const DreamReviewSchema = v.object({ rounds: v.array(ReviewRoundSchema) });
+
+export type EditEvidence = Readonly<v.InferOutput<typeof EditEvidenceSchema>>;
+
+type DreamReview = Readonly<v.InferOutput<typeof DreamReviewSchema>>;
+
 export interface RefinementRequest {
   readonly id: string;
   readonly trigger: RefinementTrigger;
@@ -171,15 +230,17 @@ export interface RefinementRequest {
   readonly turnIds: readonly string[];
   /** The automatic trigger's idempotency key; null for an explicit request. */
   readonly debtKey: string | null;
-  /** The refiner's answer, exactly as it validated. Null until it answers. */
+  /** The dreamer's answer, exactly as it validated, revised once at most. Null until it answers. */
   readonly proposal: RefinementProposal | null;
+  /** The review of each proposal so far. */
+  readonly review: DreamReview;
   readonly routes: readonly RefinementRoute[];
   readonly detail: string;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
 
-/** Omits proposal bodies: `showRefinement` is the one gated endpoint for staged files. */
+/** Omits proposal bodies; the changelog shows an excerpt of each. */
 export interface RefinementRequestView {
   readonly id: string;
   readonly trigger: RefinementTrigger;
@@ -241,6 +302,7 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
     turn_ids   TEXT NOT NULL,
     debt_key   TEXT,
     proposal   TEXT,
+    review_json TEXT,
     routes     TEXT NOT NULL,
     detail     TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -265,9 +327,15 @@ export function holdRefinementLane(sql: SqlExecutor, actorId: string): void {
     ON CONFLICT(actor_id) DO UPDATE SET answered = excluded.answered`;
 }
 
+/** A dream's helpers answer under its id: the dreamer on the id itself, its reviewer and reviser beneath it. */
+export function dreamLane(requestId: string, helper?: 'review' | 'revise', round = 0): EvolutionLaneRequest {
+  return { requestId: helper === undefined ? requestId : `${requestId}:${helper}:${String(round)}` };
+}
+
 export function refinementAnswerStored(sql: SqlExecutor, actorId: string, requestId: string): boolean {
   return sql<{ one: number }>`SELECT 1 AS one FROM evolution_helpers
-    WHERE actor_id = ${actorId} AND lane_request_id = ${requestId} AND answer_status IS NOT NULL
+    WHERE actor_id = ${actorId} AND answer_status IS NOT NULL
+      AND (lane_request_id = ${requestId} OR substr(lane_request_id, 1, ${requestId.length + 1}) = ${`${requestId}:`})
     LIMIT 1`.length > 0;
 }
 
@@ -286,7 +354,8 @@ export function nextEvolutionAnswerAt(sql: SqlExecutor, actorId: string): number
         AND (stage = 'requested' OR (stage = 'planning' AND (claim IS NULL OR claim NOT IN (SELECT value FROM json_each(${live})))))
       ORDER BY created_at ASC, id ASC LIMIT 1
     ) r
-    JOIN evolution_helpers h ON h.actor_id = ${actorId} AND h.lane_request_id = r.id
+    JOIN evolution_helpers h ON h.actor_id = ${actorId}
+      AND (h.lane_request_id = r.id OR substr(h.lane_request_id, 1, length(r.id) + 1) = r.id || ':')
     WHERE h.answer_status IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM refinement_lane_holds hd WHERE hd.actor_id = ${actorId}
         AND hd.answered >= (SELECT COUNT(*) FROM evolution_helpers e WHERE e.actor_id = ${actorId} AND e.answer_status IS NOT NULL))`;
@@ -305,6 +374,7 @@ interface OpenRefinementInput {
 
 export interface SettleRefinementPatch {
   readonly proposal?: RefinementProposal;
+  readonly review?: DreamReview;
   readonly routes?: readonly RefinementRoute[];
   readonly detail?: string;
   readonly now?: number;
@@ -350,6 +420,7 @@ interface Row {
   turn_ids: string;
   debt_key: string | null;
   proposal: string | null;
+  review_json: string | null;
   routes: string;
   detail: string;
   created_at: number;
@@ -391,6 +462,7 @@ function toRequest(row: Row): RefinementRequest {
     turnIds: decodeColumn<string[]>(TurnIdsSchema, row.turn_ids, [], row.id),
     debtKey: row.debt_key,
     proposal,
+    review: row.review_json === null ? { rounds: [] } : decodeColumn<DreamReview>(DreamReviewSchema, row.review_json, { rounds: [] }, row.id),
     routes: decodeColumn<RefinementRoute[]>(RoutesSchema, row.routes, [], row.id),
     detail: row.detail,
     createdAt: row.created_at,
@@ -405,6 +477,20 @@ function toRequest(row: Row): RefinementRequest {
 const liveClaims = new Set<string>();
 
 /** Row, debt key and claim are per actor, so one actor's pass cannot claim a sibling's refinement. */
+/** The stages a dream ends in. */
+const DREAM_ENDS: ReadonlySet<RefinementStage> = new Set(['applied', 'rolled_back', 'refused']);
+
+/** What one dream did, as it ends: its turns and how each drafted edit was routed. */
+function dreamCompleted(request: RefinementRequest | null): void {
+  if (request === null) return;
+  const routed = (disposition: RefinementDisposition): number => request.routes.filter((route) => route.disposition === disposition).length;
+
+  diagnostics.event('dream.completed', {
+    dream: request.id, trigger: request.trigger, stage: request.stage, turns: request.turnIds.length,
+    edits: request.routes.length, staged: routed('staged'), applied: routed('applied'), refused: routed('refused'),
+  });
+}
+
 export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): RefinementStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
@@ -413,7 +499,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     authorize();
 
     const rows = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-             proposal, routes, detail, created_at, updated_at
+             proposal, review_json, routes, detail, created_at, updated_at
       FROM refinement_requests WHERE actor_id = ${actorId} AND id = ${id} LIMIT 1`;
 
     return rows[0] ? toRequest(rows[0]) : null;
@@ -442,16 +528,20 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     if (current?.stage !== guard.stage || current.claim !== guard.claim) return false;
     const proposal = patch.proposal === undefined ? null : JSON.stringify(patch.proposal);
     const routes = patch.routes === undefined ? null : JSON.stringify([...patch.routes]);
+    const review = patch.review === undefined ? null : JSON.stringify(patch.review);
     void sql`UPDATE refinement_requests SET
         stage = COALESCE(${to}, stage),
         claim = CASE WHEN ${to} IS NULL THEN claim ELSE NULL END,
         proposal = COALESCE(${proposal}, proposal),
+        review_json = COALESCE(${review}, review_json),
         routes = COALESCE(${routes}, routes),
         detail = COALESCE(${patch.detail ?? null}, detail),
         updated_at = ${patch.now ?? nowMs()}
       WHERE actor_id = ${actorId} AND id = ${id}
         AND stage = ${guard.stage} AND claim IS ${guard.claim}`;
     markStoreChanged(sql);
+
+    if (to !== null && DREAM_ENDS.has(to)) dreamCompleted(one(id));
 
     return true;
   };
@@ -462,7 +552,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
 
       if (input.debtKey !== undefined) {
         const existing = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-                 proposal, routes, detail, created_at, updated_at
+                 proposal, review_json, routes, detail, created_at, updated_at
           FROM refinement_requests
           WHERE actor_id = ${actorId} AND debt_key = ${input.debtKey} LIMIT 1`;
 
@@ -497,7 +587,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       authorize();
 
       return sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-               proposal, routes, detail, created_at, updated_at
+               proposal, review_json, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId}
         ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toRequest);
     },
@@ -506,7 +596,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       authorize();
 
       const rows = sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-               proposal, routes, detail, created_at, updated_at
+               proposal, review_json, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId} AND stage = 'requested'
         ORDER BY created_at ASC, id ASC LIMIT 1`;
 
@@ -517,7 +607,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       authorize();
 
       return sql<Row>`SELECT id, trigger, scope, stage, turn_ids, debt_key,
-               proposal, routes, detail, created_at, updated_at
+               proposal, review_json, routes, detail, created_at, updated_at
         FROM refinement_requests
         WHERE actor_id = ${actorId} AND stage IN ('gated', 'evaluating')
         ORDER BY created_at ASC, id ASC`.map(toRequest);
@@ -607,8 +697,8 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
   };
 }
 
-/** Three is the smallest batch with a failure to answer beside the rest. */
-const MIN_REFINEMENT_DEBT = 3;
+/** The owner's cadence: a dream every five new turns. */
+const DREAM_CADENCE = 5;
 
 /** Bounds the brief, not the ledger; leftovers accrue to the next batch under its own key. */
 const MAX_REFINEMENT_DEBT_BATCH = 12;
@@ -629,41 +719,39 @@ export const EvolutionDebtSchema: v.GenericSchema<EvolutionDebt> = v.object({
 });
 
 /**
- * Derived, never stored. Exclusion happens before the limit, and the cut takes the oldest rows;
- * otherwise refined recent failures hide older unresolved ones forever.
+ * The rated turns no dream has read yet, oldest first. Derived, never stored: a dream's own `turn_ids` cover its turns.
+ * Exclusion happens before the limit, and the cut takes the oldest rows; otherwise newer dreams hide older turns forever.
+ * Five are owed a dream (`cadence`); an idle agent dreams over any.
  */
 export function evolutionDebt(
   sql: SqlExecutor, actor: ActorHandle, opts: { limit?: number } = {},
 ): EvolutionDebt {
   const covered = createRefinementStore(sql, actor).coveredTurnIds();
   const seen = new Set<string>();
-  const unresolved: string[] = [];
+  const fresh: string[] = [];
 
-  // One effective rating per turn; turns rated 2 or lower are owed.
-  for (const row of listTurnRatings(sql, actor, { low: true })) {
+  // One effective rating per turn, whatever it is: a good turn is evidence beside a bad one.
+  for (const row of listTurnRatings(sql, actor)) {
     if (covered.has(row.turnId) || seen.has(row.turnId)) continue;
     seen.add(row.turnId);
-    unresolved.push(row.turnId);
+    fresh.push(row.turnId);
   }
 
-  // Ledger order is newest-first; the oldest unresolved failure is owed.
-  unresolved.reverse();
+  // Ledger order is newest-first; the oldest turn is read first.
+  fresh.reverse();
   const cap = Math.max(1, opts.limit ?? MAX_REFINEMENT_DEBT_BATCH);
-  const batch = unresolved.slice(0, cap);
-  const owed = batch.length >= MIN_REFINEMENT_DEBT;
-  const backlog = unresolved.length - batch.length;
+  const batch = fresh.slice(0, cap);
+  const owed = batch.length >= DREAM_CADENCE;
+  const backlog = fresh.length - batch.length;
+  const turns = `${String(batch.length)} new rated turn${batch.length === 1 ? '' : 's'}`;
 
   return {
     turnIds: batch,
     owed,
     key: batch.length === 0 ? '' : fnv1a64(batch.join('\n')),
     summary: batch.length === 0
-      ? 'no unresolved low-rated turns: nothing is owed a refinement'
-      : (owed
-        ? `${String(batch.length)} unresolved low-rated turn${batch.length === 1 ? '' : 's'} `
-          + 'are owed a refinement'
-        : `${String(batch.length)} unresolved low-rated turn${batch.length === 1 ? '' : 's'}: `
-          + `a refinement opens at ${String(MIN_REFINEMENT_DEBT)}`)
+      ? 'no new rated turns since the last dream'
+      : (owed ? `${turns} since the last dream are owed one` : `${turns} since the last dream: a dream opens at ${String(DREAM_CADENCE)}, or when the agent is idle`)
       + (backlog > 0 ? `, and ${String(backlog)} more waiting behind this batch` : ''),
   };
 }

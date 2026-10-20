@@ -42,7 +42,7 @@ export class TurnCraftLedger {
   snapshot(): CraftCycleRecord | null {
     const crafted = new Set<string>();
     const reused = new Set<string>();
-    const dropped = new Set<string>();
+    const broke = new Set<string>();
     let returned = 0;
     let raised = 0;
 
@@ -52,7 +52,7 @@ export class TurnCraftLedger {
       // The loop closes when a later call reaches for what this turn crafted.
       for (const name of call.returned) if (crafted.has(name)) reused.add(name);
 
-      for (const name of call.dropped) dropped.add(name);
+      for (const name of call.raised) broke.add(name);
       returned += call.returned.length;
       raised += call.raised.length;
     }
@@ -61,6 +61,6 @@ export class TurnCraftLedger {
 
     if (crafted.size === 0 && invoked.length === 0) return null;
 
-    return { crafted: [...crafted], invoked, reused: [...reused], returned, raised, dropped: [...dropped] };
+    return { crafted: [...crafted], invoked, reused: [...reused], returned, raised, broke: [...broke] };
   }
 }

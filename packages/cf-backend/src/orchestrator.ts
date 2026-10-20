@@ -24,7 +24,7 @@ import {
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
-  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifactBodies, withToolText,
+  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubordinateReportLedger, type ActorToolsets,
@@ -41,7 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { censusOf, requireOps, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
+import { censusOf, requireOps, WorkspaceLayoutSchema, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -124,7 +124,6 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   // Declared reach axis; getToolDescriptions reports it rather than guessing from ToolSet keys.
   TOOL_REACH,
-  updateCraftScores,
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveAgentSource, type ArchiveCursor, type ArchivePage,
@@ -135,14 +134,12 @@ import {
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
-  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
-  previewScaffoldLive, runOptimization,
-  decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
-  type RefinementListing, type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult,
+  getEvolutionStatus, listScaffoldVersions,
+  previewScaffoldLive,
+  activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
+  type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
-  type ProposerOutcome, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type EvolutionStatus,
   readScaffoldVersion,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
@@ -152,8 +149,7 @@ import {
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, aggregateScore, type GepaRunSummary,
-  qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
+  qualitySeries, qualityWindow, type QualityDay, type QualityWindow, listThumbs, craftPreference, craftPreferences,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   listAlternateTakeSets, latestAlternateTakeSet,
@@ -197,6 +193,7 @@ import {
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
+  decodeRecordedTurns, recordedTurns, type RecordedTurn,
   LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
@@ -215,7 +212,7 @@ import {
   setAlwaysActiveSkills, setEvolutionConfig,
   setModel, setProviderAccount, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView,
-  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   EVENT_VARIANTS,
   boundEventQuery,
@@ -245,7 +242,7 @@ import {
 import {
   agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
-  WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
+  AgentWorkspaceStore, createAgentWorkspace, type AgentWorkspaceDeps,
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentVerdict, type AgentSignal, bearWorkspaceIdentity,
   type DeviceConsentRequest, type PendingDeviceConsent,
@@ -258,7 +255,7 @@ import {
 } from "@kinu.run/core";
 import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
-import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -1667,9 +1664,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const planes = this.turnPlanes(key.actorId, runtime, reach.actor);
     const resolved = await this.surfaceProfile(actor, turn, opened);
 
-    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it.
-    const artifacts = turnArtifactBodies(runtime.storage.sql, actor.handle, { ...(lane.opening ?? { answerId: '', cacheCold: false }), main: lane.opening !== undefined && reach.actor.kind === 'workspace' });
-    const overrides = artifactOverrides(artifacts.bodies);
+    // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
+    const cold = lane.opening?.cacheCold ?? false;
+    const overrides = artifactOverrides(turnArtifacts(runtime.storage.sql, actor.handle, cold));
+
+    // A dream's skills land in the workspace's skills root, which every turn's index reads, so only this agent's own
+    // cold turn writes them.
+    if (cold && actor.handle.actorId === this.rt.actor.actorId) {
+      await activateDreamSkills(this.refinementDeps);
+      // Before the turn's program is chosen, so this turn runs the version it promotes.
+      await activateReplayedScaffold(this.refinementDeps.control);
+    }
+
     const reports: SubordinateReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
@@ -1695,7 +1701,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       resolved, tools, stores: built.stores, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
       // `agent` / `llm` are reachable only inside `eval`: derived from the namespaces its programs reach.
       codemodeCapabilities: (asked) => (reach.actor.kind === 'workspace' ? codemodeCapabilitiesFor(this.ownNamespaces(asked)) : []),
-      ...(artifacts.trial !== null && { trial: artifacts.trial }),
     });
 
     // Last, once its surface stands: a turn whose tools could not be described opened nothing.
@@ -3447,6 +3452,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
           const workspaceInput = { name: agentName === '' ? undefined : agentName, purpose };
           const entry = await createCloudWorkspaceForUser({ env: this.env, userId, userDO, caller, input: workspaceInput });
+
+          this.recordAgentWorkspace({ workspace: entry.name, name: entry.displayName, brief: purpose });
           agentName = entry.name;
           created = true;
         }
@@ -3477,7 +3484,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
       // Main's turns are assembled in its own isolate, which reads and clears the arm (D9).
       armCompactNow: async () => { await this.mainCall((isolate, snapshot) => isolate.armCompaction(snapshot)); },
-      proposeWorkspace: (proposal) => this.proposals.propose(proposal),
+      createWorkspace: (input) => createAgentWorkspace(this.agentWorkspaceDeps(), input),
       ownerWaits: this.ownerWaitsOf(this.actorHandle().actorId, true),
     });
   }
@@ -3508,7 +3515,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return ownerWaits({
       deferred: this.deferrals.list(),
       plans: this.hostedPendingPlans(hostedPlans),
-      proposals: this.proposals.open(),
       consents: this.consents.list(),
       questions,
       nameOf: (actorId) => this.actorHost().describe(actorId)?.name ?? actorId,
@@ -3700,6 +3706,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       llm: () => this.rt.fastLlm ?? this.rt.llm,
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
       armWake: () => { this.armDurableWake(); }, workspace: this.name,
+      idle: () => idleDream(this.refinementDeps, this.engine.recordsTurns),
       // Reads the account and proposes to it; the owner accepts what is kept.
       account: () => this.account.ownedMemory({ by: 'background' }),
     });
@@ -3732,17 +3739,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         input: v.object({ turn: JsonValueSchema, completed: v.boolean() }),
         runSync: ({ turn, completed }) => {
           this.recordMainTurnRow(v.parse(CompletedTurnSchema, turn), completed);
-
-          return { status: 'completed' };
-        },
-      }),
-
-      craft_usage: terminalEffect({
-        input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
-        runSync: ({ messageId, toolNames }) => {
-          void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names)
-                   VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)})
-                   ON CONFLICT(actor_id, message_id) DO UPDATE SET tool_names = excluded.tool_names`;
 
           return { status: 'completed' };
         },
@@ -4251,31 +4247,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  // Lazy like `consents`. A proposed workspace is created through the account's one creation path, under its owner.
-  private _proposals: WorkspaceProposals | null = null;
-  private get proposals(): WorkspaceProposals {
-    return this._proposals ??= new WorkspaceProposals({
-      store: new WorkspaceProposalStore(this.boundSql),
-      newId: () => `wsp-${nanoid(10)}`,
-      now: () => Date.now(),
+  /**
+   * How the workspace's agent makes a workspace in its owner's account: through the account's one creation path, at
+   * once, kept in the ledger the Changelog reads and in Activity. Only the workspace's own agent holds it (`agentSelf`,
+   * and `peers` for the workspace reach), so what it made is that agent's.
+   */
+  private agentWorkspaceDeps(): AgentWorkspaceDeps {
+    return {
       create: async ({ displayName, purpose, soul }) => {
         const { stub: userDO, caller } = await this.userHub();
 
         return createCloudWorkspaceForUser({ env: this.env, userId: this.requireOwner(), userDO, caller, input: { displayName, purpose }, soul });
       },
+      made: ({ workspace, name, brief }) => { this.recordAgentWorkspace({ workspace, name, brief }); },
       link: (workspace) => `${this.env.CLI_PUBLIC_ORIGIN ?? ''}/workspace/${encodeURIComponent(workspace)}`,
-      // Read through `this.orch` at delivery time, never captured, as the deferrals' inbox is.
-      inbox: { send: (signal) => this.workspaceAgentDeliveries().signals.send(signal) },
-      announce: () => { this.overviewChanged(); },
-    });
+    };
   }
 
-  /** The owner's one decision on a workspace the agent proposed; a second answer decides nothing. */
-  @callable()
-  async decideWorkspaceProposal(id: string, answer: WorkspaceProposalAnswer): Promise<{ decided: boolean; workspace: string | null }> {
-    const asked = v.parse(v.object({ id: v.string(), answer: v.picklist(['approve', 'decline']) }), { id, answer });
-
-    return settle(Effect.map(this.proposals.decide(asked.id, asked.answer), (decided) => ({ decided: decided !== null, workspace: decided?.workspace ?? null })));
+  private recordAgentWorkspace(made: { readonly workspace: string; readonly name: string; readonly brief: string }): void {
+    new AgentWorkspaceStore(this.boundSql).record({ actorId: this.actorHandle().actorId, ...made, createdAt: Date.now() });
+    this.logActivity('workspace_created', `${made.workspace}: ${made.name}`);
   }
 
   /** Called by the UserDO over DO RPC: what a device call may do now. A call that raises or re-issues a waiting ask is
@@ -4415,13 +4406,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     initSleepTimeUpdatesTable(execRaw);
     initTurnBranchesTable(execRaw);
-    // Keyed per actor and message, as a thumb is: the thumbs re-score reads this table.
-    execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
-      actor_id   TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      tool_names TEXT NOT NULL,
-      PRIMARY KEY (actor_id, message_id)
-    )`);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
     initActivationTable(execRaw);
@@ -4810,6 +4794,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
         name: this.name,
         displayName: await this.workspaceTitle() ?? '',
+        layout: this.config.getLayout(),
       }));
 
       // Main's conversation and its measure are its own isolate's.
@@ -4944,13 +4929,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private pendingActions(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): PendingAction[] {
-    const awaiting = getChangesAwaitingTheOwner(this.boundSql, this.rt.actor);
-
     return buildPendingActions({
-      scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
-      workspaceProposals: this.proposals.open(),
-      changeApprovals: { count: awaiting.length, latestAt: awaiting[0]?.at ?? Date.now() },
       // Each agent's plans are its own isolate's (main's included).
       pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
     });
@@ -4991,7 +4971,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Id-addressed against a fresh digest so a shifted list cannot revert the wrong row. */
   @callable()
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    return await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder }, id);
+    return await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder, skills: this.refinementDeps }, id);
   }
 
   /** Claimed take sets keyed by their turn's assistant message id. */
@@ -5064,7 +5044,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, actor: this.rt.actor, turnPair: (messageId) => this.mainTurnPair(messageId), engine: this.engine, inbox: this.workspaceAgentDeliveries().signals },
+      { sql: this.boundSql, actor: this.rt.actor, turnPair: (messageId) => this.mainTurnPair(messageId), inbox: this.workspaceAgentDeliveries().signals },
       takeId, nodeId);
 
     this.logActivity('take_pick', `${outcome.changedAnswer ? 'alternate' : 'delivered'} (${nodeId})`);
@@ -5102,12 +5082,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async getEvolutionStatus(): Promise<EvolutionStatus> {
     return getEvolutionStatus(this.boundSql, this.rt.actor);
-  }
-
-  /** The owner's decision on the pending scaffold proposal. */
-  @callable()
-  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-    return applyScaffoldDecision(this.scaffoldControl, mode);
   }
 
   /**
@@ -5209,14 +5183,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A thumb is the user's own rating of the turn (`evolution/ratings.ts`); `feedback: null` clears it. Applies an
-   * EMA observation at that rating to the crafted tools recorded for this message in turn_craft_usage.
+   * A thumb is the user's own rating of the turn (`evolution/ratings.ts`); `feedback: null` clears it. A thumb given
+   * before the turn's review is the rating its crafted tools are credited with (`EvolutionEngine.reviewTurn`).
    */
   @callable()
   setTurnFeedback(
     messageId: string,
     feedback: 'positive' | 'negative' | null,
-  ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null; rescored: number }> {
+  ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null }> {
     return settle(Effect.gen({ self: this }, function* () {
       if (messageId.length === 0) {
         return yield* new KinuError('bad_input', 'messageId must be a non-empty string');
@@ -5226,26 +5200,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return yield* new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
       }
 
-      let rescored = 0;
-
-      const usageRows = feedback === null ? [] : this.sql<{ tool_names: string }>`
-      SELECT tool_names FROM turn_craft_usage
-      WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId} LIMIT 1`;
-
-      if (feedback !== null && usageRows[0]?.tool_names) {
-        const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
-        const names = parsedNames.success ? parsedNames.output : [];
-
-        if (names.length > 0) {
-          updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
-          rescored = names.length;
-        }
-      }
-
-      // The thumb wins over the model's rating of this turn and, when down, corroborates provisional lessons.
+      // The thumb wins over the model's rating of this turn.
       yield* Effect.promise(async () => settleLogged('feedback.explicit_apply_failed', { doing: 'recording a thumb in the rating ledger', otherwise: 'io' }, () => this.engine.applyExplicitFeedback(messageId, feedback), { messageId }));
 
-      return { ok: true, messageId, feedback, rescored };
+      return { ok: true, messageId, feedback };
     }));
   }
 
@@ -5262,17 +5220,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listScaffoldVersions(this.boundSql, this.rt.actor, limit);
   }
 
-  /** One search of the proposer on `target` (default the scaffold); see `runOptimization` in evolution/control.ts. */
-  @callable()
-  async runOptimization(target?: string): Promise<ProposerOutcome> {
-    return runOptimization(this.scaffoldControl, target);
-  }
-
-  @callable()
-  async getGepaRuns(limit = 20): Promise<GepaRunSummary[]> {
-    return listGepaRuns(this.boundSql, this.actorHandle(), limit);
-  }
-
   /** Satisfaction per day, oldest first, with its interval: the Quality tab's series (evolution/ratings.ts). */
   @callable()
   async getQuality(days = 30): Promise<QualityDay[]> {
@@ -5283,41 +5230,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async getQualityWindow(days = 7): Promise<QualityWindow> {
     return qualityWindow(this.boundSql, this.actorHandle(), { days });
-  }
-
-  /** One GEPA run with candidates and Pareto-front membership; Maps flattened to objects for RPC. */
-  @callable()
-  getGepaRun(runId: string): Promise<{
-    run: GepaRunSummary | null;
-    candidates: Array<{
-      id: string; parentId: string | null; source: string;
-      scores: Record<string, number>; feedback: Record<string, string>;
-      aggregateScore: number; createdAt: number;
-    }>;
-    pareto: Array<{ candidateId: string; instanceId: string; score: number }>;
-  }> {
-    return settle(Effect.gen({ self: this }, function* () {
-      return yield* Effect.catchCause(Effect.sync(() => {
-        const run = listGepaRuns(this.boundSql, this.actorHandle(), 200).find((r) => r.runId === runId) ?? null;
-
-        const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
-          id: c.id, parentId: c.parentId, source: c.source,
-          scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
-          aggregateScore: aggregateScore(c), createdAt: c.createdAt,
-        }));
-
-        // The membership table is core's; no raw SELECT across the package boundary.
-        const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
-
-        return { run, candidates, pareto };
-      }), (failed) => Effect.gen({ self: this }, function* () {
-        const error = Cause.squash(failed);
-
-        if (classify({ cause: error }) !== 'sqlite-missing-table') return yield* Effect.failCause(failed);
-
-        return { run: null, candidates: [], pareto: [] };
-      }));
-    }));
   }
 
   /** The store the change-set reads, as the session user whose plane the root actor's is. */
@@ -5645,6 +5557,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
+  /** The workspace agent's newest answered turns, from its isolate where it runs there: what a scaffold is replayed against. */
+  recordedTurns(limit?: number): Promise<RecordedTurn[]> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const agent = this.actorHandle().actorId;
+
+      if (this.isAgent(agent)) {
+        return decodeRecordedTurns(yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.recordedTurns(snapshot, limit))));
+      }
+
+      const sources = yield* this.turnRequestSources(undefined);
+
+      return yield* Effect.promise(() => recordedTurns(sources, limit));
+    }));
+  }
+
   /** Not @callable: the audited `workspace.turn_read`. */
   async supportReadTurn(read: {
     readonly turnId: string;
@@ -5941,7 +5868,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
     const reads = {
       getExecutors: () => this.getExecutors(),
-      getGepaRuns: () => this.getGepaRuns(),
       getHeadRuns: () => this.getHeadRuns(),
       getMctsTree: () => this.getMctsTree(),
       getQuality: () => this.getQuality(),
@@ -6354,10 +6280,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const craftedRaw = this.rt.craftStore.list();
 
+    // crafted_tools is workspace-wide with no actor_id, so preference is keyed by name alone.
+    const preferences = craftPreferences(this.boundSql);
+
     const crafted = craftedRaw.map(t => {
-      // crafted_tools is workspace-wide with no actor_id, so quality is keyed by name alone.
-      const scoreRow = this.sql<{ score: number; uses: number }>`
-        SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
+      const row = preferences.get(t.name);
 
       return {
         name: t.name,
@@ -6367,8 +6294,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // so codemode is their reach and they are wired whenever the store holds them.
         exposure: 'codemode' as const,
         wired: true,
-        qualityScore: scoreRow[0]?.score ?? 0.5,
-        usageCount: scoreRow[0]?.uses ?? 0,
+        qualityScore: craftPreference(row ?? { offered: 0, chosen: 0, rated: 0, rating_sum: 0 }),
+        usageCount: row?.chosen ?? 0,
       };
     });
 
@@ -6556,6 +6483,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.actorHandle().config.setChatTitle(title);
 
     return { title };
+  }
+
+  /** The page's layout, as every browser shows it: `focus` draws the chat alone. */
+  @callable() async setLayout(layout: WorkspaceLayout): Promise<{ layout: WorkspaceLayout }> {
+    const chosen = v.parse(WorkspaceLayoutSchema, layout);
+
+    this.actorHandle().config.setLayout(chosen);
+
+    return { layout: chosen };
+  }
+
+  /**
+   * Not @callable: a new workspace's install (user/workspace-create.ts), before its baseline and its first turn, so the
+   * genesis turn already runs as the blueprint says. Its schedules are the owner's own: an agent may not cancel them.
+   */
+  async seedBlueprint(seed: WorkspaceSeed): Promise<void> {
+    const { config } = this.actorHandle();
+
+    config.setBlueprint(seed.blueprint);
+    config.setLayout(seed.layout);
+    config.setChatTitle(seed.agent);
+
+    for (const schedule of seed.schedules) {
+      await this.createTimerTrigger({ cron: schedule.cron, label: schedule.label, payload: { prompt: schedule.prompt }, trust: 'owner' });
+    }
   }
 
   @callable() async dismissSubordinate(name: string, keepHistory = true): Promise<{
@@ -7284,24 +7236,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       async () => { await refinementPass(this.refinementDeps); }, { workspace: this.name }));
 
     return view;
-  }
-
-  /**
-   * Owner decision on one staged edit; the only path by which a proposed skill becomes trusted.
-   * `interactive` in the RPC gate and absent from model-facing tools, so agent bytes cannot self-authorise.
-   */
-  @callable()
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    return await decideRefinementRoute(this.refinementDeps, input);
-  }
-
-  /**
-   * The whole staged file for one edit plus the digest a decision must quote back.
-   * `interactive`: carries proposed instruction bytes. Never truncated; the modal renders it.
-   */
-  @callable()
-  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return showRefinementRoute(this.refinementDeps, { requestId, routeIndex });
   }
 
   /** Refinements newest first plus the debt that would open the next one (`/refine` with no args). */

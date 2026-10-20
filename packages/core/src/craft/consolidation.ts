@@ -4,53 +4,33 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import { craftScores, effectiveScore } from './ema';
+import { craftPreferences, unchosen } from './preference';
 import { isoDate, nowMs } from '../utils/date';
 import { appendMemoryNote } from '../memory/note';
-import { DEFAULT_CONFIG } from '../config';
 
-const RETIREMENT_THRESHOLD = DEFAULT_CONFIG.craftStore.retirementThreshold;
-
-const MIN_USES_BEFORE_RETIREMENT = DEFAULT_CONFIG.craftStore.minUsesBeforeRetirement;
-
+/** Retires each tool offered often that no turn chose lately, never the whole store, and says so in memory. */
 export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void> {
   const allTools = rt.craftStore.list();
 
   if (allTools.length === 0) return;
 
   const now = nowMs();
+  const rows = craftPreferences(rt.storage.sql);
 
-  const scoreMap = craftScores(rt.storage.sql);
+  const toRetire = allTools.flatMap((tool) => {
+    const row = rows.get(tool.name);
 
-  const toRetire: string[] = [];
+    return row !== undefined && unchosen(row, now) ? [tool.name] : [];
+  });
 
-  for (const tool of allTools) {
-    const scoreEntry = scoreMap.get(tool.name);
-
-    if (!scoreEntry) continue;
-
-    if (scoreEntry.uses < MIN_USES_BEFORE_RETIREMENT) continue;
-
-    const effective = effectiveScore(scoreEntry.score, scoreEntry.last_used_at, now);
-
-    if (effective < RETIREMENT_THRESHOLD) {
-      toRetire.push(tool.name);
-    }
-  }
-
-  // Never empty the store; mean effective score is non-decreasing only while non-empty.
-  // Formal spec: Evolution/FullCraftLifecycle.lean:consolidation_never_empties
-  if (toRetire.length >= allTools.length) {
-    return;
-  }
-
-  if (toRetire.length === 0) return;
+  // Never empty the store. Formal spec: Evolution/FullCraftLifecycle.lean:consolidation_never_empties
+  if (toRetire.length === 0 || toRetire.length >= allTools.length) return;
 
   for (const name of toRetire) {
     rt.craftStore.delete(name);
   }
 
-  await appendMemoryNote(rt.memory, `Retired ${String(toRetire.length)} stale tools: ${toRetire.join(', ')}`, {
+  await appendMemoryNote(rt.memory, `Retired ${String(toRetire.length)} tools no turn chose lately: ${toRetire.join(', ')}`, {
     heading: 'CraftStore consolidation', date: isoDate(),
   });
 }

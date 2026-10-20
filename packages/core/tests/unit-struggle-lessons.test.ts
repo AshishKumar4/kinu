@@ -44,6 +44,7 @@ function engine(first: Answer) {
 
       return JSON.stringify(answer);
     },
+    object: async () => { throw new Error('no schema is asked here'); },
   };
 
   const lessons = () => rt.storage.sql<{ id: string; revision: number; text: string; helpful: number; harmful: number; status: string }>`

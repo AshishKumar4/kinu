@@ -917,11 +917,12 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
       const twice = Date.now() - again;
 
       if (twice > 3_000) throw new Error(`two clicks at one point took ${String(twice)} ms: the second waited on the pointer to move`);
-      await desk('click', [GRID_POINTS[0], { button: 'right' }]);
+      // Each option answered, so a shape the click refuses fails here with its reason rather than as a screen unchanged.
+      requireEqual(await desk('click', [GRID_POINTS[0], { button: 'right' }]), null);
       await until('a right-click', (now) => now === 'right c0');
-      await desk('click', [GRID_POINTS[8], { count: 2 }]);
+      requireEqual(await desk('click', [GRID_POINTS[8], { count: 2 }]), null);
       await until('a double-click', (now) => now === 'double c8');
-      await desk('click', [GRID_POINTS[2], { hold: 'shift' }]);
+      requireEqual(await desk('click', [GRID_POINTS[2], { keys: ['shift'] }]), null);
       await until('a shift-click', (now) => now === 'click c2 1 shift');
       // Nothing it held stays down.
       await desk('click', [GRID_POINTS[6]]);
@@ -936,7 +937,7 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
       const typed = `${'y'.repeat(49)}\n${'z'.repeat(70)} echo "$DISPLAY ü"`;
       await desk('type', [typed]);
       await until('the typed text', (now) => now === `text ${JSON.stringify(typed)}`);
-      await desk('key', ['ctrl+a']);
+      await desk('key', [['ctrl', 'a']]);
       await desk('type', ['x']);
       await until('the text replaced', (now) => now === 'text "x"');
 
@@ -952,7 +953,7 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
       // A held key is held as long as asked, and let go.
       await open('hold');
-      requireEqual(await desk('key', ['w', { hold: 800 }]), null);
+      requireEqual(await desk('key', [['w'], { hold: 800 }]), null);
       const held = Number(/^held w (\d+)$/u.exec(await until('the key let go', (now) => now.startsWith('held w ')))?.[1]);
 
       if (!(held >= 700 && held <= 1_500)) throw new Error(`a key held for 800 ms was down ${String(held)} ms`);
@@ -961,7 +962,7 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
       // at once, read from X itself; the X server then has no key and no button down.
       await open('chord');
       await sh('DISPLAY=:0 xdotool mousedown 1');
-      const chording = desk('key', ['alt+shift+k', { hold: 10_000 }], 'agent', 'chord-stop');
+      const chording = desk('key', [['alt', 'shift', 'k'], { hold: 10_000 }], 'agent', 'chord-stop');
       await until('the chord held', (now) => now === 'held AltLeft KeyK ShiftLeft');
       requireEqual(await call('/agent-desktop-stop', v.object({ stopped: v.boolean() }), { stop: 'chord-stop' }, fresh), { stopped: true });
       requireEqual(v.parse(Refused, await chording).reason, 'cancelled');

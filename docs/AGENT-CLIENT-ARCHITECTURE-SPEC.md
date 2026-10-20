@@ -35,7 +35,7 @@ web UI is the canonical cloud client through `useAgent` and `useAgentChat`
 | Chat history | canonical `conversation_entries` projection via `getChatHistoryPage` | the same canonical store in the local SQLite, read for inspection; `AgentClient.history()` reads the active CLI JSONL for rendering | Cloud clients read the SDK projection; local render history remains a diagnostic view. |
 | Model selection | `actor_config` in the Durable Object | local `actor_config` | A cloud model change goes to the Durable Object. |
 | Memory, VFS, craft, scaffold | Durable Object SQLite and VFS | local SQLite and VFS | The client fetches. It never mirrors. |
-| Exploration, heads, GEPA | Durable Object tables | local tables | The adapter projects the same surfaces. |
+| Exploration, heads | Durable Object tables | local tables | The adapter projects the same surfaces. |
 | Run events, timeline, jobs | Durable Object event and job tables | local event and job tables | One presentation contract, two adapters. |
 | Credentials | `UserDO` | local config and key files | Cloud secrets never move into a client. |
 | Devices and PC tunnel | `UserDO` device hub plus consent policy | local daemon config | Device access goes through consent. |

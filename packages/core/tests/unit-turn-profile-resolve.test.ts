@@ -591,16 +591,19 @@ describe('a turn under a tier the account named itself', () => {
 describe('an account that never set its fast tier', () => {
   type Row = ModelMenu['models'][number];
 
-  const tools = ['tools' as const];
+  const tools = ['tools' as const, 'structured-outputs' as const];
 
   const row = (listedBy: string, id: string, contextWindow: number, cost: { input: number; output: number }): Row => ({
     provider: listedBy, id, capabilities: tools, contextWindow, cost,
   });
 
+  /** A row the catalog lists calling tools, without structured output. */
+  const toolsOnly = (listed: Row): Row => ({ ...listed, capabilities: ['tools'] });
+
   const WORKERS: readonly Row[] = [
     row('workers-ai', '@cf/zai-org/glm-5.3', 1_048_576, { input: 1.4, output: 4.4 }),
     row('workers-ai', '@cf/zai-org/glm-5.3-flash', 1_048_576, { input: 0.15, output: 0.5 }),
-    row('workers-ai', '@cf/qwen/qwen3-30b-a3b-fp8', 32_768, { input: 0.0509, output: 0.335 }),
+    toolsOnly(row('workers-ai', '@cf/qwen/qwen3-30b-a3b-fp8', 32_768, { input: 0.0509, output: 0.335 })),
   ];
 
   const ANTHROPIC: readonly Row[] = [
@@ -636,8 +639,31 @@ describe('an account that never set its fast tier', () => {
     expect(profileOver([...WORKERS, ...OPENAI]).tiers.fast.model).not.toMatch(/nano|qwen/u);
   });
 
+  // rc24 staging, 2026-10-20: the scripted eval account's fast tier went to granite-4.0-h-micro, the cheapest model that
+  // calls tools, which models.dev lists without structured output; sleep-time's update came back with no `rationale`
+  // in 4 of 8 tries on the turns it failed on, and its facts were never written.
+  test('never runs on a model the catalog does not list with structured output, however cheap', () => {
+    const micro = toolsOnly(row('workers-ai', '@cf/ibm-granite/granite-4.0-h-micro', 131_000, { input: 0.017, output: 0.112 }));
+
+    // Its main model was the account's own endpoint, which lists no window, so no window floor ruled the micro model out.
+    expect(profileOver([micro, ...WORKERS], { default: { model: 'openai-compat/fake-live' } }).tiers.fast.model).toBe('workers-ai/@cf/zai-org/glm-5.3-flash');
+  });
+
+  // Main, 2026-10-20: opencode lists `-free` rows at 0 and `contributor` rows below their own model; both are
+  // promotional, rate-limited and may train on what they are sent.
+  test('never picks a promotional row, however cheap; a person may still set one', () => {
+    const promotional = [
+      row('opencode', 'glm-5.3-flash-free', 1_048_576, { input: 0, output: 0 }),
+      row('opencode-go', 'muse-spark-1.3-contributor', 1_048_576, { input: 0.01, output: 0.02 }),
+    ];
+
+    expect(profileOver([...promotional, ...WORKERS]).tiers.fast.model).toBe('workers-ai/@cf/zai-org/glm-5.3-flash');
+    expect(profileOver([...promotional, ...WORKERS], { default: { model: 'workers-ai/@cf/zai-org/glm-5.3' }, fast: { model: 'opencode/glm-5.3-flash-free' } }).tiers.fast.model)
+      .toBe('opencode/glm-5.3-flash-free');
+  });
+
   test("prices a plan's model as the same model's API row, and an unpriced one after every priced", () => {
-    const plan = [{ provider: 'chatgpt', id: 'gpt-6-luna', capabilities: tools, contextWindow: 1_050_000 }];
+    const plan = [{ provider: 'chatgpt', id: 'gpt-6-luna', capabilities: ['tools' as const], contextWindow: 1_050_000 }];
 
     expect(profileOver([...plan, ...WORKERS]).tiers.fast.model).toBe('workers-ai/@cf/zai-org/glm-5.3-flash');
     expect(profileOver([...plan, ...OPENAI, ...WORKERS]).tiers.fast.model).toBe('chatgpt/gpt-6-luna');

@@ -27,13 +27,13 @@ const EMPTY: WorkspaceOverviewInputs = {
 };
 
 describe('buildWorkspaceOverview', () => {
-  test('every row the queue holds waits on the owner, a skill held for approval among them', () => {
+  test('every row the queue holds waits on the owner', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,
-      pendingActions: [action('deferred_action'), action('plan_review'), action('change_approval')],
+      pendingActions: [action('deferred_action'), action('plan_review')],
     });
 
-    expect(overview.decisionsWaiting).toBe(3);
+    expect(overview.decisionsWaiting).toBe(2);
     // What the agent did by itself never reaches the queue, so nothing marks the tile as updated.
     expect(overview.hasUpdates).toBe(false);
   });
@@ -42,13 +42,6 @@ describe('buildWorkspaceOverview', () => {
     const overview = buildWorkspaceOverview({ ...EMPTY, openQuestions: 2 });
 
     expect([overview.decisionsWaiting, rosterBucket(overview.activity, overview.decisionsWaiting)]).toEqual([2, 'needs']);
-  });
-
-  test('a proposed scaffold waits on the owner', () => {
-    const overview = buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('scaffold_version')] });
-
-    expect(overview.decisionsWaiting).toBe(1);
-    expect(overview.hasUpdates).toBe(false);
   });
 
   test('a pending consent and a pending plan each wait on the owner', () => {

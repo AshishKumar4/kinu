@@ -16,9 +16,15 @@ export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
 
 const StringSchema = v.string();
 
-/** Walks the value: a JSON-typed value can still hold `undefined` members. */
+/** Walks the value: a JSON-typed value can still hold `undefined` members. A value that is no object is answered before
+ *  the walk, which formats an issue for each value it refuses. */
 export function isJsonObject(value: JsonValue): value is JsonObject {
-  return !Array.isArray(value) && v.is(JsonObjectSchema, value);
+  return isParsedJsonObject(value) && v.is(JsonObjectSchema, value);
+}
+
+/** A JSON value that is text: asked with no schema, as a refused parse formats an issue for every value it refuses. */
+export function isJsonString(value: JsonValue): value is string {
+  return typeof value === 'string';
 }
 
 /** One-step check; only for values JSON by construction. Otherwise use {@link isJsonObject}. */

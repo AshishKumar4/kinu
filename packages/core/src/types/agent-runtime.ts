@@ -2,7 +2,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one struct the agent core receives, constructed per backend. See docs/ARCHITECTURE.md
  *  "Backends and the AgentRuntime contract". */
 
-import type { Storage, Memory, Executor, LLM, Schedule, Identity, Shell } from './primitives';
+import type { Storage, Memory, Executor, LLM, RoutedLLM, Schedule, Identity, Shell } from './primitives';
 import type { CraftStore as SqlCraftStore } from '@kinu.run/agent-utils';
 import type { ExecutionRouter } from '../execution/types';
 import type { DeviceTransport } from '../execution/device-tunnel-executor';
@@ -37,9 +37,9 @@ export interface AgentRuntime {
   craftStore: CraftStore;
   /** Cross-model judge, a different model from the explorer. */
   judgeModel?: LLM;
-  /** Same-vendor cheap tier (`MODEL_ROUTE_POLICY.fast`) for mechanical work; readers fall back
-   *  to `llm`. Never for user-visible generation or scaffold authoring. */
-  fastLlm?: LLM;
+  /** The fast tier (`MODEL_ROUTE_POLICY.fast`) for mechanical work, answering to a schema where the work reads one
+   *  back; readers of plain text fall back to `llm`. Never for user-visible generation or scaffold authoring. */
+  fastLlm?: RoutedLLM;
   /** The decision model that rates a turn from the user's reply (evolution/ratings.ts). Absent: turns stay unrated. */
   decide?: DecisionPort;
   /** Named executor providers (workspace, nimbus, sandbox, device) for the codemode sandbox. */

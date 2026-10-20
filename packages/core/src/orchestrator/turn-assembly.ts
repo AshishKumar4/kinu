@@ -83,7 +83,8 @@ export interface TurnAssemblySources {
   soul(): Promise<string | undefined>;
   agentsMd(window: ModelWindow): Promise<AgentsMdSources>;
   identity(): Promise<PromptIdentity>;
-  artifacts(): { readonly sections: Readonly<Record<string, string>>; readonly tools: ToolTextOverrides };
+  /** `versions`: the promoted versions the bodies are, which the turn's admission records. */
+  artifacts(): { readonly sections: Readonly<Record<string, string>>; readonly tools: ToolTextOverrides; readonly versions: readonly string[] };
   executors(): ReturnType<NonNullable<AgentRuntime['executionRouter']>['listExecutors']>;
   taskPlan(): TaskPlanContext | null;
   /** The conversation extensions keep their state under (`conversationKey`). */
@@ -308,6 +309,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       activated: invoked ? activatedSkillsBlock(invoked) : null,
       scaffoldSpend: sources.scaffoldSpend,
       stores: offered.stores,
+      artifactVersions: artifacts.versions,
     },
     profile, profileInputs, operation, externalTools, activeSkills: activeSkills ?? null, window,
   };

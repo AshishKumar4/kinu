@@ -15,15 +15,16 @@ import { tierRefusals } from '../src/profiles/tier-refusals';
 import type { ModelRouteResolution } from '../src/profiles/model-route';
 import { initActorDdl } from '../src/identity/schema';
 import { readActivityLog } from '../src/identity/activity-log';
-import type { LLM } from '../src/types/primitives';
+import type { RoutedLLM } from '../src/types/primitives';
 import { makeExecRaw, makeSql } from './helpers';
 
 const NO_FUNDS = JSON.stringify({ error: { message: 'Upstream request failed: Insufficient account funds', type: 'server_error' } });
 
 /** Each model answers from `answers` once `answering` settles; a missing entry answers 200. */
 function gateway(answers: ReadonlyMap<string, number>, calls: string[], answering: Promise<void> = Promise.resolve()) {
-  return (resolution: ModelRouteResolution): LLM => ({
+  return (resolution: ModelRouteResolution): RoutedLLM => ({
     async *stream() { yield ''; },
+    async object() { throw new Error('no schema is asked of this lane'); },
     async complete(prompt) {
       calls.push(resolution.model);
 
@@ -87,7 +88,7 @@ test('each call spends the owner\'s retries, none while a fallback follows, as a
   const llm = gateway(answers, []);
 
   const lane = {
-    llm: (resolution: ModelRouteResolution): LLM => {
+    llm: (resolution: ModelRouteResolution): RoutedLLM => {
       spent.push([resolution.model, resolution.retries]);
 
       return llm(resolution);
@@ -148,7 +149,10 @@ test('a spent plan on the tier is said once, where a busy one says nothing', asy
   });
 
   const lane = {
-    llm: (): LLM => ({ async *stream() { yield ''; }, complete: async (prompt) => (await generateText({ model: spent, prompt, maxRetries: 0 })).text }),
+    llm: (): RoutedLLM => ({
+      async *stream() { yield ''; }, complete: async (prompt) => (await generateText({ model: spent, prompt, maxRetries: 0 })).text,
+      async object() { throw new Error('no schema is asked of this lane'); },
+    }),
     refusals,
   };
 

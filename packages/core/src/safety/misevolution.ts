@@ -8,7 +8,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type * as acorn from 'acorn';
 import { childrenOf, constantString, isNameOnly, parseEvolvedCode, type PlacedNode } from './evolved-code';
 
-export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
+export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import' | 'skill';
 
 export interface MisevolutionViolation {
   ok: false;
@@ -63,14 +63,14 @@ const CRITERIA: readonly MisevolutionCriterion[] = [
   },
   {
     id: 'version-machinery-tamper',
-    trips: (facts) => mentions(['scaffold_versions', 'artifact_versions', 'artifact_trials'])(facts)
+    trips: (facts) => mentions(['scaffold_versions', 'artifact_versions'])(facts)
       || facts.paths.some(namesScaffoldFile),
-    reason: () => 'touches the version files or the trial tables: promotion happens only through the gated pipeline',
+    reason: () => 'touches the version files or tables: promotion happens only through the gated pipeline',
   },
   {
     id: 'rollout-config-tamper',
-    trips: mentions(['live_trials', 'trial_turns', 'changelog_seen_at']),
-    reason: () => 'references the live-trial switch, its arm records or the changelog seen-marker: evolved code must not change its own promotion gates or hide its changes from the operator',
+    trips: mentions(['changelog_seen_at']),
+    reason: () => 'references the changelog seen-marker: evolved code must not hide its changes from the operator',
   },
   {
     id: 'self-modification-reentry',
@@ -102,6 +102,8 @@ const SURFACE_CRITERIA: Readonly<Record<MisevolutionSurface, readonly string[]>>
   craft: ['network-egress', ...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
   import: ['network-egress', ...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
   craft_tool: [...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
+  // A dream's skill is a procedure in prose, which may name the network its steps use, as a crafted tool's code may.
+  skill: [...SAFETY_MACHINERY_CRITERIA, 'unanalysable-code'],
 });
 
 function tokensOf(text: string, keeps: (char: string) => boolean): string[] {

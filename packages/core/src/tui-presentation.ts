@@ -35,10 +35,10 @@ export const TUI_COMPOSER_STEERING_PLACEHOLDER = 'Type to steer the running turn
 export const CHANGE_KIND_GLYPH = {
   scaffold: '⟳',
   fact: '✦',
-  gepa: '◬',
   ratings: '✓',
   artifact: '➤',
   refinement: '⌁',
+  workspace: '⊞',
 } satisfies Record<ChangelogEntryKind, string>;
 
 /** The CLI preset imports these, so an advertised hint can only change with its binding. */

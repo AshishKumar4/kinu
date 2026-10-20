@@ -18,57 +18,47 @@ describe('CraftStore consolidation', () => {
     expect(rt.craftStore.list()).toHaveLength(0);
   });
 
-  test('retires stale tools (low effective score, ≥2 uses)', async () => {
+  test('retires a tool offered 50 turns that no turn chose in 30 days, and says so in memory', async () => {
     const { rt } = createTestRuntime();
     initCraftedToolsTables(rt.storage.sql);
+    const monthAgo = Date.now() - 31 * 86_400_000;
 
-    // 120 days old → effective ≈ 0.0625
-    rt.craftStore.create({ name: 'stale_tool', description: 'old', code: 'fn()' });
-    const hundredTwentyDaysAgo = Date.now() - 120 * 86_400_000;
-        void rt.storage.sql`UPDATE crafted_tools SET score = 0.5, uses = 5, last_used_at = ${hundredTwentyDaysAgo} WHERE name = 'stale_tool'`;
-
-    rt.craftStore.create({ name: 'fresh_tool', description: 'new', code: 'fn()' });
-        void rt.storage.sql`UPDATE crafted_tools SET score = 0.8, uses = 3, last_used_at = ${Date.now()} WHERE name = 'fresh_tool'`;
+    rt.craftStore.create({ name: 'unchosen', description: 'old', code: 'fn()' });
+    void rt.storage.sql`UPDATE crafted_tools SET offered = 50, chosen = 2, last_used_at = ${monthAgo} WHERE name = 'unchosen'`;
+    rt.craftStore.create({ name: 'chosen_lately', description: 'new', code: 'fn()' });
+    void rt.storage.sql`UPDATE crafted_tools SET offered = 80, chosen = 3, last_used_at = ${Date.now()} WHERE name = 'chosen_lately'`;
 
     await periodicCraftConsolidation(rt);
 
-    const remaining = rt.craftStore.list();
-    expect(remaining).toHaveLength(1);
-    expect(remaining[0].name).toBe('fresh_tool');
+    expect(rt.craftStore.list().map((tool) => tool.name)).toEqual(['chosen_lately']);
     // core-rest review P1-2: the record was all heading and no body, so the memory reader dropped it.
-    expect(parseMemoryNotes(await rt.memory.read(MEMORY_PATH) ?? '').map((note) => note.content)).toContain('Retired 1 stale tools: stale_tool');
+    expect(parseMemoryNotes(await rt.memory.read(MEMORY_PATH) ?? '').map((note) => note.content)).toContain('Retired 1 tools no turn chose lately: unchosen');
   });
 
   test('BUG-2: does NOT retire all tools when all are stale', async () => {
     const { rt } = createTestRuntime();
     initCraftedToolsTables(rt.storage.sql);
 
-    const veryOld = Date.now() - 365 * 86_400_000;
-    rt.craftStore.create({ name: 'stale1', description: 'old', code: 'fn()' });
-        void rt.storage.sql`UPDATE crafted_tools SET score = 0.3, uses = 5, last_used_at = ${veryOld} WHERE name = 'stale1'`;
-    rt.craftStore.create({ name: 'stale2', description: 'old2', code: 'fn()' });
-        void rt.storage.sql`UPDATE crafted_tools SET score = 0.2, uses = 3, last_used_at = ${veryOld} WHERE name = 'stale2'`;
+    for (const name of ['stale1', 'stale2']) {
+      rt.craftStore.create({ name, description: name, code: 'fn()' });
+      void rt.storage.sql`UPDATE crafted_tools SET offered = 60 WHERE name = ${name}`;
+    }
 
     await periodicCraftConsolidation(rt);
 
-    const remaining = rt.craftStore.list();
-    expect(remaining.length).toBeGreaterThan(0);
+    expect(rt.craftStore.list()).toHaveLength(2);
   });
 
-  test('skips tools with fewer than 2 uses', async () => {
+  test('a tool offered fewer than 50 turns stays, however long it waits', async () => {
     const { rt } = createTestRuntime();
     initCraftedToolsTables(rt.storage.sql);
 
-    const old = Date.now() - 120 * 86_400_000;
-    rt.craftStore.create({ name: 'low_use', description: 'x', code: 'fn()' });
-        void rt.storage.sql`UPDATE crafted_tools SET score = 0.5, uses = 1, last_used_at = ${old} WHERE name = 'low_use'`;
-
+    rt.craftStore.create({ name: 'new_tool', description: 'x', code: 'fn()' });
+    void rt.storage.sql`UPDATE crafted_tools SET offered = 49 WHERE name = 'new_tool'`;
     rt.craftStore.create({ name: 'fresh', description: 'y', code: 'fn()' });
-        void rt.storage.sql`UPDATE crafted_tools SET score = 0.9, uses = 10, last_used_at = ${Date.now()} WHERE name = 'fresh'`;
 
     await periodicCraftConsolidation(rt);
 
-    // 1 use is below the 2-use minimum
-    expect(rt.craftStore.list().map((tool) => tool.name).sort()).toEqual(['fresh', 'low_use']);
+    expect(rt.craftStore.list().map((tool) => tool.name).sort()).toEqual(['fresh', 'new_tool']);
   });
 });

@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
   FloppyDiskIcon, BrainIcon, CheckIcon,
-  ShieldIcon, KeyIcon, SparkleIcon,
+  ShieldIcon, KeyIcon,
   DownloadSimpleIcon, EyeIcon, ChatsCircleIcon, TrashIcon,
 } from "@phosphor-icons/react";
 import {
@@ -16,7 +16,7 @@ import {
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
-import type { AgentStatus, WorkspaceNotice } from "@kinu.run/core";
+import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -84,6 +84,8 @@ function FieldState<T>({ field, what, onRetry, children }: {
   return <CardSlot resource={field.resource} what={what} onRetry={onRetry}>{children}</CardSlot>;
 }
 
+const LAYOUT_CHOICES: { id: WorkspaceLayout; label: string }[] = [{ id: "workbench", label: "Workbench" }, { id: "focus", label: "Focus" }];
+
 const ADVISOR_SWITCH = [{ id: "off", label: "Off" }, { id: "on", label: "On" }] as const;
 
 function saveLabel(saving: boolean, saved: boolean): string {
@@ -143,6 +145,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   const displayName = useSettingField<string>();
   const soul = useSettingField<string>();
   const approval = useSettingField<ShellApprovalMode>();
+  const layout = useSettingField<WorkspaceLayout>();
   const advisor = useSettingField<AdvisorConfig>();
 
   const [saving, setSaving] = useState(false);
@@ -161,6 +164,13 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
     if (status) hydrateSoul(status.soul || "");
     else if (snapshotError) failSoul({ cause: snapshotError });
   }, [status, snapshotError, hydrateSoul, failSoul]);
+
+  const { hydrate: hydrateLayout, fail: failLayout } = layout;
+
+  useEffect(() => {
+    if (status) hydrateLayout(status.layout);
+    else if (snapshotError) failLayout({ cause: snapshotError });
+  }, [status, snapshotError, hydrateLayout, failLayout]);
 
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
@@ -197,7 +207,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
     loadRpcFields();
   }, [connectionStatus, loadRpcFields]);
 
-  const dirty = displayName.dirty || soul.dirty || approval.dirty || advisor.dirty;
+  const dirty = displayName.dirty || soul.dirty || layout.dirty || approval.dirty || advisor.dirty;
 
   const save = useCallback(() => detach(Effect.gen(function* () {
     // Only edited fields are written; the form has no authority over fields still loading or failed.
@@ -220,6 +230,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
       return titled;
     });
     write(soul, (text) => rpc("setSoul", [text]));
+    write(layout, (chosen) => rpc("setLayout", [chosen]));
     write(approval, (mode) => rpc("setShellApprovalMode", [mode]));
     write(advisor, (config) => rpc("setEvolutionConfig", [config]));
 
@@ -237,7 +248,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
     }), showing(setErr)), Effect.sync(() => {
       setSaving(false);
     }));
-  })), [rpc, rename, agentId, displayName, soul, approval, advisor]);
+  })), [rpc, rename, agentId, displayName, soul, layout, approval, advisor]);
 
   if (connectionStatus !== "connected") {
     return (
@@ -278,6 +289,15 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
             <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
               {(value) => (
                 <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
+              )}
+            </FieldState>
+          </Field>
+          <Field label="Layout" hint="Focus shows the chat alone; its chats, agents and inspector open from the bar.">
+            <FieldState field={layout} what="the layout" onRetry={retryLoad}>
+              {(value) => (
+                <div className="flex">
+                  <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
+                </div>
               )}
             </FieldState>
           </Field>
@@ -347,8 +367,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         <div className="p-card border p-border p-5" id="automations"><WorkspaceAutomations rpc={rpc} workspace={agentId} /></div>
 
         <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
-
-        <GepaOptimizationCard rpc={rpc} />
 
         <Card title="Main's conversation" icon={ChatsCircleIcon}>
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -438,6 +456,10 @@ const DECISION_WORD: Record<InstructionSourceRow["decision"], string> = {
   none: "not decided",
 };
 
+function decisionWord(row: InstructionSourceRow): string {
+  return row.byDream ? "added by a dream" : DECISION_WORD[row.decision];
+}
+
 /** Approval binds the exact bytes: any later edit stops matching the digest and drops the file back to reference material. */
 function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -520,7 +542,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
         <div className="space-y-1">
           {rows.map((row) => {
             const opened = open?.path === row.path ? open : null;
-            const state = row.reason === undefined ? DECISION_WORD[row.decision] : `not readable: ${row.reason}`;
+            const state = row.reason === undefined ? decisionWord(row) : `not readable: ${row.reason}`;
             const followed = row.decision === "approved";
             const readWord = opened === null ? "Read" : "Hide";
 
@@ -649,44 +671,6 @@ function WorkspaceBackupCard({
       </FilledButton>
       {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
       {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
-    </Card>
-  );
-}
-
-function GepaOptimizationCard({
-  rpc,
-}: {
-  rpc: WorkspaceRpc;
-}) {
-  const [running, setRunning] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const run = useCallback(() => detach(Effect.gen(function* () {
-    setRunning(true);
-    setMsg('Searching for a better agent loop. This can take a few minutes.');
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const r = yield* Effect.promise(() => rpc('runOptimization', []));
-
-      if (r.kind === 'idle') setMsg('No low-rated turns in the last 14 days to learn from.');
-      else if (r.version !== null) setMsg(`Proposed scaffold v${r.version} (${r.detail}). Promote it in the Agent tab, under How it's changing.`);
-      else setMsg(`No edit passed: ${r.detail}.`);
-    }), showing((chain) => {
-      setMsg(`Optimisation failed: ${chain}`);
-    })), Effect.sync(() => {
-      setRunning(false);
-    }));
-  })), [rpc]);
-
-  return (
-    <Card title="Scaffold self-tuning" icon={SparkleIcon}>
-      <p className="p-meta p-text-3">
-        Searches for a better agent loop, judged against your recent low-rated and satisfied turns without
-        running it, and may propose one for you to promote. Each run makes several model calls. Past runs and what
-        each found are in a workspace's Agent tab, under How it's changing.
-      </p>
-      <FilledButton onClick={run} disabled={running}>{running ? 'Optimising…' : 'Run optimisation'}</FilledButton>
-      {msg && <div className="p-meta p-text-2 mt-1">{msg}</div>}
     </Card>
   );
 }

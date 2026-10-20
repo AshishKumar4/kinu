@@ -967,6 +967,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     workingContext: (...args) => settle(through(() => isolate.workingContext(...args))),
     turnRequests: (...args) => settle(through(() => isolate.turnRequests(...args))),
     turnRequest: (...args) => settle(through(() => isolate.turnRequest(...args))),
+    recordedTurns: (...args) => settle(through(() => isolate.recordedTurns(...args))),
     spend: (...args) => settle(through(() => isolate.spend(...args))),
     context: (...args) => settle(through(() => isolate.context(...args))),
     searchConversations: (...args) => settle(through(() => isolate.searchConversations(...args))),

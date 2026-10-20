@@ -7,12 +7,11 @@ import { compactToolCall } from '../src/evolution/tool-call-record';
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { listLessons } from '../src/evolution/lessons';
+import { listTurnRatings } from '../src/evolution/ratings';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { DecisionPort } from '../src/providers/decision-model';
 import { createTestRuntime } from './helpers';
 import { historyTurnPairs } from '../src/identity/conversation-store';
-
-const REFLECTION = 'When the user names an API, call that API and no other.';
 
 function turn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
@@ -34,24 +33,22 @@ function decide(score: number, corrected: number, wrong: string): DecisionPort {
 }
 
 describe('a turn is judged by the user reply alone', () => {
-  test('a turn nobody answered moves no crafted tool score, however cleanly its tools ran', async () => {
+  test('a turn nobody answered credits no crafted tool, however cleanly its tools ran', async () => {
     const { rt, stores } = createTestRuntime();
     rt.craftStore.create({ name: 'export_report', description: 'exports', code: 'async () => "ok"' });
-    const before = rt.storage.sql<{ score: number }>`SELECT score FROM crafted_tools WHERE name = 'export_report'`[0]?.score;
 
     await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), null);
 
-    expect(rt.storage.sql<{ score: number }>`SELECT score FROM crafted_tools WHERE name = 'export_report'`[0]?.score)
-      .toBe(before);
+    expect(rt.storage.sql<{ rated: number }>`SELECT rated FROM crafted_tools WHERE name = 'export_report'`[0]?.rated).toBe(0);
   });
 
-  test("a reply that corrects the turn is rated low and the user's correction corroborates its lesson", async () => {
-    const { rt, stores } = createTestRuntime({ llmResponses: { 'should be done differently next time': REFLECTION } });
+  test('a reply that corrects the turn is rated low on what went wrong, and leaves the lesson to the dream', async () => {
+    const { rt, stores } = createTestRuntime();
     Object.assign(rt, { decide: decide(0.2, 0.95, 'misunderstood') });
 
     await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), 'No, I said the streaming API. Do it again.');
 
-    expect(listLessons(rt.storage.sql, rt.actor).map(({ text, status }) => ({ text, status })))
-      .toEqual([{ text: REFLECTION, status: 'corroborated' }]);
+    expect(listTurnRatings(rt.storage.sql, rt.actor)).toMatchObject([{ turnId: 'u-1', source: 'model', wrong: 'misunderstood' }]);
+    expect(listLessons(rt.storage.sql, rt.actor)).toEqual([]);
   });
 });

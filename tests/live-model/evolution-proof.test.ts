@@ -606,20 +606,20 @@ describe('Evolution Proof', () => {
     //
     // So the artifact is the one evolution produces from an ACCEPTED turn:
     // extractPattern generalizes the turn's tool calls and upsertCraftedTool
-    // admits the result only after compiling it to a callable and seeding the
-    // EMA row (craft/conflict.ts:90-126). Asserted per tool, because a count
+    // admits the result only after compiling it to a callable
+    // (craft/conflict.ts, upsertCraftedTool). Asserted per tool, because a count
     // alone is what let a stored "tool" whose body was `await ({ runtime })(…)`
     // read as an artifact.
     const crafted = rt.craftStore.list();
 
-    const scores = new Map(rt.storage.sql<{ tool_name: string; score: number }>`
-      SELECT tool_name, score FROM craft_scores`.map(r => [r.tool_name, r.score]));
+    const chosen = new Map(rt.storage.sql<{ name: string; chosen: number }>`
+      SELECT name, chosen FROM crafted_tools`.map(r => [r.name, r.chosen]));
 
     console.log(`    Crafted tools: ${crafted.length}`);
     expect(crafted.length).toBeGreaterThan(0);
 
     for (const t of crafted) {
-      console.log(`      ${t.name} (score ${String(scores.get(t.name))}): ${t.description.slice(0, 60)}`);
+      console.log(`      ${t.name} (chosen ${String(chosen.get(t.name))}): ${t.description.slice(0, 60)}`);
       console.log(`        code: ${t.code.slice(0, 80)}...`);
       // Named, so a later turn can ask for it by name.
       expect(t.name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
@@ -628,23 +628,17 @@ describe('Evolution Proof', () => {
       // is what makes "3 crafted tools" a claim about artifacts rather than
       // about rows.
       expect(new Function(`return (${t.code})`)()).toBeInstanceOf(Function);
-      // Scored, or the effective-score floor exempts it from retirement
-      // forever however it behaves (craft/ema.ts:39-42).
-      expect(scores.has(t.name)).toBe(true);
+      // Counted on its own row, which consolidation reads to retire a tool
+      // no turn chooses (craft/preference.ts).
+      expect(chosen.has(t.name)).toBe(true);
     }
 
-    // Memory itself: the birth record survived the reopen, and carries no
-    // lesson or reflection heading, because this window corroborated none. The
-    // absence is asserted beside the reason for it rather than left to a
-    // character count that cannot tell it from a truncated write.
+    // Memory itself: the birth record survived the reopen.
     const memory = await rt.memory.read('memory/MEMORY.md');
 
     if (!memory) throw new Error('the workspace lost memory/MEMORY.md between birth and this read');
     console.log(`    Memory (${memory.length} chars): ${JSON.stringify(memory.slice(0, 120))}`);
     expect(memory).toContain('# evolution-proof');
-    expect(rt.storage.sql<{ source: string }>`
-      SELECT source FROM lessons WHERE actor_id = ${rt.actor.actorId}
-        AND source IN ('turn_reflection', 'session_reflection')`).toEqual([]);
 
     // Indexing rides an append, so an all-accepted window indexes nothing —
     // reported, and the reason is the line above.

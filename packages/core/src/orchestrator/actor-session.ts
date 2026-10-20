@@ -124,6 +124,8 @@ export interface ActorExecutionInput {
   /** The store operations `chat.tools` run, which its scaffold's machines run too; null where this session holds no
    *  machine (an agent's isolate, whose programs run on the workspace). */
   readonly stores: ServedStores | null;
+  /** `<artifactId>@<version>` of each promoted text the turn assembled from, recorded once on its admission. */
+  readonly artifactVersions?: readonly string[];
 }
 
 const RequestCacheSchema = v.looseObject({ cache: v.optional(PromptCacheRouteSchema) });
@@ -339,7 +341,7 @@ export class ActorSession {
     return this.lastStep()?.recordedAt ?? null;
   }
 
-  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and a live trial's segment both use. */
+  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and staged evolution both use. */
   promptCacheCold(keptAliveUntil: number | null): boolean {
     const last = this.lastStep();
 
@@ -794,6 +796,8 @@ export class ActorSession {
       program = prepared.program;
       const claim = await this.admitClaim(reserved, program, prepared.selection, input);
       active.claim = claim;
+      this.orchestrator.acc.artifactVersions = input.artifactVersions ?? [];
+      this.orchestrator.acc.scaffoldVersion = program.kind === 'scaffold' ? program.version : 0;
 
       active.trace = this.options.turns?.().admitted({ turnId: claim.turnId, epoch: claim.epoch }, active.startedAt, (span) => {
         span.setAttribute('kinu.turn.mode', this.mode);
@@ -975,8 +979,9 @@ export class ActorSession {
           snapshot: () => {
             const context = this.stepContext(input.dynamic, profile, tools);
 
-            // The turn scores only the lessons it was shown.
+            // The turn scores only the lessons it was shown, and counts only the crafted tools it was offered.
             this.orchestrator.acc.noteLessonsShown(context.toolLessons ?? []);
+            this.orchestrator.acc.noteCraftedOffered(context.craftedTools ?? []);
 
             return context;
           },
@@ -1070,6 +1075,8 @@ export class ActorSession {
         break;
       case 'error': {
         this.orchestrator.acc.hadError = true;
+
+        if (event.thrown) this.orchestrator.acc.scaffoldThrew ??= event.message;
 
         // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
         // First failure wins; an abort is not one.

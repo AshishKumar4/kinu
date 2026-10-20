@@ -12,8 +12,23 @@ import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 import { WORKSPACE_MISSION_ID } from "@/components/workspaces/NewWorkspaceButton";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
+import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
+import WorkspacePage from "./WorkspacePage";
 
+/** Home: the owner's Personal assistant's chat once they have one; until then, a new workspace's mission. A read that
+ *  fails shows the mission too, so Home never waits on it. */
 export default function HomePage() {
+  const assistant = useInstalledAssistant();
+
+  if (assistant.status === "loading") return null;
+
+  // The assistant installs in `focus`: drawn so from the first frame, not after the workspace's status arrives.
+  if (assistant.status === "ready" && assistant.value !== null) return <WorkspacePage workspace={assistant.value} layout="focus" />;
+
+  return <MissionHome />;
+}
+
+function MissionHome() {
   const [mission, setMission] = useState("");
   const { entries: workspaces, error: rosterError } = useWorkspaceRoster();
   const listFailed = rosterError !== null;

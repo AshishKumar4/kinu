@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
@@ -530,6 +530,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
   protected abstract actorKind(): AgentKind;
+  /** The workspace agent's newest answered turns, which a pending scaffold is replayed against. */
+  abstract recordedTurns(limit?: number): Promise<RecordedTurn[]>;
 
   /** The workspace whose exec planes this actor rides; a facet actor overrides with its parent's. */
   protected workspaceName(): string { return this.name; }
@@ -1349,7 +1351,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get lanes(): EvolutionLanes {
     this._lanes ??= new EvolutionLanes({
       engine: this.engine, budget: this.budget,
-      // Runs on the single off-turn cadence pass, beside the promotion gate's trials.
+      // Runs on the single off-turn cadence pass, after the session chain.
       refinementLane: async () => { await refinementPass(this.refinementDeps); },
     });
 
@@ -1627,13 +1629,15 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /** On the substrate like `scaffoldControl`: facets accrue evolution debt too. */
+  /** On the substrate like `scaffoldControl`. Only the workspace agent dreams: a facet's engine is built disabled. */
   protected get refinementDeps(): RefinementDeps {
     return {
       control: this.scaffoldControl,
       facts: this.facts,
       refiner: this.temporaryAgentPort(),
       approvals: this.instructionApprovals(),
+      skillsVfs: this.rt.storage.vfs,
+      recordedTurns: () => this.recordedTurns(),
     };
   }
 

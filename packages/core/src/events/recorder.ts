@@ -112,7 +112,10 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('head_abandoned'), rootId: v.string(),
     headCount: v.number(), abandoned: v.number(), rationale: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('scaffold_promotion'), fromVersion: v.number(), toVersion: v.number() }),
-  v.object({ ...BaseFields, type: v.literal('scaffold_rollback'), fromVersion: v.number(), toVersion: v.number() }),
+  /** `reason`: why, when a replay or the watch decided it rather than the owner. */
+  v.object({ ...BaseFields, type: v.literal('scaffold_rollback'), fromVersion: v.number(), toVersion: v.number(), reason: v.optional(v.string()) }),
+  /** A pending version passed its replay against `turns` recorded turns; the next cold turn promotes it. */
+  v.object({ ...BaseFields, type: v.literal('scaffold_replayed'), version: v.number(), turns: v.number() }),
   v.object({ ...BaseFields, type: v.literal('memory_write'), path: v.string(), bytes: v.number() }),
   v.object({ ...BaseFields, type: v.literal('db_op'), op: v.picklist(APP_MUTATIONS),
     table: v.string(), scope: v.picklist(APP_TABLE_SCOPES), rowsAffected: v.number(),
@@ -140,7 +143,9 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('craft_cycle'), crafted: v.pipe(v.array(v.string()), v.readonly()),
     invoked: v.pipe(v.array(v.string()), v.readonly()), reused: v.pipe(v.array(v.string()), v.readonly()), returned: v.number(),
-    raised: v.number(), dropped: v.pipe(v.array(v.string()), v.readonly()) }),
+    raised: v.number(),
+    /** Tools a raise this turn marked broken; absent on a cycle recorded before the flag. */
+    broke: v.optional(v.pipe(v.array(v.string()), v.readonly())) }),
   v.object({ ...BaseFields, type: v.literal('execution_recovery'), recoveries: v.pipe(v.array(v.object({
     tool: v.string(), failures: v.number(), failedSignature: v.string(),
   })), v.readonly()) }),
@@ -488,7 +493,7 @@ export class RunEventRecorder {
       if (stored === undefined) return Effect.fail(new KinuError('io', 'a persisted run event returned no row'));
 
       return Effect.sync(() => {
-        if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback') markStoreChanged(this.sql);
+        if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback' || ev.type === 'scaffold_replayed') markStoreChanged(this.sql);
 
         // The event just written is this isolate's typed value; only a read from storage is parsed (parseStoredRunEvent).
         const event: RunEvent = { ...ev, eventIndex: stored.event_index };

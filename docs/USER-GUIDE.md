@@ -28,12 +28,14 @@ You can have both, and you can move a cloud workspace onto your machine later
 (§7). Both run the same core, but they are hosted differently and some
 features exist only in one.
 
-A cloud workspace's main agent can also propose a new workspace
-(`agent.proposeWorkspace`): a name, a brief that becomes its mission, and the
-rest of its soul. Nothing exists until you approve it, which shows the SOUL.md
-approving writes. Approved, it is created under your account as if you had
-created it, its first turn acts on the brief, and the agent that asked is told
-its link. Declined, nothing is created and the agent is told so.
+A cloud workspace's main agent can also create a new workspace in your account
+(`agent.createWorkspace`): a name, a brief that becomes its mission, and the
+rest of its soul. It is created at once, as if you had created it, with nothing
+asked: what stays inside your Kinu is the agent's to do. Its first turn acts on
+the brief, the agent that made it has its link, and the agent's Changelog
+records it with a way to open it. `agents.hireWorkspace` does the same and hands
+the new workspace its first task. What leaves your Kinu (mail, a write to
+another service, a deploy) still waits for your answer.
 
 Whatever waits on your answer (a command the agent wants to run outside its
 own workspace, a file it wants to replace, a machine it wants to use, a

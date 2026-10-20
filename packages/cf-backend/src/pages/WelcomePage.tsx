@@ -8,7 +8,7 @@ import {
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
 import {
-  APP_ROUTES, ONBOARDING_STEPS,
+  APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID,
 } from "@kinu.run/core";
 import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -17,8 +17,10 @@ import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
+import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
 import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
+import { installBlueprint } from "@/lib/explore-api";
 import { useAccount } from "@/hooks/use-account";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { signedInWith } from "@/lib/shared-api";
@@ -91,6 +93,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
+  // Chosen when the step opens: Next installs it on Finish, and Not now leaves Home as it is.
+  const [assistant, setAssistant] = useState<AssistantChoice>(DEFAULT_ASSISTANT);
   // Card height follows the active panel, observed; `h` 0 means unmeasured (no inline height).
   const stepSize = useElementSize();
   const stepHeight = stepSize.size.h === 0 ? null : stepSize.size.h;
@@ -120,6 +124,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     setError(null);
 
     return yield* Effect.catchCause(Effect.gen(function* () {
+      // The assistant first: Home is its chat the moment setup ends.
+      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { agent: assistant.name, brief: assistant.brief, home: true }));
       const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 
@@ -131,7 +137,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       setError(chain);
       setBusy(false);
     }));
-  })), [account, navigate]);
+  })), [account, navigate, assistant]);
 
   const next = useCallback(() => settle(Effect.gen(function* () {
     setError(null);
@@ -224,6 +230,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                     {i <= reached && <McpServersSection />}
                   </div>
                 )}
+
+                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} />}
 
                 {s.id === 'showcase' && <ShowcaseStep revealed={revealed} />}
               </div>

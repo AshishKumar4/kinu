@@ -36,8 +36,6 @@ const SummaryFieldsSchema = v.looseObject({
   [TASK_REMINDER_OPEN_KEY]: v.optional(v.array(v.string())),
   approved: v.optional(Count),
   denied: v.optional(Count),
-  decision: v.optional(v.string()),
-  name: v.optional(v.string()),
   what: v.optional(v.nullable(v.string())),
   runs: v.optional(v.array(v.string())),
   heads: v.optional(Count),
@@ -76,8 +74,6 @@ function taskReminder(fields: SummaryFields): EventSummary {
 
   return withLine('Task reminder', titles.length === 0 ? undefined : `${plural(titles.length, 'open task')}: ${titles.join(' · ')}`);
 }
-
-const PROPOSAL_DECISIONS = new Map([['created', 'created'], ['declined', 'declined'], ['failed', 'creation failed']]);
 
 /** What each of the container's incident stages was, by devbox's `IncidentStage`. */
 const SANDBOX_STAGES = new Map([
@@ -118,7 +114,6 @@ const SUMMARIES = new Map<string, (fields: SummaryFields) => EventSummary>([
   ['device_consent', (fields) => withLine('Device use', joined([
     counted(fields.approved, (count) => `${String(count)} approved`), counted(fields.denied, (count) => `${String(count)} denied`),
   ]))],
-  ['workspace_proposal', (fields) => withLine('Workspace proposal', joined([fields.name, PROPOSAL_DECISIONS.get(fields.decision ?? '')]))],
   ['sandbox_lifecycle_failure', (fields) => withLine('Computer', SANDBOX_STAGES.get(fields.stage ?? ''), {
     ...(fields.reason !== undefined && { detail: fields.reason }),
   })],

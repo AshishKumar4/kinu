@@ -222,6 +222,8 @@ export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, worksp
 
 export { EvolutionEngine } from './evolution/engine';
 
+export { createStructuredDecider } from './evolution/structured-decision';
+
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
@@ -237,14 +239,14 @@ export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/q
 // Turn ratings: the one signal evolution decides by.
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
-  listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
+  listTurnRatings, ratingOf, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
   retractThumbs, listThumbs, satisfactionInterval, qualitySeries, qualityWindow, renderQualitySeries, isTrivialTurn,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
 
 export {
-  recordLesson, listLessons, corroborateLessonsForTurn, initLessonTables,
+  recordLesson, listLessons, initLessonTables,
 } from './evolution/lessons';
 
 export {
@@ -262,7 +264,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  awaitingTheOwner, buildChangelog, countUnseenChangelog,
+  buildChangelog, countUnseenChangelog,
   revertChangelogEntryById, ChangelogEntrySchema, ChangelogRevertResultSchema,
   type ChangelogEntry, type ChangelogEntryKind,
   type ChangelogRevertResult,
@@ -343,6 +345,8 @@ export {
   GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
   GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
+  EXPLORE_KINDS, ExplorePageSchema, BlueprintPageSchema, explorePath, workspaceBlueprintPath,
+  type ExploreKind, type ExploreItem, type ExplorePage, type WorkspaceCard, type BlueprintPage,
 } from './slates/gallery-api';
 
 // The part and consent contracts the client parses: `./slates` pulls the server's runtime, so the browser reads them here.
@@ -493,7 +497,7 @@ export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
 export type { LLMProviderConfig } from './llm';
 
 export {
-  createWorkersAIEmbedder, type WorkersAiWebSearch, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+  createWorkersAIEmbedder, type WorkersAiWebSearch, generateObjectReported, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
 } from './providers/model-invocation';
 
 // Every surface that counts tokens speaks this usage report.
@@ -1025,10 +1029,17 @@ export {
   type PendingScaffold, type ScaffoldDecisionEvents,
 } from './scaffold/versions';
 
-// CraftStore quality
-export { effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
+// Crafted tools by preference
+export { craftPreference, craftPreferences, rankByPreference, type CraftPreferenceRow } from './craft/preference';
 
-export { CRAFT_NEUTRAL_PRIOR, type CraftCall } from './craft/in-episode';
+// Scaffold replay against recorded turns
+export { activateReplayedScaffold } from './scaffold/replay-gate';
+
+export {
+  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn, type ReplayVerdict,
+} from './scaffold/replay';
+
+export { type CraftCall } from './craft/in-episode';
 
 export { TurnCraftLedger } from './craft/turn-ledger';
 
@@ -1560,9 +1571,9 @@ export {
 } from './safety/device-consent';
 
 export {
-  WorkspaceProposals, WorkspaceProposalStore, initWorkspaceProposalsTable, proposedSoul, type WorkspaceProposal,
-  type WorkspaceProposalAnswer, type WorkspaceProposalInput, type WorkspaceProposalReceipt,
-} from './safety/workspace-proposals';
+  AgentWorkspaceStore, createAgentWorkspace, initAgentWorkspacesTable,
+  type AgentWorkspace, type AgentWorkspaceDeps, type AgentWorkspaceInput, type AgentWorkspaceReceipt,
+} from './identity/agent-workspaces';
 
 export {
   SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern, type SecretProvider,
@@ -1782,7 +1793,8 @@ export { activeOperationProfile, captureOperationProfile, currentOperationProfil
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
 export {
-  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type RouteModelBinder, type RouteModelBinding,
+  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type ModelLaneComponents, type RouteModelBinder,
+  type RouteModelBinding,
 } from './profiles/model-lane';
 
 export { tierRefusals } from './profiles/tier-refusals';
@@ -1842,26 +1854,21 @@ export type {
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
-// GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
+// The scaffold's versions.
 export {
-  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
+  getEvolutionStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runScaffoldOnce,
   type EvolutionStatus, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
+  type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
-// The proposer, its artifact store and live trials (docs/EVOLUTION-REDESIGN.md §3-5).
+// The artifact store a dream's section and tool edits stage in (docs/EVOLUTION-REDESIGN.md §3-4).
 export {
-  artifactOverrides, artifactVersion, bundledArtifact, currentArtifacts, listArtifactVersions,
-  sectionArtifact, toolArtifact, writeCandidate,
+  artifactOverrides, artifactVersion, currentArtifacts, listArtifactVersions,
+  sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
   type ArtifactOverrides, type ArtifactStatus, type ArtifactVersion,
 } from './evolution/artifacts';
 
-export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
-
-export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
-
-export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
 
 export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
@@ -1881,29 +1888,10 @@ export {
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
 export {
-  listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+  listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
-export {
-  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute, RefinementDecisionResultSchema, StagedSkillResultSchema,
-  type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult, type StagedSkillView,
-} from './evolution/refinement-skill';
-
-export {
-  runGepa,
-  DEFAULT_GEPA_BUDGET,
-  initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks, aggregateScore,
-} from './evolution/gepa/index';
-
-export type {
-  EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
-  GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
-  GepaIterationState, GepaProgressHooks, GepaResult,
-  GepaRunSummary, GepaStopReason,
-  GepaParetoEntry,
-} from './evolution/gepa/index';
+export { activateDreamSkills } from './evolution/refinement-skill';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
@@ -2064,6 +2052,15 @@ export type {
 
 export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage, type ChatWindow } from './read-models/status';
 
+export { WORKSPACE_LAYOUTS, WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
+
+export {
+  WorkspaceBlueprintSchema, blueprintPage, blueprintSeed,
+  type BlueprintInstall, type BlueprintNeed, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
+} from './blueprints/workspace';
+
+export { PERSONAL_ASSISTANT_ID, kinuBlueprint, kinuListings } from './blueprints/kinu';
+
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
@@ -2150,7 +2147,7 @@ export {
 export { isAdvisorSeverity } from './types/advisor';
 
 export {
-  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 
 export { EvolutionChangelogViewSchema, type EvolutionChangelogView } from './read-models/evolution-views';

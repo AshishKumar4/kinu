@@ -1,12 +1,12 @@
 /**
  * Crafting on the CLI, through real turns over one workspace: tools made in a turn read and write its files and are
- * called at the next step, one that keeps raising is scored out before the turn ends, a swarm node's eval sees the
- * same workspace-wide tools and the same retirement, and with learning off a tool still works and nothing is scored.
+ * called at the next step, one that keeps raising is marked broken and says so until the agent retires it, a swarm
+ * node's eval sees the same workspace-wide tools and the same retirement, and with learning off a tool still works and
+ * nothing is counted.
  */
 import { expect, test } from 'bun:test';
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
-import * as v from 'valibot';
 import { codemodeSurface, initWorkspaceSchema, narrowToolSurface, toolsInWorkMode, type JsonValue, type RunEvent, type WebSearchProvider } from '@kinu.run/core';
 import { present, scratchDir, scratchPath, toolExecute, workspaceDatabase, servedStoresOf } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
@@ -56,7 +56,9 @@ const TURNS = {
     'return await tools.brokenIt();',
     'return await tools.brokenIt();',
     'return await tools.brokenIt();',
-    // Under the injection floor the sandbox no longer binds the tool, a different failure from it throwing.
+    // A broken tool stays bound: its declaration says it is broken, and the agent decides.
+    'return typeof tools.brokenIt;',
+    "return await workspace.retireTool('brokenIt');",
     'return typeof tools.brokenIt;',
   ],
   'Triple it, with learning off.': [`${create('tripleIt', 'async (n) => n * 3')} return 'made';`, 'return await tools.tripleIt(7);'],
@@ -68,11 +70,12 @@ function userText(prompt: LanguageModelV2Prompt): string[] {
   return prompt.flatMap((message) => (message.role === 'user' ? message.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])) : []));
 }
 
-function crafting(): TestLanguageModelV2 {
+function crafting(prompts: string[] = []): TestLanguageModelV2 {
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async ({ prompt }) => {
+      prompts.push(JSON.stringify(prompt));
       const opened = prompt.map((message) => message.role === 'user' && userText([message]).some((text) => programsOf.has(text))).lastIndexOf(true);
       const key = userText(prompt.slice(opened, opened + 1)).find((text) => programsOf.has(text)) ?? '';
       const code = programsOf.get(key)?.[prompt.slice(opened).filter((message) => message.role === 'tool').length];
@@ -101,34 +104,38 @@ function crafting(): TestLanguageModelV2 {
   });
 }
 
-test('a crafted tool is made, called, scored out, shared with a node, and still works with learning off', async () => {
+test('a crafted tool is made, called, marked broken, retired, shared with a node, and still works with learning off', async () => {
   const db = workspaceDatabase(scratchPath('crafting-flow', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { cwd: scratchDir('crafting-flow-folder'), llm: DUMMY_LLM });
   const events: SessionEvent[] = [];
-  const session = new LocalAgentSession({ rt, db, model: crafting(), onEvent: (event) => events.push(event) });
+  const prompts: string[] = [];
+  const session = new LocalAgentSession({ rt, db, model: crafting(prompts), onEvent: (event) => events.push(event) });
 
   const results = (): string[] => events.flatMap((event) => (event.type === 'tool-result' ? [String(event.result)] : []));
-  const score = (name: string) => db.query<{ score: number; uses: number }, [string]>('SELECT score, uses FROM crafted_tools WHERE name = ?').get(name);
+  const counts = (name: string) => db.query<{ offered: number; chosen: number; broken: string | null }, [string]>('SELECT offered, chosen, broken FROM crafted_tools WHERE name = ?').get(name);
 
   try {
     rt.actor.config.setLearning(true);
     await session.send('Build the report tools.', { id: crypto.randomUUID() });
     const built = results();
 
-    expect(built).toHaveLength(8);
+    expect(built).toHaveLength(10);
     expect(built[1]).toContain('"total":3');
     expect(built[1]).toContain('"durationMs":3.75');
     expect(built[1]).toContain('"wrote":"saved"');
     expect(built[1]).toContain('"doubled":42');
     expect(await readText(rt.storage.vfs, 'reports/output.txt')).toBe('saved');
     expect(built[3]).toContain('nope');
-    expect(built[7]).toContain('undefined');
+    expect(built[7]).toContain('function');
+    expect(built[8]).toContain('retired');
+    expect(built[9]).toContain('undefined');
+    // The step after a raise read the tool's declaration with its error.
+    expect(prompts.some((prompt) => prompt.includes('brokenIt tool Broken: its last call raised \\"nope\\"'))).toBe(true);
 
-    expect(present(score('doubleIt'), 'doubleIt').uses).toBe(1);
-    expect(present(score('doubleIt'), 'doubleIt').score).toBeGreaterThan(0.5);
-    expect(present(score('brokenIt'), 'brokenIt')).toMatchObject({ uses: 4 });
-    expect(present(score('brokenIt'), 'brokenIt').score).toBeLessThan(0.2);
+    // Recorded with its turn: offered from the step after it was made, and chosen.
+    expect(counts('doubleIt')).toEqual({ offered: 1, chosen: 1, broken: null });
+    expect(counts('brokenIt')).toBeNull();
 
     const cycle = present(session.listRuns().items.flatMap((run) => session.getRunEvents(run.runId))
       .find((event): event is Extract<RunEvent, { type: 'craft_cycle' }> => event.type === 'craft_cycle'), 'the turn\'s craft_cycle row');
@@ -136,22 +143,22 @@ test('a crafted tool is made, called, scored out, shared with a node, and still 
     expect([...cycle.crafted].sort()).toEqual(['brokenIt', 'doubleIt', 'report_totals', 'write_result']);
     expect(cycle.returned).toBe(3);
     expect(cycle.raised).toBe(4);
-    expect(cycle.dropped).toEqual(['brokenIt']);
+    expect(cycle.broke).toEqual(['brokenIt']);
 
-    // Crafted tools are the workspace's: a swarm node's eval calls main's, and main's scoring retired the same one there.
+    // Crafted tools are the workspace's: a swarm node's eval calls main's, and the tool main retired is gone there too.
     const seat = await session.hostNode({ nodeId: 'crafting-node', rootId: 'crafting-swarm', depth: 1 });
     const nodeEval = present(toolsInWorkMode('build', { eval: hostedCodemodeTool(seat.actor, UNREACHED_WEB)(codemodeSurface(seat.actor.runtime, {}, () => ({}), { stores: servedStoresOf(seat.actor.runtime, seat.actor.stores.conversationSearch, seat.actor.session.orchestrator.acc.ledgers) }), narrowToolSurface(undefined)) }).eval, 'the node\'s eval');
     const node = await toolExecute<{ code: string }, { result: JsonValue }>(nodeEval)({ code: 'return [await tools.doubleIt(21), typeof tools.brokenIt];' });
 
     expect(node.result).toEqual([42, 'undefined']);
 
-    // Crafting is a capability, not evolution: with learning off the tool runs and only its score stands still.
+    // Crafting is a capability, not evolution: with learning off the tool runs and only its counts stand still.
     rt.actor.config.setLearning(false);
     await session.send('Triple it, with learning off.', { id: crypto.randomUUID() });
 
     expect(results().at(-1)).toContain('21');
-    expect(score('tripleIt')).toEqual({ score: 0.5, uses: 0 });
-    expect(v.parse(v.number(), present(score('doubleIt'), 'doubleIt').uses)).toBe(1);
+    expect(counts('tripleIt')).toEqual({ offered: 0, chosen: 0, broken: null });
+    expect(present(counts('doubleIt'), 'doubleIt').chosen).toBe(1);
   } finally {
     await session.end();
     db.close();

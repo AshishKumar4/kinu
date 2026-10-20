@@ -3,13 +3,12 @@ import { KinuError, settle } from '@kinu.run/core/obs';
 import {
   decodeJsonValue, JsonArraySchema, JsonValueSchema,
   QualityDaySchema, renderQualitySeries, SPEND_SOURCE_LABEL, usageTotal,
-  type ProposerOutcome, type JsonObject, type JsonValue,
+  type JsonObject, type JsonValue,
   type MissionBudgetLimits, type SearchNode, type Usage, type WorkspaceSpend,
   type AgentRpcMethod,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target';
-import { runLocalOptimization } from '../local-agent-client';
 import { requireAuthConfig } from '../config';
 import { ActivitySpendSchema, callAgentRpc } from '../cloud-api';
 import { ACCENT, DIM, ERR, OK, plural, printJson, printSearchTree, renderAccountSpendLines, WARN } from '../display';
@@ -19,13 +18,11 @@ import {
   getLocalAgentState,
   getLocalWorkspaceSpend,
   getLocalQuality,
-  getLocalGepaRun,
   getLocalMctsNode,
   getLocalActorInfo,
   listLocalActors,
   listLocalEvents,
   listLocalExecutors,
-  listLocalGepaRuns,
   listLocalHeads,
   listLocalMcts,
   listLocalTimeline,
@@ -39,15 +36,6 @@ interface InspectOpts {
   variant?: string;
   since?: string;
 }
-
-interface GepaOpts extends InspectOpts {
-  run?: boolean;
-}
-
-const ProposerOutcomeSchema: v.GenericSchema<ProposerOutcome> = v.variant('kind', [
-  v.object({ kind: v.literal('idle') }),
-  v.object({ kind: v.literal('searched'), artifactId: v.string(), version: v.nullable(v.number()), detail: v.string() }),
-]);
 
 const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
   id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(),
@@ -336,58 +324,6 @@ export function headsCommand(name: string, opts: InspectOpts = {}): Promise<void
   }));
 }
 
-export function gepaCommand(name: string, runId: string | undefined, opts: GepaOpts = {}): Promise<void> {
-  return settle(Effect.gen(function* () {
-    const target = resolveAgentTarget(name);
-
-    if (opts.run) return yield* Effect.promise(async () => runGepaPass(name, opts));
-    const limit = parseLimit(opts.limit, 20);
-
-    // One run is a record, so `printRows` keeps exactly one legal input shape.
-    if (runId) {
-      const detail = yield* Effect.promise(async () => readTarget(target, {
-        cloud: (auth) => cloudRead(auth, target, 'getGepaRun', [runId]),
-        local: () => decodeJsonValue({ value: getLocalGepaRun(target.localName, runId) }),
-      }));
-
-      printData(detail, opts);
-
-      return;
-    }
-
-    const data = yield* Effect.promise(async () => readTarget(target, {
-      cloud: (auth) => cloudRead(auth, target, 'getGepaRuns', [limit]),
-      local: () => decodeJsonValue({ value: listLocalGepaRuns(target.localName, limit) }),
-    }));
-
-    yield* printRows(data, opts, (item) => formatRunRow(item, GEPA_RUN_ROW));
-  }));
-}
-
-async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
-  const target = resolveAgentTarget(name);
-
-  const result = await readTarget(target, {
-    cloud: (auth) => callAgentRpc({
-      origin: auth.origin, token: auth.token, name: target.cloudName,
-      method: 'runOptimization', schema: ProposerOutcomeSchema, args: [],
-    }),
-    local: () => runLocalOptimization(target.localName),
-  });
-
-  if (opts.json) return printJson(decodeJsonValue({ value: result }));
-
-  if (result.kind === 'idle') {
-    console.log(DIM('  nothing to search: no low-rated turns in the last 14 days'));
-
-    return;
-  }
-
-  console.log(result.version === null
-    ? `${WARN('no edit passed')} ${result.artifactId}: ${result.detail}`
-    : `${OK('proposed')} ${result.artifactId} v${String(result.version)} (${result.detail}), waiting for your decision`);
-}
-
 export function executorsCommand(
   name: string,
   executor: string | undefined,
@@ -555,8 +491,6 @@ interface RunRowFields {
 }
 
 const HEAD_RUN_ROW: RunRowFields = { id: 'rootId', purpose: ['task', 'rationale'] };
-
-const GEPA_RUN_ROW: RunRowFields = { id: 'runId', purpose: ['target', 'stopReason'] };
 
 function formatRunRow(item: JsonValue, fields: RunRowFields): string {
   const row = asRecord({ value: item }, 'value');

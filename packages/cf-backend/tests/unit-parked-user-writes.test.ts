@@ -181,7 +181,7 @@ test('codemode\u2019s fs.write over the user\u2019s file is refused unread, then
   const { machine, workspaceFiles, parked, decide } = await workspaceWithMachine();
   const write = async () => await workspaceFiles['fs.write']?.execute(`${PC}${NOTES}`, 'from codemode\n');
 
-  expect(JSON.stringify(await write())).toContain('has not been read here yet');
+  expect(JSON.stringify(await write())).toContain('has no read that still counts');
   await workspaceFiles['fs.text']?.execute(`${PC}${NOTES}`);
   expect(JSON.stringify(await write())).toContain('queued for owner approval');
   expect(await parked()).toEqual([`file write ${PC}${NOTES} sha256:${digest('from codemode\n')} over sha256:${digest(OWNERS)}`]);

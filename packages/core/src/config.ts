@@ -18,13 +18,11 @@ export interface HeadsDefaults {
 }
 
 export interface CraftStoreDefaults {
-  /** Higher weights recent observations more. */
-  emaAlpha: number;
-  /** Days unused after which the score halves. */
-  halfLifeDays: number;
-  retirementThreshold: number;
-  minUsesBeforeRetirement: number;
-  minEffectiveScoreForInjection: number;
+  /** The most crafted tools a turn is offered, best preference first (craft/preference.ts). */
+  offeredCap: number;
+  /** A tool offered this many turns that no turn chose for {@link unchosenDays} is retired. */
+  offersBeforeRetirement: number;
+  unchosenDays: number;
   /** Word-overlap threshold for conflict detection (craft/conflict.ts). */
   conflictSimilarityThreshold: number;
 }
@@ -48,11 +46,9 @@ export const DEFAULT_CONFIG = {
     mergeSamples: 3,
   },
   craftStore: {
-    emaAlpha: 0.3,
-    halfLifeDays: 30,
-    retirementThreshold: 0.1,
-    minUsesBeforeRetirement: 2,
-    minEffectiveScoreForInjection: 0.2,
+    offeredCap: 20,
+    offersBeforeRetirement: 50,
+    unchosenDays: 30,
     conflictSimilarityThreshold: 0.85,
   },
   scaffold: {

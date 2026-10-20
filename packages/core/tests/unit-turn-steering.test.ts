@@ -834,3 +834,29 @@ describe('the struggles a turn records (docs/EVOLUTION-REDESIGN.md §2)', () => 
     expect(struggles(orch)).toEqual([]);
   });
 });
+
+// rc22's long computer-use turn held, for every distinct call, the steering's echo of its arguments: a slice that pinned
+// the whole program it was cut from. A turn's distinct calls keep their echoes, never their programs.
+test("a long turn's distinct calls keep the steering's echo of their arguments, not each whole program", () => {
+  const steering = new TurnSteering();
+  const PROGRAM_CHARS = 100_000;
+  const CALLS = 200;
+
+  // Each call its own long program, built fresh so nothing but the steering can hold it.
+  const program = (call: number): string => `// call ${String(call)}\n${'x'.repeat(PROGRAM_CHARS)}`;
+
+  const retained = (): number => {
+    Bun.gc(true);
+
+    return process.memoryUsage().heapUsed;
+  };
+
+  const before = retained();
+
+  for (let call = 0; call < CALLS; call += 1) {
+    steering.onToolResult({ toolName: 'eval', args: { code: program(call) }, result: `ran ${String(call)}`, success: true });
+  }
+
+  // Every program held would be 20 MB at one byte a character; every echo is 200 characters.
+  expect(retained() - before).toBeLessThan(2_000_000);
+});

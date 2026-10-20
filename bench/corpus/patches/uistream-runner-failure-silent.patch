@@ -5,7 +5,7 @@ diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold
  
      if (result.error) {
        const msg = result.error;
--      yield* Effect.promise(async () => emit({ type: 'error', message: msg }));
+-      yield* Effect.promise(async () => emit({ type: 'error', message: msg, thrown: true }));
  
        return {
          ok: false,

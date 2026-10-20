@@ -19,35 +19,52 @@ const { createLinuxSource } = require('../src/daemon/linux-screen.js');
 
 const FAKE = path.join(__dirname, 'fixtures', 'fake-screen-helper.js');
 
-/** A source whose helper is the fake, told `told`; what it logs and each change it reports are recorded. */
+/**
+ * A source whose helper is the fake, told `told`; what it logs and each change it reports are recorded. Each helper
+ * it starts is kept (`helpers`), and `reports(state)` resolves when the source reports that state. A test waits on
+ * those, never on a file's changes: Bun's fs.watch dropped the fake's last write once in 40 runs under load (measured
+ * 2026-10-20), and the wait on it hung the daemon suite's row for 480 s (tier of 0684889f9).
+ */
 function source(told, home = scratchDir('linux-screen')) {
   const logged = [];
   const changes = [];
+  const helpers = [];
+  const waiting = [];
 
   const made = createLinuxSource({
     home,
     log: (...words) => { logged.push(words.join(' ')); },
-    onChange: () => { changes.push(made.desktop().state); },
+    onChange: () => {
+      changes.push(made.desktop().state);
+
+      for (const waiter of waiting.filter((each) => each.state === changes.at(-1))) waiter.resolve();
+    },
     command: (mode) => [process.execPath, FAKE, mode, JSON.stringify(told)],
+    spawn: (argv, options) => {
+      const helper = Bun.spawn(argv, { ...options, env: { ...process.env } });
+
+      helpers.push(helper);
+
+      return helper;
+    },
   });
 
-  return { made, home, logged, changes, file: path.join(home, 'desktop.json') };
+  const reports = (state) => {
+    const waiter = { state, ...Promise.withResolvers() };
+
+    waiting.push(waiter);
+
+    return waiter.promise;
+  };
+
+  return { made, home, logged, changes, helpers, reports, file: path.join(home, 'desktop.json') };
 }
 
-/** Resolves once `file` holds `text`, read on each change to it. */
-function untilWritten(file, text) {
-  return new Promise((resolve) => {
-    const check = () => {
-      if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes(text)) {
-        watcher.close();
-        resolve(fs.readFileSync(file, 'utf8').trim().split('\n'));
-      }
-    };
+/** The lines the fake wrote to `log`, read once its helper has exited: every line it will write is there. */
+async function linesOnceExited(helper, log) {
+  await helper.exited;
 
-    const watcher = fs.watch(path.dirname(file), check);
-
-    check();
-  });
+  return fs.readFileSync(log, 'utf8').trim().split('\n');
 }
 
 describe("a Linux PC's screen source", () => {
@@ -76,7 +93,7 @@ describe("a Linux PC's screen source", () => {
     const kept = JSON.parse(fs.readFileSync(file, 'utf8'));
 
     expect({ shared, changes, kept: { token: kept.token, width: kept.width, height: kept.height }, mode: (fs.statSync(file).mode & 0o777).toString(8) }).toEqual({
-      shared: { ok: true, why: '' }, changes: ['setup', 'permission', 'ready'], kept: { token: 'tok-1', width: 1280, height: 800 }, mode: '600',
+      shared: { ok: true, why: '' }, changes: ['setup', 'setup', 'permission', 'ready'], kept: { token: 'tok-1', width: 1280, height: 800 }, mode: '600',
     });
   });
 
@@ -94,7 +111,7 @@ describe("a Linux PC's screen source", () => {
   test("a served screen draws the helper's frames, gives it the viewer's input in the portal's terms, and keeps each new token", async () => {
     const home = scratchDir('linux-screen-serve');
     const log = path.join(home, 'helper.log');
-    const { made, file } = source({ accepts: 'tok-1', next: 'tok-2', width: 4, height: 2, frames: [{ width: 4, height: 2, jpeg: 'ffd8ffd9' }], log }, home);
+    const { made, file, helpers } = source({ accepts: 'tok-1', next: 'tok-2', width: 4, height: 2, frames: [{ width: 4, height: 2, jpeg: 'ffd8ffd9' }], log }, home);
     const drawn = Promise.withResolvers();
 
     fs.writeFileSync(file, JSON.stringify({ token: 'tok-1', width: 4, height: 2 }));
@@ -107,7 +124,8 @@ describe("a Linux PC's screen source", () => {
     screen.pointer(8, 3, 1, { x: 0, y: 0 });
     screen.pointer(0, 3, 1, { x: 0, y: 120 });
     screen.close();
-    const lines = await untilWritten(log, 'closed');
+    // Its stdin closed, the helper writes `closed` and exits; one the source had to kill wrote no `closed`.
+    const lines = await linesOnceExited(helpers[0], log);
 
     expect({
       screen: { width: screen.width, height: screen.height },
@@ -146,19 +164,19 @@ describe("a Linux PC's screen source", () => {
   });
 
   test('unsharing while the prompt is up ends the share, keeps nothing, and the PC reads as shareable', async () => {
-    const home = scratchDir('linux-screen-unshare');
-    const log = path.join(home, 'helper.log');
-    const { made, file } = source({ probe: { ok: true }, share: 'waits', log }, home);
+    const { made, file, reports } = source({ probe: { ok: true }, share: 'waits' });
+    const asking = reports('permission');
 
     await made.probe();
     const sharing = made.share();
 
-    await untilWritten(log, 'asking');
+    // The prompt is up once the helper says it is asking, which the source reports as permission.
+    await asking;
     fs.rmSync(file, { force: true });
     await made.reread();
 
     expect({ shared: await sharing, file: fs.existsSync(file), desktop: made.desktop() }).toEqual({
-      shared: { ok: false, why: 'sharing was turned off while the prompt was up' }, file: false, desktop: { state: 'setup', detail: expect.any(String) },
+      shared: { ok: false, why: 'sharing was turned off while the share was asked for' }, file: false, desktop: { state: 'setup', detail: expect.any(String) },
     });
   });
 
@@ -181,6 +199,19 @@ describe("a Linux PC's screen source", () => {
     await expect(made.open({ onFrame: () => {}, onEnd: () => {} })).rejects.toThrow('sharing was not allowed on this PC');
 
     expect({ desktop: made.desktop().state, changes: changes.slice(1) }).toEqual({ desktop: 'setup', changes: ['permission', 'setup'] });
+  });
+
+  test('a frame the helper draws before it says it is ready is the screen\'s first, not dropped', async () => {
+    const home = scratchDir('linux-screen-early');
+    const { made, file } = source({ accepts: 'tok-1', next: 'tok-2', width: 4, height: 2, early: { width: 4, height: 2, jpeg: 'ffd8ffd9' }, frames: [], log: path.join(home, 'helper.log') }, home);
+    const drawn = Promise.withResolvers();
+
+    fs.writeFileSync(file, JSON.stringify({ token: 'tok-1', width: 4, height: 2 }));
+    const screen = await made.open({ onFrame: drawn.resolve, onEnd: () => {} });
+    const frame = await drawn.promise;
+
+    screen.close();
+    expect({ serial: frame.serial, jpeg: frame.jpeg.toString('hex') }).toEqual({ serial: 1, jpeg: 'ffd8ffd9' });
   });
 
   test('a PC never shared opens nothing, and says how to share it', () => {
