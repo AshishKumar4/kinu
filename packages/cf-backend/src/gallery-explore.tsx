@@ -1,7 +1,7 @@
 /**
  * Explore in the gallery: `explore` (the feed; `&kind=`, `&category=`, `&q=` as its URL takes them) and
  * `explore-workspace&id=<blueprint>` (`&install=1` with Install open; `&assistant=1` once it is the person's), in the
- * product's own shell. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
+ * product's own shell; `&signed=out` for a visitor's page, under the public bar. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
  * own address with the roster's read held 1.5 s, so the page draws before it knows it is Home. `/api/explore` is
  * answered here from a fixed feed of the owner's kind of work, ranked as the index would, Kinu's own read from core.
  * Kinu's blueprints show their served pictures; an app's picture is a listing's read, which a test or a shot answers.
@@ -12,6 +12,7 @@ import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
 import { blueprintPage, kinuBlueprint, kinuListings, RosterPageSchema, type GalleryListing, type RosterEntry } from "@kinu.run/core";
 import Layout from "@/components/layout";
+import { VisitorShell } from "@/components/gallery/GalleryShell";
 import type { BlueprintPage, ExploreItem, ExploreNeed, WorkspaceCard } from "@/lib/explore-api";
 
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
@@ -132,6 +133,7 @@ function installExploreFixture(): void {
 
     if (url.pathname === "/api/explore") return feed(url.searchParams);
 
+
     if (area === "explore" && kind === "workspaces" && id !== undefined && action === "star" && request.method === "POST") {
       document.documentElement.dataset.exploreStarred = JSON.stringify({ id: decodeURIComponent(id), body: await request.json() });
 
@@ -180,6 +182,23 @@ const ASSISTANT: RosterEntry = {
 
 const loading = (node: React.ReactNode) => <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{node}</Suspense>;
 
+/** A visitor's account reads, refused as the gate refuses them and kept on the page as `data-explore-account-reads`. */
+function refuseAccountReads(): void {
+  const next = window.fetch.bind(window);
+  const asked: string[] = [];
+
+  window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    const { pathname } = new URL(request.url);
+
+    if (!pathname.startsWith("/api/user/")) return next(input, init);
+    asked.push(`${request.method} ${pathname}`);
+    document.documentElement.dataset.exploreAccountReads = JSON.stringify(asked);
+
+    return Response.json({ error: "No Kinu session in request" }, { status: 401 });
+  }, { preconnect: next.preconnect });
+}
+
 /** `explore` or `explore-workspace`, in the product's shell. */
 export function exploreFrame(frame: string) {
   installExploreFixture();
@@ -188,13 +207,25 @@ export function exploreFrame(frame: string) {
   const feedQuery = new URLSearchParams([...search].filter(([key]) => ["q", "kind", "category", "sort"].includes(key))).toString();
   const opened = frame === "explore-workspace" ? `/explore/workspaces/${id}${search.has("install") ? "?install=1" : ""}` : `/explore${feedQuery === "" ? "" : `?${feedQuery}`}`;
 
+  const pages = (
+    <>
+      <Route path="/explore" element={loading(<ExplorePage />)} />
+      <Route path="/explore/workspaces/:blueprint" element={loading(<ExploreWorkspacePage />)} />
+    </>
+  );
+
+  if (search.get("signed") === "out") {
+    refuseAccountReads();
+
+    return { entries: [opened], node: <Routes><Route element={<VisitorShell />}>{pages}</Route></Routes> };
+  }
+
   return {
     entries: [search.get("at") === "assistant" ? `/workspace/${ASSISTANT.name}` : opened],
     node: (
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/explore" element={loading(<ExplorePage />)} />
-          <Route path="/explore/workspaces/:blueprint" element={loading(<ExploreWorkspacePage />)} />
+          {pages}
           <Route path="/new" element={loading(<NewWorkspacePage />)} />
           {search.get("at") === "assistant" && <Route path="/workspace/:agentId" element={loading(<WorkspacePage />)} />}
           <Route index element={<div className="h-full" data-gallery-home />} />

@@ -272,7 +272,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
       {resource.status === "error" && (
         <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mb-3 p-card px-3 py-2" />
       )}
-      {account.failure !== null && <p className="mx-4 mb-3 p-meta p-danger">Could not read your machines: {account.failure}</p>}
+      {account.failure !== null && <p data-failure className="mx-4 mb-3 p-meta p-danger">Could not read your machines: {account.failure}</p>}
     </div>
   );
 }

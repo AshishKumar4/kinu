@@ -78,8 +78,7 @@ export function AccountMemoryCard() {
   );
 
   return (
-    <Card title="Account memory" icon={NotebookIcon}
-      description="What every workspace and agent of yours reads alongside its own memory. Agents only propose: nothing is kept here until you accept it.">
+    <Card title="Account memory" icon={NotebookIcon}>
       <CardSlot resource={resource} what="your account memory" onRetry={reload}>
         {(state) => (
           <div className="space-y-4" data-account-memory>
