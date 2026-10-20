@@ -204,6 +204,8 @@ const FIXTURES = {
   slates: { seeded: true, library: LIBRARY },
   shared: { seeded: true, library: LIBRARY },
   app: { seeded: true, library: LIBRARY },
+  // The whole app (gallery-app.tsx): Drive as the owner keeps it.
+  whole: { seeded: true, library: LIBRARY },
   "drive-empty": { seeded: false, library: EMPTY_LIBRARY },
   "drive-wide": { seeded: "wide", library: LIBRARY },
   "drive-recipient": { seeded: false, library: { ...EMPTY_LIBRARY, received: LIBRARY.received } },

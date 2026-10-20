@@ -127,7 +127,7 @@ const blueprintOf = (id: string) => ITEMS.flatMap((item) => (item.kind === "work
 
 /** `/api/explore*` answered from the feed above, and an install answered as made: its body is kept on the page as
  *  `data-explore-installed` for a test to read. Anything else goes on. */
-function installExploreFixture(): void {
+export function installExploreFixture(): void {
   const next = window.fetch.bind(window);
 
   window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {

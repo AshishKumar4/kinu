@@ -175,7 +175,7 @@ function assistantSnapshot(snapshot: JsonObject): JsonObject {
 }
 
 /** The workspace's own answers over the gallery's, as the assistant's Durable Object would give them. */
-function assistantRpc(base: SocketCall): SocketCall {
+export function assistantRpc(base: SocketCall): SocketCall {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = (value: JsonValue) => new Response(JSON.stringify(value)).json<T>();
 
@@ -206,13 +206,13 @@ function AssistantLine() {
 }
 
 /** Home: the assistant's chat in the focus layout, with nothing above it. The brief arrives as a message in it. */
-function AssistantHome() {
+export function AssistantHome() {
   return <WorkspacePage workspace={ASSISTANT_WORKSPACE} identity={{ label: "Kinu", line: <AssistantLine /> }} />;
 }
 
 /** Home with the assistant installed, in the product's own shell. */
 /** The assistant's chat as the frame's moment has it. */
-const ASSISTANT_THREAD = MOMENT === "firstrun" ? FIRST_RUN_THREAD : MORNING_THREAD;
+export const ASSISTANT_THREAD = MOMENT === "firstrun" ? FIRST_RUN_THREAD : MORNING_THREAD;
 
 export function assistantHomeFrame(base: SocketCall) {
   serveGalleryRpc(assistantRpc(base));

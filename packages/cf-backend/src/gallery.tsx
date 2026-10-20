@@ -131,13 +131,13 @@ import { galleryChatStartsAt, galleryChatWindow, galleryClearChat, galleryServer
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
 /** `&env=computer`: the workspace shell with its computer up, so Environment shows its terminal and its desktop. */
-const SHELL_COMPUTER = frame === "workspaceshell" && new URLSearchParams(location.search).get("env") === "computer";
+const SHELL_COMPUTER = (frame === "workspaceshell" || frame === "whole") && new URLSearchParams(location.search).get("env") === "computer";
 
 /** The owner's PC in the Environment frames: the account's device row that `ENVIRONMENT_EXECUTORS`' device names. */
 const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 
 /** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
-const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
+const SHELL_PC = frame === "workspaceshell" || frame === "whole" ? new URLSearchParams(location.search).get("pc") : null;
 
 /**
  * `&pcdesktop=ready|setup|permission`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
@@ -249,6 +249,12 @@ let settingsCodexHealthy = false;
 window.addEventListener("gallery:settings-heal", () => { settingsCodexHealthy = true; });
 
 window.addEventListener("gallery:settings-release", () => SETTINGS_GATEWAY_HOLD.resolve());
+
+// The whole app (gallery-app.tsx) shows every settings card settled, as the owner meets them.
+if (frame === "whole") {
+  settingsCodexHealthy = true;
+  SETTINGS_GATEWAY_HOLD.resolve();
+}
 
 function fixtureJson(body: JsonValue | ProfileCatalogEnvelope | AccountUsage, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -998,7 +1004,10 @@ const GALLERY_LOGO = sanitizeWorkspaceLogoSvg(
   + "6' height='7' rx='3.5' fill='#115e59'/></svg>",
 );
 
-const galleryRoster: RosterEntry[] = new URLSearchParams(location.search).get("roster") === "assistant"
+// The whole app opens on the assistant's account unless `&roster=` names another.
+const ROSTER_ASKED = new URLSearchParams(location.search).get("roster") ?? (frame === "whole" ? "assistant" : null);
+
+const galleryRoster: RosterEntry[] = ROSTER_ASKED === "assistant"
   // The workspaces the personal assistant runs and watches (gallery-assistant.tsx).
   ? ASSISTANT_ROSTER.map((entry) => ({ ...entry, logo: entry.name === "api-worker" ? GALLERY_LOGO : entry.logo }))
   : [
@@ -1276,6 +1285,9 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   if (decided !== null) return Promise.resolve(decided);
 
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
+
+  // The whole app: the account's own reads; the roster, profile and model menu stay the shell's.
+  if (frame === "whole" && path.startsWith("/api/user/") && !/^\/api\/user\/(?:workspaces(?:\/|$)|profile$|models$)/u.test(path)) return userSettingsFixture(path, method, body);
   const memory = accountMemoryFixture(path, method);
 
   return memory === null ? null : Promise.resolve(memory);
@@ -8074,6 +8086,12 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    // The whole app, every page through its own sidebar, with the design bar's live switches (gallery-app.tsx).
+    ["whole", async () => {
+      const { appFrame } = await import("@/gallery-app");
+
+      return appFrame(workspacePageRpc, seedFrameTranscript);
+    }],
     ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
     ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageRpc))],
     ["explore", () => Promise.resolve(exploreFrame("explore"))],
