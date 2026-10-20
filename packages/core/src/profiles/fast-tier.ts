@@ -17,6 +17,12 @@ function priceOf(model: ModelMenu['models'][number], menu: ModelMenu['models']):
   return model.cost ?? menu.find((other) => other.id === model.id && other.cost !== undefined)?.cost;
 }
 
+/** Whether the catalog lists the model with structured output, under its own row or the same model's under another
+ *  provider, as a plan's row lists less than the API's. */
+function answersStructured(model: ModelMenu['models'][number], menu: ModelMenu['models']): boolean {
+  return menu.some((other) => other.id === model.id && other.capabilities?.includes('structured-outputs') === true);
+}
+
 /** Lower first; an unknown price is never treated as free, so it sorts after every known one. */
 function byPrice(a: ModelPricing | undefined, b: ModelPricing | undefined): number {
   if (a === undefined) return b === undefined ? 0 : 1;
@@ -27,12 +33,14 @@ function byPrice(a: ModelPricing | undefined, b: ModelPricing | undefined): numb
 }
 
 /**
- * Every model the fast tier could run on, cheapest first: one that calls tools (a researcher runs whole turns on fast),
- * by input price, then output price, as fast jobs read turns and write a line; an unpriced one after the priced, and
- * equal ones in the menu's order, which is the registry's provider order.
+ * Every model the fast tier could run on, cheapest first: one that calls tools (a researcher runs whole turns on fast)
+ * and that the catalog lists with structured output (sleep-time, titles and triage read a shape back: rc24 staging's
+ * pick without it, granite-4.0-h-micro, dropped a field sleep-time requires in 4 of 8 tries), by input price, then
+ * output price, as fast jobs read turns and write a line; an unpriced one after the priced, and equal ones in the
+ * menu's order, which is the registry's provider order.
  */
 export function fastCandidatesOf(menu: Pick<ModelMenu, 'models'>): FastCandidate[] {
-  const able = menu.models.filter((model) => model.capabilities?.includes('tools') === true);
+  const able = menu.models.filter((model) => model.capabilities?.includes('tools') === true && answersStructured(model, menu.models));
   const priced = able.map((model) => ({ model, price: priceOf(model, menu.models) }));
 
   // `sort` is stable, so equal prices keep the menu's order; `priced` is this call's own array.
