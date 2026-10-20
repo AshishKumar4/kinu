@@ -2,6 +2,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The mutable scaffold on a local workspace through LocalAgentSession: a promoted scaffold drives the turn,
 // and a pending proposal resolves, so maybeEvolveScaffold's pending guard cannot deadlock the loop.
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { AgentRuntime, LLMProviderConfig } from '@kinu.run/core';
@@ -249,6 +250,35 @@ describe('a promoted scaffold drives a local turn', () => {
     // A dispatch that dropped the args would answer with a refusal, not the search's hits.
     expect(events.some((e) => e.type === 'tool-call' && e.toolName === 'memory')).toBe(true);
     expect(streamed(events)).toBe('tool returned hits');
+  });
+});
+
+describe('a turn records the scaffold it ran', () => {
+  const recorded = (rt: AgentRuntime) => rt.storage.sql<{ turn: string }>`SELECT turn FROM completed_turns ORDER BY created_at`
+    .map((row) => v.parse(v.object({ scaffold: v.optional(v.object({ version: v.number(), threw: v.optional(v.string()) })) }), JSON.parse(row.turn)).scaffold);
+
+  test('its version, and its program\'s own throw; a call it caught is not a throw', async () => {
+    const { rt, session } = await setup('the default loop answered');
+    // A turn is recorded only while the agent learns.
+    rt.actor.config.setLearning(true);
+
+    await installScaffold(rt, {
+      version: 1, status: 'current',
+      code: `async function run({ task }) {
+        const failed = await host.callTool('no_such_tool', {});
+        await host.emit({ type: 'text_delta', text: 'caught ' + JSON.stringify(failed).length });
+      }`,
+    });
+    await session.send('first', { id: crypto.randomUUID() });
+
+    await installScaffold(rt, { version: 2, status: 'current', code: `async function run() { throw new Error('the loop broke'); }` });
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'historical' WHERE version = 1`;
+    await session.send('second', { id: crypto.randomUUID() });
+
+    const [first, second] = recorded(rt);
+    expect(first).toEqual({ version: 1 });
+    expect(second?.version).toBe(2);
+    expect(second?.threw).toContain('the loop broke');
   });
 });
 

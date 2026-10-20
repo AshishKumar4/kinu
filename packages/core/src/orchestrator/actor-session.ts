@@ -797,6 +797,7 @@ export class ActorSession {
       const claim = await this.admitClaim(reserved, program, prepared.selection, input);
       active.claim = claim;
       this.orchestrator.acc.artifactVersions = input.artifactVersions ?? [];
+      this.orchestrator.acc.scaffoldVersion = program.kind === 'scaffold' ? program.version : 0;
 
       active.trace = this.options.turns?.().admitted({ turnId: claim.turnId, epoch: claim.epoch }, active.startedAt, (span) => {
         span.setAttribute('kinu.turn.mode', this.mode);
@@ -1074,6 +1075,8 @@ export class ActorSession {
         break;
       case 'error': {
         this.orchestrator.acc.hadError = true;
+
+        if (event.thrown) this.orchestrator.acc.scaffoldThrew ??= event.message;
 
         // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
         // First failure wins; an abort is not one.

@@ -372,16 +372,16 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
     const ran = ['section:guidance/operating@2', 'tool:shell.description@1'];
 
-    // The review rates a turn that carries its versions.
-    await engine.reviewTurn(makeTurn({ turnId: 'reviewed', artifacts: ran }), 'No, I said staging.');
+    // The review rates a turn that carries its versions, whatever scaffold is current when it runs.
+    await engine.reviewTurn(makeTurn({ turnId: 'reviewed', artifacts: ran, scaffold: { version: 3 } }), 'No, I said staging.');
     // A thumb on a turn whose review has not run reads them from its record in the window.
-    createCompletedTurnStore(rt.storage.sql, rt.actor).append(makeTurn({ turnId: 'parked', artifacts: ran }), { awaitsFollowup: true });
+    createCompletedTurnStore(rt.storage.sql, rt.actor).append(makeTurn({ turnId: 'parked', artifacts: ran, scaffold: { version: 2 } }), { awaitsFollowup: true });
     await engine.applyExplicitFeedback('parked', 'positive');
     // A turn recorded before turns carried versions has none to give.
     await engine.applyExplicitFeedback('older', 'negative');
 
-    const versions = Object.fromEntries(listTurnRatings(rt.storage.sql, rt.actor).map((rating) => [rating.turnId, rating.artifacts]));
-    expect(versions).toEqual({ reviewed: ran, parked: ran, older: null });
+    const versions = Object.fromEntries(listTurnRatings(rt.storage.sql, rt.actor).map((rating) => [rating.turnId, [rating.artifacts, rating.scaffoldVersion]]));
+    expect(versions).toEqual({ reviewed: [ran, 3], parked: [ran, 2], older: [null, null] });
   });
 
   test('a thumb over a reviewed turn reads its versions through the review\'s row', async () => {

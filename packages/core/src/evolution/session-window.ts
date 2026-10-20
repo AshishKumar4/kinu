@@ -67,6 +67,8 @@ export const CompletedTurnSchema = v.object({
   askedOwner: v.optional(v.boolean()),
   /** `<artifactId>@<version>` of each promoted text the turn ran with; its rating keeps them. Absent on turns before. */
   artifacts: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+  /** The scaffold version its program ran (0: the built-in loop), and the program's own throw if it threw. */
+  scaffold: v.optional(v.object({ version: v.number(), threw: v.optional(v.string()) })),
 });
 
 const APPEND_SCOPE = 'turn_append';
@@ -221,20 +223,27 @@ interface TurnRow { id: string; turn: string; followup: string | null; created_a
 
 /** Bound to one actor: ids can collide across actors, and window size, queue
  *  depth and stale-claim sweeps are counts. */
+/** What a turn ran with: its promoted text versions, and the scaffold version its program ran. */
+export interface RanWith {
+  readonly artifacts: readonly string[] | null;
+  readonly scaffoldVersion: number | null;
+}
+
 /**
- * The versions a turn ran with while its record is still in the window: a thumb or a pick lands on a turn whose review
- * has not run, which is the one rating that reads them from the turn itself. Null once the window let it go.
+ * What a turn ran with while its record is still in the window: a thumb or a pick lands on a turn whose review has not
+ * run, which is the one rating that reads it from the turn itself. Nulls once the window let it go.
  */
-export function completedTurnArtifacts(sql: SqlExecutor, actor: ActorHandle, turnId: string): readonly string[] | null {
+export function completedTurnRanWith(sql: SqlExecutor, actor: ActorHandle, turnId: string): RanWith {
   actor.assertCurrent();
 
   const row = sql<{ turn: string }>`SELECT turn FROM completed_turns
     WHERE actor_id = ${actor.actorId} AND json_extract(turn, '$.turnId') = ${turnId} ORDER BY created_at DESC LIMIT 1`[0];
 
-  if (row === undefined) return null;
-  const turn = v.safeParse(CompletedTurnSchema, parseJsonValue(row.turn));
+  const turn = row === undefined ? null : v.safeParse(CompletedTurnSchema, parseJsonValue(row.turn));
 
-  return turn.success ? turn.output.artifacts ?? null : null;
+  if (turn?.success !== true) return { artifacts: null, scaffoldVersion: null };
+
+  return { artifacts: turn.output.artifacts ?? null, scaffoldVersion: turn.output.scaffold?.version ?? null };
 }
 
 export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): CompletedTurnStore {

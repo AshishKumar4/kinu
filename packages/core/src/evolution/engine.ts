@@ -54,14 +54,13 @@ import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
 } from '../experience/imports';
 import {
-  initCompletedTurnTable, completedTurnArtifacts, createCompletedTurnStore, type CompletedTurnStore,
+  initCompletedTurnTable, completedTurnRanWith, createCompletedTurnStore, type CompletedTurnStore,
   MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
 } from './session-window';
 import { initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { buildChangelog } from './changelog';
-import { getCurrentScaffoldVersion } from '../scaffold/versions';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
@@ -335,7 +334,7 @@ export class EvolutionEngine {
           actions: renderActions(turn.toolCalls),
           answer: turn.assistantResponse,
           followup,
-          scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+          scaffoldVersion: turn.scaffold?.version ?? null,
           artifacts: turn.artifacts ?? null,
         });
       }
@@ -506,8 +505,7 @@ export class EvolutionEngine {
       source: 'thumbs',
       request: pair?.request ?? '',
       answer: pair?.response ?? '',
-      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
-      artifacts: completedTurnArtifacts(this.rt.storage.sql, this.rt.actor, messageId),
+      ...completedTurnRanWith(this.rt.storage.sql, this.rt.actor, messageId),
     });
 
   }

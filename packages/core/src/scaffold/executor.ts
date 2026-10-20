@@ -82,7 +82,8 @@ export type ScaffoldEvent =
   | { type: 'tool_result'; toolCallId: string; result?: JsonValue; outcome: ToolOutcome; error?: string }
   | { type: 'step_finish'; stepIndex: number; reason?: string }
   | { type: 'done'; result?: JsonValue }
-  | { type: 'error'; message: string }
+  /** `thrown` only from the run's own failure; a program's `host.emit` cannot set it. */
+  | { type: 'error'; message: string; thrown?: true }
   /** AI-SDK UI chunk from `host.defaultInference()`, passed through verbatim. */
   | { type: 'ui_chunk'; chunk: JsonValue }
   | { type: 'chat_chunk' | 'model_chunk'; streamId: string; chunk: ChatEvent }
@@ -479,7 +480,7 @@ export function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult
 
     if (result.error) {
       const msg = result.error;
-      yield* Effect.promise(async () => emit({ type: 'error', message: msg }));
+      yield* Effect.promise(async () => emit({ type: 'error', message: msg, thrown: true }));
 
       return {
         ok: false,

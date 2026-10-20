@@ -112,6 +112,10 @@ export class TurnAccumulator {
   askedOwner = false;
   /** The promoted text versions the turn assembled from (`ArtifactOverrides.versions`), set once it is admitted. */
   artifactVersions: readonly string[] = [];
+  /** The scaffold version its program ran, 0 for the built-in loop, set once it is admitted. */
+  scaffoldVersion = 0;
+  /** The program's own throw, if it threw (`thrown` on its error event). */
+  scaffoldThrew: string | null = null;
   /** The turn's last request, for providers/cache-warming.ts. Held by reference, never copied. `fallback`: the spec that
    *  served it, where a fallback did. */
   lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage; readonly fallback: string | undefined } | undefined = undefined;
@@ -155,6 +159,8 @@ export class TurnAccumulator {
     this.lastFinishReason = undefined;
     this.askedOwner = false;
     this.artifactVersions = [];
+    this.scaffoldVersion = 0;
+    this.scaffoldThrew = null;
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;

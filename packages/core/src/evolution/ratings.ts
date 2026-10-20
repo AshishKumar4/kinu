@@ -294,8 +294,9 @@ export function recordTurnRating(sql: SqlExecutor, actor: ActorHandle, input: Re
 interface RawRatingRow {
   id: string; turn_id: string; score: number; corrected: number; wrong: WrongReason | null; source: RatingSource;
   request: string; actions: string; answer: string; followup: string | null; scaffold_version: number | null;
-  /** `artifacts_json` of the newest of the turn's rows that has one. */
+  /** `artifacts_json` and `scaffold_version` of the newest of the turn's rows that has each. */
   ran_with: string | null;
+  ran_scaffold: number | null;
   rejects: string | null;
   created_at: number;
 }
@@ -306,7 +307,7 @@ function toRating(row: RawRatingRow): TurnRating {
   return {
     id: row.id, turnId: row.turn_id, score: row.score, corrected: row.corrected, wrong: row.wrong,
     source: row.source, request: row.request, actions: row.actions, answer: row.answer, followup: row.followup,
-    scaffoldVersion: row.scaffold_version,
+    scaffoldVersion: row.ran_scaffold,
     artifacts: row.ran_with === null ? null : v.parse(RanWithSchema, parseJsonValue(row.ran_with)),
     rejects: row.rejects,
     createdAt: row.created_at,
@@ -347,7 +348,9 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
   const rows = query.turnIds === undefined
     ? sql<RawRatingRow>`
       SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
-          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with FROM turn_ratings r
+          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with,
+        (SELECT a.scaffold_version FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold FROM turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.created_at >= ${query.since ?? 0}
         AND r.score < ${below} AND r.score >= ${from}
         AND NOT EXISTS (SELECT 1 FROM turn_ratings s
@@ -359,7 +362,9 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
       ORDER BY r.created_at DESC, r.id DESC LIMIT ${limit}`
     : sql<RawRatingRow>`
       SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
-          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with
+          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with,
+        (SELECT a.scaffold_version FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold
       FROM json_each(${JSON.stringify([...new Set(query.turnIds)])}) AS wanted CROSS JOIN turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.turn_id = wanted.value
         AND r.score < ${below} AND r.score >= ${from}

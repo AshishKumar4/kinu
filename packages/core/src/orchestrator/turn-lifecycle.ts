@@ -264,6 +264,7 @@ export function snapshotCompletedTurn(turn: { readonly acc: TurnAccumulator; rea
     shownLessons: acc.lessonsShown(),
     ...(acc.askedOwner && { askedOwner: true }),
     artifacts: acc.artifactVersions,
+    scaffold: { version: acc.scaffoldVersion, ...(acc.scaffoldThrew !== null && { threw: acc.scaffoldThrew }) },
   };
 
   if (opts.turnId !== undefined) completed.turnId = opts.turnId;
