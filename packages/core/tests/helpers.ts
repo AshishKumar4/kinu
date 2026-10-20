@@ -154,10 +154,6 @@ export function createMemoryMemory(db: Database, vfs: VFS & Required<Pick<VFS, '
 
 export function createMockLLM(responses: Record<string, string> = {}): LLM {
   return {
-    async *stream(opts) {
-      const key = Object.keys(responses).find(k => opts.system.includes(k) || opts.messages.some(m => m.content.includes(k)));
-      yield responses[key ?? ''] ?? 'mock response';
-    },
     async complete(prompt) {
       const key = Object.keys(responses).find(k => prompt.includes(k));
 

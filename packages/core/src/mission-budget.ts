@@ -373,12 +373,11 @@ export class MissionGovernor {
     return labels.map((l) => this.ledger.get(l)).filter((r): r is MissionRow => r !== null).map(toSnapshot);
   }
 
-  /** `stream` is guarded, not metered (turn loops debit it); `complete` is estimated from chars at the blended rate. */
+  /** `complete` is guarded, then estimated from chars at the blended rate. */
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
 
     return {
-      stream: (opts) => settleSync(Effect.andThen(this.admitCall(labels), Effect.sync(() => llm.stream(opts)))),
       complete: (prompt) => settle(Effect.gen({ self: this }, function* () {
         yield* this.admitCall(labels);
         const text = yield* Effect.promise(() => llm.complete(prompt));

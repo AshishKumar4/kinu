@@ -329,7 +329,6 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       const prompts: string[] = [];
 
       rt.fastLlm = {
-        stream: async function* () { yield ''; },
         complete: async (prompt) => {
           prompts.push(prompt);
 

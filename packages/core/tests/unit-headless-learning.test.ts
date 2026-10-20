@@ -35,7 +35,6 @@ function reflectingLlm() {
   let reflections = 0;
 
   const llm: LLM = {
-    async *stream() { yield ''; },
     async complete(prompt) {
       if (!prompt.includes(REFLECTION_PROMPT)) return '';
       reflections += 1;

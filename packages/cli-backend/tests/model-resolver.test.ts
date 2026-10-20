@@ -275,15 +275,7 @@ describe('createLocalModelResolver', () => {
     try {
       await createLocalProviderLLM({ llm, affinity: { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }, spend: UNOBSERVED }).complete('uncapped');
       await createLocalProviderLLM({ llm: { ...llm, ...staleCap }, affinity: { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }, spend: UNOBSERVED }).complete('stale cap');
-      let streamed = '';
-
-      for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap }, affinity: { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }, spend: UNOBSERVED })
-        .stream({ system: 'be brief', messages: [{ role: 'user', content: 'stream' }] })) {
-        streamed += chunk;
-      }
-
-      expect(streamed).toBe('ok');
-      expect(bodies).toHaveLength(3);
+      expect(bodies).toHaveLength(2);
 
       for (const body of bodies) {
         expect(Object.hasOwn(body, 'max_tokens')).toBe(false);

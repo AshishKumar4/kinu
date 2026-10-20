@@ -168,7 +168,6 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
     let scores = 0;
     const advisor = scriptedAdvisorPort();
     rt.judgeModel = {
-      async *stream() { yield ''; },
       complete: async () => { scores++;
 
  return '{"score":0.7}'; },

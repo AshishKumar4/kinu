@@ -44,7 +44,6 @@ function bornWithoutModel(): LLM {
   const refused = (): Promise<never> => Promise.reject(new KinuError('unsupported', 'a workspace being born calls no model'));
 
   return {
-    stream: () => ({ [Symbol.asyncIterator]: () => ({ next: refused }) }),
     complete: refused,
   };
 }
