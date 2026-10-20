@@ -348,8 +348,8 @@ export type {
 } from './slates/room-api';
 
 export {
-  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
-  GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
+  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GallerySlateSchema, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
   EXPLORE_KINDS, ExplorePageSchema, BlueprintPageSchema, explorePath, workspaceBlueprintPath,
   type ExploreKind, type ExploreItem, type ExplorePage, type WorkspaceCard, type BlueprintPage,
@@ -2060,10 +2060,12 @@ export { WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-
 
 export {
   blueprintPage, blueprintSeed,
-  type BlueprintInstall, type BlueprintNeed, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
+  type BlueprintInstall, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
 } from './blueprints/workspace';
 
 export { PERSONAL_ASSISTANT_ID, kinuBlueprint, kinuListings } from './blueprints/kinu';
+
+export { ClockSchema } from './blueprints/workspace';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 

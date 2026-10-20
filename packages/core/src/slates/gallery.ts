@@ -11,9 +11,9 @@ import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { textContains } from '../utils/text-match';
 import {
-  EXPLORE_KINDS, GALLERY_CATEGORIES, GALLERY_PAGE_SIZE,
-  type ExploreItem, type ExploreKind, type ExplorePage, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate,
-  type GallerySort, type WorkspaceCard,
+  EXPLORE_KINDS, ExploreNeedSchema, GALLERY_CATEGORIES, GALLERY_PAGE_SIZE,
+  type ExploreItem, type ExploreKind, type ExplorePage, type GalleryCategory, type GalleryListing, type GallerySlate, type GallerySort,
+  type WorkspaceCard,
 } from './gallery-api';
 import type { GalleryListingSync } from './share-modes';
 
@@ -30,7 +30,7 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
     maker TEXT NOT NULL DEFAULT 'person' CHECK (maker IN ('person', 'kinu')),
     url TEXT NOT NULL,
     picture TEXT,
-    needs TEXT, /* JSON: what an install asks of the person (BlueprintNeed[]) */
+    needs TEXT, /* JSON: what an install asks of the person (ExploreNeed[]) */
     listed_at INTEGER NOT NULL,
     viewers INTEGER NOT NULL DEFAULT 0, /* a projection: the owner workspace's distinct signed-in viewers of the share (slate_share_views), as its last listing sync carried them */
     PRIMARY KEY (kind, workspace, item)
@@ -82,9 +82,7 @@ export interface KinuListing {
   readonly needs: WorkspaceCard['needs'];
 }
 
-const NeedsSchema = v.pipe(v.string(), v.parseJson(), v.array(v.object({
-  connection: v.nullable(v.string()), secret: v.nullable(v.string()), access: v.picklist(['read', 'write']), why: v.string(),
-})));
+const NeedsSchema = v.pipe(v.string(), v.parseJson(), v.array(ExploreNeedSchema));
 
 /** The window stars count toward trending, and toward this week's featured two. */
 const TRENDING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -177,37 +175,6 @@ export class GalleryIndex {
     this.db.exec('DELETE FROM gallery_stars WHERE email = ?', person.email);
     this.db.exec('DELETE FROM gallery_reports WHERE email = ?', person.email);
     this.db.exec('DELETE FROM gallery_installs WHERE user_id = ?', person.userId);
-  }
-
-  /** One page, newest first, most starred, or most starred this week; `viewer` sees their own stars. */
-  page(query: { readonly q: string; readonly sort: GallerySort; readonly category: GalleryCategory | null; readonly page: number },
-    viewer: string | null, now: number): GalleryPage {
-    const where: string[] = [];
-    const params: (string | number)[] = [];
-
-    // Its words anywhere in the title or the line.
-    if (query.q !== '') {
-      where.push(`(${textContains('l.title')} OR ${textContains('l.line')})`);
-      params.push(query.q, query.q);
-    }
-
-    if (query.category !== null) {
-      where.push('l.category = ?');
-      params.push(query.category);
-    }
-
-    const order = { new: 'l.listed_at DESC', stars: 'stars DESC, l.listed_at DESC', trending: 'recent DESC, stars DESC, l.listed_at DESC' }[query.sort];
-    const offset = Math.max(0, query.page) * GALLERY_PAGE_SIZE;
-
-    const rows = this.rows(`WHERE ${["l.kind = 'app'", ...where].join(' AND ')} ORDER BY ${order} LIMIT ? OFFSET ?`,
-      [...params, GALLERY_PAGE_SIZE + 1, offset], viewer, now);
-
-    const featured = this.featured(now);
-
-    return {
-      listings: rows.slice(0, GALLERY_PAGE_SIZE).map((row) => listingOf(row, featured)),
-      next: rows.length > GALLERY_PAGE_SIZE ? query.page + 1 : null,
-    };
   }
 
   /** One page of Explore: both kinds ranked together, or one kind, Kinu's own first; `viewer` sees their own stars. */

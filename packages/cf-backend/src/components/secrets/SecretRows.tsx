@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { Combobox } from "@cloudflare/kumo";
 import { TrashIcon } from "@phosphor-icons/react";
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
-import { secretProvider } from "@kinu.run/core";
+import { parseDotenv, secretProvider } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
 import { Choice, inputCls } from "@/components/ui/form";
 import { listWorkspaces, type SecretEntry } from "@/lib/user-api";
@@ -23,7 +23,7 @@ export interface SecretDraft {
 }
 
 /** Where a new secret goes unless the owner says otherwise: the Authorization header, as most APIs read a key. */
-export const AUTHORIZATION: SecretPosition = { kind: "authorization" };
+const AUTHORIZATION: SecretPosition = { kind: "authorization" };
 
 export const BLANK: SecretDraft = { name: "", value: "", hosts: "", position: AUTHORIZATION };
 
@@ -62,8 +62,27 @@ export function rowsReady(rows: readonly SecretDraft[]): boolean {
   return secretEntries(rows).length > 0 && rows.every((row) => rowProblem(row) === null);
 }
 
+/**
+ * A pasted .env's finished lines taken into `rows`, which stay the one copy: a name they hold takes the line's value and
+ * keeps its hosts and position; a new one is added with its provider's host. What is left is the unfinished last line,
+ * or nothing once the paste is `done`.
+ */
+export function takeDotenvLines(rows: readonly SecretDraft[], text: string, done: boolean) {
+  const lines = text.split(/\r?\n/u);
+  const left = done ? "" : lines.pop() ?? "";
+  const taken = new Map(rows.filter((row) => row.name !== "" || row.value !== "").map((row) => [row.name, row]));
+
+  for (const { name, value } of parseDotenv(lines.join("\n"))) {
+    const held = taken.get(name);
+
+    taken.set(name, held === undefined ? withProvider({ ...BLANK, name, value }) : { ...held, value });
+  }
+
+  return { rows: [...taken.values()], left };
+}
+
 /** A value whose shape names its provider fills a blank name, and blank hosts with that provider's own and its position. */
-export function withProvider(row: SecretDraft): SecretDraft {
+function withProvider(row: SecretDraft): SecretDraft {
   const provider = secretProvider(row.value.trim());
 
   if (provider === null) return row;

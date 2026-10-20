@@ -49,22 +49,6 @@ export const GALLERY_LAST_PAGE = Math.floor(Number.MAX_SAFE_INTEGER / GALLERY_PA
 
 export type GallerySort = (typeof GALLERY_SORTS)[number];
 
-/** One page of the Gallery: `next` is the page after it, null at the end. */
-export const GalleryPageSchema = v.object({ listings: v.array(GalleryListingSchema), next: v.nullable(v.number()) });
-
-export type GalleryPage = v.InferOutput<typeof GalleryPageSchema>;
-
-/** `GET`, public: one page of listings, matching `q` and in `category` when given. */
-export function galleryPath(query: { q: string; sort: GallerySort; category: GalleryCategory | null; page: number }): string {
-  const search = new URLSearchParams({ sort: query.sort, page: String(query.page) });
-
-  if (query.q !== '') search.set('q', query.q);
-
-  if (query.category !== null) search.set('category', query.category);
-
-  return `/api/gallery?${search.toString()}`;
-}
-
 /** A listed slate's own page, as the index holds it. */
 export const GallerySlateSchema = v.object({
   listing: GalleryListingSchema,
@@ -111,9 +95,9 @@ export const EXPLORE_KINDS = ['app', 'workspace'] as const;
 
 export type ExploreKind = (typeof EXPLORE_KINDS)[number];
 
-/** What an install asks of the person: a connection (an MCP preset id) at a level of access, or a secret by name; and
- *  why (blueprints/workspace.ts `BlueprintNeed`). */
-const ExploreNeedSchema = v.object({
+/** What an install reaches of the person's: a connection (an MCP preset id) or a secret by name, read or written, and
+ *  why. A workspace blueprint declares it, its listing keeps it, and its card shows it. */
+export const ExploreNeedSchema = v.strictObject({
   connection: v.nullable(v.string()),
   secret: v.nullable(v.string()),
   access: v.picklist(['read', 'write']),

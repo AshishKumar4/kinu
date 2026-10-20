@@ -1068,7 +1068,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     }, 1);
 
     try {
-      return { found: index.page({ q, sort: 'new', category: null, page: 0 }, null, 2).listings.map((listing) => listing.line) };
+      return { found: index.explore({ q, kind: 'app', sort: 'new', category: null, page: 0 }, null, 2).items.flatMap((item) => (item.kind === 'app' ? [item.app.line] : [])) };
     } catch (cause) {
       return { failed: cause instanceof Error ? cause.message : String(cause) };
     }

@@ -1,8 +1,8 @@
 /**
- * The Gallery (sharing v7 `gallery`, `gallery-slate`): the real pages over the gallery's listings fixture
- * (gallery-listings.tsx), which answers `/api/gallery` as the Gallery's contract says (room-api.ts). Sort, category and
- * search ask the server again; a listed slate opens by its link, forks with its key, stars, and can be reported. Every
- * card and hero shows the slate's picture where it has one. Signed out, the same pages sit in a bar with Sign in.
+ * A listed slate's page (sharing v7 `gallery-slate`): the real page over the gallery's listings fixture
+ * (gallery-listings.tsx), which answers `/api/gallery` as the Gallery's contract says (room-api.ts). A listed slate opens
+ * by its link, forks with its key, stars, and can be reported; its hero shows its picture, and More like it is Explore's
+ * apps of its category. Signed out, the same page sits in a bar with Sign in.
  */
 import { describe, expect, test } from 'bun:test';
 import { Effect } from 'effect';
@@ -37,7 +37,7 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   return page;
 }
 
-const listed = (page: Page, within = '') => page.$$eval(`${within} [data-gallery-listing]`, (tiles) => tiles.map((tile) => tile.getAttribute('data-gallery-listing')));
+const liked = (page: Page) => page.$$eval('[data-gallery-like] [data-explore-item]', (cards) => cards.map((card) => card.getAttribute('data-explore-item')));
 
 /** The fixture's record of what the page asked the Gallery (gallery-listings.tsx): its fetches never reach the network. */
 const AskedSchema = v.array(v.object({ path: v.string(), search: v.string(), body: v.nullable(v.string()) }));
@@ -65,73 +65,7 @@ async function askedAfter(page: Page, path: string, act: () => Promise<void>): P
   return found;
 }
 
-const searched = async (page: Page, act: () => Promise<void>) => new URLSearchParams((await askedAfter(page, '/api/gallery', act)).search);
-
-describe('the Gallery', () => {
-  test('lists what people listed; sort, category and search ask again; a next page appends', async () => {
-    await withGallery(async (gallery) => {
-      for (const [theme, viewport] of [['dark', 'desktop'], ['light', 'mobile']] as const) {
-        const page = await freshPage(gallery, 'gallery-list', theme, viewport);
-
-        try {
-          await page.waitForSelector('[data-gallery-listing]', SOON);
-          // This week's top two lead the unfiltered page.
-          expect(await page.$$eval('[data-gallery-featured]', (cards) => cards.map((card) => card.getAttribute('data-gallery-featured')))).toEqual(['pr-board', 'trip']);
-          expect(await page.$eval('[data-gallery-sort="trending"]', (chip) => chip.getAttribute('aria-pressed'))).toBe('true');
-
-          // Each card shows its slate's picture through the Gallery's read.
-          expect(await page.$eval('[data-gallery-listing="pr-board"] img[data-slate-picture]', (img) => new URL(img.getAttribute('src') ?? '', location.origin).pathname)).toMatch(PICTURE);
-          // And how many people signed in have opened it, beside its stars.
-          expect(await page.$eval('[data-gallery-featured="pr-board"] [data-gallery-viewers]', (count) => [count.getAttribute('data-gallery-viewers'), count.getAttribute('aria-label')]))
-            .toEqual(['1840', '1,840 people have opened it']);
-          expect(await page.$eval('[data-gallery-listing="habits"] [data-gallery-viewers]', (count) => count.textContent)).toBe('705');
-          expect(await page.$('[data-gallery-featured="trip"] img[data-slate-picture]')).not.toBeNull();
-
-          // A page at a time: the next one joins it.
-          expect(await listed(page)).toHaveLength(6);
-          expect((await searched(page, () => page.click('[data-gallery-more]'))).get('page')).toBe('1');
-          await page.waitForFunction(() => document.querySelectorAll('[data-gallery-listing]').length === 7, SOON);
-          expect(await page.$('[data-gallery-more]')).toBeNull();
-          // A slate with no picture yet keeps its letter.
-          expect(await page.$('[data-gallery-listing="poll"] img[data-slate-picture]')).toBeNull();
-
-          const bySort = await searched(page, () => page.click('[data-gallery-sort="stars"]'));
-
-          expect([bySort.get('sort'), bySort.get('page')]).toEqual(['stars', '0']);
-          await page.waitForSelector('[data-gallery-sort="stars"][aria-pressed="true"]', SOON);
-
-          const byCategory = await searched(page, () => page.click('[data-gallery-category="home"]'));
-
-          expect(byCategory.get('category')).toBe('home');
-          await page.waitForFunction(() => document.querySelectorAll('[data-gallery-listing]').length === 2, SOON);
-          expect(await listed(page)).toEqual(['habits', 'recipe']);
-          expect(await page.$('[data-gallery-featured]')).toBeNull();
-
-          await page.click('[data-gallery-category="all"]');
-          await page.waitForFunction(() => document.querySelectorAll('[data-gallery-listing]').length === 6, SOON);
-
-          const bySearch = await searched(page, () => page.type('[data-gallery-search]', 'scale'));
-
-          expect(bySearch.get('q')).toContain('s');
-          await page.waitForFunction(() => document.querySelectorAll('[data-gallery-listing]').length === 1, SOON);
-          expect(await listed(page)).toEqual(['recipe']);
-
-          await page.type('[data-gallery-search]', 'zzz');
-          await page.waitForSelector('[data-gallery-no-match]', SOON);
-
-          // A card opens its slate's own page.
-          await page.click('[data-gallery-search]', { count: 3 });
-          await page.keyboard.press('Backspace');
-          await page.waitForSelector('[data-gallery-listing="trip"] a', SOON);
-          await page.click('[data-gallery-listing="trip"] a');
-          await page.waitForSelector('[data-gallery-slate="trip"]', SOON);
-        } finally {
-          await page.close();
-        }
-      }
-    });
-  });
-
+describe("a listed slate's page", () => {
   test("a listed slate's page: Open by its link, Fork, Star, its counts, Report", async () => {
     await withGallery(async (gallery) => {
       for (const [theme, viewport] of [['light', 'desktop'], ['dark', 'mobile']] as const) {
@@ -143,8 +77,6 @@ describe('the Gallery', () => {
           expect(await page.$eval('[data-gallery-open]', (link) => link.getAttribute('href'))).toBe('/s/ravi/pr-board?k=p8x2');
           expect(await page.$('[data-gallery-people]')).not.toBeNull();
           expect(await page.$('[data-gallery-forks]')).not.toBeNull();
-          // More like it: the same category, never itself.
-          expect(await listed(page, '[data-gallery-like]')).not.toContain('pr-board');
 
           // Star, then take it back: each is asked of the Gallery, and the count follows.
           expect(await page.$eval('[data-gallery-viewers]', (line) => line.textContent ?? '')).toMatch(/^Opened by [\d,]+ people$/);
@@ -195,30 +127,25 @@ describe('the Gallery', () => {
         expect(await lent.$('[data-gallery-needs]')).not.toBeNull();
         expect(await lent.$('[data-gallery-need]')).toBeNull();
         expect(await lent.$('[data-gallery-forks]')).toBeNull();
+        // More like it: Explore's apps of its category, never itself.
+        await lent.waitForSelector('[data-gallery-like] [data-explore-item]', SOON);
+        expect(await liked(lent)).toEqual(['standup']);
       } finally {
         await lent.close();
       }
     });
   });
 
-  test('signed out: the same pages under a bar with Sign in; Open is the link, and Fork, Star and Report sign in first', async () => {
+  test('signed out: the same page under a bar with Sign in; Open is the link, and Fork, Star and Report sign in first', async () => {
     await withGallery(async (gallery) => {
       for (const [theme, viewport] of [['dark', 'desktop'], ['light', 'mobile']] as const) {
-        const list = await freshPage(gallery, 'gallery-list&signed=out', theme, viewport);
-
-        try {
-          await list.waitForSelector('[data-gallery-public] [data-gallery-listing]', SOON);
-          expect(await list.$('nav[aria-label="Primary"]')).toBeNull();
-          expect(await list.$('[data-gallery-sign-in]')).not.toBeNull();
-        } finally {
-          await list.close();
-        }
-
         for (const [control, forking] of [['[data-gallery-star]', null], ['[data-gallery-report]', null], ['[data-gallery-fork]', '1']] as const) {
           const slate = await freshPage(gallery, 'gallery-slate&slate=pr-board&signed=out', theme, viewport);
 
           try {
             await slate.waitForSelector('[data-gallery-public] [data-gallery-slate="pr-board"]', SOON);
+            expect(await slate.$('nav[aria-label="Primary"]')).toBeNull();
+            expect(await slate.$('[data-gallery-sign-in]')).not.toBeNull();
             expect(await slate.$eval('[data-gallery-open]', (link) => link.getAttribute('href'))).toBe('/s/ravi/pr-board?k=p8x2');
 
             const [login] = await Promise.all([

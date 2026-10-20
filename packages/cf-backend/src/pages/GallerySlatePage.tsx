@@ -6,10 +6,12 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FlagIcon, FolderIcon, GitForkIcon, GithubLogoIcon, PlayIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
-import type { GalleryListing, GallerySlate, RoomService } from "@kinu.run/core";
+import { APP_ROUTES, galleryPicturePath, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { useGallerySignedIn } from "@/components/gallery/GalleryShell";
-import { ListingPicture, ListingTile } from "@/components/gallery/GalleryTiles";
+import { Cover } from "@/components/drive/DriveTiles";
+import { ExploreCard } from "@/components/explore/ExploreCard";
+import { SlatePicture } from "@/components/slates/SlatePicture";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { Avatar } from "@/components/ui/Avatar";
@@ -18,7 +20,8 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { hereForking, signInAndReturn } from "@/lib/sign-in";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { readGallery, readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
+import { readExplore, type ExploreItem } from "@/lib/explore-api";
+import { readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
@@ -91,14 +94,14 @@ export default function GallerySlatePage() {
   const [read, setRead] = useState<GallerySlate | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
-  const [like, setLike] = useState<readonly GalleryListing[]>([]);
+  const [like, setLike] = useState<readonly ExploreItem[]>([]);
   const [star, setStar] = useState<{ on: boolean; count: number } | null>(null);
   const [starFailure, setStarFailure] = useState<string | null>(null);
   // Back from signing in to fork: the picker is open.
   const [dialog, setDialog] = useState<"fork" | "report" | null>(signedIn && search.has("fork") ? "fork" : null);
   const [reported, setReported] = useState(false);
 
-  // The slate's page, then more of its category: never itself.
+  // The slate's page, then more apps of its category from Explore: never itself.
   useEffect(() => {
     let current = true;
 
@@ -107,8 +110,8 @@ export default function GallerySlatePage() {
       setRead(page);
       setStar({ on: page.listing.starred, count: page.listing.stars });
 
-      return Effect.map(Effect.promise(() => readGallery({ q: "", sort: "trending", category: page.listing.category, page: 0 })), (same) => {
-        if (current) setLike(same.listings.filter((each) => each.workspace !== workspace || each.slate !== slate).slice(0, 2));
+      return Effect.map(Effect.promise(() => readExplore({ q: "", kind: "app", sort: "trending", category: page.listing.category, page: 0 })), (same) => {
+        if (current) setLike(same.items.filter((each) => each.kind === "app" && (each.app.workspace !== workspace || each.app.slate !== slate)).slice(0, 2));
       });
     }), showing((chain) => { if (current) setFailure(chain); })));
 
@@ -140,9 +143,12 @@ export default function GallerySlatePage() {
   return (
     <div className="h-full overflow-y-auto" data-gallery-slate={listing.slate}>
       <div className="mx-auto w-full max-w-[1120px] px-4 pb-16 pt-6 sm:px-8 sm:pt-8">
-        <p className="p-meta p-text-3"><Link to="/gallery" className="p-text-2 hover:underline">Gallery</Link> / {listing.title}</p>
+        <p className="p-meta p-text-3"><Link to={`${APP_ROUTES.explore}?kind=app`} className="p-text-2 hover:underline">Explore</Link> / {listing.title}</p>
         <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div data-gallery-hero className="relative aspect-[2/1] overflow-hidden rounded-[14px] border p-border"><ListingPicture listing={listing} /></div>
+          <div data-gallery-hero className="relative aspect-[2/1] overflow-hidden rounded-[14px] border p-border">
+            <SlatePicture workspace={listing.workspace} slate={{ id: listing.slate, title: listing.title, picture: listing.picture }} at={galleryPicturePath}
+              className="absolute inset-0 size-full object-cover object-left-top" fallback={<Cover title={listing.title} />} />
+          </div>
           <div className="min-w-0 space-y-4">
             <div>
               <h1 className="p-display text-2xl">{listing.title}</h1>
@@ -174,7 +180,7 @@ export default function GallerySlatePage() {
           {like.length > 0 && (
             <div data-gallery-like>
               <h2 className="mb-3 p-heading text-[15px] p-text">More like it</h2>
-              <ul className="grid gap-4 sm:grid-cols-2">{like.map((each) => <ListingTile key={`${each.workspace}/${each.slate}`} listing={each} />)}</ul>
+              <ul className="grid gap-4 sm:grid-cols-2">{like.map((each) => <ExploreCard key={each.kind === "app" ? `${each.app.workspace}/${each.app.slate}` : each.workspace.id} item={each} />)}</ul>
             </div>
           )}
         </div>

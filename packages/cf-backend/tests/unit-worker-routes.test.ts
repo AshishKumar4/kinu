@@ -145,6 +145,13 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   // A live share's entry is its link and its Gallery Open: its shell is public, and its open route decides who it admits.
   ['page', 'GET', '/shared/live/acme/share-1', shell('/shared/live/acme/share-1')],
   ['anon', 'GET', '/shared/live/acme/share-1', shell('/shared/live/acme/share-1')],
+  // The Gallery's list is Explore's apps: its address lands there, behind sign-in as Explore is; a listed slate's page
+  // stays public.
+  ['anon', 'GET', '/gallery', { status: 302, assets: [], location: '/explore?kind=app' }],
+  ['signed-in', 'GET', '/gallery', { status: 302, assets: [], location: '/explore?kind=app' }],
+  ['page', 'GET', '/explore?kind=app', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fexplore%3Fkind%3Dapp` }],
+  ['signed-in', 'GET', '/explore?kind=app', shell('/explore')],
+  ['anon', 'GET', '/gallery/ravi/pr-board', shell('/gallery/ravi/pr-board')],
   // The Drive's Shared tab is the account's own.
   ['page', 'GET', '/shared', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fshared` }],
   ['anon', 'GET', '/shared/live', door(401)],
