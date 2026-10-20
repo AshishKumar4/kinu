@@ -315,7 +315,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           modules: probeModules('hire-probe.ts', probeRuntime),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           ai: await getHireAi(),
-          serviceBindings: { ASSETS: agentAssets() },
+          // The shipped facet, whose live relay a `relay-cut-` workspace loses at a shell call (relay-cut.test.ts).
+          serviceBindings: { ASSETS: agentAssets(fileURLToPath(new URL('./tests/workerd/relay-cut-agent.ts', import.meta.url))) },
           outboundService: hireOutbound,
           durableObjects: {
             HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
