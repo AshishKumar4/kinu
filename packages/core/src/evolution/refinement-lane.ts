@@ -13,7 +13,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 // user's own sentence in the reviewed turns.
 
 import { renderWatch } from './watch';
-import { changeStanding, type ChangeOwners } from './change-standing';
+import { changeOwners, changeStanding, type ChangeOwners } from './change-standing';
 import { confusedPicks, renderConfusedPicks } from './picks';
 import { discoverSkills } from '../skills/discover';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
@@ -489,11 +489,6 @@ function parseProposal(scope: RefinementScope) {
 
     return parsed.output.scope === scope ? Result.succeed(parsed.output) : Result.fail(`the dreamer proposed at ${parsed.output.scope} scope and this dream is ${scope} scope`);
   };
-}
-
-/** The stores a dream's changes live in, as this lane holds them. */
-function changeOwners(deps: RefinementDeps): ChangeOwners {
-  return { sql: deps.control.sql, actor: deps.control.rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
 }
 
 /** The owner's order for where a lesson goes, which the dreamer drafts by and the reviewer holds it to. */

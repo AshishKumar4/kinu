@@ -9,7 +9,9 @@ import type { SqlExecutor } from '../types/primitives';
 import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
 import { artifactVersion, type ArtifactStatus } from './artifacts';
-import type { RefinementRequest, RefinementRoute } from './refinement';
+import type { RefinementDeps, RefinementRequest, RefinementRoute } from './refinement';
+import { replacedBy } from '../scaffold/versions';
+import type { ScaffoldStatus } from '../types/scaffold';
 
 /** The stores a dream's changes live in, each the owner of whether its change is in effect. */
 export interface ChangeOwners {
@@ -17,6 +19,11 @@ export interface ChangeOwners {
   readonly actor: ActorHandle;
   /** The trust authority a dream's skill lives by; absent: no skill is in effect. */
   readonly approvals?: Pick<InstructionApprovalStore, 'get'>;
+}
+
+/** The stores a dream lane's changes live in. */
+export function changeOwners(deps: Pick<RefinementDeps, 'control' | 'approvals'>): ChangeOwners {
+  return { sql: deps.control.sql, actor: deps.control.rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
 }
 
 /** Where a dream's change stands, as its owner holds it now, never as its route recorded it when it was made. */
@@ -72,4 +79,21 @@ export function changeStanding(
 
     case 'subagent_spec': return null;
   }
+}
+
+const SCAFFOLD_STANDING = {
+  current: 'in_effect',
+  pending: 'waiting',
+  rolled_back: 'reverted',
+  historical: 'replaced',
+} as const satisfies Record<ScaffoldStatus, ChangeStanding>;
+
+/** A scaffold version by its row, in effect since the promotion that made it current; null for one never recorded. */
+export function scaffoldStanding({ sql, actor }: ChangeOwners, version: number): Standing | null {
+  actor.assertCurrent();
+
+  const row = sql<{ status: ScaffoldStatus; written_at: number }>`SELECT status, written_at FROM scaffold_versions
+    WHERE actor_id = ${actor.actorId} AND version = ${version}`[0];
+
+  return row === undefined ? null : { standing: SCAFFOLD_STANDING[row.status], since: replacedBy(sql, actor, version)?.at ?? row.written_at };
 }

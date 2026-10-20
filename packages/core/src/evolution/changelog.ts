@@ -16,7 +16,7 @@ import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents
 import { rollbackScaffold } from '../scaffold/rollback';
 import { artifactLabel, artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
 import { revertDreamSkill } from './refinement-skill';
-import { replacedBy } from '../scaffold/watch';
+import { replacedBy } from '../scaffold/versions';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,

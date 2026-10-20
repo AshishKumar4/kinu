@@ -1,19 +1,26 @@
 /**
- * The watch (docs/EVOLUTION.md, "The watch"): what the dreams changed, held to the turns that ran with it. A rated
- * turn's rater is asked whether the reply rejects one of the dream changes the turn ran with, and an explicit stop
- * reverts that change at the dream lane's next pass.
+ * The watch (docs/EVOLUTION.md, "The watch"): every change in effect, held to the turns that ran with it, each read
+ * through its owner (`change-standing.ts`). Two signals revert one at the dream lane's next pass: a rated reply that
+ * explicitly rejects a dream's change, and, for the scaffold version made current, a turn it threw on or its low-rated
+ * turns beyond chance against the version it replaced. Text is never reverted by a count: the next dream revises it.
  */
 
+import * as v from 'valibot';
 import { Result } from 'effect';
+import { parseJsonValue } from '../utils/json';
+import { WORKSPACE_RUN_ID } from '../events/model-call';
+import { CompletedTurnSchema } from './session-window';
+import { getCurrentScaffoldVersion, replacedBy } from '../scaffold/versions';
+import { rollbackScaffold } from '../scaffold/rollback';
 import { createFactsStore, type FactsStore } from '../memory/facts';
 import { parseSkillFile } from '../skills/parse';
 import { evidenceWindow } from '../utils/evidence-window';
 import { diagnostics } from '../obs/index';
 import { RunEventRecorder } from '../events/recorder';
 import { artifactLabel, artifactVersion } from './artifacts';
-import { changeStanding, type ChangeOwners, type ChangeStanding, type Standing } from './change-standing';
+import { changeOwners, changeStanding, scaffoldStanding, type ChangeOwners, type ChangeStanding, type Standing } from './change-standing';
 import { executeChangelogRevert, type ChangelogRevertAction } from './changelog';
-import { isCorrected, listRejections, listTurnRatings, type TurnRating } from './ratings';
+import { isCorrected, isLowRating, listRejections, listTurnRatings, type TurnRating } from './ratings';
 import {
   createRefinementStore, type RefinementDeps, type RefinementEdit, type RefinementRequest, type RefinementRoute,
 } from './refinement';
@@ -233,10 +240,9 @@ export function renderWatch(owners: ChangeOwners): string {
  * effect and took effect before that reply, is reverted as the owner's own revert would. Runs before a dream, so the
  * dream reads the agent as the owner left it.
  */
-export async function revertRejectedChanges(deps: RefinementDeps): Promise<void> {
+async function revertRejectedChanges(deps: RefinementDeps, owners: ChangeOwners): Promise<void> {
   const { sql, rt } = deps.control;
   const events = new RunEventRecorder(sql, rt.actor);
-  const owners: ChangeOwners = { sql, actor: rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
 
   for (const rejection of listRejections(sql, rt.actor, EXPLICIT_STOP)) {
     const change = dreamChangesFor(owners, rejection.artifacts, Infinity).find((listed) => listed.id === rejection.rejects);
@@ -246,4 +252,92 @@ export async function revertRejectedChanges(deps: RefinementDeps): Promise<void>
 
     if (reverted.ok) diagnostics.event('dream.change_rejected', { change: change.id, turn: rejection.turnId });
   }
+}
+
+/** Rated turns a scaffold version is watched for. */
+const WATCHED_TURNS = 10;
+
+/** The replaced version's rated turns its share is read from. */
+const BASELINE_TURNS = 30;
+
+/** 5% across the watch's ten looks (Bonferroni): one look's bound. */
+const REGRESSION_BOUND = 0.05 / WATCHED_TURNS;
+
+/** P(X >= k) for X ~ Binomial(n, p). */
+function upperTail(k: number, n: number, p: number): number {
+  let total = 0;
+  let term = (1 - p) ** n;
+
+  for (let i = 0; i <= n; i += 1) {
+    if (i >= k) total += term;
+    term = term * ((n - i) / (i + 1)) * (p / (1 - p));
+  }
+
+  return Math.min(1, total);
+}
+
+function lowShare(ratings: readonly TurnRating[]) {
+  return { low: ratings.filter((rating) => isLowRating(rating.score)).length, of: ratings.length };
+}
+
+/** The scaffold version under watch: in effect since a promotion that replaced `replaced`. */
+interface WatchedScaffold {
+  readonly version: number;
+  readonly replaced: number;
+  readonly since: number;
+}
+
+/** Why the version goes back, or null while it holds. */
+function scaffoldVerdict({ sql, actor }: ChangeOwners, { version, since, replaced }: WatchedScaffold): string | null {
+  const threw = sql<{ turn: string }>`SELECT turn FROM completed_turns WHERE actor_id = ${actor.actorId} AND created_at >= ${since}`
+    .map((row) => v.safeParse(CompletedTurnSchema, parseJsonValue(row.turn)))
+    .flatMap((parsed) => (parsed.success && parsed.output.scaffold?.version === version && parsed.output.scaffold.threw !== undefined
+      ? [{ turnId: parsed.output.turnId, threw: parsed.output.scaffold.threw }]
+      : []))[0];
+
+  if (threw !== undefined) return `it threw on turn ${threw.turnId}: ${threw.threw}`;
+
+  const rated = listTurnRatings(sql, actor, { since }).filter((rating) => rating.scaffoldVersion === version);
+  const baseline = listTurnRatings(sql, actor).filter((rating) => rating.scaffoldVersion === replaced).slice(0, BASELINE_TURNS);
+  const now = lowShare(rated);
+  const before = lowShare(baseline);
+  // Smoothed, so a clean baseline is not certainty and an empty one is a coin.
+  const expected = (before.low + 1) / (before.of + 2);
+
+  if (now.of === 0 || upperTail(now.low, now.of, expected) >= REGRESSION_BOUND) return null;
+
+  return `${String(now.low)} of its ${String(now.of)} rated turns were low, against ${String(before.low)} of `
+    + `${String(before.of)} under v${String(replaced)}`;
+}
+
+/** The current scaffold version, while a promotion made it so and fewer than 10 of its turns are rated. */
+function watchedScaffold(owners: ChangeOwners): WatchedScaffold | null {
+  const version = getCurrentScaffoldVersion(owners.sql, owners.actor);
+  const promotion = version === null ? null : replacedBy(owners.sql, owners.actor, version);
+
+  if (version === null || promotion === null || scaffoldStanding(owners, version)?.standing !== 'in_effect') return null;
+  const rated = listTurnRatings(owners.sql, owners.actor, { since: promotion.at }).filter((rating) => rating.scaffoldVersion === version).length;
+
+  return rated > WATCHED_TURNS ? null : { version, replaced: promotion.replaced, since: promotion.at };
+}
+
+/** A scaffold version that threw or regressed goes back to the one it replaced, with why on its rollback event. */
+async function revertRegressedScaffold(deps: RefinementDeps, owners: ChangeOwners): Promise<void> {
+  const { rt, events } = deps.control;
+  const watching = watchedScaffold(owners);
+  const reason = watching === null ? null : scaffoldVerdict(owners, watching);
+
+  if (watching === null || reason === null) return;
+  const restored = await rollbackScaffold(rt, watching.replaced);
+
+  if (Result.isFailure(restored)) return;
+  events.emit(WORKSPACE_RUN_ID, { type: 'scaffold_rollback', fromVersion: watching.version, toVersion: watching.replaced, reason });
+}
+
+/** The watch's one look, on the dream lane's pass, before its replay and its dream. */
+export async function watchChanges(deps: RefinementDeps): Promise<void> {
+  const owners = changeOwners(deps);
+
+  await revertRegressedScaffold(deps, owners);
+  await revertRejectedChanges(deps, owners);
 }
