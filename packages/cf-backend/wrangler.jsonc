@@ -281,6 +281,8 @@
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
     "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
     "CLOUDFLARE_AI_GATEWAY_ID": "default",
+    // The /deploy door's public PKCE client (docs/SELF-DEPLOY.md § The Cloudflare door): an id, never a secret.
+    "CLOUDFLARE_DEPLOY_CLIENT_ID": "d4a4eef20ae904413777223b4e9ea682",
     // Mission Inbox mail domain: <agent-name>@EMAIL_DOMAIN. Takes effect only
     // after the one-time Email Routing / Email Sending setup in
     // docs/EMAIL-INGRESS.md is done for this domain.
@@ -562,6 +564,7 @@
         "SIGN_IN_PROVIDERS": "",
         "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
         "CLOUDFLARE_AI_GATEWAY_ID": "default",
+        "CLOUDFLARE_DEPLOY_CLIENT_ID": "d4a4eef20ae904413777223b4e9ea682",
         "EMAIL_DOMAIN": "staging.kinu.run",
         "OPS_ALERT_EMAIL": "",
         "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "",

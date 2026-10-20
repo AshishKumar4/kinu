@@ -44,6 +44,16 @@ export const DEPLOY_FAKE_CREDENTIALS: readonly string[] = [
 /** The only session the probe deployment's Updates surface answers. */
 export const DEPLOY_FAKE_OWNER = 'owner@example.com';
 
+/** The Cloudflare user `GET /user` answers, until a row signs in as another (`signInAs`). */
+export const DEPLOY_FAKE_USER = { id: 'probe-user', email: DEPLOY_FAKE_OWNER };
+
+const NAMESERVERS = ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'];
+
+/** A zone's id, as Cloudflare's: 32 hex characters, here derived from its name. */
+export function deployFakeZoneId(name: string): string {
+  return createHash('sha256').update(name).digest('hex').slice(0, 32);
+}
+
 /** A build behind the channel's: the probe deployment's own stamp and record version. */
 export const DEPLOY_FAKE_OLDER_BUILD = {
   version: '0.3.9+probe00',
@@ -221,7 +231,14 @@ function manifestText(build: DeployFakeServedBuild): string {
       { name: 'CREDENTIAL_ENCRYPTION_KEY', handling: 'prompted', required: true, prompt: '32 random bytes' },
       { name: 'WEBHOOK_ROUTE_SECRET', handling: 'prompted', required: true, prompt: '32 random bytes' },
     ],
-    vars: [{ name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' }],
+    vars: [
+      { name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' },
+      { name: 'CLI_PUBLIC_ORIGIN', policy: 'derived' },
+      { name: 'CLOUDFLARE_ACCOUNT_ID', policy: 'derived' },
+      { name: 'CONTROL_PLANE_ADMINS', policy: 'derived' },
+      { name: 'EMAIL_DOMAIN', policy: 'derived' },
+      { name: 'MAIL_ACCOUNTS', policy: 'derived' },
+    ],
     files: files().map(([path, body]) => ({
       path,
       sha256: sha256(body),
@@ -299,6 +316,8 @@ export interface DeployFakeRefusal {
   readonly status: number;
   readonly code: number;
   readonly message: string;
+  /** Refused every time until `/unrefuse`, as a prerequisite stays unmet. */
+  readonly sticky?: boolean;
 }
 
 export const DeployFakeStateSchema = v.object({
@@ -313,6 +332,9 @@ export const DeployFakeStateSchema = v.object({
   creates: v.array(v.string()),
   refreshes: v.number(),
   expiredCalls: v.number(),
+  r2Reads: v.number(),
+  versionSecrets: v.array(v.string()),
+  domains: v.array(v.string()),
   footprint: v.object({
     served: v.number(),
     unpacked: v.number(),
@@ -341,6 +363,12 @@ export interface DeployFakeState {
   readonly refreshes: number;
   /** Calls presenting an already-expired token, each answered 401 as Cloudflare does. */
   readonly expiredCalls: number;
+  /** Reads of the account's buckets: a paused run's re-checks, counted. */
+  readonly r2Reads: number;
+  /** The secrets the last version bound itself; an update binds none of the root keys. */
+  readonly versionSecrets: readonly string[];
+  /** Custom domains bound to the Worker. */
+  readonly domains: readonly string[];
   /** Bytes really served and received for one release (the release footprint in `deploy-lifecycle.test.ts`). */
   readonly footprint: DeployFakeFootprint;
 }
@@ -384,6 +412,17 @@ interface Held {
   uploads: number;
   creates: string[];
   scriptExists: boolean;
+  /** The last version's bindings as settings answer them: plain-text vars with their text, Durable Objects by class. */
+  bindings: { type: string; name: string; text?: string; class_name?: string }[];
+  /** Each version's `workers/tag`. */
+  tags: Map<string, string>;
+  user: { id: string; email: string };
+  /** Off: every bucket call is refused as R2 not turned on, until the row turns it on. */
+  r2: boolean;
+  r2Reads: number;
+  /** By zone id; a zone added by `POST /zones` is pending until the row activates it. */
+  zones: Map<string, { name: string; status: string }>;
+  domains: string[];
   refuseOnce: DeployFakeRefusal | null;
   served: DeployFakeServedBuild | null;
   /** Null serves the four small files. */
@@ -422,6 +461,13 @@ function fresh(): Held {
     uploads: 0,
     creates: [],
     scriptExists: false,
+    bindings: [],
+    tags: new Map<string, string>(),
+    user: DEPLOY_FAKE_USER,
+    r2: true,
+    r2Reads: 0,
+    zones: new Map(),
+    domains: [],
     refuseOnce: null,
     served: null,
     weigh: null,
@@ -451,6 +497,13 @@ function reset(): void {
   held.uploads = 0;
   held.creates = empty.creates;
   held.scriptExists = false;
+  held.bindings = [];
+  held.tags = new Map<string, string>();
+  held.user = DEPLOY_FAKE_USER;
+  held.r2 = true;
+  held.r2Reads = 0;
+  held.zones = new Map();
+  held.domains = [];
   held.refuseOnce = null;
   held.served = null;
   held.weigh = null;
@@ -478,6 +531,9 @@ function snapshot(): DeployFakeState {
     creates: [...held.creates],
     refreshes: held.refreshes,
     expiredCalls: held.expiredCalls,
+    r2Reads: held.r2Reads,
+    versionSecrets: held.bindings.filter((binding) => binding.type === 'secret_text').map((binding) => binding.name),
+    domains: [...held.domains],
     footprint: { ...held.footprint },
   };
 }
@@ -503,6 +559,7 @@ const RefusalSchema = v.object({
   status: v.number(),
   code: v.number(),
   message: v.string(),
+  sticky: v.optional(v.boolean()),
 });
 
 /** Method included because a step looks before it creates and only the write is worth holding. No duration: the window is a signal, not a race. */
@@ -543,7 +600,7 @@ const ExpireSchema = v.object({ expiresIn: v.number() });
 /** Anything else is a caller's typo and is refused. */
 const CONTROL_PATHS: readonly string[] = [
   '/reset', '/refuse', '/serve', '/publish', '/state', '/stall', '/stall/reached',
-  '/stall/release', '/weigh', '/expire', '/existing',
+  '/stall/release', '/weigh', '/expire', '/existing', '/r2', '/user', '/zone', '/activate', '/unrefuse',
 ];
 
 function envelope(result: JsonValue, status = 200): Response {
@@ -583,7 +640,7 @@ async function api(url: URL, request: Request): Promise<Response> {
   const armed = held.refuseOnce;
 
   if (armed !== null && path.startsWith(armed.path)) {
-    held.refuseOnce = null;
+    if (armed.sticky !== true) held.refuseOnce = null;
 
     return refusal(armed.status, armed.code, armed.message);
   }
@@ -603,7 +660,18 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path.startsWith('/accounts?')) return envelope([{ id: ACCOUNT_ID, name: 'Probe Account' }]);
 
-  if (path.startsWith('/zones?')) return envelope([]);
+  if (path === '/user') return envelope(held.user);
+
+  const zoned = zoneApi(path, request, named);
+
+  if (zoned !== undefined) return zoned;
+
+  if (path.includes('/r2/buckets')) {
+    held.r2Reads += request.method === 'GET' ? 1 : 0;
+
+    // The probe's R2 refusal (deploy-lifecycle.test.ts R2_REFUSAL); the live code is to measure.
+    if (!held.r2) return refusal(403, 10_042, 'R2 is not enabled for this account. Add a payment method to enable R2.');
+  }
 
   if (path === `/accounts/${ACCOUNT_ID}`) return envelope({ id: ACCOUNT_ID, name: 'Probe Account' });
 
@@ -661,6 +729,42 @@ async function api(url: URL, request: Request): Promise<Response> {
   throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
 }
 
+function zoneOf(id: string): JsonValue {
+  const zone = held.zones.get(id);
+
+  return { id, name: zone?.name ?? '', status: zone?.status ?? 'pending', name_servers: NAMESERVERS };
+}
+
+/** The account's zones as the page and the address step reach them; a zone added here waits on its nameservers. */
+function zoneApi(path: string, request: Request, named: (key: string) => string): Response | undefined {
+  const asked = /^\/zones\?name=([^&]+)/u.exec(path)?.[1];
+
+  if (asked !== undefined) return envelope([...held.zones].filter(([, zone]) => zone.name === decodeURIComponent(asked)).map(([id]) => zoneOf(id)));
+
+  if (path.startsWith('/zones?')) return envelope([...held.zones.keys()].map((id) => zoneOf(id)));
+
+  if (path === '/zones' && request.method === 'POST') {
+    const id = deployFakeZoneId(named('name'));
+
+    held.zones.set(id, { name: named('name'), status: 'pending' });
+
+    return envelope(zoneOf(id));
+  }
+
+  const zone = /^\/zones\/([^/?]+)$/u.exec(path)?.[1];
+
+  if (zone !== undefined) return held.zones.has(zone) ? envelope(zoneOf(zone)) : refusal(404, 1001, 'Invalid zone identifier');
+
+  // A Workers custom domain makes the host's record and serves the Worker on it.
+  if (path.endsWith('/workers/domains') && request.method === 'PUT') {
+    held.domains.push(named('hostname'));
+
+    return envelope({ id: `domain-${named('hostname')}` });
+  }
+
+  return undefined;
+}
+
 /** The Worker script's own routes: versions deployed, secrets, settings and the asset session. */
 function workerScriptApi(
   path: string, request: Request, named: (key: string) => string,
@@ -698,9 +802,18 @@ function workerScriptApi(
     return envelope({ name: named('name') });
   }
 
+  if (path.endsWith('/workers/scripts')) return envelope(held.scriptExists ? [{ id: 'kinu' }] : []);
+
+  if (path.includes('/versions?deployable=true')) {
+    return envelope({ items: [...held.versions.keys()].map((id) => ({ id, annotations: { 'workers/tag': held.tags.get(id) ?? '' } })) });
+  }
+
+  // Bindings as settings answer them: a secret by name only, kept from version to version.
   if (path.endsWith('/settings')) {
+    const secrets = [...held.secrets.keys()].filter((name) => !held.bindings.some((binding) => binding.name === name));
+
     return held.scriptExists
-      ? envelope({ logpush: false })
+      ? envelope({ logpush: false, bindings: [...held.bindings, ...secrets.map((name) => ({ type: 'secret_text', name }))] })
       : refusal(404, 10_007, 'workers.api.error.script_not_found');
   }
 
@@ -717,6 +830,18 @@ function workerScriptApi(
   }
 
   return undefined;
+}
+
+const VersionMetadataSchema = v.object({
+  bindings: v.array(v.object({ type: v.string(), name: v.string(), text: v.optional(v.string()), class_name: v.optional(v.string()) })),
+  annotations: v.optional(v.object({ 'workers/tag': v.optional(v.string()) })),
+});
+
+async function versionMetadata(raw: ArrayBuffer, request: Request): Promise<v.InferOutput<typeof VersionMetadataSchema>> {
+  const form = await new Response(raw, { headers: { 'content-type': request.headers.get('content-type') ?? '' } }).formData();
+  const part = form.get('metadata');
+
+  return v.parse(VersionMetadataSchema, JSON.parse(typeof part === 'string' ? part : await part?.text() ?? '{}'));
 }
 
 /** Version uploads are counted: "the run uploaded twice" is the failure a resumed run must not have. */
@@ -755,8 +880,11 @@ async function multipart(url: URL, request: Request): Promise<Response> {
   held.uploads += 1;
   held.creates.push('version');
   const id = `version-${String(held.uploads)}`;
+  const metadata = await versionMetadata(raw, request);
 
   held.versions.set(id, held.published);
+  held.tags.set(id, metadata.annotations?.['workers/tag'] ?? '');
+  held.bindings = metadata.bindings.map((binding) => (binding.type === 'secret_text' ? { type: binding.type, name: binding.name } : binding));
 
   if (request.method === 'POST') return envelope({ id });
 
@@ -827,6 +955,8 @@ async function control(url: URL, request: Request): Promise<Response> {
 
   if (url.pathname === '/refuse') held.refuseOnce = v.parse(RefusalSchema, await request.json());
 
+  if (url.pathname === '/unrefuse') held.refuseOnce = null;
+
   if (url.pathname === '/serve') held.served = v.parse(ServedBuildSchema, await request.json());
 
   if (url.pathname === '/publish') held.published = v.parse(ServedBuildSchema, await request.json());
@@ -842,11 +972,40 @@ async function control(url: URL, request: Request): Promise<Response> {
 
   if (url.pathname === '/expire') held.shortGrant = v.parse(ExpireSchema, await request.json()).expiresIn;
 
+  if (url.pathname === '/r2') held.r2 = v.parse(v.object({ on: v.boolean() }), await request.json()).on;
+
+  if (url.pathname === '/user') held.user = v.parse(v.object({ id: v.string(), email: v.string() }), await request.json());
+
+  // A zone of the account, active; `/activate` makes a pending one so, as its nameservers would.
+  if (url.pathname === '/zone') {
+    const zone = v.parse(v.object({ id: v.string(), name: v.string() }), await request.json());
+
+    held.zones.set(zone.id, { name: zone.name, status: 'active' });
+  }
+
+  if (url.pathname === '/activate') {
+    const id = v.parse(v.object({ id: v.string() }), await request.json()).id;
+    const zone = held.zones.get(id);
+
+    if (zone !== undefined) zone.status = 'active';
+  }
+
   // What a self-update runs against: a Worker a previous run left serving the older build.
   if (url.pathname === '/existing') {
     held.scriptExists = true;
     held.versions.set('version-0', DEPLOY_FAKE_OLDER_BUILD);
     held.deployments.push([{ version_id: 'version-0', percentage: 100 }]);
+    // What the run that made it bound: its derived vars, its classes, and the record its handover wrote.
+    held.bindings = [
+      { type: 'plain_text', name: 'CLI_PUBLIC_ORIGIN', text: `https://kinu.${SUBDOMAIN}.workers.dev` },
+      { type: 'plain_text', name: 'CLOUDFLARE_ACCOUNT_ID', text: ACCOUNT_ID },
+      { type: 'plain_text', name: 'CONTROL_PLANE_ADMINS', text: DEPLOY_FAKE_OWNER },
+      { type: 'plain_text', name: 'EMAIL_DOMAIN', text: '' },
+      { type: 'plain_text', name: 'MAIL_ACCOUNTS', text: 'operators' },
+      { type: 'durable_object_namespace', name: 'OrchestratorAgent', class_name: 'OrchestratorAgent' },
+      { type: 'secret_text', name: 'CREDENTIAL_ENCRYPTION_KEY' },
+    ];
+    held.secrets.set('KINU_DEPLOYMENT_RECORD', DEPLOY_FAKE_RECORD);
   }
 
   if (!CONTROL_PATHS.includes(url.pathname)) {
@@ -915,7 +1074,7 @@ export async function deployOutbound(request: Request): Promise<Response> {
   // The deployment's own smoke check, answered as the Worker would: by the
   // version the request's override names when that one is deployed, and by
   // the serving version otherwise.
-  if (url.pathname === '/api/health' && url.host.endsWith('.workers.dev')) {
+  if (url.pathname === '/api/health' && (url.host.endsWith('.workers.dev') || held.domains.includes(url.host))) {
     const armed = held.refuseOnce;
 
     if (armed !== null && armed.path === '/api/health') {

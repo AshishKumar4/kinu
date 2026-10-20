@@ -786,11 +786,11 @@ export const SUPPLY = new Map<string, Supply>([
     handling: 'config-var',
     required: false,
     absent: 'the Cloudflare half of /deploy renders as not configured and refuses to start a '
-      + 'run; `kinu deploy local` is unaffected. Belongs in `vars`: a PKCE client is public and '
-      + 'has no secret to pair it with.',
-    source: 'https://dash.cloudflare.com/?to=/:account/api-tokens — a self-managed PUBLIC OAuth '
-      + 'client with PKCE, redirect https://kinu.run/deploy/callback plus a localhost redirect '
-      + 'for the CLI door, and the scopes in docs/SELF-DEPLOY.md § The Cloudflare door.',
+      + 'run; `kinu deploy local` is unaffected. Set in `vars` (wrangler.jsonc, both environments): '
+      + 'a PKCE client has no secret to pair it with.',
+    source: 'the self-managed OAuth client registered for the deploy door, with PKCE, redirect '
+      + 'https://kinu.run/deploy/callback plus a localhost redirect for the CLI door, and the scopes in '
+      + 'docs/SELF-DEPLOY.md § The Cloudflare door.',
   }],
   ['KINU_FIRST_OWNER_LINK', {
     handling: 'out-of-band',

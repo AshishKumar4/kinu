@@ -520,6 +520,7 @@ const runnerOptions = {
           DEPLOY_FAKE: { name: 'deploy-probe', entrypoint: 'DeployFakeControl' },
           UPDATES_PROBE: { name: 'deploy-probe', entrypoint: 'UpdatesProbe' },
           DEPLOY_DOOR_PROBE: { name: 'deploy-probe', entrypoint: 'DeployDoorProbe' },
+          DEPLOY_FRAMES_PROBE: { name: 'deploy-probe', entrypoint: 'DeployFramesProbe' },
         },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },

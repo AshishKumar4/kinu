@@ -7,7 +7,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
-import { readEnvelope, type CloudflareCall } from './cloudflare';
+import { readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
 import type { DeployContext } from './context';
 import type { DeployInputs } from './inputs';
 import type { JsonObject } from '../utils/json';
@@ -31,8 +31,8 @@ type DnsRecord = v.InferOutput<typeof DnsRecordsSchema>[number];
  * The call's answer, or null when the token may not make it: a refusal its scope explains, which the owner can do
  * themselves or widen the token for. Any other failure fails the step.
  */
-async function allowed<Result>(context: DeployContext, call: CloudflareCall, schema: v.GenericSchema<Result>): Promise<Result | null> {
-  const response = await context.transport.request(call);
+async function allowed<Result>(transport: CloudflareTransport, call: CloudflareCall, schema: v.GenericSchema<Result>): Promise<Result | null> {
+  const response = await transport.request(call);
 
   if (response.status === 401 || response.status === 403) return null;
 
@@ -41,7 +41,7 @@ async function allowed<Result>(context: DeployContext, call: CloudflareCall, sch
 
 /** The zone the mail domain is the apex of: Email Routing's catch-all exists only there. */
 async function zoneOf(context: DeployContext, domain: string): Promise<string | null> {
-  const zones = await allowed(context, { method: 'GET', path: `/zones?name=${encodeURIComponent(domain)}&account.id=${context.inputs.accountId}` }, ZonesSchema);
+  const zones = await allowed(context.transport, { method: 'GET', path: `/zones?name=${encodeURIComponent(domain)}&account.id=${context.inputs.accountId}` }, ZonesSchema);
 
   return zones?.find((zone) => zone.name === domain)?.id ?? null;
 }
@@ -66,7 +66,7 @@ async function ensureRecords(context: DeployContext, zone: string, records: read
   const asked: DnsRecord[] = [];
 
   for (const record of records) {
-    const held = await allowed(context, {
+    const held = await allowed(context.transport, {
       method: 'GET', path: `/zones/${zone}/dns_records?type=${record.type}&name=${encodeURIComponent(record.name)}&per_page=100`,
     }, DnsRecordsSchema);
 
@@ -76,7 +76,7 @@ async function ensureRecords(context: DeployContext, zone: string, records: read
 
     if (record.priority !== undefined) body.priority = record.priority;
 
-    const made = held === null ? null : await allowed(context, { method: 'POST', path: `/zones/${zone}/dns_records`, body }, v.object({ id: v.string() }));
+    const made = held === null ? null : await allowed(context.transport, { method: 'POST', path: `/zones/${zone}/dns_records`, body }, v.object({ id: v.string() }));
 
     if (made === null) asked.push(record);
   }
@@ -94,25 +94,25 @@ async function ownDmarc(context: DeployContext, zone: string, domain: string, be
   if (before === null) return [wanted];
 
   if (before.some((record) => recordValue(record).startsWith('v=DMARC1'))) return [];
-  const now = await allowed(context, { method: 'GET', path: `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(wanted.name)}&per_page=100` }, DnsRecordsSchema);
+  const now = await allowed(context.transport, { method: 'GET', path: `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(wanted.name)}&per_page=100` }, DnsRecordsSchema);
   const sendings = (now ?? []).find((record) => recordValue(record).startsWith('v=DMARC1') && record.id !== undefined);
 
   if (sendings === undefined) return ensureRecords(context, zone, [wanted]);
 
   if (recordValue(sendings) === wanted.content) return [];
-  const patched = await allowed(context, { method: 'PATCH', path: `/zones/${zone}/dns_records/${sendings.id ?? ''}`, body: { content: wanted.content } }, v.object({ id: v.string() }));
+  const patched = await allowed(context.transport, { method: 'PATCH', path: `/zones/${zone}/dns_records/${sendings.id ?? ''}`, body: { content: wanted.content } }, v.object({ id: v.string() }));
 
   return patched === null ? [wanted] : [];
 }
 
 /** The domain's sending subdomain: the one it has, else made now; null where the token may not. */
 async function sendingDomain(context: DeployContext, zone: string, domain: string): Promise<v.InferOutput<typeof SendingDomainSchema> | null> {
-  const held = await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains` }, v.array(SendingDomainSchema));
+  const held = await allowed(context.transport, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains` }, v.array(SendingDomainSchema));
 
   if (held === null) return null;
 
   return held.find((each) => each.name === domain)
-    ?? await allowed(context, { method: 'POST', path: `/zones/${zone}/email/sending/subdomains`, body: { name: domain } }, SendingDomainSchema);
+    ?? await allowed(context.transport, { method: 'POST', path: `/zones/${zone}/email/sending/subdomains`, body: { name: domain } }, SendingDomainSchema);
 }
 
 const recordLine = (record: DnsRecord): string => `${record.type} ${record.name} ${record.priority === undefined ? '' : `${String(record.priority)} `}${record.content}`;
@@ -137,9 +137,9 @@ export function mailStep(inputs: DeployInputs) {
 
         const asks: string[] = [];
         // The domain is its zone's apex, which routing takes with no name: `name` is for a subdomain, and the apex's is refused.
-        const routed = await allowed(context, { method: 'POST', path: `/zones/${zone}/email/routing/dns`, body: {} }, v.unknown());
+        const routed = await allowed(context.transport, { method: 'POST', path: `/zones/${zone}/email/routing/dns`, body: {} }, v.unknown());
 
-        const catchAll = routed === null ? null : await allowed(context, {
+        const catchAll = routed === null ? null : await allowed(context.transport, {
           method: 'PUT', path: `/zones/${zone}/email/routing/rules/catch_all`,
           body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: [inputs.instanceName] }] },
         }, v.unknown());
@@ -151,9 +151,9 @@ export function mailStep(inputs: DeployInputs) {
 
         const dmarcPath = `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(`_dmarc.${domain}`)}&per_page=100`;
         // Read before Sending is made: making it writes a DMARC of its own where the domain had none.
-        const dmarcBefore = await allowed(context, { method: 'GET', path: dmarcPath }, DnsRecordsSchema);
+        const dmarcBefore = await allowed(context.transport, { method: 'GET', path: dmarcPath }, DnsRecordsSchema);
         const sending = await sendingDomain(context, zone, domain);
-        const records = sending === null ? null : await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema);
+        const records = sending === null ? null : await allowed(context.transport, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema);
 
         if (sending === null || records === null) {
           asks.push(`In the dashboard, open ${domain}, then Email, then Email Sending: enable it for ${domain} and add the records it lists. Sending needs Workers Paid.`);
@@ -172,4 +172,91 @@ export function mailStep(inputs: DeployInputs) {
       });
     },
   };
+}
+
+export type MailPurpose = 'receive' | 'send' | 'sign' | 'report';
+
+export interface MailRecord {
+  readonly type: string;
+  readonly name: string;
+  readonly content: string;
+  readonly purpose: MailPurpose;
+}
+
+/** What the mail step would write on a zone's apex, and what the zone already holds of it: read, never written. */
+export interface MailPreview {
+  readonly host: string;
+  /** An MX the domain already has that points elsewhere: keep that mail on a subdomain, or stop. */
+  readonly conflict: { readonly mx: string; readonly suggestion: string } | null;
+  readonly writes: readonly MailRecord[];
+  readonly kept: readonly MailRecord[];
+}
+
+const MailRecordSchema = v.object({ type: v.string(), name: v.string(), content: v.string(), purpose: v.picklist(['receive', 'send', 'sign', 'report']) });
+
+export const MailPreviewSchema: v.GenericSchema<MailPreview> = v.object({
+  host: v.string(),
+  conflict: v.nullable(v.object({ mx: v.string(), suggestion: v.string() })),
+  writes: v.array(MailRecordSchema),
+  kept: v.array(MailRecordSchema),
+});
+
+/** Email Routing's own MX hosts (`route1.mx.cloudflare.net` …), which the step writes rather than meets. */
+const ROUTING_MX = /\.mx\.cloudflare\.net$/u;
+
+function purposeOf(record: Pick<DnsRecord, 'type' | 'content'>, routing: boolean): MailPurpose {
+  const value = recordValue(record);
+
+  if (record.type === 'MX') return routing ? 'receive' : 'send';
+
+  if (value.startsWith('v=DKIM1')) return 'sign';
+
+  return value.startsWith('v=DMARC1') ? 'report' : 'send';
+}
+
+/**
+ * The same records the step reaches: Email Routing's (`GET …/email/routing/dns`, the records it needs), the sending
+ * domain's when it exists (Cloudflare makes them with it, so a domain not sending yet lists none), and DMARC where the
+ * domain has none. A read the token may not make lists nothing for it.
+ */
+export function mailPreview(transport: CloudflareTransport, zone: { readonly id: string; readonly name: string }): Effect.Effect<MailPreview> {
+  return Effect.promise(async () => {
+    const host = zone.name;
+
+    const read = async (type: string, name: string) => await allowed(transport, {
+      method: 'GET', path: `/zones/${zone.id}/dns_records?type=${type}&name=${encodeURIComponent(name)}&per_page=100`,
+    }, DnsRecordsSchema) ?? [];
+
+    const routing = await allowed(transport, { method: 'GET', path: `/zones/${zone.id}/email/routing/dns` }, DnsRecordsSchema) ?? [];
+    const sendings = await allowed(transport, { method: 'GET', path: `/zones/${zone.id}/email/sending/subdomains` }, v.array(SendingDomainSchema));
+    const sending = sendings?.find((each) => each.name === host);
+
+    const sent = sending === undefined
+      ? []
+      : await allowed(transport, { method: 'GET', path: `/zones/${zone.id}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema) ?? [];
+
+    const asMail = (records: readonly DnsRecord[], routes: boolean): MailRecord[] => records
+      .map((record) => ({ type: record.type, name: record.name, content: record.content, purpose: purposeOf(record, routes) }));
+
+    const wanted = [...asMail(routing, true), ...asMail(sent.filter((record) => record.name !== `_dmarc.${host}`), false)];
+
+    const writes: MailRecord[] = [];
+    const kept: MailRecord[] = [];
+
+    for (const record of wanted) {
+      const held = await read(record.type, record.name);
+
+      (held.some((each) => recordValue(each) === recordValue(record)) ? kept : writes).push(record);
+    }
+
+    const heldDmarc = (await read('TXT', `_dmarc.${host}`)).find((record) => recordValue(record).startsWith('v=DMARC1'));
+    const dmarc: MailRecord = { type: 'TXT', name: `_dmarc.${host}`, content: heldDmarc === undefined ? dmarcRecord(host) : recordValue(heldDmarc), purpose: 'report' };
+
+    (heldDmarc === undefined ? writes : kept).push(dmarc);
+
+    const receiving = new Set(routing.filter((record) => record.type === 'MX').map(recordValue));
+    const elsewhere = (await read('MX', host)).map(recordValue).find((mx) => !receiving.has(mx) && !ROUTING_MX.test(mx));
+
+    return { host, conflict: elsewhere === undefined ? null : { mx: elsewhere, suggestion: `mail.${host}` }, writes, kept };
+  });
 }

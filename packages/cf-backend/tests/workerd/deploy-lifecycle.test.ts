@@ -10,16 +10,19 @@ import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { sha256Hex } from '@kinu.run/core';
 import {
-  DEPLOY_SOCKET_PROTOCOL, DeploySnapshotSchema, DeploymentRecordSchema, FACT_UPLOAD_PEAK, SELF_UPDATE_RUN_ID, UpdateOfferSchema, runKeyDigest,
+  DEPLOY_SOCKET_PROTOCOL, DeployPreflightSchema, DeployRunFrameSchema, DeployRunViewSchema, DeploySessionSchema, DeploySnapshotSchema,
+  DeploymentRecordSchema, FACT_UPLOAD_PEAK, SELF_UPDATE_RUN_ID, UpdateOfferSchema, runKeyDigest,
   type DeployInputs, type DeploySnapshot,
 } from '@kinu.run/core/deploy';
 import {
-  DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_ACCOUNT, DEPLOY_FAKE_CHANNEL_BUILD, DEPLOY_FAKE_OLDER_BUILD, DEPLOY_FAKE_OWNER,
-  DEPLOY_FAKE_REFRESH_TOKEN, DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_SUBDOMAIN, DEPLOY_FAKE_VERSION,
+  DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_ACCOUNT, DEPLOY_FAKE_CHANNEL_BUILD, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_OLDER_BUILD, DEPLOY_FAKE_OWNER,
+  DEPLOY_FAKE_REFRESH_TOKEN, DEPLOY_FAKE_ROTATED_REFRESH, DEPLOY_FAKE_SUBDOMAIN, DEPLOY_FAKE_USER, DEPLOY_FAKE_VERSION, deployFakeZoneId,
 } from './deploy-fake';
 
 /** Spelled rather than imported: the name is part of what the browser is promised. */
 const DEPLOY_STATE_COOKIE = '__Host-kinu_deploy_state';
+
+const DEPLOY_SESSION_COOKIE = '__Host-kinu_deploy_session';
 
 const INPUTS: DeployInputs = {
   accountId: DEPLOY_FAKE_ACCOUNT, instanceName: 'kinu', address: { kind: 'workers-dev', hostname: '', zoneId: '' },
@@ -321,3 +324,211 @@ async function sha256HexOf(text: string): Promise<string> {
 
   return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
+
+const HOUR = 3_600_000;
+
+const WEEK = 7 * 24 * HOUR;
+
+const NEW_KINU = { kind: 'new', account: DEPLOY_FAKE_ACCOUNT, name: 'kinu', address: { kind: 'workers' }, computer: false, mail: null };
+
+const newKinu = JSON.stringify(NEW_KINU);
+
+/** One browser on the page: its sign-in cookie, carried as a browser carries it. */
+async function signedInPage(): Promise<string> {
+  const started = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/signin', { 'content-type': 'application/json' }, JSON.stringify({ end: 'tab' }));
+  const cookie = (name: string) => started.setCookie.find((each) => each.startsWith(`${name}=`))?.split(';')[0] ?? '';
+  const state = new URL(v.parse(v.object({ location: v.string() }), JSON.parse(started.body)).location).searchParams.get('state') ?? '';
+
+  const landed = await env.DEPLOY_DOOR_PROBE.hit(
+    'GET', `/deploy/callback?code=probe-code&state=${encodeURIComponent(state)}`, { cookie: `${cookie(DEPLOY_STATE_COOKIE)}; ${cookie(DEPLOY_SESSION_COOKIE)}` },
+  );
+
+  expect({ status: landed.status, location: landed.location }).toEqual({ status: 302, location: '/deploy' });
+
+  return cookie(DEPLOY_SESSION_COOKIE);
+}
+
+/** A call from that browser: no run key, only its cookie; a body is JSON. */
+const page = async (cookie: string, method: string, path: string, body?: string) => env.DEPLOY_DOOR_PROBE.hit(
+  method, path, body === undefined ? { cookie } : { cookie, 'content-type': 'application/json' }, body,
+);
+
+const current = async (cookie: string) => v.parse(DeployRunViewSchema, JSON.parse((await page(cookie, 'GET', '/api/deploy/runs/current')).body));
+
+const sessionOf = async (cookie: string) => v.parse(DeploySessionSchema, JSON.parse((await page(cookie, 'GET', '/api/deploy/session')).body));
+
+/** The run is named for its Cloudflare user and account; the sign-in for its cookie's digest. */
+const pageRun = (user = DEPLOY_FAKE_USER.id) => runStub(`deploy-run.${user}.${DEPLOY_FAKE_ACCOUNT}`);
+
+const signInObject = (cookie: string) => runStub(`deploy-session.${sha256Hex(cookie.slice(DEPLOY_SESSION_COOKIE.length + 1))}`);
+
+describe('the deploy page', () => {
+  it('signs in with Cloudflare, pauses a run on R2 and carries on once it is on, and goes live with its setup link', async () => {
+    await env.DEPLOY_FAKE.reset();
+    await env.DEPLOY_FAKE.r2(false);
+
+    const cookie = await signedInPage();
+    const session = await sessionOf(cookie);
+    const checklist = v.parse(DeployPreflightSchema, JSON.parse((await page(cookie, 'GET', `/api/deploy/preflight?account=${DEPLOY_FAKE_ACCOUNT}`)).body));
+    const begun = await page(cookie, 'POST', '/api/deploy/runs', newKinu);
+    const run = pageRun();
+
+    await run.settledAfter(['failed']);
+
+    // Asked again by the page's read and by its own clock, still refused: paused, never refused.
+    const readsBefore = (await env.DEPLOY_FAKE.state()).r2Reads;
+    const paused = await current(cookie);
+
+    await run.settledAfter(['failed']);
+    await run.advance(15_000);
+    await run.settledAfter(['failed']);
+    const rechecks = (await env.DEPLOY_FAKE.state()).r2Reads - readsBefore;
+
+    expect({
+      session, begun: begun.status,
+      checklist: { r2: checklist.r2, needs: checklist.needs.map((need) => need.id), name: checklist.suggestedName, subdomain: checklist.workersSubdomain, plan: checklist.plan },
+      paused: { state: paused.state, phase: paused.phase.id, need: paused.paused?.id, href: paused.paused?.action.href, code: paused.paused?.details?.code },
+      rechecked: rechecks >= 2,
+      // The grant moved into the run: the sign-in keeps its access token for reads, never the refresh token.
+      sessionHolds: await signInObject(cookie).heldCredentials(),
+      runHolds: await run.heldCredentials(),
+    }).toEqual({
+      session: { signedIn: true, email: DEPLOY_FAKE_OWNER, accounts: [{ id: DEPLOY_FAKE_ACCOUNT, name: 'Probe Account' }], resume: null, deployments: [] },
+      begun: 200,
+      checklist: { r2: 'off', needs: ['r2'], name: 'kinu', subdomain: DEPLOY_FAKE_SUBDOMAIN, plan: 'unknown' },
+      paused: { state: 'paused', phase: 'storage', need: 'r2', href: `https://dash.cloudflare.com/${DEPLOY_FAKE_ACCOUNT}/r2/overview`, code: 10_042 },
+      rechecked: true,
+      sessionHolds: [DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_ACCESS_TOKEN],
+      runHolds: [DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_REFRESH_TOKEN],
+    });
+
+    await env.DEPLOY_FAKE.r2(true);
+    await current(cookie);
+    await run.settledAfter(['done']);
+
+    const live = await current(cookie);
+    const frames = await env.DEPLOY_FRAMES_PROBE.frames('/api/deploy/runs/current/socket', { upgrade: 'websocket', cookie }, 2);
+    const made = await env.DEPLOY_FAKE.state();
+    const rows = await run.rowText();
+
+    expect({
+      state: live.state, url: live.live?.url, link: live.live?.setupLink.startsWith(`https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev/login?setup=`),
+      cli: live.live?.cli, phases: live.phases.map((phase) => phase.state), uploads: made.uploads,
+      frame: v.parse(DeployRunFrameSchema, JSON.parse(frames[1] ?? '{}')).run, held: await run.heldCredentials(),
+      rowsHoldSecrets: [DEPLOY_FAKE_ACCESS_TOKEN, DEPLOY_FAKE_REFRESH_TOKEN, cookie.slice(DEPLOY_SESSION_COOKIE.length + 1)].some((secret) => rows.includes(secret)),
+    }).toEqual({
+      state: 'live', url: `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev`, link: true,
+      cli: `curl -fsSL https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev/install.sh | bash`, phases: ['done', 'done', 'done', 'done', 'done', 'done'], uploads: 1,
+      frame: live, held: [], rowsHoldSecrets: false,
+    });
+  });
+
+  it('lets go of the grant an hour into a pause, keeps what it minted, resumes from another device, and deletes itself a week on', async () => {
+    await env.DEPLOY_FAKE.reset();
+    await env.DEPLOY_FAKE.refuseOnce({ path: `/accounts/${DEPLOY_FAKE_ACCOUNT}/workers/scripts/kinu/subdomain`, status: 401, code: 10_000, message: 'Authentication error', sticky: true });
+
+    const first = await signedInPage();
+    const runId = v.parse(v.object({ runId: v.string() }), JSON.parse((await page(first, 'POST', '/api/deploy/runs', newKinu)).body)).runId;
+    const run = pageRun();
+
+    await run.settledAfter(['failed']);
+    const paused = await current(first);
+
+    await run.settledAfter(['failed']);
+    await run.advance(HOUR);
+
+    const dropped = { view: await current(first), holds: await run.heldCredentials(), vault: await run.vaultNames() };
+
+    // Another Cloudflare user's sign-in cannot name this run.
+    await env.DEPLOY_FAKE.signInAs({ id: 'probe-other', email: 'other@example.com' });
+    const stranger = await signedInPage();
+    const strangers = { resume: (await sessionOf(stranger)).resume, current: (await page(stranger, 'GET', '/api/deploy/runs/current')).status };
+
+    await env.DEPLOY_FAKE.signInAs(DEPLOY_FAKE_USER);
+    await env.DEPLOY_FAKE.unrefuse();
+    const second = await signedInPage();
+    const resume = (await sessionOf(second)).resume;
+    const continued = await page(second, 'POST', '/api/deploy/runs/current/continue');
+
+    await run.settledAfter(['done']);
+    const live = await current(second);
+    const uploads = (await env.DEPLOY_FAKE.state()).uploads;
+
+    await run.advance(WEEK);
+
+    expect({
+      paused: { state: paused.state, phase: paused.phase.id, need: paused.paused?.id, code: paused.paused?.details?.code },
+      dropped: { state: dropped.view.state, need: dropped.view.paused?.id, holds: dropped.holds, vault: dropped.vault },
+      strangers, resume, continued: continued.status,
+      live: { runId: live.runId, state: live.state, uploads },
+      gone: { object: await run.gone(), current: (await page(second, 'GET', '/api/deploy/runs/current')).status },
+    }).toEqual({
+      paused: { state: 'paused', phase: 'address', need: 'signin-again', code: 10_000 },
+      dropped: { state: 'paused', need: 'signin-again', holds: [], vault: ['CREDENTIAL_ENCRYPTION_KEY', 'JWT_SECRET', 'KINU_FIRST_OWNER_LINK', 'WEBHOOK_ROUTE_SECRET'] },
+      strangers: { resume: null, current: 404 },
+      resume: { runId, account: DEPLOY_FAKE_ACCOUNT, phase: 'address', state: 'paused' },
+      continued: 200,
+      // The version it uploaded before the pause is the one that went live.
+      live: { runId, state: 'live', uploads: 1 },
+      gone: { object: true, current: 404 },
+    });
+  });
+
+  it('offers a Kinu on an older build its update and installs it in place; one on the channel\'s build is offered nothing', async () => {
+    await env.DEPLOY_FAKE.reset();
+    await env.DEPLOY_FAKE.existing();
+
+    const cookie = await signedInPage();
+    const offered = (await sessionOf(cookie)).deployments;
+
+    await page(cookie, 'POST', '/api/deploy/runs', JSON.stringify({ kind: 'update', account: DEPLOY_FAKE_ACCOUNT, name: 'kinu' }));
+    await pageRun().settledAfter(['done']);
+
+    const made = await env.DEPLOY_FAKE.state();
+    const after = (await sessionOf(cookie)).deployments;
+
+    expect({
+      offered: offered.map((kinu) => [kinu.name, kinu.url, kinu.update.current?.version, kinu.update.available?.version, kinu.update.installable]),
+      installed: { uploads: made.uploads, serving: made.servingRelease, rootKeysBound: made.versionSecrets, live: (await current(cookie)).live?.url },
+      after: after.map((kinu) => [kinu.name, kinu.update.current?.sha, kinu.update.upToDate, kinu.update.installable]),
+    }).toEqual({
+      offered: [['kinu', `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev`, DEPLOY_FAKE_OLDER_BUILD.version, DEPLOY_FAKE_CHANNEL_BUILD.version, true]],
+      // The same Worker, one new version, its root keys kept by Cloudflare rather than minted again.
+      installed: { uploads: 1, serving: DEPLOY_FAKE_VERSION, rootKeysBound: [], live: `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev` },
+      after: [['kinu', DEPLOY_FAKE_CHANNEL_BUILD.sha, true, false]],
+    });
+  });
+
+  it('adds a domain registered elsewhere as a zone, goes live on workers.dev meanwhile, and moves onto it once it is active', async () => {
+    await env.DEPLOY_FAKE.reset();
+
+    const cookie = await signedInPage();
+
+    await page(cookie, 'POST', '/api/deploy/runs', JSON.stringify({ ...NEW_KINU, address: { kind: 'domain', domain: 'flourandhearth.com', host: 'flourandhearth.com' } }));
+    const run = pageRun();
+
+    await run.settledAfter(['done']);
+    const waiting = await current(cookie);
+
+    await env.DEPLOY_FAKE.activate(deployFakeZoneId('flourandhearth.com'));
+    await run.advance(15_000);
+    await run.settledAfter(['done']);
+
+    const moved = await current(cookie);
+    const made = await env.DEPLOY_FAKE.state();
+
+    expect({
+      waiting: { state: waiting.state, url: waiting.live?.url, pending: waiting.live?.pending },
+      moved: { state: moved.state, url: moved.live?.url, pending: moved.live?.pending },
+      made: { domains: made.domains, uploads: made.uploads }, held: await run.heldCredentials(),
+    }).toEqual({
+      waiting: {
+        state: 'live', url: `https://kinu.${DEPLOY_FAKE_SUBDOMAIN}.workers.dev`,
+        pending: { domain: 'flourandhearth.com', nameservers: ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'] },
+      },
+      moved: { state: 'live', url: 'https://flourandhearth.com', pending: undefined },
+      // A new version for the new origin; the grant kept to watch the zone is gone with the move's handover.
+      made: { domains: ['flourandhearth.com'], uploads: 2 }, held: [],
+    });
+  });
+});

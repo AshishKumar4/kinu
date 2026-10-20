@@ -107,7 +107,11 @@ straight to disk.
    old colon names (`invalid_scope` for `account:read`, kinu.run 2026-10-20).
    The mail scopes are the client's optional ones. A declined consent or a
    refused scope comes back to the page with Cloudflare's `error` and
-   `error_description`, as does a refused code exchange.
+   `error_description`, as does a refused code exchange. The page holds no
+   run key: its sign-in is an HttpOnly cookie naming the object that holds
+   the grant and the Cloudflare user `GET /user` proved, for an hour, and a
+   run is named for that user and its account, so signing in on another
+   device finds it (docs/SELF-DEPLOY-FLOW.md § 10). The CLI keeps its run key.
 2. **Account and plan.** The lean deployment runs on the free plan. R2 needs
    a payment method on file. The computer needs Workers Paid and is off by
    default. It is a Durable Object-managed container on Cloudflare's managed
@@ -121,6 +125,9 @@ straight to disk.
    an account-owned token with Workers Containers Write that `computer-token`
    mints, never asked. With the computer off, none of these runs, and the upload
    leaves out the `KinuDevbox` binding and the container.
+   The page's preflight reads whether R2 is on; the plan it cannot read without
+   Billing, so it reports "unknown", and a run that meets Workers Free pauses
+   on it.
 3. **Name and address.** Instance name (default: `kinu`), and where it lives:
    `<name>.<subdomain>.workers.dev` by default, or a hostname in one of the
    account's zones, in which case the flow creates a Workers custom domain,
@@ -138,7 +145,11 @@ straight to disk.
 6. **Deploy.** The steps run in a Durable Object on kinu.run that holds the
    session's access token only for the run, streams progress over the
    existing WebSocket surface, and wipes the token at the end. Each step is
-   idempotent, so a re-run resumes. In order: read the account and settle the
+   idempotent, so a re-run resumes; the upload tags its version, so a replay
+   reuses it rather than uploading another. A prerequisite refusal (R2 off,
+   Workers Paid, a refused sign-in) pauses the run, which asks again every
+   15 s; an hour into the pause it lets go of the grant, and keeps what it
+   minted and its setup link for seven days before deleting itself. In order: read the account and settle the
    address; create KV, the R2 buckets, the Vectorize index with the geometry
    `release.json` states, the AI Gateway; seed the runtime cache; mint the
    secrets and the first owner's setup link; upload the Worker version with the

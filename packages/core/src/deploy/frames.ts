@@ -35,6 +35,7 @@ const DeployStepFailureSchema = v.object({
   detail: v.string(),
   code: v.number(),
   status: v.number(),
+  endpoint: v.optional(v.string()),
 });
 
 export const DeployStepRowSchema = v.object({

@@ -16,6 +16,10 @@ export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
  *  OAuth `state`, so `/deploy/callback` proves it is the starting browser. */
 export const DEPLOY_STATE_COOKIE_NAME = '__Host-kinu_deploy_state';
 
+/** The deploy page's sign-in (`deploy/routes.ts`): names the object holding the person's Cloudflare grant for an hour.
+ *  The page's JavaScript never reads it, and no run key exists on the page. */
+export const DEPLOY_SESSION_COOKIE_NAME = '__Host-kinu_deploy_session';
+
 /** CSRF cookie for the CLI approval page's POST (`cli/routes.ts`). */
 export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
 
@@ -26,6 +30,7 @@ export const KINU_COOKIE_NAMES: readonly string[] = [
   OAUTH_STATE_COOKIE_NAME,
   CLI_APPROVAL_CSRF_COOKIE_NAME,
   DEPLOY_STATE_COOKIE_NAME,
+  DEPLOY_SESSION_COOKIE_NAME,
   VIEWER_COOKIE_NAME,
 ];
 

@@ -22,7 +22,7 @@ import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
-import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
+import type { DeployInputs, DeployRunPhase, DeployRunView, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { ParkedWritesProbeDO } from './parked-writes-probe';
 import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
@@ -498,6 +498,10 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   expireSoon(): Promise<boolean>;
   rowText(): Promise<string>;
   abort(reason: string): Promise<void>;
+  advance(ms: number): Promise<void>;
+  vaultNames(): Promise<readonly string[]>;
+  gone(): Promise<boolean>;
+  view(owner: string): Promise<DeployRunView | null>;
 }
 
 interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
@@ -512,6 +516,11 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   weigh(weight: DeployFakeWeight): Promise<void>;
   expireGrant(expiresIn: number): Promise<void>;
   existing(): Promise<void>;
+  r2(on: boolean): Promise<void>;
+  unrefuse(): Promise<void>;
+  signInAs(user: { id: string; email: string }): Promise<void>;
+  zone(zone: { id: string; name: string }): Promise<void>;
+  activate(zoneId: string): Promise<void>;
 }
 
 interface UpdatesSession {
@@ -534,7 +543,11 @@ interface DoorProbeAnswer {
 }
 
 interface DeployDoorProbeRpc extends Rpc.WorkerEntrypointBranded {
-  hit(method: string, path: string, headers?: Readonly<Record<string, string>>): Promise<DoorProbeAnswer>;
+  hit(method: string, path: string, headers?: Readonly<Record<string, string>>, body?: string): Promise<DoorProbeAnswer>;
+}
+
+interface DeployFramesProbeRpc extends Rpc.WorkerEntrypointBranded {
+  frames(path: string, headers: Readonly<Record<string, string>>, count: number): Promise<readonly string[]>;
 }
 
 declare global {
@@ -597,6 +610,7 @@ declare global {
       DEPLOY_FAKE: Service<DeployFakeControlRpc>;
       UPDATES_PROBE: Service<UpdatesProbeRpc>;
       DEPLOY_DOOR_PROBE: Service<DeployDoorProbeRpc>;
+      DEPLOY_FRAMES_PROBE: Service<DeployFramesProbeRpc>;
     }
 
     /** `exports.CodemodeEgress` is a loopback stub here as in production. */

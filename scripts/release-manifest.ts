@@ -64,6 +64,8 @@ export const VAR_POLICY = {
   SIGN_IN_PROVIDERS: 'derived',
   CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD: 'carried',
   CLOUDFLARE_AI_GATEWAY_ID: 'carried',
+  // kinu.run's own door; a self-host deploys nobody else, and refreshes with the id its record names.
+  CLOUDFLARE_DEPLOY_CLIENT_ID: 'ours',
   CLOUDFLARE_ACCOUNT_ID: 'derived',
   // '' names the datasets a deployment binds in its own account; only kinu.run's staging, sharing an account, differs.
   ANALYTICS_DATASET_SUFFIX: 'carried',

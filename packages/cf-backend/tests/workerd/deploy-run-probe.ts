@@ -23,6 +23,33 @@ export class DeployRunProbeDO extends DeployRunDO {
   private readonly woken: (() => void)[] = [];
   private fires = 0;
   private armedAtMs = 0;
+  /** How far this object's clock runs ahead of the machine's: an hour or a week passes in a call. */
+  private skew = 0;
+
+  protected override now(): number {
+    return Date.now() + this.skew;
+  }
+
+  /** Moves this object's clock on and delivers its alarm at once, as the time it was armed for had come. Answers after that
+   *  delivery; one it starts (a re-check, a move) is awaited with `settledAfter`. */
+  async advance(ms: number): Promise<void> {
+    const fired = this.fires;
+
+    this.skew += ms;
+    await this.ctx.storage.setAlarm(Date.now());
+
+    while (this.fires === fired) await new Promise<void>((resolve) => { this.woken.push(resolve); });
+  }
+
+  /** The names its vault holds: a grant let go of, and what the run minted, kept. */
+  async vaultNames(): Promise<readonly string[]> {
+    return [...(await this.ctx.storage.list({ prefix: 'secret.' })).keys()].map((key) => key.slice('secret.'.length)).sort();
+  }
+
+  /** Whether the object deleted itself: nothing stored, no alarm. */
+  async gone(): Promise<boolean> {
+    return (await this.ctx.storage.list()).size === 0 && await this.ctx.storage.getAlarm() === null;
+  }
 
   /** The plane's credentials this object still stores, read off its storage: a finished run holds none. */
   async heldCredentials(): Promise<readonly string[]> {
@@ -50,6 +77,7 @@ export class DeployRunProbeDO extends DeployRunDO {
   /** Only moves an expiry: moving a plan's own alarm would start the run rather than expire it. */
   async expireSoon(): Promise<boolean> {
     if (await this.ctx.storage.get<string>('run.intent') !== undefined) return false;
+    await this.ctx.storage.put('run.grant_until', this.now());
     await this.ctx.storage.setAlarm(Date.now() + 50);
 
     return true;
@@ -116,6 +144,11 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/refuse', refusal);
   }
 
+  /** Ends a sticky refusal. */
+  async unrefuse(): Promise<void> {
+    await this.hit('/unrefuse');
+  }
+
   async serve(build: DeployFakeServedBuild): Promise<void> {
     await this.hit('/serve', build);
   }
@@ -152,9 +185,30 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/existing');
   }
 
+  /** Off: every bucket call is refused as R2 not turned on, until turned on. */
+  async r2(on: boolean): Promise<void> {
+    await this.hit('/r2', { on });
+  }
+
+  /** The Cloudflare user `GET /user` answers from now on. */
+  async signInAs(user: { id: string; email: string }): Promise<void> {
+    await this.hit('/user', user);
+  }
+
+  /** An active zone of the account. */
+  async zone(zone: { id: string; name: string }): Promise<void> {
+    await this.hit('/zone', zone);
+  }
+
+  /** A pending zone's nameservers took: Cloudflare now calls it active. */
+  async activate(zoneId: string): Promise<void> {
+    await this.hit('/activate', { id: zoneId });
+  }
+
   private async hit(
     path: string,
-    body?: DeployFakeRefusal | DeployFakeServedBuild | DeployFakeStall | DeployFakeWeight | { expiresIn: number },
+    body?: DeployFakeRefusal | DeployFakeServedBuild | DeployFakeStall | DeployFakeWeight | { expiresIn: number } | { on: boolean }
+      | { id: string; email?: string; name?: string },
   ): Promise<DeployFakeState> {
     const sent = body === undefined
       ? { method: 'POST' }
@@ -202,8 +256,8 @@ export interface DoorProbeAnswer {
 /** The deploy door (`deployRoutes`, and the callback the Worker answers itself): what a callback must prove before a stranger's Cloudflare tokens land in a run.
  *  No cookie jar: the test carries the cookie itself, which a forwarded URL cannot do. */
 export class DeployDoorProbe extends WorkerEntrypoint<Env> {
-  async hit(method: string, path: string, headers: Readonly<Record<string, string>> = {}): Promise<DoorProbeAnswer> {
-    const request = new Request(`https://kinu.probe.workers.dev${path}`, { method, headers });
+  async hit(method: string, path: string, headers: Readonly<Record<string, string>> = {}, body?: string): Promise<DoorProbeAnswer> {
+    const request = new Request(`https://kinu.probe.workers.dev${path}`, { method, headers, body });
 
     // As the Worker dispatches: every `/api/` path is the app's, the OAuth return is its own.
     const response = path.startsWith('/api/')
@@ -222,5 +276,28 @@ export class DeployDoorProbe extends WorkerEntrypoint<Env> {
       location: response.headers.get('location') ?? '',
       setCookie: response.headers.getAll('set-cookie'),
     };
+  }
+}
+
+/** The first frames a socket of the deploy door delivers, as the page receives them. */
+export class DeployFramesProbe extends WorkerEntrypoint<Env> {
+  async frames(path: string, headers: Readonly<Record<string, string>>, count: number): Promise<readonly string[]> {
+    const response = await serveFamily(deployRoutes)(new Request(`https://kinu.probe.workers.dev${path}`, { headers }), this.env);
+    const socket = response?.webSocket;
+
+    if (socket === null || socket === undefined) throw new Error(`${path} answered ${String(response?.status)}, not a socket`);
+    const received: string[] = [];
+    const all = Promise.withResolvers<void>();
+
+    socket.addEventListener('message', (event) => {
+      received.push(typeof event.data === 'string' ? event.data : '');
+
+      if (received.length === count) all.resolve();
+    });
+    socket.accept();
+    await all.promise;
+    socket.close();
+
+    return received;
   }
 }

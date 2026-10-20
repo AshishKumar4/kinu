@@ -53,6 +53,13 @@ const DeploymentsSchema = v.object({ deployments: v.array(v.object({ versions: v
 
 const VERSION_OVERRIDE_HEADER = 'Cloudflare-Workers-Version-Overrides';
 
+/** A version's own identifier, up to 100 bytes, as `wrangler deploy --tag` sets it. */
+const VERSION_TAG = 'workers/tag';
+
+const TaggedVersionsSchema = v.object({
+  items: v.optional(v.array(v.object({ id: v.string(), annotations: v.optional(v.object({ [VERSION_TAG]: v.optional(v.string()) })) }))),
+});
+
 const ASSET_CONTENT_TYPES = {
   html: 'text/html', js: 'text/javascript', mjs: 'text/javascript',
   css: 'text/css', json: 'application/json', svg: 'image/svg+xml',
@@ -371,11 +378,11 @@ function secretsStep(): DeployStep {
         // Runs before the upload: secrets are bindings of a version.
         // Root keys are minted once; re-minting `CREDENTIAL_ENCRYPTION_KEY` would make stored
         // credentials unreadable. Updates carry them via `keep_bindings`.
-        if (context.update) {
+        if (context.update && !context.freshSetupLink) {
           return `${MINTED_SECRETS.length} secret(s) kept from the running version.`;
         }
 
-        for (const name of MINTED_SECRETS) {
+        for (const name of context.update ? [] : MINTED_SECRETS) {
           if ((yield* Effect.promise(async () => context.vault.read(name))) !== null) continue;
           const bytes = new Uint8Array(32);
 
@@ -389,7 +396,8 @@ function secretsStep(): DeployStep {
         if (address === undefined) return yield* Effect.die(new Error('the account step settled no address for the setup link'));
         yield* Effect.promise(async () => mintFirstOwnerLink(context, address));
 
-        return `${MINTED_SECRETS.length} secret(s) minted, ${supplied} supplied, and a one-time setup link for ${context.inputs.ownerEmail}.`;
+        return `${MINTED_SECRETS.length} secret(s) ${context.update ? 'kept' : 'minted'}, ${supplied} supplied, `
+          + `and a one-time setup link for ${context.inputs.ownerEmail}.`;
       });
     },
   };
@@ -424,9 +432,18 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
         const script = context.inputs.instanceName;
+        const exists = yield* Effect.promise(async () => scriptExists(context.transport, accountId, script));
+        // Once per run (docs/SELF-DEPLOY-FLOW.md § 7): a replay after the version landed finds it by this run's tag.
+        const tagged = exists ? yield* Effect.promise(async () => taggedVersion(context, script)) : undefined;
+
+        if (tagged !== undefined) {
+          context.facts.set(FACT_VERSION_ID, tagged);
+
+          return `Version ${tagged} was already uploaded by this run.`;
+        }
+
         const session = yield* openAssetSession(context, manifest, script);
         const carried = yield* carryArtifact(context, manifest, session);
-        const exists = yield* Effect.promise(async () => scriptExists(context.transport, accountId, script));
         const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
 
         const path = exists
@@ -842,6 +859,18 @@ function mebibytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
+/** `?deployable=true` answers every deployable version, unpaged, each with its annotations (wrangler 4.145.0's
+ *  `versions deploy --tag` resolves tags from this list). */
+async function taggedVersion(context: DeployContext, script: string): Promise<string | undefined> {
+  const listed = await cloudflareResult(
+    context.transport,
+    { method: 'GET', path: `/accounts/${context.inputs.accountId}/workers/scripts/${script}/versions?deployable=true` },
+    TaggedVersionsSchema,
+  );
+
+  return (listed.items ?? []).find((item) => item.annotations?.[VERSION_TAG] === context.tag)?.id;
+}
+
 async function scriptExists(transport: CloudflareTransport, accountId: string, script: string): Promise<boolean> {
   const response = await transport.request({
     method: 'GET',
@@ -929,6 +958,7 @@ async function versionMetadata(
     bindings,
     keep_bindings: ['secret_text', 'secret_key'],
     observability: { enabled: true },
+    annotations: { [VERSION_TAG]: context.tag },
   };
 
   if (!exists) metadata.migrations = { new_tag: tag, new_sqlite_classes: classes };

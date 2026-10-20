@@ -46,6 +46,10 @@ export interface DeployContext {
   readonly http: HttpGet;
   /** Self-update: root secrets are not re-minted and the upload declares no migrations. */
   readonly update: boolean;
+  /** An update that also mints a new first-owner link, as a change asking for one does. */
+  readonly freshSetupLink: boolean;
+  /** Set on the version this run uploads, so a replayed upload finds it rather than making another. At most 100 bytes. */
+  readonly tag: string;
   /** Never a secret: pass resource names, not values. */
   note(message: string): void;
 }
