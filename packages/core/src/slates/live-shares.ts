@@ -222,7 +222,7 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     this.db.exec('UPDATE slate_edit_marks SET editor = ? WHERE lower(editor) = ?', FORGOTTEN_PERSON, person.email);
 
     // A deployment with no key for views counted no account apart from the signed out: nothing of it is there.
-    for (const { id } of this.list()) {
+    for (const { id } of this.db.exec('SELECT id FROM slate_live_shares').toArray().map((row) => v.parse(v.object({ id: v.string() }), row))) {
       const key = await viewerKey(id);
 
       if (key !== null) this.db.exec('DELETE FROM slate_share_views WHERE share = ? AND viewer = ?', id, key);

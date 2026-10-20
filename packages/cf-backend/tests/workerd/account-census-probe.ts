@@ -8,7 +8,7 @@
  */
 import { getAgentByName, type AgentContext } from 'agents';
 import { objectNamed, ownerCaller, sandboxIdForWorkspace, sandboxPreviewExposures, type WorkspaceOverview } from '@kinu.run/core';
-import { initSlateLiveShareTables, initSlateShareTables, SlateShareStore } from '@kinu.run/core/slates';
+import { initSlateLiveShareTables, initSlateShareTables, SlateLiveShareStore, SlateShareStore } from '@kinu.run/core/slates';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -144,7 +144,8 @@ export class CensusWorkspace extends ProductionOrchestrator {
     const shares = new SlateShareStore(sql);
     shares.add({ id: 'share-board', slate: 'board', publication: 'pub-1', included: [] });
     shares.addUsers('share-board', [{ userId: person.userId, email: person.email }]);
-    sql.exec(`INSERT INTO slate_live_shares (id, slate_id, visibility, handle, grant_json, created_at) VALUES ('live-board', 'board', 'users', 'board-handle', '{"members":[]}', 1)`);
+    const live = new SlateLiveShareStore(sql);
+    live.add({ id: 'live-board', slate: 'board', visibility: 'users', handle: 'board-handle', grant: { slates: ['board'], members: [] } });
     sql.exec(`INSERT INTO slate_live_share_users (share_id, user_id, email, created_at, role) VALUES ('live-board', ?, ?, 1, 'edit')`, person.userId, person.email);
     sql.exec(`INSERT INTO slate_viewer_requests (share_id, viewer, path, calls, outcome, created_at) VALUES ('live-board', ?, '/', '[]', 'ok', 1)`, `user:${person.userId}`);
     sql.exec(`INSERT INTO slate_edit_marks (slate_id, editor, revision_before) VALUES ('board', ?, NULL)`, person.email);
