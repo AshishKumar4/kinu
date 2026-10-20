@@ -24,6 +24,8 @@ interface Unreachable {
 /** Every page the router serves. */
 export const PAGE_ROWS = {
   home: ['workspace-title', 'agent-chats-persist'],
+  // The mission form, Home's until Home was the assistant: the rows that reached it there.
+  newWorkspace: ['workspace-title', 'agent-chats-persist'],
   welcome: ['account-settings'],
   workspaces: ['workspace-title'],
   plugins: ['blueprint-fork'],

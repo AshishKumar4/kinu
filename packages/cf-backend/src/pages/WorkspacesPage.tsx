@@ -128,7 +128,7 @@ export default function WorkspacesPage() {
         {!roster.loading && entries.length === 0 && error === null && (
           <div className="p-card px-5 py-8 text-center">
             <p className="p-row-text p-text-3">No workspaces yet.</p>
-            <Link to={APP_ROUTES.home} className="mt-2 inline-block p-t-control p-accent">Create one on Home →</Link>
+            <Link to={APP_ROUTES.newWorkspace} className="mt-2 inline-block p-t-control p-accent">Create one →</Link>
           </div>
         )}
 

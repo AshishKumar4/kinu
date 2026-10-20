@@ -1075,9 +1075,9 @@ export interface FirstAnswerVerdict {
 const SENT_MESSAGES = `[...document.querySelectorAll('#chat [data-revert-turn]')].map((control) => control.parentElement?.textContent ?? '')`;
 
 /**
- * Row: a person creates a workspace from the home page and gets a first answer.
+ * Row: a person creates a workspace from its mission's page and gets a first answer.
  *
- * Type a mission into the home page's form and press Create workspace; the page
+ * Type a mission into the form every New workspace opens and press Create workspace; the page
  * must land in the new workspace, and its first turn, the one the mission
  * starts, must end with a reply on screen.
  */
@@ -1088,8 +1088,9 @@ export async function workspaceGetsFirstAnswer(target: FlowTarget): Promise<Firs
 
   try {
     await recordRenderTasks(page);
-    await page.goto(`${target.origin}/`, { waitUntil: 'load' });
-    await until(page, "the home page's mission field", `document.querySelector('#workspace-mission:not([disabled])') !== null`);
+    // Where every New workspace goes: Home is the assistant's chat once the account has one.
+    await page.goto(`${target.origin}/new`, { waitUntil: 'load' });
+    await until(page, "the new workspace's mission field", `document.querySelector('#workspace-mission:not([disabled])') !== null`);
 
     // A home page asking to connect a model cannot create: say so rather than press.
     const warned = v.parse(v.string(), await page.evaluate(SHOWN_WARNINGS));

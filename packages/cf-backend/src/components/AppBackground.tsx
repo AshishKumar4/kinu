@@ -25,6 +25,7 @@ const RAIL_QUERY = '(min-width: 48rem)';
 
 const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
   [APP_ROUTES.home]: true,
+  [APP_ROUTES.newWorkspace]: true,
 };
 
 interface AppBackgroundHandle {

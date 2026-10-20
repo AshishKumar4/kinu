@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet, matchPath, useLocation,
 import { Suspense, type ReactNode } from "react";
 import Layout from "./components/layout";
 import GalleryShell from "./components/gallery/GalleryShell";
-import HomePage from "./pages/HomePage";
+import HomePage, { NewWorkspacePage } from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding } from "@kinu.run/core";
@@ -121,6 +121,7 @@ export default function App() {
           <Route path={APP_ROUTES.welcome} element={<Page label="welcome"><WelcomePage /></Page>} />
           <Route element={<Layout />}>
             <Route index element={<Page label="home"><HomePage /></Page>} />
+            <Route path={APP_ROUTES.newWorkspace} element={<Page label="new-workspace"><NewWorkspacePage /></Page>} />
             <Route path={APP_ROUTES.userSettings} element={<Page label="user-settings"><UserSettingsPage /></Page>} />
             <Route path={APP_ROUTES.userMcp} element={<Page label="user-mcp"><UserMcpPage /></Page>} />
             <Route path={APP_ROUTES.drive} element={<Page label="drive"><DrivePage tab="mine" /></Page>} />
