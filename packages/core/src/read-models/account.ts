@@ -14,6 +14,8 @@ export function needsOnboarding(profile: AccountOnboarding | null): boolean {
 /** Read by both the indicator and the sliding panel so they agree on the count. */
 export const ONBOARDING_STEPS = [
   { id: 'profile', title: 'Your name' },
+  // Offered only where the deployment has mail and the person may have an address but has none.
+  { id: 'mail', title: 'Your email address' },
   { id: 'providers', title: 'Connect a provider' },
   { id: 'model', title: 'Your default model' },
   { id: 'search', title: 'Web search' },

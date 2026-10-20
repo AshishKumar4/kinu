@@ -193,13 +193,23 @@ describe('Mail', () => {
     });
   });
 
-  test('the claim form prefills a lowercased email local part; an ineligible account cannot claim', async () => {
+  test('with no address, Mail offers it in place: their first name, checked as they type, created at once', async () => {
     await withGallery(async (gallery) => {
-      const page = await open(gallery, '&account=claim');
-      expect(await page.$eval('[aria-label="Username"]', (input) => input instanceof HTMLInputElement ? input.value : '')).toBe('me');
-      await action(page, 'Claim address');
+      const page = await open(gallery, '&account=new');
+      const field = '[data-mail-create] [aria-label="Username"]';
+
+      await page.waitForSelector('[data-mail-create] [data-mail-address-state="available"]');
+      expect(await page.$eval(field, (input) => input instanceof HTMLInputElement ? input.value : '')).toBe('ashish');
+      await page.click(field, { clickCount: 3 });
+      await page.type(field, 'priya');
+      await page.waitForSelector('[data-mail-create] [data-mail-address-state="taken"]');
+      expect(await page.$eval('[data-mail-create] button[type="submit"]', (button) => button instanceof HTMLButtonElement && button.disabled)).toBe(true);
+      await page.click(field, { clickCount: 3 });
+      await page.type(field, 'ashish');
+      await page.waitForSelector('[data-mail-create] [data-mail-address-state="available"]');
+      await page.click('[data-mail-create] button[type="submit"]');
       await page.waitForSelector('[data-mail-list]');
-      expect(await calls(page)).toContainEqual({ method: 'POST', path: '/api/user/mail/claim', body: { username: 'me' } });
+      expect((await calls(page)).filter((call) => call.method === 'POST')).toEqual([{ method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } }]);
       await page.close();
       const member = await open(gallery, '&account=member');
       expect(await member.$('[aria-label="Username"]')).toBeNull();
@@ -296,9 +306,9 @@ describe('Mail', () => {
     });
   });
 
-  test('on a deployment with no mail domain, Mail is off: no footer icon, the page says so, no claim offered', async () => {
+  test('on a deployment with no mail domain, Mail is off: no footer icon, the page says so, no address offered', async () => {
     await withGallery(async (gallery) => {
-      const page = await open(gallery, '&account=claim&mail=off');
+      const page = await open(gallery, '&account=new&mail=off');
 
       await page.waitForFunction(() => document.querySelector('[data-mail-off]') !== null);
       expect(await page.$('[data-footer-mail]')).toBeNull();

@@ -692,6 +692,68 @@ describe('account panels', () => {
     });
   });
 
+  test('setup offers an address from the name just given, checked as typed, and Next creates it with its mailbox', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'welcome', 'light', 'desktop');
+      const field = '[data-welcome-step="mail"] [aria-label="Username"]';
+      const shown = (id: string) => page.waitForFunction((want) => document.querySelector(`[data-welcome-step="${want}"]`)?.getAttribute('aria-hidden') !== 'true', {}, id);
+      const nextDisabled = () => page.$$eval('button', (nodes) => nodes.some((node) => node.textContent?.trim() === 'Next' && node instanceof HTMLButtonElement && node.disabled));
+
+      // Typed over what is there, as a person selects all and types.
+      const retype = async (selector: string, text: string) => {
+        await page.click(selector);
+        await page.keyboard.down('Control');
+        await page.keyboard.press('KeyA');
+        await page.keyboard.up('Control');
+        await page.keyboard.press('Backspace');
+        await page.type(selector, text);
+      };
+
+      try {
+        await page.waitForSelector('[data-welcome-step="profile"] input');
+        await retype('[data-welcome-step="profile"] input', 'Lucía Ferreira');
+        await clickByText(page, 'button', 'Next');
+        await shown('mail');
+        await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
+        expect(await page.$eval(field, (input) => input instanceof HTMLInputElement ? input.value : '')).toBe('lucia');
+
+        await retype(field, 'dana');
+        await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="taken"]');
+        expect(await nextDisabled()).toBe(true);
+
+        await retype(field, 'lucia');
+        await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
+        await clickByText(page, 'button', 'Next');
+        await shown('providers');
+        expect(await page.evaluate(() => document.documentElement.dataset.galleryMailCreated)).toBe('lucia@kinu.run');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('the address step can be passed by unmade, and a deployment with no mail never offers it', async () => {
+    await withGallery(async (gallery) => {
+      const skipped = await freshPage(gallery, `welcome&step=${String(ONBOARDING_STEP_IDS.indexOf('mail'))}`, 'dark', 'mobile');
+      const off = await freshPage(gallery, 'welcome&mail=off', 'dark', 'mobile');
+
+      try {
+        await skipped.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
+        await skipped.click('[data-mail-not-now]');
+        await clickByText(skipped, 'button', 'Next');
+        await skipped.waitForFunction(() => document.querySelector('[data-welcome-step="providers"]')?.getAttribute('aria-hidden') !== 'true');
+        expect(await skipped.evaluate(() => document.documentElement.dataset.galleryMailCreated ?? null)).toBeNull();
+
+        await off.waitForSelector('[data-welcome-step="profile"]');
+        await off.waitForFunction((count) => document.querySelectorAll('[aria-label="Setup steps"] li').length === count, {}, ONBOARDING_STEP_IDS.length - 1);
+        expect(await off.$('[data-welcome-step="mail"]')).toBeNull();
+      } finally {
+        await skipped.close();
+        await off.close();
+      }
+    });
+  });
+
   test('setup offers tools to connect, and every step can be passed by', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'welcome&step=1', 'light', 'mobile');

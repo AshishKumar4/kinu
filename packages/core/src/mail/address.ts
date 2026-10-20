@@ -64,3 +64,28 @@ export function mailLabelOf(name: string): string | null {
 export function isMailLabel(label: string): boolean {
   return LABEL.test(label);
 }
+
+/** Usernames no account may have: the mailbox names mail systems and people expect to reach a deployment's operator. */
+const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
+  'postmaster', 'abuse', 'admin', 'administrator', 'noreply', 'no-reply', 'mail', 'mailer-daemon', 'ops', 'dmarc', 'security',
+  'support', 'root', 'www', 'hostmaster', 'webmaster', 'info', 'help', 'billing',
+]);
+
+/** Why `username` cannot be anyone's: not a label (`invalid`), or one mail systems need (`reserved`); null when it can. */
+export function mailUsernameRefusal(username: string): 'invalid' | 'reserved' | null {
+  if (!LABEL.test(username)) return 'invalid';
+
+  return RESERVED_USERNAMES.has(username) ? 'reserved' : null;
+}
+
+/**
+ * The username a person is offered: their first name as it reads in an address (accents dropped), else their sign-in
+ * email's local part; null when neither makes one they may have.
+ */
+export function suggestedMailUsername(person: { readonly displayName: string | null; readonly email: string }): string | null {
+  const plain = (text: string): string => text.normalize('NFD').replace(/\p{M}+/gu, '');
+  const firstName = plain(person.displayName?.trim().split(/\s+/u)[0] ?? '');
+  const local = plain(person.email.slice(0, Math.max(0, person.email.lastIndexOf('@'))));
+
+  return [mailLabelOf(firstName), mailLabelOf(local)].find((label): label is string => label !== null && mailUsernameRefusal(label) === null) ?? null;
+}
