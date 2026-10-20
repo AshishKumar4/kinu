@@ -1516,6 +1516,37 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await session.end();
   });
 
+  // The InternalFish audit: a local non-turn call was priced only when its model was the chat's, so a judge or fast call
+  // on another model stayed unpriced in workspace spend where cloud priced it at that model's own rate.
+  test("a non-turn call on another model is priced at that model's own rate, as cloud prices it", async () => {
+    const answered = fakeModel('done', { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 });
+    const rates = new Map([['local/chat', { input: 1, output: 1 }], ['local/judge', { input: 5, output: 5 }]]);
+    const catalog = { roles: {}, tiers: { default: { model: 'local/chat' } }, modelFallbacks: { 'local/chat': ['local/judge'] } };
+
+    const { session, rt } = setupWithResolver({
+      normalizeSpecSync: (spec) => spec?.trim() ?? 'local/chat',
+      resolveModel: () => answered,
+      listProviders: async () => [], listModels: async () => ({ models: [], failures: [] }),
+      modelInfo: async (spec) => {
+        const cost = spec === null || spec === undefined ? undefined : rates.get(spec);
+
+        return cost === undefined ? null : { id: 'priced', cost };
+      },
+      ...resolverRest,
+    }, { profileAuthority: () => ({ authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog }) });
+
+    // A turn warms the rates of its model and its fallbacks; the judge then runs outside it, on the fallback's model.
+    await session.send('hi', { id: crypto.randomUUID() });
+    const route = { tier: 'deep' as const, reasoningEffort: null, fallbacks: [], retries: 0 };
+
+    await present(rt.modelForRoute, 'the runtime model lane')({ ...route, source: 'judge', model: 'local/judge' }).complete('grade this');
+
+    const rows = session.getRunEvents(WORKSPACE_RUN_ID).filter((e) => e.type === 'model_call' && e.source === 'judge');
+
+    expect(rows).toMatchObject([{ spec: 'local/judge', usd: 5 }]);
+    await session.end();
+  });
+
   test('a non-turn model call lands as its own row, and a silent provider stays unmeasured', async () => {
     const measured = fakeModel('graded', { inputTokens: 41, outputTokens: 7, totalTokens: 48 });
     const quiet = fakeModel('unmeasured', { inputTokens: undefined, outputTokens: undefined, totalTokens: undefined });

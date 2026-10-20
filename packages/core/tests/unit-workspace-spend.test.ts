@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { RunEventRecorder } from '../src/events/recorder';
 import { WORKSPACE_RUN_ID } from '../src/events/model-call';
-import { buildModelCallEvent } from '../src/events/model-call-event';
+import { pricedModelCallEvent } from '../src/events/model-call-event';
 import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { accountSpendOfCall, mergeAccountSpend } from '../src/read-models/account-usage';
@@ -449,9 +449,9 @@ describe('workspaceSpend — by the account that paid', () => {
     events.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 1, usage: { input: 1_900, output: 100 }, usd: 0.03, account: work(2_000, 12) });
     events.emit('run-1', { type: 'step_finish', parts: [], stepIndex: 2, usage: { input: 50, output: 5 }, account: { provider: 'anthropic', name: 'main' } });
     events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge', usage: { input: 10, output: 1 } });
-    events.emit(WORKSPACE_RUN_ID, buildModelCallEvent(
+    events.emit(WORKSPACE_RUN_ID, pricedModelCallEvent(
       { source: 'compaction', usage: { input: 300, output: 20 }, spec: 'anthropic@work/m', account: { provider: 'anthropic', name: 'work' } },
-      { effectiveSpec: null, pricing: null },
+      { pricing: () => null },
     ));
 
     const { accounts, total } = workspaceSpend({ events, sql: ws.sql, actor });
@@ -474,9 +474,9 @@ describe('one model call made away from a workspace counts as a workspace\'s led
 
     const calls = [
       // Priced as the account prices its own call: at the rate of the very spec it called.
-      buildModelCallEvent({ source: 'slate', usage: { input: 1_000, output: 100 }, spec: 'anthropic@work/m', account: { provider: 'anthropic', name: 'work' } }, { effectiveSpec: 'anthropic@work/m', pricing }),
-      buildModelCallEvent({ source: 'slate', usage: { input: 50 }, spec: 'openai@main/x', account: { provider: 'openai', name: 'main' } }, { effectiveSpec: null, pricing: null }),
-      buildModelCallEvent({ source: 'slate', usage: {}, spec: 'openai@main/x', account: { provider: 'openai', name: 'main' } }, { effectiveSpec: null, pricing }),
+      pricedModelCallEvent({ source: 'slate', usage: { input: 1_000, output: 100 }, spec: 'anthropic@work/m', account: { provider: 'anthropic', name: 'work' } }, { pricing: () => pricing }),
+      pricedModelCallEvent({ source: 'slate', usage: { input: 50 }, spec: 'openai@main/x', account: { provider: 'openai', name: 'main' } }, { pricing: () => null }),
+      pricedModelCallEvent({ source: 'slate', usage: {}, spec: 'openai@main/x', account: { provider: 'openai', name: 'main' } }, { pricing: () => pricing }),
     ];
 
     for (const call of calls) {
