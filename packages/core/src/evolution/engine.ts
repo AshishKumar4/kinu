@@ -38,6 +38,7 @@ import {
   type AdvisorNote, type AdvisorRowData,
 } from '../advisor/review';
 import { initLessonTables } from './lessons';
+import { dreamChangesFor } from './watch';
 import {
   applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, owesTurnLessons, recordTurnStruggles,
   scoreToolLessons, StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
@@ -303,6 +304,7 @@ export class EvolutionEngine {
     // counts, so a thumb cleared later falls back to it.
     const reading = graded || followup === null || decide === undefined ? null : await rateTurn(decide, {
       request: turn.userMessage, actions: renderActions(turn.toolCalls), answer: turn.assistantResponse, followup,
+      changes: dreamChangesFor(this.rt.storage.sql, this.rt.actor, turn.artifacts ?? null),
     }, turn.toolCalls.length);
 
     const effective = (): EffectiveRating | null => {

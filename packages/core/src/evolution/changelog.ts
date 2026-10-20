@@ -14,7 +14,7 @@ import { renderFactValue, type FactsStore } from '../memory/facts';
 import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/versions';
 import { rollbackScaffold } from '../scaffold/rollback';
-import { artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
+import { artifactLabel, artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
 import { revertDreamSkill } from './refinement-skill';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
@@ -250,16 +250,6 @@ const ARTIFACT_SUMMARY: Record<ArtifactStatus, string> = {
   rolled_back: 'I reverted new wording for',
   historical: 'I replaced earlier wording for',
 };
-
-/** What an artifact id names, as the owner reads it. */
-function artifactLabel(artifactId: string): string {
-  const tool = /^tool:([a-z_]+)\.(description|schema)$/u.exec(artifactId);
-
-  if (tool?.[1] !== undefined) return `the ${tool[1]} tool's ${tool[2] === 'schema' ? 'field descriptions' : 'description'}`;
-  const section = /^section:(.+)$/u.exec(artifactId)?.[1];
-
-  return section === undefined ? artifactId : `the ${section} prompt section`;
-}
 
 /** What one routed edit changes, as the owner reads it. */
 function routeLabel(route: RefinementRoute): string {

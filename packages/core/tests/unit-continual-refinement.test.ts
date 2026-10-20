@@ -15,7 +15,8 @@ import {
 import { initAllTables } from '../src/state/workspace-schema';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { initLessonTables } from '../src/evolution/lessons';
-import { initTurnRatingTables } from '../src/evolution/ratings';
+import { initTurnRatingTables, rateTurn } from '../src/evolution/ratings';
+import { dreamChangesFor, renderWatch } from '../src/evolution/watch';
 import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import {
   artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, toolArtifact, turnArtifacts,
@@ -33,7 +34,7 @@ import { vfsDirname } from '../src/utils/vfs-helpers';
 import { gatherApprovableInstructions } from '../src/read-models/instruction-approvals';
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
 import type { AgentRuntime } from '../src/types/agent-runtime';
-import type { DecisionResult } from '../src/providers/decision-model';
+import type { DecisionPort, DecisionResult } from '../src/providers/decision-model';
 import { SYSTEM_ROLE_DEFINITIONS } from '../src/profiles/catalog';
 import type { AgentStores } from '../src/state/agent-stores';
 import type {
@@ -1489,6 +1490,130 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
   });
 });
 
+const LoggedEventSchema = v.object({ event: v.string(), fields: v.record(v.string(), v.unknown()) });
+
+/** The diagnostics lines a sink captured, as events. */
+function loggedEvents(lines: readonly string[]): v.InferOutput<typeof LoggedEventSchema>[] {
+  return lines.map((line) => v.parse(LoggedEventSchema, JSON.parse(line)));
+}
+
+describe('the watch: a reply that rejects a dream\'s change', () => {
+  /** A dream that keeps a fact and rewords a section, the section made current by a cold turn. */
+  async function dreamt() {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 4);
+
+    const { port } = scriptedRefiner(proposalText({
+      scope: 'workspace', summary: 'a preference and a shorter section',
+      edits: [FACT_EDIT, { kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'four corrected turns all asked for a shorter answer than the section invites' }],
+    }));
+
+    const deps = fx.deps(port);
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+    await advanceRefinementLane(deps);
+
+    return { fx, deps, text: `${ARTIFACT}@1`, fact: `fact:${FACT_EDIT.key}` };
+  }
+
+  /** A model rating at `at` of a turn that ran with `artifacts`. */
+  const rate = (fx: ReturnType<typeof fixture>, at: number, rated: { readonly score: number; readonly corrected: number; readonly artifacts: readonly string[]; readonly rejects?: string }) =>
+    recordTurnRating(fx.rt.storage.sql, fx.rt.actor, {
+      turnId: `t-${String(at)}`, wrong: null, source: 'model', request: 'r', answer: 'a', ...rated, now: at,
+    });
+
+  const reject = (fx: ReturnType<typeof fixture>, rejects: string, corrected: number, at: number) =>
+    rate(fx, at, { score: 1, corrected, artifacts: [`${ARTIFACT}@1`], rejects });
+
+  test('a turn lists the dream changes it ran with, each as what it is', async () => {
+    const { fx, text, fact } = await dreamt();
+    const changes = dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, [text]);
+
+    expect(changes.map((change) => change.id).sort()).toEqual([fact, text].sort());
+    expect(changes.find((change) => change.id === text)?.describe).toStartWith(`the ${TARGET_ID} prompt section was reworded; it now reads: "${CANDIDATE.slice(0, 40)}`);
+    expect(changes.find((change) => change.id === fact)?.describe).toBe(`the agent remembers ${FACT_EDIT.key}: "one line"`);
+    // A turn that ran without the section's new version is not held to it.
+    expect(dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, []).map((change) => change.id)).toEqual([fact]);
+  });
+
+  test('the rater is asked about the listed changes only when there are any, and names the one rejected', async () => {
+    const asked: Parameters<DecisionPort>[0][] = [];
+
+    const decide: DecisionPort = async (request) => {
+      asked.push(request);
+
+      return { answers: {
+        satisfaction: { type: 'score', score: 0 }, corrected: { type: 'noul', noul: 0.95 },
+        wrong: { type: 'choice', choice: 'ignored_instruction' },
+        ...(request.questions.rejects !== undefined && { rejects: { type: 'choice', choice: 'change_2' } }),
+      }, usage: { input: 0, output: 0 } };
+    };
+
+    const turn = { request: 'r', actions: '', answer: 'a', followup: 'stop answering in one line' };
+    const changes = [{ id: 'section:a@1', describe: 'the a prompt section was reworded' }, { id: 'fact:user.answer_length', describe: 'the agent remembers user.answer_length: "one line"' }];
+
+    expect(await rateTurn(decide, turn, 0)).toEqual({ score: 1, corrected: 0.95, wrong: 'ignored_instruction', rejects: null });
+    expect(asked[0]?.questions.rejects).toBeUndefined();
+    expect(await rateTurn(decide, { ...turn, changes }, 0)).toMatchObject({ rejects: 'fact:user.answer_length' });
+    expect(asked[1]?.questions.rejects).toMatchObject({ type: 'choice', criteria: { none: expect.any(String), change_1: changes[0]?.describe, change_2: changes[1]?.describe } });
+  });
+
+  test('the next dream reads each change with the turns that ran with it, against as many rated before it', async () => {
+    const { fx, text, fact } = await dreamt();
+    const since = present(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, ARTIFACT)[0]?.decidedAt ?? null, 'the activation');
+
+    rate(fx, since + 1_000, { score: 4, corrected: 0, artifacts: [text] });
+    rate(fx, since + 2_000, { score: 5, corrected: 0, artifacts: [text] });
+    rate(fx, since + 3_000, { score: 1, corrected: 0.6, artifacts: [text], rejects: fact });
+
+    const lines = renderWatch(fx.rt.storage.sql, fx.rt.actor).split('\n');
+    const line = (id: string) => present(lines.find((entry) => entry.includes(`(${id})`)) ?? null, id);
+
+    expect(line(text)).toStartWith(`  - the ${TARGET_ID} prompt section, reworded (${text}), in effect: 3 rated turns ran with it, mean 3.3 with 1 corrected; the 3 rated before it, mean `);
+    expect(line(text)).toEndWith('; 0 replies rejected it');
+    expect(line(fact)).toStartWith(`  - remembering ${FACT_EDIT.key} (${fact}), in effect: 3 rated turns ran with it, mean 3.3 with 1 corrected`);
+    expect(line(fact)).toEndWith('; 1 replies rejected it');
+
+    const { port, requests } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'nothing', edits: [] }));
+    seedGradedTurns(fx.rt, 1);
+    await requestRefinement(fx.deps(port), { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(fx.deps(port));
+    expect(requests[0]?.task).toContain(`## What changed since, and how the turns went\n\n${lines.join('\n')}`);
+  });
+
+  test('an explicit stop reverts the change it names before the next dream; a mild or an earlier rejection does not', async () => {
+    const { fx, deps, text, fact } = await dreamt();
+    const lines: string[] = [];
+    const later = Date.now() + 60_000;
+
+    reject(fx, fact, 0.5, later);
+    reject(fx, text, 0.95, later + 1);
+    // Said before the fact took effect: not about this fact.
+    reject(fx, fact, 0.95, 1);
+
+    const restore = setDiagnosticsSink(createLineLogger((line) => { lines.push(line); }));
+
+    try {
+      await refinementPass(deps);
+    } finally {
+      restore();
+    }
+
+    expect(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, ARTIFACT)[0]?.status).toBe('rolled_back');
+    expect(fx.facts.recall(FACT_EDIT.key)?.value).toBe('one line');
+    expect(loggedEvents(lines)
+      .filter((line) => line.event === 'dream.change_rejected')).toEqual([{ event: 'dream.change_rejected', fields: { change: text, turn: `t-${String(later + 1)}` } }]);
+
+    // Now said plainly, after it took effect: the fact goes too, and a second pass reverts nothing twice.
+    reject(fx, fact, 0.9, later + 2);
+    await refinementPass(deps);
+    expect(fx.facts.recall(FACT_EDIT.key)).toBeNull();
+    await refinementPass(deps);
+    expect(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, ARTIFACT)[0]?.status).toBe('rolled_back');
+  });
+});
+
 describe('a dream says what it did', () => {
   test('completed with its counts as it ends, applied per change at its cold turn, reverted per owner revert', async () => {
     const lines: string[] = [];
@@ -1518,7 +1643,7 @@ describe('a dream says what it did', () => {
       restore();
     }
 
-    const said = lines.map((line) => v.parse(v.object({ event: v.string(), fields: v.record(v.string(), v.unknown()) }), JSON.parse(line)))
+    const said = loggedEvents(lines)
       .filter((line) => line.event.startsWith('dream.'));
 
     expect(said).toEqual([

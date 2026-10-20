@@ -258,6 +258,12 @@ A request is `applied` when at least one artifact is in effect: a promoted propo
 
 The proposal schema is `strictObject` at every level. An unknown field refuses the whole proposal rather than being dropped, because a dropped field is a claim the agent made that the harness silently overrode.
 
+### The watch
+
+Each dream change is held to the turns that ran with it (`core/src/evolution/watch.ts`). A turn's rating keeps the text versions the turn ran with (`artifacts_json`), and `dreamChangesFor` lists the dream changes in effect for it, newest first and at most six: each section or tool text version it ran with, each fact a dream still holds, and each skill a dream wrote that is trusted. Each change is described as what it is, with its text: "the guidance/operating prompt section was reworded; it now reads: …", "the agent remembers user.answer_length: …".
+
+When a turn ran with any, its rater is asked one more question: does the reply tell the agent to stop, or to undo, one of them? Its answer, the change's id or none, is the rating's `rejects`. An explicit stop is a rejection the rater also reads as a correction at 0.8 or more; the dream lane's next pass (`revertRejectedChanges`, before it dreams) reverts that change exactly as the owner's own revert from the changelog would, and logs `dream.change_rejected`. It reverts only a change still in effect that took effect before the reply, so a later dream's change of the same fact is not held to an older rejection.
+
 ## CraftStore lifecycle
 
 ```mermaid

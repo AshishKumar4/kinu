@@ -1,5 +1,6 @@
 /** Host-facing refinement calls, shared by both backends; the lane is refinement-lane.ts. */
 
+import { revertRejectedChanges } from './watch';
 import {
   advanceRefinementLane, dreamRequest, requestRefinement,
   type RefinementLaneStep, type RequestRefinementInput,
@@ -47,6 +48,7 @@ export async function refinementPass(deps: RefinementDeps, trigger: 'cadence' | 
   releaseRefinementLane(sql, rt.actor.actorId);
 
   return settle(attempt({ doing: 'running the refinement lane', otherwise: 'unavailable' }, async () => {
+    await revertRejectedChanges(deps);
     await dreamRequest(deps, trigger);
 
     return advanceRefinementLane(deps);

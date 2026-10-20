@@ -12,6 +12,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 // the next cold turn, subagent specs are refused, and facts must be backed by the
 // user's own sentence in the reviewed turns.
 
+import { renderWatch } from './watch';
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
@@ -650,6 +651,10 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     history || '  (this is the first refinement)',
     '',
+    '## What changed since, and how the turns went',
+    '',
+    renderWatch(sql, actor) || '  (no earlier dream changed anything)',
+    '',
     `## Files you may read yourself: ${contextRefs.length === 0 ? '(none in this workspace)' : contextRefs.join(', ')}`,
     '',
     '## Your answer',
@@ -745,6 +750,10 @@ function renderReviewerBrief(
       '## What earlier dreams did',
       '',
       dreamHistory(sql, rt.actor, request) || '  (this is the first dream)',
+      '',
+      '## What changed since, and how the turns went',
+      '',
+      renderWatch(sql, rt.actor) || '  (no earlier dream changed anything)',
       '',
       '## The drafted edits',
       '',

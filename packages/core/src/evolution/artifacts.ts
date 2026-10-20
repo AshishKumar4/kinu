@@ -133,6 +133,16 @@ export function bundledArtifact(artifactId: string): string | null {
   return fields === null ? null : JSON.stringify(fields, null, 2);
 }
 
+/** What an artifact id names, as the owner reads it. */
+export function artifactLabel(artifactId: string): string {
+  const tool = /^tool:([a-z_]+)\.(description|schema)$/u.exec(artifactId);
+
+  if (tool?.[1] !== undefined) return `the ${tool[1]} tool's ${tool[2] === 'schema' ? 'field descriptions' : 'description'}`;
+  const section = /^section:(.+)$/u.exec(artifactId)?.[1];
+
+  return section === undefined ? artifactId : `the ${section} prompt section`;
+}
+
 /** One artifact's promoted version. */
 export interface CurrentArtifact {
   readonly artifactId: string;

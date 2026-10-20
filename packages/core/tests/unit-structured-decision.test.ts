@@ -54,6 +54,6 @@ describe('createStructuredDecisionPort', () => {
     const decide = createStructuredDecisionPort({ llm: () => scripted('{"satisfaction":"1","corrected":"yes","wrong":"misunderstood"}') });
 
     expect(await rateTurn(decide, { request: 'use staging', actions: '', answer: 'used production', followup: 'no, staging' }, 0))
-      .toEqual({ score: 2, corrected: 0.9, wrong: 'misunderstood' });
+      .toEqual({ score: 2, corrected: 0.9, wrong: 'misunderstood', rejects: null });
   });
 });
