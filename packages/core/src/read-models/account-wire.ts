@@ -95,6 +95,8 @@ export type AccountForegroundFrame = v.InferOutput<typeof AccountForegroundFrame
 export const CredentialSummarySchema = v.object({
   key: v.string(),
   kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
+  /** When a login that never renews (no refresh token) stops working; absent for every other credential. */
+  expiresAt: v.optional(v.number()),
 });
 
 export type CredentialSummary = v.InferOutput<typeof CredentialSummarySchema>;

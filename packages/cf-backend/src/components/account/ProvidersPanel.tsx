@@ -40,6 +40,13 @@ function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   );
 }
 
+/** When a login that never renews stops working (Claude Code's `setup-token`); nothing for one that renews. */
+function loginEnds(credentials: readonly CredentialSummary[], key: string): ReactNode {
+  const ends = credentials.find((credential) => credential.key === key)?.expiresAt;
+
+  return ends === undefined ? null : <>until {new Date(ends).toLocaleString()}, then sign in again</>;
+}
+
 const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
 
 /** The panel in its own titled card; `framed` false where its host already says "Connect a provider". */
@@ -113,7 +120,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                             <ProviderEntry provider="chatgpt" name="ChatGPT"
                               method="Sign in with ChatGPT"
                               connected={status.connected || planSignedIn}
-                              detail={planSignedIn ? <>{planEmail}{plan.account === null && plan.device !== null ? <> on {plan.device.label}</> : null}</> : codexAccount}
+                              detail={<>{planSignedIn ? <>{planEmail}{plan.account === null && plan.device !== null ? <> on {plan.device.label}</> : null}</> : codexAccount} {loginEnds(credentials, planSignedIn ? CHATGPT_CRED_KEY : CODEX_CRED_KEY)}</>}
                               disconnect={async (revoke) => answered('ChatGPT', planSignedIn ? await signOutChatGpt(revoke) : await disconnectCodex(revoke))}
                               revokesAt={revokingProviderOf(planSignedIn ? CHATGPT_CRED_KEY : CODEX_CRED_KEY)}
                               onChanged={reloadAll}
@@ -127,13 +134,14 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                   </CardSlot>
                   <ProviderEntry provider="claude" name="Claude" method="claude.ai sign-in"
                     connected={held.has(CLAUDE_CRED_KEY)}
+                    detail={loginEnds(credentials, CLAUDE_CRED_KEY)}
                     disconnect={async () => { await deleteCredential(CLAUDE_CRED_KEY, false); }}
                     onChanged={reloadAll}
                     connect={<ClaudeConnect onChanged={reloadAll} />} />
                   <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
                     {(providers) => storedEntries(credentials, providers).map((entry) => (
                       <ProviderEntry key={entry.key} provider={entry.provider} name={entry.name} method={entry.method}
-                        detail={<span className="p-annotation">{entry.key}</span>}
+                        detail={<><span className="p-annotation">{entry.key}</span> {loginEnds(credentials, entry.key)}</>}
                         connected
                         disconnect={async (revoke) => {
                           answered(entry.name, await deleteCredential(entry.key, revoke));

@@ -35,8 +35,9 @@ export interface AgentRuntime {
   schedule: Schedule;
   identity: Identity;
   craftStore: CraftStore;
-  /** Cross-model judge, a different model from the explorer. */
-  judgeModel?: LLM;
+  /** Cross-model judge, a different model from the explorer: the deep tier (`MODEL_ROUTE_POLICY.judge`), which also
+   *  drafts a dream's edits through its structured output. */
+  judgeModel?: RoutedLLM;
   /** The fast tier (`MODEL_ROUTE_POLICY.fast`) for mechanical work, answering to a schema where the work reads one
    *  back; readers of plain text fall back to `llm`. Never for user-visible generation or scaffold authoring. */
   fastLlm?: RoutedLLM;
