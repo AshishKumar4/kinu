@@ -99,7 +99,7 @@ describe('the desktop members', () => {
     expect(computer.declarations?.['screenshot']?.full).toContain('1280×768');
     expect(computer.declarations?.['click']?.full).toContain('x below 1280 and y below 768');
     // A chord's keys are typed as an array where the model reads them (owner, 2026-10-19).
-    expect([computer.declarations?.['key']?.full, computer.declarations?.['click']?.full]).toEqual([
+    expect((['key', 'click'] as const).map((member) => computer.declarations?.[member]?.full)).toEqual([
       expect.stringContaining('key(keys: string[]'), expect.stringContaining('keys?: string[]'),
     ]);
     await call(computer, 'click', [10, 20], { button: 'right', count: 2, keys: ['Ctrl', 'cmd'] });
