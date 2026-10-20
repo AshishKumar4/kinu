@@ -17,6 +17,7 @@ import {
   previewSuffixMetaName,
   buildWorkspacePreviewHost,
   APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH, VIEWER_EXCHANGE_PATH,
+  APP_ROUTES, CLIENT_ERROR_ENDPOINT, CLIENT_RENDER_FAILED,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
@@ -1210,10 +1211,28 @@ const PUBLIC_API = [
   '/api/workspaces/:name/webhook/', // a signed delivery URL
   '/api/gallery', // read by anyone; a star or report reads its session itself
   '/api/explore', // read by anyone, as the Gallery is
+  CLIENT_ERROR_ENDPOINT, // a crash report from any page; a signed-in one reads its session itself, the cross-site rule with it
 ];
 
 describe('worker wiring', () => {
   const ZONE = { PREVIEW_HOST_SUFFIX: SUFFIX };
+
+  // Production walkthrough, 2026-10-20: the app mounted the crash reports behind its session gate, so a public page's
+  // crash was refused before the route read it.
+  test("a crash report reaches its route with no session, and a forged cross-site one carrying the cookie does not", async () => {
+    const { env, ctx, cookie } = await appProbe();
+
+    const body = JSON.stringify({
+      event: CLIENT_RENDER_FAILED, route: APP_ROUTES.home, errorName: 'TypeError',
+      stack: '    at Landing (https://kinu.example.com/assets/index.js:1:2)', componentStack: '',
+    });
+
+    const at = `${PROBE_ORIGIN}${CLIENT_ERROR_ENDPOINT}`;
+    const anonymous = await api.fetch(new Request(at, { method: 'POST', body }), env, ctx);
+    const forged = await api.fetch(new Request(at, { method: 'POST', body, headers: { cookie, origin: 'https://evil.example' } }), env, ctx);
+
+    expect({ anonymous: anonymous.status, forged: forged.status }).toEqual({ anonymous: 202, forged: 403 });
+  });
 
   test('the CSRF gate runs before any authenticated route', async () => {
     // Every write route outside the listed public prefixes refuses an anonymous request, and a
