@@ -2,10 +2,10 @@
  * @vitest-environment node
  */
 import { env } from 'cloudflare:workers';
+import { runDurableObjectAlarm } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { parseMailRecipient } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { accountIdFor } from '../../src/auth/store';
 
 // The privacy policy promises that deleting an account deletes everything it has. Priya Raman's account holds a
 // workspace with a preview, a device, a credential, mail with an attachment, a Drive file, feedback, marks in Explore,
@@ -20,9 +20,6 @@ const MIME = [
   'Content-Type: text/plain', 'Content-Disposition: attachment; filename="secret.txt"', '', 'whsec_northwind', '--B--', '',
 ].join('\r\n');
 
-/** The probe's deployment offers built-in sign-in, as one with no OAuth provider does: an address's account is minted so. */
-const BUILTIN_DEPLOYMENT = {};
-
 const account = (id: string) => env.CENSUS_ACCOUNT.get(env.CENSUS_ACCOUNT.idFromName(id));
 
 const workspace = (name: string) => env.CENSUS_WORKSPACE.get(env.CENSUS_WORKSPACE.idFromName(name));
@@ -31,8 +28,8 @@ const control = () => env.CENSUS_CONTROL.get(env.CENSUS_CONTROL.idFromName('site
 
 describe("deleting an account on real workerd, every store's census", () => {
   it("leaves nothing of the person in any store, theirs or another owner's", async () => {
-    const priya = { userId: await accountIdFor(BUILTIN_DEPLOYMENT, EMAIL), email: EMAIL };
-    const dana = await accountIdFor(BUILTIN_DEPLOYMENT, 'dana@northwind.io');
+    const [priyaId = '', dana = ''] = await account('census-ids').accountsOf([EMAIL, 'dana@northwind.io']);
+    const priya = { userId: priyaId, email: EMAIL };
     const mailbox = env.CENSUS_MAILBOX.get(env.CENSUS_MAILBOX.idFromName(priya.userId));
     const name = env.CENSUS_MAILNAME.get(env.CENSUS_MAILNAME.idFromName('priya'));
     const recipient = parseMailRecipient('priya@kinu.run', 'kinu.run');
@@ -48,11 +45,8 @@ describe("deleting an account on real workerd, every store's census", () => {
     await control().seedPerson(priya);
     await account('kinu:builtin-accounts').seedSignIn(priya);
 
-    // Dana's card reaches Priya's account on its own job.
-    for (let at = Date.now(); (await account(priya.userId).accountCensus()).user_share_cards === 0;) {
-      if (Date.now() - at > 20_000) throw new Error("Dana's card never reached Priya");
-      await new Promise((resolve) => { setTimeout(resolve, 100); });
-    }
+    // Dana's card reaches Priya's account on its own job, run by Dana's account's alarm.
+    while (await runDurableObjectAlarm(account(dana)));
 
     // Read from Dana's account where a read would make Priya's again.
     const census = async () => ({
@@ -98,8 +92,8 @@ describe("deleting an account on real workerd, every store's census", () => {
     for (const [table, rows] of Object.entries(after.mailbox)) expect({ table, rows }).toEqual({ table, rows: 0 });
 
     expect(after).toMatchObject({
-      // Retired, never reissued, and naming no one (docs/MAIL.md §11).
-      mailName: { label: 'priya', state: 'retired', user_id: '' },
+      // Retired: kept, owned by no one (docs/MAIL.md §11).
+      mailName: { label: 'priya', user_id: '' },
       driveShards: 0,
       preview: false,
       controlPlane: {

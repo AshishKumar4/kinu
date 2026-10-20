@@ -301,6 +301,7 @@ interface CensusPerson {
 }
 
 interface CensusAccountRpc extends Rpc.DurableObjectBranded {
+  accountsOf(emails: readonly string[]): Promise<string[]>;
   seedPriya(person: CensusPerson): Promise<void>;
   seedDana(priya: CensusPerson): Promise<void>;
   seedSignIn(person: CensusPerson): Promise<void>;

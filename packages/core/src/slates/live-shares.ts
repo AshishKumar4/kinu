@@ -71,7 +71,7 @@ export function accountViewer(userId: string): string {
 }
 
 /** What a deleted account's requests and edits are recorded under once it is forgotten: no one. */
-export const FORGOTTEN_PERSON = 'a deleted account';
+const FORGOTTEN_PERSON = 'a deleted account';
 
 const EditMarkRow = v.object({ editor: v.string(), revision_before: v.nullable(v.string()) });
 

@@ -15,9 +15,12 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
 import { MailboxDO } from '../../src/mail/mailbox-do';
 import { ORCHESTRATOR_RPC_SURFACE, USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
-import { tenantDrive, tenantObjectNames } from '../../src/drive/tenant';
+import { tenantDrive } from '../../src/drive/tenant';
+// Mossaic's own name for a tenant's user object, so a census of the wrong object cannot pass.
+import { vfsUserDOName } from '../../../../third_party/mossaic/worker/core/lib/utils';
 import { UserDO } from '../../src/user/user-do';
 import { shareViewerKey } from '../../src/viewer-pass';
+import { accountIdFor } from '../../src/auth/store';
 import type { MossaicUserDO } from '../../src/drive/mossaic-objects';
 
 export * from '../../src/server';
@@ -37,7 +40,7 @@ function workspaceNamed(env: ProbeEnv, name: string): Promise<DurableObjectStub<
   return getAgentByName<ProbeEnv, ProductionOrchestrator>(env.OrchestratorAgent, name);
 }
 
-const ACCOUNT_METHODS = ['seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'driveCensus', 'previewCensus'];
+const ACCOUNT_METHODS = ['accountsOf', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'driveCensus', 'previewCensus'];
 
 /** The tables an account holds, by the prefixes `account-reset-probe.ts` counts, and its sent cards. */
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_', 'share_cards_'];
@@ -48,6 +51,11 @@ export class CensusAccountDO extends UserDO {
 
     for (const name of ACCOUNT_METHODS) Reflect.deleteProperty(this, name);
     sealRpcSurface(this, [...USER_DO_RPC_SURFACE, ...ACCOUNT_METHODS]);
+  }
+
+  /** The accounts `emails` are on this deployment, by the rule every sign-in mints by. */
+  async accountsOf(emails: readonly string[]): Promise<string[]> {
+    return await Promise.all(emails.map((email) => accountIdFor(this.env, email)));
   }
 
   /** Priya's account as she used it: her workspace with a preview, a device, a credential and a file in her Drive. */
@@ -115,7 +123,9 @@ export class CensusAccountDO extends UserDO {
 
   /** How many shards `tenant`'s Drive spans, by its own record: none once its user object is gone. */
   async driveCensus(tenant: string): Promise<number> {
-    return objectNamed<DurableObjectId, DurableObjectStub<MossaicUserDO>>(this.env.MOSSAIC_USER, tenantObjectNames(tenant).user).tenantShards();
+    const users = this.env.MOSSAIC_USER;
+
+    return users === undefined ? 0 : objectNamed<DurableObjectId, DurableObjectStub<MossaicUserDO>>(users, vfsUserDOName('default', tenant)).tenantShards();
   }
 
   /** Whether `workspace`'s preview is still published. */

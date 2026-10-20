@@ -382,10 +382,14 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         outboundService: async (request) => {
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         },
+        // Every deployment binds the mailbox and the mail names: an account's delete reaches both.
+        r2Buckets: ['MAIL_BUCKET'],
         durableObjects: {
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
+          MAILBOX: { className: 'MailboxDO', useSQLite: true },
+          MAILNAME: { className: 'MailNameDO', useSQLite: true },
         }, })],
 // Account deletion's census: every store the account has, each under the binding name production code reaches it by.
 ['account-census-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-census-probe.ts', { ...probeRuntime, keepNames: true }),

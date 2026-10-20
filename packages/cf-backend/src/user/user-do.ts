@@ -30,9 +30,8 @@ import { rawPath, rethrow } from '../api/context';
 import { destroyDriveTenant, tenantDrive } from '../drive/tenant';
 import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
 import { internalCaller } from '@kinu.run/core/control-plane';
-import { builtinSignInOn } from '@kinu.run/core/identity';
+import { BUILTIN_ACCOUNTS_OBJECT, builtinSignInOn } from '@kinu.run/core/identity';
 import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
-import { builtinAccounts } from '../auth/builtin';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
 import type { McpPresetAvailability, McpServerSummary, ProviderListing } from '@kinu.run/core';
@@ -1379,7 +1378,7 @@ export class UserDO extends Agent<Env> {
       await controlPlaneStub({ ControlPlaneDO }).forgetUser(await internalCaller(this.env), person);
     }
 
-    if (builtinSignInOn(this.env)) await builtinAccounts(this.env).builtinRemoveAccount(await ownerCaller(this.env), person);
+    if (builtinSignInOn(this.env)) await objectNamed(this.env.UserDO, BUILTIN_ACCOUNTS_OBJECT).builtinRemoveAccount(await ownerCaller(this.env), person);
 
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made

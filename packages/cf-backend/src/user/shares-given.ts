@@ -9,7 +9,7 @@ import { logDoCallRetry } from '../obs/do-call-retry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { UserDO } from './user-do';
 
-export type ShareRosterAuthority = Pick<UserDO, 'shareCards_withdraw' | 'sharesReceived_forget' | 'shareRecipient_forget'>;
+type ShareRosterAuthority = Pick<UserDO, 'shareCards_withdraw' | 'sharesReceived_forget' | 'shareRecipient_forget'>;
 
 export interface SharesGivenEnv<Id> {
   UserDO: ObjectNamespace<Id, ShareRosterAuthority>;
