@@ -3,6 +3,7 @@ import { nimbusPreviewUrl } from '../src/nimbus-route';
 import { VIEWER_COOKIE_NAME } from '../src/viewer-pass';
 import { present } from '@kinu.run/test-utils';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
@@ -673,5 +674,95 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     // pinned one cannot serve.
     const profile = resolveWith({ ...clean, availableModels: [...clean.availableModels, 'groq/llama-3.1-8b-instant'] });
     expect(profile.tiers.deep.model).toBe(profile.tiers.default.model);
+  });
+});
+
+/**
+ * Staging rc25 and production rc22, 2026-10-20, 15 cold first turns each: a turn whose model was already chosen
+ * waited on its workspace's provider sweep (ChatGPT's model list alone 470-790 ms) in 8 and 4 of them. A cold workspace
+ * serves the account's last listing swept under the same credentials and accounts, and sweeps behind its turn.
+ */
+describe('OwnedModelServices — the listing kept at the account', () => {
+  /** One account's store, as the user object keeps it, and the work its workspaces run behind their turns. */
+  async function account() {
+    const user = createTestUserDO({ durableObjectId: 'owner-1' });
+    const caller = await testOwner();
+    const behind: Promise<unknown>[] = [];
+
+    const services = (accounts: Readonly<Record<string, string>> = {}) => new OwnedModelServices({
+      env: fakeEnv(fakeUserDO(), platformGatewayEnv()),
+      agentName: () => 'snapshot',
+      workspaceId: () => 'workspace', workspaceName: () => 'workspace',
+      appTitle: 'Kinu',
+      ownerRequired: false,
+      getOwnerUserId: () => null,
+      getUserCaller: async () => ({ workspaceToken: 'wt' }),
+      getCredentialsRevision: async () => await user.userDO.getCredentialsRevision(caller),
+      accounts: () => accounts,
+      storedListing: {
+        read: async (key) => await user.userDO.storedProviderListing(caller, key),
+        keep: async (revision, key, listing) => { await user.userDO.keepProviderListing(caller, revision, key, listing); },
+        detach: (work) => { behind.push(Effect.runPromise(work)); },
+      },
+      reportModelCall: unobservedSpend, webSearchChain: NO_CHAIN,
+    });
+
+    const settled = async (): Promise<void> => {
+      while (behind.length > 0) await Promise.all(behind.splice(0));
+    };
+
+    return { user, services, settled };
+  }
+
+  test('a cold workspace serves the listing another swept under the same keys, without waiting on its own sweep', async () => {
+    const { services, settled } = await account();
+
+    catalogUp();
+    const first = await services().profileProviderSnapshot();
+
+    await settled();
+    // A cold object of the same account: served the kept listing, its own sweep behind it (the cache's own suite holds
+    // that sweep to show the read never waits on it).
+    const read = await services().profileProviderSnapshot();
+
+    await settled();
+
+    expect({ first: first.cache, cold: read.cache, models: read.snapshot.availableModels, revision: read.snapshot.revision })
+      .toEqual({ first: 'miss', cold: 'stored', models: first.snapshot.availableModels, revision: first.snapshot.revision });
+  });
+
+  // An unset fast tier on a cold turn picks from the kept list, so the account keeps it whole.
+  test("the account keeps a listing whole, its fast tier's candidates and efforts with it, under the keys it was swept at", async () => {
+    const { user } = await account();
+    const caller = await testOwner();
+
+    const listing = {
+      models: ['openai/gpt-x', 'groq/llama-y'], failures: [], reasoningEfforts: { 'openai/gpt-x': ['low', 'high'] as const },
+      fast: [{ model: 'groq/llama-y', contextWindow: 131_072 }, { model: 'openai/gpt-x' }],
+    };
+
+    const revision = await user.userDO.getCredentialsRevision(caller);
+
+    await user.userDO.keepProviderListing(caller, revision, '{}', listing);
+    await user.userDO.keepProviderListing(caller, revision - 1, '{}', { ...listing, models: ['stale/model'] });
+
+    expect({ same: await user.userDO.storedProviderListing(caller, '{}'), otherAccounts: await user.userDO.storedProviderListing(caller, '{"openai":"work"}') })
+      .toEqual({ same: listing, otherAccounts: null });
+  });
+
+  test('a listing swept under other credentials or other accounts is not served, and the turn waits on its sweep', async () => {
+    const { user, services, settled } = await account();
+
+    catalogUp();
+    await services().profileProviderSnapshot();
+    await settled();
+
+    const otherAccounts = await services({ openai: 'work' }).profileProviderSnapshot();
+
+    await settled();
+    user.db.exec('UPDATE user_credentials_revision SET revision = revision + 1 WHERE id = 1');
+    const movedKeys = await services().profileProviderSnapshot();
+
+    expect([otherAccounts.cache, movedKeys.cache]).toEqual(['miss', 'miss']);
   });
 });

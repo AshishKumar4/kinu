@@ -35,6 +35,7 @@
     "user_devices",
     "user_mcp_servers",
     "user_profile",
+    "user_provider_listing",
     "user_secret_grants",
     "user_secrets",
     "user_share_cards",

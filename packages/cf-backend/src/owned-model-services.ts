@@ -4,7 +4,7 @@ import type { LanguageModel } from 'ai';
 import {
   actorAffinity, parseModelSpec, reasoningEffortOptions,
   providerSnapshotOf, providerListingOf, ProviderListingCache,
-  type ModelAffinity, type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
+  type ModelAffinity, type ProviderListing, type StoredProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ModelAttemptInfo, type ProviderWaitInfo,
   type WebSearchProvider, type WebSearchChain,
   type ProviderEnv, type WorkersAIBinding,
@@ -52,7 +52,15 @@ export interface OwnedModelServicesOptions<Id> {
   readonly onProviderWait?: (info: ProviderWaitInfo) => void;
   /** Invoked as each request ends, likewise. */
   readonly onModelAttempt?: (info: ModelAttemptInfo) => void;
-  readonly accountFor?: (providerId: string) => string | undefined;
+  /** Each provider's chosen account, as one map: what the registry lists and calls each provider with. */
+  readonly accounts?: () => Readonly<Record<string, string>>;
+  /** Where a complete listing is kept past this object's life, and how its sweep runs off a turn's path; absent: every
+   *  object sweeps for itself. */
+  readonly storedListing?: {
+    readonly read: (accounts: string) => Promise<ProviderListing | null>;
+    readonly keep: (revision: number, accounts: string, listing: ProviderListing) => Promise<void>;
+    readonly detach: (work: Effect.Effect<void>) => void;
+  };
   readonly currentTurn?: (actor: ActorReference) => string | null;
   /** Where the web provider's Workers AI conversions and searches are counted. */
   readonly reportModelCall: ModelCallSink;
@@ -69,11 +77,38 @@ export class OwnedModelServices<Id = DurableObjectId> {
   /** Revision the listing was swept under; a differing live revision invalidates it without a clock. */
   private cachedCredentialsRevision: number | null = null;
   /** Last complete provider listing; the cache policy is core's `ProviderListingCache`, keyed on `revision`. */
-  private readonly providerListings = new ProviderListingCache(
-    () => this.sweepProviderListing(),
-  );
+  private readonly providerListings: ProviderListingCache;
 
-  constructor(private readonly options: OwnedModelServicesOptions<Id>) {}
+  constructor(private readonly options: OwnedModelServicesOptions<Id>) {
+    this.providerListings = new ProviderListingCache(() => this.sweepProviderListing(), this.storedListings());
+  }
+
+  /** The canonical {provider: account} this object lists under: the key a kept listing is served on. */
+  private accountsKey(): string {
+    const accounts = this.options.accounts?.() ?? {};
+
+    return JSON.stringify(Object.fromEntries(Object.keys(accounts).sort().map((provider) => [provider, accounts[provider]])));
+  }
+
+  /** The account's store, keyed on the credentials' revision this object read last and the accounts it lists under. */
+  private storedListings(): StoredProviderListing | undefined {
+    const stored = this.options.storedListing;
+
+    if (stored === undefined) return undefined;
+
+    return {
+      read: () => stored.read(this.accountsKey()),
+      keeper: () => {
+        const revision = this.cachedCredentialsRevision;
+        const accounts = this.accountsKey();
+
+        return async (listing) => {
+          if (revision !== null) await stored.keep(revision, accounts, listing);
+        };
+      },
+      detach: stored.detach,
+    };
+  }
 
   /** Lazy so it reads the facet's logical name at call time. */
   get affinity(): ModelAffinity {
@@ -104,7 +139,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
         appTitle: this.options.appTitle,
         onProviderWait: this.options.onProviderWait,
         onModelAttempt: this.options.onModelAttempt,
-        accountFor: this.options.accountFor,
+        accountFor: (provider) => this.options.accounts?.()[provider],
         ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
       });
 
