@@ -135,8 +135,7 @@ import {
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
   collectWorkspaceAgentsMd,
-  InstructionApprovalStore, trustOfInstructionApprovals,
-  type InstructionApproval, type InstructionTrustResolver,
+  InstructionApprovalStore, type InstructionTrustResolver,
   InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
@@ -2177,7 +2176,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
    *  or copied root starts unapproved. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
-  protected _workspaceInstructionApprovals: readonly InstructionApproval[] | null = null;
   private instructionApprovals(): InstructionApprovalStore {
     this._instructionApprovals ??= new InstructionApprovalStore(
       this.rt.storage.sql,
@@ -2188,28 +2186,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._instructionApprovals;
   }
 
-  /** A facet replaces this with the root authority snapshot. */
   private _instructionTrust: InstructionTrustResolver | null = null;
   protected instructionTrust(): InstructionTrustResolver {
-    const approvals = this._workspaceInstructionApprovals;
-
-    if (approvals !== null) {
-      return (path, content) => trustOfInstructionApprovals(approvals, path, content);
-    }
-
     const store = this.instructionApprovals();
     this._instructionTrust ??= store.trustOf.bind(store);
 
     return this._instructionTrust;
-  }
-
-  /** The workspace root's authoritative approval rows. Facets fetch this before each turn and
-   * never consult their private SQL for shared files. */
-  @callable()
-  async getWorkspaceInstructionApprovals(): Promise<readonly InstructionApproval[]> {
-    this._workspaceInstructionApprovals = null;
-
-    return this.instructionApprovals().list();
   }
 
   /** The workspace's instruction files, read through its sandbox where it has one. */
@@ -2232,31 +2214,23 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Derived on read, never stored, so the agent cannot fill the queue by writing files. */
   @callable()
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
-    this._workspaceInstructionApprovals = null;
-
     return this.instructionDesk().list(request);
   }
 
   @callable()
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
-    this._workspaceInstructionApprovals = null;
-
     return this.instructionDesk().read(path);
   }
 
   /** Grants these bytes at this path system placement; the digest is re-checked against the file. */
   @callable()
   async approveInstruction(path: string, reviewedDigest: string): Promise<AdmittedInstructionDecision> {
-    this._workspaceInstructionApprovals = null;
-
     return this.instructionDesk().approve(path, reviewedDigest);
   }
 
   /** The refusal is kept, so nothing can re-grant it without the owner deciding again. */
   @callable()
   async revokeInstruction(path: string): Promise<AdmittedInstructionDecision> {
-    this._workspaceInstructionApprovals = null;
-
     return this.instructionDesk().revoke(path);
   }
 

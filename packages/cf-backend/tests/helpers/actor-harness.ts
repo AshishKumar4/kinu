@@ -1709,15 +1709,10 @@ export type ScriptedHeadReport = Pick<HeadReport, 'status' | 'summary' | 'errorM
 /** The world each activation was built in, by its storage context: read by the actor at construction. */
 const activationWorlds = new WeakMap<object, HarnessActorWorld>();
 
-/** The one read the instruction-trust authority performs against a parent. */
-interface HarnessInstructionAuthority {
-  getWorkspaceInstructionApprovals(): Promise<readonly never[]>;
-}
-
-/** The parent DO namespace: a real parent agent or a deny-stub. */
+/** The parent DO namespace: a real parent agent. */
 interface HarnessParentNamespace {
   idFromName(name: string): string;
-  get(id: string): HarnessOrchestratorAgent | HarnessInstructionAuthority;
+  get(id: string): HarnessOrchestratorAgent;
 }
 
 /** Env with refusing defaults; the world records live calls and `parent` binds the parent hop. */

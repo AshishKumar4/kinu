@@ -260,7 +260,6 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'headJournalRecordReport',
   'headJournalRecordSplit',
   'installWorkspaceCapability',
-  'getWorkspaceInstructionApprovals',
   'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
