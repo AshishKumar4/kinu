@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { ExecutorPortSchema, type ExecutorCapability } from '../execution/types';
 import { DESKTOP_INPUTS, WATCH_DEFAULT_FRAMES, watchSheet, type DesktopScreen } from '../execution/desktop';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
-import { defineOperation, described, type Impact, type Operation } from './operation';
+import { defineOperation, described, opaque, type Impact, type Operation } from './operation';
 import { FILE } from './file';
 
 const Command = v.pipe(v.string(), v.nonEmpty());
@@ -148,9 +148,13 @@ const desk = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, 
   op: Pick<Operation<I, O>, 'name' | 'help' | 'input' | 'output'> & { readonly impact: Impact },
 ) => defineOperation({ ns: 'computer', slate: false, ...op });
 
-const KEYS_ARE = 'Keys pressed together, joined by "+": "Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "Page_Up", '
+const KEYS_ARE = 'The keys pressed together, as an array: "Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "Page_Up", '
   + '"Page_Down", "Up", "Down", "Left", "Right", "space", "F1"-"F12", a letter, digit or punctuation mark, and modifiers: '
-  + '"ctrl+l", "ctrl+shift+t", "alt+Tab", or "w+space" for two at once. Enter, Esc, cmd and win are understood.';
+  + '["ctrl", "l"], ["ctrl", "shift", "t"], ["alt", "Tab"], or ["w", "space"] for two at once. Enter, Esc, cmd and win are understood.';
+
+/** The keys of a chord as the model reads them, however the desktop reads them (`DESKTOP_INPUTS`): an array of
+ *  strings, its one documented form. */
+const KEY_LIST = { type: 'array', items: { type: 'string' } } as const;
 
 /** What a watch's frames cost, from the box's layout: each frame's size, then the image the default and the most make,
  *  as screenshots' worth of pixels, which is what an image costs. */
@@ -201,11 +205,11 @@ export function computerDesktop(screen: DesktopScreen) {
     }),
     click: desk({
       name: 'click', impact: 'execute', output: v.null(), help: 'Click at a point.',
-      input: deskInput(DESKTOP_INPUTS.click, {
+      input: deskInput({ ...DESKTOP_INPUTS.click, keys: v.optional(opaque(DESKTOP_INPUTS.click.keys.wrapped, KEY_LIST)) }, {
         at: point,
         button: 'Default "left".',
         count: '2 double-clicks, 3 triple-clicks; default 1.',
-        modifiers: 'Modifiers held during the click: "ctrl", "shift", "alt", "super", or several joined by "+".',
+        keys: 'Modifiers held during the click, as an array: ["shift"] or ["ctrl", "shift"].',
       }),
     }),
     type: desk({
@@ -214,8 +218,8 @@ export function computerDesktop(screen: DesktopScreen) {
     }),
     key: desk({
       name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord: keys pressed together.',
-      input: deskInput(DESKTOP_INPUTS.key, {
-        chord: `${KEYS_ARE} Always one string: "ctrl+l", never ["ctrl", "l"]; the space bar is "space".`,
+      input: deskInput({ ...DESKTOP_INPUTS.key, keys: opaque(DESKTOP_INPUTS.key.keys, KEY_LIST) }, {
+        keys: `${KEYS_ARE} The space bar is "space".`,
         hold: 'Milliseconds it stays down before it is released, as a game reads a held key; 1 to 10,000. There is no '
           + 'separate key down or key up: hold it for as long as it should act.',
       }),
