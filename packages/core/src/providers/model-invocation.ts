@@ -23,6 +23,9 @@ export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
 
 export type StreamRequest = Parameters<typeof streamText>[0];
 
+/** A structured call's request: one prompt, and only the options it sends on. */
+export type ObjectRequest = Pick<StreamRequest, 'model' | 'system' | 'maxRetries' | 'abortSignal' | 'providerOptions'> & { readonly prompt: string };
+
 export interface ReportedCall {
   readonly spend: ModelCallSpend;
   readonly spec?: string;
@@ -95,13 +98,9 @@ const NON_STRICT: ProviderOptions = { openai: { strictJsonSchema: false }, opena
  * AI's 408 at 10 minutes, 2026-10-20). An answer off the schema was billed and is no answer: it fails `bad_input`, as a
  * wrong answer does, and is not asked of another model; an answer stopped at the output limit fails `unavailable`.
  */
-export function generateObjectReported<S extends v.GenericSchema>(request: GenerateRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
+export function generateObjectReported<S extends v.GenericSchema>(request: ObjectRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
   const streamed: StreamRequest = {
-    model: request.model,
-    prompt: request.prompt ?? '',
-    ...(request.system !== undefined && { system: request.system }),
-    ...(request.maxRetries !== undefined && { maxRetries: request.maxRetries }),
-    ...(request.abortSignal !== undefined && { abortSignal: request.abortSignal }),
+    ...request,
     output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
     providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
   };
