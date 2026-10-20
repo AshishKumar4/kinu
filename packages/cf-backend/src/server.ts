@@ -36,10 +36,10 @@ import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
 import {
-  crossSiteRejection, sessionGate,
+  crossSiteRejection, requestIdentity, sessionGate,
   type AuthIdentity,
 } from "./auth/session";
-import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
+import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH, VISITOR_SHELL } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
@@ -387,6 +387,15 @@ worker.get('/gallery', (c) => c.redirect(`${APP_ROUTES.explore}?kind=app`));
 for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);
 
 for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
+
+/**
+ * Explore is public. Signed out, its page is marked a visitor's, which the app draws under the public bar, reading nothing
+ * of an account; signed in, it goes on through the gate to the account's own page, rail and theme.
+ */
+const exploreShell: MiddlewareHandler<WorkerEnv> = async (c, next) =>
+  (await requestIdentity(c.req.raw, c.env) === null ? serveApp(c.req.raw, c.env, VISITOR_SHELL) : next());
+
+for (const path of [APP_ROUTES.explore, `${APP_ROUTES.explore}/*`]) worker.get(path, exploreShell);
 
 worker.use('*', (c, next) => settle(Effect.gen(function* () {
   const request = c.req.raw;

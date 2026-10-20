@@ -8,7 +8,7 @@ import { Button, Loader } from "@cloudflare/kumo";
 import { FlagIcon, FolderIcon, GitForkIcon, GithubLogoIcon, PlayIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, galleryPicturePath, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
-import { useGallerySignedIn } from "@/components/gallery/GalleryShell";
+import { useGallerySignedIn } from "@/hooks/use-gallery-signed-in";
 import { Cover } from "@/components/drive/DriveTiles";
 import { ExploreCard } from "@/components/explore/ExploreCard";
 import { SlatePicture } from "@/components/slates/SlatePicture";
@@ -18,7 +18,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
-import { hereForking, signInAndReturn } from "@/lib/sign-in";
+import { hereAsking, signInAndReturn } from "@/lib/sign-in";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { readExplore, type ExploreItem } from "@/lib/explore-api";
 import { readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
@@ -157,7 +157,7 @@ export default function GallerySlatePage() {
             <p className="p-row-text p-text-2">{listing.line}</p>
             <div className="flex flex-wrap items-center gap-2">
               <a href={listing.url} data-gallery-open className="p-btn inline-flex h-9 items-center gap-1.5 rounded-md px-5 text-sm font-medium"><PlayIcon size={14} weight="fill" />Open</a>
-              <Button size="base" variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereForking()))}>
+              <Button size="base" variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereAsking("fork")))}>
                 <GitForkIcon size={15} />Fork
               </Button>
               <Button size="base" variant="ghost" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>

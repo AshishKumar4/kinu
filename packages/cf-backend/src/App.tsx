@@ -1,11 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate, Outlet, matchPath, useLocation, useParams } from "react-router-dom";
-import { Suspense, type ReactNode } from "react";
+import { Suspense, useEffect, type ReactNode } from "react";
 import Layout from "./components/layout";
-import GalleryShell from "./components/gallery/GalleryShell";
+import GalleryShell, { VisitorShell } from "./components/gallery/GalleryShell";
 import HomePage, { NewWorkspacePage } from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { APP_ROUTES, needsOnboarding } from "@kinu.run/core";
+import { APP_ROUTES, needsOnboarding, pageIsVisitors } from "@kinu.run/core";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { lastValue } from "./hooks/use-async-resource";
 import { lazyRoute } from "./lazy-route";
@@ -115,8 +115,41 @@ function OnboardingGate() {
   return <Outlet />;
 }
 
+/** Explore's pages: in the rail for the signed in, under the public bar for a visitor. */
+const EXPLORE_ROUTES = (
+  <>
+    <Route path={APP_ROUTES.explore} element={<Page label="explore"><ExplorePage /></Page>} />
+    <Route path={APP_ROUTES.exploreWorkspace} element={<Page label="explore-workspace"><ExploreWorkspacePage /></Page>} />
+  </>
+);
+
+const LISTED_SLATE_ROUTE = <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />;
+
+/** A visitor's way to a page that is not public: its address is the server's to answer, with sign-in first. */
+function ServerPage() {
+  const { pathname, search } = useLocation();
+
+  useEffect(() => { window.location.assign(pathname + search); }, [pathname, search]);
+
+  return <LazyFallback />;
+}
+
+/**
+ * A visitor's page, as the server marked it (`pageIsVisitors`): Explore under the public bar, reading nothing of an
+ * account, and a listed slate's page as anyone sees it.
+ */
+const VISITOR_ROUTES = (
+  <>
+    <Route element={<VisitorShell />}>{EXPLORE_ROUTES}</Route>
+    <Route element={<GalleryShell />}>{LISTED_SLATE_ROUTE}</Route>
+    <Route path="*" element={<Page label="server"><ServerPage /></Page>} />
+  </>
+);
+
 // Paths come from `APP_ROUTES` so the router and failure reports' route field cannot drift.
-export default function App() {
+export default function App({ visitor = pageIsVisitors() }: { readonly visitor?: boolean }) {
+  if (visitor) return <BrowserRouter><Routes>{VISITOR_ROUTES}</Routes></BrowserRouter>;
+
   return (
     <BrowserRouter>
       <Routes>
@@ -142,17 +175,14 @@ export default function App() {
             <Route path={APP_ROUTES.workspaceAgentPath} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.workspaceView} element={<Page label="workspace-view"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.swarm} element={<Page label="swarm-explorer"><SwarmExplorer /></Page>} />
-            <Route path={APP_ROUTES.explore} element={<Page label="explore"><ExplorePage /></Page>} />
-            <Route path={APP_ROUTES.exploreWorkspace} element={<Page label="explore-workspace"><ExploreWorkspacePage /></Page>} />
+            {EXPLORE_ROUTES}
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
             <Route path="*" element={<Page label="not-found"><NotFoundPage /></Page>} />
           </Route>
         </Route>
         {/* A listed slate's page is public: the app's shell signed in, a bar with Sign in signed out (GalleryShell). */}
-        <Route element={<GalleryShell />}>
-          <Route path={APP_ROUTES.gallerySlate} element={<Page label="gallery-slate"><GallerySlatePage /></Page>} />
-        </Route>
+        <Route element={<GalleryShell />}>{LISTED_SLATE_ROUTE}</Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
         <Route path={APP_ROUTES.sharedBlueprint} element={<Page label="blueprint"><BlueprintPage /></Page>} />
         {/* Outside onboarding too: a person a share names enters it before setting anything up. */}

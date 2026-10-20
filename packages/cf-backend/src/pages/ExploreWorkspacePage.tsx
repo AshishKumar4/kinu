@@ -20,6 +20,8 @@ import { InstallDialog } from "@/components/explore/InstallDialog";
 import { useConnectedPreset } from "@/hooks/use-mcp-servers";
 import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, type WorkspaceCard } from "@/lib/explore-api";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
+import { useGallerySignedIn } from "@/hooks/use-gallery-signed-in";
+import { hereAsking, signInAndReturn } from "@/lib/sign-in";
 
 const ago = (at: number) => {
   const days = Math.round((Date.now() - at) / 864e5);
@@ -74,8 +76,9 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
   );
 }
 
-/** Install, or Open for the assistant the person already has; and a star of their own, counted with everyone's. */
+/** Install, or Open for the assistant the person already has; and a star of their own, counted with everyone's. Signed out, each signs in first. */
 function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; onInstall: () => void }) {
+  const signedIn = useGallerySignedIn();
   const assistant = useInstalledAssistant();
   const [star, setStar] = useState({ on: workspace.starred, count: workspace.stars });
   const [failure, setFailure] = useState<string | null>(null);
@@ -93,8 +96,8 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
     <div className="mt-2 flex flex-wrap items-center gap-2">
       {installed
         ? <Link to={APP_ROUTES.home} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--c-accent)] px-3 text-[13px] font-semibold text-[var(--c-accent-on)]" data-blueprint-open><HouseIcon size={14} />Open on Home</Link>
-        : <FilledButton onClick={onInstall} data-blueprint-install><DownloadSimpleIcon size={14} />Install</FilledButton>}
-      <button type="button" onClick={() => detach(toggle(!star.on))} aria-pressed={star.on} data-blueprint-star
+        : <FilledButton onClick={signedIn ? onInstall : () => signInAndReturn(hereAsking("install"))} data-blueprint-install><DownloadSimpleIcon size={14} />Install</FilledButton>}
+      <button type="button" onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star
         className={`inline-flex h-8 items-center gap-1.5 rounded-lg border p-border px-3 text-[13px] transition-colors hover:p-text ${star.on ? "p-text" : "p-text-2"}`}>
         <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : undefined} />
         {star.on ? "Starred" : "Star"}<span className="tabular-nums p-text-3">{star.count.toLocaleString("en-US")}</span>
@@ -106,13 +109,10 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
 
 export default function ExploreWorkspacePage() {
   const { blueprint = "" } = useParams();
+  const signedIn = useGallerySignedIn();
   const [page, setPage] = useState<BlueprintPage | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
-  const [installing, setInstalling] = useState(new URLSearchParams(location.search).has("install"));
-  const [soul, setSoul] = useState(false);
-  const connected = useConnectedPreset();
-  const has = (preset: string | null) => preset !== null && connected(preset);
 
   useEffect(() => {
     let current = true;
@@ -125,6 +125,23 @@ export default function ExploreWorkspacePage() {
   if (failure !== null) return <div className="p-8"><LoadFailure what="this workspace" message={failure} onRetry={() => setTries((n) => n + 1)} /></div>;
 
   if (page === null) return <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;
+
+  return signedIn ? <AccountBlueprint page={page} /> : <Blueprint page={page} connected={NOTHING_CONNECTED} />;
+}
+
+/** A visitor signed out has connected nothing, and has no account to ask. */
+const NOTHING_CONNECTED = (): boolean => false;
+
+/** Signed in, each need says whether the person has already connected it. */
+function AccountBlueprint({ page }: { page: BlueprintPage }) {
+  return <Blueprint page={page} connected={useConnectedPreset()} />;
+}
+
+function Blueprint({ page, connected }: { page: BlueprintPage; connected: (preset: string) => boolean }) {
+  const signedIn = useGallerySignedIn();
+  const [installing, setInstalling] = useState(signedIn && new URLSearchParams(location.search).has("install"));
+  const [soul, setSoul] = useState(false);
+  const has = (preset: string | null) => preset !== null && connected(preset);
   const { workspace, inside } = page;
 
   return (

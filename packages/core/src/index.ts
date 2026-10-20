@@ -2272,7 +2272,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { desktopClientUrl } from './http/desktop-client';
 
-export { serveApp } from './http/app-shell';
+export { serveApp, VISITOR_SHELL } from './http/app-shell';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
 
@@ -2395,6 +2395,8 @@ export {
 } from './utils/session-recovery';
 
 export { pageDeployedBuildSha } from './web/page-build';
+
+export { pageIsVisitors, VISITOR_PAGE_ATTRIBUTE } from './web/visitor-page';
 
 export { loadRouteChunk } from './utils/chunk-recovery';
 

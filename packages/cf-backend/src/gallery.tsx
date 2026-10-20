@@ -4,7 +4,7 @@
  */
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
-import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
@@ -8153,15 +8153,24 @@ async function mount() {
   if (root === null) throw new Error("gallery root is missing");
 
   createRoot(root).render(
-    // Every frame mounts under the shell's three stores; a frame mounting `Layout` gets its nearer store, as the app does.
     <StrictMode>
       <ErrorBoundary label="gallery">
         <MemoryRouter initialEntries={entries}>
-          <AccountProvider><WorkspaceRosterProvider><AgentsNavProvider>{node}</AgentsNavProvider></WorkspaceRosterProvider></AccountProvider>
+          <FrameStores>{node}</FrameStores>
         </MemoryRouter>
       </ErrorBoundary>
     </StrictMode>,
   );
+}
+
+/**
+ * Every frame mounts under the shell's three stores; a frame mounting `Layout` gets its nearer store, as the app does. A
+ * visitor's frame (`&signed=out`) mounts none: the app's visitor routes have no account to read.
+ */
+function FrameStores({ children }: { children: ReactNode }) {
+  if (new URLSearchParams(location.search).get("signed") === "out") return children;
+
+  return <AccountProvider><WorkspaceRosterProvider><AgentsNavProvider>{children}</AgentsNavProvider></WorkspaceRosterProvider></AccountProvider>;
 }
 
 try {
