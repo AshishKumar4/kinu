@@ -2,14 +2,41 @@ import { createRoot, hydrateRoot } from 'react-dom/client';
 import * as v from 'valibot';
 
 import { requestUrl } from '@kinu.run/core';
-import { LANDING_PROFILE, LANDING_ROSTER } from '@/components/landing/landing-fixtures';
+import { LANDING_ACCOUNT_READS } from '@/components/landing/landing-fixtures';
 import { LandingPage } from '@/components/landing/LandingPage';
+import type { ConfigRow } from '@/lib/user-api';
 import "virtual:kinu-theme.css";
 import './index.css';
 
-// The static landing serves no `/api/user/*`; stub only the two reads the real `Sidebar` makes.
+// The static landing serves no `/api/`: its real components' account reads are answered here, and nothing under it
+// reaches a server, which would only refuse a page without a session.
 
 const realFetch = window.fetch.bind(window);
+
+const SETTINGS_PATH = '/api/user/config/';
+
+const SettingWriteSchema = v.object({ value: v.string() });
+
+/** The settings chosen on this page, read back until it is left: a sample has no account to keep them in. */
+const settings = new Map<string, string>();
+
+async function answerSetting(key: string, method: string, body: () => Promise<string>): Promise<Response> {
+  if (method === 'GET') return Response.json({ key, value: settings.get(key) ?? null } satisfies ConfigRow);
+
+  settings.set(key, v.parse(SettingWriteSchema, JSON.parse(await body())).value);
+
+  return Response.json({ ok: true });
+}
+
+function answerAccount(path: string, method: string, body: () => Promise<string>): Promise<Response> {
+  const read = LANDING_ACCOUNT_READS.get(path);
+
+  if (method === 'GET' && read !== undefined) return Promise.resolve(Response.json(read));
+
+  if (path.startsWith(SETTINGS_PATH) && (method === 'GET' || method === 'PUT')) return answerSetting(path.slice(SETTINGS_PATH.length), method, body);
+
+  return Promise.resolve(Response.json({ error: `The sample answers no ${method} ${path}.` }, { status: 404 }));
+}
 
 window.fetch = Object.assign(
   (input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]): Promise<Response> => {
@@ -19,15 +46,11 @@ window.fetch = Object.assign(
     const path = new URL(url, window.location.origin).pathname;
     const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : 'GET')).toUpperCase();
 
-    if (method === 'GET' && path === '/api/user/profile') {
-      return Promise.resolve(Response.json(LANDING_PROFILE));
-    }
+    if (!path.startsWith('/api/')) return realFetch(input, init);
 
-    if (method === 'GET' && path === '/api/user/workspaces') {
-      return Promise.resolve(Response.json(LANDING_ROSTER));
-    }
+    const sent = init?.body;
 
-    return realFetch(input, init);
+    return answerAccount(path, method, () => (parsedRequest.success ? parsedRequest.output.text() : Promise.resolve(typeof sent === 'string' ? sent : '')));
   },
   { preconnect: realFetch.preconnect },
 );

@@ -68,6 +68,13 @@ const DeployPage = lazyRoute(() => import("./pages/DeployPage"));
 
 const UpdatesPage = lazyRoute(() => import("./pages/UpdatesPage"));
 
+// An awaited import, which `gate:wired` reads as the page's one reference.
+const NotFoundPage = lazyRoute(async () => {
+  const { default: page } = await import("./pages/NotFoundPage");
+
+  return { default: page };
+});
+
 function LazyFallback() {
   return (
     <div className="flex items-center justify-center h-full">
@@ -139,6 +146,7 @@ export default function App() {
             <Route path={APP_ROUTES.exploreWorkspace} element={<Page label="explore-workspace"><ExploreWorkspacePage /></Page>} />
             <Route path={APP_ROUTES.control} element={<Page label="control-plane"><ControlPage /></Page>} />
             <Route path={APP_ROUTES.updates} element={<Page label="updates"><UpdatesPage /></Page>} />
+            <Route path="*" element={<Page label="not-found"><NotFoundPage /></Page>} />
           </Route>
         </Route>
         {/* A listed slate's page is public: the app's shell signed in, a bar with Sign in signed out (GalleryShell). */}

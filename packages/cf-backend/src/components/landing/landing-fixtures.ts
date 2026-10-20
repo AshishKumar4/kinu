@@ -2,7 +2,8 @@
  *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
 import { mainPanelAgent, satisfactionInterval, wilsonInterval, type ActivitySnapshot, type DirEntry, type PanelAgent, type PendingAction, type PlanReview, type QualityWindow, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
-import type { UserProfile } from '@/lib/user-api';
+import type { Important } from '@/lib/mail-api';
+import type { AccountMemoryState, DeviceConsent, UserDevice, UserProfile } from '@/lib/user-api';
 import { answeringRpc, type WorkspaceAnswer, type WorkspaceAnswers, type WorkspaceRpc } from '@/lib/workspace-rpc';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
 
@@ -31,10 +32,10 @@ export const LANDING_CHATS: readonly PanelAgent[] = [
   { colour: 2, key: 'actor-logs', label: 'Read last night\'s error logs', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'error-logs' }, tab: true, input: true, figures: NO_FIGURES },
 ];
 
-/** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
+/** The frame's workspace is first so the rail marks it open. */
 const QUIET = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null } as const;
 
-export const LANDING_ROSTER = {
+const LANDING_ROSTER = {
   entries: [
     { name: 'api-worker', displayName: 'API Worker', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
     { name: 'perf-audit', displayName: 'Dew', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
@@ -46,7 +47,7 @@ export const LANDING_ROSTER = {
 } satisfies RosterPage;
 
 /** workspaceCount must equal the roster's total: the gate reads both. */
-export const LANDING_PROFILE: UserProfile = {
+const LANDING_PROFILE: UserProfile = {
   email: 'ashish@example.com',
   displayName: 'Ashish',
   createdAt: NOW - 90 * 864e5,
@@ -55,6 +56,20 @@ export const LANDING_PROFILE: UserProfile = {
   workspaceCount: LANDING_ROSTER.total,
   controlPlane: false,
 };
+
+/**
+ * Every account read the landing's real components make, by path, each typed as its reader parses it. The `landing.tsx`
+ * shim answers these and the settings under `/api/user/config/`, and refuses any other `/api/` request: a static page
+ * has no session for a server to read.
+ */
+export const LANDING_ACCOUNT_READS: ReadonlyMap<string, object> = new Map<string, object>([
+  ['/api/user/profile', LANDING_PROFILE],
+  ['/api/user/workspaces', LANDING_ROSTER],
+  ['/api/user/devices', [] satisfies UserDevice[]],
+  ['/api/user/devices/consents', [] satisfies DeviceConsent[]],
+  ['/api/user/memory', { facts: [], notes: [], pending: [] } satisfies AccountMemoryState],
+  ['/api/user/mail/important', { enabled: false, unread: 0, items: [] } satisfies Important],
+]);
 
 export const WORK_FRAME_CAPTION = 'Sample workspace';
 

@@ -1075,6 +1075,41 @@ describe('what the Devices page says about a machine\'s history', () => {
 
 const MEMORY_SHOTS = evidenceDir('account-memory');
 
+// rc28 walkthrough: Models was headed Models twice, its card under the section's own heading.
+describe('Settings sections', () => {
+  test("each is named once: no panel under a section's heading carries that heading again", async () => {
+    await withGallery(async (gallery) => {
+      const rail = await freshPage(gallery, 'usersettingsstate', 'dark', 'desktop');
+      const sections = await rail.$$eval('[data-settings-section]', (links) => links.map((link) => link.getAttribute('data-settings-section') ?? ''));
+
+      await rail.close();
+      expect(sections.length).toBeGreaterThan(1);
+
+      const repeated: string[] = [];
+
+      for (const section of sections) {
+        const page = await freshPage(gallery, `usersettingsstate&section=${section}`, 'dark', 'desktop');
+
+        try {
+          await page.waitForSelector(`[data-settings-section="${section}"][aria-current="true"]`);
+          await page.waitForSelector('[data-settings-head] h2');
+          await settleAccountFixture(page);
+          repeated.push(...await page.evaluate((name) => {
+            const heading = document.querySelector('[data-settings-head] h2')?.textContent?.trim() ?? '';
+            const panels = [...document.querySelectorAll('h2, h3')].filter((title) => title.closest('[data-settings-head]') === null);
+
+            return panels.filter((title) => title.textContent?.trim() === heading).map(() => `${name}: ${heading}`);
+          }, section));
+        } finally {
+          await page.close();
+        }
+      }
+
+      expect(repeated).toEqual([]);
+    });
+  });
+});
+
 describe('Settings → Memory', () => {
   test('lists what waits on the owner, each kept fact with who said it, its revisions, and the notes, at both widths', async () => {
     await withGallery(async (gallery) => {
