@@ -14,7 +14,7 @@ import {
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
   declareTerminalRoster,
   AgentOrchestrator, recordedTurn, type AgentOrchestratorDeps,
-  providerSnapshotOf, ProviderListingCache, type ProviderListing,
+  providerListingKey, providerSnapshotOf, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, SUBMIT_PLAN_TOOL, BUILTIN_TOOLS,
   craftedToolDescription, type CraftedTool,
@@ -474,8 +474,37 @@ describe('providerSnapshotOf — one formula, deterministic', () => {
   });
 });
 
+/** One listing's key, for the reads that never change it. */
+const KEY = providerListingKey(1, {});
+
 describe('ProviderListingCache — complete listings only, guarded by generation', () => {
   const clean: ProviderListing = { models: ['a/1'], failures: [] };
+
+  // The InternalFish audit: a local account switch changed no providers' revision, so the cached listing stayed the old
+  // account's until the session reopened. A listing is keyed on the revision and the accounts both.
+  test("a read under another revision or another provider's account is a new listing; the same key is a hit", async () => {
+    let sweeps = 0;
+
+    const cache = new ProviderListingCache(async () => {
+      sweeps += 1;
+
+      return clean;
+    });
+
+    const outcomes: string[] = [];
+
+    // The second read names the same accounts in another order.
+    const reads: Array<[number, Record<string, string>]> = [
+      [1, { openai: 'main', anthropic: 'main' }], [1, { anthropic: 'main', openai: 'main' }], [1, { openai: 'work', anthropic: 'main' }], [2, { openai: 'work', anthropic: 'main' }],
+    ];
+
+    for (const [revision, accounts] of reads) {
+      outcomes.push((await cache.read(providerListingKey(revision, accounts))).cache);
+    }
+
+    expect(outcomes).toEqual(['miss', 'hit', 'miss', 'miss']);
+    expect(sweeps).toBe(3);
+  });
 
   test('a complete listing is memoized; the second read is a hit', async () => {
     let sweeps = 0;
@@ -486,8 +515,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    expect((await cache.read()).cache).toBe('miss');
-    expect((await cache.read()).cache).toBe('hit');
+    expect((await cache.read(KEY)).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('hit');
     expect(sweeps).toBe(1);
   });
 
@@ -502,8 +531,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return { models: ['a/1'], failures: [{ provider: 'b', reason: '503' }] };
     });
 
-    expect((await cache.read()).cache).toBe('miss');
-    expect((await cache.read()).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
     expect(sweeps).toBe(2);
   });
 
@@ -518,8 +547,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    const first = cache.read();
-    const second = cache.read();
+    const first = cache.read(KEY);
+    const second = cache.read(KEY);
     gate.resolve();
     const [a, b] = await Promise.all([first, second]);
     expect(sweeps).toBe(1);
@@ -539,11 +568,11 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    const inFlight = cache.read();
+    const inFlight = cache.read(KEY);
     cache.invalidate();
     gate.resolve();
     expect((await inFlight).listing).toEqual(clean);
-    expect((await cache.read()).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
     expect(sweeps).toBe(2);
   });
 
@@ -556,10 +585,10 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    await cache.read();
-    expect((await cache.read()).cache).toBe('hit');
+    await cache.read(KEY);
+    expect((await cache.read(KEY)).cache).toBe('hit');
     cache.invalidate();
-    expect((await cache.read()).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
     expect(sweeps).toBe(2);
   });
 
@@ -573,7 +602,7 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    for (let i = 0; i < 5; i++) await cache.read();
+    for (let i = 0; i < 5; i++) await cache.read(KEY);
     expect(sweeps).toBe(1);
   });
 });
@@ -608,12 +637,12 @@ describe('ProviderListingCache — a store it serves from, and sweeps behind', (
       return fresh;
     }, kept1.port);
 
-    const served = await cache.read();
+    const served = await cache.read(KEY);
 
     answer.resolve();
     await kept1.settled();
 
-    expect({ served, after: await cache.read(), keeps: kept1.keeps })
+    expect({ served, after: await cache.read(KEY), keeps: kept1.keeps })
       .toEqual({ served: { listing: kept, cache: 'stored' }, after: { listing: fresh, cache: 'hit' }, keeps: [fresh] });
   });
 
@@ -623,12 +652,12 @@ describe('ProviderListingCache — a store it serves from, and sweeps behind', (
     let next = fresh;
     const cache = new ProviderListingCache(async () => next, empty.port);
 
-    const first = await cache.read();
+    const first = await cache.read(KEY);
 
     await empty.settled();
     cache.invalidate();
     next = degraded;
-    const second = await cache.read();
+    const second = await cache.read(KEY);
 
     await empty.settled();
     expect({ first: first.cache, second: second.cache, keeps: empty.keeps }).toEqual({ first: 'miss', second: 'miss', keeps: [fresh] });
@@ -644,7 +673,7 @@ describe('ProviderListingCache — a store it serves from, and sweeps behind', (
       return fresh;
     }, kept1.port);
 
-    await cache.read();
+    await cache.read(KEY);
     cache.invalidate();
     answer.resolve();
     await kept1.settled();

@@ -309,6 +309,36 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(answers).toEqual(['from a', 'from a', 'from b']);
   });
 
+  // The InternalFish audit: an account switch changed no providers' revision, so the listing the profile read stayed the
+  // old account's until the session reopened; a named endpoint's account lists its own models and windows.
+  test("a provider account switched mid-session is listed for the next turn, with no restart", async () => {
+    let sweeps = 0;
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => namedSpec(spec) ?? 'local/a',
+      resolveModel: () => fakeModel('answered'),
+      listProviders: async () => [],
+      listModels: async () => {
+        sweeps += 1;
+
+        return { models: [{ provider: 'local', id: 'a', label: 'a', capabilities: ['streaming' as const] }], failures: [] };
+      },
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const { session } = setupWithResolver(resolver, { profileAuthority: tierAuthority(() => 'local/a') });
+
+    await session.send('first', { id: crypto.randomUUID() });
+    await session.send('second', { id: crypto.randomUUID() });
+    expect(sweeps).toBe(1);
+
+    session.setProviderAccount('local', 'work');
+    await session.send('third', { id: crypto.randomUUID() });
+    expect(sweeps).toBe(2);
+    await session.end();
+  });
+
   test('the account default tier drives the next turn model', async () => {
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => namedSpec(spec) ?? 'local/a',
