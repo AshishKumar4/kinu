@@ -13,7 +13,7 @@ import {
 import { AccountProposalSchema, type AccountMemory } from '../memory/account';
 import { attempt, diagnostics, settle, type KinuError } from '../obs/index';
 import type { SessionTranscript } from '../session/transcript';
-import type { LLM, RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { RawSqlExec, RoutedLLM, SqlExecutor } from '../types/primitives';
 import { isDefinitiveTerminalFailure, terminalEffect, type TerminalEffect, type TerminalEffectOutcome } from './terminal-effects';
 
 const PROCESSED = 'sleep_time';
@@ -54,7 +54,8 @@ export interface SleepTimeLaneDeps {
   readonly config: AgentConfigStore;
   readonly facts: FactsStore;
   readonly transcript: () => Pick<SessionTranscript, 'newestFirst'>;
-  readonly llm: () => LLM;
+  /** The fast tier, answering sleep-time's update to its schema. */
+  readonly llm: () => RoutedLLM;
   readonly transactionSync: <T>(write: () => T) => T;
   /** Wakes the actor at `nextWakeAt`. */
   readonly armWake: () => void;

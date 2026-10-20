@@ -1,17 +1,18 @@
 import type { ModelAttemptIdentity } from '../providers/attempt-identity';
 import type { LanguageModel } from 'ai';
+import type * as v from 'valibot';
 import type { ActorReference } from '../identity/actor-handle';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
 import { accountOf, MAIN_ACCOUNT } from '../credentials/accounts';
 import { attemptOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
 import { reasoningEffortOptions, type ProviderOptions, type ReasoningEffort } from '../providers/effort';
-import { generateReported, type GenerateRequest } from '../providers/model-invocation';
+import { generateObjectReported, generateReported, type GenerateRequest } from '../providers/model-invocation';
 import type { ModelCallSpend } from '../events/model-call';
 import { callRetries } from '../providers/middleware/retry';
 import { formatModelSpec, parseModelSpec } from '../providers/types';
 import { describeProviderError, OWNER_FIXABLE_REFUSALS, providerRefusalCode, toProviderError } from '../providers/util';
-import type { LLM } from '../types/primitives';
+import type { RoutedLLM } from '../types/primitives';
 import type { ResolvedTurnProfile } from './resolve';
 import { resolveModelRoute, type ModelRouteResolution, type ProfileRoutedSource } from './model-route';
 import { currentOperationProfile, operationProfileStream, resolveOperationProfile, runOperationProfile } from './operation';
@@ -24,7 +25,7 @@ export interface RouteWalk {
 }
 
 export interface RouteCallComponents extends RouteWalk {
-  llm(resolution: ModelRouteResolution): LLM;
+  llm(resolution: ModelRouteResolution): RoutedLLM;
 }
 
 /** A backend's whole say in a routed call: the client and effort options for one (spec, effort), the spec normalised against its registry. */
@@ -79,25 +80,41 @@ export function routedCallOptions(call: Pick<ModelRouteResolution, 'reasoningEff
   return { maxRetries: 0, providerOptions: { ...effort, ...callRetries(call.retries) } };
 }
 
-/** One routed call as an {@link LLM}, billed under the route's source once it completes. */
-export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, spend: Omit<ModelCallSpend, 'source'>, system?: string): LLM {
+/** One routed call as an {@link RoutedLLM}, billed under the route's source once it completes. */
+export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, spend: Omit<ModelCallSpend, 'source'>, system?: string): RoutedLLM {
+  const sent = (prompt: string) => {
+    const { model, providerOptions } = bind(route);
+    const request: GenerateRequest = { model, prompt, ...routeRetryOptions(route) };
+
+    if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
+
+    if (system !== undefined) request.system = system;
+
+    return { request, call: { spend: { ...spend, source: route.source }, spec: route.model } };
+  };
+
   return {
     async *stream() { yield ''; },
     async complete(prompt) {
-      const { model, providerOptions } = bind(route);
-      const request: GenerateRequest = { model, prompt, ...routeRetryOptions(route) };
+      const { request, call } = sent(prompt);
 
-      if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
+      return (await generateReported(request, call)).text.trim();
+    },
+    async object(prompt, schema) {
+      const { request, call } = sent(prompt);
 
-      if (system !== undefined) request.system = system;
-
-      return (await generateReported(request, { spend: { ...spend, source: route.source }, spec: route.model })).text.trim();
+      return await generateObjectReported(request, schema, call);
     },
   };
 }
 
 export function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string): Promise<string> {
   return onRoute(route, lane, (serving) => lane.llm(serving).complete(prompt));
+}
+
+/** `schema`'s answer on the route; an answer off it ends the walk (`generateObjectReported`), as a wrong answer does. */
+function objectOnRoute<S extends v.GenericSchema>(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string, schema: S): Promise<v.InferOutput<S>> {
+  return onRoute(route, lane, (serving) => lane.llm(serving).object(prompt, schema));
 }
 
 /** The route's model, then its configured chain, as a turn walks it; `invoke` is one call on the serving entry. */
@@ -159,12 +176,17 @@ export async function onRoute<T>(route: ModelRouteResolution, lane: RouteWalk, i
   return await settle(call(cooled ?? { spec: route.model, reasoningEffort: route.reasoningEffort }));
 }
 
-export function createRoutedModelLane(actor: ActorReference, source: ProfileRoutedSource, binding: ModelLaneComponents): LLM {
+export function createRoutedModelLane(actor: ActorReference, source: ProfileRoutedSource, binding: ModelLaneComponents): RoutedLLM {
   return {
     async complete(prompt) {
       const context = await resolveOperationProfile({ actor, resolve: () => binding.resolveProfile() });
 
       return runOperationProfile(context, () => completeOnRoute(resolveModelRoute(source, context.profile), binding, prompt));
+    },
+    async object(prompt, schema) {
+      const context = await resolveOperationProfile({ actor, resolve: () => binding.resolveProfile() });
+
+      return runOperationProfile(context, () => objectOnRoute(resolveModelRoute(source, context.profile), binding, prompt, schema));
     },
     stream(options) {
       // Capture the caller's scope now; a generator body first runs in the consumer's next().

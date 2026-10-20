@@ -26,8 +26,7 @@ import {
 import { machineOperations } from '../../packages/core/src/operations/executors';
 import { wakeText } from '../../packages/core/src/jobs/runner';
 import type { BackgroundJob } from '../../packages/core/src/types/jobs';
-import { generateText, streamText } from 'ai';
-import { codemodeNamespace, createOpenAICompatProvider, runSleepTimeCompute, type JsonValue, type LLM } from '@kinu.run/core';
+import { codemodeNamespace, createOpenAICompatProvider, routedLlm, runSleepTimeCompute, type JsonValue } from '@kinu.run/core';
 import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
 
 /** An OpenAI-shaped refusal of a request, with the failure's class as its code. */
@@ -225,14 +224,10 @@ describe('the tier model behind background memory compression', () => {
         hasCredential: async (key) => key === SCRIPTED_CREDENTIAL,
       });
 
-      const llm: LLM = {
-        async *stream(options) {
-          yield* streamText({ model, instructions: options.system, messages: options.messages, tools: options.tools }).textStream;
-        },
-        async complete(prompt) {
-          return (await generateText({ model, prompt, maxRetries: 0 })).text;
-        },
-      };
+      // The fast lane a host builds over the scripted model, asked as sleep-time asks it: for its schema.
+      const llm = routedLlm(() => ({ model }), {
+        source: 'fast', tier: 'fast', model: 'openai-compat/fake-live', reasoningEffort: null, fallbacks: [], retries: 0,
+      }, { report: () => {} });
 
       const update = await runSleepTimeCompute(llm, {
         turns: [

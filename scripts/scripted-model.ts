@@ -184,13 +184,18 @@ export async function connectCloudflare(origin: string, headers: Record<string, 
   });
 }
 
-/** The scripted model as the account's default tier, so every workspace it makes runs on it, the ones made from the
- *  home page included. */
-const SCRIPTED_DEFAULT: CatalogNeed = (catalog) => catalog.tiers.default.model === SCRIPTED_MODEL_SPEC
+/**
+ * The scripted model as the account's default and fast tiers, so every workspace it makes runs on it, the ones made
+ * from the home page included, and its titles, sleep-time and triage answer from the script. Fast is set as an owner
+ * sets it: unset, it picks itself from the account's providers, a real model (rc24 staging, 2026-10-20: titled-chat's
+ * title came from Workers AI).
+ */
+const SCRIPTED_TIERS: CatalogNeed = (catalog) => catalog.tiers.default.model === SCRIPTED_MODEL_SPEC && catalog.tiers.fast?.model === SCRIPTED_MODEL_SPEC
   ? null
-  : { ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, model: SCRIPTED_MODEL_SPEC } } };
+  : { ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, model: SCRIPTED_MODEL_SPEC }, fast: { model: SCRIPTED_MODEL_SPEC } } };
 
-/** Make the scripted model the default tier of the account `headers` name. Its credential must be registered first. */
+/** Make the scripted model the default and fast tiers of the account `headers` name. Its credential must be
+ *  registered first. */
 export async function defaultToScriptedModel(origin: string, headers: Record<string, string> = {}): Promise<void> {
-  await settleCatalog(origin, headers, [SCRIPTED_DEFAULT]);
+  await settleCatalog(origin, headers, [SCRIPTED_TIERS]);
 }

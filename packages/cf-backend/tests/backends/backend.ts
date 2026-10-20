@@ -9,7 +9,7 @@ import { copyFileSync, cpSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
+import { answeredAs, scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   actorOverWorkspace, agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -335,6 +335,12 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
           prompts.push(prompt);
 
           return JSON.stringify(answer);
+        },
+        // Sleep-time asks for its update's schema; the answer is read through it, as the fast lane reads one.
+        object: async (prompt, schema) => {
+          prompts.push(prompt);
+
+          return answeredAs(schema, JSON.stringify(answer));
         },
       };
       rt.actor.config.setSleepTimeComputeEnabled(enabled);

@@ -1,11 +1,11 @@
 import { Effect } from 'effect';
-import { settleSync } from '@kinu.run/core/obs';
-import type { JsonValue, LLM, TemporaryAgentPort, TemporaryRunRequest } from '@kinu.run/core';
+import { KinuError, settleSync } from '@kinu.run/core/obs';
+import type { JsonValue, RoutedLLM, TemporaryAgentPort, TemporaryRunRequest } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
 
 /** A scripted LLM returning the next of `responses` per call; records prompts. */
-export interface ScriptedLLM extends LLM {
+export interface ScriptedLLM extends RoutedLLM {
   /** The prompts the LLM has received, in order. */
   readonly prompts: ReadonlyArray<string>;
   readonly callCount: number;
@@ -38,17 +38,33 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
     async complete(prompt: string): Promise<string> {
       return nextResponse(prompt);
     },
+    async object(prompt, schema) {
+      return answeredAs(schema, nextResponse(prompt));
+    },
   };
 }
 
+/**
+ * A scripted answer read as a structured call reads one (`generateObjectReported`): through `schema`, and an answer off
+ * it refused as wrong (`bad_input`).
+ */
+export function answeredAs<S extends v.GenericSchema>(schema: S, text: string): v.InferOutput<S> {
+  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), schema), text);
+
+  return settleSync(parsed.success
+    ? Effect.succeed(parsed.output)
+    : Effect.fail(new KinuError('bad_input', 'the scripted model answered off its schema', { cause: new v.ValiError(parsed.issues) })));
+}
+
 /** An LLM that returns canned JSON. */
-export function createJSONLLM(payload: JsonValue): LLM {
+export function createJSONLLM(payload: JsonValue): RoutedLLM {
   const stringPayload = v.safeParse(v.string(), payload);
   const json = stringPayload.success ? stringPayload.output : JSON.stringify(payload);
 
   return {
     async *stream() { yield json; },
     async complete() { return json; },
+    async object(_prompt, schema) { return answeredAs(schema, json); },
   };
 }
 

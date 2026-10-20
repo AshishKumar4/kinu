@@ -31,9 +31,18 @@ function exitedWith(code, said = '') {
 function mac({ release = '23.1.0', compiler = () => null, told = {} } = {}) {
   const home = scratchDir('mac-screen');
   const compiled = [];
+  // Each helper started, so a test waits on its exit, never on a file's changes (linux-screen.test.js says why).
+  const helpers = [];
 
   const spawn = (argv, options) => {
-    if (argv[0] !== 'xcrun') return Bun.spawn(argv, { ...options, env: { ...process.env } });
+    if (argv[0] !== 'xcrun') {
+      const helper = Bun.spawn(argv, { ...options, env: { ...process.env } });
+
+      helpers.push(helper);
+
+      return helper;
+    }
+
     compiled.push(argv.slice(1, 3).join(' '));
     const answer = compiler(argv);
 
@@ -49,7 +58,7 @@ function mac({ release = '23.1.0', compiler = () => null, told = {} } = {}) {
     command: (mode) => [process.execPath, FAKE, mode, JSON.stringify(told)],
   });
 
-  return { made, home, compiled, file: path.join(home, 'desktop.json') };
+  return { made, home, compiled, helpers, file: path.join(home, 'desktop.json') };
 }
 
 describe("a Mac's screen source", () => {
@@ -149,7 +158,7 @@ describe("a Mac's screen source", () => {
   test("a served Mac's screen takes the viewer's keys as macOS key codes, and drops a key it has no code for", async () => {
     const home = scratchDir('mac-screen-serve');
     const log = path.join(home, 'helper.log');
-    const { made, file } = mac({ told: { accepts: 'permission', next: 'permission', width: 4, height: 2, frames: [], log } });
+    const { made, file, helpers } = mac({ told: { accepts: 'permission', next: 'permission', width: 4, height: 2, frames: [], log } });
 
     fs.writeFileSync(file, JSON.stringify({ token: 'permission', width: 4, height: 2 }));
     const screen = await made.open({ onFrame: () => {}, onEnd: () => {} });
@@ -159,18 +168,9 @@ describe("a Mac's screen source", () => {
     screen.key(true, 0x20ac);
     screen.key(false, 0xffeb);
     screen.close();
-
-    const told = await new Promise((resolve) => {
-      const check = () => {
-        if (!fs.existsSync(log) || !fs.readFileSync(log, 'utf8').includes('closed')) return;
-        watcher.close();
-        resolve(fs.readFileSync(log, 'utf8').trim().split('\n'));
-      };
-
-      const watcher = fs.watch(home, check);
-
-      check();
-    });
+    // Its stdin closed, the helper writes `closed` and exits; every line it wrote is in the log once it has.
+    await helpers.at(-1)?.exited;
+    const told = fs.readFileSync(log, 'utf8').trim().split('\n');
 
     expect(told).toEqual(['permission', '{"type":"key","code":55,"down":true}', '{"type":"key","code":8,"down":true}', '{"type":"key","code":55,"down":false}', 'closed']);
   });
