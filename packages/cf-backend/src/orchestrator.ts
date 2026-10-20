@@ -192,8 +192,8 @@ import {
   type Page, type PageRequest,
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
-  turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  decodeRecordedTurns, recordedTurns, type RecordedTurn,
+  type TurnRequestIndex, type TurnRequestPage,
+  decodeRecordedTurns, type RecordedTurn,
   LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
@@ -5524,11 +5524,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
     return settle(Effect.gen({ self: this }, function* () {
-      const agent = actor ?? this.actorHandle().actorId;
+      const agent = yield* this.requestHolder(actor);
 
-      if (this.isAgent(agent)) return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequests(snapshot, turnId)));
-
-      return turnRequestIndex(yield* this.turnRequestSources(actor), turnId);
+      return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequests(snapshot, turnId)));
     }));
   }
 
@@ -5537,30 +5535,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): Promise<TurnRequestPage> {
     return settle(Effect.gen({ self: this }, function* () {
       const read = { turnId, epoch: at.epoch, revision: at.revision, ...(at.from !== undefined && { from: at.from }) };
-      const actor = at.actor;
-      const agent = actor ?? this.actorHandle().actorId;
+      const agent = yield* this.requestHolder(at.actor);
 
-      if (this.isAgent(agent)) return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequest(snapshot, read)));
-
-      const sources = yield* this.turnRequestSources(actor);
-
-      return yield* Effect.promise(() => turnRequestPage(sources, read));
+      return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequest(snapshot, read)));
     }));
   }
 
-  /** The workspace agent's newest answered turns, from its isolate where it runs there: what a scaffold is replayed against. */
-  recordedTurns(limit?: number): Promise<RecordedTurn[]> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const agent = this.actorHandle().actorId;
-
-      if (this.isAgent(agent)) {
-        return decodeRecordedTurns(yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.recordedTurns(snapshot, limit))));
-      }
-
-      const sources = yield* this.turnRequestSources(undefined);
-
-      return yield* Effect.promise(() => recordedTurns(sources, limit));
-    }));
+  /** The workspace agent's newest answered turns, from its isolate: what a scaffold is replayed against. */
+  async recordedTurns(limit?: number): Promise<RecordedTurn[]> {
+    return decodeRecordedTurns(await this.agentCall(this.actorHandle().actorId, (isolate, snapshot) => isolate.recordedTurns(snapshot, limit)));
   }
 
   /** Not @callable: the audited `workspace.turn_read`. */
@@ -5577,16 +5560,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       : await this.getTurnRequest(read.turnId, { ...read.at, ...(read.actor !== undefined && { actor: read.actor }) });
   }
 
-  private turnRequestSources(actorId: string | undefined): Effect.Effect<AgentStores, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (actorId === undefined) return this.stores;
-      const host = this.actorHost();
-      const record = host.describe(actorId);
+  /** Whose isolate holds `actor`'s requests, main's by default: every agent's are its isolate's (D9), so an id that names
+   *  none is the one refusal. */
+  private requestHolder(actor: string | undefined): Effect.Effect<string, KinuError> {
+    const agent = actor ?? this.actorHandle().actorId;
 
-      if (record === null) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
-
-      return host.bindStores({ actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId }).stores;
-    });
+    return this.isAgent(agent) ? Effect.succeed(agent) : Effect.fail(new KinuError('missing', 'The actor is not registered in this workspace.'));
   }
 
   /** For resume, pass the last seen `since` index; returns events strictly after it. A turn's run is main's, in its own
