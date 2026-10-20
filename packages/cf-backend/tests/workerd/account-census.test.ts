@@ -110,8 +110,18 @@ describe("deleting an account on real workerd, every store's census", () => {
 
     // Her address routes nowhere, and no one can take it (docs/MAIL.md §11): Email Routing's mail to it is refused.
     expect(await account(dana).mailTo('priya@kinu.run', MIME)).toHaveLength(1);
-    await expect(name.claim('priya', dana)).rejects.toThrow();
-    await expect(name.claim('priya', priya.userId)).rejects.toThrow();
+
+    const claimed = async (userId: string) => {
+      try {
+        await name.claim('priya', userId);
+
+        return 'claimed';
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    expect([await claimed(dana), await claimed(priya.userId)]).toEqual([expect.stringContaining('is taken'), expect.stringContaining('is taken')]);
 
     // A push from a workspace still naming her, as one cached before the deletion would send: her account keeps no
     // card, it answers that it was deleted, and Dana's account forgets her again (owner decision, 2026-10-20).

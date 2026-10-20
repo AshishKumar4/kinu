@@ -157,7 +157,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     // A box being deleted has no retry or emptying left to do.
     if (this.deleting) return;
 
-    await settle(this.fenced(Effect.promise(async () => {
+    return settle(this.fenced(Effect.promise(async () => {
       if (this.env.EMAIL !== undefined) await this.outbox.reconcile(this.env.EMAIL, Date.now());
 
       const emptied = await this.store.purge();

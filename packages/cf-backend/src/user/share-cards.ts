@@ -171,7 +171,8 @@ export class ShareCardJobs extends LifecycleCapability {
       ? recipient.shareCards_put(caller, { ownerUserId: write.owner, workspace: write.workspace, shareId: write.share, card: write.card })
       : recipient.shareCards_remove(caller, write.owner, write.workspace, write.share);
 
-    const sent = sending.then(() => undefined);
+    // Its end, however it ends: a withdrawal waits for it, and its failure is the job's to retry.
+    const sent = Promise.allSettled([sending]).then(() => undefined);
 
     this.#sending.add(sent);
 
