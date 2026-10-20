@@ -36,7 +36,6 @@ if (mode === 'probe') {
   say({ type: 'asking' });
 
   if (told.share === 'waits') {
-    fs.appendFileSync(told.log, 'asking\n');
     process.stdin.resume();
   } else if (told.share === 'refuse') {
     say({ type: 'failed', why: 'sharing was not allowed on this PC' });
