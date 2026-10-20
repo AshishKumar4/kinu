@@ -384,20 +384,11 @@ export class LocalAgentHost {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const pending = this.opening.get(address);
 
-    if (pending) {
-      const entry = await pending;
-      await this.recoverChildren(entry);
-
-      return entry;
-    }
+    if (pending) return await pending;
 
     const existing = this.entries.get(address);
 
-    if (existing) {
-      await this.recoverChildren(existing);
-
-      return existing;
-    }
+    if (existing) return existing;
 
     const separator = address.lastIndexOf('/');
 
@@ -407,10 +398,8 @@ export class LocalAgentHost {
       }
 
       const parent = await this.resolveEntry(address.slice(0, separator));
-      const child = await this.openChildEntry(parent, address.slice(separator + 1));
-      await this.recoverChildren(child);
 
-      return child;
+      return await this.openChildEntry(parent, address.slice(separator + 1));
     }
 
     const opening = this.createTopLevel(address);
@@ -418,7 +407,9 @@ export class LocalAgentHost {
 
     try {
       const entry = await opening;
-      await this.recoverChildren(entry);
+
+      // Opened here first, so this process opens every hire under it: what each was left, or left owing, runs again.
+      await this.openTree(entry);
 
       return entry;
     } finally {
@@ -758,12 +749,28 @@ export class LocalAgentHost {
     }
   }
 
-  private async recoverChildren(parent: HostEntry): Promise<void> {
-    for (const roster of parent.roster.list()) {
-      if (roster.birth !== null || roster.deleteRequested || parent.children.has(roster.name)) continue;
+  /**
+   * Each hire `parent` has, read from its roster: the tree is the SQL one, never this process's memory, so a pass after a
+   * restart reaches every level of it. A hire this process has not opened is opened here; one still being born, or being
+   * deleted, is its birth's or its deletion's to finish.
+   */
+  private async hiresOf(parent: HostEntry): Promise<HostEntry[]> {
+    const hires: HostEntry[] = [];
 
-      await settleLogged('host.subordinate_recovery_failed', { doing: 'recovering a local subordinate', otherwise: 'io' }, async () => { await this.openChildEntry(parent, roster.name); }, { parent: parent.key, subordinate: roster.name });
+    for (const roster of parent.roster.list()) {
+      if (roster.birth !== null || roster.deleteRequested) continue;
+
+      await settleLogged('host.subordinate_recovery_failed', { doing: 'recovering a local subordinate', otherwise: 'io' }, async () => {
+        hires.push(await this.openChildEntry(parent, roster.name));
+      }, { parent: parent.key, subordinate: roster.name });
     }
+
+    return hires;
+  }
+
+  /** Every hire under `entry`, at every level its roster records, opened. */
+  private async openTree(entry: HostEntry): Promise<void> {
+    for (const hire of await this.hiresOf(entry)) await this.openTree(hire);
   }
 
   private async openChildEntry(parent: HostEntry, childName: string): Promise<HostEntry> {
@@ -912,7 +919,7 @@ export class LocalAgentHost {
     const outcome = await this.drive(entry, () => this.runPass(entry, now));
     let nextAt = outcome.ran ? outcome.value : nextTriggerAt(entry.tree.db);
 
-    for (const child of entry.children.values()) {
+    for (const child of await this.hiresOf(entry)) {
       const childNext = (await this.tickEntry(child, now)).nextAt;
 
       if (childNext !== null) nextAt = nextAt === null ? childNext : Math.min(nextAt, childNext);

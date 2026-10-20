@@ -307,6 +307,69 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
   return { model, parked: parked.promise, aborted: aborted.promise };
 }
 
+/** A root's brief that hires a child, whose mission hires the grandchild; `NESTED.work` is the grandchild's own. */
+const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one helper for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
+
+/**
+ * Hires at two levels: the root's brief hires a child with `NESTED.child`, and that mission hires a grandchild with
+ * `NESTED.work`. With `park`, the grandchild's turn holds until it is aborted, so its host closes with that work left.
+ */
+function nestedHireModel(park: boolean) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const parked = Promise.withResolvers<void>();
+  const hired = new Set<string>();
+
+  const hire = (id: string, message: string) => ({
+    stream: new ReadableStream<LanguageModelV2StreamPart>({
+      start(controller) {
+        controller.enqueue({ type: 'stream-start', warnings: [] });
+        controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'agents', input: JSON.stringify({ op: 'hire', role: 'task', message }) });
+        controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+        controller.close();
+      },
+    }),
+  });
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => textAnswer('acknowledged', usage),
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+      const answered = prompt.includes('"tool-result"');
+
+      if (prompt.includes(NESTED.work) && park) {
+        parked.resolve();
+
+        return {
+          stream: new ReadableStream<LanguageModelV2StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              options.abortSignal?.addEventListener('abort', () => { controller.error(options.abortSignal?.reason); }, { once: true });
+            },
+          }),
+        };
+      }
+
+      if (!answered && prompt.includes(NESTED.child) && !prompt.includes(NESTED.work) && !hired.has('child')) {
+        hired.add('child');
+
+        return hire('call_grandchild', NESTED.work);
+      }
+
+      if (!answered && prompt.includes(NESTED.brief) && !hired.has('root')) {
+        hired.add('root');
+
+        return hire('call_child', NESTED.child);
+      }
+
+      return { stream: textStream('ok', usage) };
+    },
+  });
+
+  return { model, parked: parked.promise };
+}
+
 function reportingChildModel(content: string, status: 'completed' | 'failed' = 'completed') {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
@@ -908,6 +971,41 @@ describe('LocalAgentHost', () => {
       // Its search waits for its model until stopped: closing would otherwise wait out the settle grace.
       await (await host.acquire('root/helper')).cancelBackgroundJob('bgjob-held');
       await host.close();
+    }
+  });
+
+  // The tree a pass walks is the roster's, not the process's: after a restart, a hire's own hire is reached and its work
+  // runs, though nothing opened its address.
+  test("after a restart, a hire's own hire is reached by the root's passes and runs the work it was left", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const first = nestedHireModel(true);
+    const { host } = makeHost(state, first.model, refs);
+
+    try {
+      const session = await host.acquire('root');
+      await session.send(`${NESTED.brief} Begin.`, { id: crypto.randomUUID() });
+      await first.parked;
+    } finally {
+      await host.close();
+    }
+
+    const second = nestedHireModel(false);
+    const { host: restarted } = makeHost(state, second.model, refs);
+    const deep = Promise.withResolvers<string>();
+
+    const off = restarted.subscribe((who, event) => {
+      if (event.type === 'turn-end' && who.split('/').length === 3) deep.resolve(who);
+    });
+
+    try {
+      await restarted.acquire('root');
+      await restarted.tick('root');
+      expect((await deep.promise).startsWith('root/')).toBe(true);
+    } finally {
+      off();
+      await restarted.close();
     }
   });
 
