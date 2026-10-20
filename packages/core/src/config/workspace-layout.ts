@@ -11,5 +11,3 @@ export type WorkspaceLayout = (typeof WORKSPACE_LAYOUTS)[number];
 
 export const WorkspaceLayoutSchema = v.picklist(WORKSPACE_LAYOUTS);
 
-/** The root actor's config key. */
-export const WORKSPACE_LAYOUT_CONFIG_KEY = 'layout';

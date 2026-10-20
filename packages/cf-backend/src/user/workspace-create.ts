@@ -11,7 +11,7 @@ import {
 import { carriesCauseCode, diagnostics, KinuError, logged, toKinuError, settle, type ErrorCode } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
-import type { UserCaller } from '@kinu.run/core';
+import type { UserCaller, WorkspaceSeed } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import type { WorkspaceRegistration, WorkspaceRegistrationSource } from './workspaces';
 import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
@@ -50,7 +50,7 @@ type CreateCloudWorkspaceInput = v.InferOutput<typeof CreateCloudWorkspaceInputS
 export type CloudWorkspaceBirth = Pick<
   OrchestratorAgent,
   'claimOwner' | 'setInitialDisplayName' | 'setSoul' | 'resetWorkspaceBaseline'
-  | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn'
+  | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn' | 'seedBlueprint'
 >;
 
 export interface CreateCloudWorkspaceEnv<Id> extends AvailableModelsEnv<Id>, IndexFeedEnv<Id> {
@@ -63,16 +63,18 @@ export interface CreateCloudWorkspaceRequest<Id> {
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
   input: CreateCloudWorkspaceInput;
-  /** The whole SOUL.md, for a workspace the owner approved as an agent proposed it; absent, it is rendered from the
-   *  purpose. Not an HTTP field: only the owner's approval of a proposal sets it. */
+  /** The whole SOUL.md, for a workspace the owner approved as an agent proposed it, or installed from a blueprint;
+   *  absent, it is rendered from the purpose. Not an HTTP field: only those two set it. */
   soul?: string;
+  /** What a blueprint seeds before the first turn: its layout, its main agent's name, its schedules. */
+  seed?: WorkspaceSeed;
 }
 
 export function createCloudWorkspaceForUser<Id>(
   request: CreateCloudWorkspaceRequest<Id>,
 ): Promise<WorkspaceEntry> {
   return settle(Effect.gen(function* () {
-    const { env, userId, userDO, caller, input, soul } = request;
+    const { env, userId, userDO, caller, input, soul, seed } = request;
     const trimmedPurpose = input.purpose?.trim() ?? '';
     const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
 
@@ -117,6 +119,8 @@ export function createCloudWorkspaceForUser<Id>(
       if (purpose) initialization.mission = purpose;
 
       if (soul !== undefined) initialization.soul = soul;
+
+      if (seed !== undefined) initialization.seed = seed;
 
       if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
 
@@ -253,6 +257,7 @@ interface InitializeOrchestratorInput<Id> {
   nameOrigin: NameOrigin;
   mission?: string;
   soul?: string;
+  seed?: WorkspaceSeed;
   model?: string;
   reasoningEffort?: ReasoningEffort;
   role?: string;
@@ -261,7 +266,7 @@ interface InitializeOrchestratorInput<Id> {
 async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>): Promise<void> {
   const {
     env, userId, userDO, agentName, displayName, nameOrigin,
-    mission, soul, model, reasoningEffort, role,
+    mission, soul, seed, model, reasoningEffort, role,
   } = input;
 
   const orchestrator = env.OrchestratorAgent.get(
@@ -274,6 +279,8 @@ async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
   await orchestrator.setInitialDisplayName(displayName, nameOrigin);
   await orchestrator.setSoul(soul ?? renderSoulMarkdown({ name: displayName, mission }));
+
+  if (seed) await orchestrator.seedBlueprint(seed);
   // The Output diff is relative to birth: capture after identity seeding, before any turn.
   await orchestrator.resetWorkspaceBaseline();
 

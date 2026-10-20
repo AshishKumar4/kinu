@@ -12,6 +12,7 @@ import type { UserDO } from './user-do';
 import { listAvailableModels, testAvailableModel, type AvailableModelsEnv } from './available-models';
 import { readUserAccountUsage } from './account-usage';
 import { handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
+import { handleInstallRequest, installedAssistant } from './blueprint-install';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import { rawParam, type FamilyEnv } from '../api/context';
 
@@ -21,6 +22,7 @@ type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
+  | 'getConfig' | 'setConfig' | 'getProfile'
 >;
 
 export interface AccountApiEnv<Id> extends CreateWorkspaceEnv<Id>, ProviderEnv {
@@ -172,6 +174,14 @@ accountApi.get('/usage', async (c) => json({ body: await readUserAccountUsage({
 accountApi.post('/workspaces', async (c) => handleCreateWorkspaceRequest({
   request: c.req.raw, env: c.env, userId: c.get('account').userId, userDO: c.get('account').stub,
 }));
+
+accountApi.post('/blueprints/:id/install', async (c) => handleInstallRequest({
+  request: c.req.raw, env: c.env, userId: c.get('account').userId, userDO: c.get('account').stub, owner: c.get('owner'),
+  id: decodeURIComponent(rawParam(c, 'id')),
+}));
+
+/** The workspace Home opens on: the owner's Personal assistant, while it is theirs. */
+accountApi.get('/assistant', async (c) => json({ body: { workspace: await installedAssistant(c.get('account').stub, c.get('owner')) } }));
 
 /** Answers ok for a workspace already gone: a delete repeated, or raced by another, is done (staging df49f4cc5, nine
  *  DELETEs of one workspace in 2 ms, eight answered 500; kinu-logs/evals-fast/FINDINGS.md F11). */

@@ -8,7 +8,7 @@ import {
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
 import {
-  APP_ROUTES, ONBOARDING_STEPS,
+  APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID,
 } from "@kinu.run/core";
 import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -17,7 +17,7 @@ import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
-import { AssistantStep, DEFAULT_ASSISTANT, PERSONAL_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
+import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
 import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { installBlueprint } from "@/lib/explore-api";
@@ -125,7 +125,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       // The assistant first: Home is its chat the moment setup ends.
-      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT, { name: assistant.name.trim() || DEFAULT_ASSISTANT.name, brief: assistant.brief }));
+      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { agent: assistant.name, brief: assistant.brief, home: true }));
       const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 
@@ -231,7 +231,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   </div>
                 )}
 
-                {s.id === 'assistant' && <AssistantStep email={profile?.email ?? ""} choice={assistant} onChange={setAssistant} />}
+                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} />}
 
                 {s.id === 'showcase' && <ShowcaseStep revealed={revealed} />}
               </div>

@@ -8,7 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
 import { DownloadSimpleIcon, KeyIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, mcpPresetById } from "@kinu.run/core";
+import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -18,14 +18,13 @@ import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { installBlueprint, type BlueprintPage } from "@/lib/explore-api";
-import { PERSONAL_ASSISTANT } from "@/components/assistant/AssistantStep";
 
 
 const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
 
 export function InstallDialog({ page, connected, onClose }: { page: BlueprintPage; connected: (preset: string | null) => boolean; onClose: () => void }) {
   const navigate = useNavigate();
-  const assistant = page.workspace.id === PERSONAL_ASSISTANT;
+  const assistant = page.workspace.id === PERSONAL_ASSISTANT_ID;
   const [name, setName] = useState(assistant ? "Kinu" : page.workspace.title);
   const [brief, setBrief] = useState("08:00");
   const [home, setHome] = useState(true);
@@ -35,7 +34,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
   const install = () => detach(Effect.catchCause(Effect.gen(function* () {
     setBusy(true);
     setFailure(null);
-    const workspace = yield* Effect.promise(() => installBlueprint(page.workspace.id, { name: name.trim(), ...(assistant && { brief }) }));
+    const workspace = yield* Effect.promise(() => installBlueprint(page.workspace.id, assistant ? { agent: name, brief, home } : { displayName: name }));
 
     yield* Effect.promise(async () => navigate(assistant && home ? APP_ROUTES.home : `/workspace/${encodeURIComponent(workspace)}`));
   }), showing((chain) => { setFailure(chain); setBusy(false); })));

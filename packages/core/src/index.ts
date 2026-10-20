@@ -2042,7 +2042,14 @@ export type {
 
 export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage, type ChatWindow } from './read-models/status';
 
-export { WORKSPACE_LAYOUTS, WORKSPACE_LAYOUT_CONFIG_KEY, WorkspaceLayoutSchema, type WorkspaceLayout } from './read-models/workspace-layout';
+export { WORKSPACE_LAYOUTS, WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
+
+export {
+  BlueprintNeedSchema, WorkspaceBlueprintSchema, blueprintSeed,
+  type BlueprintInstall, type BlueprintNeed, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
+} from './blueprints/workspace';
+
+export { KINU_BLUEPRINTS, PERSONAL_ASSISTANT_ID, kinuBlueprint } from './blueprints/kinu';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 

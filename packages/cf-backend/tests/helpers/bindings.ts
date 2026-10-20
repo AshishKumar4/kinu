@@ -203,6 +203,9 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
 
   return {
     ensureProfile: refuse('ensureProfile'),
+    getProfile: refuse('getProfile'),
+    getConfig: refuse('getConfig'),
+    setConfig: refuse('setConfig'),
     mintCliToken: refuse('mintCliToken'),
     verifyCliToken: refuse('verifyCliToken'),
     verifyAccessToken: refuse('verifyAccessToken'),
@@ -274,6 +277,7 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
     claimOwner: refuse('claimOwner'),
     setInitialDisplayName: refuse('setInitialDisplayName'),
     setSoul: refuse('setSoul'),
+    seedBlueprint: refuse('seedBlueprint'),
     resetWorkspaceBaseline: refuse('resetWorkspaceBaseline'),
     setModel: refuse('setModel'),
     setReasoningEffort: refuse('setReasoningEffort'),

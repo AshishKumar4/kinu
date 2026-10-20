@@ -96,9 +96,26 @@ export function readBlueprint(id: string): Promise<BlueprintPage> {
 
 const InstalledSchema = v.object({ workspace: v.string() });
 
-/** Installs a workspace blueprint as a new workspace of yours; the personal assistant's also becomes your Home. */
-export function installBlueprint(id: string, settings: { readonly name: string; readonly brief?: string }): Promise<string> {
-  return settle(Effect.map(request(InstalledSchema, `/api/explore/workspaces/${encodeURIComponent(id)}/install`, { method: "POST", json: settings }), (installed) => installed.workspace));
+/** What an install chose; the owner's offset from UTC is this browser's, so their 08:00 is theirs. */
+export interface InstallChoice {
+  readonly displayName?: string;
+  readonly agent?: string;
+  readonly brief?: string;
+  readonly home?: boolean;
+}
+
+/** Installs a workspace blueprint as a new workspace of yours; the Personal assistant may also become your Home. */
+export function installBlueprint(id: string, choice: InstallChoice): Promise<string> {
+  return settle(Effect.map(request(InstalledSchema, `/api/user/blueprints/${encodeURIComponent(id)}/install`, {
+    method: "POST", json: { ...choice, utcOffsetMinutes: -new Date().getTimezoneOffset() },
+  }), (installed) => installed.workspace));
+}
+
+const AssistantSchema = v.object({ workspace: v.nullable(v.string()) });
+
+/** The workspace Home opens on, or null: the owner's Personal assistant while it is theirs. */
+export function readInstalledAssistant(): Promise<string | null> {
+  return settle(Effect.map(request(AssistantSchema, "/api/user/assistant"), (read) => read.workspace));
 }
 
 export { GALLERY_SORTS };

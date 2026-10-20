@@ -13,7 +13,7 @@ import type { ReasoningEffort } from '../providers/effort';
 import type { TierSource } from '../profiles/resolve';
 import type { RoleId } from '../types/profile';
 import type { PlanReview } from '../types/plans';
-import type { WorkspaceLayout } from './workspace-layout';
+import type { WorkspaceLayout } from '../config/workspace-layout';
 import type { InlineSteer } from './transcript';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
@@ -82,6 +82,7 @@ export interface AgentStatusDeps {
   readonly reasoningEffort: ReasoningEffort | null;
   readonly name: string;
   readonly displayName: string;
+  readonly layout: WorkspaceLayout;
 }
 
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
@@ -118,7 +119,7 @@ export function agentStatusFacts(sql: SqlExecutor, actor: ActorHandle, soul: str
 export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
   return {
     ...agentStatusFacts(deps.sql, deps.actor, await deps.soul(), deps.name),
-    displayName: deps.displayName, model: deps.model, reasoningEffort: deps.reasoningEffort,
+    displayName: deps.displayName, model: deps.model, reasoningEffort: deps.reasoningEffort, layout: deps.layout,
   };
 }
 

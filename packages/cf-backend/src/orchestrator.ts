@@ -40,7 +40,7 @@ import {
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
 } from "@kinu.run/core";
-import { censusOf, requireOps, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
+import { censusOf, requireOps, WorkspaceLayoutSchema, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -4769,6 +4769,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
         name: this.name,
         displayName: await this.workspaceTitle() ?? '',
+        layout: this.config.getLayout(),
       }));
 
       // Main's conversation and its measure are its own isolate's.
@@ -6515,6 +6516,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     this.actorHandle().config.setChatTitle(title);
 
     return { title };
+  }
+
+  /** The page's layout, as every browser shows it: `focus` draws the chat alone. */
+  @callable() async setLayout(layout: WorkspaceLayout): Promise<{ layout: WorkspaceLayout }> {
+    const chosen = v.parse(WorkspaceLayoutSchema, layout);
+
+    this.actorHandle().config.setLayout(chosen);
+
+    return { layout: chosen };
+  }
+
+  /**
+   * Not @callable: a new workspace's install (user/workspace-create.ts), before its baseline and its first turn, so the
+   * genesis turn already runs as the blueprint says. Its schedules are the owner's own: an agent may not cancel them.
+   */
+  async seedBlueprint(seed: WorkspaceSeed): Promise<void> {
+    const { config } = this.actorHandle();
+
+    config.setBlueprint(seed.blueprint);
+    config.setLayout(seed.layout);
+    config.setChatTitle(seed.agent);
+
+    for (const schedule of seed.schedules) {
+      await this.createTimerTrigger({ cron: schedule.cron, label: schedule.label, payload: { prompt: schedule.prompt }, trust: 'owner' });
+    }
   }
 
   @callable() async dismissSubordinate(name: string, keepHistory = true): Promise<{
