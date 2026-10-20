@@ -146,7 +146,7 @@ export class UserDO extends Agent<Env> {
     sessionStands: (tokenHash) => this.sessions.sessionStands(tokenHash),
   };
 
-  private readonly credentials = new UserCredentials({ ...this.host, setConfig: (caller, key, value) => this.profile.setConfig(caller, key, value) });
+  private readonly credentials = new UserCredentials(this.host);
 
   private readonly secrets = new UserSecrets(this.host);
 
