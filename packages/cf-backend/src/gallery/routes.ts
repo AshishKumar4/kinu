@@ -25,6 +25,8 @@ export const galleryRoutes = new Hono<FamilyEnv<Env, object>>();
 // A star or a report is a signed-in person's: one sent with their cookie from another origin is refused, as the gate does.
 galleryRoutes.use('/api/gallery/*', async (c, next) => crossSiteRejection(c.req.raw) ?? await next());
 
+galleryRoutes.use('/api/explore/*', async (c, next) => crossSiteRejection(c.req.raw) ?? await next());
+
 const NO_STORE = { 'cache-control': 'no-store' };
 
 const Query = v.object({
@@ -103,6 +105,20 @@ async function marked(c: Context<FamilyEnv<Env, object>>, mark: (body: v.InferOu
 }
 
 galleryRoutes.post('/api/gallery/star', async (c) => marked(c, (body) => (body.on === undefined ? null : { kind: 'star', workspace: body.workspace, slate: body.slate, on: body.on })));
+
+/** A signed-in person's star on one of Kinu's workspace blueprints: 204, or 404 when it is not listed. */
+galleryRoutes.post('/api/explore/workspaces/:id/star', async (c) => {
+  const viewer = await viewerOf(c);
+
+  if (viewer === null) return err(401, 'Sign in to star a workspace');
+  const body = await safeJson(c.req.raw, v.object({ on: v.boolean() }));
+
+  if (body === null) return err(400, 'Body must say on');
+  const { plane, caller } = await gallery(c.env);
+  const mark = { kind: 'star', listing: 'workspace', workspace: KINU_LISTINGS, slate: decodeURIComponent(rawParam(c, 'id')), on: body.on } as const;
+
+  return await plane.galleryMark(caller, viewer, mark) ? new Response(null, { status: 204 }) : err(404, 'No such workspace blueprint');
+});
 
 galleryRoutes.post('/api/gallery/report', async (c) => marked(c, (body) => (body.reason === undefined ? null : { kind: 'report', workspace: body.workspace, slate: body.slate, reason: body.reason })));
 

@@ -22,7 +22,8 @@ export default function HomePage() {
 
   if (assistant.status === "loading") return null;
 
-  if (assistant.status === "ready" && assistant.value !== null) return <WorkspacePage workspace={assistant.value} />;
+  // The assistant installs in `focus`: drawn so from the first frame, not after the workspace's status arrives.
+  if (assistant.status === "ready" && assistant.value !== null) return <WorkspacePage workspace={assistant.value} layout="focus" />;
 
   return <MissionHome />;
 }

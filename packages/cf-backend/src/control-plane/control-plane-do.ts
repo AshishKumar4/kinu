@@ -40,7 +40,7 @@ export type {
 
 /** What a signed-in person does to a listing. */
 export type GalleryMark =
-  | { readonly kind: 'star'; readonly workspace: string; readonly slate: string; readonly on: boolean }
+  | { readonly kind: 'star'; readonly workspace: string; readonly slate: string; readonly on: boolean; readonly listing?: ExploreKind }
   | { readonly kind: 'report'; readonly workspace: string; readonly slate: string; readonly reason: string };
 
 /** One page of Explore, as its route asks it: a page of the Gallery, of either kind. */
@@ -202,7 +202,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     await this.gate(caller, 'gallery.mark');
     const at = { email, workspace: mark.workspace, slate: mark.slate };
 
-    return mark.kind === 'star' ? this.gallery.star({ ...at, on: mark.on }, Date.now()) : this.gallery.report({ ...at, reason: mark.reason }, Date.now());
+    return mark.kind === 'star' ? this.gallery.star({ ...at, on: mark.on, kind: mark.listing ?? 'app' }, Date.now()) : this.gallery.report({ ...at, reason: mark.reason }, Date.now());
   }
 
   /** A deleted account's stars, reports and installs. */
