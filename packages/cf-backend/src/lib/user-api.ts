@@ -1,7 +1,7 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import { Cause, Effect } from 'effect';
 import {
-  AccountMemoryProposalSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
+  AccountMemoryProposalSchema, DeviceDesktopSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
@@ -20,7 +20,12 @@ import {
   UserProfileSchema,
   WorkspaceEntrySchema,
   CredentialSummarySchema,
+  SecretPositionSchema,
   type McpTransport,
+  type SecretPosition,
+  USER_WEB_SEARCH_TEST_PATH,
+  WEB,
+  type WebSearchRoute,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -167,6 +172,8 @@ const UserDeviceSchema = v.object({
   wholeMachine: v.boolean(),
   /** Workspace-specific home and roots live on the runtime status, not here. */
   sandbox: DeviceSandboxSchema,
+  /** The PC's screen as its daemon last reported it (1014-t). */
+  desktop: DeviceDesktopSchema,
   version: v.nullable(v.string()),
   servedVersion: v.nullable(v.string()),
   update: v.picklist(DEVICE_UPDATE_STATES),
@@ -211,6 +218,42 @@ export const grantDeviceConsent = (deviceId: string, agentName: string) =>
 /** The row is deleted, so the next device call asks again instead of reading as a standing refusal. */
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
   settle(api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(deviceId)}/consent?agentName=${encodeURIComponent(agentName)}`));
+
+/** The account's secrets as Settings lists them: never a value or a stand-in. */
+const SecretSummarySchema = v.object({
+  name: v.string(),
+  hosts: v.array(v.string()),
+  position: SecretPositionSchema,
+  updatedAt: v.number(),
+  grants: v.array(v.object({ workspace: v.string(), title: v.string(), reveal: v.boolean() })),
+});
+
+export type SecretSummary = v.InferOutput<typeof SecretSummarySchema>;
+
+/** A secret as the owner writes it: its value leaves the browser once, here, and is never read back. */
+export interface SecretEntry {
+  readonly name: string;
+  readonly hosts: readonly string[];
+  readonly position: SecretPosition;
+  readonly value: string;
+}
+
+export const listSecrets = () => settle(api(v.array(SecretSummarySchema), 'GET', '/secrets'));
+
+/** All or none, each granted to `grantTo`. */
+export const putSecrets = (entries: readonly SecretEntry[], grantTo: readonly string[]) =>
+  settle(api(OkSchema, 'POST', '/secrets', { entries: entries.map((entry) => ({ ...entry, hosts: [...entry.hosts] })), grantTo: [...grantTo] }));
+
+export const setSecretDestination = (name: string, hosts: readonly string[], position: SecretPosition) =>
+  settle(api(OkSchema, 'PUT', `/secrets/${encodeURIComponent(name)}/destination`, { hosts: [...hosts], position }));
+
+export const deleteSecret = (name: string) => settle(api(OkSchema, 'DELETE', `/secrets/${encodeURIComponent(name)}`));
+
+export const grantSecret = (name: string, workspace: string, reveal: boolean) =>
+  settle(api(OkSchema, 'PUT', `/secrets/${encodeURIComponent(name)}/grants/${encodeURIComponent(workspace)}`, { reveal }));
+
+export const revokeSecretGrant = (name: string, workspace: string) =>
+  settle(api(OkSchema, 'DELETE', `/secrets/${encodeURIComponent(name)}/grants/${encodeURIComponent(workspace)}`));
 
 export const listCredentials  = () => settle(api(v.array(CredentialSummarySchema), 'GET', '/credentials'));
 
@@ -344,6 +387,13 @@ export function testModel(spec: string, signal: AbortSignal): Promise<ModelTestR
   }));
 }
 
+/** One search through one entry of the chain, as the `web` tool would make it; a refusal rejects in the provider's words. */
+export function testWebSearch(route: WebSearchRoute, query: string, signal: AbortSignal): Promise<WebSearchAnswer> {
+  return settle(request(WEB.search.output, USER_WEB_SEARCH_TEST_PATH, { method: 'POST', json: { query, limit: 3, route }, signal }));
+}
+
+export type WebSearchAnswer = v.InferOutput<typeof WEB.search.output>;
+
 
 export const listProviderCatalog = () =>
   settle(api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog'));
@@ -353,6 +403,7 @@ export type CloudflareAccountStatus = v.InferOutput<typeof CloudflareAccountStat
 const CloudflareAccountStatusSchema = v.object({
   connected: v.boolean(), selectedId: v.nullable(v.string()),
   accounts: v.array(v.object({ id: v.string(), name: v.string() })),
+  webSearch: v.boolean(),
 });
 
 export const listCloudflareAccounts = () =>

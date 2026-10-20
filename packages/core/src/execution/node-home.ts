@@ -15,20 +15,17 @@ export interface HostedNodeHome {
 
 /** Actor-home kinds and provisioning live in `actor-hosting.ts`. */
 
-/**
- * The session as one facet: its uid, home, `HOME` and `TMPDIR`. The file half is
- * `nimbusSessionFiles(box, cred)`; both are required or the facet cannot write its own home.
- */
-export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNodeHome): NimbusSandboxHandle {
-  // An unnamed call starts at home unless told; a named one where its shell is, unless told.
-  const optionsFor = (options?: Parameters<NimbusSandboxHandle['exec']>[1]) => ({
-    ...options,
-    ...(options?.shellId === undefined && { cwd: options?.cwd ?? node.home }),
-    env: { ...options?.env, HOME: node.home, TMPDIR: node.tmp },
-    cred: node.cred,
-  });
+type CommandOptions = Parameters<NimbusSandboxHandle['exec']>[1];
 
-  // Nothing that runs a command is carried over as it is: a member not bound here is absent, never run as someone else.
+/**
+ * `box` with every command it runs, a process it keeps running past the call (`startProcess`) included, given the
+ * options `optionsFor` makes of the caller's. Nothing that runs a command is carried over as it is: a member not bound
+ * here is absent, never run as someone else.
+ */
+export function withCommandOptions(
+  box: NimbusSandboxHandle,
+  optionsFor: (options: CommandOptions) => CommandOptions | Promise<CommandOptions>,
+): NimbusSandboxHandle {
   const execution: NimbusSandboxHandle = {
     ready: () => box.ready(),
     ...(box.runtimes !== undefined && { runtimes: box.runtimes }),
@@ -37,18 +34,33 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
     ...(box.mountTable !== undefined && { mountTable: box.mountTable.bind(box) }),
     ...(box.namespace !== undefined && { namespace: box.namespace.bind(box) }),
     ...(box.shellCwd !== undefined && { shellCwd: box.shellCwd.bind(box) }),
-    exec: (command, options) => box.exec(command, optionsFor(options)),
+    ...(box.shellState !== undefined && { shellState: box.shellState.bind(box) }),
+    exec: async (command, options) => box.exec(command, await optionsFor(options)),
   };
 
   if (box.execStream) {
     const execStream = box.execStream;
-    execution.execStream = (command, options) => execStream(command, optionsFor(options));
+    execution.execStream = async (command, options) => execStream(command, await optionsFor(options));
   }
 
   if (box.startProcess) {
     const startProcess = box.startProcess;
-    execution.startProcess = (command, options) => startProcess(command, optionsFor(options));
+    execution.startProcess = async (command, options) => startProcess(command, await optionsFor(options));
   }
 
   return execution;
+}
+
+/**
+ * The session as one facet: its uid, home, `HOME` and `TMPDIR`. The file half is
+ * `nimbusSessionFiles(box, cred)`; both are required or the facet cannot write its own home.
+ */
+export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNodeHome): NimbusSandboxHandle {
+  // An unnamed call starts at home unless told; a named one where its shell is, unless told.
+  return withCommandOptions(box, (options) => ({
+    ...options,
+    ...(options?.shellId === undefined && { cwd: options?.cwd ?? node.home }),
+    env: { ...options?.env, HOME: node.home, TMPDIR: node.tmp },
+    cred: node.cred,
+  }));
 }

@@ -5,7 +5,7 @@ import { expect, test } from 'bun:test';
 import { runFixtures, type FixtureRun, type Manifest, type Verdict } from './upgrade-fixtures';
 
 /** A deployment as the fixtures meet it: the bucket's anchor, and what the fixture account still holds. */
-function staging(holds: { anchor: Manifest | null; kept: boolean }) {
+function staging(holds: { anchor: Manifest | null; kept: boolean; resetAt?: string; accounts?: 'held' | 'gone'; freshHolds?: boolean }) {
   // Each sweep, by the anchor it kept.
   const swept: string[] = [];
   const checked: string[] = [];
@@ -13,6 +13,8 @@ function staging(holds: { anchor: Manifest | null; kept: boolean }) {
 
   const run: FixtureRun = {
     anchor: async () => state.anchor,
+    resetAt: async () => holds.resetAt ?? null,
+    accountsMissing: async () => (holds.accounts === 'gone' ? 'upgrade-fixture@kinu.run answered 401 at sign-in' : null),
     continuity: async (expected) => {
       state.checked.push(expected.seededAt);
 
@@ -21,7 +23,7 @@ function staging(holds: { anchor: Manifest | null; kept: boolean }) {
     freshStart: async () => {
       state.fresh += 1;
 
-      return { workspace: `upgrade-fresh-${String(state.fresh)}`, verdicts: [] };
+      return { workspace: `upgrade-fresh-${String(state.fresh)}`, verdicts: [['the roster names the fresh workspace', holds.freshHolds ?? true, 'it is not listed']] };
     },
     seed: async ({ fresh, previous }) => {
       state.seeds += 1;
@@ -41,6 +43,7 @@ function staging(holds: { anchor: Manifest | null; kept: boolean }) {
       state.kept = true;
     },
     sweep: async (kept) => { state.swept.push(kept?.seededAt ?? 'nothing'); },
+    sweepFresh: async (kept) => { state.swept.push(`fresh but ${kept}`); },
   };
 
   return { state, run };
@@ -81,6 +84,30 @@ test('after a full reset, which deletes the anchor, one first seed; the deploy a
     .toEqual({ seeds: 2, anchor: 'seed-2', checked: ['seed-1'], swept: ['seed-1', 'seed-2'] });
   // Each seed's file takes the path the baseline's does not.
   expect(state.anchor?.note.path).toBe('notes/upgrade-b.md');
+});
+
+// Staging deploy of af8995c96 (2026-10-19), a full reset: the reset deleted the builtin accounts with the anchor, and the
+// row went red signing upgrade-fixture@kinu.run in (401), though a reset leaves no older build's data to upgrade.
+test('after a reset that deleted the fixture accounts, the fresh start still runs and decides; continuity and seed are a notice', async () => {
+  const notices: string[] = [];
+  const { state, run } = staging({ anchor: null, kept: false, resetAt: '2026-10-19T21:22:28Z', accounts: 'gone' });
+
+  expect(await runFixtures(run, silent, (said) => { notices.push(said); })).toBe(true);
+  expect({ seeds: state.seeds, fresh: state.fresh, anchor: state.anchor, swept: state.swept })
+    .toEqual({ seeds: 0, fresh: 1, anchor: null, swept: ['fresh but upgrade-fresh-1'] });
+  expect(notices).toHaveLength(1);
+  expect(notices[0]).toContain('2026-10-19T21:22:28Z');
+
+  // The fresh start is this build's own contract: a miss there is red, reset or not.
+  const missed = staging({ anchor: null, kept: false, resetAt: '2026-10-19T21:22:28Z', accounts: 'gone', freshHolds: false });
+
+  expect(await runFixtures(missed.run, silent, () => undefined)).toBe(false);
+});
+
+test('fixture accounts that cannot sign in are red where no reset explains them', async () => {
+  const unexplained = staging({ anchor: null, kept: false, accounts: 'gone' });
+
+  await expect(runFixtures(unexplained.run, silent, () => undefined)).rejects.toThrow('401');
 });
 
 test('a seed that does not hold is swept, keeping the baseline, which stays the anchor', async () => {

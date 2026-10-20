@@ -2,9 +2,9 @@
 // ENOENT on the archive, and the archiver's own words were "FATAL ERROR: zstd uncompress failed" (sbs10031227nr610).
 import { afterAll, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 import { type StreamProfile, streamCommand } from '../src/stream-archive';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
@@ -83,24 +83,22 @@ async function listing(squashfs: Uint8Array | undefined, label: string): Promise
 }
 
 test('an archiver that fails mid-stream and removes its output is reported in its own words, not the upload\'s', async () => {
-  // mksquashfs unlinks its output on a fatal error; each PUT here answers once the archive is gone.
+  // mksquashfs unlinks its output on a fatal error; each PUT here answers once the archive is gone. The archiver says
+  // so itself, on a FIFO a reader the test started exits on: never a file-change event, which Bun's fs.watch can drop
+  // under load (2026-10-20), leaving every PUT, and the test, waiting.
   mkdirSync(dirname(archive), { recursive: true });
   mkdirSync(join(root, 'vanish'), { recursive: true });
+  const removed = join(root, 'removed');
+  const made = await runToExit(['mkfifo', removed]);
 
-  const gone = new Promise<void>((resolve) => {
-    const watcher = watch(dirname(archive), (_event, name) => {
-      if (name === basename(archive) && statSync(archive, { throwIfNoEntry: false }) === undefined) {
-        watcher.close();
-        resolve();
-      }
-    });
-  });
-
-  const target = store(gone);
+  if (made.exitCode !== 0) throw new Error(`mkfifo failed: ${made.stderr}`);
+  const reader = Bun.spawn(['cat', removed], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+  const target = store(reader.exited.then(() => undefined));
 
   const failing = () => `python3 -c 'import os,sys,time
 f = open(sys.argv[1], "wb"); f.write(os.urandom(20 * 1024 * 1024)); f.flush(); time.sleep(1)
-os.unlink(sys.argv[1]); sys.stderr.write("FATAL ERROR: Failed to write to output filesystem\\n"); sys.exit(1)' ${archive}`;
+os.unlink(sys.argv[1]); open(sys.argv[2], "w").write("removed\\n")
+sys.stderr.write("FATAL ERROR: Failed to write to output filesystem\\n"); sys.exit(1)' ${archive} ${removed}`;
 
   const published = await publish(join(root, 'vanish'), target.url, failing);
 

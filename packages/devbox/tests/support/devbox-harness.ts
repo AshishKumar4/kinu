@@ -352,6 +352,8 @@ export class FakeSandbox {
   readonly starts: StartRecord[] = [];
   readonly kills: string[] = [];
   readonly execs: string[] = [];
+  /** The variables each process launch (`devbox-process`) was handed, in order. */
+  readonly launchEnvs: Record<string, string>[] = [];
   readonly exposures: { port: number; token: string | undefined; name: string | undefined }[] = [];
   get schedules(): string[] { return alarmTimes.get(this.ctx.storage)?.scheduled ?? []; }
   /** Configured probe answers for services on a started container, retained
@@ -985,16 +987,22 @@ export class FakeSandbox {
 
     // A caller's command is `setsid -w /bin/bash -c` (D69); the box's own is `/bin/bash -c`. A digest write names its file
     // in argv (`file-digest-write.ts`).
-    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners"
+    const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners" || args[3] === 'stamped-processes'
       || args[3] === 'devbox-desktop' || args[3] === 'devbox-disk-stall' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true)
       || args[0] === 'xdotool' || args[3] === 'devbox-screenshot' || args[3] === 'devbox-watch' || args[3] === 'devbox-let-up';
 
     if (this.nativeExec !== undefined && onHost) return this.nativeExec(args, options);
 
     const pid = this.#pid++;
+    const process = await this.#nativeCommand(args, options, pid);
 
-    return this.#nativeCommand(args, options, pid);
+    this.#live.set(pid, process);
+
+    return process;
   }
+
+  /** Each process an exec started, by its pid, for the box's own kill of it (`endProcess`). */
+  readonly #live = new Map<number, ExecProcess>();
 
   #nativeProtocol(args: string[], options: ContainerExecOptions): Promise<ExecProcess> | ExecProcess | undefined {
     if (args[3] === 'devbox-incarnation-read') {
@@ -1056,6 +1064,13 @@ export class FakeSandbox {
     // A caller's run is in its own group, `setsid -w` (D69): what it runs follows.
     const args = launched[0] === 'setsid' && launched[1] === '-w' ? launched.slice(2) : launched;
 
+    // The box ends a process with an exec of kill (`endProcess`): the process it names ends as a SIGKILL ends it.
+    if (args[0] === 'kill' && args[1] === '-KILL') {
+      this.#live.get(Number(args[2]))?.kill(9);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
+
     // The restore deadline's process ends only when it is killed: a test that needs the deadline to
     // fall hands the box a hand clock rather than waiting out a duration.
     if (args[0] === '/bin/sleep') {
@@ -1072,6 +1087,8 @@ export class FakeSandbox {
 
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
+
+    if (args[3] === 'devbox-process') this.launchEnvs.push({ ...options.env });
 
     if (PROCESS_SCRIPTS.has(args[3] ?? '')) return await this.#processScript(args, pid);
 

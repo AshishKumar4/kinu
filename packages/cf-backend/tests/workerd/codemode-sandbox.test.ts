@@ -28,22 +28,28 @@ function children(dir: string): string[] {
   return [...new Set(names)];
 }
 
+/** Whether a call's options at `at` name base64, as `fs.text(path, { encoding })` and `fs.write(path, content, { encoding })` do. */
+function isBase64(args: readonly unknown[], at: number): boolean {
+  return v.is(v.object({ encoding: v.literal('base64') }), args[at]);
+}
+
 /** Each tool source `workspace.createTool` was sent, as the host receives it. */
 const created: string[] = [];
 
 const workspace = {
   name: 'workspace',
   fns: {
+    // As the file plane serves them: `encoding: 'base64'` reads and writes the file's bytes, here its UTF-8.
     'fs.text': async (...args: unknown[]) => {
       const path = text(args, 0);
       const stored = files.get(path);
 
       if (stored === undefined) throw new Error(`ENOENT: no such file: ${path}`);
 
-      return stored;
+      return isBase64(args, 1) ? Buffer.from(stored, 'utf8').toString('base64') : stored;
     },
     'fs.write': async (...args: unknown[]) => {
-      files.set(text(args, 0), text(args, 1));
+      files.set(text(args, 0), isBase64(args, 2) ? Buffer.from(text(args, 1), 'base64').toString('utf8') : text(args, 1));
 
       return 'ok';
     },
@@ -106,7 +112,7 @@ const dbProvider = {
 const SCRATCH_TABLE = 'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "key", type: "text", primaryKey: true }, { name: "value", type: "json" }] });';
 
 describe('the eval sandbox under workerd', () => {
-  const executor = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }));
+  const executor = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }, async () => ({})));
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
     const outcomes: ToolOutcome[] = [];
@@ -324,7 +330,7 @@ describe('the eval sandbox under workerd', () => {
     expect(String(offline.result)).toContain('threw: ');
 
     // The loopback stub `enable_ctx_exports` mints for the exported class.
-    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false } }));
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false, ownerUserId: null } }, async () => ({})));
     const result = await online.execute(program, [toolsProvider([]), dbProvider, workspace]);
     // `.invalid` resolves for nobody: the network's own failure comes back via the marked 502, not a sandbox refusal.
     expect(String(offline.result)).toContain('not permitted to access the internet');
@@ -332,9 +338,20 @@ describe('the eval sandbox under workerd', () => {
     expect(String(result.result)).not.toContain('not permitted to access the internet');
   });
 
+  test("a program holds its workspace's secrets as env.NAME and process.env.NAME, read for each run, never over Kinu's own", async () => {
+    let held = true;
+    const holding = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }, async () => Object.fromEntries(held ? [['STRIPE_SECRET_KEY', 'pxs1_first'], ['workspace', 'a-secret-named-workspace']] : [])));
+    const program = 'return [env.STRIPE_SECRET_KEY ?? null, process.env.STRIPE_SECRET_KEY ?? null, env.workspace];';
+
+    expect((await holding.execute(program, [toolsProvider([]), dbProvider, workspace])).result).toEqual(['pxs1_first', 'pxs1_first', 'probe']);
+
+    held = false;
+    expect((await holding.execute(program, [toolsProvider([]), dbProvider, workspace])).result).toEqual([null, null, 'probe']);
+  });
+
   test('a program cannot reach cloud metadata, and is told why', async () => {
     // Refused by the shared classifier before any DNS lookup or socket, as shell and `web.fetch` refuse it.
-    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false } }));
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false, ownerUserId: null } }, async () => ({})));
     const program = "// probe the metadata service\ntry { await fetch('http://169.254.169.254/latest/meta-data/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";
 
     const result = await online.execute(program, [toolsProvider([]), dbProvider, workspace]);
@@ -351,7 +368,7 @@ describe('the eval sandbox under workerd', () => {
 
     const web = createWebCodemodeProvider({ provider, files: null, sessions: { open: unused, list: unused, close: unused }, prelude: { source: BROWSER_PRELUDE } });
     const fns = Object.fromEntries(Object.entries(web.tools).map(([name, entry]) => [name, (...args: unknown[]) => entry.execute(...args)]));
-    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false } }));
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false, ownerUserId: null } }, async () => ({})));
 
     const ran = await withCodemodeProgram(() => online.execute(
       "// reach a browser this agent did not open, then list tools on something that is no page\n"

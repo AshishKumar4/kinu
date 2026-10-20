@@ -26,8 +26,7 @@ import {
 import { machineOperations } from '../../packages/core/src/operations/executors';
 import { wakeText } from '../../packages/core/src/jobs/runner';
 import type { BackgroundJob } from '../../packages/core/src/types/jobs';
-import { generateText, streamText } from 'ai';
-import { codemodeNamespace, createOpenAICompatProvider, runSleepTimeCompute, type JsonValue, type LLM } from '@kinu.run/core';
+import { codemodeNamespace, createOpenAICompatProvider, routedLlm, runSleepTimeCompute, type JsonValue } from '@kinu.run/core';
 import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
 
 /** An OpenAI-shaped refusal of a request, with the failure's class as its code. */
@@ -109,20 +108,6 @@ describe('the deployed tiers\' Worker answers only its key, and reads a bounded 
     const undeclared = await worker.fetch(asked(COMPLETIONS, streamed), ENV);
 
     expect([declared.status, undeclared.status]).toEqual([413, 413]);
-  });
-});
-
-// The first-run web-search case searches through the account's `tavily` credential, pointed here.
-describe('the deployed tiers\' Worker answers a Tavily search', () => {
-  test('with results whose URLs the provider keeps, and refuses a body with no query', async () => {
-    const search = 'https://scripted-model.kinu.run/search';
-    const answered = await worker.fetch(asked(search, JSON.stringify({ query: 'Cloudflare Durable Objects documentation', max_results: 2 })), ENV);
-    const body = v.parse(v.object({ results: v.array(v.object({ url: v.pipe(v.string(), v.url()) })) }), await answered.json());
-
-    expect([answered.status, body.results.length]).toEqual([200, 2]);
-    expect(body.results.every((result) => result.url.startsWith('https://'))).toBe(true);
-    expect((await worker.fetch(asked(search, '{}'), ENV)).status).toBe(400);
-    expect((await worker.fetch(new Request(search, { method: 'POST', body: '{}' }), ENV)).status).toBe(401);
   });
 });
 
@@ -239,14 +224,10 @@ describe('the tier model behind background memory compression', () => {
         hasCredential: async (key) => key === SCRIPTED_CREDENTIAL,
       });
 
-      const llm: LLM = {
-        async *stream(options) {
-          yield* streamText({ model, instructions: options.system, messages: options.messages, tools: options.tools }).textStream;
-        },
-        async complete(prompt) {
-          return (await generateText({ model, prompt, maxRetries: 0 })).text;
-        },
-      };
+      // The fast lane a host builds over the scripted model, asked as sleep-time asks it: for its schema.
+      const llm = routedLlm(() => ({ model }), {
+        source: 'fast', tier: 'fast', model: 'openai-compat/fake-live', reasoningEffort: null, fallbacks: [], retries: 0,
+      }, { report: () => {} });
 
       const update = await runSleepTimeCompute(llm, {
         turns: [

@@ -181,7 +181,8 @@ async function* scaffoldTurn(
         yield { type: 'step-finish', stepIndex: ev.stepIndex, responseMessages: [], source: 'scaffold' };
         break;
       case 'error':
-        yield { type: 'error', message: ev.message, source: 'scaffold' };
+        // `thrown` travels with it: the turn records its program's own throw.
+        yield { ...ev, source: 'scaffold' };
         break;
       // Native tool raw output has no chat rendering; `model_chunk` already carries it.
       case 'model_output':

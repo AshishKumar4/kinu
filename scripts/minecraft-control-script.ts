@@ -12,9 +12,9 @@ export const MINECRAFT_CONTROL = 'KINU_MINECRAFT_CONTROL';
 export const MINECRAFT_CONTROL_TRIES = [
   'await computer.screenshot();',
   'await computer.click([640, 400]);',
-  'await computer.key("F12");',
-  'await computer.key("ctrl+shift+j");',
-  'await computer.key("ctrl+l");',
+  'await computer.key(["F12"]);',
+  'await computer.key(["ctrl", "shift", "j"]);',
+  'await computer.key(["ctrl", "l"]);',
   'await computer.type("javascript:document.title=\'escaped\'");',
   'await computer.click([640, 755], { button: "right" });',
   'await computer.screenshot();',

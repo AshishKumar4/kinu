@@ -11,6 +11,7 @@ import type { CallJob, Shell, ShellExecOptions } from '../types/primitives';
 import { attempt, KinuError, settle, type Logger } from '../obs/index';
 import { serve, type Served } from '../operations/operation';
 import { shellRun } from '../operations/shell';
+import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 
 /** What the call hands its runtime: absent keys stay absent, so a runtime reads presence. */
 function shellCallOptions(
@@ -132,6 +133,15 @@ export function serveShell({ shell, router, files, budget, escalations, logger }
           logger.failure(RUN_RUNTIME_NO_EXEC, refusal, { runtime: runtimeKey });
 
           return yield* new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
+        }
+
+        const mount = Object.entries(EXECUTOR_MOUNTS).find(([executor]) => executor === runtimeKey)?.[1];
+
+        // The workspace's name for a path on the machine is not the machine's own (rc22 coding: `/computer/workspace/app`).
+        if (mount !== undefined && args.cwd !== undefined && (args.cwd === mount || args.cwd.startsWith(`${mount}/`))) {
+          const own = args.cwd.slice(mount.length) || '/';
+
+          return yield* new KinuError('bad_input', `cwd "${args.cwd}" is the workspace's name for ${runtimeKey}'s ${own}; on ${runtimeKey} it is "${own}"`);
         }
 
         const context = { ...shellCallOptions(args, signal, job), device: nickname, reportCwd: true };

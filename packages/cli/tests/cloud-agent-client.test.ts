@@ -851,7 +851,8 @@ describe('CloudAgentClient protocol', () => {
     );
 
     expect(rpc.method).toBe('revertConversation');
-    expect(rpc.args).toEqual(['m3']);
+    // A walk-back leaves files as they are: the agent is told what its rewound turns left.
+    expect(rpc.args).toEqual(['m3', { chatOnly: true }]);
     mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: null });
 
     const result = await forkPromise;
@@ -910,9 +911,9 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
-  // The CLI read the changelog by its own copy of the shape, which lacked an artifact's revert and a skill's pending
-  // decision: the first refused the whole page, the second dropped the decision.
-  test('the changelog keeps every entry the workspace records: an artifact revert and a pending decision', async () => {
+  // The CLI once read the changelog by its own copy of the shape, which refused an artifact's revert and with it the
+  // whole page. Every revert the workspace offers reaches the CLI as recorded.
+  test('the changelog keeps every entry the workspace records: an artifact revert and a skill revert', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
     const warmup = client.send('hello');
@@ -924,7 +925,7 @@ describe('CloudAgentClient protocol', () => {
     const recorded: EvolutionChangelogView = {
       entries: [
         { id: 'artifact:report@2', kind: 'artifact', at: 2, summary: 'The report, second version', evidence: '', revert: { type: 'artifact_revert', target: 'report@1' } },
-        { id: 'refinement:r1:0', kind: 'refinement', at: 1, summary: 'A skill waits for you', evidence: '', decision: { requestId: 'r1', routeIndex: 0 } },
+        { id: 'refinement:r1:0', kind: 'refinement', at: 1, summary: 'A skill a dream wrote', evidence: '', revert: { type: 'skill_revert', target: 'r1#0' } },
       ],
       unseenCount: 2, seenAt: 0,
     };

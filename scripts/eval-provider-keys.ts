@@ -19,13 +19,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS, parseEvalAccount, type EvalAccount } from '@kinu.run/core';
+import {
+  accountOf, baseCredentialKey, CLOUDFLARE_OAUTH_CRED_KEY, DEFAULT_WORKERS_AI_MODEL_SPEC, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_WORKSPACE_LEASE_MS,
+  MAIN_ACCOUNT, MY_GATEWAY_PROVIDER_ID, validateCredential, type OAuthCredential,
+  parseEvalAccount, parseGatewayTarget, type EvalAccount,
+} from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { DEFAULT_MODELS, evalMatrix } from '../evals/src/config';
 import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
 import { trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
+import { deployedConfig, deploymentAt } from './infra-manifest';
 
 /** Where the operator keeps eval-service's provider keys: outside every checkout, mode 600. */
 export const EVAL_PROVIDER_KEYS = join(homedir(), '.config', 'kinu', 'eval-provider-keys.json');
@@ -47,7 +52,81 @@ export interface Provisioning {
   readonly models: readonly string[];
   /** The trial accounts the eval runs act as here (`evals/src/slot.ts`), each given the keys eval-service is. */
   readonly trialAccounts?: readonly EvalAccount[];
+  /** The deployment's own AI Gateway and a Cloudflare API token that may run it, which every account is given when the
+   *  run measures a gateway model ({@link gatewayFor}); a run on none leaves the accounts without a Cloudflare login. */
+  readonly gateway?: EvalGateway;
+  /** Plan logins (`claude.oauth`, `chatgpt.oauth@<account>`) a run signed in for itself (scripts/eval-plan-run.ts). Each
+   *  has one owner, whose renewals single-flight in its own object: the trial account its model's sequence runs in, given
+   *  those its models name ({@link plansNamed}) once. eval-service never holds one; the run deletes them at its end. */
+  readonly planGrants?: Readonly<Record<string, OAuthCredential>>;
 }
+
+/**
+ * The plan grants `models` run on: a grant serves the model specs whose provider part its key names, `claude.oauth`
+ * serving `claude/…` and `chatgpt.oauth@compare` serving `chatgpt@compare/…`.
+ */
+function plansNamed(models: readonly string[], grants: Readonly<Record<string, OAuthCredential>>): [string, OAuthCredential][] {
+  return Object.entries(grants).filter(([key]) => {
+    const provider = baseCredentialKey(key).replace(/\.oauth$/u, '');
+    const named = accountOf(key) === MAIN_ACCOUNT ? provider : `${provider}@${accountOf(key)}`;
+
+    return models.some((model) => model.startsWith(`${named}/`));
+  });
+}
+
+/** Give one trial account the plan grants the run's models name and it does not hold: a grant it holds is its own, maybe
+ *  renewed since, and the run's first copy would undo that. A finding, or null. */
+async function givePlans(input: Provisioning, headers: Record<string, string>, account: string, holds: ReadonlySet<string>): Promise<string | null> {
+  for (const [key, grant] of plansNamed(input.models, input.planGrants ?? {}).filter(([named]) => !holds.has(named))) {
+    const answer = await fetch(`${input.origin}/api/user/credentials/${encodeURIComponent(key)}`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(grant), signal: AbortSignal.timeout(CALL_MS),
+    });
+
+    if (!answer.ok) return `storing the run's ${key} for ${account} answered ${String(answer.status)}`;
+  }
+
+  return null;
+}
+
+/** An AI Gateway the eval accounts reach a gateway model through, billed to its Cloudflare account. */
+export interface EvalGateway { readonly accountId: string; readonly id: string; readonly token: string }
+
+/** Whether the run measures a model reached through the user's own AI Gateway (`my-gateway/<author>/<model>`). */
+function needsGateway(models: readonly string[]): boolean {
+  return models.some((model) => model.startsWith(`${MY_GATEWAY_PROVIDER_ID}/`));
+}
+
+/**
+ * Give one account `gateway`: its Cloudflare login, the gateway token as a Cloudflare credential names it (my-gateway sends
+ * it as the gateway's `cf-aig-authorization` and the management reads' bearer, measured on staging 2620e7c05), and the
+ * gateway selected. Either already there is left as it is. A finding, or null.
+ */
+async function giveGateway(origin: string, headers: Record<string, string>, held: ReadonlySet<string>, gateway: EvalGateway): Promise<string | null> {
+  if (!held.has(CLOUDFLARE_OAUTH_CRED_KEY)) {
+    const stored = await fetch(`${origin}/api/user/credentials/${CLOUDFLARE_OAUTH_CRED_KEY}`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'oauth', accessToken: gateway.token, expiresAt: NEVER, metadata: { accountId: gateway.accountId } }),
+      signal: AbortSignal.timeout(CALL_MS),
+    });
+
+    if (!stored.ok) return `storing the Cloudflare login at ${origin} answered ${String(stored.status)}`;
+  }
+
+  const selection = await fetch(`${origin}/api/user/cloudflare/gateways`, { headers, signal: AbortSignal.timeout(CALL_MS) });
+
+  if (!selection.ok) return `reading the selected AI Gateway at ${origin} answered ${String(selection.status)}`;
+
+  if (v.parse(v.looseObject({ selectedId: v.nullable(v.string()) }), await selection.json()).selectedId === gateway.id) return null;
+
+  const selected = await fetch(`${origin}/api/user/cloudflare/gateway`, {
+    method: 'PUT', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ id: gateway.id }), signal: AbortSignal.timeout(CALL_MS),
+  });
+
+  return selected.ok ? null : `selecting AI Gateway ${gateway.id} at ${origin} answered ${String(selected.status)}`;
+}
+
+/** An API token does not expire as an OAuth login does: its credential names no end. */
+const NEVER = Date.parse('2100-01-01T00:00:00Z');
 
 /** What eval-service lists: every model spec it can run. */
 interface Listed {
@@ -157,6 +236,13 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
     given = true;
   }
 
+  const gated = input.gateway !== undefined && needsGateway(input.models) ? await giveGateway(input.origin, headers, holds, input.gateway) : null;
+
+  if (gated !== null) return { given, reset, finding: `${account}: ${gated}` };
+  const planned = await givePlans(input, headers, account, holds);
+
+  if (planned !== null) return { given, reset, finding: planned };
+
   // A bare account inherits a single Workers AI model for its swarm judge. Its refusal ended every research swarm
   // in run 37880718948. Keys alone do not configure that route: keep the user's retry count, and cross providers.
   const model = DEFAULT_WORKERS_AI_MODEL_SPEC;
@@ -214,11 +300,16 @@ export async function provisionEvalProviderKeys(input: Provisioning): Promise<Pr
     else findings.push(`storing ${key} for eval-service answered ${String(answer.status)}`);
   }
 
+  const gated = input.gateway !== undefined && needsGateway(input.models) ? await giveGateway(input.origin, headers, held, input.gateway) : null;
+
+  if (gated !== null) findings.push(`eval-service: ${gated}`);
   const after = await listed(input, headers);
 
   if ('why' in after) return { stored, findings: [...findings, after.why] };
+  // A plan model runs only where its grant is owned: its trial account, checked below.
+  const planModels = new Set(input.models.filter((model) => plansNamed([model], input.planGrants ?? {}).length > 0));
 
-  for (const model of input.models) {
+  for (const model of input.models.filter((each) => !planModels.has(each))) {
     if (!after.specs.has(model)) findings.push(`eval-service at ${input.origin} lists no ${model}, so the eval pass cannot run it`);
   }
 
@@ -242,6 +333,43 @@ export async function provisionEvalProviderKeys(input: Provisioning): Promise<Pr
   };
 }
 
+/**
+ * The plan grants a run holds (scripts/eval-plan-run.ts), handed to this step in its environment alone: a JSON record of
+ * credential key to OAuth login, each checked as the product checks a stored credential, whose refusal never quotes it.
+ */
+function plansIn(held: string | undefined): Readonly<Record<string, OAuthCredential>> | undefined {
+  if (held === undefined || held === '') return undefined;
+
+  return Object.fromEntries(Object.entries(v.parse(v.record(v.string(), v.unknown()), JSON.parse(held))).map(([key, value]) => {
+    const credential = validateCredential({ key, value });
+
+    if (credential.kind !== 'oauth') throw new Error(`the run's ${key} is not a plan login`);
+
+    return [key, credential];
+  }));
+}
+
+/**
+ * The AI Gateway the deployment at `origin` runs on (its `AI_GATEWAY_URL`, wrangler.jsonc), and the gateway token
+ * (`WEBSEARCH_CF_TOKEN`, ~/.config/kinu/secrets.env and armada): AI Gateway Run, Edit and Read and Workers AI, and
+ * nothing that writes the account's Workers, containers or tokens, since it is stored in deployed accounts. A gateway
+ * model's trials are billed to the deployment's own account.
+ */
+function gatewayFor(origin: string): EvalGateway {
+  const deployment = deploymentAt(origin);
+
+  const target = deployment === undefined ? { reason: `no environment in wrangler.jsonc serves ${origin}` }
+    : parseGatewayTarget(deployedConfig(deployment.environment).vars?.['AI_GATEWAY_URL']);
+
+  const token = process.env['WEBSEARCH_CF_TOKEN'] ?? '';
+
+  if ('reason' in target) throw new Error(`a gateway model needs ${origin}'s AI Gateway: ${target.reason}`);
+
+  if (token === '') throw new Error('a gateway model needs WEBSEARCH_CF_TOKEN, the gateway token (AI Gateway Run)');
+
+  return { accountId: target.account, id: target.id, token };
+}
+
 if (import.meta.main) {
   const asked = process.argv[2] ?? '';
 
@@ -263,8 +391,12 @@ if (import.meta.main) {
   const accounts = leased === null ? [] : Array.from({ length: Number(leased[2]) - Number(leased[1]) + 1 },
     (_, at) => parseEvalAccount(`trial-${String(Number(leased[1]) + at)}`)).filter((account) => account !== null);
 
+  const gateway = needsGateway(matrix.models) ? gatewayFor(origin) : undefined;
+  const planGrants = plansIn(process.env['KINU_EVAL_PLAN_GRANTS']);
+
   const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
     origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models, trialAccounts: accounts,
+    ...gateway !== undefined && { gateway }, ...planGrants !== undefined && { planGrants },
   });
 
   for (const note of notes ?? []) console.log(`eval-provider-keys: ${note}`);

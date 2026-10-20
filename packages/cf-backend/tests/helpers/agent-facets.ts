@@ -1,6 +1,7 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
+import * as v from 'valibot';
 import { MAIN_AGENT, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { AgentContext } from 'agents';
@@ -340,6 +341,37 @@ export async function holdNextRunDelivery(): Promise<{ readonly actorId: string;
   heldRuns.push(held.resolve);
 
   return await held.promise;
+}
+
+/** The RPC session of the port each isolate opened last, by storage key. */
+const portSessions = new Map<string, AbortController>();
+
+/** The relay the isolate under `storageKey` holds into its workspace disconnects, as the platform ends an RPC session:
+ *  each call still on its port fails, and each later one on it; a stream crossing it breaks at both ends. */
+export function cutPort(storageKey: string): void {
+  portSessions.get(storageKey)?.abort(new Error('the relay to the workspace disconnected'));
+}
+
+/** `port` over one RPC session `session` ends. A stream crossing it breaks with it: its reader hears the end as an
+ *  error, and its writer is cancelled. */
+function overSession(port: AgentWorkspacePort, session: AbortSignal): AgentWorkspacePort {
+  const owned = (name: string | symbol): name is keyof AgentWorkspacePort => name in port;
+
+  return new Proxy(port, {
+    get: (held, name) => {
+      // An answer is not a thenable: `await port` yields the port.
+      if (!owned(name)) return undefined;
+      const member = v.parse(v.function(), held[name]);
+
+      return async (...args: unknown[]) => {
+        if (session.aborted) throw session.reason;
+
+        const crossed = args.map((arg) => (arg instanceof ReadableStream ? arg.pipeThrough(new TransformStream(), { signal: session }) : arg));
+
+        return await untilLost(Promise.resolve(member(...crossed)), session);
+      };
+    },
+  });
 }
 
 const heldReports = new Map<string, (deliver: () => Promise<void>) => void>();
@@ -797,8 +829,11 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           },
           port: async () => {
             crossing();
+            const rpc = new AbortController();
 
-            return port;
+            portSessions.set(placement.storageKey, rpc);
+
+            return overSession(port, rpc.signal);
           },
         },
         WORKSPACE_NAME: placement.workspaceName,
@@ -932,6 +967,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     workingContext: (...args) => settle(through(() => isolate.workingContext(...args))),
     turnRequests: (...args) => settle(through(() => isolate.turnRequests(...args))),
     turnRequest: (...args) => settle(through(() => isolate.turnRequest(...args))),
+    recordedTurns: (...args) => settle(through(() => isolate.recordedTurns(...args))),
     spend: (...args) => settle(through(() => isolate.spend(...args))),
     context: (...args) => settle(through(() => isolate.context(...args))),
     searchConversations: (...args) => settle(through(() => isolate.searchConversations(...args))),

@@ -22,7 +22,7 @@ const box: SandboxHandle = {
   ensureReady: unreachable, exec: unreachable, readFile: unreachable, writeFile: unreachable, writeFileIfDigest: unreachable,
   listFiles: unreachable, statFile: unreachable, deleteFile: unreachable, exposePort: unreachable, unexposePort: unreachable,
   getExposedPorts: unreachable, startSupervisedProcess: unreachable, stopSupervisedProcess: unreachable, supervisedProcessLogs: unreachable,
-  listSupervisedProcesses: unreachable, portToken: unreachable, probePort: unreachable, portListeners: unreachable,
+  listSupervisedProcesses: unreachable, portToken: unreachable, probePort: unreachable, portListeners: unreachable, stampedProcesses: unreachable,
   resize: unreachable, answerRest: unreachable, releaseDesktop: unreachable,
   desktop: async () => ({ kind: 'screen', png: PNG, width: 1280, height: 768 }),
 };

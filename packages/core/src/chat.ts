@@ -44,10 +44,12 @@ import { ASK_OWNER_TOOL } from './tools/registry';
 import { modelWindow, type ModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
-import type { CompactionTrigger, ExtensionHost } from './extension';
+import type { CompactionTrigger, ExtensionHost, MessageSwap } from './extension';
+import { ImageCarrierSchema, releaseCarriedImages } from './types/tool-images';
 import { mergeProviderOptions } from './providers/effort';
 import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, serverCompactor, sinceLatestCompaction } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
+import { ChatRelay } from './chat-relay';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
 import * as v from 'valibot';
@@ -97,7 +99,8 @@ export type ChatEvent = (
     modelId?: string;
   }
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
-  | { type: 'error'; message: string }
+  /** `thrown`: the turn's scaffold program itself threw (`runScaffold`), not a call it made that failed. */
+  | { type: 'error'; message: string; thrown?: true }
   | { type: 'model-fallback'; from: string; to: string; reason: string }
   | { type: 'context-admitted'; tokens: number; contextWindow: number | null }
   /** `text`: the answer, else what streamed, else a tool-result synthesis. `answer`: only the final step's text
@@ -129,6 +132,27 @@ function waitingAsks(history: readonly ModelMessage[], waitsOn: ((call: AskCall)
   if (waitsOn === undefined) return [];
 
   return trailingUnpairedCalls(history, ASK_OWNER_TOOL).map((call) => ({ toolCallId: call.toolCallId, input: projectJsonValue({ value: call.input }) })).filter(waitsOn);
+}
+
+/** What the context retires, the call retires in what it holds. */
+function retiringIn(call: ProviderCall, plane: StepContextPlane | undefined): StepContextPlane | undefined {
+  return plane?.retire === undefined ? plane : {
+    ...plane,
+    retire: async (swaps) => {
+      await plane.retire?.(swaps);
+      call.retired(swaps);
+    },
+  };
+}
+
+/** Kept by the step's record and its hooks: the SDK's record of the step lets its images' bytes go. */
+function releaseStepImages(step: StepResult<ToolSet>): void {
+  for (const part of step.content) if (part.type === 'tool-result' && v.is(ImageCarrierSchema, part.output)) releaseCarriedImages(part.output);
+}
+
+/** The tool calls a tool message answers, as one key; '' for any other message. */
+function answeredCalls(message: ModelMessage): string {
+  return message.role === 'tool' ? message.content.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])).join(' ') : '';
 }
 
 function askedIn(step: StepResult<ToolSet> | undefined): AskCall[] {
@@ -323,22 +347,6 @@ const DEAD_STREAM = 'Model stream ended without output: the provider stream term
   + '(no finish reason, no content). The turn did not complete.';
 
 /** One provider call's state, as the SDK's stream drains into it via {@link ProviderCall.consume}. */
-/** The provider's compaction summary is for the model: the stream the owner sees leaves it out. */
-function withoutServerSummaries(stream: ReadableStream<UIMessageChunk>): ReadableStream<UIMessageChunk> {
-  const summaries = new Set<string>();
-
-  return stream.pipeThrough(new TransformStream<UIMessageChunk, UIMessageChunk>({
-    transform(chunk, controller) {
-      if (chunk.type === 'text-start' && isServerCompaction(chunk.providerMetadata)) summaries.add(chunk.id);
-
-      if ((chunk.type === 'text-start' || chunk.type === 'text-delta' || chunk.type === 'text-end') && summaries.has(chunk.id)) return;
-
-      if (chunk.type === 'custom' && isServerCompaction(chunk.providerMetadata)) return;
-      controller.enqueue(chunk);
-    },
-  }));
-}
-
 class ProviderCall {
   /** Set by `onAbort`, or by the drain when the provider threw the abort reason first. */
   interrupted = false;
@@ -458,6 +466,21 @@ class ProviderCall {
       ...(this.fallback !== undefined && { fallback: this.fallback }),
       ...(modelId !== '' && { modelId }),
     } };
+  }
+
+  /**
+   * Images the turn's context moved out are moved out where this call holds them too: its response and the SDK's record
+   * of the call hold the same message objects for every step of the turn, so a swap made only in the context kept every
+   * image the turn took live (a 250-step turn of distinct screenshots: 35 to 93 MB in the agent's isolate). A swap names
+   * a context's message, which may be a copy: the call's own is found by the tool calls it answers.
+   */
+  retired(swaps: readonly MessageSwap[]): void {
+    for (const { from, to } of swaps) {
+      const answered = answeredCalls(from);
+      const held = this.responseSoFar.find((message) => message === from || (answered !== '' && answeredCalls(message) === answered));
+
+      if (held !== undefined && held.role === to.role) Object.assign(held, { content: to.content });
+    }
   }
 
   /** Returns the step's own messages: what the record holds past this call's earlier steps. */
@@ -975,6 +998,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     const call = new ProviderCall(servingFallback);
     const attempt = cache;
+    const callContext = retiringIn(call, stepContextPlane);
     let stepEnded: (() => void) | null = null;
 
     const endStep = (): void => {
@@ -1004,7 +1028,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         destination: servingRoute,
         replay,
         meter,
-        context: stepContextPlane,
+        context: callContext,
         turnStart,
       }, { stepNumber: stepOffset + stepNumber, messages, steps });
 
@@ -1086,6 +1110,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // Recorded: the step that ended is the turn's `stepCount - 1`, the number its request was prepared under.
           await extensions?.emitStepEnd({ stepNumber: stepCount - 1 });
           await opts.onStep?.(step, own);
+          releaseStepImages(step);
         } catch (cause) {
           call.stepFailure ??= { doing: 'run the step hook', cause };
         }
@@ -1094,13 +1119,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       },
     });
 
-    // Started before this loop so the tee is taken before any chunk flows; awaited in the tail.
-    const observed = opts.observeStream?.(withoutServerSummaries(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) })));
+    // Fed from this loop's own reads, as each part is read; awaited in the tail.
+    const relay = new ChatRelay(opts.observeStream, { tools: attempt.tools, describe: describeProviderError });
 
     let drained = false;
 
     try {
       for await (const chunk of result.stream) {
+        relay.push(chunk);
         const event = call.consume(chunk);
 
         if (event !== null) {
@@ -1115,6 +1141,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       drained = true;
     } catch (err) {
+      relay.end({ error: err });
+
       // The signal is authoritative: a provider may throw its abort reason before `onAbort` runs.
       if (opts.signal?.aborted) call.interrupted = true;
       else if (APICallError.isInstance(err)) call.failed({ cause: err });
@@ -1126,10 +1154,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       let completed = false;
 
       call.stoppedReading();
+      relay.end();
 
       try {
         if (!drained && call.streamError === undefined && call.stepFailure === null) consumer.abort();
-        await observed;
+        await relay.observed;
         completed = drained && !call.interrupted && call.streamError === undefined;
       } finally {
         // A failed seal is not permission to commit its partial rows on a second attempt.

@@ -15,12 +15,13 @@ import {
 import { initAllTables } from '../src/state/workspace-schema';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { initLessonTables } from '../src/evolution/lessons';
-import { initTurnRatingTables } from '../src/evolution/ratings';
-import { buildChangelog } from '../src/evolution/changelog';
-import { initGepaTables } from '../src/evolution/gepa/persistence';
+import { initTurnRatingTables, rateTurn } from '../src/evolution/ratings';
+import { dreamChangesFor, renderWatch } from '../src/evolution/watch';
+import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import {
-  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, settleArtifact,
+  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, toolArtifact, turnArtifacts,
 } from '../src/evolution/artifacts';
+import { BUILTIN_TOOL_DESCRIPTIONS } from '../src/tools/registry';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import {
@@ -33,6 +34,8 @@ import { vfsDirname } from '../src/utils/vfs-helpers';
 import { gatherApprovableInstructions } from '../src/read-models/instruction-approvals';
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import type { DecisionPort, DecisionResult } from '../src/providers/decision-model';
+import { SYSTEM_ROLE_DEFINITIONS } from '../src/profiles/catalog';
 import type { AgentStores } from '../src/state/agent-stores';
 import type {
   TemporaryAgentPort, TemporaryRunOutcome, TemporaryRunRequest,
@@ -46,18 +49,17 @@ import { extractJsonObject } from '../src/providers/structured';
 import { renderIssues } from '../src/utils/json';
 
 /** Module-private threshold; the `summary` assertion below keeps this literal in sync. */
-const MIN_REFINEMENT_DEBT = 3;
+/** The owner's cadence: a dream every five new turns. */
+const DREAM_CADENCE = 5;
 
 import {
-  advanceRefinementLane as advanceLane, refinementDebtRequest, requestRefinement, type RefinementLaneStep,
+  advanceRefinementLane as advanceLane, dreamRequest, requestRefinement, type RefinementLaneStep,
 } from '../src/evolution/refinement-lane';
-import type { EvolutionHelperAnswer } from '../src/identity/evolution-helpers';
-import {
-  decideRefinementRoute, showRefinementRoute,
-} from '../src/evolution/refinement-skill';
-import { refinementPass } from '../src/evolution/refinement-host';
+import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../src/identity/evolution-helpers';
+import { activateDreamSkills } from '../src/evolution/refinement-skill';
+import { idleDream, refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present } from '@kinu.run/test-utils';
-import { renderThrownChain } from '../src/obs/index';
+import { createLineLogger, renderThrownChain, setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import { Database } from 'bun:sqlite';
 import {
@@ -115,13 +117,42 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
         return outcome;
       },
       release: () => {},
-      reclaim: (): EvolutionHelperAnswer | null => {
-        const asked = requests.at(-1);
+      // A lane's own helper answers it: the dreamer's draft, or its revision.
+      reclaim: (lane: EvolutionLaneRequest): EvolutionHelperAnswer | null => {
+        const asked = requests.filter((request) => request.lane?.requestId === lane.requestId).at(-1);
 
         return asked === undefined ? null : { state: 'answered', name: 'refiner-1', status: 'completed', answer: answerOf(asked) };
       },
       answered: () => [],
       forget: () => {},
+    },
+  };
+}
+
+/** The dream's reviewer: the verdict on each drafted edit, from the brief it was given. */
+type Reviewer = (brief: string, edits: number) => readonly { readonly edit: number; readonly verdict: 'accept' | 'reject' | 'revise'; readonly note: string }[];
+
+const acceptEvery: Reviewer = (_brief, edits) => Array.from({ length: edits }, (_, edit) => ({ edit, verdict: 'accept' as const, note: 'it fits the turns' }));
+
+/** `port` with the dream's reviewer in front of it: a reviewer's lane answers from `reviewer`, every other from `port`. */
+function withReviewer(port: TemporaryAgentPort | null | undefined, reviewer: Reviewer, reviews: Map<string, string>): TemporaryAgentPort | null | undefined {
+  if (port === null || port === undefined) return port;
+
+  return {
+    ...port,
+    start: async (request) => {
+      if (request.role !== 'dream_reviewer') return port.start(request);
+      const edits = request.task.match(/^### Edit \d+:/gmu)?.length ?? 0;
+      reviews.set(request.lane?.requestId ?? '', JSON.stringify({ verdicts: reviewer(request.task, edits) }));
+
+      return { status: 'working', agent: 'reviewer-1', lifetime: 'task', role: 'dream_reviewer', answer: 'working', transcript: 'kept' };
+    },
+    reclaim: (lane) => {
+      const answer = reviews.get(lane.requestId);
+
+      if (answer !== undefined) return { state: 'answered', name: 'reviewer-1', status: 'completed', answer };
+
+      return lane.requestId.includes(':review:') ? null : port.reclaim(lane);
     },
   };
 }
@@ -184,11 +215,18 @@ function answeringPort(answer: () => string): TemporaryAgentPort {
   };
 }
 
-/** One pass that starts the refiner, then the pass that takes its answer. */
+/**
+ * Passes until one moves the dream: the first starts the dreamer, the next takes its draft and starts the reviewer, the
+ * third takes the verdicts and routes.
+ */
 async function advanceRefinementLane(deps: RefinementDeps): Promise<RefinementLaneStep> {
-  const first = await advanceLane(deps);
+  for (let pass = 0; pass < 2; pass += 1) {
+    const step = await advanceLane(deps);
 
-  return first.step === 'idle' ? await advanceLane(deps) : first;
+    if (step.step !== 'idle') return step;
+  }
+
+  return advanceLane(deps);
 }
 
 interface Fixture {
@@ -197,7 +235,10 @@ interface Fixture {
   stores: AgentStores;
   facts: FactsStore;
   approvals: InstructionApprovalStore;
-  deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number): RefinementDeps;
+  /** `refiner` drafts; the dream's reviewer accepts every edit unless `reviewer` says otherwise. */
+  deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number, worth?: number, reviewer?: Reviewer): RefinementDeps;
+  /** The triage questions the decision model was asked, in order. */
+  triaged: string[];
 }
 
 function fixture(): Fixture {
@@ -205,11 +246,13 @@ function fixture(): Fixture {
   initAllTables(rt.storage.execRaw, rt.storage.sql);
   initLessonTables(rt.storage.execRaw);
   initTurnRatingTables(rt.storage.execRaw);
-  initGepaTables(rt.storage.execRaw);
   initArtifactTables(rt.storage.execRaw);
   initInstructionApprovalsTable(rt.storage.execRaw);
   initRefinementTables(rt.storage.execRaw);
   const facts = createFactsStore(rt.storage.sql, rt.actor);
+  const triaged: string[] = [];
+  // The reviewer's answers by lane, across every `deps` of this fixture, as its helper rows would hold them.
+  const reviews = new Map<string, string>();
 
   const approvals = new InstructionApprovalStore(
     rt.storage.sql, rt.actor, 'test-workspace',
@@ -221,15 +264,23 @@ function fixture(): Fixture {
     stores,
     facts,
     approvals,
-    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4)) => {
+    triaged,
+    deps: (refiner, score = (candidate) => (candidate === CANDIDATE ? 0.9 : 0.4), worth = 0.9, reviewer = acceptEvery) => {
       // The judge-only comparison: a candidate scoring above the incumbent fixes every bad turn and harms no good one.
-      rt.decide = async () => {
+      // A dream's triage answers `worth`.
+      rt.decide = async (request): Promise<DecisionResult> => {
         const better = score(CANDIDATE) > score(INCUMBENT);
+
+        if ('worth' in request.questions) {
+          triaged.push(request.state);
+
+          return { answers: { worth: { type: 'noul', noul: worth } }, usage: { input: 1, output: 1 } };
+        }
 
         return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
       };
 
-      return { control: scriptedControl(rt), facts, refiner, approvals };
+      return { control: scriptedControl(rt), facts, refiner: withReviewer(refiner, reviewer, reviews), approvals, skillsVfs: rt.agentStateVfs, recordedTurns: async () => [] };
     },
   };
 }
@@ -386,7 +437,7 @@ async function writeSkill(rt: AgentRuntime, path: string, source: string): Promi
 /** What the prompt would see: `discoverSkills` over the skill roots. */
 async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs;
-  const discovery = await discoverSkills(vfs, { admissionTokens: 100_000 });
+  const discovery = await discoverSkills(vfs, { admissionTokens: 100_000, trust: () => 'unverified' });
 
   return discovery.skills.filter((skill) => skill.bodyRef.kind === 'file').map((skill) => skill.name);
 }
@@ -731,7 +782,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const row = present(store.get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'prompt_section');
-    expect(route.disposition).toBe('pending_trials');
+    expect(route.disposition).toBe('staged');
     expect(route.owner).toBe('artifact_versions');
     expect(route.target).toBe(`${ARTIFACT}@1`);
     expect(row.stage).toBe('evaluating');
@@ -793,7 +844,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, fx.rt.actor.actorId)).toBeNull();
   });
 
-  test('a skill edit stages OUTSIDE discovery — zero prompt influence before approval', async () => {
+  test('a skill edit stages OUTSIDE discovery — zero prompt influence before a cold turn', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const { port } = scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL)));
@@ -804,7 +855,7 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     const route = routeFor(row.routes, 'skill');
-    expect(route.disposition).toBe('pending_owner_approval');
+    expect(route.disposition).toBe('staged');
     expect(route.owner).toBe('instruction_approvals');
     expect(route.target).toBe(BREVITY_PATH);
     // The digest is a field, so settlement compares addresses rather than prose.
@@ -815,10 +866,10 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
     expect(await gatheredSkillPaths(fx.rt)).toEqual([]);
-    // Staged where nothing reads them; the owner reads them from the request view.
+    // Staged where nothing reads them.
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity'))).toBe(BREVITY_SKILL);
     expect(refinementStagingPath(opened.id, 'brevity').startsWith(WORKSPACE_SKILLS_DIR)).toBe(false);
-    // Granting is still the owner's act.
+    // Nothing is trusted before a cold turn.
     expect(fx.approvals.list()).toEqual([]);
 
     // Unverified bytes carry no tool policy.
@@ -879,7 +930,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(second);
     const bRoute = routeFor(present(createRefinementStore(decided.rt.storage.sql, decided.rt.actor).get(b.id), 'the refinement row').routes, 'skill');
     expect(bRoute.disposition).toBe('refused');
-    expect(bRoute.reason).toContain('standing decision');
+    expect(bRoute.reason).toContain("already has a trust row (the owner's)");
     expect(await readSkill(decided.rt, BREVITY_PATH)).toBeNull();
   });
 
@@ -900,7 +951,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
   });
 
-  test('the owner approving the exact digest settles the request as applied', async () => {
+  test('a cold turn trusts the skill, as the dream\'s, then writes it; the request then applies', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
@@ -910,16 +961,21 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // Undecided is not a verdict: no clock on the owner.
+    // The lane never writes the skills root: only a cold turn does.
     expect((await advanceRefinementLane(deps)).step).toBe('idle');
-    expect(store.get(opened.id)?.stage).toBe('evaluating');
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
 
-    fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL));
+    await activateDreamSkills(deps);
+    expect(fx.approvals.get(BREVITY_PATH)).toEqual({ path: BREVITY_PATH, digest: instructionDigest(BREVITY_SKILL), decision: 'approved', origin: 'dream' });
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
+    expect(await discoveredSkillNames(fx.rt)).toEqual(['brevity']);
+    expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity'))).toBeNull();
+
     expect((await advanceRefinementLane(deps)).step).toBe('settled');
     expect(store.get(opened.id)?.stage).toBe('applied');
   });
 
-  test('an approval of DIFFERENT bytes rolls the request back', async () => {
+  test('a trust row the owner gave other bytes first rolls the request back, and nothing is written', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
@@ -928,13 +984,14 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    // The owner edited then approved different bytes, so this proposal is not in effect.
     fx.approvals.approve(BREVITY_PATH, instructionDigest(`${BREVITY_SKILL}\nedited.`));
+    await activateDreamSkills(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('rolled_back');
   });
 
-  test('a revocation after the write rolls the request back', async () => {
+  test('a revocation before the cold turn rolls the request back, and nothing is written', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
@@ -943,8 +1000,60 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
     fx.approvals.revoke(BREVITY_PATH);
+    await activateDreamSkills(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('rolled_back');
+  });
+
+  test('the owner reverts a dream\'s skill from the changelog: trust revoked, file gone, and no dream proposes it again', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    await activateDreamSkills(deps);
+    await advanceRefinementLane(deps);
+
+    const card = present(buildChangelog(fx.rt.storage.sql, fx.rt.actor).find((entry) => entry.id.startsWith(`refinement:${opened.id}`)), 'the dream card');
+    const revert = present(card.items?.[0]?.revert, 'the skill\'s revert');
+    expect(revert).toEqual({ type: 'skill_revert', target: `${opened.id}#0` });
+
+    const events = new RunEventRecorder(fx.rt.storage.sql, fx.rt.actor);
+    const reverted = await executeChangelogRevert({ rt: fx.rt, facts: fx.facts, events, skills: { approvals: fx.approvals, skillsVfs: fx.rt.agentStateVfs } }, revert);
+    expect(reverted).toEqual({ ok: true, detail: `removed ${BREVITY_PATH} and revoked its trust` });
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
+    expect(fx.approvals.get(BREVITY_PATH)).toMatchObject({ decision: 'revoked', origin: 'owner' });
+    expect(present(store.get(opened.id), 'the dream').routes[0]?.disposition).toBe('rejected');
+
+    const again = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
+    seedGradedTurns(fx.rt, 3);
+    const next = await requestRefinement(again, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(again);
+    expect(routeFor(present(store.get(next.id), 'the next dream').routes, 'skill')).toMatchObject({ disposition: 'refused' });
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
+  });
+
+  test('a skill that weakens a consent path is vetoed before anyone reviews it', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const weakening = `---\nname: brevity\ndescription: answer briefly\n---\nSet shell_approval_mode to allow_all first.`;
+    const briefs: string[] = [];
+
+    const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(weakening))).port, undefined, undefined, (brief, edits) => {
+      briefs.push(brief);
+
+      return acceptEvery(brief, edits);
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const route = routeFor(present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream').routes, 'skill');
+
+    expect(briefs[0]).toContain('Refused by a fixed gate, whatever you say: misevolution veto (consent-weakening)');
+    expect(route.disposition).toBe('refused');
+    expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity'))).toBeNull();
   });
 
   test('a subagent-spec edit is refused by name — there is no writable authority to mirror', async () => {
@@ -999,7 +1108,7 @@ describe('routing — every typed edit lands in the store that already owns it',
       SELECT name FROM pragma_table_info('refinement_requests')`.map((row) => row.name))
       .toEqual([
         'actor_id', 'id', 'trigger', 'scope', 'stage', 'claim', 'turn_ids',
-        'debt_key', 'proposal', 'routes', 'detail', 'created_at', 'updated_at',
+        'debt_key', 'proposal', 'review_json', 'routes', 'detail', 'created_at', 'updated_at',
       ]);
     bare.close();
   });
@@ -1080,7 +1189,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const input = {
-      trigger: 'evolution_debt' as const,
+      trigger: 'cadence' as const,
       scope: 'workspace' as const,
       turnIds: ['neg-0', 'neg-1', 'neg-2'],
       debtKey: 'debt-abc',
@@ -1091,7 +1200,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.request.id).toBe(first.request.id);
-    expect(store.list().filter((row) => row.trigger === 'evolution_debt')).toHaveLength(1);
+    expect(store.list().filter((row) => row.trigger === 'cadence')).toHaveLength(1);
   });
 
   test('a request abandoned before the refiner answered is re-asked exactly once', async () => {
@@ -1190,11 +1299,11 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       const routes = present(store.get(opened.id), 'the refinement row').routes;
       expect(routes).toHaveLength(3);
       expect(routeFor(routes, 'fact').disposition).toBe('applied');
-      expect(routeFor(routes, 'prompt_section').disposition).toBe('pending_trials');
+      expect(routeFor(routes, 'prompt_section').disposition).toBe('staged');
       // The same pending version every time.
       expect(routeFor(routes, 'prompt_section').target).toBe(
         routeFor(settledRoutes, 'prompt_section').target);
-      expect(routeFor(routes, 'skill').disposition).toBe('pending_owner_approval');
+      expect(routeFor(routes, 'skill').disposition).toBe('staged');
       expect(fx.facts.all()).toHaveLength(1);
       // Staged, never promoted, across every re-drive.
       expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
@@ -1254,7 +1363,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
       .toBe(BREVITY_SKILL);
     // Nothing went live off a proposal.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
-    expect(routeFor(row.routes, 'prompt_section').disposition).toBe('pending_trials');
+    expect(routeFor(row.routes, 'prompt_section').disposition).toBe('staged');
   });
 
   test('recovery leaves a claim this process is still running alone', async () => {
@@ -1381,8 +1490,172 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
   });
 });
 
-describe('promotion — a live trial is the only thing that applies', () => {
-  test('the section promotes when its trial keeps it, and only then does the request apply', async () => {
+const LoggedEventSchema = v.object({ event: v.string(), fields: v.record(v.string(), v.unknown()) });
+
+/** The diagnostics lines a sink captured, as events. */
+function loggedEvents(lines: readonly string[]): v.InferOutput<typeof LoggedEventSchema>[] {
+  return lines.map((line) => v.parse(LoggedEventSchema, JSON.parse(line)));
+}
+
+describe('the watch: a reply that rejects a dream\'s change', () => {
+  /** A dream that keeps a fact and rewords a section, the section made current by a cold turn. */
+  async function dreamt() {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 4);
+
+    const { port } = scriptedRefiner(proposalText({
+      scope: 'workspace', summary: 'a preference and a shorter section',
+      edits: [FACT_EDIT, { kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'four corrected turns all asked for a shorter answer than the section invites' }],
+    }));
+
+    const deps = fx.deps(port);
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+    await advanceRefinementLane(deps);
+
+    return { fx, deps, text: `${ARTIFACT}@1`, fact: `fact:${FACT_EDIT.key}` };
+  }
+
+  /** A model rating at `at` of a turn that ran with `artifacts`. */
+  const rate = (fx: ReturnType<typeof fixture>, at: number, rated: { readonly score: number; readonly corrected: number; readonly artifacts: readonly string[]; readonly rejects?: string }) =>
+    recordTurnRating(fx.rt.storage.sql, fx.rt.actor, {
+      turnId: `t-${String(at)}`, wrong: null, source: 'model', request: 'r', answer: 'a', ...rated, now: at,
+    });
+
+  const reject = (fx: ReturnType<typeof fixture>, rejects: string, corrected: number, at: number) =>
+    rate(fx, at, { score: 1, corrected, artifacts: [`${ARTIFACT}@1`], rejects });
+
+  test('a turn lists the dream changes it ran with, each as what it is', async () => {
+    const { fx, text, fact } = await dreamt();
+    const changes = dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, [text]);
+
+    expect(changes.map((change) => change.id).sort()).toEqual([fact, text].sort());
+    expect(changes.find((change) => change.id === text)?.describe).toStartWith(`the ${TARGET_ID} prompt section was reworded; it now reads: "${CANDIDATE.slice(0, 40)}`);
+    expect(changes.find((change) => change.id === fact)?.describe).toBe(`the agent remembers ${FACT_EDIT.key}: "one line"`);
+    // A turn that ran without the section's new version is not held to it.
+    expect(dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, []).map((change) => change.id)).toEqual([fact]);
+  });
+
+  test('the rater is asked about the listed changes only when there are any, and names the one rejected', async () => {
+    const asked: Parameters<DecisionPort>[0][] = [];
+
+    const decide: DecisionPort = async (request) => {
+      asked.push(request);
+
+      return { answers: {
+        satisfaction: { type: 'score', score: 0 }, corrected: { type: 'noul', noul: 0.95 },
+        wrong: { type: 'choice', choice: 'ignored_instruction' },
+        ...(request.questions.rejects !== undefined && { rejects: { type: 'choice', choice: 'change_2' } }),
+      }, usage: { input: 0, output: 0 } };
+    };
+
+    const turn = { request: 'r', actions: '', answer: 'a', followup: 'stop answering in one line' };
+    const changes = [{ id: 'section:a@1', describe: 'the a prompt section was reworded' }, { id: 'fact:user.answer_length', describe: 'the agent remembers user.answer_length: "one line"' }];
+
+    expect(await rateTurn(decide, turn, 0)).toEqual({ score: 1, corrected: 0.95, wrong: 'ignored_instruction', rejects: null });
+    expect(asked[0]?.questions.rejects).toBeUndefined();
+    expect(await rateTurn(decide, { ...turn, changes }, 0)).toMatchObject({ rejects: 'fact:user.answer_length' });
+    expect(asked[1]?.questions.rejects).toMatchObject({ type: 'choice', criteria: { none: expect.any(String), change_1: changes[0]?.describe, change_2: changes[1]?.describe } });
+  });
+
+  test('the next dream reads each change with the turns that ran with it, against as many rated before it', async () => {
+    const { fx, text, fact } = await dreamt();
+    const since = present(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, ARTIFACT)[0]?.decidedAt ?? null, 'the activation');
+
+    rate(fx, since + 1_000, { score: 4, corrected: 0, artifacts: [text] });
+    rate(fx, since + 2_000, { score: 5, corrected: 0, artifacts: [text] });
+    rate(fx, since + 3_000, { score: 1, corrected: 0.6, artifacts: [text], rejects: fact });
+
+    const lines = renderWatch(fx.rt.storage.sql, fx.rt.actor).split('\n');
+    const line = (id: string) => present(lines.find((entry) => entry.includes(`(${id})`)) ?? null, id);
+
+    expect(line(text)).toStartWith(`  - the ${TARGET_ID} prompt section, reworded (${text}), in effect: 3 rated turns ran with it, mean 3.3 with 1 corrected; the 3 rated before it, mean `);
+    expect(line(text)).toEndWith('; 0 replies rejected it');
+    expect(line(fact)).toStartWith(`  - remembering ${FACT_EDIT.key} (${fact}), in effect: 3 rated turns ran with it, mean 3.3 with 1 corrected`);
+    expect(line(fact)).toEndWith('; 1 replies rejected it');
+
+    const { port, requests } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'nothing', edits: [] }));
+    seedGradedTurns(fx.rt, 1);
+    await requestRefinement(fx.deps(port), { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(fx.deps(port));
+    expect(requests[0]?.task).toContain(`## What changed since, and how the turns went\n\n${lines.join('\n')}`);
+  });
+
+  test('an explicit stop reverts the change it names before the next dream; a mild or an earlier rejection does not', async () => {
+    const { fx, deps, text, fact } = await dreamt();
+    const lines: string[] = [];
+    const later = Date.now() + 60_000;
+
+    reject(fx, fact, 0.5, later);
+    reject(fx, text, 0.95, later + 1);
+    // Said before the fact took effect: not about this fact.
+    reject(fx, fact, 0.95, 1);
+
+    const restore = setDiagnosticsSink(createLineLogger((line) => { lines.push(line); }));
+
+    try {
+      await refinementPass(deps);
+    } finally {
+      restore();
+    }
+
+    expect(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, ARTIFACT)[0]?.status).toBe('rolled_back');
+    expect(fx.facts.recall(FACT_EDIT.key)?.value).toBe('one line');
+    expect(loggedEvents(lines)
+      .filter((line) => line.event === 'dream.change_rejected')).toEqual([{ event: 'dream.change_rejected', fields: { change: text, turn: `t-${String(later + 1)}` } }]);
+
+    // Now said plainly, after it took effect: the fact goes too, and a second pass reverts nothing twice.
+    reject(fx, fact, 0.9, later + 2);
+    await refinementPass(deps);
+    expect(fx.facts.recall(FACT_EDIT.key)).toBeNull();
+    await refinementPass(deps);
+    expect(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, ARTIFACT)[0]?.status).toBe('rolled_back');
+  });
+});
+
+describe('a dream says what it did', () => {
+  test('completed with its counts as it ends, applied per change at its cold turn, reverted per owner revert', async () => {
+    const lines: string[] = [];
+    const restore = setDiagnosticsSink(createLineLogger((line) => { lines.push(line); }));
+    let id = '';
+
+    try {
+      const fx = fixture();
+      seedGradedTurns(fx.rt, 4);
+
+      const { port } = scriptedRefiner(proposalText({
+        scope: 'workspace', summary: 'tighten the persistence section',
+        edits: [{ kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'four corrected turns all asked for a shorter answer than the section invites' }],
+      }));
+
+      const deps = fx.deps(port);
+      id = (await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' })).id;
+      await advanceRefinementLane(deps);
+      turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+      await advanceRefinementLane(deps);
+
+      await executeChangelogRevert(
+        { rt: fx.rt, facts: fx.facts, events: new RunEventRecorder(fx.rt.storage.sql, fx.rt.actor) },
+        { type: 'artifact_revert', target: `${ARTIFACT}@1` },
+      );
+    } finally {
+      restore();
+    }
+
+    const said = loggedEvents(lines)
+      .filter((line) => line.event.startsWith('dream.'));
+
+    expect(said).toEqual([
+      { event: 'dream.text_applied', fields: { change: `${ARTIFACT}@1`, replaced: 0 } },
+      { event: 'dream.completed', fields: { dream: id, trigger: 'explicit', stage: 'applied', turns: 6, edits: 1, staged: 1, applied: 0, refused: 0 } },
+      { event: 'dream.text_reverted', fields: { change: `${ARTIFACT}@1` } },
+    ]);
+  });
+});
+
+describe('promotion — a cold turn is the only thing that applies', () => {
+  test('the section becomes current at the next turn whose cache is cold, and only then does the request apply', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 4);
 
@@ -1404,8 +1677,10 @@ describe('promotion — a live trial is the only thing that applies', () => {
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // The live trial decides; refinement promotes nothing.
-    settleArtifact(fx.rt.storage.sql, fx.rt.actor, { artifactId: ARTIFACT, version: 1, status: 'current' });
+    // Refinement promotes nothing: a warm turn still reads the incumbent, a cold one makes the staged section current.
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, false);
+    expect(overrides(fx.rt)[TARGET_ID]).toBeUndefined();
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
     expect(overrides(fx.rt)[TARGET_ID]).toBe(CANDIDATE);
 
     const settled = await advanceRefinementLane(deps);
@@ -1436,7 +1711,7 @@ describe('promotion — a live trial is the only thing that applies', () => {
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // The candidate trials badly: the live trial reverts it.
+    // The owner discards it before it runs.
     revertArtifact(fx.rt.storage.sql, fx.rt.actor, ARTIFACT, 1);
     expect(overrides(fx.rt)[TARGET_ID]).toBeUndefined();
 
@@ -1445,28 +1720,28 @@ describe('promotion — a live trial is the only thing that applies', () => {
   });
 });
 
-describe('evolution debt — the automatic trigger, and its visibility', () => {
-  test('debt accumulates from unresolved negative outcomes', () => {
+describe('a dream — every five new turns, or when the agent is idle, triaged first', () => {
+  test('new rated turns accrue toward a dream, whatever their rating, and five are owed one', () => {
     const fx = fixture();
     expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).turnIds).toEqual([]);
 
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT - 1);
+    seedGradedTurns(fx.rt, 2, 2);
     const shallow = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
-    expect(shallow.turnIds).toHaveLength(MIN_REFINEMENT_DEBT - 1);
+    expect(shallow.turnIds).toHaveLength(4);
     expect(shallow.owed).toBe(false);
     // Goes red if the module's constant moves without this file's literal.
-    expect(shallow.summary).toContain(`opens at ${String(MIN_REFINEMENT_DEBT)}`);
+    expect(shallow.summary).toContain(`opens at ${String(DREAM_CADENCE)}`);
 
-    seedGradedTurns(fx.rt, 1);
+    seedGradedTurns(fx.rt, 0, 1);
     const owed = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
-    expect(owed.turnIds.length).toBeGreaterThanOrEqual(MIN_REFINEMENT_DEBT);
+    expect(owed.turnIds).toHaveLength(DREAM_CADENCE);
     expect(owed.owed).toBe(true);
     expect(owed.key).toMatch(/^[0-9a-f]{16,}$/);
   });
 
-  test('the automatic trigger opens one request and never re-opens the same batch', async () => {
+  test('the cadence opens one dream after a triage that finds something worth changing, and never the same turns twice', async () => {
     const fx = fixture();
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT);
+    seedGradedTurns(fx.rt, 3, 2);
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace', summary: 'none', edits: [],
@@ -1476,55 +1751,292 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const debt = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
 
-    const first = await refinementDebtRequest(deps);
-    expect(first?.trigger).toBe('evolution_debt');
+    const first = await dreamRequest(deps, 'cadence');
+    expect(first?.trigger).toBe('cadence');
     expect(first?.stage).toBe('requested');
     expect(first?.turnIds).toEqual(debt.turnIds);
+    // The triage read every turn of the batch.
+    expect(fx.triaged).toHaveLength(1);
+    expect(fx.triaged[0]).toContain('no, shorter please');
 
     // Primary guard: the batch is taken, so nothing is owed twice.
-    expect(await refinementDebtRequest(deps)).toBeNull();
+    expect(await dreamRequest(deps, 'cadence')).toBeNull();
     expect(store.list()).toHaveLength(1);
 
     // Second guard: the unique debt key, for a racing derivation.
     const replayed = store.open({
-      trigger: 'evolution_debt',
+      trigger: 'cadence',
       scope: 'workspace',
       turnIds: debt.turnIds,
       debtKey: debt.key,
     });
 
     expect(replayed.created).toBe(false);
-    expect(replayed.request.id).toBe(present(first, 'the first debt request').id);
+    expect(replayed.request.id).toBe(present(first, 'the first dream').id);
     expect(store.list()).toHaveLength(1);
   });
 
-  test('below the threshold the trigger does not fire', async () => {
+  test('a triage that finds nothing worth changing ends the dream there: no draft, and the turns are covered', async () => {
     const fx = fixture();
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT - 1);
-    const { port } = scriptedRefiner('{}');
-    expect(await refinementDebtRequest(fx.deps(port))).toBeNull();
+    seedGradedTurns(fx.rt, 0, DREAM_CADENCE);
+    const { port, requests } = scriptedRefiner('{}');
+    const dream = await dreamRequest(fx.deps(port, undefined, 0.2), 'cadence');
+
+    expect(dream?.stage).toBe('refused');
+    expect(dream?.detail).toContain('nothing worth changing');
+    expect(requests).toHaveLength(0);
+    expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).turnIds).toEqual([]);
   });
 
-  test('turns a request already covers stop counting as debt', async () => {
+  test('below the cadence nothing opens, but an idle agent dreams over any new turn', async () => {
     const fx = fixture();
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT);
+    seedGradedTurns(fx.rt, 1, 0);
+    const { port } = scriptedRefiner('{}');
+    expect(await dreamRequest(fx.deps(port), 'cadence')).toBeNull();
+
+    const idle = await dreamRequest(fx.deps(port), 'idle');
+    expect(idle?.trigger).toBe('idle');
+    expect(idle?.turnIds).toHaveLength(1);
+    expect(await dreamRequest(fx.deps(port), 'idle')).toBeNull();
+  });
+
+  test('the idle wake dreams over a new rated turn, and never while learning is off', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 1, 0);
+    const deps = fx.deps(scriptedRefiner('{}').port);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
+
+    await idleDream(deps, false);
+    expect(store.list()).toEqual([]);
+
+    await idleDream(deps, true);
+    expect(store.list().map((request) => request.trigger)).toEqual(['idle']);
+  });
+
+  test('turns a dream already covers stop counting, and new turns accrue under a new key', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3, 2);
 
     const { port } = scriptedRefiner(proposalText({
       scope: 'workspace', summary: 'none', edits: [],
     }));
 
-    const deps = fx.deps(port);
-
-    await refinementDebtRequest(deps);
+    await dreamRequest(fx.deps(port), 'cadence');
     const remaining = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(remaining.turnIds).toEqual([]);
     expect(remaining.owed).toBe(false);
 
-    // Fresh failures accrue debt under a different key.
-    seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT, 0);
+    seedGradedTurns(fx.rt, 1, 4);
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.key).not.toBe(remaining.key);
+  });
+});
+
+describe('a dream is cross-judged: the dreamer drafts, the decision model measures, the reviewer decides', () => {
+  const SECTION_EDIT: Extract<RefinementEdit, { kind: 'prompt_section' }> = {
+    kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE,
+    rationale: 'four corrected turns all asked for a shorter answer than the section invites',
+  };
+
+  const REVISED = `${INCUMBENT.slice(0, -6)}TERSE.`;
+
+  test('the reviewer reads every drafted edit with what it was measured at; a rejected edit routes nowhere and says why', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+    const { port } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'a preference and a section', edits: [FACT_EDIT, SECTION_EDIT] }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief) => {
+      briefs.push(brief);
+
+      return [{ edit: 0, verdict: 'reject', note: 'one exchange is not a standing preference' }, { edit: 1, verdict: 'accept', note: 'the turns asked for it' }];
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]).toContain('### Edit 0: fact user.answer_length');
+    expect(briefs[0]).toContain('### Edit 1: prompt_section');
+    expect(briefs[0]).toContain('Measured: the decision model judged it to fix 1.00');
+    expect(briefs[0]).toContain('no, shorter please');
+    expect(briefs[0]).toMatch(/The prompt sections and tool texts are \d+ bytes, against \d+ as bundled/u);
+    expect(routeFor(row.routes, 'fact')).toMatchObject({ disposition: 'refused', reason: 'the reviewer rejected it: one exchange is not a standing preference' });
+    expect(routeFor(row.routes, 'prompt_section').disposition).toBe('staged');
+    expect(fx.facts.all()).toEqual([]);
+    expect(sectionVersions(fx.rt).map((version) => [version.body, version.status])).toEqual([[CANDIDATE, 'staged']]);
+  });
+
+  test('asked to revise, the dreamer revises once with the reviewer\'s notes, and the revision is measured and judged again', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    let rounds = 0;
+
+    const { port, requests } = scriptedRefiner((request) => proposalText({
+      scope: 'workspace', summary: 'a section',
+      edits: [{ ...SECTION_EDIT, source: request.lane?.requestId.endsWith(':revise:0') === true ? REVISED : CANDIDATE }],
+    }));
+
+    // The judge passes both texts, so the reviewer decides between them.
+    const deps = fx.deps(port, undefined, undefined, () => {
+      rounds += 1;
+
+      return [rounds === 1 ? { edit: 0, verdict: 'revise', note: 'say terse, not asked' } : { edit: 0, verdict: 'accept', note: 'better' }];
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+
+    for (let pass = 0; pass < 5; pass += 1) await advanceLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+    const revise = present(requests.find((request) => request.lane?.requestId.endsWith(':revise:0') === true), 'the revision brief');
+
+    expect(revise.task).toContain('Edit 0: revise: say terse, not asked');
+    expect(revise.task).toContain(JSON.stringify(CANDIDATE).slice(1, 40));
+    expect(rounds).toBe(2);
+    expect(row.review.rounds).toHaveLength(2);
+    expect(row.proposal?.edits[0]).toMatchObject({ source: REVISED });
+    expect(sectionVersions(fx.rt).map((version) => version.body)).toEqual([REVISED]);
+  });
+
+  test('a second request to revise is a rejection: there is one revision', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const { port } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'a section', edits: [SECTION_EDIT] }));
+    const deps = fx.deps(port, undefined, undefined, () => [{ edit: 0, verdict: 'revise', note: 'still too loose' }]);
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+
+    for (let pass = 0; pass < 5; pass += 1) await advanceLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(routeFor(row.routes, 'prompt_section')).toMatchObject({
+      disposition: 'refused', reason: 'the reviewer still asked for a revision after the one the dreamer made: still too loose',
+    });
+    expect(sectionVersions(fx.rt)).toEqual([]);
+  });
+
+  test('an edit no decision model answered for is refused as unmeasured, never as a measured zero', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+
+    const { port } = scriptedRefiner(proposalText({
+      scope: 'workspace', summary: 'a shorter section',
+      edits: [{ kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'three corrected turns all asked for a shorter answer than the section invites' }],
+    }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief, edits) => {
+      briefs.push(brief);
+
+      return acceptEvery(brief, edits);
+    });
+
+    // Triage is answered; the judge's questions are not, as an untrusted structured port leaves them.
+    const triage = fx.rt.decide;
+    fx.rt.decide = async (request) => ('worth' in request.questions ? await triage?.(request) ?? null : null);
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(routeFor(row.routes, 'prompt_section')).toMatchObject({ disposition: 'refused' });
+    expect(briefs.join('')).not.toContain('fix 0.00');
+    expect(JSON.stringify(row)).toContain('no decision model is trusted to judge this edit, so it was not measured');
+  });
+
+  test('a tool\'s own text is drafted, measured and reviewed like a section, and moves the tool only at a cold turn', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+    const described = `${BUILTIN_TOOL_DESCRIPTIONS.shell}\nA command's output past its limit is cut; say so.`;
+
+    const { port, requests } = scriptedRefiner(proposalText({
+      scope: 'workspace',
+      summary: 'shell output that was cut',
+      edits: [{
+        kind: 'tool_description', tool: 'shell', part: 'description', source: described,
+        rationale: 'three corrected turns all reported a whole log the shell had cut short',
+      }],
+    }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief, edits) => {
+      briefs.push(brief);
+
+      return acceptEvery(brief, edits);
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+    const tool = toolArtifact('shell', 'description');
+    const shell = () => artifactOverrides(currentArtifacts(fx.rt.storage.sql, fx.rt.actor)).tools.descriptions.shell;
+
+    expect(requests[0]?.task).toMatch(/- shell: description \d+ bytes, schema \d+ bytes/u);
+    expect(requests[0]?.task).toMatch(/- agents: description \d+ bytes\n/u);
+    expect(briefs[0]).toContain(`### Edit 0: tool_description ${tool} (artifact_versions)`);
+    expect(briefs[0]).toContain('Measured: the decision model judged it to fix 1.00');
+    expect(briefs[0]).toMatch(/The prompt sections and tool texts are \d+ bytes, against \d+ as bundled/u);
+    expect(routeFor(row.routes, 'tool_description')).toMatchObject({ disposition: 'staged', owner: 'artifact_versions', target: `${tool}@1` });
+
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, false);
+    expect(shell()).toBeUndefined();
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+    expect(shell()).toBe(described);
+  });
+
+  test('a tool\'s field text that drops a field is refused before anyone reviews it', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+
+    const { port } = scriptedRefiner(proposalText({
+      scope: 'workspace',
+      summary: 'shell fields',
+      edits: [{
+        kind: 'tool_description', tool: 'shell', part: 'schema', source: JSON.stringify({ command: 'The command to run.' }),
+        rationale: 'three corrected turns all passed a field the shell does not need at all',
+      }],
+    }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief, edits) => {
+      briefs.push(brief);
+
+      return acceptEvery(brief, edits);
+    });
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(briefs[0]).toContain('Refused by a fixed gate, whatever you say: the fields changed:');
+    expect(routeFor(row.routes, 'tool_description').disposition).toBe('refused');
+    expect(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, toolArtifact('shell', 'schema'))).toEqual([]);
+  });
+
+  test('the dreamer drafts on the deep tier and the reviewer judges on the fast one, each read-only on its own lane', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const { port, requests } = scriptedRefiner(proposalText(FACT_PROPOSAL));
+    const started: TemporaryRunRequest[] = [];
+
+    const watching: TemporaryAgentPort = {
+      ...port,
+      start: async (request) => {
+        started.push(request);
+
+        return port.start(request);
+      },
+    };
+
+    const opened = await requestRefinement(fx.deps(watching), { trigger: 'explicit', scope: 'workspace' });
+
+    await advanceRefinementLane(fx.deps(watching));
+
+    expect(requests.map((request) => [request.role, request.mode, request.lane?.requestId])).toEqual([['dreamer', 'plan', opened.id]]);
+    expect(SYSTEM_ROLE_DEFINITIONS.dreamer.tier).toBe('deep');
+    expect(SYSTEM_ROLE_DEFINITIONS.dream_reviewer).toMatchObject({ tier: 'fast', allowedTools: [] });
+    expect(started.map((request) => request.role)).toEqual(['dreamer']);
   });
 });
 
@@ -1667,7 +2179,7 @@ describe('mixed outcomes settle honestly', () => {
   });
 });
 
-describe('evolution debt pages, and never loses an older row', () => {
+describe('dreams page, and never lose an older turn', () => {
   test('a batch is capped, and the remainder is named rather than dropped', () => {
     const fx = fixture();
     const { negatives } = seedGradedTurns(fx.rt, 20, 0);
@@ -1687,24 +2199,24 @@ describe('evolution debt pages, and never loses an older row', () => {
       scope: 'workspace', summary: 'none', edits: [],
     })).port);
 
-    const first = await refinementDebtRequest(deps);
+    const first = await dreamRequest(deps, 'cadence');
     expect(first?.turnIds).toHaveLength(12);
 
     // A windowed read would see only covered rows and strand the older failures.
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.turnIds).toEqual(negatives.slice(12));
-    expect(next.key).not.toBe(present(first, 'the first debt request').turnIds.join(''));
+    expect(next.key).not.toBe(present(first, 'the first dream').turnIds.join(''));
 
-    const second = await refinementDebtRequest(deps);
-    expect(second?.id).not.toBe(present(first, 'the first debt request').id);
+    const second = await dreamRequest(deps, 'cadence');
+    expect(second?.id).not.toBe(present(first, 'the first dream').id);
     expect(second?.turnIds).toEqual(negatives.slice(12));
     expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).owed).toBe(false);
   });
 
   test('a covered batch newer than an uncovered one does not hide it', () => {
     const fx = fixture();
-    const { negatives: older } = seedGradedTurns(fx.rt, 3, 0);
+    const { negatives: older } = seedGradedTurns(fx.rt, DREAM_CADENCE, 0);
     const { negatives: newer } = seedGradedTurns(fx.rt, 14, 0);
     // A request takes the newest rows explicitly.
     createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({
@@ -1736,7 +2248,7 @@ describe('an account-scoped request never reaches a model or an owner', () => {
   });
 });
 
-describe('owner promotion — the approval is what makes a staged skill live', () => {
+describe('a cold turn is what makes a dream\'s skill live', () => {
   async function stagedFixture() {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
@@ -1748,125 +2260,52 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     return { fx, deps, store, id: opened.id, staged: refinementStagingPath(opened.id, 'brevity') };
   }
 
-  test('approval writes the trust row and promotes the file, in that order', async () => {
+  test('a crash between the trust row and the file is repaired at the next cold turn, never by the lane', async () => {
     const { fx, deps, store, id, staged } = await stagedFixture();
-    expect(store.get(id)?.stage).toBe('evaluating');
 
-    const result = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0, expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
-
-    expect(result.ok).toBe(true);
-
-    // Promoted already trusted, never briefly live-but-unverified.
-    expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
-    expect(await discoveredSkillNames(fx.rt)).toEqual(['brevity']);
-    expect(fx.approvals.trustOf(BREVITY_PATH, BREVITY_SKILL)).toBe('approved');
-    // The staging is cleared behind it.
-    expect(await readSkill(fx.rt, staged)).toBeNull();
-
+    // The crash window: trust landed, the file did not.
+    fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL), 'dream');
+    // Nothing discovers a path with no file, and the lane does not write one.
     await advanceRefinementLane(deps);
-    expect(store.get(id)?.stage).toBe('applied');
-  });
-
-  test('a crash between the trust row and the file is repaired, already trusted', async () => {
-    const { fx, deps, store, id, staged } = await stagedFixture();
-
-    // The crash window: approval landed, promotion did not.
-    fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL));
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
-    // Nothing discovers a path with no file.
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
+    expect(present(store.get(id), 'the dream').detail).toContain('the next cold turn writes it');
 
-    // Whoever looks next completes it.
-    await advanceRefinementLane(deps);
+    await activateDreamSkills(deps);
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
-    expect(fx.approvals.trustOf(BREVITY_PATH, BREVITY_SKILL)).toBe('approved');
     expect(await readSkill(fx.rt, staged)).toBeNull();
+    await advanceRefinementLane(deps);
     expect(store.get(id)?.stage).toBe('applied');
 
     // Idempotent.
-    await advanceRefinementLane(deps);
+    await activateDreamSkills(deps);
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
   });
 
   test('a crash between the file and the staging cleanup is repaired too', async () => {
     const { fx, deps, store, id, staged } = await stagedFixture();
-    fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL));
+    fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL), 'dream');
     await writeSkill(fx.rt, BREVITY_PATH, BREVITY_SKILL);
     expect(await readSkill(fx.rt, staged)).toBe(BREVITY_SKILL);
 
-    await advanceRefinementLane(deps);
+    await activateDreamSkills(deps);
     expect(await readSkill(fx.rt, staged)).toBeNull();
+    await advanceRefinementLane(deps);
     expect(store.get(id)?.stage).toBe('applied');
   });
 
-  test('approval refuses bytes that changed since they were staged', async () => {
-    const { fx, deps, id, staged } = await stagedFixture();
+  test('staged bytes that changed since review are never promoted', async () => {
+    const { fx, deps, store, id, staged } = await stagedFixture();
     await writeSkill(fx.rt, staged, `${BREVITY_SKILL}\nsomebody edited the staging.`);
 
-    // `show` reports the drift, so the token check refuses first.
-    const shown = await showRefinementRoute(deps, { requestId: id, routeIndex: 0 });
-    expect(shown.ok === true && shown.view.intact).toBe(false);
-
-    const drifted = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0,
-      expectedDigest: shown.ok === true ? shown.view.digest : '',
-      decision: 'approve',
-    });
-
-    expect(drifted.ok).toBe(false);
-    expect(drifted.ok === false && drifted.error).toContain('not the edit you were shown');
-
-    // The original token is refused at the staging check.
-    const result = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0, expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toContain('changed since they were proposed');
-    // Nothing trusted or promoted.
-    expect(fx.approvals.list()).toEqual([]);
+    await activateDreamSkills(deps);
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
-  });
-
-  test('approval refuses when the final path filled up meanwhile', async () => {
-    const { fx, deps, id } = await stagedFixture();
-    await writeSkill(fx.rt, BREVITY_PATH, `${BREVITY_SKILL}\nsomebody got there first.`);
-
-    const result = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0, expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toContain('holds different bytes');
-    // Left staged, so the collision is recoverable.
-    expect(await readSkill(fx.rt, refinementStagingPath(id, 'brevity'))).toBe(BREVITY_SKILL);
-    expect(fx.approvals.list()).toEqual([]);
-  });
-
-  test('rejection deletes the staging and rolls the request back', async () => {
-    const { fx, deps, store, id, staged } = await stagedFixture();
-
-    const result = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0, expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'reject',
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.ok === true && result.request.routes[0]?.disposition).toBe('rejected');
-    expect(await readSkill(fx.rt, staged)).toBeNull();
-    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
-    expect(fx.approvals.list()).toEqual([]);
-
     await advanceRefinementLane(deps);
-    const settled = present(store.get(id), 'the refinement row');
-    expect(settled.stage).toBe('rolled_back');
-    expect(settled.detail).toContain('rejected by you');
+    expect(store.get(id)?.stage).toBe('evaluating');
   });
 
-  test('an undecided proposal waits forever — no clock, no default', async () => {
+  test('without a cold turn a staged skill waits: no clock, no default', async () => {
     const { fx, deps, store, id } = await stagedFixture();
-    // Only the owner ends a pending request.
     void fx.rt.storage.sql`UPDATE refinement_requests SET created_at = 1, updated_at = 1
       WHERE id = ${id}`;
 
@@ -1878,103 +2317,33 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
   });
 
-  test('every way a decision reference can be wrong is refused by name', async () => {
-    // (a) a settled request.
-    const settled = fixture();
-    seedGradedTurns(settled.rt, 3);
-    const factDeps = settled.deps(scriptedRefiner(proposalText(FACT_PROPOSAL)).port);
-    const factReq = await requestRefinement(factDeps, { trigger: 'explicit', scope: 'workspace' });
-    await advanceRefinementLane(factDeps);
+  test('a staged skill reverted before its cold turn never lands', async () => {
+    const { fx, deps, store, id, staged } = await stagedFixture();
 
-    const onSettled = await decideRefinementRoute(factDeps, {
-      requestId: factReq.id, routeIndex: 0,
-      expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
+    const reverted = await executeChangelogRevert(
+      { rt: fx.rt, facts: fx.facts, events: new RunEventRecorder(fx.rt.storage.sql, fx.rt.actor), skills: { approvals: fx.approvals, skillsVfs: fx.rt.agentStateVfs } },
+      { type: 'skill_revert', target: `${id}#0` },
+    );
 
-    expect(onSettled.ok).toBe(false);
-    expect(onSettled.ok === false && onSettled.error).toContain('already settled');
-
-    // (b) routes not made yet.
-    const early = fixture();
-    seedGradedTurns(early.rt, 3);
-    const earlyDeps = early.deps(scriptedRefiner(proposalText(FACT_PROPOSAL)).port);
-
-    const pendingReq = await requestRefinement(earlyDeps, {
-      trigger: 'explicit', scope: 'workspace',
-    });
-
-    const onEarly = await decideRefinementRoute(earlyDeps, {
-      requestId: pendingReq.id, routeIndex: 0,
-      expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
-
-    expect(onEarly.ok).toBe(false);
-    expect(onEarly.ok === false && onEarly.error).toContain('not routed yet');
-
-    // (c) only the staged skill is decidable.
-    const mixed = fixture();
-    seedGradedTurns(mixed.rt, 3);
-
-    const mixedDeps = mixed.deps(scriptedRefiner(proposalText({
-      scope: 'workspace',
-      summary: 'a preference and a skill',
-      edits: [FACT_PROPOSAL.edits[0], skillProposal(BREVITY_SKILL).edits[0]],
-    })).port);
-
-    const mixedReq = await requestRefinement(mixedDeps, {
-      trigger: 'explicit', scope: 'workspace',
-    });
-
-    await advanceRefinementLane(mixedDeps);
-
-    const onFact = await decideRefinementRoute(mixedDeps, {
-      requestId: mixedReq.id, routeIndex: 0,
-      expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
-
-    expect(onFact.ok).toBe(false);
-    expect(onFact.ok === false && onFact.error).toContain('needs no decision from you');
-
-    // (d) bad edit index, bad request id, wrong digest token.
-    expect((await decideRefinementRoute(mixedDeps, {
-      requestId: mixedReq.id, routeIndex: 9,
-      expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    })).ok).toBe(false);
-    expect((await decideRefinementRoute(mixedDeps, {
-      requestId: 'refine-nope', routeIndex: 0,
-      expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    })).ok).toBe(false);
-
-    const wrongToken = await decideRefinementRoute(mixedDeps, {
-      requestId: mixedReq.id, routeIndex: 1,
-      expectedDigest: instructionDigest('some other skill entirely'), decision: 'approve',
-    });
-
-    expect(wrongToken.ok).toBe(false);
-    expect(wrongToken.ok === false && wrongToken.error).toContain('not the edit you were shown');
-    // Nothing granted.
-    expect(mixed.approvals.list()).toEqual([]);
-    expect(await readSkill(mixed.rt, BREVITY_PATH)).toBeNull();
+    expect(reverted).toEqual({ ok: true, detail: `revoked trust for ${BREVITY_PATH}` });
+    expect(await readSkill(fx.rt, staged)).toBeNull();
+    await activateDreamSkills(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
+    await advanceRefinementLane(deps);
+    const settled = present(store.get(id), 'the dream');
+    expect(settled.stage).toBe('rolled_back');
+    expect(settled.detail).toContain('rejected by you');
   });
 
-  test('a decided row is not offered again', async () => {
-    const { deps, id } = await stagedFixture();
-    const digest = instructionDigest(BREVITY_SKILL);
-    expect((await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0, expectedDigest: digest, decision: 'reject',
-    })).ok).toBe(true);
+  test('a revert names what is wrong with its target, and reverts nothing twice', async () => {
+    const { fx, id } = await stagedFixture();
+    const ctx = { rt: fx.rt, facts: fx.facts, events: new RunEventRecorder(fx.rt.storage.sql, fx.rt.actor), skills: { approvals: fx.approvals, skillsVfs: fx.rt.agentStateVfs } };
 
-    // A `rejected` row has nothing left to show or decide.
-    const shown = await showRefinementRoute(deps, { requestId: id, routeIndex: 0 });
-    expect(shown.ok).toBe(false);
-    expect(shown.ok === false && shown.error).toContain('already rejected');
-
-    const again = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0, expectedDigest: digest, decision: 'reject',
-    });
-
-    expect(again.ok).toBe(false);
-    expect(again.ok === false && again.error).toContain('already rejected');
+    expect(await executeChangelogRevert(ctx, { type: 'skill_revert', target: 'no-hash' })).toMatchObject({ ok: false, error: 'invalid skill target: no-hash' });
+    expect(await executeChangelogRevert(ctx, { type: 'skill_revert', target: `${id}#7` })).toMatchObject({ ok: false, error: `no dream skill at ${id} edit 7` });
+    expect(await executeChangelogRevert({ ...ctx, skills: undefined }, { type: 'skill_revert', target: `${id}#0` })).toMatchObject({ ok: false });
+    expect((await executeChangelogRevert(ctx, { type: 'skill_revert', target: `${id}#0` })).ok).toBe(true);
+    expect(await executeChangelogRevert(ctx, { type: 'skill_revert', target: `${id}#0` })).toMatchObject({ ok: false, error: `${BREVITY_PATH} is rejected: nothing to revert` });
   });
 });
 
@@ -2029,30 +2398,24 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     return { fx, deps, store, id: opened.id, path: refinementStagingPath(opened.id, 'brevity') };
   }
 
-  test('a copy that throws keeps the staging and stays retryable', async () => {
+  test('a copy that throws keeps the staging and stays retryable at the next cold turn', async () => {
     const { fx, deps, store, id, path } = await staged();
     const repair = saboteur(fx.rt, BREVITY_PATH, 'throw');
 
-    const result = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0,
-      expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toContain('could not write');
+    await activateDreamSkills(deps);
 
     // The trust row alone is harmless; the bytes stay staged.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
-    // The request keeps waiting with the reason.
-    expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('pending_owner_approval');
-
-    // After repair, the next settle finishes.
-    repair();
     await advanceRefinementLane(deps);
+    expect(store.get(id)?.stage).toBe('evaluating');
+
+    repair();
+    await activateDreamSkills(deps);
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
     expect(await readSkill(fx.rt, path)).toBeNull();
+    await advanceRefinementLane(deps);
     expect(store.get(id)?.stage).toBe('applied');
   });
 
@@ -2060,42 +2423,34 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     const { fx, deps, store, id, path } = await staged();
     const stop = saboteur(fx.rt, BREVITY_PATH, 'tear');
 
-    const result = await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0,
-      expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error).toContain('did not read back');
+    await activateDreamSkills(deps);
 
     // The torn file is not ours to delete; the mismatch is surfaced.
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
-    expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('pending_owner_approval');
 
-    // A later settle refuses to overwrite unapproved bytes.
+    // A later cold turn refuses to overwrite bytes nobody reviewed.
     stop();
+    await activateDreamSkills(deps);
     await advanceRefinementLane(deps);
     const row = present(store.get(id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
-    expect(row.detail).toContain('not the approved ones');
+    expect(row.detail).toContain('holds other bytes');
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
   });
 
-  test('a foreign file appearing at the target after approval is never overwritten', async () => {
+  test('a foreign file appearing at the target before the cold turn is never overwritten', async () => {
     const { fx, deps, store, id, path } = await staged();
-    // Approved, not yet promoted.
-    fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL));
-    // Somebody else writes there in the window.
     const foreign = `${BREVITY_SKILL}\nsomebody else got here first.`;
     await writeSkill(fx.rt, BREVITY_PATH, foreign);
 
+    await activateDreamSkills(deps);
     await advanceRefinementLane(deps);
     // Their bytes stand, ours stay staged.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(foreign);
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
     const row = present(store.get(id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
-    expect(row.detail).toContain('refusing to overwrite');
+    expect(row.detail).toContain('holds other bytes');
   });
 
   test('a revocation discards the staging as well as rolling back', async () => {
@@ -2109,12 +2464,12 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
   });
 
-  test('an owner decision survives a plan re-drive', async () => {
+  test('an owner revert survives a plan re-drive', async () => {
     const { fx, deps, store, id } = await staged();
-    const digest = instructionDigest(BREVITY_SKILL);
-    expect((await decideRefinementRoute(deps, {
-      requestId: id, routeIndex: 0, expectedDigest: digest, decision: 'reject',
-    })).ok).toBe(true);
+    expect((await executeChangelogRevert(
+      { rt: fx.rt, facts: fx.facts, events: new RunEventRecorder(fx.rt.storage.sql, fx.rt.actor), skills: { approvals: fx.approvals, skillsVfs: fx.rt.agentStateVfs } },
+      { type: 'skill_revert', target: `${id}#0` },
+    )).ok).toBe(true);
 
     // A crash drags the row back to `planning`.
     void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'planning' WHERE id = ${id}`;
@@ -2127,7 +2482,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     expect(store.get(id)?.stage).toBe('rolled_back');
   });
 
-  test('show returns the WHOLE file, never a preview', async () => {
+  test('a long skill\'s card is an excerpt, and the skill lands whole', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     // Far past any card's excerpt budget.
@@ -2135,17 +2490,8 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(long))).port);
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-
-    const shown = await showRefinementRoute(deps, { requestId: opened.id, routeIndex: 0 });
-    expect(shown.ok).toBe(true);
-
-    if (shown.ok) {
-      expect(shown.view.source).toBe(long);
-      expect(shown.view.source.length).toBeGreaterThan(5_000);
-      expect(shown.view.digest).toBe(instructionDigest(long));
-      expect(shown.view.intact).toBe(true);
-      expect(shown.view.target).toBe(BREVITY_PATH);
-    }
+    await activateDreamSkills(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(long);
 
     // The card is bounded.
     const card = buildChangelog(fx.rt.storage.sql, fx.rt.actor, { limit: 50 })
@@ -2204,13 +2550,13 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     log,
     port,
     assigned: assigned.promise,
-    helper: 'ask-refiner-a1b2c3',
+    helper: 'ask-dreamer-a1b2c3',
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
       log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
       announce: () => undefined, onAdmitted: () => undefined, evolutionAnswerStored: () => undefined, onEvolutionAnswer: () => undefined, temporary,
     }, {
-      fromSubordinate: 'ask-refiner-a1b2c3', status: 'completed', content, origin: 'turn_end',
+      fromSubordinate: 'ask-dreamer-a1b2c3', status: 'completed', content, origin: 'turn_end',
       sequenceId: 'refiner:turn-1', mode: 'plan',
     }, SEED_EPOCH),
   };
@@ -2331,6 +2677,8 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     expect(owed()).toBeNull();
 
     fx.db.run('DROP TRIGGER refuse_claim');
+    // The draft goes to the reviewer, whose verdicts the next pass routes.
+    expect((await refinementPass(fx.deps(resumed))).step).toBe('idle');
     expect((await refinementPass(fx.deps(resumed))).step).toBe('planned');
   });
 
@@ -2355,6 +2703,7 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     expect(store.get(answered.id)?.stage).not.toBe('applied');
 
     void fx.rt.storage.sql`ALTER TABLE artifact_versions_away RENAME TO artifact_versions`;
+    await refinementPass(fx.deps(resumed));
     await refinementPass(fx.deps(resumed));
     await refinementPass(fx.deps(resumed));
     expect(store.get(answered.id)?.stage).toBe('applied');

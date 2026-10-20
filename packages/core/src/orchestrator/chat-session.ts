@@ -6,6 +6,7 @@
 
 import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owner-questions';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
+import type { RewindTold } from './rewind-notice';
 import {
   deliveredSignal, IntentResultSchema, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type IntentInput, type IntentResult, type OwedDelivery,
   type TurnDeliveryInput,
@@ -15,7 +16,6 @@ import { refusedRun, type RunEndOutcome } from '../subordinates/agent-isolate';
 import { driveExecution, type AssembledRound, type ClaimedRound } from './execution-driver';
 import { authoredTurnMetadata, stampAuthorship, turnTags, type TurnTags } from '../types/turn-metadata';
 import type { TurnAuthorship } from '../types/turn';
-import type { TrialTurn } from '../evolution/trial-rules';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
@@ -179,8 +179,6 @@ export interface PreparedTurn {
   readonly sessionKey: string;
   readonly contextWindow: number | null;
   readonly historyLength: number;
-  /** The live trial's arm this turn ran (`turnArtifactBodies`), recorded with the completed turn. */
-  readonly trial?: TrialTurn | null;
   /** Until when the conversation's warming lane kept the prompt cache warm for its last request, as the preparation
    *  noted this one ({@link TurnOpeningAsk}); null when nothing kept it. */
   readonly cacheKeptAliveUntil: number | null;
@@ -416,7 +414,6 @@ export class ChatSession {
   /** The asking turn the running turn continues from, while it is an answer's turn. */
   private resumingAsk: string | null = null;
   private messageId = '';
-  private turnTrial: TrialTurn | null = null;
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
   private readonly taskReminders = new TaskReminders();
@@ -493,6 +490,10 @@ export class ChatSession {
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
   get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
+
+  /** What its wake waits on: a turn runs, or one queued may. One a question to the owner holds is parked until they close
+   *  it, and wakes nothing meanwhile; a Stop still finds it owed and cancels it. */
+  get turnRunnable(): boolean { return this.pumpActive || (this.queue.length > 0 && this.queue.some(this.runnable())); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
 
@@ -736,6 +737,12 @@ export class ChatSession {
 
   announcementOnDisk(identity: string): boolean {
     return this.onDisk(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`);
+  }
+
+  announcementHeld(identity: string): boolean {
+    const runs = this.runnable();
+
+    return this.runningAnnouncement !== identity && this.queue.some((item) => item.idempotencyKey === identity && !runs(item));
   }
 
   private readonly onDisk: (entryId: string) => boolean;
@@ -1182,7 +1189,11 @@ export class ChatSession {
   /** The owner's answer: the asking call's result, and the turn that continues from it, owed once its step's every
    *  question has closed. */
   answerQuestions(id: string, answers: readonly OwnerAnswer[]): Effect.Effect<void, KinuError> {
-    return Effect.andThen(this.actorSession.questions.answer(id, answers), Effect.sync(() => { this.resumeAnswered(); }));
+    return Effect.andThen(this.actorSession.questions.answer(id, answers), Effect.sync(() => {
+      this.resumeAnswered();
+
+      if (!this.actorSession.questions.hasOpen()) this.questionsClosed();
+    }));
   }
 
   /** `id`'s questions closed unanswered: the agent reads that, and a sibling's answer may now be resumed. */
@@ -1191,10 +1202,16 @@ export class ChatSession {
 
     this.resumeAnswered();
 
-    // What waited behind the questions may run now.
-    if (closed > 0) this.pump();
+    if (closed > 0) this.questionsClosed();
 
     return closed;
+  }
+
+  /** What waited behind the owner's questions may run now, and an effect parked behind them falls due: an isolate that
+   *  ended since lost the turn it queued, which the effect queues again. */
+  private questionsClosed(): void {
+    this.pump();
+    this.actorSession.orchestrator.track(this.ports.terminal().ownerActed(), 'releasing the effects parked behind questions to the owner');
   }
 
   /**
@@ -1212,7 +1229,7 @@ export class ChatSession {
 
   /** A Stop, a clear or a walk-back: nothing the agent asked is waited on or resumed; what waited behind it may run. */
   private abandonQuestions(): void {
-    if (this.actorSession.questions.abandon() > 0) this.pump();
+    if (this.actorSession.questions.abandon() > 0) this.questionsClosed();
   }
 
   /** Only a running turn keyed under `prefix`. */
@@ -1312,9 +1329,10 @@ export class ChatSession {
     );
   }
 
-  /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. */
-  async revertTo(entryId: string): Promise<void> {
-    await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void);
+  /** Queue and running turn define "in flight"; delivery is awaited so the redraw precedes the answer. With `told`, a
+   *  chat-only rewind: the agent is told what its rewound turns left (`rewind-notice.ts`). */
+  async revertTo(entryId: string, told?: RewindTold): Promise<void> {
+    await this.actorSession.revertConversation(this.sessionId, entryId, () => this.turnInFlight() ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : Effect.void, told);
     // An open question's call, or an answered one not yet resumed, ends the conversation: a walk-back removes it.
     this.abandonQuestions();
     this.emit({ type: 'history-reverted', entryId });
@@ -1602,15 +1620,18 @@ export class ChatSession {
   }
 
   /**
-   * The next item to run. A question to the owner holds the agent as a call to them would: while one is open, only the
-   * owner's message, an answer's turn or the asking turn re-opened runs, ahead of the work it holds, which keeps its order.
+   * Which queued items may run now. A question to the owner holds the agent as a call to them would: while one is open,
+   * only the owner's message, an answer's turn or the asking turn re-opened runs, ahead of the work it holds, which keeps
+   * its order and runs once the question closes.
    */
-  private nextRunnable(): QueueItem | undefined {
-    const runs = (item: QueueItem): boolean => item.kind === 'user' || item.continuation !== undefined || item.tags.event === OWNER_ANSWER_SIGNAL;
-    const head = this.queue[0];
+  private runnable(): (item: QueueItem) => boolean {
+    const open = this.actorSession.questions.hasOpen();
 
-    if (head === undefined || runs(head) || !this.actorSession.questions.hasOpen()) return this.queue.shift();
-    const at = this.queue.findIndex(runs);
+    return (item) => !open || item.kind === 'user' || item.continuation !== undefined || item.tags.event === OWNER_ANSWER_SIGNAL;
+  }
+
+  private nextRunnable(): QueueItem | undefined {
+    const at = this.queue.findIndex(this.runnable());
 
     return at < 0 ? undefined : this.queue.splice(at, 1)[0];
   }
@@ -1697,7 +1718,7 @@ export class ChatSession {
 
     // The owner wrote instead of choosing: their message answers the open questions, and the answers given ride it.
     if (item.kind === 'user' && questions.mayWait()) {
-      questions.close('in_chat');
+      if (questions.close('in_chat').length > 0) this.questionsClosed();
       questions.retireResumes();
     }
 
@@ -1770,7 +1791,6 @@ export class ChatSession {
       project: async ({ lease, assembled, outcome }) => ({ claim: await this.projectTurn(item, event, lease, { round: assembled, execution: outcome }), stop: true }),
       // Stopped as it opened, or closed by its recovery: it ran nothing, and ends as an interrupted turn does.
       stopped: async ({ lease, outcome }) => {
-        this.turnTrial = null;
         await this.projectTurn(item, event, lease, { round: null, execution: outcome });
       },
       failed: async ({ lease, failure }) => {
@@ -1816,9 +1836,8 @@ export class ChatSession {
     };
 
     if (turnId) completedTurn.turnId = turnId;
-    const snapshot = snapshotCompletedTurn(this.actorSession.orchestrator, completedTurn);
 
-    return this.turnTrial === null ? snapshot : { ...snapshot, trial: this.turnTrial };
+    return snapshotCompletedTurn(this.actorSession.orchestrator, completedTurn);
   }
 
   /** Everything here may throw; runOpenedTurn owns what that means. */
@@ -1857,8 +1876,6 @@ export class ChatSession {
     }, round);
 
     const { cacheKeptAliveUntil } = prepared;
-
-    this.turnTrial = prepared.trial ?? null;
 
     const partial = item.continuation === undefined ? null : await this.actorSession.canonical.cutStep(item.continuation.openOutputs);
 

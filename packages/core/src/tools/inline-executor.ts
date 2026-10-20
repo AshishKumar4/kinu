@@ -15,8 +15,10 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { commandAnswer, ExecPartsSchema } from '../execution/exec-result';
 import { shellExecOptions } from '../execution/shell-session';
-import { diagnostics, KinuError, refusalOf, toKinuError } from '../obs/index';
-import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
+import { diagnostics, KinuError, refusalOf, settle, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { isReservedCraftToolName } from '../craft/in-episode';
+import { craftPreference, craftPreferences, type CraftPreferenceRow } from '../craft/preference';
 import { admitCraftedSource } from '../craft/source';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
@@ -45,6 +47,8 @@ export interface InlineExecutorDeps {
   /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
   files?: VFS;
   craftStore: CraftStore;
+  /** The agent's crafting setting, read per call; absent: on. */
+  crafting?: () => boolean;
   shell: ShellExec;
   /** The declaration the host gated `shell` under. */
   filesOwner: FilesOwner;
@@ -119,27 +123,36 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
     listTools: {
       planAllowed: true,
-      description: 'List crafted tools as an array of { name, description, qualityScore }.',
+      description: 'List crafted tools, best first, as an array of { name, description, preference, broken }.',
       execute: async () => {
-        // A real array, so model code can `.filter`/`.map` it.
-        const crafted = craftStore.list();
         // The columns exist on the crafted_tools row, so a failed read is a broken database.
-        const scoreByName = new Map<string, number>();
+        const rows = sql === undefined ? new Map<string, CraftPreferenceRow>() : craftPreferences(sql);
+        const unrated = craftPreference({ offered: 0, chosen: 0, rated: 0, rating_sum: 0 });
 
-        if (sql) {
-          const rows = sql<{ name: string; score: number }>`
-            SELECT name, score FROM crafted_tools
-          `;
+        // A real array, so model code can `.filter`/`.map` it.
+        return craftStore.list()
+          .map((t) => {
+            const row = rows.get(t.name);
 
-          for (const r of rows) scoreByName.set(r.name, r.score);
+            return { name: t.name, description: t.description, preference: row === undefined ? unrated : craftPreference(row), broken: row?.broken ?? null };
+          })
+          .sort((a, b) => b.preference - a.preference);
+      },
+    },
+
+    retireTool: {
+      description: 'Delete a crafted tool by name.',
+      execute: (...args: unknown[]): Promise<JsonValue> => settle(Effect.gen(function* () {
+        const name = parseInput(StringSchema, { value: args[0] });
+
+        if (!name || craftStore.get(name) === undefined) {
+          return yield* new KinuError('missing', `No crafted tool is named ${JSON.stringify(name ?? '')}.`);
         }
 
-        return crafted.map(t => ({
-          name: t.name,
-          description: t.description,
-          qualityScore: scoreByName.get(t.name) ?? CRAFT_NEUTRAL_PRIOR,
-        }));
-      },
+        craftStore.delete(name);
+
+        return { name, action: 'retired' };
+      })),
     },
 
     createTool: {
@@ -148,6 +161,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const name = parseInput(StringSchema, { value: args[0] });
         const description = parseInput(StringSchema, { value: args[1] });
         const code = parseInput(StringSchema, { value: args[2] });
+
+        if (deps.crafting?.() === false) {
+          return { ok: false, ...refusalOf(new KinuError('unavailable', 'Crafting is off for this agent: createTool makes no tool.')) };
+        }
 
         if (!name || !description || !code) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
@@ -235,7 +252,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             code: codeStr,
           });
 
-          // Column defaults seed the neutral prior in the same INSERT, so decay and injection floor see the tool.
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {
           // The craft store is local SQLite, so an unrecognised failure is `io`.

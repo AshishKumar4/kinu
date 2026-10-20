@@ -783,7 +783,7 @@
       "loadAtStart": 0.96,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/pre-commit-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts": {
+    "bun test --timeout=0 --isolate scripts/gates.test.ts scripts/decision-agreement.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/pre-commit-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts": {
       "machine": "linux x64, AMD EPYC (4 threads)",
       "wallSeconds": 156.84,
       "cpuSeconds": 226.99,
@@ -1143,15 +1143,15 @@
       "loadAtStart": 1.46,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
-      "wallSeconds": 81,
-      "cpuSeconds": 44.97,
-      "peakRssMb": 555.21,
-      "peakRunnable": 12,
-      "peakCpuThreads": 3.15,
-      "meanThreads": 0.56,
-      "samples": 356,
-      "loadAtStart": 3.56,
+    "bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts": {
+      "wallSeconds": 61.33,
+      "cpuSeconds": 48.06,
+      "peakRssMb": 530.4,
+      "peakRunnable": 8,
+      "peakCpuThreads": 3.53,
+      "meanThreads": 0.78,
+      "samples": 277,
+      "loadAtStart": 2.76,
       "exit": 0,
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
     }

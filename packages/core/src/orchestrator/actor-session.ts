@@ -2,6 +2,7 @@ import type { ServedStores } from '../tools/actor-stores';
 import type { ModelMessage, ToolSet } from 'ai';
 
 import * as v from 'valibot';
+import { nanoid } from '../utils/nanoid';
 import { serialQueue } from '@kinu.run/agent-utils';
 import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -29,6 +30,7 @@ import type { RunEventRecorder } from '../events/recorder';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { ContextEntry, ContextSelection } from '../session/context';
 import { projectJsonValue, type JsonObject } from '../utils/json';
+import { rewindNotice, rewoundWork, type RewindNotice, type RewindTold } from './rewind-notice';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import { ASKED, type Holds } from '../utils/held-reads';
 import type { Usage } from '../usage';
@@ -122,6 +124,8 @@ export interface ActorExecutionInput {
   /** The store operations `chat.tools` run, which its scaffold's machines run too; null where this session holds no
    *  machine (an agent's isolate, whose programs run on the workspace). */
   readonly stores: ServedStores | null;
+  /** `<artifactId>@<version>` of each promoted text the turn assembled from, recorded once on its admission. */
+  readonly artifactVersions?: readonly string[];
 }
 
 const RequestCacheSchema = v.looseObject({ cache: v.optional(PromptCacheRouteSchema) });
@@ -337,7 +341,7 @@ export class ActorSession {
     return this.lastStep()?.recordedAt ?? null;
   }
 
-  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and a live trial's segment both use. */
+  /** Whether the next request finds the prompt cache cold: the one reading the turn's dynamic context and staged evolution both use. */
   promptCacheCold(keptAliveUntil: number | null): boolean {
     const last = this.lastStep();
 
@@ -368,11 +372,33 @@ export class ActorSession {
     });
   }
 
-  /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction. */
-  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>): Promise<void> {
+  /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction.
+   *  With `told`, a chat-only rewind: the agent is told what its rewound turns did, and what the computer holds now where
+   *  the host read it, in a row of the chat its next turn reads, which starts no turn of its own. */
+  async revertConversation(sessionId: string, entryId: string, assertIdle: () => Effect.Effect<void, KinuError>, told?: RewindTold): Promise<void> {
+    // Read before the cut deletes them; a turn that ran in between fails the cut's idle check.
+    const rewound = told === undefined ? null : await this.canonical.transcript(sessionId).partsFrom(entryId);
+
     this.canonical.revertTo(sessionId, entryId, () => this.inFlight ? Effect.fail(new KinuError('denied', REVERT_NEEDS_IDLE)) : assertIdle());
+
+    const notice = told === undefined || rewound === null ? null : rewindNotice(rewoundWork(rewound), told.computer);
+
+    if (notice !== null) await this.tellRewound(sessionId, notice);
     this.dynamic.unload();
     await this.restoreWorkingHistory();
+  }
+
+  /** The notice in the context and as its chat's row, as a turn's opening row is, under a turn of no run. */
+  private async tellRewound(sessionId: string, notice: RewindNotice): Promise<void> {
+    const id = `rewound:${nanoid()}`;
+
+    const message = await this.canonical.append({
+      id, message: { role: 'user', content: notice.text }, origin: 'input', turnId: null, assertOwner: () => this.runtime.actor.assertCurrent(),
+    });
+
+    const transcript = this.canonical.transcript(sessionId);
+
+    transcript.appendUser(await transcript.prepareUser({ id, turnId: id, message, metadata: notice.metadata }));
   }
 
   /** A Retry of an answered turn: its answer withdrawn from the transcript and the context (`SessionHistory.withdrawAnswer`),
@@ -770,6 +796,8 @@ export class ActorSession {
       program = prepared.program;
       const claim = await this.admitClaim(reserved, program, prepared.selection, input);
       active.claim = claim;
+      this.orchestrator.acc.artifactVersions = input.artifactVersions ?? [];
+      this.orchestrator.acc.scaffoldVersion = program.kind === 'scaffold' ? program.version : 0;
 
       active.trace = this.options.turns?.().admitted({ turnId: claim.turnId, epoch: claim.epoch }, active.startedAt, (span) => {
         span.setAttribute('kinu.turn.mode', this.mode);
@@ -951,8 +979,9 @@ export class ActorSession {
           snapshot: () => {
             const context = this.stepContext(input.dynamic, profile, tools);
 
-            // The turn scores only the lessons it was shown.
+            // The turn scores only the lessons it was shown, and counts only the crafted tools it was offered.
             this.orchestrator.acc.noteLessonsShown(context.toolLessons ?? []);
+            this.orchestrator.acc.noteCraftedOffered(context.craftedTools ?? []);
 
             return context;
           },
@@ -1046,6 +1075,8 @@ export class ActorSession {
         break;
       case 'error': {
         this.orchestrator.acc.hadError = true;
+
+        if (event.thrown) this.orchestrator.acc.scaffoldThrew ??= event.message;
 
         // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
         // First failure wins; an abort is not one.

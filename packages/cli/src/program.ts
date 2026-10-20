@@ -23,7 +23,6 @@ import {
   qualityCommand,
   eventsCommand,
   executorsCommand,
-  gepaCommand,
   headsCommand,
   swarmCommand,
   memoryCommand,
@@ -197,7 +196,7 @@ export function buildProgram(): Command {
       .command('acp <name>')
       .helpGroup(RUNNING)
       .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo)')
-      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
+      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons or proposals')
       .option('--transcript-dir <dir>', 'Where to store transcripts'),
   ).action(acpCommand);
 
@@ -208,7 +207,7 @@ export function buildProgram(): Command {
       .description('Run one task without the TUI and exit, for CI and scripts')
       .option('-w, --workspace <name>', 'Workspace to run (default: the only one configured)')
       .option('--json', 'Emit line-delimited JSON events')
-      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons, proposals or trials')
+      .option('--no-auto-evolve', 'Turn this agent\'s learning setting off: no ratings, lessons or proposals')
       .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this run'),
   ).action(execCommand);
@@ -356,15 +355,6 @@ export function buildProgram(): Command {
     .action(debugCommand);
 
   program
-    .command('gepa <name> [runId]')
-    .helpGroup(INSPECT)
-    .description('Show GEPA searches, or run one over the scaffold with --run')
-    .option('--run', 'Run one proposer search over the scaffold, judged on recent turns without running it')
-    .option('--limit <n>', 'Run limit')
-    .option('--json', 'Print raw JSON')
-    .action(gepaCommand);
-
-  program
     .command('quality <name>')
     .helpGroup(INSPECT)
     .description('Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals')
@@ -385,7 +375,7 @@ export function buildProgram(): Command {
   program
     .command('desktop [action]')
     .helpGroup(THIS_PC)
-    .description('Connect this PC, or show its connection status and daemon logs')
+    .description('Connect this PC, show its status and daemon logs, or share its screen (share, unshare)')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
     .action(desktopCommand);
 
@@ -465,7 +455,6 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['swarm', 'kinu swarm jarvis'],
   ['heads', 'kinu heads jarvis --limit 5'],
   ['debug', 'kinu debug jarvis -o jarvis.debug.jsonl'],
-  ['gepa', 'kinu gepa jarvis --run'],
   ['quality', 'kinu quality jarvis'],
   ['connect', 'kinu connect --label studio'],
   ['desktop', 'kinu desktop status'],

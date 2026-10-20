@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
@@ -151,7 +151,7 @@ import {
   toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
-  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, currentWorkMode, requireWorkModePermission,
+  toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission,
   type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing,
   type AgentInbox,
   childContextResolver,
@@ -194,7 +194,7 @@ import { gatedClientHandlers } from "./client-socket-gate";
 import { isWorkspaceTerminal } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
-import { sha256Hex } from '@kinu.run/core';
+import { JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -529,6 +529,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
   protected abstract actorKind(): AgentKind;
+  /** The workspace agent's newest answered turns, which a pending scaffold is replayed against. */
+  abstract recordedTurns(limit?: number): Promise<RecordedTurn[]>;
 
   /** The workspace whose exec planes this actor rides; a facet actor overrides with its parent's. */
   protected workspaceName(): string { return this.name; }
@@ -912,6 +914,7 @@ export abstract class ActorAgent extends Agent<Env> {
     accountFor: (provider) => this.config.getProviderAccounts()[provider]
       ?? currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts?.[provider],
     reportModelCall: (report) => { this.reportModelCall(report); },
+    webSearchChain: async () => webSearchChainOf((await this.profileCatalog()).catalog),
     currentTurn: (reference) => this.currentTurnOf(reference),
   });
 
@@ -1347,7 +1350,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get lanes(): EvolutionLanes {
     this._lanes ??= new EvolutionLanes({
       engine: this.engine, budget: this.budget,
-      // Runs on the single off-turn cadence pass, beside the promotion gate's trials.
+      // Runs on the single off-turn cadence pass, after the session chain.
       refinementLane: async () => { await refinementPass(this.refinementDeps); },
     });
 
@@ -1625,13 +1628,15 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /** On the substrate like `scaffoldControl`: facets accrue evolution debt too. */
+  /** On the substrate like `scaffoldControl`. Only the workspace agent dreams: a facet's engine is built disabled. */
   protected get refinementDeps(): RefinementDeps {
     return {
       control: this.scaffoldControl,
       facts: this.facts,
       refiner: this.temporaryAgentPort(),
       approvals: this.instructionApprovals(),
+      skillsVfs: this.rt.storage.vfs,
+      recordedTurns: () => this.recordedTurns(),
     };
   }
 
@@ -2055,6 +2060,13 @@ export abstract class ActorAgent extends Agent<Env> {
       // A refused device cancel leaves the job running and retryable.
       onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
       onSettled: () => { this.detachOwned(Effect.promise(() => this.servingMoved())); },
+      // A command on the computer runs in the box's container, which a restart of this object leaves running: its
+      // processes carry its job's id (`sandbox.ts`), and the box is asked for them without being started.
+      stillRunning: async (job) => {
+        const box = this.rt.sandboxHandle;
+
+        return job.kind === 'shell' && box !== null && ((await box.stampedProcesses(JOB_STAMP_ENV, job.id))?.length ?? 0) > 0;
+      },
     };
   }
 
@@ -2343,6 +2355,7 @@ export abstract class ActorAgent extends Agent<Env> {
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
         turnSurface: () => this.turnSurface(),
+        commandEnvironment: (use, caller) => this.account.commandEnvironment(use, caller),
       }, {
         actor: this.actorHandle(),
         rootActor: true,
@@ -2423,7 +2436,8 @@ export abstract class ActorAgent extends Agent<Env> {
           search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(actor.handle.actorId),
         }, this.agentStores(actor.handle.actorId).conversations(), { ownerWaits: null });
 
-        const providers = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
+        const reached = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
+        const providers = context.viewer === true ? providersWithoutOwnerSecrets(reached) : reached;
         // Narrow by the child's own durable, per-actor role, in the mode that role leaves the caller.
         const authority = await this.hostedSlateAuthority(actor, mode, providers, Object.keys(surface.native));
         const reach = slateToolReach(authority.reach);
@@ -2459,7 +2473,14 @@ export abstract class ActorAgent extends Agent<Env> {
    * Not `@callable`: reached on the stub transport only.
    */
   slateCallDispatch(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Promise<SlateSurfaceValue> {
-    return settle(Effect.gen({ self: this }, function* () {
+    // A shared slate's call, its viewer's or its owner's own, and everything it starts runs for no owner.
+    if (context.viewer === true) return withholdingOwnerSecrets(() => settle(this.dispatchSlateCall(path, route, mode, context)));
+
+    return settle(this.dispatchSlateCall(path, route, mode, context));
+  }
+
+  private dispatchSlateCall(path: readonly SlateCallerHop[], route: SlateRoute, mode: WorkMode, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+    return Effect.gen({ self: this }, function* () {
       // Only a namespace member is checked without running it; anything else asked about alone would run.
       if (context.authorizeOnly && route.kind !== 'namespace') {
         return yield* new KinuError('bad_input', `A ${route.kind} route runs at the host; it is not authorized to run elsewhere`);
@@ -2575,7 +2596,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
         case 'app': return yield* new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
       }
-    }));
+    });
   }
 
   /** The one adapter between a slate's `agent.send` and the turn inbox. */
@@ -2623,8 +2644,13 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   protected codemodeLaunch(actor: string | null, as: 'owner' | 'viewer'): (online: boolean) => ProgramLaunch {
     const workspace = this.workspaceName();
+    // A viewer's program holds none of the owner's secrets, and its egress spends none.
+    const owner = as === 'owner';
 
-    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor, asOwner: as === 'owner' } : null });
+    return (online) => codemodeLauncher(
+      { kinuNode: true, egress: online ? { workspace, actor, asOwner: owner, ownerUserId: owner ? this.getOwnerUserId() : null } : null },
+      () => this.account.commandEnvironment('run', owner ? 'owner' : 'viewer'),
+    );
   }
 
   /**
@@ -2645,7 +2671,11 @@ export abstract class ActorAgent extends Agent<Env> {
       this._slateToolFactories.set(launch, factory);
     }
 
-    const scope: CodemodeScope = { reach, nested: context.nested, namespaces: (executor) => actorNamespaces(actor, policy, { executor }) };
+    // A program calls back into these from its own isolate: a viewer's runs with none of the owner's secrets there too.
+    const scope: CodemodeScope = {
+      reach, nested: context.nested,
+      namespaces: (executor) => (context.viewer === true ? providersWithoutOwnerSecrets(actorNamespaces(actor, policy, { executor })) : actorNamespaces(actor, policy, { executor })),
+    };
 
     return await inWorkMode(mode, () => factory.callTool(codemodeSurface(rt, {}, () => ({}), { stores: actor.stores }), route.name, route.input, scope)) ?? null;
   }
@@ -2761,8 +2791,11 @@ export abstract class ActorAgent extends Agent<Env> {
    * less `agents` unless `owner`: the owner's own slate, as the owner, with no share in it. The host refuses what else
    * only the agent does. Read per call: executors attach and detach while this object lives.
    */
+  /** A caller other than the owner (a share's viewer, a shared slate's server) runs commands with none of the owner's secrets. */
   protected slateNamespaces(mode: WorkMode, owner = false): CodemodeProvider[] {
-    return actorNamespaces(this.surfaceActor(mode, owner ? 'owner' : 'viewer'), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
+    const providers = actorNamespaces(this.surfaceActor(mode, owner ? 'owner' : 'viewer'), owner ? SURFACE_POLICY.ownerSlate : SURFACE_POLICY.slate);
+
+    return owner ? providers : providersWithoutOwnerSecrets(providers);
   }
 
   /**
@@ -3213,7 +3246,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this.modelSettingsChanges += 1;
     this._accountSwarms = null;
     this.invalidateModelCaches();
-    await this.terminal.modelSettingsChanged();
+    await this.terminal.ownerActed();
   }
 
 
@@ -3590,6 +3623,8 @@ export abstract class ActorAgent extends Agent<Env> {
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
     const turn = reach.kind === 'workspace' && step.surface !== null ? turnTags(step.surface.item).reason : undefined;
     const model = reach.kind === 'workspace' ? this.promptModelContextFor(step.profile.tier.model) : { id: step.profile.tier.model };
+    // Names and hosts only: a placeholder is the command's to hold, never the model's to read.
+    const secrets = this.account.secretsHeld;
 
     return collectDynamicContext({
       rt: actor.runtime,
@@ -3604,6 +3639,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(activeSkills !== null && activeSkills !== undefined && { activeSkills }),
       memoryTail,
       ...(accountFacts !== undefined && { accountFacts }),
+      ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, position, reveal }) => ({ name, hosts, position, reveal })), withheld: secrets.withheld } }),
       ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,

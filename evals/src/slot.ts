@@ -21,7 +21,7 @@ import type { EvalTarget } from './workspace-roster';
 export type TrialPlace = {
   readonly taskFiles: readonly string[];
   readonly task: string;
-  readonly matrix: Pick<EvalMatrix, 'models' | 'arms' | 'trials' | 'firstSlot'>;
+  readonly matrix: Pick<EvalMatrix, 'models' | 'arms' | 'trials' | 'firstSlot' | 'sequence'>;
   readonly model: string;
   readonly arm: string;
   readonly trial: number;
@@ -30,11 +30,13 @@ export type TrialPlace = {
 /** The trial's own account, `trial-<n>`. */
 export function trialSlot(place: TrialPlace): EvalAccount {
   const files = [...place.taskFiles].sort();
-  const taskAt = files.indexOf(place.task);
-  const { models, arms, trials, firstSlot } = place.matrix;
+  const { models, arms, trials, firstSlot, sequence } = place.matrix;
+  // A sequence's tasks share their model, arm and trial's account; otherwise each task has its own.
+  const taskAt = sequence ? 0 : files.indexOf(place.task);
+  const tasks = sequence ? 1 : files.length;
 
-  if (taskAt === -1) throw new Error(`runner ${place.task} has no place in the run's matrix`);
-  const needed = files.length * models.length * arms.length * trials;
+  if (!files.includes(place.task)) throw new Error(`runner ${place.task} has no place in the run's matrix`);
+  const needed = tasks * models.length * arms.length * trials;
   const [low, high] = halfOf(firstSlot > HALF);
   const slot = firstSlot - 1 + ((taskAt * models.length + models.indexOf(place.model)) * arms.length + arms.indexOf(place.arm)) * trials + place.trial;
   const account = parseEvalAccount(`trial-${String(slot)}`);
@@ -90,8 +92,8 @@ export function freeBlock(size: number, pass: boolean, hosts: readonly string[],
 
 /** Every trial account a matrix uses: the ones a deploy gives the eval provider keys. */
 export function trialAccounts(taskFiles: readonly string[], matrix: TrialPlace['matrix']): EvalAccount[] {
-  return [...taskFiles].sort().flatMap((file) => matrix.models.flatMap((model) => matrix.arms.flatMap((arm) =>
-    Array.from({ length: matrix.trials }, (_, at) => trialSlot({ taskFiles, task: file, matrix, model, arm, trial: at + 1 })))));
+  return [...new Set([...taskFiles].sort().flatMap((file) => matrix.models.flatMap((model) => matrix.arms.flatMap((arm) =>
+    Array.from({ length: matrix.trials }, (_, at) => trialSlot({ taskFiles, task: file, matrix, model, arm, trial: at + 1 }))))))];
 }
 
 
@@ -116,21 +118,28 @@ export async function trialInheritedRows(target: EvalTarget): Promise<{ inherite
   const rows = v.parse(v.record(v.string(), v.number()), held.value);
 
   if ((rows.user_config ?? 0) === 0) return { inherited: inheritedRows(rows) };
-  const catalog = await read('/api/user/profile-catalog');
+  const [catalog, gateways] = await Promise.all([read('/api/user/profile-catalog'), read('/api/user/cloudflare/gateways')]);
 
-  return 'why' in catalog ? { why: catalog.why }
-    : { inherited: inheritedRows(rows, v.parse(ProfileCatalogEnvelopeSchema, catalog.value).version) };
+  if ('why' in catalog) return { why: catalog.why };
+
+  if ('why' in gateways) return { why: gateways.why };
+
+  return { inherited: inheritedRows(rows, {
+    catalog: v.parse(ProfileCatalogEnvelopeSchema, catalog.value).version > 0,
+    gateway: v.parse(v.looseObject({ selectedId: v.nullable(v.string()) }), gateways.value).selectedId !== null,
+  }) };
 }
 
 /**
  * Make `target`'s trial account its trial's own before the trial opens on it. A live workspace named for this trial
  * (`subject`) is its own earlier attempt, which armada ran again once it lost it: the account is the trial's alone in
  * its run's leased block, so the retry takes it back as it does a stopped run's. Any other live workspace is another
- * run's, and stops it.
+ * run's, and stops it. A task of a sequence opens on the rows its sequence's earlier tasks left; the sequence's account
+ * was checked once, before its first task (scripts/evals-map.ts).
  */
-export async function prepareTrialAccount(target: EvalTarget, now: number, subject?: string): Promise<void> {
+export async function prepareTrialAccount(target: EvalTarget, now: number, trial: { readonly subject?: string; readonly sequence: boolean } = { sequence: false }): Promise<void> {
   const workspaces = await listWorkspaces(target.origin, target.identity);
-  const own = subject === undefined ? null : evalWorkspaceStem(subject);
+  const own = trial.subject === undefined ? null : evalWorkspaceStem(trial.subject);
   const live = workspaces.find((workspace) => now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS && (own === null || !workspace.name.startsWith(own)));
 
   if (live !== undefined) {
@@ -139,6 +148,8 @@ export async function prepareTrialAccount(target: EvalTarget, now: number, subje
   }
 
   for (const { name } of workspaces) await deleteWorkspace(target.origin, target.identity, name);
+
+  if (trial.sequence) return;
   const read = await trialInheritedRows(target);
 
   if ('why' in read) throw new Error(`${accountOf(target)}: ${read.why}`);

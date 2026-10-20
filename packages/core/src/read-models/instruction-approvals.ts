@@ -30,6 +30,8 @@ export interface InstructionSourceRow {
   readonly kind: InstructionSourceKind;
   readonly bytes: number;
   readonly decision: InstructionDecision | 'none';
+  /** Present when a dream granted the approval, not the owner. */
+  readonly byDream?: true;
   /** Why the path is inert, when discovery declined to follow it. */
   readonly reason?: string;
 }
@@ -93,11 +95,14 @@ export function listInstructionApprovals(input: {
   for (const row of input.decisions) decisionByPath.set(row.path, row);
 
   const ordered = [...input.sources].sort(compareRows).map((meta): InstructionSourceRow => {
+    const decided = decisionByPath.get(meta.path);
+
     const row: InstructionSourceRow = {
       path: meta.path,
       kind: meta.kind,
       bytes: meta.bytes,
-      decision: decisionByPath.get(meta.path)?.decision ?? 'none',
+      decision: decided?.decision ?? 'none',
+      ...(decided?.decision === 'approved' && decided.origin === 'dream' && { byDream: true as const }),
     };
 
     return meta.reason === undefined ? row : { ...row, reason: meta.reason };
@@ -159,7 +164,8 @@ export async function gatherApprovableInstructions(input: {
     sources.push({ path: entry.path, kind: 'agents_md', bytes: 0, reason: entry.reason });
   }
 
-  const discovery = await discoverSkills(input.skillsVfs, { admissionTokens: input.admissionTokens });
+  // The listing reads paths and sizes, never an index line, so trust has nothing to decide here.
+  const discovery = await discoverSkills(input.skillsVfs, { admissionTokens: input.admissionTokens, trust: () => 'unverified' });
   const skills = discovery.skills.filter((skill) => skill.bodyRef.kind === 'file');
 
   const sizes = await Promise.all(skills.map(async (skill) => {

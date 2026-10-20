@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { Holds } from '../utils/held-reads';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
+import { WorkspaceLayoutSchema, type WorkspaceLayout } from './workspace-layout';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../types/profile';
@@ -45,7 +46,6 @@ export const AGENT_CONFIG_KEYS = {
   shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
   /** 'true' runs waiting edits as live trials on the main agent; off by default (docs/EVOLUTION-REDESIGN.md §5). */
-  liveTrials: 'live_trials',
   /** 'true' once an agent hosted in its own isolate has submitted a plan there: Work asks only those isolates (D9). */
   holdsPlans: 'holds_plans',
   /** 'true' once the workspace's own agent ran a turn in its isolate: only then does that isolate hold runs or spend (D9). */
@@ -54,6 +54,8 @@ export const AGENT_CONFIG_KEYS = {
   holdsQuestions: 'holds_questions',
   /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons, proposals or trials. On by default. */
   learning: 'learning',
+  /** 'false' withholds crafted tools: none is offered, made, or extracted from a turn. On by default. */
+  crafting: 'crafting',
   advisorMinSeverity: 'advisor_min_severity',
   /** 'true' enables the turn reviewer; off by default since it costs a model call per turn. */
   advisorEnabled: 'advisor_enabled',
@@ -70,6 +72,10 @@ export const AGENT_CONFIG_KEYS = {
   isolateGen: 'isolate_gen',
   /** The root's chat title as the person set it; the workspace keeps its own name. */
   chatTitle: 'chat_title',
+  /** The root's page layout (`WorkspaceLayout`); unset reads as `workbench`. */
+  layout: 'layout',
+  /** The workspace blueprint the workspace was installed from, by id; unset for one made any other way. */
+  blueprint: 'blueprint',
   /** A one-shot wait this agent armed on its owner (`agent.wakeWhenOwnerDone`), JSON `OwnerWaitWatch`: met, it wakes the
    *  agent once and the row goes. Read on each change to what waits on the owner, only while one is armed. */
   ownerWaitsWatch: 'owner_waits_watch',
@@ -124,8 +130,6 @@ export interface AgentConfigStore {
   revokeShellApproval(grants: readonly ApprovalGrant[]): void;
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
-  getLiveTrials(): boolean;
-  setLiveTrials(enabled: boolean): void;
   getHoldsPlans(): boolean;
   setHoldsPlans(): void;
   getHoldsTurns(): boolean;
@@ -134,6 +138,8 @@ export interface AgentConfigStore {
   setHoldsQuestions(): void;
   getLearning(): boolean;
   setLearning(enabled: boolean): void;
+  getCrafting(): boolean;
+  setCrafting(enabled: boolean): void;
   getAdvisorEnabled(): boolean;
   setAdvisorEnabled(enabled: boolean): void;
   /** Unset or unknown reads as `concern`. */
@@ -154,6 +160,10 @@ export interface AgentConfigStore {
   setEmailNotificationsEnabled(enabled: boolean): void;
   getChatTitle(): string | null;
   setChatTitle(title: string): void;
+  getLayout(): WorkspaceLayout;
+  setLayout(layout: WorkspaceLayout): void;
+  getBlueprint(): string | null;
+  setBlueprint(id: string): void;
   /** Unset, or a row that no longer parses, reads as none. */
   getOwnerWaitsWatch(): OwnerWaitWatch | null;
   /** Null clears it. */
@@ -200,7 +210,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
 
-    if (key === AGENT_CONFIG_KEYS.liveTrials || key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
+    if (key === AGENT_CONFIG_KEYS.learning || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
   const remove = (key: string, ...others: string[]): void => {
@@ -209,7 +219,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId}
       AND key IN (SELECT value FROM json_each(${JSON.stringify(keys)}))`;
 
-    if (keys.some((name) => name === AGENT_CONFIG_KEYS.liveTrials || name === AGENT_CONFIG_KEYS.learning || name === AGENT_CONFIG_KEYS.changelogSeenAt)) markStoreChanged(sql);
+    if (keys.some((name) => name === AGENT_CONFIG_KEYS.learning || name === AGENT_CONFIG_KEYS.changelogSeenAt)) markStoreChanged(sql);
   };
 
   const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
@@ -362,8 +372,6 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setSleepTimeComputeEnabled(enabled) {
       set(AGENT_CONFIG_KEYS.sleepTimeCompute, enabled ? 'true' : 'false');
     },
-    getLiveTrials() { return get(AGENT_CONFIG_KEYS.liveTrials) === 'true'; },
-    setLiveTrials(enabled) { set(AGENT_CONFIG_KEYS.liveTrials, String(enabled)); },
     getHoldsPlans() { return get(AGENT_CONFIG_KEYS.holdsPlans) === 'true'; },
     setHoldsPlans() { set(AGENT_CONFIG_KEYS.holdsPlans, 'true'); },
     getHoldsTurns() { return get(AGENT_CONFIG_KEYS.holdsTurns) === 'true'; },
@@ -372,6 +380,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setHoldsQuestions() { set(AGENT_CONFIG_KEYS.holdsQuestions, 'true'); },
     getLearning() { return get(AGENT_CONFIG_KEYS.learning) !== 'false'; },
     setLearning(enabled) { set(AGENT_CONFIG_KEYS.learning, String(enabled)); },
+    getCrafting() { return get(AGENT_CONFIG_KEYS.crafting) !== 'false'; },
+    setCrafting(enabled) { set(AGENT_CONFIG_KEYS.crafting, String(enabled)); },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
     getAdvisorMinSeverity() {
@@ -425,6 +435,20 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     setChatTitle(title) {
       set(AGENT_CONFIG_KEYS.chatTitle, title);
+    },
+    getLayout() {
+      const stored = v.safeParse(WorkspaceLayoutSchema, get(AGENT_CONFIG_KEYS.layout));
+
+      return stored.success ? stored.output : 'workbench';
+    },
+    setLayout(layout) {
+      set(AGENT_CONFIG_KEYS.layout, layout);
+    },
+    getBlueprint() {
+      return get(AGENT_CONFIG_KEYS.blueprint);
+    },
+    setBlueprint(id) {
+      set(AGENT_CONFIG_KEYS.blueprint, id);
     },
     getOwnerWaitsWatch() {
       const stored = get(AGENT_CONFIG_KEYS.ownerWaitsWatch);

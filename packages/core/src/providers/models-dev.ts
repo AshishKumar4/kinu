@@ -45,6 +45,8 @@ const ModelsDevModelSchema = v.object({
   name: v.optional(v.string()),
   provider: v.optional(ModelProviderOverrideSchema),
   tool_call: v.optional(v.boolean()),
+  /** Whether the model answers to a response schema; read as the `structured-outputs` capability. */
+  structured_output: v.optional(v.boolean()),
   reasoning: v.optional(v.boolean()),
   /** How a model's reasoning is steered; only `effort` rows name levels. Absent or empty means no effort. */
   reasoning_options: v.optional(v.array(v.object({
@@ -359,6 +361,8 @@ function modelInfoFromModelsDev(
   const capabilities: ModelCapability[] = ['streaming'];
 
   if (model.tool_call === true) capabilities.push('tools');
+
+  if (model.structured_output === true) capabilities.push('structured-outputs');
 
   if (model.reasoning === true) capabilities.push('reasoning');
 

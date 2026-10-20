@@ -65,8 +65,9 @@ interface RecentOutcome {
 interface CurriculumSkill {
   name: string;
   description: string;
-  score: number;
-  uses: number;
+  /** Turns that chose it, of the turns that offered it. */
+  chosen: number;
+  offered: number;
 }
 
 interface CurriculumContext {
@@ -76,11 +77,9 @@ interface CurriculumContext {
 
 function collectContext(rt: AgentRuntime): CurriculumContext {
   const skills = rt.storage.sql<CurriculumSkill>`
-    SELECT name, COALESCE(description, '') as description,
-           COALESCE(score, 0.5) as score,
-           COALESCE(uses, 0) as uses
+    SELECT name, COALESCE(description, '') as description, chosen, offered
       FROM crafted_tools
-      ORDER BY uses DESC NULLS LAST, name`;
+      ORDER BY chosen DESC, name`;
 
   // No catch: a missing table must not read as a fresh workspace. Neutral ratings carry no verdict, so listing
   // them as failures would mislead the judge.
@@ -97,7 +96,7 @@ function buildPrompt(
   window: [number, number],
 ): string {
   const skillList = ctx.skills.slice(0, 40)
-    .map(s => `- ${s.name} (score=${s.score.toFixed(2)}, uses=${s.uses}): ${s.description.slice(0, 80)}`)
+    .map(s => `- ${s.name} (chosen in ${String(s.chosen)} of ${String(s.offered)} turns offered): ${s.description.slice(0, 80)}`)
     .join('\n') || '(no crafted skills yet)';
 
   const recentList = ctx.recent.slice(0, 10)

@@ -9,16 +9,16 @@ import { observingCrafts } from '../src/delegation/actor-tools';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { TurnCraftLedger } from '../src/craft/turn-ledger';
 import type { CraftLedger } from '../src/craft/in-episode';
-import { CRAFT_NEUTRAL_PRIOR, craftInvocationError } from '../src/craft/in-episode';
+import { craftInvocationError } from '../src/craft/in-episode';
 import { runWorkModeInvocation } from '../src/execution/work-mode';
 import type { JsonValue } from '../src/utils/json';
 import { present, toolExecute } from '@kinu.run/test-utils';
 
-/** A scored observation: credit lifts a tool above its prior, blame lowers it. */
+/** An observation: a clean return repairs a tool (credit), a raise marks it broken (blame). */
 interface Observation { names: string[]; verdict: 'credit' | 'blame' }
 
-/** A ledger over a name list; `dropped` names are reported back like below-floor tools. */
-function fakeLedger(initial: string[] = [], dropped: string[] = []): CraftLedger & {
+/** A ledger over a name list. */
+function fakeLedger(initial: string[] = []): CraftLedger & {
   tools: string[];
   observations: Observation[];
 } {
@@ -29,11 +29,8 @@ function fakeLedger(initial: string[] = [], dropped: string[] = []): CraftLedger
     tools,
     observations,
     names: () => [...tools],
-    observe(names, quality) {
-      observations.push({ names: [...names], verdict: quality > CRAFT_NEUTRAL_PRIOR ? 'credit' : 'blame' });
-
-      return names.filter((n) => dropped.includes(n));
-    },
+    broke(name) { observations.push({ names: [name], verdict: 'blame' }); },
+    repaired(names) { if (names.length > 0) observations.push({ names: [...names], verdict: 'credit' }); },
   };
 }
 
@@ -76,7 +73,7 @@ describe('craft observation — the trigger', () => {
     await block(turn, ledger, 'await workspace.createTool("sum","d","async()=>1")', { creates: 'sum', result: { ok: true } });
 
     expect(turn.snapshot()).toEqual({
-      crafted: ['sum'], invoked: [], reused: [], returned: 0, raised: 0, dropped: [],
+      crafted: ['sum'], invoked: [], reused: [], returned: 0, raised: 0, broke: [],
     });
   });
 
@@ -143,7 +140,7 @@ describe('craft observation — the fitness signal', () => {
     await block(turn, ledger, 'return await tools.sum(2)');
     expect(ledger.observations).toEqual([{ names: ['sum'], verdict: 'credit' }]);
     expect(turn.snapshot()).toEqual({
-      crafted: [], invoked: ['sum'], reused: [], returned: 1, raised: 0, dropped: [],
+      crafted: [], invoked: ['sum'], reused: [], returned: 1, raised: 0, broke: [],
     });
   });
 
@@ -170,7 +167,7 @@ describe('craft observation — the fitness signal', () => {
 
     expect(ledger.observations).toEqual([{ names: ['sum'], verdict: 'credit' }]);
     expect(turn.snapshot()).toEqual({
-      crafted: ['sum'], invoked: ['sum'], reused: ['sum'], returned: 1, raised: 0, dropped: [],
+      crafted: ['sum'], invoked: ['sum'], reused: ['sum'], returned: 1, raised: 0, broke: [],
     });
   });
 
@@ -226,12 +223,12 @@ describe('craft observation — the fitness signal', () => {
     expect(ledger.observations).toEqual([{ names: ['sum'], verdict: 'blame' }]);
   });
 
-  test('a tool pushed below the injection floor is named in the turn record', async () => {
-    const ledger = fakeLedger(['sum'], ['sum']);
+  test('a tool a raise marked broken is named in the turn record', async () => {
+    const ledger = fakeLedger(['sum']);
     const turn = recording();
 
     await block(turn, ledger, 'await tools.sum(1)', { failure: craftInvocationError('sum', new Error('boom')).message });
-    expect(present(turn.snapshot(), 'the craft-cycle snapshot').dropped).toEqual(['sum']);
+    expect(present(turn.snapshot(), 'the craft-cycle snapshot').broke).toEqual(['sum']);
   });
 });
 

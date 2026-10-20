@@ -45,7 +45,7 @@ const WORKERS_AI_MINUTE_LIMIT = 3021;
 const MINUTE_MS = 60_000;
 
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499); a longer Retry-After means the account is spent. */
-const MAX_RETRY_DELAY_MS = 60_000;
+export const MAX_RETRY_DELAY_MS = 60_000;
 
 /** A lane known only by looking which credential the call bills (a sole named account stands in for `main`): looked up
  *  only when a wait is declared, or when some lane under `route` is cooling, so a call costs no lookup otherwise. */
@@ -399,7 +399,8 @@ interface ReportedWait {
   readonly retry?: number;
 }
 
-function backoffCeiling(attempt: number): number {
+/** The most a full-jitter wait before retry `attempt` (1-based) may be; the wait is a uniform draw below it. */
+export function backoffCeiling(attempt: number): number {
   return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
 }
 

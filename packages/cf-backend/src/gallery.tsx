@@ -46,6 +46,9 @@ import { WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
+import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
+import { ASSISTANT_ROSTER, assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
+import { exploreFrame } from "./gallery-explore";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
@@ -60,6 +63,7 @@ import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { Modal } from "@/components/ui/Modal";
+import { ComputerPreviewFrame, SecretPasteFrame, secretsFixture } from "@/gallery-secrets";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { admitReviewAnnotations, FEEDBACK_ENDPOINT, reviewFeedbackText } from "@kinu.run/core";
@@ -113,9 +117,9 @@ import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
-  FileCheckpointEntry, FileCheckpointListing, ForkRunParams, GepaRunSummary,
+  FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
-  AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
+  AccountSpend, ChangelogEntry, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { ModelTestResult, UserDevice } from "@/lib/user-api";
 import { ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
@@ -133,6 +137,20 @@ const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 
 /** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
 const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
+
+/**
+ * `&pcdesktop=ready|setup|permission`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
+ * `setup` poses a Mac with no compiler for its capture helper, as the daemon names the step.
+ */
+const SHELL_PC_DESKTOP: UserDevice["desktop"] = (() => {
+  const state = SHELL_PC === null ? null : new URLSearchParams(location.search).get("pcdesktop");
+
+  if (state === "ready") return { state, width: 1512, height: 982 };
+
+  if (state === "setup") return { state, detail: "Install the Command Line Tools (xcode-select --install), then open this tab again." };
+
+  return state === "permission" ? { state } : { state: "none" };
+})();
 
 /** The shell's machines under `&env=computer` or `&pc=`, as `listMounts` and the snapshot's executors answer them. */
 const SHELL_MACHINES = {
@@ -205,6 +223,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       expiresAt: NOW + 50 * 864e5,
       replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+      desktop: { state: "none" },
       version: null, servedVersion: null, update: "unreported", updateRefusal: null,
     },
   ],
@@ -216,7 +235,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty", "secretpaste"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -436,8 +455,10 @@ function galleryChatGptStatus() {
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
 
-/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read. */
-const settingsSavedCredentials = new Map<string, JsonValue>();
+/** Keys saved through the providers panel, listed after the stock ones; each body is kept on the page for a flow to read.
+ *  `&keys=` names keys the account already holds (`tavily,exa`). */
+const settingsSavedCredentials = new Map<string, JsonValue>((new URLSearchParams(location.search).get("keys")?.split(",") ?? [])
+  .map((key) => [key, { kind: "bearer", token: "gallery" }]));
 
 /** `&chatgpt=device`: a machine that signs in; without, none is connected yet. */
 function chatgptFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -586,11 +607,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     ]);
   }
 
-  if (path === "/api/user/cloudflare/accounts") {
-    return fixtureJson({
-      connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
-    });
-  }
+  if (path === "/api/user/cloudflare/accounts") return Response.json(galleryCloudflareAccounts());
 
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;
@@ -737,17 +754,20 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
           capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0"],
         },
+        desktop: { state: "none" },
       },
       // `&devices=history`: a refused update and a machine that has never connected.
       ...(new URLSearchParams(location.search).get("devices") === "history" ? [{
         id: "dev-3", label: "Lab box", os: "linux", hostname: "lab", connected: true, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: "0.2.0+older", servedVersion: "0.3.0+served", update: "refused", updateRefusal: "Bun 1.4.2 install failed: permission denied",
       }, {
         id: "dev-old", label: "Old box", os: "linux", hostname: "old", connected: false, createdAt: NOW - 90 * 864e5, lastSeenAt: null, expiresAt: null,
         replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
         sandbox: { tier: "sandboxed", capability: "files_only", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
       ...(frame === "devices" ? [{
@@ -756,6 +776,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         replacedAt: null,
         revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+        desktop: { state: "none" },
         version: null, servedVersion: null, update: "unreported", updateRefusal: null,
       }] : []),
     ]);
@@ -764,8 +785,12 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   return null;
 }
 
-/** A saved catalog reads back. */
-let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = { catalog: BUILTIN_PROFILE_CATALOG, version: 0 };
+/** A saved catalog reads back; `&chain=` starts it on a chosen web search. */
+let galleryCatalog: Pick<ProfileCatalogEnvelope, "catalog" | "version"> = (() => {
+  const webSearch = galleryWebSearchChain();
+
+  return { catalog: webSearch === undefined ? BUILTIN_PROFILE_CATALOG : { ...BUILTIN_PROFILE_CATALOG, webSearch }, version: 0 };
+})();
 
 /** Hashed with WebCrypto: the gallery has no `node:crypto`. A stale write is refused. */
 async function profileCatalogFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
@@ -831,6 +856,8 @@ function builtinAuthFixture(path: string): Response | null {
 }
 
 const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  secretsFixture,
+  galleryWebSearchTest,
   builtinAuthFixture,
   accountMemoryFixture,
   accountProfileFixture,
@@ -890,6 +917,7 @@ function galleryConnectDevice(id: string, label: string, connected: boolean) {
     replacedAt: null,
     revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: [] },
+    desktop: id === GALLERY_PC.id ? SHELL_PC_DESKTOP : { state: "none" },
     version: null, servedVersion: null, update: "unreported", updateRefusal: null,
   };
 }
@@ -940,16 +968,19 @@ const GALLERY_LOGO = sanitizeWorkspaceLogoSvg(
   + "6' height='7' rx='3.5' fill='#115e59'/></svg>",
 );
 
-const galleryRoster: RosterEntry[] = [
-  ...GALLERY_ROSTER.entries,
-  ...(EXTRA_WORKSPACE ? [{
-    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
-  }] : []),
-].map((entry) => {
-  const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
+const galleryRoster: RosterEntry[] = new URLSearchParams(location.search).get("roster") === "assistant"
+  // The workspaces the personal assistant runs and watches (gallery-assistant.tsx).
+  ? ASSISTANT_ROSTER.map((entry) => ({ ...entry, logo: entry.name === "api-worker" ? GALLERY_LOGO : entry.logo }))
+  : [
+    ...GALLERY_ROSTER.entries,
+    ...(EXTRA_WORKSPACE ? [{
+      name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
+    }] : []),
+  ].map((entry) => {
+    const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
 
-  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "api-worker" ? GALLERY_LOGO : null };
-});
+    return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "api-worker" ? GALLERY_LOGO : null };
+  });
 
 function galleryRosterCounts(): RosterCounts {
   const counts: RosterCounts = { all: galleryRoster.length, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
@@ -1220,6 +1251,11 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   return memory === null ? null : Promise.resolve(memory);
 }
 
+/** The stub for a read; one with a query (`?limit=3`) is answered as its path is. */
+function stubbed(path: string): JsonValue | undefined {
+  return STUB.get(path) ?? STUB.get(path.split("?")[0] ?? path);
+}
+
 const galleryRequests: string[] = [];
 
 Object.assign(window, { galleryRequests });
@@ -1253,7 +1289,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return rosterRead(roster.searchParams);
   }
 
-  const response = STUB.get(path);
+  const response = stubbed(path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
@@ -1934,6 +1970,8 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
 
   if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
 
+  if (method.endsWith("DeviceSession") || method === "listDeviceSessions") return rpcResult(v.parse(JsonValueSchema, galleryDeviceSessions(method, args ?? []))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -1941,8 +1979,6 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
   if (method === "getAlwaysActiveSkills") return rpcResult({ names: [] }).json<T>();
 
   if (method === "listTriggers") return rpcResult({ triggers: [] }).json<T>();
-
-  if (method === "getGepaRun") return rpcResult({ run: null, candidates: [], pareto: [] }).json<T>();
 
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
 
@@ -1987,6 +2023,33 @@ function gallerySessions(method: string, args: readonly unknown[]): readonly Ter
   if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
 
   return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
+}
+
+/** The PC's sessions (1014-t) as its daemon lists them (1019-aa): its shell, a dev server on a port, and a deploy asking
+ *  a question. Its daemon reads no last command: that needs the owner's shell rc. */
+const GALLERY_DEVICE_SESSIONS: TerminalSession[] = [
+  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: "main", needsInput: false },
+  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main", needsInput: false },
+  { id: "pty-deploy", name: "deploy", cwd: "/Users/ashish/work/storefront/infra", open: true, running: "npm", last: null, ports: [], branch: "main", needsInput: true },
+];
+
+function galleryDeviceSessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
+  if (method === "openDeviceSession") {
+    const record = { id: `pty-${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, name: `shell ${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, cwd: "" };
+
+    GALLERY_DEVICE_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
+
+    return record;
+  }
+
+  const at = GALLERY_DEVICE_SESSIONS.findIndex((session) => session.id === args[1]);
+  const found = GALLERY_DEVICE_SESSIONS[at];
+
+  if (method === "renameDeviceSession" && typeof args[2] === "string" && found !== undefined) GALLERY_DEVICE_SESSIONS[at] = { ...found, name: args[2] };
+
+  if (method === "closeDeviceSession" && found !== undefined) GALLERY_DEVICE_SESSIONS.splice(at, 1);
+
+  return method === "listDeviceSessions" ? GALLERY_DEVICE_SESSIONS : null;
 }
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
@@ -2282,10 +2345,6 @@ const SYSTEM_EVENT_ROWS: UIMessage[] = [
   harnessTurn("event-gate", { kinuEvent: COMPLETION_GATE_EVENT }, "[Runtime check — a mechanical gate from Kinu, not written by the user.]\n\nThis run ends after your next reply."),
   harnessTurn("event-consent", { kinuEvent: "device_consent", ids: ["c1", "c2", "c3"], approved: 2, denied: 1 },
     "Your owner answered your device requests: 2 approved, 1 denied. Re-issue the approved commands to run them."),
-  harnessTurn("event-proposal", { kinuEvent: "workspace_proposal", proposal: "p1", decision: "created", name: "Release notes", workspace: "release-notes", url: "/workspace/release-notes" },
-    "Your owner approved the workspace \"Release notes\". It exists now, and its first turn acts on the brief. Its link: /workspace/release-notes"),
-  harnessTurn("event-proposal-declined", { kinuEvent: "workspace_proposal", proposal: "p2", decision: "declined", name: "Weekly digest" },
-    "Your owner declined the workspace you proposed, \"Weekly digest\". Nothing was created."),
   harnessTurn("event-sandbox", { kinuEvent: "sandbox_lifecycle_failure", incidentId: "inc-1", stage: "checkpoint", reason: "The snapshot upload timed out after 3 tries." },
     "The workspace container failed at the checkpoint stage. Work written inside the container since the last good checkpoint is NOT durable.\n\nIncident id: inc-1"),
   harnessTurn("event-plan-approved", { kinuEvent: "plan_approved", planId: "plan-1", revision: 2, decision: "approve", planTitle: "Read the database by its new binding" },
@@ -2992,6 +3051,10 @@ function rosterMoved(): void {
 }
 
 async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
+  // The choice the dialog sent: a chat-only rewind tells the agent what its turns left on the computer.
+  const chosen = v.safeParse(v.object({ chatOnly: v.boolean() }), args?.[1]);
+
+  document.documentElement.dataset.galleryRevertChatOnly = chosen.success ? String(chosen.output.chatOnly) : "unsaid";
   galleryRevertConversation(v.parse(v.string(), args?.[0]));
 
   return null;
@@ -3027,16 +3090,13 @@ const PLAN_ASKS: PendingAction[] = [{
   planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
 }];
 
-/** `&asks=mixed`: one of each kind that waits on the owner, and a version under trial that waits on nobody. */
+/** `&asks=mixed`: one of each kind that waits on the owner. */
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/routes/webhooks.ts", detail: null, at: NOW - 150_000, write: { path: "src/routes/webhooks.ts" } },
-  { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
-    proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
   ...PLAN_ASKS,
   { id: "plan:binding-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit the binding of every route", detail: "Submitted by binding-auditor", at: NOW - 200_000,
     planRef: { owner: "binding-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("binding-auditor") },
-  { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
 /** A change a share of issue-triage made on the owner's access, for Sam, as the queue lists it. */
@@ -3064,10 +3124,10 @@ const ASK_SETS = new Map([
   ["effect", EFFECT_ASKS], ["effects", EFFECTS_ASKS], ["effect-mixed", [...EFFECT_ASKS, ...PARKED_ASKS.slice(0, 1)]],
 ]);
 
-/** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
+/** A plan submitted after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
 const LATE_ASKS: PendingAction[] = [{
-  id: "proposal-late", kind: "workspace_proposal", title: "Create workspace “Release notes”", detail: "Draft each release's notes.", at: NOW,
-  proposal: { name: "Release notes", brief: "Draft each release's notes.", soul: "# Release notes\n\nKeep them short." },
+  id: "plan-late", kind: "plan_review", title: "Review the plan: Write the v2 release notes", detail: null, at: NOW,
+  planRef: { owner: WORKSPACE_PAGE_NAME, id: "pl-late", revision: 1 },
 }];
 
 window.addEventListener("gallery:arrive-ask", () => {
@@ -4070,57 +4130,13 @@ const QUALITY_WINDOW = {
   rated: 26, thumbs: 6, turns: 35,
 };
 
-/** Typed so the fixtures track `GepaRunSummary`, its stop reasons included. */
-const GEPA_RUNS = [
-  {
-    runId: "gepa_2", target: "scaffold", targetRef: null, startedAt: NOW - 3 * 864e5, endedAt: NOW - 3 * 864e5 + 6e5,
-    status: "completed", stopReason: "no_improvement_possible", winnerId: "cand_2b", iterations: 6, metricCalls: 48,
-  },
-  {
-    runId: "gepa_1", target: "scaffold", targetRef: null, startedAt: NOW - 12 * 864e5, endedAt: NOW - 12 * 864e5 + 9e5,
-    status: "completed", stopReason: "iterations_exhausted", winnerId: "cand_1c", iterations: 4, metricCalls: 32,
-  },
-] satisfies GepaRunSummary[];
-
-const GEPA_DETAIL = {
-  run: GEPA_RUNS[0],
-  candidates: [
-    { id: "cand_2a", parentId: null, aggregateScore: 0.61, scores: { i1: 0.6, i2: 0.55, i3: 0.68 }, createdAt: NOW - 3 * 864e5 },
-    { id: "cand_2b", parentId: "cand_2a", aggregateScore: 0.78, scores: { i1: 0.81, i2: 0.72, i3: 0.81 }, createdAt: NOW - 3 * 864e5 },
-    { id: "cand_2c", parentId: "cand_2a", aggregateScore: 0.44, scores: { i1: 0.4, i2: 0.51, i3: 0.41 }, createdAt: NOW - 3 * 864e5 },
-  ],
-  pareto: [{ candidateId: "cand_2b", instanceId: "i1", score: 0.81 }, { candidateId: "cand_2a", instanceId: "i3", score: 0.68 }],
-};
-
-const GEPA_OLDER_DETAIL = {
-  run: GEPA_RUNS[1],
-  candidates: [
-    { id: "cand_1a", parentId: null, aggregateScore: 0.52, scores: { i1: 0.5, i2: 0.49, i3: 0.57 }, createdAt: NOW - 12 * 864e5 },
-    { id: "cand_1c", parentId: "cand_1a", aggregateScore: 0.66, scores: { i1: 0.7, i2: 0.6, i3: 0.68 }, createdAt: NOW - 12 * 864e5 },
-  ],
-  pareto: [{ candidateId: "cand_1c", instanceId: "i1", score: 0.7 }],
-};
-
 const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
 
   if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
 
-  if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
-
   // A record: the blanket `[]` reads as a changelog that failed to load.
   if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
-
-  if (method === "getGepaRun") {
-    const [runId] = v.parse(v.tuple([v.string()]), args);
-
-    // `&gepa=held`: the newer run's candidates wait for `gallery:release-gepa`, as a slow read would.
-    if (runId === "gepa_2" && new URLSearchParams(location.search).get("gepa") === "held") {
-      await new Promise((resolve) => { window.addEventListener("gallery:release-gepa", resolve, { once: true }); });
-    }
-
-    return rpcResult(runId === "gepa_2" ? GEPA_DETAIL : GEPA_OLDER_DETAIL).json<T>();
-  }
 
   if (method === "getFacts") return rpcResult([
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
@@ -5488,7 +5504,8 @@ const BRAIN_STATUS = {
   name: "api-worker-health-9935d3", displayName: "API Worker",
   purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.", model: "opencode-go/muse-spark-1.3-contributor",
   scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
-  soul: "# API Worker", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
+  soul: "# API Worker", forkLineage: null,
+  layout: "workbench", createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
 const GALLERY_SLATE_ID = "sandbox-probe";
@@ -5628,28 +5645,50 @@ const BACKGROUND_JOBS: BackgroundJob[] = [
   },
 ];
 
+/** The Agent tab's journal: a dream that changed how the agent works, one that changed nothing, and a fact it kept. */
 const CHANGELOG = {
   seenAt: NOW - 30e5,
   unseenCount: 2,
   entries: [
     {
-      id: "cl_1", kind: "scaffold", at: NOW - 10e5, scaffoldVersion: 8, revert: true,
-      summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
-      evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie",
+      id: "refinement:refine-a1:applied", kind: "refinement", at: NOW - 10e5,
+      summary: "I dreamt and changed how I work",
+      evidence: "applied · workspace scope · five new turns since the last dream · reviewed 5 rated turns",
+      items: [
+        {
+          id: "refinement:refine-a1:0", kind: "refinement", at: NOW - 10e5,
+          summary: "Reword the shell tool's description: takes effect after the next pause",
+          evidence: "owner artifact_versions · accepted by the dream's reviewer",
+          revert: { type: "artifact_revert", target: "tool:shell.description@1" },
+        },
+        {
+          id: "refinement:refine-a1:1", kind: "refinement", at: NOW - 10e5,
+          summary: "The release-notes skill: takes effect after the next pause",
+          evidence: "owner instruction_approvals · staged where no prompt reads it",
+          revert: { type: "skill_revert", target: "refine-a1#1" },
+        },
+        {
+          id: "refinement:refine-a1:2", kind: "refinement", at: NOW - 10e5,
+          summary: "Remember user.answer_length: in effect now",
+          evidence: "owner agent_facts · the user's own words: \"keep answers to one line unless I ask\"",
+          revert: { type: "fact_forget", target: "user.answer_length" },
+        },
+      ],
     },
     {
-      id: "cl_3", kind: "fact", at: NOW - 50e5, scaffoldVersion: null, revert: true,
+      id: "fact:computer.staging_db", kind: "fact", at: NOW - 50e5,
       summary: "Remembered: staging still binds the sessions database as DB",
-      evidence: null,
+      evidence: "",
+      revert: { type: "fact_forget", target: "computer.staging_db" },
     },
     {
-      id: "cl_4", kind: "refinement", at: NOW - 6e5, scaffoldVersion: null,
-      summary: "Reviewed my own recent failures and changed nothing",
-      evidence: "refused · workspace scope · reviewed 3 turns",
+      id: "refinement:refine-a0:refused", kind: "refinement", at: NOW - 60e5,
+      summary: "I dreamt and changed nothing",
+      evidence: "refused · workspace scope · the agent was idle · reviewed 3 rated turns",
       noChange: true,
     },
   ],
-};
+} satisfies { seenAt: number; unseenCount: number; entries: ChangelogEntry[] };
 
 /** Without it a waiting decision lights nothing while a running job carries a digit. */
 const PENDING_ACTIONS: PendingAction[] = [
@@ -5675,16 +5714,6 @@ const PENDING_ACTIONS: PendingAction[] = [
     title: "Approve the plan · Gateway timeout repair",
     detail: null,
     planRef: { owner: "main", id: "plan-gateway", revision: 3 },
-  },
-  {
-    id: "scaffold-v8", kind: "scaffold_version", at: NOW - 10e5,
-    title: "Scaffold v8 is waiting to be promoted or rolled back",
-    detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
-  },
-  {
-    id: "change-approvals", kind: "change_approval", at: NOW - 10e5,
-    title: "A skill the agent wrote waits for your approval",
-    detail: null,
   },
 ];
 
@@ -6989,6 +7018,26 @@ function AgentFrame() {
 }
 
 
+/** What the api Worker's agent has noted as it worked. */
+const AGENT_TAB_NOTES: MemoryEntry[] = [
+  { path: "memory/MEMORY.md", content: "A renamed D1 binding: read both names until every environment has redeployed.", matchScore: 1, updatedAt: "2026-10-19", savedBy: "main" },
+  { path: "memory/MEMORY.md", content: "Staging takes its migration before the deploy: wrangler d1 migrations apply SESSIONS_DB --env staging --remote", matchScore: 1, updatedAt: "2026-10-18", savedBy: "main" },
+];
+
+/** The Agent tab at the inspector's width (`frame=agenttab`): an agent that has worked a while, or, with `&state=new`, one that has not. */
+function AgentTabFrame() {
+  const fresh = new URLSearchParams(location.search).get("state") === "new";
+
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div data-gallery-inspector className="w-[380px] max-w-full min-h-screen border-x p-border p-sidebar px-4 py-5">
+        <AgentSurface snapshot={{ status: "ready", value: BRAIN_STATUS }} memory={fresh ? [] : AGENT_TAB_NOTES} memoryContent={fresh ? "" : BRAIN_MEMORY}
+          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={workspaceRpc(fresh ? workspacePageRpc : evolutionRpc)} workspace={WORKSPACE_PAGE_NAME} />
+      </div>
+    </div>
+  );
+}
+
 /** Five transcript states that must not render as one blank pane. */
 function TranscriptFrame() {
   return (
@@ -7340,6 +7389,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
     replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
+    desktop: { state: "none" },
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current", updateRefusal: null,
   };
 }
@@ -7677,7 +7727,11 @@ function nodeQuery(): string {
   return node === null ? "" : `?node=${encodeURIComponent(node)}`;
 }
 
-function workspacePageFrame(): MountedFrame {
+/** Home too, so a workspace created on it opens here with what its prompt carried. */
+async function workspacePageFrame(): Promise<MountedFrame> {
+  // Not a static import: that would fold the home page's chunk into the gallery's, which the setup modal's test holds apart.
+  const { default: HomePage } = await import("@/pages/HomePage");
+
   serveGalleryRpc(workspacePageRpc);
 
   const transcript = new URLSearchParams(location.search).get("transcript");
@@ -7692,6 +7746,7 @@ function workspacePageFrame(): MountedFrame {
         <GalleryNavigator />
         {transcript === "longturn" && <LongTurnNotes />}
         <Routes>
+          <Route index element={<div className="h-screen overflow-hidden p-bg p-text"><HomePage /></div>} />
           <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
           <Route path={APP_ROUTES.workspaceAgentPath} element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
@@ -7860,6 +7915,8 @@ async function mount() {
   // Frames fully fixed by name; `entries` is the MemoryRouter location for frames that read a route param.
   const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
     ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
+    ["secretpaste", { node: <SecretPasteFrame />, entries: ["/"] }],
+    ["computerpreview", { node: <ComputerPreviewFrame />, entries: ["/"] }],
     ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
     ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_SHOWN} /></div>, entries: ["/"] }],
@@ -7937,6 +7994,15 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
+    ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageRpc))],
+    ["explore", () => Promise.resolve(exploreFrame("explore"))],
+    ["explore-workspace", () => Promise.resolve(exploreFrame("explore-workspace"))],
+    ["focus-workspace", () => {
+      seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
+
+      return Promise.resolve(focusWorkspaceFrame(workspacePageRpc, WORKSPACE_PAGE_NAME));
+    }],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
@@ -7994,7 +8060,7 @@ async function mount() {
   else if (frame === "environment" || frame === "files") ({ node, entries } = driveFrame(frame));
   else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
-  else if (frame === "workspacepage") ({ node, entries } = workspacePageFrame());
+  else if (frame === "workspacepage") ({ node, entries } = await workspacePageFrame());
   else if (frame === "usersettingsstate") ({ node, entries } = userSettingsStateFrame());
   else if (frame === "devicesandbox") node = <DeviceSandboxFrame />;
   else if (dynamicFixture !== undefined) ({ node, entries } = await dynamicFixture());

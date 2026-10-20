@@ -41,7 +41,6 @@ import { reviewCommand } from '../src/safety/command-review';
 import { formatApproval, gateExec } from '../src/safety/approval-gate';
 import { argumentDigest } from '../src/safety/argument-digest';
 import { checkMisevolution } from '../src/safety/misevolution';
-import { drawArm, trialDecision } from '../src/evolution/trial-rules';
 import { hybridSearch } from '../src/memory/hybrid-search';
 import { reciprocalRankFusion } from '../src/memory/vector-store';
 import { delegationFeatures, renderDelegationFeatures } from '../src/evolution/delegation-features';
@@ -110,8 +109,6 @@ export interface PipelineSubjects {
   readonly argumentDigest: typeof argumentDigest;
 
   readonly checkMisevolution: typeof checkMisevolution;
-  readonly trialDecision: typeof trialDecision;
-  readonly drawArm: typeof drawArm;
 
   readonly hybridSearch: typeof hybridSearch;
   readonly reciprocalRankFusion: typeof reciprocalRankFusion;
@@ -187,8 +184,6 @@ export const SUBJECT_SOURCE = {
   argumentDigest: 'safety/argument-digest.ts',
 
   checkMisevolution: 'safety/misevolution.ts',
-  trialDecision: 'evolution/trial-rules.ts',
-  drawArm: 'evolution/trial-rules.ts',
 
   hybridSearch: 'memory/hybrid-search.ts',
   reciprocalRankFusion: 'memory/vector-store.ts',
@@ -263,8 +258,6 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     argumentDigest,
 
     checkMisevolution,
-    trialDecision,
-    drawArm,
 
     hybridSearch,
     reciprocalRankFusion,

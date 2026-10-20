@@ -2,7 +2,7 @@
 // No auth header is forwarded (it overrides in-account pre-auth: 401); user-billed providers
 // stay on the credential path.
 import { describe, expect, test } from 'bun:test';
-import { generateText, streamText } from 'ai';
+import { generateText, jsonSchema, Output, streamText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import {
   asFetchFunction,
@@ -44,6 +44,7 @@ describe('parseGatewayTarget', () => {
   test('splits a gateway URL into the gateway id and the prefix requests sit under', () => {
     expect(parseGatewayTarget(TEST_GATEWAY_URL)).toEqual({
       id: 'test-gateway',
+      account: 'testaccount0000000000000000000',
       origin: 'https://gateway.ai.cloudflare.com',
       prefix: '/v1/testaccount0000000000000000000/test-gateway/',
     });
@@ -268,6 +269,37 @@ describe('platform gateway availability', () => {
     expect(stub.runs).toHaveLength(1);
     expect(stub.runs[0].headers).not.toHaveProperty('authorization');
     expect(stub.runs[0].query).toMatchObject({ model: '@cf/zai-org/glm-5.3' });
+  });
+
+  // Staging rc24: a fast model sent no schema answered sleep-time without `rationale`. The binding sends the schema;
+  // the gateway and the user's account reach the same models.
+  test('a structured call sends Workers AI its schema, on the gateway as on the user\'s account', async () => {
+    const answered = { ...completion, choices: [{ ...completion.choices[0], message: { role: 'assistant', content: '{"key":"build.dir"}' } }] };
+    const stub = stubAiBinding(() => Response.json(answered));
+    const sent: unknown[] = [];
+
+    const userDeps = {
+      ...providerDeps(platformGatewayEnv(stub)),
+      getAuth: async () => ({ headers: {}, baseURL: 'https://api.cloudflare.com/client/v4/accounts/user-acct/ai/v1' }),
+      fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push(await new Response(init?.body).json());
+
+        return Response.json(answered);
+      }),
+    };
+
+    const output = Output.object({ schema: jsonSchema<{ key: string }>({ type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }) });
+
+    for (const model of [
+      createAIGatewayProvider().createModel('workers-ai/@cf/zai-org/glm-4.7-flash', providerDeps(platformGatewayEnv(stub))),
+      createWorkersAIProvider().createModel('@cf/zai-org/glm-4.7-flash', userDeps),
+    ]) {
+      expect((await generateText({ model, prompt: 'where does the build go?', output })).output).toEqual({ key: 'build.dir' });
+    }
+
+    for (const body of [stub.runs[0].query, ...sent]) {
+      expect(body).toMatchObject({ response_format: { type: 'json_schema', json_schema: { schema: { required: ['key'] } } } });
+    }
   });
 });
 

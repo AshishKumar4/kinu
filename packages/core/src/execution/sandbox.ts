@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { abortedBeforeStart } from '@kinu.run/agent-utils';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
-import { commandTool, ExecutorPortSchema, type ExecutorTool } from './types';
+import { commandTool, ExecutorPortSchema, type ExecutorTool, type ExecutorToolResult } from './types';
 import { shellCall } from './command-call';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells, type ShellSession } from './shell-session';
 import { namedShellCall } from '../safety/approval-gate';
@@ -20,6 +20,8 @@ import { parseInput, projectJsonValue, type JsonValue } from '../utils/json';
 import { direntType } from '../vfs/dirent';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import { desktopTools, type DesktopAnswer, type DesktopRequest, type DesktopScreen } from './desktop';
+import type { CommandEnvironment } from './command-environment';
+import { COMPUTER_OWNER_ONLY, ownerComputerCall, secretsCaller } from './secrets-caller';
 
 /** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
@@ -86,8 +88,12 @@ export interface SandboxHandle {
   unexposePort(port: number): Promise<JsonValue | void>;
   getExposedPorts():
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
-  /** The only kind of background process that survives container sleep. */
-  startSupervisedProcess(command: string, opts?: { cwd?: string }):
+  /**
+   * The only kind of background process that survives container sleep; `env` is kept with it and set again on each
+   * restart. `reveal`: the owner started it, so at each start and restart the box asks the account for the values this
+   * workspace's agents may read, and the process holds them in memory only.
+   */
+  startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>>; reveal?: boolean }):
     Promise<{ processId: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
   /** What a supervised job wrote most recently, both streams as its terminal showed them. */
@@ -105,6 +111,8 @@ export interface SandboxHandle {
   probePort(port: number): Promise<boolean>;
   /** `stamp` read up holders' ancestry; null while down (never starts it). */
   portListeners(stamp: string, ports?: readonly number[]): Promise<readonly SandboxPortListener[] | null>;
+  /** The pids running under `stamp=value`; null while down (never starts it). */
+  stampedProcesses(stamp: string, value: string): Promise<readonly number[] | null>;
   /** Records the size; a container running at another size restarts at it, and one not running stays so. */
   resize(size: string): Promise<SandboxResize>;
   answerRest(answer: 'now' | 'keep'): Promise<SandboxRestAnswer>;
@@ -273,6 +281,8 @@ export interface SandboxExecutorOptions {
   /** The desktop: this agent, as the box tells its drivers apart, and the screen as the box's own constants set it;
    *  without it the computer offers no desktop. */
   readonly desktop?: { readonly driver: string; readonly screen: DesktopScreen };
+  /** The owner's secrets granted to this workspace, as each command's variables; without it a command gets none. */
+  readonly environment?: CommandEnvironment;
 }
 
 /** What every member of the computer's surface works over: its handle (none: not configured), its named shells, and
@@ -282,10 +292,12 @@ interface Computer {
   readonly names: ShellSession;
   readonly shells: MachineShells | undefined;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
+  /** Absent where no account grants secrets: a command then waits on nothing before it is dispatched. */
+  readonly environment: CommandEnvironment | undefined;
 }
 
 /** `computer.exec`. */
-function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
+function execMember({ handle, names, shells, touch, environment }: Computer): ExecutorTool {
   return commandTool(
     'Run a shell command on your computer. '
       + 'BUN IS THE DEFAULT toolchain here (bun 1.3.12 ships in the image): use `bun install`, '
@@ -306,7 +318,7 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
         return { refused: refusalOf(new KinuError('unsupported', 'computer.exec: this runtime keeps no named shells')) };
       }
 
-      const call = machineShellCall(command, exec, { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' });
+      const place = { home: WORKSPACE_BACKUP_DIR, scope: shells?.scope ?? '', stateDirectory: shells?.stateDirectory ?? '' };
       const reportCwd = reportsCwd({ context: args[1] });
       const { name } = exec;
 
@@ -325,14 +337,17 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
           // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only refuses to
           // dispatch. One call: the handle owns any re-call after a lost reply, under the call's one launch id.
           return await names.hold(name, callJob(exec), () => named.run(pinned, async () => {
+            const env: Record<string, string> = environment === undefined ? {} : { ...await environment('run', secretsCaller()) };
+
+            if (job !== undefined) env[JOB_STAMP_ENV] = job;
+            const call = machineShellCall(command, exec, place, Object.keys(env));
+
             const res = await touch(() => {
               if (signal?.aborted) throw notDispatched();
               // The signal is added only when given, so an adapter can tell "none" from "already fired".
-              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR };
+              const opts: SandboxExecOptions = { cwd: WORKSPACE_BACKUP_DIR, ...(Object.keys(env).length > 0 && { env }) };
 
               if (signal !== undefined) opts.signal = signal;
-
-              if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
 
               if (output !== undefined) opts.output = call.output(output);
 
@@ -358,7 +373,7 @@ function execMember({ handle, names, shells, touch }: Computer): ExecutorTool {
 }
 
 /** `computer.startProcess`. */
-function startProcessMember({ handle, touch }: Computer): ExecutorTool {
+function startProcessMember({ handle, touch, environment }: Computer): ExecutorTool {
   return commandTool(
     'Start a SUPERVISED background process in the computer. Supervision records a restart ' +
       'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
@@ -383,10 +398,13 @@ function startProcessMember({ handle, touch }: Computer): ExecutorTool {
       return { call: { text: command, cwd, context: {} }, run: async () => {
         try {
           // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
+          const caller = secretsCaller();
+          const env = environment === undefined ? undefined : await environment('keep', caller);
+
           const started = await touch(async () => {
             await withSandboxRetry(() => handle.ensureReady());
 
-            return handle.startSupervisedProcess(command, { cwd });
+            return handle.startSupervisedProcess(command, env === undefined ? { cwd } : { cwd, env, reveal: caller === 'owner' });
           });
 
           return { processId: started.processId };
@@ -474,6 +492,24 @@ function listProcessesMember({ handle, touch }: Computer): ExecutorTool {
   };
 }
 
+/** A saved command's run keeps its caller through approval, as an immediate member's execute does. */
+function ownerComputerTool(member: ExecutorTool): ExecutorTool {
+  const forOwner = async (run: () => Promise<ExecutorToolResult>): Promise<ExecutorToolResult> => (secretsCaller() === 'viewer'
+    ? refusalOf(new KinuError('denied', COMPUTER_OWNER_ONLY))
+    : run());
+
+  const prepare = member.prepare;
+
+  const guarded = prepare === undefined ? member : commandTool(member.description, (args) => {
+    if (secretsCaller() === 'viewer') return { refused: refusalOf(new KinuError('denied', COMPUTER_OWNER_ONLY)) };
+    const prepared = prepare(args);
+
+    return 'refused' in prepared ? prepared : { call: prepared.call, run: (state) => forOwner(() => prepared.run(state)) };
+  }, member);
+
+  return { ...guarded, execute: (...args) => forOwner(() => guarded.execute(...args)) };
+}
+
 /** Pass no handle for a "not configured" stub. */
 export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxExecutorOptions = {}): ExecutorProvider {
   const { previewHostSuffix, activated, sizes, shells, desktop } = options;
@@ -487,7 +523,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
   let active = false;
 
   const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
-    const answer = await fn();
+    const answer = await ownerComputerCall(fn);
 
     if (!active) {
       active = true;
@@ -521,7 +557,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return { supported: true, url: exposed.url, port, name, route: exposed.route };
   };
 
-  const computer: Computer = { handle, names, shells, touch };
+  const computer: Computer = { handle, names, shells, touch, environment: options.environment };
 
   const tools: ExecutorProvider['tools'] = {
     exec: execMember(computer),
@@ -592,7 +628,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     kind: 'computer',
     files: handle ? sandboxFiles(handle, (call) => withSandboxRetry(() => touch(call))) : undefined,
     homeDir: async () => WORKSPACE_BACKUP_DIR,
-    fileRoot: async () => ({ root: EXECUTOR_MOUNTS.computer, home: WORKSPACE_BACKUP_DIR }),
+    fileRoot: () => ownerComputerCall(async () => ({ root: EXECUTOR_MOUNTS.computer, home: WORKSPACE_BACKUP_DIR })),
     capabilities: new Set(capabilities),
     filesOwner: 'agent',
     isAvailable: () => connected,
@@ -615,41 +651,47 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
       is lost. Durability is the container DO's own affair: it snapshots
       /workspace to R2 periodically and restores in its container-start hook,
       before any executor can observe the container. Not this no-op close. */ },
-    tools,
+    tools: Object.fromEntries(Object.entries(tools).map(([name, member]) => [name, ownerComputerTool(member)])),
     positionalArgs: true,
 
     async exposePort(port, opts) {
-      if (!handle) return { supported: false, reason: NOT_CONFIGURED };
+      return ownerComputerCall(async () => {
+        if (!handle) return { supported: false, reason: NOT_CONFIGURED };
 
-      if (!previewHostSuffix) return { supported: false, reason: PREVIEWS_NOT_CONFIGURED };
+        if (!previewHostSuffix) return { supported: false, reason: PREVIEWS_NOT_CONFIGURED };
 
-      if (!v.is(ExecutorPortSchema, port)) {
-        return { supported: false, reason: `invalid port ${String(port)}` };
-      }
+        if (!v.is(ExecutorPortSchema, port)) {
+          return { supported: false, reason: `invalid port ${String(port)}` };
+        }
 
-      // A failure keeps its class: the caller is told what failed, never that the computer cannot serve ports.
-      return await exposeOn(handle, port, opts?.name);
+        // A failure keeps its class: the caller is told what failed, never that the computer cannot serve ports.
+        return await exposeOn(handle, port, opts?.name);
+      });
     },
 
     async unexposePort(port) {
-      if (!handle) return;
+      return ownerComputerCall(async () => {
+        if (!handle) return;
 
-      if (!v.is(ExecutorPortSchema, port)) return settle(Effect.fail(new KinuError('bad_input', `invalid port ${String(port)}`)));
-      // No catch: unexposing an unexposed port already succeeds; other errors must surface.
-      await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
+        if (!v.is(ExecutorPortSchema, port)) return settle(Effect.fail(new KinuError('bad_input', `invalid port ${String(port)}`)));
+        // No catch: unexposing an unexposed port already succeeds; other errors must surface.
+        await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
+      });
     },
 
     async listExposedPorts() {
-      if (!handle || !previewHostSuffix) return [];
-      // A read of the box's record, which never starts it: no use of the box.
-      const ports = await withSandboxRetry(() => handle.getExposedPorts());
+      return ownerComputerCall(async () => {
+        if (!handle || !previewHostSuffix) return [];
+        // A read of the box's record, which never starts it: no use of the box.
+        const ports = await withSandboxRetry(() => handle.getExposedPorts());
 
-      return (ports ?? []).map(p => ({
-        port: p.port,
-        url: p.url,
-        name: p.name,
-        status: 'unknown' as const,
-      }));
+        return (ports ?? []).map(p => ({
+          port: p.port,
+          url: p.url,
+          name: p.name,
+          status: 'unknown' as const,
+        }));
+      });
     },
   };
 }
@@ -680,6 +722,8 @@ export function sandboxFiles(
 
   const errnoOf = (cause: Error): VfsErrorCode | null => {
     if (isVfsError(cause)) return null;
+
+    if (cause instanceof KinuError && cause.code === 'denied') return 'EPERM';
     const visited = new Set<Error>();
 
     for (let current: unknown = cause; current instanceof Error && !visited.has(current); current = current.cause) {
@@ -700,7 +744,7 @@ export function sandboxFiles(
 
   const serving = async <T>(path: string, syscall: string, op: () => Promise<T>): Promise<T> => {
     try {
-      return await through(op);
+      return await ownerComputerCall(() => through(op));
     } catch (cause) {
       if (!(cause instanceof Error)) throw cause;
 
@@ -708,7 +752,7 @@ export function sandboxFiles(
 
       if (code === null) throw cause;
 
-      throw syscallError(code, syscall, path, { cause });
+      throw syscallError(code, syscall, path, { cause, ...(cause instanceof KinuError && { detail: cause.message }) });
     }
   };
 
@@ -729,7 +773,7 @@ export function sandboxFiles(
         throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
       }
 
-      const r = await through(() => handle.exec(
+      const r = await serving(path, 'read', () => handle.exec(
         `set -o pipefail; dd if=${shellQuote(path)} bs=1 skip=${String(offset)} count=${String(length)} status=none | base64 -w 0`,
       ));
 
@@ -780,7 +824,7 @@ export function sandboxFiles(
     async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },
 
     async mkdir(path, opts) {
-      const r = await through(() => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
+      const r = await serving(path, 'mkdir', () => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
 
       if ((r.exitCode ?? 0) !== 0) {
         throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });

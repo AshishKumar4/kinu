@@ -1,10 +1,11 @@
 /-
   Kinu.Evolution.FullCraftLifecycle — 5-phase CraftStore pipeline.
   Sources: packages/core/src/evolution/engine.ts#EvolutionEngine.extractPattern,
-  packages/core/src/craft/ema.ts#updateCraftScores,
+  packages/core/src/craft/preference.ts#countCraftOffers,
   packages/core/src/craft/consolidation.ts#periodicCraftConsolidation.
-  The nonempty retirement guard still holds; age/use eligibility, extraction
-  vetoes, SQL persistence and configurable floating-point EMA are abstracted out.
+  The nonempty retirement guard still holds; `score` abstracts retirement
+  eligibility (offers and the last choice). Offer and age eligibility, extraction
+  vetoes and SQL persistence are abstracted out.
   On parity 61e789ecf, shared source eligibility is
   packages/core/src/tools/crafted-executor.ts#selectInjectableCraftedTools;
   this list model makes no claim about compiler or source-selection parity.
@@ -32,17 +33,13 @@ theorem extract_increases (store : CraftStore) (e : CraftEntry) :
 theorem extract_contains (store : CraftStore) (e : CraftEntry) :
     e ∈ extract store e := List.mem_cons_self _ _
 
-def emaUpdateInt (old obs : Nat) : Nat := (700 * old + 300 * obs) / 1000
-
-def updateScore (store : CraftStore) (name : String) (obs : Nat) : CraftStore :=
+/-- A turn's offer of `name`: counted on that tool alone. -/
+def updateScore (store : CraftStore) (name : String) (_obs : Nat) : CraftStore :=
   store.map fun e =>
-    if e.name == name then { e with score := emaUpdateInt e.score obs, uses := e.uses + 1 } else e
+    if e.name == name then { e with uses := e.uses + 1 } else e
 
 theorem update_preserves (store : CraftStore) (name : String) (obs : Nat) :
     (updateScore store name obs).length = store.length := List.length_map _ _
-
-theorem ema_bounded (old obs : Nat) (ho : old ≤ 1000) (hn : obs ≤ 1000) :
-    emaUpdateInt old obs ≤ 1000 := by simp only [emaUpdateInt]; omega
 
 -- Consolidation: inline the let to help Lean reduce
 def consolidate (store : CraftStore) (threshold : Nat) : CraftStore :=
@@ -71,17 +68,6 @@ theorem full_lifecycle_nonempty (store : CraftStore) (entry : CraftEntry)
   apply consolidation_never_empties
   simp only [updateScore, extract, List.length_map, List.length_cons]
   omega
-
--- ── EMA convergence (simplified — Nat division) ─────────────────
-
-/-- EMA update stays within bounds when both inputs are bounded. -/
-theorem ema_stays_bounded (old obs : Nat) (ho : old ≤ 1000) (hn : obs ≤ 1000) :
-    emaUpdateInt old obs ≤ 1000 := by
-  simp only [emaUpdateInt]; omega
-
-/-- EMA update produces a non-negative result. -/
-theorem ema_nonneg (old obs : Nat) : emaUpdateInt old obs ≥ 0 := by
-  simp only [emaUpdateInt]; omega
 
 -- ── Retirement: consolidation removes low-score tools ────────────
 

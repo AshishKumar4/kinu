@@ -25,15 +25,14 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { initToolEffectClaimTable, openLocalActor } from '@kinu.run/core';
+import { craftPreference, initToolEffectClaimTable, openLocalActor } from '@kinu.run/core';
 import { tierAuthority, toolSequenceModel } from './helpers/local-session';
 import { LocalAgentSession } from '../src/local-session';
-import { WEB_SEARCH_INDEX } from '@kinu.run/core';
 
 // A head owns no store: its rows are actor-keyed in the parent's one database.
 
 const stubWeb: WebSearchProvider = {
-  search: async () => ({ query: '', results: [], source: WEB_SEARCH_INDEX }),
+  search: async () => ({ query: '', results: [], source: 'exa' as const }),
   fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),
@@ -580,8 +579,8 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     await expect(run({ command: 'cat note.txt', runtime: 'device' })).rejects.toMatchObject({ code: 'unavailable' });
   });
 
-  /** A head's `workspace.*` crafted-tool EMA calls run over its own scratch database, which must carry `crafted_tools`. */
-  test('its own workspace plane scores the tools it crafts', async () => {
+  /** A head's `workspace.*` crafted-tool calls run over its own scratch database, which must carry `crafted_tools`. */
+  test('its own workspace plane lists the tools it crafts', async () => {
     const rt = await createHeadRuntime(makeParent(), 'h3');
     const workspace = present(routerOf(rt).getProvider('workspace'), 'the workspace executor');
 
@@ -590,7 +589,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
       'echo_back', 'Return its argument.', 'async (args) => args',
     )).toEqual({ ok: true, name: 'echo_back', action: 'created' });
     expect(await workspace.tools.listTools.execute()).toEqual([
-      { name: 'echo_back', description: 'Return its argument.', qualityScore: 0.5 },
+      { name: 'echo_back', description: 'Return its argument.', preference: craftPreference({ offered: 0, chosen: 0, rated: 0, rating_sum: 0 }), broken: null },
     ]);
   });
 });

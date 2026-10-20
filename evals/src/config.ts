@@ -64,6 +64,9 @@ export interface EvalMatrix {
   readonly trials: number;
   /** The run's first trial account: {@link PASS_FIRST_SLOT} for a deploy's pass, else 1. */
   readonly firstSlot: number;
+  /** Every task of a model, arm and trial in one account, one after another (KINU_EVAL_SEQUENCE): a model on a plan
+   *  login runs where that login is owned, so each renewal is the owning account's own (scripts/eval-plan-run.ts). */
+  readonly sequence: boolean;
 }
 
 /** A positive integer from `env[name]`, or `fallback` when it is unset. */
@@ -124,6 +127,7 @@ export function evalMatrix(env: Env, knownArms: readonly string[]): EvalMatrix {
     trials: positiveInteger(env, 'KINU_EVAL_TRIALS', DEFAULT_TRIALS),
     // A run's first account is the block its lease took (KINU_EVAL_FIRST_SLOT, scripts/evals-lease.ts), else its half's first.
     firstSlot: positiveInteger(env, 'KINU_EVAL_FIRST_SLOT', env.KINU_EVAL_PASS === '1' ? PASS_FIRST_SLOT : 1),
+    sequence: env.KINU_EVAL_SEQUENCE === '1',
   };
 }
 

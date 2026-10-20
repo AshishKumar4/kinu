@@ -53,7 +53,7 @@ export interface ActorReach {
    * `workspace`: the workspace's own agent. Its programs reach the workspace's own surface (its memory, files, tasks,
    * agents and self, its account) and what lies outside the workspace (its owner's MCP servers and extensions, declared
    * to its eval, and its owner's other workspaces, as peers), and it runs on the workspace's lanes (its owner's turns are
-   * evolution's verdicts, its fresh ones draw trial arms and run the evolved tool text, it spends and scopes the
+   * evolution's verdicts, its fresh ones run the evolved tool text, it spends and scopes the
    * workspace's missions and switches its role, and its jobs are the workspace's).
    * `confined`: a hire's, a head's or a swarm node's: its web, files and state, and none of the above.
    */

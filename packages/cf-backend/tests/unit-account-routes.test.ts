@@ -63,10 +63,10 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
     ControlPlaneDO: {
       idFromName: (name) => name,
       get: () => ({
-        galleryForget: async (caller, email) => {
+        galleryForget: async (caller, person) => {
           // Held to the control plane's own gate: only the Worker's ingest capability reaches it.
           await requireControl({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY }, caller, 'gallery.forget');
-          calls.push(`gallery:forget:${email}`);
+          calls.push(`gallery:forget:${person.email}:${person.userId}`);
         },
       }),
     },
@@ -105,7 +105,7 @@ describe('DELETE /api/user/account', () => {
 
     expect(response?.status).toBe(200);
     expect(v.parse(DeletedSchema, await response?.json())).toEqual({ deleted: true });
-    expect(calls).toEqual(['cards:withdraw', 'gallery:forget:owner@example.test', `account:delete:${USER_ID}`]);
+    expect(calls).toEqual(['cards:withdraw', `gallery:forget:owner@example.test:${USER_ID}`, `account:delete:${USER_ID}`]);
   });
 
   test("the SDK's own abort sentinel is a completed delete", async () => {
@@ -113,7 +113,7 @@ describe('DELETE /api/user/account', () => {
     const response = await account(request(JSON.stringify({ confirm: 'owner@example.test' })), env);
 
     expect(response?.status).toBe(200);
-    expect(calls).toEqual(['cards:withdraw', 'gallery:forget:owner@example.test', `account:delete:${USER_ID}`]);
+    expect(calls).toEqual(['cards:withdraw', `gallery:forget:owner@example.test:${USER_ID}`, `account:delete:${USER_ID}`]);
   });
 
   test('any other failure is a 500 naming its class; its cause goes to the log alone', async () => {

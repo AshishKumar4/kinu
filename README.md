@@ -73,10 +73,11 @@ You can use it for:
   OpenRouter keys, and cloud workspaces use them. On your machine a local
   workspace can also drive your Claude Code or opencode login.
 
-The agent also writes tools for itself and scores them as it uses them. When
-you correct it, it records a provisional lesson. For a hard task it can run a
-swarm: a tree search whose nodes are whole agents, scored by a verifier you
-register in the workspace.
+The agent also writes tools for itself and scores them as it uses them. Every
+few rated turns it dreams: it reads how they went and drafts small changes to
+its own prompt, tool texts, memory and skills, which you can revert. For a hard
+task it can run a swarm: a tree search whose nodes are whole agents, scored by
+a verifier you register in the workspace.
 
 ## Using it
 

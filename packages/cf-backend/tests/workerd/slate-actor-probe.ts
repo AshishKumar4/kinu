@@ -2,6 +2,7 @@
  * Hosted Plan/eval probe: crafted-tool declarations are re-read, not cached,
  * and `plan` mode is refused at the seam `build` is admitted at.
  */
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -17,10 +18,11 @@ import { actorNamespaces, createAgentStores, adaptMemory, initWorkspaceSchema, S
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initAgentDataTables, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
-import { codemodeLauncher } from '../../src/codemode-sandbox';
+import { codemodeLauncher, type ProgramLaunch } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
 import { initSlateBuildTable, SlateBuilds } from '@kinu.run/core/slates';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
+import { KinuError } from '@kinu.run/core/obs';
 import type { BrowserSessions } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
@@ -36,6 +38,8 @@ import { MemoryStore } from '@kinu.run/agent-utils/memory';
 
 const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
 
+const SEARCHES_NOTHING = async (): Promise<never> => { throw new KinuError('unavailable', 'this probe searches nothing'); };
+
 const NO_BROWSERS: BrowserSessions = { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} };
 
 /** A probe's actor over genuine stores; its caller supplies any machine and file plane it exercises. */
@@ -50,7 +54,7 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
 
   return {
     executors: () => scope.executors ?? [],
-    web: { search: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
+    web: { search: createDefaultWebSearchProvider({ fetch, search: SEARCHES_NOTHING, browser: NO_BROWSER_RUN }), files: { vfs: createMemoryVfs().vfs, home: WORKSPACE_ROOT }, browser: { sessions: NO_BROWSERS, prelude: BROWSER_PRELUDE } },
     stores: serveStores({
       memory: () => ({ memory, actor: handle, conversations: stores.conversationSearch }),
       files: files === undefined ? unreached : () => files,
@@ -61,6 +65,12 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
   };
 }
 
+
+
+/** A probe's programs, as its own owner's: online, they reach the network as the probe's agent, holding no secret. */
+function probeLaunch(name: string): (online: boolean) => ProgramLaunch {
+  return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: name, actor: name, asOwner: true, ownerUserId: null } : null }, async () => ({}));
+}
 
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
@@ -77,7 +87,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     files.mkdir('/slates/crafted', { recursive: true });
     files.writeFile('/slates/crafted/package.json', JSON.stringify({ main: 'server.ts' }));
     const sql = bindAgentSql(this);
-    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
+    initCraftedToolsTables(sql);
     initAgentDataTables((statement) => { this.ctx.storage.sql.exec(statement); });
     initSlateBuildTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
@@ -87,7 +97,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'binding-probe', actor: 'binding-probe', asOwner: true } : null }), workspace: 'binding-probe',
+      launch: probeLaunch('binding-probe'), workspace: 'binding-probe',
     });
 
     const actor = bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => Effect.void);
@@ -183,7 +193,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'stop-probe', actor: 'stop-probe', asOwner: true } : null }), workspace: 'stop-probe',
+      launch: probeLaunch('stop-probe'), workspace: 'stop-probe',
     });
 
     const actor = bindActorHandle(sql, {
@@ -224,7 +234,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     void sql`INSERT OR IGNORE INTO workspace_identity (id, name) VALUES (${'mode-probe'}, ${'mode-probe'})`;
 
     const factory = createCodemodeToolFactory({
-      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'mode-probe', actor: 'mode-probe', asOwner: true } : null }), workspace: 'mode-probe',
+      launch: probeLaunch('mode-probe'), workspace: 'mode-probe',
     });
 
     const actor = new WorkspaceActorDirectory(sql, { workspaceId: 'mode-probe', ownerUserId: '' }).createMain({ name: 'mode-probe' });

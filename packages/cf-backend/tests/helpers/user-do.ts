@@ -111,6 +111,8 @@ export interface TestUserDO {
   revokedSessionPushes: string[];
   /** Workspaces the owner's object asked for their first tile, in order. */
   overviewNudges: string[];
+  /** Workspaces told their secrets moved, in order. */
+  secretsMoved: string[];
   consentPrompts: Array<{
     workspace: string;
     method: string;
@@ -171,6 +173,7 @@ export const CAPABLE_HELLO = {
   runtime: 'Bun 1.4.2',
   agentRoot: '/home/ashish/.kinu/agents',
   sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
+  desktop: { state: 'none' },
 } satisfies JsonValue;
 
 export const TEST_CREDENTIAL_ENCRYPTION_KEY = 'test-credential-encryption-key-0123456789';
@@ -231,6 +234,8 @@ export interface DeviceFrame {
   device?: string;
   /** The id the hub stamped on the frame. */
   deviceId?: string;
+  /** The proven workspace the hub stamped on the frame, which the daemon keys a workspace's terminal sessions on. */
+  workspace?: string;
   /** Sandbox frame the daemon enforces; rides beside id/method/params because `DeviceTunnel` spreads `extra`. */
   sandbox?: JsonValue;
   /** The checkpoint hint the daemon snapshots under, on a mutating frame. */
@@ -246,6 +251,7 @@ const DeviceFrameSchema = v.object({
   sandbox: v.optional(JsonValueSchema),
   checkpoint: v.optional(JsonValueSchema),
   deviceId: v.optional(v.string()),
+  workspace: v.optional(v.string()),
   output: v.optional(v.boolean()),
 });
 
@@ -302,12 +308,17 @@ interface TestUserEnvironment {
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
       requestOverviewPush(): Promise<void>;
       devicesMoved(): Promise<{ watching: boolean }>;
+      secretsMoved(): Promise<void>;
     };
   };
 }
 
 export interface AcceptedSocket {
   readonly sent: string[];
+  /** What the object sent as binary messages, each copied as it went: a screen's bytes (1014-t), a pane's output. */
+  readonly binary: Uint8Array[];
+  /** The code and reason the object closed it with; null while it has not. */
+  closed(): { readonly code: number | undefined; readonly reason: string | undefined } | null;
   drop(): void;
   readonly ws: WebSocket;
   forward(far: (data: string) => void): void;
@@ -331,16 +342,27 @@ function installRecordingSocketPair(): void {
       readonly 1: unknown;
       constructor() {
         const sent: string[] = [];
+        const binary: Uint8Array[] = [];
+        let closedWith: { code: number | undefined; reason: string | undefined } | null = null;
         let attachment: JsonValue = null;
         let far: ((data: string) => void) | null = null;
 
         const server = {
           readyState: 1,
-          send: (data: string) => {
+          send: (data: string | ArrayBuffer | ArrayBufferView) => {
+            if (typeof data !== 'string') {
+              binary.push(data instanceof ArrayBuffer ? new Uint8Array(data.slice(0)) : new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)));
+
+              return;
+            }
+
             sent.push(data);
             far?.(data);
           },
-          close: () => { server.readyState = 3; },
+          close: (code?: number, reason?: string) => {
+            server.readyState = 3;
+            closedWith ??= { code, reason };
+          },
           serializeAttachment: (value: JsonValue) => { attachment = value; },
           deserializeAttachment: () => attachment,
         };
@@ -348,7 +370,7 @@ function installRecordingSocketPair(): void {
         // Delegates to `server` so `drop` is visible through it; the UserDO reads only
         // send, close, readyState and the attachment members.
         const ws: WebSocket = Object.create(server);
-        ACCEPTED_SOCKETS.push({ sent, drop: () => { server.readyState = 3; }, ws, forward: (to) => { far = to; } });
+        ACCEPTED_SOCKETS.push({ sent, binary, closed: () => closedWith, drop: () => { server.readyState = 3; }, ws, forward: (to) => { far = to; } });
         this[0] = { readyState: 1 };
         this[1] = server;
       }
@@ -367,6 +389,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
   const overviewNudges: string[] = [];
+  const secretsMoved: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const unavailableNotices: TestUserDO['unavailableNotices'] = [];
@@ -541,6 +564,11 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         delete: (key: string): boolean => kv.delete(key),
       },
       transactionSync: <T,>(closure: () => T): T => db.transaction(closure)(),
+      // The asynchronous face of the same pairs, where the SDK's OAuth provider keeps an MCP server's login.
+      get: async (key: string): Promise<JsonValue | undefined> => kv.get(key),
+      put: async (key: string, value: JsonValue): Promise<void> => { kv.set(key, value); },
+      delete: async (key: string): Promise<boolean> => kv.delete(key),
+      list: async (listing: { prefix: string }): Promise<Map<string, JsonValue>> => new Map([...kv].filter(([key]) => key.startsWith(listing.prefix))),
       // The SDK's `destroy()` runs these before the abort; dropping every table matches `deleteAll`.
       deleteAlarm: async (): Promise<void> => {},
       // The SDK's Lifecycle arms its job queue's alarm; `UserDO.alarm()` runs the due jobs, as the platform's would.
@@ -636,6 +664,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         async devicesMoved() {
           return { watching: options.deviceRosterMoved === undefined ? false : await options.deviceRosterMoved(name) };
         },
+        async secretsMoved() {
+          secretsMoved.push(name);
+        },
       }),
     },
   };
@@ -674,7 +705,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
-    revokedSessionPushes, overviewNudges,
+    revokedSessionPushes, overviewNudges, secretsMoved,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: async (workspace, consentId, answer) => ({ ok: await registryFor(workspace).resolve(consentId, answer) }),
     consentWakes,

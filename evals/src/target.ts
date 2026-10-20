@@ -25,9 +25,10 @@ export type EvalArm = { readonly id: string; apply(session: KinuPublicSession): 
 
 export const ARMS = [
   { id: 'product', apply: () => Promise.resolve() },
-  // docs/EVOLUTION-REDESIGN.md §8: the reactive run's two arms.
+  // docs/EVOLUTION-REDESIGN.md §8: the reactive run's arms. `crafting-off` learns, and crafts nothing.
   { id: 'learning-on', apply: (session) => session.setLearning(true) },
   { id: 'learning-off', apply: (session) => session.setLearning(false) },
+  { id: 'crafting-off', apply: async (session) => { await session.setLearning(true); await session.setCrafting(false); } },
 ] as const satisfies readonly EvalArm[];
 
 /** The deployment and the browser-plane identity, refused before any trial when either is missing. */
@@ -45,16 +46,32 @@ export function resolveEvalTarget(env: Env): EvalTarget {
 /** What the deployment serves now, the product a trial measures: the build's sha. */
 export interface Served {
   readonly sha: string;
+  /** The Worker version that answered, or null where the deployment names none (a loopback one). */
+  readonly version: string | null;
 }
 
 export function deployedBuild(target: Pick<EvalTarget, 'origin'>): Promise<Served> {
   return infraBoundary(`GET ${target.origin}/api/health`, async () => {
-    const { status, build } = await servedHealth(target.origin);
+    const { status, build, workerVersion } = await servedHealth(target.origin);
 
     if (build === undefined || build === null) throw new DeploymentAnswer(`/api/health answered ${String(status)} with no build stamp`, status);
 
-    return { sha: build.sha };
+    return { sha: build.sha, version: workerVersion };
   });
+}
+
+/**
+ * What changed under a trial between its start and its end, or null: a new build, or a new Worker version of the same
+ * build (a secret change makes one). Either restarts every Durable Object, so the trial measured the deployment, not
+ * the model or the product, and it is recorded as infrastructure (`EvalBuildChanged`, task.ts HARNESS_ERRORS).
+ */
+export function buildChanged(before: Served, after: Served): string | null {
+  if (after.sha !== before.sha) return `the deployment served ${before.sha.slice(0, 12)} then ${after.sha.slice(0, 12)} during the trial`;
+
+  if (before.version === null || after.version === null || before.version === after.version) return null;
+
+  return `the deployment's Worker changed version during the trial, ${before.version.slice(0, 8)} then ${after.version.slice(0, 8)}, on build `
+    + `${before.sha.slice(0, 12)}: a new version restarts every Durable Object, so this trial measured the deployment, not the model or the product`;
 }
 
 /**

@@ -7,7 +7,7 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LLM, LLMProviderConfig, ModelRouteResolution, ReasoningEffort } from '@kinu.run/core';
+import type { LLMProviderConfig, ModelRouteResolution, ReasoningEffort, RoutedLLM } from '@kinu.run/core';
 import { captureOperationProfile, runOperationProfile, operationProfileStream, currentOperationProfile,
   WORKSPACE_RUN_ID, profileCatalogDigest } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
@@ -26,6 +26,7 @@ function recordRoutes(rt: CLIRuntime) {
   rt.setModelForRoute?.(resolution => ({
     async *stream() { issuer.push(currentOperationProfile(rt.actor)?.turnId ?? null); seen.push(resolution); yield 'streamed'; },
     complete: async () => 'stub answer',
+    object: async () => { throw new Error('no schema is asked of this lane'); },
   }));
 
   return { seen, issuer };
@@ -48,8 +49,9 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
 /** Stubs the model a resolved route runs with, not the routing decision. */
 function stubModels(rt: CLIRuntime): ModelRouteResolution[] {
   const seen: ModelRouteResolution[] = [];
-  rt.setModelForRoute?.((resolution): LLM => ({
+  rt.setModelForRoute?.((resolution): RoutedLLM => ({
     async *stream() { yield ''; },
+    object: async () => { throw new Error('no schema is asked of this lane'); },
     complete: async () => {
       seen.push(resolution);
 
@@ -238,6 +240,7 @@ describe('a local runtime opened without a session', () => {
     const held = Promise.withResolvers<void>();
     rt.setModelForRoute?.(route => ({
       async *stream() { yield ''; },
+      object: async () => { throw new Error('no schema is asked of this lane'); },
       complete: async () => {
         started.resolve();
         await held.promise;

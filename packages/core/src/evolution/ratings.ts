@@ -4,7 +4,9 @@
  * model rates. A turn nobody answered stays unrated: no rule infers a verdict from tool exits.
  */
 
+import * as v from 'valibot';
 import { markStoreChanged } from '@kinu.run/agent-utils';
+import { parseJsonValue } from '../utils/json';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn, ToolCallRecord } from './types';
@@ -90,6 +92,8 @@ export interface RatingVerdict {
   readonly score: number;
   readonly corrected: number;
   readonly wrong: WrongReason | null;
+  /** The id of the listed change the reply rejects (`RatedTurnInput.changes`); absent or null for none. */
+  readonly rejects?: string | null;
 }
 
 export interface TurnRating extends RatingVerdict {
@@ -101,6 +105,9 @@ export interface TurnRating extends RatingVerdict {
   readonly answer: string;
   readonly followup: string | null;
   readonly scaffoldVersion: number | null;
+  /** The promoted text versions the turn ran with, from whichever of its rows recorded them; null when none did. */
+  readonly artifacts: readonly string[] | null;
+  readonly rejects: string | null;
   readonly createdAt: number;
 }
 
@@ -169,6 +176,21 @@ export interface RatedTurnInput {
   readonly actions: string;
   readonly answer: string;
   readonly followup: string;
+  /** Changes a dream made that the turn ran with; with any, the rater is asked whether the reply rejects one. */
+  readonly changes?: readonly { readonly id: string; readonly describe: string }[];
+}
+
+/** The one question a turn that ran with dream changes adds; each change is a choice, read as what it says it is. */
+function rejectsQuestion(changes: readonly { readonly describe: string }[]): DecisionQuestion {
+  return {
+    type: 'choice',
+    instructions: "Does the user's next message tell the agent to stop, or to undo, one of the changes it recently made "
+      + 'to how it works? Choose none unless the message plainly rejects that change.',
+    criteria: {
+      none: 'None: the message rejects none of these changes',
+      ...Object.fromEntries(changes.map((change, index) => [`change_${String(index + 1)}`, change.describe])),
+    },
+  };
 }
 
 function renderState(turn: RatedTurnInput, calls: number): string {
@@ -185,13 +207,17 @@ function renderState(turn: RatedTurnInput, calls: number): string {
  * refused for a reason only the owner can fix: the turn stays unrated and nothing retries it.
  */
 export async function rateTurn(decide: DecisionPort, turn: RatedTurnInput, calls: number): Promise<RatingVerdict | null> {
-  const result = await decide({ state: renderState(turn, calls), questions: RATING_QUESTIONS });
+  const changes = turn.changes ?? [];
+  const questions = changes.length === 0 ? RATING_QUESTIONS : { ...RATING_QUESTIONS, rejects: rejectsQuestion(changes) };
+  const result = await decide({ state: renderState(turn, calls), questions });
 
   if (result === null) return null;
-  const { satisfaction, corrected, wrong } = result.answers;
+  const { satisfaction, corrected, wrong, rejects } = result.answers;
   const reason = wrong?.type === 'choice' ? WRONG_REASONS.find((r) => r === wrong.choice) : undefined;
+  const rejected = rejects?.type === 'choice' ? /^change_(\d+)$/u.exec(rejects.choice)?.[1] : undefined;
 
-  if (satisfaction?.type !== 'score' || corrected?.type !== 'noul' || reason === undefined) {
+  if (satisfaction?.type !== 'score' || corrected?.type !== 'noul' || reason === undefined
+    || (changes.length > 0 && rejects?.type !== 'choice')) {
     return settle(Effect.fail(new KinuError('bad_input', 'the decision model left a rating question unanswered')));
   }
 
@@ -199,6 +225,7 @@ export async function rateTurn(decide: DecisionPort, turn: RatedTurnInput, calls
     score: Math.min(5, Math.max(1, satisfaction.score + 1)),
     corrected: Math.min(1, Math.max(0, corrected.noul)),
     wrong: reason,
+    rejects: rejected === undefined ? null : changes[Number(rejected) - 1]?.id ?? null,
   };
 }
 
@@ -215,6 +242,8 @@ const TURN_RATINGS_DDL = `(
     answer TEXT NOT NULL,
     followup TEXT,
     scaffold_version INTEGER,
+    artifacts_json TEXT,
+    rejects TEXT,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`;
@@ -233,6 +262,8 @@ export interface RecordTurnRatingInput extends RatingVerdict {
   readonly answer: string;
   readonly followup?: string | null;
   readonly scaffoldVersion?: number | null;
+  /** `<artifactId>@<version>` the turn ran with, where the writer knows them (`CompletedTurn.artifacts`). */
+  readonly artifacts?: readonly string[] | null;
   readonly now?: number;
 }
 
@@ -247,12 +278,14 @@ export function recordTurnRating(sql: SqlExecutor, actor: ActorHandle, input: Re
     : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup);
 
   void sql`INSERT INTO turn_ratings
-      (actor_id, id, turn_id, score, corrected, wrong, source, request, actions, answer, followup, scaffold_version, created_at)
+      (actor_id, id, turn_id, score, corrected, wrong, source, request, actions, answer, followup, scaffold_version, artifacts_json,
+       rejects, created_at)
     VALUES
       (${actor.actorId}, ${id}, ${input.turnId}, ${input.score}, ${input.corrected}, ${input.wrong}, ${input.source},
        ${evidenceWindow(input.request, EVIDENCE_BUDGETS.storedUserMessage)}, ${input.actions ?? ''},
        ${evidenceWindow(input.answer, EVIDENCE_BUDGETS.storedAssistantResponse)}, ${followup},
-       ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()})`;
+       ${input.scaffoldVersion ?? null}, ${input.artifacts === undefined || input.artifacts === null ? null : JSON.stringify(input.artifacts)},
+       ${input.rejects ?? null}, ${input.now ?? nowMs()})`;
   markStoreChanged(sql);
 
   return id;
@@ -261,14 +294,23 @@ export function recordTurnRating(sql: SqlExecutor, actor: ActorHandle, input: Re
 interface RawRatingRow {
   id: string; turn_id: string; score: number; corrected: number; wrong: WrongReason | null; source: RatingSource;
   request: string; actions: string; answer: string; followup: string | null; scaffold_version: number | null;
+  /** `artifacts_json` and `scaffold_version` of the newest of the turn's rows that has each. */
+  ran_with: string | null;
+  ran_scaffold: number | null;
+  rejects: string | null;
   created_at: number;
 }
+
+const RanWithSchema = v.array(v.string());
 
 function toRating(row: RawRatingRow): TurnRating {
   return {
     id: row.id, turnId: row.turn_id, score: row.score, corrected: row.corrected, wrong: row.wrong,
     source: row.source, request: row.request, actions: row.actions, answer: row.answer, followup: row.followup,
-    scaffoldVersion: row.scaffold_version, createdAt: row.created_at,
+    scaffoldVersion: row.ran_scaffold,
+    artifacts: row.ran_with === null ? null : v.parse(RanWithSchema, parseJsonValue(row.ran_with)),
+    rejects: row.rejects,
+    createdAt: row.created_at,
   };
 }
 
@@ -287,6 +329,14 @@ export interface RatingQuery {
  * (`RATING_SOURCES`). Turn ids lead the join so each probes `idx_turn_ratings_actor_turn`; a window walks
  * `idx_turn_ratings_actor` in order and stops at the limit.
  */
+/** A rated turn as a decision model reads it: the request, what the agent did, its answer, and the user's next words. */
+export const renderRating = (rating: TurnRating): string => [
+  `USER REQUEST:\n${rating.request}`,
+  `AGENT ACTIONS:\n${rating.actions || '(none)'}`,
+  `AGENT FINAL ANSWER:\n${rating.answer}`,
+  ...(rating.followup === null ? [] : [`USER'S NEXT MESSAGE:\n${rating.followup}`]),
+].join('\n\n');
+
 export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: RatingQuery = {}): TurnRating[] {
   actor.assertCurrent();
   const [p0, p1] = RATING_SOURCES;
@@ -297,7 +347,10 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
 
   const rows = query.turnIds === undefined
     ? sql<RawRatingRow>`
-      SELECT r.* FROM turn_ratings r
+      SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with,
+        (SELECT a.scaffold_version FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold FROM turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.created_at >= ${query.since ?? 0}
         AND r.score < ${below} AND r.score >= ${from}
         AND NOT EXISTS (SELECT 1 FROM turn_ratings s
@@ -308,7 +361,11 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
                 OR (s.created_at = r.created_at AND s.rowid > r.rowid)))))
       ORDER BY r.created_at DESC, r.id DESC LIMIT ${limit}`
     : sql<RawRatingRow>`
-      SELECT r.* FROM json_each(${JSON.stringify([...new Set(query.turnIds)])}) AS wanted CROSS JOIN turn_ratings r
+      SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with,
+        (SELECT a.scaffold_version FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold
+      FROM json_each(${JSON.stringify([...new Set(query.turnIds)])}) AS wanted CROSS JOIN turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.turn_id = wanted.value
         AND r.score < ${below} AND r.score >= ${from}
         AND NOT EXISTS (SELECT 1 FROM turn_ratings s
@@ -320,6 +377,21 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
       ORDER BY r.created_at DESC, r.id DESC LIMIT ${limit}`;
 
   return rows.map(toRating);
+}
+
+/** Each rated reply that rejected a change its turn ran with, at least `corrected` sure it corrected the turn, oldest first. */
+export function listRejections(sql: SqlExecutor, actor: ActorHandle, corrected: number): {
+  readonly turnId: string; readonly rejects: string; readonly artifacts: readonly string[] | null; readonly at: number;
+}[] {
+  actor.assertCurrent();
+
+  return sql<{ turn_id: string; rejects: string; artifacts_json: string | null; created_at: number }>`
+    SELECT turn_id, rejects, artifacts_json, created_at FROM turn_ratings
+      WHERE actor_id = ${actor.actorId} AND rejects IS NOT NULL AND corrected >= ${corrected} ORDER BY created_at, id`
+    .map((row) => ({
+      turnId: row.turn_id, rejects: row.rejects, at: row.created_at,
+      artifacts: row.artifacts_json === null ? null : v.parse(RanWithSchema, parseJsonValue(row.artifacts_json)),
+    }));
 }
 
 export function ratingOf(sql: SqlExecutor, actor: ActorHandle, turnId: string): TurnRating | null {
@@ -343,11 +415,6 @@ export function retractThumbs(sql: SqlExecutor, actor: ActorHandle, turnId: stri
   actor.assertCurrent();
   void sql`DELETE FROM turn_ratings WHERE actor_id = ${actor.actorId} AND turn_id = ${turnId} AND source = 'thumbs'`;
   markStoreChanged(sql);
-}
-
-/** Effective, so a thumbs-up over a low model rating clears the turn. */
-export function hasLowRating(sql: SqlExecutor, actor: ActorHandle, turnIds: readonly string[]): boolean {
-  return turnIds.length > 0 && listTurnRatings(sql, actor, { turnIds, low: true }).length > 0;
 }
 
 /** Mean satisfaction on the 1-5 scale with its 95% interval: scores map to [0,1] for the interval. */

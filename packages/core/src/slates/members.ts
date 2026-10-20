@@ -4,6 +4,7 @@
  * off a slate's surface (fail closed). `toolCallEffect` reads `NATIVE_ACTION_EFFECTS` from here.
  */
 import type { Impact } from '@agent-core/core/facets';
+import { COMPUTER_OWNER_ONLY } from '../execution/secrets-caller';
 import type { Operation } from '../operations/operation';
 import { AGENT } from '../operations/agent';
 import { AGENTS_IMPACTS, AGENTS_SLATE } from '../operations/agents';
@@ -89,6 +90,13 @@ export function slateOwnerOnly(address: { readonly namespace: string; readonly m
   if (wired !== undefined) return wired.slate === 'owner' && wired.impacts.has(address.member);
 
   return DECLARED.get(address.namespace)?.get(address.member)?.slate === 'owner';
+}
+
+/** What a share cannot grant or run, including a member named in an older grant. */
+export function shareMemberRefusal(address: { readonly namespace: string; readonly member: string }): string | null {
+  if (address.namespace === 'computer') return COMPUTER_OWNER_ONLY;
+
+  return slateOwnerOnly(address) ? `${address.namespace}.${address.member} runs only in its owner's own slate` : null;
 }
 
 /**

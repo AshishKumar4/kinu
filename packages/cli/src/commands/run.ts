@@ -19,12 +19,10 @@ import { numberField, oneOfFlag, stringField, webhookTriggerInput } from '../opt
 import {
   executeLocalExecutor,
   getLocalAgentState,
-  getLocalGepaRun,
   getLocalMctsNode,
   getLocalToolSurface,
   listLocalEvents,
   listLocalExecutors,
-  listLocalGepaRuns,
   listLocalHeads,
   listLocalMcts,
   listLocalTriggers,
@@ -385,8 +383,6 @@ interface RpcInspection {
   readonly searchNode: (nodeId: string) => Promise<JsonValue>;
   readonly searchTree: () => Promise<JsonValue>;
   readonly heads: (limit: number) => Promise<JsonValue>;
-  readonly gepaRun: (runId: string) => Promise<JsonValue>;
-  readonly gepaRuns: (limit: number) => Promise<JsonValue>;
   readonly executors: () => Promise<JsonValue>;
   readonly exec: (executor: string, command: string) => Promise<JsonValue>;
   readonly stop: () => Promise<JsonValue>;
@@ -424,11 +420,6 @@ const RPC_COMMANDS = {
     return nodeId ? on.searchNode(nodeId) : on.searchTree();
   },
   heads: (cmd, on) => on.heads(limitOf(cmd, 20)),
-  gepa: (cmd, on) => {
-    const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-
-    return runId ? on.gepaRun(runId) : on.gepaRuns(limitOf(cmd, 20));
-  },
   executors: (_cmd, on) => on.executors(),
   exec: (cmd, on) => {
     const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
@@ -488,8 +479,6 @@ function cloudInspection(origin: string, token: string, name: string): RpcInspec
     searchNode: (nodeId) => rpc('getMctsNodeDetail', [nodeId]),
     searchTree: () => rpc('getMctsTree'),
     heads: (limit) => rpc('getHeadRuns', [limit]),
-    gepaRun: (runId) => rpc('getGepaRun', [runId]),
-    gepaRuns: (limit) => rpc('getGepaRuns', [limit]),
     executors: () => rpc('getExecutors'),
     exec: (executor, command) => rpc('executeInExecutor', [executor, command]),
     stop: () => rpc('cancelCurrentWork'),
@@ -516,8 +505,6 @@ function localInspection(name: string, client: AgentClient): RpcInspection {
     searchNode: async (nodeId) => json(getLocalMctsNode(name, nodeId)),
     searchTree: async () => json(listLocalMcts(name)),
     heads: async (limit) => json(listLocalHeads(name, limit)),
-    gepaRun: async (runId) => json(getLocalGepaRun(name, runId)),
-    gepaRuns: async (limit) => json(listLocalGepaRuns(name, limit)),
     executors: async () => json(listLocalExecutors()),
     exec: async (executor, command) => json(await executeLocalExecutor(name, executor, command)),
     stop: async () => {

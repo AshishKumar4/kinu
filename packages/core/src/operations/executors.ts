@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { ExecutorPortSchema, type ExecutorCapability } from '../execution/types';
 import { DESKTOP_INPUTS, WATCH_DEFAULT_FRAMES, watchSheet, type DesktopScreen } from '../execution/desktop';
 import { CRAFTED_TOOL_BODY, WORKSPACE_FILE_BINDINGS } from '../types/codemode';
-import { defineOperation, described, type Impact, type Operation } from './operation';
+import { defineOperation, described, opaque, type Impact, type Operation } from './operation';
 import { FILE } from './file';
 
 const Command = v.pipe(v.string(), v.nonEmpty());
@@ -107,8 +107,10 @@ const ws = executorOp('workspace');
 
 export const WORKSPACE = {
   listTools: ws({
-    name: 'listTools', help: 'Your crafted tools, with each one\'s quality score.', impact: 'observe', input: v.strictObject({}),
-    output: v.array(v.object({ name: v.string(), description: v.string(), qualityScore: v.number() })),
+    name: 'listTools', impact: 'observe', input: v.strictObject({}),
+    help: 'Your crafted tools, best first: each one\'s preference (how often you chose it when offered, weighted by how '
+      + 'the turns that used it were rated, 0 to 1) and, if its last call raised, the error.',
+    output: v.array(v.object({ name: v.string(), description: v.string(), preference: v.number(), broken: v.nullable(v.string()) })),
   }),
   createTool: ws({
     name: 'createTool', impact: 'mutate',
@@ -118,6 +120,12 @@ export const WORKSPACE = {
       + '`createTool(name, description, async (args) => { ... })`, saved as its source: it closes over nothing in this program.',
     input: v.strictObject({ name: v.pipe(v.string(), v.nonEmpty()), description: v.pipe(v.string(), v.nonEmpty()), code: v.pipe(v.string(), v.nonEmpty()) }),
     output: v.object({ name: v.string(), action: v.picklist(['created', 'updated']) }),
+  }),
+  retireTool: ws({
+    name: 'retireTool', impact: 'mutate',
+    help: 'Delete a crafted tool you no longer need, or one that keeps raising and is not worth a rewrite.',
+    input: v.strictObject({ name: v.pipe(v.string(), v.nonEmpty()) }),
+    output: v.object({ name: v.string(), action: v.literal('retired') }),
   }),
 } as const;
 
@@ -148,9 +156,13 @@ const desk = <const I extends v.StrictObjectSchema<v.ObjectEntries, undefined>, 
   op: Pick<Operation<I, O>, 'name' | 'help' | 'input' | 'output'> & { readonly impact: Impact },
 ) => defineOperation({ ns: 'computer', slate: false, ...op });
 
-const KEYS_ARE = '"Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "Page_Up", "Page_Down", "Up", "Down", '
-  + '"Left", "Right", "space", "F1"-"F12", or a letter, digit or punctuation mark; modifiers before it with "+": "ctrl+l", '
-  + '"ctrl+shift+t", "alt+Tab". Enter, Esc, cmd and win are understood.';
+const KEYS_ARE = 'The keys pressed together, as an array: "Return", "Tab", "Escape", "BackSpace", "Delete", "Home", "End", "Page_Up", '
+  + '"Page_Down", "Up", "Down", "Left", "Right", "space", "F1"-"F12", a letter, digit or punctuation mark, and modifiers: '
+  + '["ctrl", "l"], ["ctrl", "shift", "t"], ["alt", "Tab"], or ["w", "space"] for two at once. Enter, Esc, cmd and win are understood.';
+
+/** The keys of a chord as the model reads them, however the desktop reads them (`DESKTOP_INPUTS`): an array of
+ *  strings, its one documented form. */
+const KEY_LIST = { type: 'array', items: { type: 'string' } } as const;
 
 /** What a watch's frames cost, from the box's layout: each frame's size, then the image the default and the most make,
  *  as screenshots' worth of pixels, which is what an image costs. */
@@ -201,11 +213,11 @@ export function computerDesktop(screen: DesktopScreen) {
     }),
     click: desk({
       name: 'click', impact: 'execute', output: v.null(), help: 'Click at a point.',
-      input: deskInput(DESKTOP_INPUTS.click, {
+      input: deskInput({ ...DESKTOP_INPUTS.click, keys: v.optional(opaque(DESKTOP_INPUTS.click.keys.wrapped, KEY_LIST)) }, {
         at: point,
         button: 'Default "left".',
         count: '2 double-clicks, 3 triple-clicks; default 1.',
-        hold: 'Modifiers held during the click: "ctrl", "shift", "alt", "super", or several joined by "+".',
+        keys: 'Modifiers held during the click, as an array: ["shift"] or ["ctrl", "shift"].',
       }),
     }),
     type: desk({
@@ -213,9 +225,9 @@ export function computerDesktop(screen: DesktopScreen) {
       input: deskInput(DESKTOP_INPUTS.type, { text: 'At most 4,000 characters.' }),
     }),
     key: desk({
-      name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord of modifiers and a key.',
-      input: deskInput(DESKTOP_INPUTS.key, {
-        keys: `${KEYS_ARE} Always one string: "ctrl+l", never ["ctrl", "l"]; the space bar is "space".`,
+      name: 'key', impact: 'execute', output: v.null(), help: 'Press a key, or a chord: keys pressed together.',
+      input: deskInput({ ...DESKTOP_INPUTS.key, keys: opaque(DESKTOP_INPUTS.key.keys, KEY_LIST) }, {
+        keys: `${KEYS_ARE} The space bar is "space".`,
         hold: 'Milliseconds it stays down before it is released, as a game reads a held key; 1 to 10,000. There is no '
           + 'separate key down or key up: hold it for as long as it should act.',
       }),

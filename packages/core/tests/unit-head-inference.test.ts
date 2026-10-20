@@ -28,7 +28,6 @@ import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { getRunEvents } from '../src/read-models/runs';
 import { profileCatalogDigest } from '../src/profiles/catalog';
 import { claimFences } from '../src/orchestrator/actor-claims';
-import { WEB_SEARCH_INDEX } from '../src/index';
 
 /** One text step, finishReason 'stop', so the head ends in a single step. */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
@@ -327,7 +326,7 @@ describe('buildHeadAccumulatorTools', () => {
     // The head's own surface, as both backends build it.
     const served = buildHeadToolSet({
       input, capture, rt, conversations: conversationsFor(rt), jobs: actorJobsFor(rt),
-      webSearch: { search: async (query) => ({ query, results: [], source: WEB_SEARCH_INDEX }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
+      webSearch: { search: async (query) => ({ query, results: [], source: 'exa' as const }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
       effectClaims: effectClaimsFor(rt),
     });

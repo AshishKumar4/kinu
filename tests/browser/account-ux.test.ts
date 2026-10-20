@@ -98,6 +98,67 @@ async function settleAccountFixture(page: Page): Promise<void> {
   await retry?.click();
 }
 
+declare global {
+  interface Window {
+    /** What `holdSignIns` holds, oldest first. */
+    __heldAccount?: { readonly key: string; readonly release: (failed: boolean) => Promise<void> }[];
+  }
+}
+
+const CLAUDE_FINISH = 'POST /api/user/claude/finish';
+
+const CHATGPT_FINISH = 'POST /api/user/chatgpt/paste/finish';
+
+const CREDENTIALS = 'GET /api/user/credentials';
+
+const PLAN = 'GET /api/user/chatgpt';
+
+/**
+ * Holds the account's answers to the two sign-ins and to the reads that show them. A sign-in is finished when let
+ * through; a read answers as the account stood when it was asked, and arrives when let through.
+ */
+async function holdSignIns(page: Page): Promise<void> {
+  await page.evaluate((reads, finishes) => {
+    const inner = window.fetch;
+    const held: NonNullable<Window['__heldAccount']> = [];
+
+    window.__heldAccount = held;
+    window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+      const key = `${init?.method ?? 'GET'} ${new URL(input instanceof Request ? input.url : String(input), location.href).pathname}`;
+
+      if (!reads.includes(key) && !finishes.includes(key)) return inner(input, init);
+      const asked = reads.includes(key) ? inner(input, init) : null;
+      const arrived = Promise.withResolvers<Response>();
+
+      held.push({ key, release: async (failed) => {
+        const answer = failed ? Response.json({ error: 'the account did not answer' }, { status: 503 }) : await (asked ?? inner(input, init));
+        const body = new Uint8Array(await answer.arrayBuffer());
+        const read = Promise.withResolvers<void>();
+
+        // Settles once the page has read the whole answer.
+        arrived.resolve(new Response(new ReadableStream({ start: (into) => { into.enqueue(body); }, pull: (into) => { into.close(); read.resolve(); } }),
+          { status: answer.status, headers: answer.headers }));
+        await read.promise;
+      } });
+
+      return arrived.promise;
+    }, { preconnect: inner.preconnect });
+  }, [CREDENTIALS, PLAN], [CLAUDE_FINISH, CHATGPT_FINISH]);
+}
+
+/** Lets the newest held `key` through, as a failure when `failed`, and returns once the page has read it. */
+async function letThrough(page: Page, key: string, failed = false): Promise<void> {
+  await page.evaluate(async (wanted, fail) => {
+    const held = window.__heldAccount ?? [];
+    const at = held.map((entry) => entry.key).lastIndexOf(wanted);
+
+    if (at < 0) throw new Error(`nothing held for ${wanted}`);
+    await held.splice(at, 1)[0]?.release(fail);
+  }, key, failed);
+}
+
+const heldOf = (page: Page, key: string) => page.evaluate((wanted) => (window.__heldAccount ?? []).filter((entry) => entry.key === wanted).length, key);
+
 /** Workspace entries are complete, the current route is marked, and filters return the requested entries. */
 async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport: keyof typeof VIEWPORTS): Promise<void> {
   await page.waitForSelector('[aria-label="Search workspaces"]');
@@ -372,6 +433,62 @@ describe('account panels', () => {
     });
   });
 
+  // m2071: after ChatGPT's address was pasted back its row said Not connected until connecting Claude re-read it, with an
+  // error beside it. Each sign-in re-reads its own provider at once; a read asked before the other provider finished,
+  // arriving late, neither covers the newer answer nor shows its failure.
+  test('Claude and ChatGPT sign-ins that overlap and answer out of order each end connected, with no error', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'setupmodal&panel=providers', 'dark', 'desktop');
+      const code = '[aria-label="Claude sign-in code"]';
+
+      try {
+        await page.waitForSelector('[role="dialog"]');
+        await settleAccountFixture(page);
+        await page.waitForSelector('[data-chatgpt-connect]');
+        await clickByText(page, '[data-chatgpt-connect] button', 'Sign in here', '[data-chatgpt-connect]');
+        await page.waitForSelector('[data-chatgpt-way="here"] input');
+        await page.type('[data-chatgpt-way="here"] input', 'http://127.0.0.1:1455/auth/callback?code=abc&state=xyz');
+        await page.click('[data-provider="Claude"] button');
+        await page.waitForSelector(code);
+        await page.type(code, 'good-code');
+
+        // ChatGPT's finish is asked first and Claude's second; Claude's answers first, so its reads hold no ChatGPT sign-in.
+        await holdSignIns(page);
+        await clickByText(page, '[data-chatgpt-way="here"] button', 'Finish', '[data-chatgpt-way="here"]');
+        await page.waitForFunction(() => window.__heldAccount?.length === 1);
+        await page.focus(code);
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => window.__heldAccount?.length === 2);
+        await letThrough(page, CLAUDE_FINISH);
+        await page.waitForFunction((reads) => reads.every((read) => window.__heldAccount?.some((entry) => entry.key === read)), {}, [CREDENTIALS, PLAN]);
+        await letThrough(page, CHATGPT_FINISH);
+        await page.waitForSelector('[data-chatgpt-way="here"]', { hidden: true });
+        expect(await heldOf(page, PLAN)).toBe(2);
+
+        // The newest reads arrive first; Claude's arrive after them, its plan stale and its credentials refused.
+        await letThrough(page, PLAN);
+        await letThrough(page, CREDENTIALS);
+        await page.waitForFunction(() => ['ChatGPT', 'Claude'].every((name) => document.querySelector(`[data-provider="${name}"] button[aria-label^="Disconnect"]`) !== null));
+        await letThrough(page, PLAN);
+        await letThrough(page, CREDENTIALS, true);
+        await page.evaluate(() => {
+          const drawn = Promise.withResolvers<void>();
+
+          requestAnimationFrame(() => { requestAnimationFrame(() => { drawn.resolve(); }); });
+
+          return drawn.promise;
+        });
+
+        expect(await page.evaluate(() => ({
+          connected: ['ChatGPT', 'Claude'].filter((name) => document.querySelector(`[data-provider="${name}"] button[aria-label^="Disconnect"]`) !== null),
+          failures: document.querySelectorAll('[role="dialog"] :is([data-resource-state="error"], [role="alert"])').length,
+        }))).toEqual({ connected: ['ChatGPT', 'Claude'], failures: 0 });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('typing in a modal is not taken by the home page arriving behind it', async () => {
     await withGallery(async (gallery) => {
       const held: HTTPRequest[] = [];
@@ -580,10 +697,13 @@ describe('account panels', () => {
       const page = await freshPage(gallery, 'welcome&step=1', 'light', 'mobile');
 
       try {
-        for (const id of ['providers', 'model', 'tools', 'showcase']) {
+        for (const id of ONBOARDING_STEP_IDS.slice(1)) {
           await page.waitForFunction((want) => document.querySelector(`[data-welcome-step="${want}"]`)?.getAttribute('aria-hidden') !== 'true', {}, id);
 
           if (id === 'tools') await page.waitForSelector('[data-welcome-step="tools"] [data-plugin-source]');
+
+          // Web search opens on the default already chosen, so Next passes it with nothing to pick.
+          if (id === 'search') await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"] input:checked');
 
           if (id !== 'showcase') await clickByText(page, 'button', 'Next');
         }
@@ -781,13 +901,13 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ href: a.getAttribute('href'), current: a.getAttribute('aria-current') })));
 
-              // Account settings is reached from the account menu at the head
-              // of the rail, so the nav carries no row of its own for it.
-              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/devices', '/drive', '/gallery', '/plugins', '/workspaces']);
+              // Settings and Devices are the sidebar footer's: the account menu,
+              // and the icon beside it. The nav carries no row for them.
+              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/drive', '/explore', '/plugins', '/workspaces']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the account
-              // menu at its head, the roster eyebrow above the rows.
+              // menu in its footer, the roster eyebrow above the rows.
               const rail = await home.evaluate(() => document.querySelector('aside')?.innerText ?? '');
               expect(rail).toContain('WORKSPACES');
               expect(rail).toContain('API Worker');
@@ -800,7 +920,7 @@ describe('account panels', () => {
               const rows = await navPaint(home);
               const open = rows.find((row) => row.label === 'Home');
               const hovered = rows.find((row) => row.label === 'Workspaces');
-              const resting = rows.find((row) => row.label === 'Devices');
+              const resting = rows.find((row) => row.label === 'Plugins');
 
               expect(hovered?.background).not.toBe(resting?.background);
               expect(hovered?.background).not.toBe(open?.background);
@@ -860,7 +980,11 @@ describe('account panels', () => {
               expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 
-            if (viewport === 'desktop') expect(await activeNavRow(devices)).toBe('Devices');
+            // Devices is the footer's icon, not a nav row: the icon is the open page, and no nav row is.
+            if (viewport === 'desktop') {
+              expect(await devices.$('[data-footer-devices][aria-current="page"]')).not.toBeNull();
+              expect(await devices.$$('nav[aria-label="Primary"] a[aria-current="page"]')).toHaveLength(0);
+            }
             
           } finally {
             await devices.close();
@@ -872,11 +996,11 @@ describe('account panels', () => {
             await shared.waitForSelector('[data-drive-section="Shared with you"]');
             const body = await shared.evaluate(() => document.body.innerText);
 
-            // The Drive's second place, in its column or below `lg` its switch: what others shared first, then what the owner shared.
+            // The Drive's third place, after My stuff and Slates, in its column or below `lg` its switch: what others shared first, then what the owner shared.
             const place = viewport === 'desktop' ? 'data-drive-place' : 'data-drive-tab';
 
             expect(await shared.$$eval(`[${place}]`, (tabs, name) => tabs.map((tab) => [tab.getAttribute(name), tab.getAttribute('aria-current')]), place))
-              .toEqual([['slates', null], ['mine', null], ['shared', 'page']]);
+              .toEqual([['mine', null], ['slates', null], ['shared', 'page']]);
             expect(body.indexOf('Shared with you')).toBeLessThan(body.indexOf('Shared by you'));
 
             // The Drive row stays lit on /shared: it is the Drive, not another page.

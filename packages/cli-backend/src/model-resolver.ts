@@ -1,5 +1,5 @@
 import type { ModelAttemptIdentity } from '@kinu.run/core';
-import { createChatModel, routeWebSearch, type FirstPartySearch, type LLMProviderConfig } from '@kinu.run/core';
+import { createChatModel, routeWebSearch, type LLMProviderConfig, type WebSearch } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
@@ -10,6 +10,7 @@ import {
   specModelInfo,
   createProviderProxyFetch,
   listModelsDevProviderModels,
+  generateObjectReported,
   generateReported,
   mapModelList,
   streamTextReported,
@@ -48,7 +49,7 @@ import {
   type InputTokenCount,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import type { LLM } from '@kinu.run/core';
+import type { RoutedLLM } from '@kinu.run/core';
 import { createOpenCodeProvider } from './opencode-provider';
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
@@ -116,8 +117,8 @@ export interface LocalModelResolver {
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
   getAuth: AuthResolver;
-  /** The signed-in account's web search, through its gated route; absent signed out. */
-  readonly firstPartySearch?: FirstPartySearch;
+  /** The signed-in account's web search, its own chain run by its deployment; absent signed out. */
+  readonly accountSearch?: WebSearch;
   withCallScope?(scope: Pick<ProviderDeps, 'accountFor' | 'onProviderWait' | 'onModelAttempt'>): LocalModelResolver;
 }
 
@@ -146,7 +147,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   /** Sink and producer label together: only the consumer knows which producer
    *  a call belongs to. */
   spend: ModelCallSpend;
-}): LLM {
+}): RoutedLLM {
   const resolver = createLocalModelResolver(opts);
   // Normalized per call: an unresolvable id fails at the call, not at construction.
   const spec = () => resolver.normalizeSpecSync(opts.route?.model ?? null);
@@ -178,6 +179,11 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
       const generated: GenerateRequest = { model: model(resolved), prompt, ...callOptions(resolved) };
 
       return (await generateReported(generated, { spend, spec: resolved })).text.trim();
+    },
+    async object(prompt, schema) {
+      const resolved = spec();
+
+      return await generateObjectReported({ model: model(resolved), prompt, ...callOptions(resolved) }, schema, { spend, spec: resolved });
     },
   };
 }
@@ -271,11 +277,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const normalizeSpecSync = (specOrNull?: string | null): string =>
     normalizeModelSpec(specOrNull, registry, { spec: defaultSpec, missing: noDefaultModelMessage() });
 
-  const firstPartySearch = cloud === undefined ? undefined : routeWebSearch({ origin: cloud.origin, token: cloud.token, fetch: opts.fetch ?? globalThis.fetch });
+  const accountSearch = cloud === undefined ? undefined : routeWebSearch({ origin: cloud.origin, token: cloud.token, fetch: opts.fetch ?? globalThis.fetch });
 
   const resolverWith = (own: ProviderDeps): LocalModelResolver => ({
     normalizeSpecSync,
-    ...(firstPartySearch !== undefined && { firstPartySearch }),
+    ...(accountSearch !== undefined && { accountSearch }),
     resolveModel(specOrNull, affinity) {
       return registry.resolve(normalizeSpecSync(specOrNull), { ...own, ...affinity });
     },
@@ -359,6 +365,8 @@ function createGatewayBackedProvider(opts: {
         headers: withAffinity(opts.llm, deps.sessionAffinity).headers,
         modelId,
         fetch: opts.fetch,
+        // Workers AI's models take the schema, as the deployment's binding sends it.
+        structuredOutputs: opts.catalogProviderId === 'cloudflare-workers-ai',
       });
     },
   };
@@ -550,7 +558,7 @@ class CloudProxyProvider implements ModelProvider {
 
     return opts.id === 'my-gateway'
         ? gatewayWireModel(opts.id, modelId, transport)
-        : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
+        : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false, structuredOutputs: opts.id === 'workers-ai' });
   }
 }
 

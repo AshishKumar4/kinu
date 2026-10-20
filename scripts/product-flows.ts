@@ -32,9 +32,9 @@ import { DESKTOP_COLOURS, DESKTOP_PANEL, DESKTOP_SIZE } from '../packages/devbox
 import {
   AGENT_PLAN_ASK, FLOW_MEMORY_NOTE, FLOW_SHELL_PROBE, FLOW_SLATE, MEMORY_ASK, SLATE_ASK, STORM_ASK, STORM_DIR, STORM_FILES, STORM_SEED_ASK, WRITE_FILE_ASK,
   JOB_ASK, JOB_NOT_STARTED, JOB_STARTED,
-  APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, PROPOSAL_LINK_REPLY, WORKSPACE_PROPOSAL_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
+  APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
-  SPLICE_BEFORE, SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_WORK_ASK,
+  SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
@@ -130,46 +130,70 @@ export async function agentPlanIsReviewedInItsPane(target: FlowTarget): Promise<
   }
 }
 
-/** Where the ping's card sits, and how far the agent has got with it. */
-export interface SpliceReading {
-  /** Its delivery mark and the colour it wears. */
+/** One ping's card as the chat draws it: its delivery mark and the colour it wears, and whether it is drawn inside the
+ *  answer rather than as a loose card. */
+export interface SpliceCard {
+  readonly ping: number;
   readonly state: string | null;
   readonly tone: string | null;
-  /** Drawn inside the answer, not as a loose card. */
   readonly spliced: boolean;
-  /** The reading order of the turn's words before it, the card, and the answer after it (-1: not found). */
+}
+
+/** The chat as one reading of the page sees the work turn. */
+export interface SpliceReading {
+  /** Each ping's card drawn, in the chat's reading order. */
+  readonly cards: readonly SpliceCard[];
+  /** The reading order of each step's words, each ping's card after it, and the answer (-1: not found). */
   readonly order: readonly number[];
+  /** Whether the turn was still working. */
+  readonly working: boolean;
 }
 
 export interface SpliceVerdict {
-  /** While the agent slept: the card waiting on it. */
-  readonly waited: SpliceReading;
+  /** Once each ping's card is drawn: what the chat showed then. */
+  readonly arrivals: readonly SpliceReading[];
   /** Once the turn ended, and again after a reload. */
   readonly answered: SpliceReading;
   readonly reloaded: SpliceReading;
+  /** The answer's words: the pings the agent heard, in the order they reached it. */
+  readonly heard: string;
 }
 
-/** The ping's card as the chat draws it, by the word it carries, read in the page. */
+/** The chat as it draws the work turn, read in the page: each ping's card by the numbered word it carries. */
 const SPLICE_READING = `(() => {
   const all = [...document.querySelectorAll('#chat *')];
   const at = (needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
     && ![...el.children].some((child) => (child.textContent ?? '').includes(needle)));
-  const card = [...document.querySelectorAll('#chat [data-signal-card]')].find((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}));
-  const mark = card?.querySelector('[data-delivery]') ?? null;
+  const ping = (el) => Number(new RegExp(${JSON.stringify(`${SPLICE_SENT}-(\\d+)`)}).exec(el.textContent ?? '')?.[1] ?? 0);
+  const cards = [...document.querySelectorAll('#chat [data-signal-card]')].filter((el) => ping(el) > 0).map((card) => {
+    const mark = card.querySelector('[data-delivery]');
+
+    return {
+      ping: ping(card),
+      state: mark?.getAttribute('data-delivery') ?? null,
+      tone: ['p-warning', 'p-success'].find((name) => mark?.classList.contains(name)) ?? null,
+      spliced: card.closest('[data-spliced-signal]') != null,
+    };
+  });
+  const steps = ${JSON.stringify(SPLICE_STEPS)};
 
   return {
-    state: mark?.getAttribute('data-delivery') ?? null,
-    tone: ['p-warning', 'p-success'].find((name) => mark?.classList.contains(name)) ?? null,
-    spliced: card?.closest('[data-spliced-signal]') != null,
-    order: [${JSON.stringify(SPLICE_BEFORE)}, ${JSON.stringify(SPLICE_SENT)}, ${JSON.stringify(SPLICE_HEARD)}].map(at),
+    cards,
+    order: [...steps.flatMap((step, i) => [at(step), at(${JSON.stringify(SPLICE_SENT)} + '-' + String(i + 1))]), at(${JSON.stringify(SPLICE_HEARD)})],
+    working: !(${CHAT_IDLE}),
   };
 })()`;
 
-const SpliceReadingSchema = v.object({ state: v.nullable(v.string()), tone: v.nullable(v.string()), spliced: v.boolean(), order: v.array(v.number()) });
+const SpliceReadingSchema = v.object({
+  cards: v.array(v.object({ ping: v.number(), state: v.nullable(v.string()), tone: v.nullable(v.string()), spliced: v.boolean() })),
+  order: v.array(v.number()),
+  working: v.boolean(),
+});
 
 /**
- * Row: a page in the chat sends the agent a word while it works. Its card waits amber, is drawn inside the answer between
- * the words before it and the answer that read it, turns green once read, and a reload draws it there still.
+ * Row: a page in the chat sends the agent a word at each step of its work. Each card is drawn as it arrives, while the
+ * agent still works, after the words of the step it arrived in; once read, each sits there green, every one of them,
+ * and a reload draws them there still (1008-r, 1008-x).
  */
 export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<SpliceVerdict> {
   const workspace = await createFlowWorkspace(target, 'splice');
@@ -177,6 +201,7 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
   try {
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
     const reading = async (): Promise<SpliceReading> => v.parse(SpliceReadingSchema, await page.evaluate(SPLICE_READING));
+    const chatHas = (words: string): string => `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(words)})`;
 
     await sendAndSettle(page, SPLICE_PAGE_ASK);
     await until(page, 'the Ping page drawn', `document.querySelector('[data-slate-ui="ping"] iframe') !== null`);
@@ -185,23 +210,30 @@ export async function spliceSitsWhereItWasRead(target: FlowTarget): Promise<Spli
 
     await frame.waitForSelector('#ping');
 
-    // The work turn: sent, and clicked into while it sleeps.
+    // The work turn: sent, and clicked into once at each step while it waits.
     const composer = await typeIntoComposer(page, SPLICE_WORK_ASK);
     await composer.press('Enter');
-    await until(page, 'the work turn waiting on its build', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_BEFORE)})`);
-    await frame.click('#ping');
-    await until(page, "the ping's card", `[...document.querySelectorAll('#chat [data-signal-card]')].some((el) => (el.textContent ?? '').includes(${JSON.stringify(SPLICE_SENT)}))`);
-    const waited = await reading();
+    const arrivals: SpliceReading[] = [];
 
-    await until(page, 'the answer that read the ping', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)}) && ${CHAT_IDLE}`);
+    for (const [index, step] of SPLICE_STEPS.entries()) {
+      const sent = `${SPLICE_SENT}-${String(index + 1)}`;
+
+      await until(page, `step ${String(index + 1)} waiting on its build`, chatHas(step));
+      await frame.click('#ping');
+      await until(page, `ping ${String(index + 1)}'s card`, `[...document.querySelectorAll('#chat [data-signal-card]')].some((el) => (el.textContent ?? '').includes(${JSON.stringify(sent)}))`);
+      arrivals.push(await reading());
+    }
+
+    await until(page, 'the answer that read the pings', `${chatHas(SPLICE_HEARD)} && ${CHAT_IDLE}`);
     const answered = await reading();
+    const heard = v.parse(v.string(), await page.evaluate(`(document.querySelector('#chat')?.innerText ?? '').split('\\n').find((line) => line.includes(${JSON.stringify(SPLICE_HEARD)}))?.trim() ?? ''`));
 
     await page.reload({ waitUntil: 'load' });
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
-    await until(page, 'the answer drawn again', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(SPLICE_HEARD)})`);
+    await until(page, 'the answer drawn again', chatHas(SPLICE_HEARD));
     const again = await reading();
 
-    return { waited, answered, reloaded: again };
+    return { arrivals, answered, reloaded: again, heard };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }
@@ -365,61 +397,60 @@ export async function hireParksAndRunsOnApproval(target: FlowTarget): Promise<Hi
   }
 }
 
-export interface WorkspaceProposalVerdict {
-  /** What the Needs-you card offered the owner before anything existed. */
-  readonly cardTitle: string;
-  readonly cardSoul: string;
-  /** Whether the account already listed a workspace of that name before the approval. */
-  readonly existedBeforeApproval: boolean;
-  /** The link the agent repeated from its wake, and the workspace it names. */
+export interface AgentWorkspaceVerdict {
+  /** Whether the account already listed a workspace of that name before the agent's turn. */
+  readonly existedBefore: boolean;
+  /** The link the agent repeated from `agent.createWorkspace`'s answer, and the workspace it names. */
   readonly link: string;
   readonly created: { readonly name: string; readonly displayName: string } | null;
-}
-
-/** The proposal's card in the chat's attention stack, where Work's row for it opens it. */
-const PROPOSAL_CARD = '#chat [data-workspace-proposal]';
-
-/** A button in the proposal card, by its words. */
-function proposalButton(words: string): string {
-  return `[...document.querySelectorAll(${JSON.stringify(`${PROPOSAL_CARD} button`)})].find((button) => ${words}.test(button.textContent ?? ''))?.click()`;
+  /** What waited on the owner in Work → Needs you once the turn was over. */
+  readonly needsYou: number;
+  /** The Agent tab's Changelog entry for it: its words, and the workspace it opens. */
+  readonly changelog: { readonly summary: string; readonly opens: string } | null;
 }
 
 /**
- * Row: the workspace's main agent proposes a new workspace, Work → Needs you lists it, its row opens its card in the
- * chat's attention stack, the owner approves it there once, and it exists under the owner's account with the proposed
- * name, while the agent that asked is woken with its link.
+ * Row: the workspace's main agent creates a workspace in its owner's account, at once, nothing asked (the owner,
+ * 2026-10-19): it exists under the name the agent gave it, the agent's reply carries its link, nothing waits in Work →
+ * Needs you, and the Agent tab's Changelog records it with a way to open it.
  */
-export async function agentProposesAWorkspace(target: FlowTarget): Promise<WorkspaceProposalVerdict> {
-  const workspace = await createFlowWorkspace(target, 'proposal');
+export async function agentCreatesAWorkspace(target: FlowTarget): Promise<AgentWorkspaceVerdict> {
+  const workspace = await createFlowWorkspace(target, 'agent-ws');
   let created: string | null = null;
 
   try {
+    const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
     const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
 
-    await sendAndSettle(page, WORKSPACE_PROPOSAL_ASK);
-    await openInspector(page);
-    await page.evaluate(stripTab('Work'));
-    await until(page, 'the proposal in Work → Needs you', `document.querySelector('#inspector [data-section="work-needs-you"] [data-pending-action]') !== null`);
-    await page.click('#inspector [data-section="work-needs-you"] [data-pending-action]');
-    await until(page, "the proposal's card in the chat", `document.querySelector(${JSON.stringify(PROPOSAL_CARD)}) !== null`);
-    const cardTitle = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(PROPOSAL_CARD)})?.textContent ?? ''`));
-
-    await page.evaluate(proposalButton('/show its soul/iu'));
-    await until(page, 'the soul approving writes', `document.querySelector('[data-workspace-proposal-soul]') !== null`);
-    const cardSoul = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-workspace-proposal-soul]')?.textContent ?? ''`));
-    const before = new Set((await listWorkspaces(target.origin, target.identity)).map((row) => row.name));
-
-    await page.evaluate(proposalButton('/create workspace/iu'));
+    await sendAndSettle(page, AGENT_WORKSPACE_ASK);
     await until(page, "the agent's reply with the new workspace's link",
-      `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PROPOSAL_LINK_REPLY)})`);
+      `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(AGENT_WORKSPACE_REPLY)})`);
     const said = v.parse(v.string(), await page.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
-    const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(PROPOSAL_LINK_REPLY)))?.[0] ?? '';
+    const link = /https?:\/\/\S+?\/workspace\/[a-z0-9-]+/u.exec(said.slice(said.lastIndexOf(AGENT_WORKSPACE_REPLY)))?.[0] ?? '';
 
     created = /\/workspace\/([a-z0-9-]+)$/u.exec(link)?.[1] ?? null;
     const row = (await listWorkspaces(target.origin, target.identity)).find((entry) => entry.name === created);
 
+    await openInspector(page);
+    await until(page, 'Work in the inspector strip', `document.querySelector('#inspector button[aria-label="Work"]') !== null`);
+    await page.evaluate(stripTab('Work'));
+    await until(page, 'the Work tab', `document.querySelector('#inspector [data-section]') !== null`);
+    const needsYou = v.parse(v.number(), await page.evaluate(`document.querySelectorAll('#inspector [data-section="work-needs-you"] [data-pending-action]').length`));
+
+    await page.evaluate(stripTab('Agent'));
+    const entry = `#inspector [data-changelog-workspace=${JSON.stringify(created ?? '(none)')}]`;
+
+    await until(page, "the Changelog's entry for the new workspace", `document.querySelector(${JSON.stringify(entry)}) !== null`);
+
+    const changelog = v.parse(v.nullable(v.object({ summary: v.string(), opens: v.string() })), await page.evaluate(`(() => {
+      const link = document.querySelector(${JSON.stringify(entry)});
+      // The entry's details region is labelled by its summary.
+      const details = link?.closest('[role="region"]');
+      return link === null ? null : { summary: details?.getAttribute('aria-label') ?? '', opens: link.getAttribute('href') ?? '' };
+    })()`));
+
     return {
-      cardTitle, cardSoul, link, existedBeforeApproval: created !== null && before.has(created),
+      link, needsYou, changelog, existedBefore: created !== null && before.has(created),
       created: row === undefined ? null : { name: row.name, displayName: row.displayName ?? '' },
     };
   } finally {
@@ -595,6 +626,15 @@ export interface AgentReturnVerdict {
  * report of 2026-09-23: every agent was present over the API and a reloaded page
  * showed none of them.
  */
+/**
+ * The chat column's conversation, whole: its pane shows the conversation's beginning once nothing older is left to read,
+ * by a page it read or by the window its room seeded it with, whose frame says it reaches the start (c1c9c18e9). A wait
+ * for the page read alone waited out the runner's bound on rc22 (2620e7c05): a short chat seeded whole reads none. An
+ * empty chat shows no edge, so this is for a chat that has rows.
+ */
+const CHAT_FROM_ITS_BEGINNING = `[...document.querySelectorAll('#chat [data-scroll-edge]')]
+  .some((edge) => edge.textContent?.includes('Beginning of the conversation') === true)`;
+
 export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentReturnVerdict> {
   const workspace = await createFlowWorkspace(target, 'agent-return');
   const elsewhere = await createFlowWorkspace(target, 'agent-elsewhere');
@@ -651,7 +691,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
-    // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own.
+    // The agents list arrives on the opening read (`getWorkspaceOpening`), not on its own; the workspace's own chat is
+    // empty here, and an empty pane always reads its newest page.
     await settledAfter(back, ledger, 'getWorkspaceOpening', 'getChatHistoryPage');
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
@@ -668,7 +709,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
       await back.click(`nav[aria-label="Chats"] [data-agent-tab="${agent}"] a`);
       await until(back, "the agent's page", `location.pathname === ${JSON.stringify(`${agentPath}${encodeURIComponent(agent)}`)}`);
       await until(back, "the agent's own composer", agentComposer(workspace, agent));
-      await settledAfter(back, ledger, 'getChatHistoryPage');
+      await until(back, "the agent's conversation from its beginning", CHAT_FROM_ITS_BEGINNING);
+      await settledAfter(back, ledger);
       conversation = v.parse(v.string(), await back.evaluate(`document.querySelector('#chat')?.textContent ?? ''`));
     }
 
@@ -959,6 +1001,10 @@ export async function eachPaneKeepsItsTranscript(target: FlowTarget): Promise<St
 
 /** Press the welcome page's forward control: Next through its steps, then
  *  Finish setup. Answers which it pressed, or 'none' when neither is offered. */
+/** Whether the setup offers a way forward: Next or Finish setup, drawn and pressable. */
+const WELCOME_OFFERED = `[...document.querySelectorAll('button')]
+  .some((b) => !b.disabled && b.getClientRects().length > 0 && ['Next', 'Finish setup'].includes((b.textContent ?? '').trim()))`;
+
 const WELCOME_FORWARD = `(() => {
   const offered = [...document.querySelectorAll('button')].filter((b) => !b.disabled && b.getClientRects().length > 0);
   const finish = offered.find((b) => (b.textContent ?? '').trim() === 'Finish setup');
@@ -991,6 +1037,8 @@ export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
     const welcomed = v.parse(v.boolean(), await page.evaluate(`location.pathname === '/welcome'`));
 
     for (let pressed = 'next'; welcomed && pressed === 'next'; await painted(page)) {
+      // `/welcome` is the address before the page draws its setup: its steps' buttons come once it has.
+      await until(page, 'the setup offering Next or Finish setup', WELCOME_OFFERED);
       pressed = v.parse(v.picklist(['next', 'finish', 'none']), await page.evaluate(WELCOME_FORWARD));
 
       if (pressed === 'none') throw new Error('the welcome page offers neither Next nor Finish setup');
@@ -1493,8 +1541,8 @@ async function relisted(page: Page, act: () => Promise<void>, loadsDocument = fa
 const MY_STUFF_PLACE = `[...document.querySelectorAll('[data-drive-place="mine"], [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
 
 /**
- * Opens My stuff, where New is: a first visit to the Drive lands on Slates when the account has a slate, as the
- * approved design does. With My stuff the only place there is no column or switch, and the page is already there.
+ * Opens My stuff, where New is: a first visit to the Drive lands there unless My stuff holds nothing, as the approved
+ * design does (owner, 2026-10-19). Below `lg` the switch names it; from `lg` the column does.
  */
 async function openMyStuff(page: Page): Promise<void> {
   await until(page, 'My stuff or its place', `document.querySelector('[data-drive-new]') !== null || ${MY_STUFF_PLACE} !== undefined`);
@@ -1687,8 +1735,8 @@ function slateTile(workspace: string): string {
 async function driveWithSlate(target: FlowTarget, workspace: string): Promise<Page> {
   const page = await signedInPage(target.browser, target);
 
-  // A first visit to the Drive lands on Slates when the owner has one.
-  await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
+  // Slates is its own place; a first visit to the Drive lands on My stuff when it holds anything.
+  await page.goto(`${target.origin}/slates`, { waitUntil: 'load' });
   await until(page, 'the slate\'s tile in Slates', `document.querySelector(${JSON.stringify(slateTile(workspace))}) !== null`);
   await painted(page);
 

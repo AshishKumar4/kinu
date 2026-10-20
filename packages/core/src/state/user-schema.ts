@@ -13,6 +13,7 @@ export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
 
 export const WORKSPACE_KEYED_ROWS = [
   { table: 'device_consent', column: 'agent_name', removal: 'before-destroy' },
+  { table: 'user_secret_grants', column: 'workspace', removal: 'before-destroy' },
   { table: 'cli_agent_connect_tickets', column: 'agent_name', removal: 'before-destroy' },
   { table: 'device_joins', column: 'workspace', removal: 'before-destroy' },
   { table: 'user_workspaces', column: 'name', removal: 'after-destroy' },

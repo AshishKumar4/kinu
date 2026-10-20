@@ -3,7 +3,9 @@
 // Every other method this daemon answers is one request and one reply. A
 // terminal is neither: bytes arrive from a program nobody asked, at a time
 // nobody chose. So a session is state the daemon holds, and the socket carries
-// four frames each way (open, input, resize, close) rather than a call.
+// frames each way (open, input, resize, detach, output, exit) rather than a call.
+// A session outlives the pane showing it (1014-t): detached, it keeps running
+// and keeps its newest output, which the next pane to attach is shown first.
 //
 // WHY the runtime's own terminal, and not `posix_openpt` through `bun:ffi`.
 // The daemon runs on Kinu's approved Bun: one started on anything older moves
@@ -62,6 +64,10 @@ const MAX_SESSIONS = 8;
 
 /** The window, bounded per axis: the protocol's `ptyMaxAxis`, the hub's bound too. */
 const MAX_AXIS = require('./device-protocol.json').ptyMaxAxis;
+
+/** The newest output a session keeps for the next pane to attach: the hub holds as much before a pane attaches, so
+ *  what it is shown arrives whole. */
+const RETAINED_BYTES = 64 * 1024;
 
 /** A session name is a map key and a word in this daemon's log lines. Bounded
  *  for both reasons; it never becomes a path. */
@@ -140,6 +146,7 @@ function createProcReader(fs) {
       cpuTicks: Number(fields[11]) + Number(fields[12]) + Number(fields[13]) + Number(fields[14]),
       tasks: Number(fields[17]),
       startTicks: fields[19] ?? '',
+      foreground: Number(fields[5]),
     };
   }
 
@@ -222,8 +229,9 @@ function sessionGroups(leader, platform = process.platform) {
  *
  * `spawn` is an argument so a test can read what was asked for without a
  * machine, and defaults to the runtime's own so production has one path.
- * `send` belongs to the SOCKET that opened the session: a terminal whose socket
- * is gone has nobody to draw for, which is why `closeAll` exists.
+ * `send` belongs to the pane watching the session: a session with no pane keeps
+ * running, keeps its newest output, and sends nothing until one attaches.
+ * `closeAll` ends them all, for a daemon that is itself ending.
  */
 function createSessions(options = {}) {
   const {
@@ -259,7 +267,9 @@ function createSessions(options = {}) {
 
     if (!(send instanceof Function)) throw new Error('a terminal needs a socket to report to');
 
-    const record = { name, pid: 0, discardedBytes: 0, exited: false, terminal: undefined, ended: null };
+    const record = {
+      name, pid: 0, discardedBytes: 0, exited: false, terminal: undefined, ended: null, send, retained: [], retainedBytes: 0, plan: request.plan,
+    };
 
     let child;
 
@@ -273,10 +283,12 @@ function createSessions(options = {}) {
           rows,
           name: TERMINAL_NAME,
           data(_terminal, bytes) {
+            retain(record, Buffer.from(bytes));
+
             // A terminal's newest bytes ARE its picture, so a congested socket
             // discards rather than queues: the count is logged when the
             // session ends, and the next full repaint restores the display.
-            if (!send({ type: FRAMES.ptyOutput, session: name, data: Buffer.from(bytes).toString('base64') })) {
+            if (record.send !== null && !record.send({ type: FRAMES.ptyOutput, session: name, data: Buffer.from(bytes).toString('base64') })) {
               record.discardedBytes += bytes.length;
             }
           },
@@ -288,9 +300,10 @@ function createSessions(options = {}) {
           },
         },
         env: request.env,
-        // No cwd: the plan puts the command where it belongs — `--chdir`
-        // inside the sandbox, the shell's own default outside it — and a cwd
-        // here would be a second answer to that question.
+        // The plan's own answer (`spawnCwd`), as a command's supervisor takes
+        // it: the raw tier's folder, and the sandbox launcher's, which then
+        // `--chdir`s the shell inside.
+        cwd: request.cwd,
         stdin: 'ignore',
         stdout: 'ignore',
         stderr: 'ignore',
@@ -319,7 +332,7 @@ function createSessions(options = {}) {
       terminal.close();
 
       if (record.discardedBytes > 0) log('device.terminal_output_discarded', name, record.discardedBytes);
-      send({ type: FRAMES.ptyExit, session: name, exitCode: status });
+      record.send?.({ type: FRAMES.ptyExit, session: name, exitCode: status });
     }
 
     /** @param {unknown} error */
@@ -330,6 +343,43 @@ function createSessions(options = {}) {
     child.exited.then(reportExit, reportExitFailure);
 
     return { pid: child.pid, cols, rows };
+  }
+
+  /** The newest output, oldest first, a whole chunk at a time. */
+  function retain(record, bytes) {
+    record.retained.push(bytes);
+    record.retainedBytes += bytes.length;
+
+    while (record.retainedBytes > RETAINED_BYTES && record.retained.length > 1) record.retainedBytes -= record.retained.shift().length;
+  }
+
+  /** A pane attaches: the session reports to it from now on, and it is shown what the session kept. */
+  function attach(name, send) {
+    if (!(send instanceof Function)) throw new Error('a terminal needs a socket to report to');
+    const record = held(name);
+
+    record.send = send;
+
+    return { pid: record.pid, plan: record.plan, retained: Buffer.concat(record.retained) };
+  }
+
+  /** The process a session's terminal runs, its shell or the sandbox's launcher of it; null when none runs. */
+  function pid(name) {
+    return sessions.get(name)?.pid ?? null;
+  }
+
+  /** The pane went away: the session keeps running and keeps its output for the next one. */
+  function detach(name) {
+    const record = sessions.get(parseSessionName(name));
+
+    if (record) record.send = null;
+  }
+
+  /** Every pane went away with the socket that carried them. */
+  function detachAll() {
+    for (const record of sessions.values()) record.send = null;
+
+    return [...sessions.keys()];
   }
 
   function held(name) {
@@ -399,6 +449,10 @@ function createSessions(options = {}) {
 
   return {
     open,
+    attach,
+    detach,
+    detachAll,
+    pid,
     write,
     resize,
     close,

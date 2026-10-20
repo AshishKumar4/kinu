@@ -4,7 +4,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, RoutedLLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   objectNamed,
   nimbusSessionShell, createShellSession,
@@ -22,7 +22,7 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
-import { JOB_STAMP_ENV, withHostedNodeExecution, WORKSPACE_ROOT, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
+import { JOB_STAMP_ENV, withCommandEnvironment, withHostedNodeExecution, WORKSPACE_ROOT, type CommandEnvironment, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
 import type { ActorReference, HostedNodeHome, InvocationSurface, TierRefusals } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -81,6 +81,8 @@ export interface CFRuntimeAccess {
   getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
   /** The surface of the live turn, which its calls' background policy reads (`ActorAgent.turnSurface`). */
   readonly turnSurface?: () => InvocationSurface;
+  /** The owner's secrets granted to the workspace, as the variables of every command an agent runs in it. */
+  readonly commandEnvironment: CommandEnvironment;
 }
 
 /** A method, so the SDK's scalar-only `sql` satisfies it while `SqlExecutor` also admits ArrayBuffer. */
@@ -194,6 +196,8 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 }
 
 export type CFRuntime = AgentRuntime & {
+  /** The reflection lane: routed, so it answers to a schema where a fast lane is absent. */
+  llm: RoutedLLM;
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
   localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
@@ -260,9 +264,11 @@ export function createCFRuntime(
   const env = access.env;
   const workspaceBox = access.workspaceBox(actor.shellId);
 
-  const executionBox = hooks.workspaceExecution
-    ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution)
-    : workspaceBox;
+  // Outermost, so a command's own variables (a facet's `HOME`, a job's stamp) win over a secret's name.
+  const executionBox = withCommandEnvironment(
+    hooks.workspaceExecution ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution) : workspaceBox,
+    access.commandEnvironment,
+  );
 
   // Workspace state belongs to the session user: a facet's uid could not create entries under `.kinu`.
   const originVfs = workspaceBox.store({ home: WORKSPACE_ROOT });
@@ -282,21 +288,20 @@ export function createCFRuntime(
 
   const memory = adaptMemory(memoryStore, originVfs, { store: vectorStore });
 
-  const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
+  const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
-  const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
+  const profileLane = (source: FixedTierSource): RoutedLLM | undefined => createProfileLaneLLM({
     agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
     refusals: hooks.refusals,
     modelOperations: hooks.modelOperations,
   });
 
   // The one required lane: `AgentRuntime.llm` is not optional.
-  const llm: LLM = profileLane('reflection') ?? {
-    async *stream() { yield ""; },
-    async complete(): Promise<string> {
-      throw new Error('reflection model lane has no active profile');
-    },
+  const noProfile = async (): Promise<never> => {
+    throw new Error('reflection model lane has no active profile');
   };
+
+  const llm: RoutedLLM = profileLane('reflection') ?? { async *stream() { yield ""; }, complete: noProfile, object: noProfile };
 
   const schedule = createRealSchedule(access, sql, actor.actor);
   const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
@@ -390,6 +395,7 @@ export function createCFRuntime(
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: toolFiles, files: agentFileVfs, craftStore, shell, planes,
+      crafting: () => actor.actor.config.getCrafting(),
       sql,
       slate: hooks.slate,
     },
@@ -439,6 +445,7 @@ export function createCFRuntime(
         shells: machineShells,
         // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
         desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },
+        environment: access.commandEnvironment,
       }));
       diagnostics.event('computer.executor_registered', {
         sandboxId,
@@ -667,7 +674,7 @@ interface ProfileLaneOptions {
 }
 
 /** Only a completed call reports: a thrown seam was not billed. */
-function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
+function createProfileLaneLLM(options: ProfileLaneOptions): RoutedLLM | undefined {
   const { actor, resolveProfile, source, report, refusals } = options;
 
   if (!resolveProfile) return undefined;

@@ -16,7 +16,7 @@ import {
   previewHostSuffix,
   previewSuffixMetaName,
   buildWorkspacePreviewHost,
-  APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH,
+  APP_FONTS_PATH, appFontFile, SLATE_FONTS_PATH, escapeHtml, PREVIEW_ENTRY_PATH, CLI_PREVIEW_ENTRY_PATH, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
@@ -90,6 +90,9 @@ const OWNER = '0123456789abcdef0123456789abcdef';
 const PREVIEW_STORE = makeKv();
 
 await sandboxPreviewExposures(PREVIEW_STORE, PREVIEW_SANDBOX_ID).publish(PREVIEW_PORT, PREVIEW_TOKEN);
+
+// A public link, so these cases reach the container with any visitor; who a private one admits is `unit-preview-forgery`.
+await sandboxPreviewExposures(PREVIEW_STORE, PREVIEW_SANDBOX_ID).setPublic(PREVIEW_PORT, true);
 
 const ENV = {
   AUTH_KV: PREVIEW_STORE,
@@ -756,6 +759,18 @@ describe("signing a preview's owner in on its own host", () => {
     expect(await port.text()).toContain(escapeHtml(previewRefusalText(false)));
   });
 
+  test("a computer's preview signs its owner in the same way, onto its own host, and turns anyone else away", async () => {
+    // A slate on the workspace's own box at some port says nothing of the computer's port of the same number.
+    const env = ownedWorkspace([], true);
+    const ticketed = await previewEntry(entry(`${PREVIEW_URL}app?x=1`), env, OWNER_ID);
+    const exchange = new URL(present(ticketed.headers.get('location'), 'the exchange'));
+    const stranger = await previewEntry(entry(PREVIEW_URL), env, STRANGER_ID);
+
+    expect([ticketed.status, exchange.origin, exchange.pathname, exchange.searchParams.get('next')]).toEqual([303, new URL(PREVIEW_URL).origin, VIEWER_EXCHANGE_PATH, '/app?x=1']);
+    expect(stranger.status).toBe(403);
+    expect(await stranger.text()).toContain(escapeHtml(previewRefusalText(false)));
+  });
+
   test('the entry sends no one anywhere but a preview this deployment signed', async () => {
     const labelEnd = NIMBUS_URL.indexOf(`.${SUFFIX}`);
     const forged = `${NIMBUS_URL.slice(0, labelEnd - 1)}a${NIMBUS_URL.slice(labelEnd)}`;
@@ -1194,6 +1209,7 @@ const PUBLIC_API = [
   LIVE_SHARE_OPEN_PATH, // a public share opens signed out; a named one reads its session itself, the cross-site rule with it
   '/api/workspaces/:name/webhook/', // a signed delivery URL
   '/api/gallery', // read by anyone; a star or report reads its session itself
+  '/api/explore', // read by anyone, as the Gallery is
 ];
 
 describe('worker wiring', () => {

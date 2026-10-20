@@ -8,7 +8,7 @@ import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   connectedDevices, deleteExecutorPathOp, ExecutorFileDownload, ExecutorFileUpload, getExecutorFiles, readExecutorFile, renameExecutorPathOp,
   runOnExecutor,
-  type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest,
+  type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest, type RewindComputer,
 } from '@kinu.run/core';
 import type { HeldSlatePorts } from '@kinu.run/core/slates';
 import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -56,7 +56,9 @@ export interface WorkspaceExecutorsHost {
   broadcast(frame: string): void;
   ownerUserId(): string | null;
   /** A terminal on the owner's machine, opened by the owner's account for this workspace. */
-  openOwnerTerminal(window: { cols: number; rows: number }, device: string | undefined): Promise<{ session: string }>;
+  openOwnerTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string }>;
+  /** The screen of the owner's machine `device`, opened by the owner's account for this workspace (1014-t). */
+  openOwnerScreen(device: string): Promise<{ session: string }>;
 }
 
 /** A terminal step's refusal as the pane reads it, or null once the step is done. */
@@ -265,17 +267,49 @@ export class WorkspaceExecutors {
   }
 
   /** `user` is the object holding both sockets; the route sends the pane's upgrade there. */
-  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
-    return settle(Effect.suspend((): Effect.Effect<{ session: string; user: string } | { error: string }> => {
+  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+    return settle(this.openOnOwner('opening a terminal on this machine', async () => this.host.openOwnerTerminal(window, target)));
+  }
+
+  /** As a terminal opens, for the machine's screen: `user` holds the device socket the viewer's bytes cross. */
+  openDeviceScreen(device: string): Promise<{ session: string; user: string } | { error: string }> {
+    return settle(this.openOnOwner("opening this machine's screen", async () => this.host.openOwnerScreen(device)));
+  }
+
+  private openOnOwner(doing: string, open: () => Promise<{ session: string }>): Effect.Effect<{ session: string; user: string } | { error: string }> {
+    return Effect.suspend((): Effect.Effect<{ session: string; user: string } | { error: string }> => {
       const user = this.host.ownerUserId();
 
       if (!user) return Effect.succeed({ error: unownedWorkspace().message });
 
-      // Each refusal the user object authors (no device, an older daemon, consent) reaches the pane as written.
-      return Effect.matchCause(Effect.promise(async () => this.host.openOwnerTerminal(window, device)), {
+      // Each refusal the user object authors (no device, an older daemon, consent) reaches the client as written.
+      return Effect.matchCause(Effect.promise(open), {
         onSuccess: (opened) => ({ session: opened.session, user }),
-        onFailure: (failed) => ({ error: terminalRefusal({ doing: 'opening a terminal on this machine', cause: Cause.squash(failed) }) }),
+        onFailure: (failed) => ({ error: terminalRefusal({ doing, cause: Cause.squash(failed) }) }),
       });
+    });
+  }
+
+  /**
+   * The computer as a chat-only rewind tells it to the agent: what runs on it and what listens, read only while it is
+   * up, as `exposedPorts` reads it, so a rewind never wakes a computer at rest. A read that fails says so in its place.
+   */
+  async rewindComputer(): Promise<RewindComputer> {
+    const [workspace, computer] = await Promise.all([this.exposedPorts('workspace'), this.exposedPorts('computer')]);
+    const ports = [...workspace.ports, ...computer.ports];
+    const state = this.host.computerState();
+    const handle = this.host.runtime().sandboxHandle;
+    const status = this.router?.getProvider('computer')?.getStatus?.();
+
+    if (state.refused !== null) return { processes: null, unread: state.refused, ports };
+
+    if (state.starting) return { processes: null, unread: 'the computer is still restoring', ports };
+
+    if (handle === null || status?.active !== true) return { processes: [], ports };
+
+    return await settle(Effect.matchCause(Effect.promise(() => handle.listSupervisedProcesses()), {
+      onSuccess: (rows): RewindComputer => ({ processes: rows.map(({ command, status: running }) => ({ command, status: running })), ports }),
+      onFailure: (failed): RewindComputer => ({ processes: null, unread: renderThrownChain({ cause: Cause.squash(failed) }), ports }),
     }));
   }
 

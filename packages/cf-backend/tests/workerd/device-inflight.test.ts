@@ -184,7 +184,7 @@ async function machine(owner: string, workspace: string, answer: (frame: v.Infer
   const hello = {
     type: 'HELLO', protocolVersion: DEVICE_PROTOCOL_VERSION, features: [...DEVICE_FEATURES], os: 'linux', hostname: 'studio',
     arch: 'x64', updateCheck: true, root: '/home/ashish/project', home: '/home/ashish', runtime: 'Bun 1.4.2',
-    agentRoot: '/home/ashish/.kinu/agents', sandbox: { capability: 'sandboxed', reason: null, gpu: [] },
+    agentRoot: '/home/ashish/.kinu/agents', sandbox: { capability: 'sandboxed', reason: null, gpu: [] }, desktop: { state: 'none' },
   } satisfies v.InferOutput<typeof DeviceHelloSchema>;
 
   socket.send(JSON.stringify(hello));

@@ -159,7 +159,10 @@ describe('eval-service provider keys on every deployment it drives', () => {
  * its workspaces, and the account delete that empties it.
  */
 function accountsDeployment() {
-  type Account = { keys: Map<string, JsonValue>; inherited: Record<string, number>; workspaces: { name: string; lastVisited: number }[]; catalog: ProfileCatalogEnvelope };
+  type Account = {
+    keys: Map<string, JsonValue>; inherited: Record<string, number>; workspaces: { name: string; lastVisited: number }[]; catalog: ProfileCatalogEnvelope;
+    gateway: string | null;
+  };
 
   const accounts = new Map<string, Account>();
   const resets: string[] = [];
@@ -168,7 +171,7 @@ function accountsDeployment() {
     const name = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
     const catalog = { ...BUILTIN_PROFILE_CATALOG, retries: 3 };
 
-    const account = accounts.get(name) ?? { keys: new Map(), inherited: {}, workspaces: [], catalog: {
+    const account = accounts.get(name) ?? { keys: new Map(), inherited: {}, workspaces: [], gateway: null, catalog: {
       authority: { kind: 'account', accountId: name }, version: 0, digest: profileCatalogDigest(catalog), catalog,
     } };
 
@@ -203,8 +206,15 @@ function accountsDeployment() {
         const account = of(request);
 
         return Response.json({ user_credentials: account.keys.size, ...account.inherited,
-          user_config: (account.inherited.user_config ?? 0) + Number(account.catalog.version > 0) });
+          user_config: (account.inherited.user_config ?? 0) + Number(account.catalog.version > 0) + Number(account.gateway !== null) });
       },
+      // The selection is a user_config row, read before any Cloudflare call (CredentialsStore.listAIGateways).
+      '/api/user/cloudflare/gateways': (request) => Response.json({ connected: of(request).keys.has('cloudflare.oauth'), selectedId: of(request).gateway, gateways: [], error: null }),
+      '/api/user/cloudflare/gateway': { PUT: async (request) => {
+        of(request).gateway = v.parse(v.object({ id: v.nullable(v.string()) }), await request.json()).id;
+
+        return Response.json({ ok: true });
+      } },
       '/api/user/workspaces': (request) => Response.json({ entries: of(request).workspaces, nextCursor: null }),
       '/api/user/profile': (request) => {
         const account = request.headers.get('x-kinu-dev-identity-account');
@@ -261,6 +271,75 @@ describe('every trial account a run acts as', () => {
 
       expect(cleaned.trials?.reset).toEqual(['trial-1']);
       expect(cleaned.findings).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // Staging 2620e7c05, 2026-10-19: a gateway model (my-gateway/anthropic/claude-sonnet-5.5) is listed only for an account
+  // holding a Cloudflare login and a selected AI Gateway, and the selection is a user_config row.
+  test('a run on a gateway model gives each account the deployment\'s Cloudflare login and gateway, and keeps them', async () => {
+    const { server, accounts, resets, at } = accountsDeployment();
+    const gateway = { accountId: 'f44999d1ddda7012e9a87729eba250f1', id: 'kinu-ai-gateway-staging', token: 'cf-api-token-never-printed' };
+
+    try {
+      const input = {
+        origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY',
+        models: [MODEL, 'my-gateway/anthropic/claude-sonnet-5.5'], trialAccounts: ['trial-1', 'trial-2'] as const, gateway,
+      };
+
+      await provisionEvalProviderKeys(input);
+      const again = await provisionEvalProviderKeys(input);
+
+      for (const name of ['eval-service', 'trial-1', 'trial-2']) {
+        expect(accounts.get(name)?.keys.get('cloudflare.oauth')).toMatchObject({ kind: 'oauth', accessToken: gateway.token, metadata: { accountId: gateway.accountId } });
+        expect(accounts.get(name)?.gateway).toBe(gateway.id);
+      }
+
+      expect([resets, again.trials?.reset]).toEqual([[], []]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('a run on no gateway model gives no account a Cloudflare login or a gateway', async () => {
+    const { server, accounts, at } = accountsDeployment();
+
+    try {
+      await provisionEvalProviderKeys({
+        origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY',
+        models: [MODEL], trialAccounts: ['trial-1'] as const,
+        gateway: { accountId: 'f44999d1ddda7012e9a87729eba250f1', id: 'kinu-ai-gateway-staging', token: 'cf-api-token-never-printed' },
+      });
+      expect([...accounts.values()].map((account) => [account.keys.has('cloudflare.oauth'), account.gateway])).toEqual([[false, null], [false, null]]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // 2026-10-19, the owner's call: Claude Haiku 5.5 and GPT-6 Luna measured on the owner's own plans, through a grant the
+  // run alone signed in for. Each is owned by one account, whose renewals single-flight in its own object: the trial
+  // account its model's sequence runs in (EvalMatrix.sequence), never eval-service, and given it once.
+  test('a run on plan models gives its trial account the run\'s plan grants once; eval-service and a run on none get none', async () => {
+    const { server, accounts, at } = accountsDeployment();
+    const grant = { kind: 'oauth' as const, accessToken: 'plan-access-never-printed', refreshToken: 'plan-refresh-never-printed', expiresAt: 4102444800000, metadata: {} };
+    const planGrants = { 'claude.oauth': grant, 'chatgpt.oauth@compare': grant };
+    const base = { origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY' };
+
+    try {
+      const input = { ...base, models: [MODEL, 'claude/claude-haiku-5-5', 'chatgpt@compare/gpt-6-luna'], trialAccounts: ['trial-1'] as const, planGrants };
+
+      await provisionEvalProviderKeys(input);
+      // The account renews its grant: a later provisioning leaves the renewed one, never the run's first.
+      accounts.get('trial-1')?.keys.set('claude.oauth', { ...grant, accessToken: 'renewed' });
+      await provisionEvalProviderKeys(input);
+
+      expect([accounts.get('trial-1')?.keys.get('claude.oauth'), accounts.get('trial-1')?.keys.get('chatgpt.oauth@compare')])
+        .toEqual([{ ...grant, accessToken: 'renewed' }, grant]);
+      expect([...accounts.get('eval-service')?.keys.keys() ?? []]).toEqual(['opencode-go.bearer']);
+
+      await provisionEvalProviderKeys({ ...base, models: [MODEL], trialAccounts: ['trial-3'] as const, planGrants });
+      expect([...accounts.get('trial-3')?.keys.keys() ?? []]).toEqual(['opencode-go.bearer']);
     } finally {
       await server.stop(true);
     }

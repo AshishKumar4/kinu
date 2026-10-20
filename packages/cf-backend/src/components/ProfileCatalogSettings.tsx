@@ -28,6 +28,7 @@ import {
   type RoleId,
   type TierAssignment,
   type TierId, type ModelMenuResponse,
+  fastAssignment,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { settle, showing } from '@kinu.run/core/obs';
@@ -50,11 +51,20 @@ interface TierWords {
 const TIER_WORDS: ReadonlyMap<TierId, TierWords> = new Map([
   ['default', { name: 'Main', use: 'Every chat and every new workspace' }],
   ['deep', { name: 'Deep', use: 'Planning, reviews and judging work' }],
-  ['fast', { name: 'Quick', use: 'Summaries, titles, reflection and research' }],
+  ['fast', { name: 'Quick', use: 'Summaries, titles, reviews and research' }],
 ]);
 
 function tierWords(id: TierId): TierWords {
   return TIER_WORDS.get(id) ?? { name: id, use: 'The roles that name this tier' };
+}
+
+/** What an unset tier runs on: Quick, the pick the server resolves it to (`fastAssignment`); any other, the main model. */
+function unsetTierPlaceholder(tierId: TierId, menu: ModelMenuResponse, main: TierAssignment): string {
+  const autoFast = tierId === 'fast' ? fastAssignment(menu.fast ?? [], main) : null;
+
+  return autoFast !== null
+    ? `Automatic · ${labelOfSpec(menu, autoFast.model)}`
+    : `Main model · ${labelOfSpec(menu, main.model)}`;
 }
 
 /** `clef-flash` reads "Clef Flash". */
@@ -312,7 +322,7 @@ export function ProfileCatalogSettings() {
 
             <div className="border-t p-border pt-4" data-section="tiers">
               <div className="p-row-text font-medium p-text">For particular work</div>
-              <p className="mt-0.5 p-meta p-text-3">Left unset, each uses the main model.</p>
+              <p className="mt-0.5 p-meta p-text-3">Left unset, Quick picks the cheapest of your providers' models that can do the work; the others use the main model.</p>
               <div className="mt-1">
                 {tierIdsOf(draft).filter((tierId) => tierId !== 'default').map((tierId) => {
                   const assignment = draft.tiers[tierId];
@@ -339,7 +349,7 @@ export function ProfileCatalogSettings() {
                           value={assignment?.model ?? ''}
                           onChange={(model) => setTier(tierId, model)}
                           clearable
-                          placeholder={`Main model · ${labelOfSpec(menu, draft.tiers.default.model)}`}
+                          placeholder={unsetTierPlaceholder(tierId, menu, draft.tiers.default)}
                           label={`${tierId} model`}
                           test={testModel}
                           size="sm"

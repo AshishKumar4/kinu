@@ -4709,6 +4709,47 @@ read the line 31 to 36 of 48 and the codes 3 to 7 of 36; at 1 frame a second it 
 samples. At high resolution the sheet's four frames as a clip cost 1,028 and read 48 of 48 and 36 of 36, so the clip
 that reads as well costs what the sheet does, 4% less. It would need ffmpeg, which the image lacks, and a wire Kinu
 does not speak: the gateway serves its Gemini only on Google's own API.
+Rerun on 2026-10-19 on the video models Kinu reaches over chat-completions, through the account's AI Gateway
+(staging), with the same frames, questions and scoring, each clip sent as `video_url` the way
+@ai-sdk/openai-compatible sends one. On these frames no clip read as well for fewer tokens. On `alibaba/qwen3.8-max`
+(temperature 0), the sheet costs 1,145 prompt tokens and scored 9 of 10 on the moving page in 3 runs of 3. A clip
+costs 2,019 tokens whether it is encoded at 2 or 8 frames a second (the model samples it itself) and also scored 9.
+Its 4-frame clip (the sheet's frames) costs 1,403 and scored 7. On small text the sheet read the still line 45 of 48
+and the changing codes 16 of 36 at 1,086 tokens; the clip read 48 of 48 and 34 of 36 at 1,960, so it reads the codes
+better but costs 80% more. On `moonshotai/kimi-k3` (temperature 1, the only one it takes), the sheet costs 1,538
+tokens and scored 10 of 10 in 3 runs. The 8-frames-a-second clip also scored 10, at 8,004 tokens; the
+2-frames-a-second clip and the 4-frame clip cost 2,824 and 1,529 and scored 7 and 8 in one run each (at a 6,000-token
+output limit those two, and two of the sheet's, reasoned past it without an answer). On small text, at that limit, its
+sheet answered 10 of 12 and read the still line 39 of 40 and 20 of the 36 codes at 1,479 tokens; the 8-frames-a-second
+clip read 48 of 48 and 36 of 36 at 7,945, and the 4-frame clip 48 of 48 and 4 of 36 at 1,470. `meta/muse-spark-1.3`
+never saw a clip: the gateway sent its prompt without the video (47 tokens) and the model answered that it could see
+none. The rerun stopped when the account's unified billing balance ran out, before Kimi's text runs at a 32,000-token
+limit.
+Then in the watch flow itself (2026-10-19), as Kinu sends a watch on chat completions. A build ran in a real xterm on
+a staging computer, and computer.watch's own program took its 3-second sheet. The same 3 seconds were captured at 8
+frames a second and encoded to the clip. The turn was shaped as Kinu shapes it: the agent's `eval` call, the tool
+result, then the media in the next user message. Two questions were asked of each trial. In a status line rewritten 8
+times a second, which crate failed and with which code (shown for half a second), and which step the build is on at
+the end. In a scrolling test log, which test FAILED, and the last counter shown. Scores are sheet against clip, out of
+8 trials per question (Qwen 3.8 Max: 4 or 5).
+
+| model, route | failed crate | its code | final step | failed test | final counter | prompt tokens |
+|---|---|---|---|---|---|---|
+| qwen3.8-max, OpenCode Go | 4/5, 4/4 | 1/5, 1/4 | 4/5, 0/4 | 4/4, 3/4 | 4/4, 0/4 | 1,463-1,480, 2,336-2,353 |
+| @cf/qwen/qwen3.8-27b, Workers AI | 6, 2 | 0, 0 | 3, 1 | 2, 5 | 6, 1 | 1,501-1,518, 3,427-3,444 |
+| @cf/zai-org/glm-5.3-flash, Workers AI | 7, 3 | 2, 0 | 7, 0 | 2, 4 | 5, 0 | 1,640-1,657, 4,216-4,233 |
+| @cf/google/gemma-4-26b-a4b-it, Workers AI | 6, 6 | 1, 1 | 4, 2 | 0, 0 | 0, 1 | 536-554, 1,919-1,937 |
+| @cf/moonshotai/kimi-k2.6, Workers AI | 7, 0 | 5, 0 | 6, 0 | 4, 0 | 8, 0 | 1,555-1,572, 253-270 |
+
+The clip read where the work stood at the end worse: the final step on every model, and the final counter on every
+model but Gemma (1 of 8 against 0). It also costs 1.6 to 3.6 times the sheet's tokens. It scored higher only on the
+test name that scrolled past, on Qwen 3.8 27B (5 of 8 against 2) and GLM 5.3 Flash (4 against 2), on the failed crate
+on Qwen 3.8 Max (4 of 4 against 4 of 5), and on Gemma's final counter (1 against 0). So a watch stays a sheet on every
+model measured. Kimi K2.6 on Workers AI took no clip at all: 253 to 270 prompt tokens, the text alone, though Workers
+AI's schema lists `video_url`. Muse Spark through AI Gateway took none either. Both are written up with their repros
+for the owner to pass on. If a clip ever measures better, a Workers AI model's video input is read from Workers AI's
+own model schema, one source per provider. Five Workers AI models list `video_url` there while models.dev marks none
+of them as taking video.
 
 D90. The computer's terminal sessions are named tmux sessions the box keeps by id, name and folder (2026-10-13, the
 owner: a cmux-like experience across the machines). One `devbox` session became any number: the page attaches with

@@ -9,8 +9,9 @@ import { DurableObject } from 'cloudflare:workers';
 import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
   censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
-  type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort,
-  type OpsCaller, type Page, type PageRequest, type Repair, type TablesAnswer,
+  kinuListings,
+  type ExploreKind, type ExplorePage, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort,
+  type OpsCaller, type WorkspaceCard, type Page, type PageRequest, type Repair, type TablesAnswer,
 } from '@kinu.run/core';
 import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -39,8 +40,13 @@ export type {
 
 /** What a signed-in person does to a listing. */
 export type GalleryMark =
-  | { readonly kind: 'star'; readonly workspace: string; readonly slate: string; readonly on: boolean }
+  | { readonly kind: 'star'; readonly workspace: string; readonly slate: string; readonly on: boolean; readonly listing?: ExploreKind }
   | { readonly kind: 'report'; readonly workspace: string; readonly slate: string; readonly reason: string };
+
+/** One page of Explore, as its route asks it: a page of the Gallery, of either kind. */
+export interface ExploreQuery extends GalleryQuery {
+  readonly kind: ExploreKind | null;
+}
 
 /** One page of the Gallery, as its routes ask it. */
 export interface GalleryQuery {
@@ -80,6 +86,9 @@ export class ControlPlaneDO extends DurableObject<Env> {
 
     if (unmade && this.storageRefusal === undefined) writeStamp(stamps, 'control');
     this.gallery = new GalleryIndex(ctx.storage.sql);
+
+    // Kinu's own workspace blueprints are code: each activation lists this build's.
+    if (this.storageRefusal === undefined) this.gallery.syncKinu(kinuListings(), Date.now());
     // A DO is a different isolate from the Worker, so `server.ts`'s sink is not installed here. Memoised per isolate.
     installAnalyticsDiagnostics(env);
   }
@@ -161,6 +170,26 @@ export class ControlPlaneDO extends DurableObject<Env> {
     return this.gallery.listed(workspace, slate);
   }
 
+  async explorePage(caller: PresentedCaller, query: ExploreQuery, viewer: string | null): Promise<ExplorePage> {
+    await this.gate(caller, 'gallery.read');
+
+    return this.gallery.explore(query, viewer, Date.now());
+  }
+
+  /** A listed workspace blueprint's card, or null when it is not listed. */
+  async exploreWorkspace(caller: PresentedCaller, workspace: string, item: string, viewer: string | null): Promise<WorkspaceCard | null> {
+    await this.gate(caller, 'gallery.read');
+
+    return this.gallery.workspaceCard(workspace, item, viewer, Date.now());
+  }
+
+  /** A person's install of a listed item, counted once; false when it is not listed. */
+  async exploreInstalled(caller: PresentedCaller, install: { readonly kind: ExploreKind; readonly workspace: string; readonly item: string; readonly userId: string }): Promise<boolean> {
+    await this.gate(caller, 'gallery.mark');
+
+    return this.gallery.installed(install, Date.now());
+  }
+
   /** The listings `email` starred. */
   async galleryStarred(caller: PresentedCaller, email: string): Promise<GalleryListing[]> {
     await this.gate(caller, 'gallery.read');
@@ -173,13 +202,13 @@ export class ControlPlaneDO extends DurableObject<Env> {
     await this.gate(caller, 'gallery.mark');
     const at = { email, workspace: mark.workspace, slate: mark.slate };
 
-    return mark.kind === 'star' ? this.gallery.star({ ...at, on: mark.on }, Date.now()) : this.gallery.report({ ...at, reason: mark.reason }, Date.now());
+    return mark.kind === 'star' ? this.gallery.star({ ...at, on: mark.on, kind: mark.listing ?? 'app' }, Date.now()) : this.gallery.report({ ...at, reason: mark.reason }, Date.now());
   }
 
-  /** A deleted account's stars and reports. */
-  async galleryForget(caller: PresentedCaller, email: string): Promise<void> {
+  /** A deleted account's stars, reports and installs. */
+  async galleryForget(caller: PresentedCaller, person: { readonly email: string; readonly userId: string }): Promise<void> {
     await this.gate(caller, 'gallery.forget');
-    this.gallery.forget(email);
+    this.gallery.forget(person);
   }
 
   /** One account's rows. The roster fan-out stays in the Worker route, where subrequests are counted. */

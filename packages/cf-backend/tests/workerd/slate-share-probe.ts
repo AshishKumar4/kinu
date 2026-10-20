@@ -28,7 +28,7 @@ import { ROOT_SLATE_CALLER, slateRevision, type PartRunAnswer, type PartRunReque
 import type { PartViewer } from '../../src/slates/part-runs';
 import { FakeViewerAccounts } from './personal-parts-fakes';
 import { slateBatchStub } from '../../src/slates/rpc-transport';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { asFetchFunction, callCodemodeMember, createDefaultWebSearchProvider, createWebCodemodeProvider, requireCodemodeMember } from '@kinu.run/core';
 
 // `env.FILES` and `codemodeEgress()` resolve exports of this worker; without them a `build` boot throws before the route.
@@ -144,7 +144,11 @@ export class FakeBrowserRun extends WorkerEntrypoint {
 
 /** The web members a slate's host answers; with no Browser Run of its own, only the browser members' refusals. */
 const PROBE_WEB = createWebCodemodeProvider({
-  provider: createDefaultWebSearchProvider({ fetch: asFetchFunction(async () => new Response('', { status: 404 })), browser: { missing: 'the probe renders nothing' } }),
+  provider: createDefaultWebSearchProvider({
+    fetch: asFetchFunction(async () => new Response('', { status: 404 })),
+    search: async () => { throw new KinuError('unavailable', 'the probe searches nothing'); },
+    browser: { missing: 'the probe renders nothing' },
+  }),
   files: null, prelude: { missing: 'a slate drives a browser from its class' },
 });
 

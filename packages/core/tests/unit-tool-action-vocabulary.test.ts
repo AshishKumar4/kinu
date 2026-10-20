@@ -10,7 +10,6 @@ import {
 } from '../src/index';
 import { asSchema, type ToolSet } from 'ai';
 import { conversationsFor } from './helpers';
-import { WEB_SEARCH_INDEX } from '../src/index';
 
 /** The malformed argument a model actually emitted, kept verbatim. */
 const MALFORMED = 'list">';
@@ -23,7 +22,7 @@ interface DispatchSurface {
 }
 
 const noopWebSearch: WebSearchProvider = {
-  search: async (query) => ({ query, results: [], source: WEB_SEARCH_INDEX }),
+  search: async (query) => ({ query, results: [], source: 'exa' as const }),
   fetch: async (url) => ({ url, markdown: '', retrievedAt: '2026-01-01T00:00:00Z' }),
   render: async (url) => ({ url, markdown: '', retrievedAt: '2026-01-01T00:00:00Z' }),
   screenshot: async (url) => ({ url, retrievedAt: '2026-01-01T00:00:00Z', bytes: new Uint8Array() }),

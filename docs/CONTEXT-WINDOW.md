@@ -22,7 +22,7 @@ rewrite what came before them.
 | Tool definitions | The native tools this agent may call in this work mode, then MCP and extension tools | The role, the work mode, an active skill's tool restriction, or an MCP server connecting | `profile.allowedTools`; `composeTurn` in `cf-backend/src/actor-agent.ts`, `composeNextRequest` in `cli-backend/src/local-session.ts` |
 | System: core | Operating guidance, the execution environments this workspace has, the tool index, persistence, code execution, delegation, background work, verification, output format | The tool list, or a promoted prompt section | `buildSystemPromptSync`, `packages/core/src/prompt.ts` |
 | System: lead doctrine | Seven sections on briefing, parallel work, review, interruptions and delivery | Never between turns; only a root agent that can hire has it | same |
-| System: workspace | `SOUL.md`, owner-approved `AGENTS.md`, the skills index, pinned skill bodies | The owner edits one of them | same |
+| System: workspace | `SOUL.md`, approved `AGENTS.md`, the skills index, pinned skill bodies | The owner edits one of them, or a dream's skill lands at a cold turn | same |
 | System: agent | The agent's and workspace's names, the role section | A rename or a role change | same |
 | Unapproved instruction files | `AGENTS.md` and skill files nobody approved, sealed in `<workspace_instructions>` as reference material | Their bytes change | `renderUnverifiedInstructions`, `prompt.ts` |
 | Dynamic context | Runtime facts (backend, model, working directory, date), why the turn runs, work mode, tasks, jobs, delegates, approvals, executor and device status, facts, memory tail | Any of that state changes | `DynamicContextLedger`, `packages/core/src/prompting/volatile-context.ts` |

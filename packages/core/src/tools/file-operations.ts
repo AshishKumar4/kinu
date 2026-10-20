@@ -21,7 +21,7 @@ import { requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES, type VfsMountRouting } from '../vfs/mounts';
 import { rasterImage } from '../utils/raster-image';
-import { bytesToBase64 } from '../utils/base64';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { imageCarrier, type ImageCarrier } from '../types/tool-images';
 import type { CodemodeProvider } from '../types/codemode';
 import { serve, type Served } from '../operations/operation';
@@ -189,9 +189,9 @@ export function serveFile(current: () => FileDeps): Readonly<Record<keyof typeof
 
   return {
     read: serve(FILE.read, async ({ path, offset, limit }) => await run((files) => files.read(path, { offset, limit }))),
-    text: serve(FILE.text, async ({ path }) => await run((files) => files.text(path))),
+    text: serve(FILE.text, async ({ path, encoding }) => await run((files) => files.text(path, encoding))),
     edit: serve(FILE.edit, async ({ path, edits }) => await run((files) => files.edit(path, edits))),
-    write: serve(FILE.write, async ({ path, content }) => await run((files) => files.write(path, content))),
+    write: serve(FILE.write, async ({ path, content, encoding }) => await run((files) => files.write(path, content, encoding))),
     list: serve(FILE.list, async ({ path, offset }) => await run((files) => files.list(path, offset ?? 0))),
     stat: serve(FILE.stat, async ({ path }) => await run((files) => files.stat(path))),
     search: serve(FILE.search, async ({ path, query }) => await run((files) => files.search(path, query))),
@@ -220,6 +220,11 @@ export function createFileCodemodeProvider(served: Readonly<Record<keyof typeof 
   return codemodeNamespace('file', 'Your workspace files, read and edited as the file tool does: an edit needs a read first.', Object.values(served));
 }
 
+/** A file's bytes as the text a read of it shows. */
+function decodedText(bytes: Uint8Array): string {
+  return new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
+}
+
 function fileOps(deps: FileDeps) {
   const { vfs, ledger, budget } = deps;
 
@@ -243,12 +248,12 @@ function fileOps(deps: FileDeps) {
   /** The one write path: conditioned on what was read (`vfs/conditional-write.ts`). `observe` runs as soon as the
    *  bytes land, so a later failure cannot leave the ledger denying content already on disk. */
   const persist = async (
-    target: Landing, content: string, observe: (revision?: VfsRevision) => void, observed: ObservedFile,
+    target: Landing, content: string | Uint8Array, observe: (revision?: VfsRevision) => void, observed: ObservedFile,
   ): Promise<{ readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee }> => {
     const dir = vfsDirname(target.path);
 
     if (dir) await ensureDir(vfs, dir);
-    const written = await writeConditionally(vfs, target.path, new TextEncoder().encode(content), observed);
+    const written = await writeConditionally(vfs, target.path, typeof content === 'string' ? new TextEncoder().encode(content) : content, observed);
 
     observe('revision' in written.now ? written.now.revision : undefined);
 
@@ -271,7 +276,7 @@ function fileOps(deps: FileDeps) {
 
     const read: ObservedFile = at === undefined ? { kind: 'read', bytes } : { kind: 'read', bytes, revision: at };
 
-    return { text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes), observed: read };
+    return { text: decodedText(bytes), observed: read };
   };
 
   const undo = (report: VfsWriteReport | null) => (report === null ? {} : { undo: uncheckpointedSentence(report.uncheckpointed, 'this write') });
@@ -298,7 +303,7 @@ function fileOps(deps: FileDeps) {
           (action === 'edit' ? 'edit it: the text you are matching may have moved.' : 'replace it, so you know what you are discarding.') };
       case 'never':
         return { reason: 'unread', refusal:
-          `${path} has not been read here yet, so ${action === 'edit' ? 'editing' : 'overwriting'} it would be blind. ` +
+          `${path} has no read that still counts (a read counts until the conversation is compacted), so ${action === 'edit' ? 'editing' : 'overwriting'} it would be blind. ` +
           `Call op=read path=${path} first` +
           (action === 'edit' ? ', then copy old_text out of what it returns.' : '.') };
     }
@@ -366,13 +371,25 @@ function fileOps(deps: FileDeps) {
     return slice.output;
   };
 
-  /** The whole file for a program, which holds the value: a later write or edit through either surface is not blind. */
-  const text = (path: string): Promise<string> => inspect('read', path, async () => {
-    const whole = await readText(vfs, path);
+  /**
+   * The whole file for a program, which holds the value: a later write or edit through either surface is not blind.
+   * `base64` gives its bytes exactly, which text cannot hold for a file that is not UTF-8; the ledger reads it as the
+   * text a read of it shows, so a write is gated alike either way.
+   */
+  const text = (path: string, encoding: 'utf8' | 'base64' = 'utf8'): Promise<string> => inspect('read', path, async () => {
+    if (encoding === 'utf8') {
+      const whole = await readText(vfs, path);
 
-    ledger.observeWhole(path, whole);
+      ledger.observeWhole(path, whole);
 
-    return whole;
+      return whole;
+    }
+
+    const bytes = await vfs.readFile(path);
+
+    ledger.observeWhole(path, decodedText(bytes));
+
+    return bytesToBase64(bytes);
   });
 
   return {
@@ -390,8 +407,11 @@ function fileOps(deps: FileDeps) {
 
       return head.total !== null && head.total > head.bytes ? { path, matches, truncated: { shown: head.bytes, total: head.total } } : { path, matches };
     }),
-    write: async (path: string, content: string) => {
+    write: async (path: string, written: string, encoding: 'utf8' | 'base64' = 'utf8') => {
       requireBuild('file.write');
+      // The bytes to write exactly, or the text; the ledger reads either as the text a read of it shows.
+      const content = encoding === 'base64' ? base64ToBytes(written) : written;
+      const shown = typeof content === 'string' ? content : decodedText(content);
       let target: Landing;
       let existing: string | null;
       let observed: ObservedFile;
@@ -414,7 +434,7 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(target, content, (revision) => ledger.observeWhole(path, content, revision), observed);
+        landed = await persist(target, content, (revision) => ledger.observeWhole(path, shown, revision), observed);
       } catch (err) {
         const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
 

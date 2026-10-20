@@ -445,7 +445,7 @@ describe('addressing the bound directory', () => {
     writeFileSync(join(state, 'solo', 'home', 'main', 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
     const rt = agentRuntime(state, 'solo', project);
 
-    const found = await discoverSkills(rt.ownFiles, { admissionTokens: 100_000 });
+    const found = await discoverSkills(rt.ownFiles, { admissionTokens: 100_000, trust: () => 'unverified' });
 
     expect(found.skills.find((skill) => skill.name === 'review')?.source).toBe('vfs');
   });

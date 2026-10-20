@@ -6,7 +6,7 @@ import {
   providerSnapshotOf, providerListingOf, ProviderListingCache,
   type ModelAffinity, type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ModelAttemptInfo, type ProviderWaitInfo,
-  type WebSearchProvider,
+  type WebSearchProvider, type WebSearchChain,
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
 import { diagnostics, recording, settle, settleSync } from '@kinu.run/core/obs';
@@ -54,8 +54,10 @@ export interface OwnedModelServicesOptions<Id> {
   readonly onModelAttempt?: (info: ModelAttemptInfo) => void;
   readonly accountFor?: (providerId: string) => string | undefined;
   readonly currentTurn?: (actor: ActorReference) => string | null;
-  /** Where the web provider's Workers AI conversions are counted, as `platform` spend. */
+  /** Where the web provider's Workers AI conversions and searches are counted. */
   readonly reportModelCall: ModelCallSink;
+  /** The owner's search chain, read per search from their profile catalog. */
+  readonly webSearchChain: () => Promise<WebSearchChain>;
 }
 
 export class OwnedModelServices<Id = DurableObjectId> {
@@ -180,12 +182,20 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return listing;
   }
 
-  /** Key-less by default; a stored `tavily` credential upgrades search. */
+  /** The owner's keys, Cloudflare login and chain, read per search. */
+  private searchingOwner() {
+    return {
+      auth: () => (this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined),
+      chain: this.options.webSearchChain,
+    };
+  }
+
+  /** Searches along the owner's chain, with their keys and Cloudflare login. */
   getWebSearchProvider(): WebSearchProvider {
     if (this.webSearchProviderCache) return this.webSearchProviderCache;
     this.webSearchProviderCache = buildCfWebSearchProvider(
       this.options.env,
-      () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
+      this.searchingOwner(),
       this.options.reportModelCall,
       (url) => selfPreviewPass(this.options.env, this.options.workspaceName(), url),
     );
@@ -197,7 +207,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
   getViewerWebSearchProvider(): WebSearchProvider {
     this.viewerWebSearchProviderCache ??= buildCfWebSearchProvider(
       this.options.env,
-      () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
+      this.searchingOwner(),
       this.options.reportModelCall,
     );
 

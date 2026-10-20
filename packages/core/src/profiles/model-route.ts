@@ -21,12 +21,15 @@ export const MODEL_ROUTE_POLICY = {
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },
   advisor: { kind: 'fixed', tier: 'deep' },
-  compaction: { kind: 'fixed', tier: 'fast' },
+  // Every compactor summarizes on the turn's own model (compaction/src/actor.ts, and the CLI's and workspace's).
+  compaction: { kind: 'invocation' },
   fast: { kind: 'fixed', tier: 'fast' },
   // The few words naming each finished phase of a turn's tool calls; its own label, so its spend reads apart.
   phase_line: { kind: 'fixed', tier: 'fast', effort: 'low' },
   reflection: { kind: 'fixed', tier: 'fast' },
   platform: { kind: 'platform' },
+  // The account's `webSearch` chain, not a tier (web/search-chain.ts).
+  search: { kind: 'platform' },
   // Replays the frozen spec that wrote the entry (providers/cache-warming.ts); no turn exists.
   warming: { kind: 'platform' },
   test: { kind: 'platform' },

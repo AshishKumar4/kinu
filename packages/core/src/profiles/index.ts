@@ -6,7 +6,7 @@ export {
   TIER_IDS, TierIdSchema, tierIdsOf, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema, webSearchChainOf,
 } from './catalog';
 
 export type {
@@ -35,6 +35,8 @@ export {
   providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing,
 } from './provider-catalog';
+
+export { fastAssignment, fastCandidatesOf, type FastCandidate } from './fast-tier';
 
 export { agentRoleSwitch } from './agent-role-switch';
 

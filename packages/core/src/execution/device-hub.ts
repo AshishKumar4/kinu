@@ -8,13 +8,14 @@ import { diagnostics } from '../obs/log';
 import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, NO_DEVICE_CONNECTED, WS_OPEN, type TunnelSocket } from './device-tunnel';
+import { DeviceTunnel, NO_DEVICE_CONNECTED, type TunnelSocket } from './device-tunnel';
 import { DEVICE_ERRORS, DEVICE_METHOD, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION, DEVICE_VERSION_REFUSAL_CLOSE, DEVICE_UPDATE_REQUIRED, deviceFailure } from './device-protocol';
 import { DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
 import { EXECUTOR_CAPABILITIES } from './types';
+import { DeviceDesktopSchema, NO_DESKTOP, type DeviceDesktop } from './device-desktop';
 import { connections, type Connections, type ConnectionSocket, type ConnectionsContext } from '@nimbus-sh/fabric/connections.js';
 import { z } from 'zod/v4';
 import * as v from 'valibot';
@@ -48,11 +49,12 @@ const DeviceAttachmentSchema = z.object({
   features: z.array(z.string()).optional(),
   probe: DeviceToolchainSchema.optional(),
   relays: z.array(z.string()).optional(),
+  /** The screen its HELLO reported (`DeviceDesktopSchema`), narrowed where it is read. */
+  desktop: z.unknown().optional(),
 });
 
-export interface DeviceSocketCtx extends ConnectionsContext {
+export interface DeviceSocketCtx extends ConnectionsContext<DeviceSocket> {
   acceptWebSocket(ws: DeviceSocket, tags: string[]): void;
-  getWebSockets(tag?: string): DeviceSocket[];
 }
 
 function deviceTag(deviceId: string): string {
@@ -77,9 +79,9 @@ export class DeviceSocketHub {
 
   private readonly relays = new DeviceRelays();
 
-  private readonly sockets: Connections<z.infer<typeof DeviceAttachmentSchema>>;
+  private readonly sockets: Connections<z.infer<typeof DeviceAttachmentSchema>, DeviceSocket>;
 
-  constructor(private readonly ctx: DeviceSocketCtx) {
+  constructor(ctx: DeviceSocketCtx) {
     this.sockets = connections(ctx, DeviceAttachmentSchema);
   }
 
@@ -123,12 +125,7 @@ export class DeviceSocketHub {
   }
 
   liveSocket(deviceId: string): DeviceSocket | null {
-    // Nimbus ask (connections socket type): get() erases the socket's send surface.
-    for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
-      if (ws.readyState === WS_OPEN) return ws;
-    }
-
-    return null;
+    return this.sockets.get(deviceTag(deviceId));
   }
 
   /** The fresh toolchain answer, or null: never asked, unable to answer, or stale. Null never means "has none". */
@@ -199,6 +196,19 @@ export class DeviceSocketHub {
 
     if (!ws) return;
     this.sockets.write(ws, { ...this.sockets.read(ws) ?? { device: deviceId }, ...patch });
+  }
+
+  /** The screen a device's HELLO reported, held on its socket: like its being online, it is the connection's (1014-t). */
+  holdDesktop(deviceId: string, desktop: DeviceDesktop): void {
+    this.annotate(deviceId, { desktop });
+  }
+
+  /** None for a device with no live socket, and for one whose HELLO named a screen this hub cannot read. */
+  desktop(deviceId: string): DeviceDesktop {
+    const ws = this.liveSocket(deviceId);
+    const held = v.safeParse(DeviceDesktopSchema, ws === null ? undefined : this.sockets.read(ws)?.desktop);
+
+    return held.success ? held.output : NO_DESKTOP;
   }
 
   relayDevice(): string | null {

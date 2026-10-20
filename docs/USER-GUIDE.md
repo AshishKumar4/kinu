@@ -28,12 +28,14 @@ You can have both, and you can move a cloud workspace onto your machine later
 (§7). Both run the same core, but they are hosted differently and some
 features exist only in one.
 
-A cloud workspace's main agent can also propose a new workspace
-(`agent.proposeWorkspace`): a name, a brief that becomes its mission, and the
-rest of its soul. Nothing exists until you approve it, which shows the SOUL.md
-approving writes. Approved, it is created under your account as if you had
-created it, its first turn acts on the brief, and the agent that asked is told
-its link. Declined, nothing is created and the agent is told so.
+A cloud workspace's main agent can also create a new workspace in your account
+(`agent.createWorkspace`): a name, a brief that becomes its mission, and the
+rest of its soul. It is created at once, as if you had created it, with nothing
+asked: what stays inside your Kinu is the agent's to do. Its first turn acts on
+the brief, the agent that made it has its link, and the agent's Changelog
+records it with a way to open it. `agents.hireWorkspace` does the same and hands
+the new workspace its first task. What leaves your Kinu (mail, a write to
+another service, a deploy) still waits for your answer.
 
 Whatever waits on your answer (a command the agent wants to run outside its
 own workspace, a file it wants to replace, a machine it wants to use, a
@@ -117,6 +119,15 @@ The CLI records a transcript of each run by default (`kinu debug <workspace>
 conversation. Your conversation lives in the workspace and loads when you open
 it. `--no-transcript` skips the record for one run, and
 `--transcript-dir <dir>` chooses where it goes.
+
+Don't paste API keys or passwords into the chat. Add them in the web app under
+Settings › Secrets, one at a time or as a pasted `.env`, each with the hosts it
+may be sent to, and choose the workspaces that may use it. There an agent's
+commands see `$NAME` and its programs `env.NAME`, holding a stand-in that turns
+into the key only when sent over https to those hosts, so the key never enters
+the conversation, a file or a log. Where that can't work (a database password,
+a signed request), turn on "Agents may read the value" for that workspace. If
+you paste a key into the web composer anyway, it offers to move it there first.
 
 ## 4. Letting it touch your machine
 

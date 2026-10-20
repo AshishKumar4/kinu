@@ -1,12 +1,18 @@
-/** Native container previews: a published capability is checked before a DO is addressed. */
+/**
+ * Native container previews: a published capability is checked before a DO is addressed, then its visitor. Like a
+ * workspace preview (`nimbus-route.ts`), it opens for the workspace's signed-in owner and the workspace's own fetches,
+ * by the viewer pass, unless the owner made it a public link; its URL alone is no bearer link.
+ */
 import { Effect } from "effect";
 import { diagnostics, recording, settle } from "@kinu.run/core/obs";
-import { escapeHtml } from "@kinu.run/core";
+import { escapeHtml, VIEWER_EXCHANGE_PATH } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
-import { isKinuSandboxId } from "@kinu.run/core";
-import { sandboxPreviewExposed, type PreviewSuffixEnv } from "@kinu.run/core";
+import { workspaceOfSandbox } from "@kinu.run/core";
+import { sandboxPreviewExposure, type LabelSignerEnv, type PreviewSuffixEnv } from "@kinu.run/core";
 import type { KvStore } from "@kinu.run/agent-utils";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
+import { exchangePreviewTicket, isNavigation, ownRequest, previewEntryUrl, previewRefusalText } from "./nimbus-route";
+import { computerPreviewHandle, PREVIEW_SELF, previewViewerKey, viewerCookie } from "./viewer-pass";
 
 
 /** One refusal shape for every unserved hostname, so it is not an existence oracle. */
@@ -18,9 +24,11 @@ function refusePreview(code: string, error: string, status: number): Response {
 }
 
 /** A deployment can omit container previews entirely. */
-export interface SandboxPreviewEnv extends PreviewSuffixEnv {
+export interface SandboxPreviewEnv extends PreviewSuffixEnv, LabelSignerEnv {
   KinuDevbox?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
   AUTH_KV?: KvStore;
+  /** The app's origin, where a preview's visitor is signed in. */
+  CLI_PUBLIC_ORIGIN?: string;
 }
 
 /** Always answers; an unpublished hostname gets a 404, never the app and never a Durable Object. */
@@ -28,8 +36,10 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
   const url = new URL(request.url);
   const label = sandboxPreviewLabelOf(url, env);
 
+  const workspace = label === null ? null : workspaceOfSandbox(label.sandboxId);
+
   // Refused on shape, before any lookup.
-  if (label === null || !isKinuSandboxId(label.sandboxId)) {
+  if (label === null || workspace === null) {
     return refusePreview('NOT_A_PREVIEW', "This host serves previews of a workspace's computer only.", 404);
   }
 
@@ -39,7 +49,9 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
   }
 
 
-  if (!(await sandboxPreviewExposed(env.AUTH_KV, label))) {
+  const exposure = await sandboxPreviewExposure(env.AUTH_KV, label);
+
+  if (exposure === null) {
     diagnostics.event('preview.unpublished_label', { sandboxId: label.sandboxId, port: label.port });
 
     return refusePreview(
@@ -47,6 +59,15 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
       'This preview is not exposed. Re-expose the port to publish it again.',
       404,
     );
+  }
+
+  if (!exposure.public) {
+    const key = previewViewerKey(label.port, await computerPreviewHandle(label.token));
+
+    if (url.pathname === VIEWER_EXCHANGE_PATH) return containPreviewResponse(await exchangePreviewTicket(request, { ...env, AUTH_KV: env.AUTH_KV }, workspace, key));
+    const refused = await unadmitted(request, env, { workspace, key, port: label.port });
+
+    if (refused !== null) return containPreviewResponse(refused);
   }
 
   const devbox = env.KinuDevbox;
@@ -61,6 +82,28 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
   }), (failed) => Effect.as(recording({ doing: 'reaching the restored container preview', otherwise: 'unavailable' }, (failure) => {
     diagnostics.failure('preview.forward_failed', failure, { sandboxId: label.sandboxId, port: label.port });
   })(failed), renderNotReadyPage(url.hostname))));
+}
+
+/**
+ * Null when the visitor is the workspace's owner, or the workspace itself, by a viewer cookie this host minted (only
+ * after the app's entry checked its owner, or for the workspace's own fetch) and a request of this preview's own; a
+ * page load without one is sent to the app to sign in, any other request refused.
+ */
+async function unadmitted(
+  request: Request, env: SandboxPreviewEnv, preview: { readonly workspace: string; readonly key: string; readonly port: number },
+): Promise<Response | null> {
+  const origin = new URL(request.url).origin;
+  const cookie = await viewerCookie(env, preview.workspace, preview.key, request.headers.get('cookie'));
+
+  if (cookie !== null && !cookie.consented && ownRequest(request, origin, cookie.subject === PREVIEW_SELF)) return null;
+  diagnostics.event('preview.computer.refused', { port: preview.port, reason: cookie === null ? 'no-viewer' : 'not-owner' });
+  const entry = cookie === null && isNavigation(request) ? previewEntryUrl(env, request.url) : null;
+  const headers = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
+
+  // A page load is sent to the app, which signs its visitor in and sends the owner back; a script's request is refused.
+  if (entry !== null) return new Response(null, { status: 303, headers: { ...headers, location: entry } });
+
+  return new Response(previewRefusalText(false), { status: 403, headers: { ...headers, 'content-type': 'text/plain; charset=utf-8' } });
 }
 
 function renderNotReadyPage(host: string): Response {

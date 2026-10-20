@@ -18,6 +18,7 @@ import {
   type ExecutorInfo,
 } from "@kinu.run/core";
 import { DESKTOP_SIZE } from "@kinu.run/devbox/desktop";
+import type { TerminalSession } from "@kinu.run/devbox";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { lazyRoute } from "@/lazy-route";
 import type { TerminalPaneProps } from "@/components/TerminalPane";
@@ -33,7 +34,7 @@ import { useAccountMachines, type AccountMachine } from "./EnvironmentMachines";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { detach, renderThrownChain, type KinuError } from "@kinu.run/core/obs";
 import {
-  ONE_SHELL, SessionDetails, SessionTabs, openSession, useComputerSessions, type ComputerSessions,
+  ONE_SHELL, SessionDetails, SessionTabs, openSession, useMachineSessions, type MachineSessions,
 } from "./EnvironmentSessions";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -108,15 +109,36 @@ function machinesOf(mounts: readonly EnvironmentInfo[], account: readonly Accoun
   ];
 }
 
+/** What a machine's Desktop tab shows: its screen at its size, or the step before it; null for no tab. */
+type MachineDesktop =
+  | { readonly kind: "screen"; readonly src: string; readonly width: number; readonly height: number }
+  | { readonly kind: "step"; readonly state: "setup" | "permission"; readonly detail: string | null }
+  | null;
+
+/** The computer's screen; a PC's as its daemon reports it (1014-t); none for the workspace. */
+function machineDesktop(machine: Machine, workspace: string): MachineDesktop {
+  if (machine.mount.name === "computer") return { kind: "screen", src: desktopClientUrl(location, workspace, null), ...DESKTOP_SIZE };
+  const desktop = machine.device?.desktop;
+
+  if (machine.device === null || desktop === undefined || desktop.state === "none") return null;
+
+  if (desktop.state === "ready") return { kind: "screen", src: desktopClientUrl(location, workspace, machine.device.id), width: desktop.width, height: desktop.height };
+
+  return { kind: "step", state: desktop.state, detail: desktop.state === "setup" ? desktop.detail : null };
+}
+
 function machineLabel(machine: Machine, exec: ExecutorInfo | undefined): string {
   return machine.device?.label ?? exec?.label ?? executorLabel(machine.mount.name);
 }
 
 /** A PC's state is the account's first: offline, or connected without this workspace's grant. */
-function machineStatus(machine: Machine, exec: ExecutorInfo | undefined): StatusReading {
+function machineStatus(machine: Machine, exec: ExecutorInfo | undefined, seen: { waiting: boolean }): StatusReading {
   if (machine.device !== null && !machine.device.connected) return { word: "Offline", tone: "off" };
 
   if (machine.device !== null && !machine.device.granted) return { word: "No access", tone: "attention" };
+
+  // A PC's program waiting for an answer reads as the computer's does (1019-aa).
+  if (seen.waiting) return { word: "Needs input", tone: "attention" };
 
   return statusOf(machine.mount, exec);
 }
@@ -156,6 +178,11 @@ function computerStatus(mount: EnvironmentInfo, exec: ExecutorInfo | undefined, 
   return statusOf(mount, exec);
 }
 
+/** A machine one of whose sessions waits for an answer. */
+function sessionWaits(read: MachineSessions): boolean {
+  return read.sessions?.some((session) => session.needsInput) === true;
+}
+
 function Dot({ tone }: { tone: Tone }) {
   return <span aria-hidden className="p-env-dot" data-tone={tone} />;
 }
@@ -190,9 +217,16 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
   const selectedMachine = environments.find((m) => m.key === selected) ?? defaultMachine;
   const computerLive = environments.some((m) => m.key === "computer" && m.mount.live);
-  // The computer's sessions are read while they are on screen: its tabs, or the wide column's list.
-  const sessions = useComputerSessions(rpc, computerLive && (wide || selectedMachine?.key === "computer"));
-  const waiting = new Set(sessions.sessions?.some((session) => session.needsInput) === true ? ["computer"] : []);
+  // The computer's sessions are read while they are on screen: its tabs, or the wide column's list. A PC's are read
+  // while it is chosen and this workspace holds it (1019-aa); either one's waiting session marks its machine.
+  const sessions = useMachineSessions(rpc, computerLive && (wide || selectedMachine?.key === "computer"), null);
+  const chosenDevice = selectedMachine?.device ?? null;
+  const pcSessions = useMachineSessions(rpc, chosenDevice !== null && chosenDevice.connected && chosenDevice.granted, chosenDevice?.id ?? null);
+
+  const waiting = new Set([
+    ...(sessionWaits(sessions) ? ["computer"] : []),
+    ...(chosenDevice !== null && selectedMachine !== null && sessionWaits(pcSessions) ? [selectedMachine.key] : []),
+  ]);
 
   const choose = (machine: string, tab?: string) => {
     setSelected(machine);
@@ -229,7 +263,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           executorOutputs={executorOutputs}
           onExecute={onExecute}
           onOpenFiles={onOpenFiles}
-          sessions={sessions}
+          sessions={chosenDevice === null ? sessions : pcSessions}
           shown={shown}
           wide={wide}
           machineRow={machineRow}
@@ -303,7 +337,7 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
         const exec = execByName.get(m.mount.name);
         const { Icon: KindIcon, about } = environmentOf(m.mount.name);
         const active = selected === m.key;
-        const status = active && chosen !== null ? chosen.status : machineStatus(m, exec);
+        const status = active && chosen !== null ? chosen.status : machineStatus(m, exec, { waiting: waiting.has(m.key) });
 
         return (
           <div key={m.key} data-env-card={m.mount.name} className="min-w-0">
@@ -343,7 +377,8 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   onOpenFiles: (root: string) => void;
-  sessions: ComputerSessions;
+  /** The computer's sessions, or the chosen PC's. */
+  sessions: MachineSessions;
   shown: Shown;
   wide: boolean;
   machineRow: (chosen: ChosenMachine) => ReactNode;
@@ -354,15 +389,17 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
   const size = useComputerSize(rpc, computer && mount.live);
   const name = machineLabel(machine, exec);
   const restarting = computer && size.pending === "resize";
+  // The computer's sessions or the chosen PC's, read above for the machine row's marks too; another machine has one shell.
+  const machineSessions = computer || device !== null ? sessions : null;
   const listed = sessions.sessions ?? [];
   const seen = { waiting: listed.some((session) => session.needsInput), awake: listed.some((session) => session.open) };
-  const status = computer ? computerStatus(mount, exec, size, seen) : machineStatus(machine, exec);
+  const status = computer ? computerStatus(mount, exec, size, seen) : machineStatus(machine, exec, { waiting: device !== null && seen.waiting });
 
   return (
     <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
       {machineRow({ status, actions: <MachineActions mount={mount} name={name} size={computer ? <ComputerSize state={size} /> : null} onOpenFiles={onOpenFiles} /> })}
       {computer && size.notice}
-      {computer && sessions.failure !== null && <p className="px-4 pb-1 p-meta p-danger">{sessions.failure}</p>}
+      {machineSessions?.failure != null && <p className="px-4 pb-1 p-meta p-danger">{machineSessions.failure}</p>}
       {device !== null && !device.connected && (
         <Absence icon={DesktopTowerIcon} title={`${name} is offline`}>
           Its Kinu daemon is not running. Run <code className="p-annotation">kinu connect</code> on it to bring it back.
@@ -371,8 +408,9 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
       {device !== null && device.connected && !device.granted && <GiveAccess name={name} onGive={() => grant(device.id)} />}
       {(device === null || (device.connected && device.granted)) && (
         <EnvironmentView mount={mount} machineKey={machine.key} device={device?.id ?? null} exec={exec} name={name} workspace={workspace}
+          desktop={machineDesktop(machine, workspace)}
           restartingTo={restarting ? size.restartingTo ?? "" : null} executorOutputs={executorOutputs} onExecute={onExecute}
-          sessions={computer ? sessions : null} shown={shown} wide={wide} />
+          sessions={machineSessions} shown={shown} wide={wide} />
       )}
     </section>
   );
@@ -403,7 +441,7 @@ function MachineActions({ mount, name, size, onOpenFiles }: {
 }
 
 /** Under the machine row: the machine's absence, its restart, or its tabs and its terminal or screen. */
-function EnvironmentView({ mount, machineKey, device, exec, name, workspace, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
+function EnvironmentView({ mount, machineKey, device, exec, name, workspace, desktop, restartingTo, executorOutputs, onExecute, sessions, shown, wide }: {
   mount: EnvironmentInfo;
   /** The machine's key in the column: its tabs are kept under it. */
   machineKey: string;
@@ -412,12 +450,13 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, res
   exec: ExecutorInfo | undefined;
   name: string;
   workspace: string;
+  desktop: MachineDesktop;
   /** While a resize restarts the computer, the size it starts at. */
   restartingTo: string | null;
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
-  /** The computer's sessions; null for a machine with one shell. */
-  sessions: ComputerSessions | null;
+  /** The computer's sessions, or a PC's; null for a machine with one shell. */
+  sessions: MachineSessions | null;
   shown: Shown;
   wide: boolean;
 }) {
@@ -425,9 +464,9 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, res
 
   if (exec === undefined) return <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>;
 
-  const tab = shown.tab(machineKey);
-  // Only the computer has a screen.
-  const desktop = exec.name === "computer" ? desktopClientUrl(location, workspace) : null;
+  const tab = shownTab(shown.tab(machineKey), sessions?.sessions ?? null);
+  // A PC's pane names its session once its list has read; one whose list failed opens its first, naming none.
+  const unlisted = device !== null && sessions?.sessions === null;
 
   const tabs = (
     <SessionTabs label={`${name} sessions`} sessions={sessions?.sessions ?? null} current={tab} desktop={desktop !== null}
@@ -440,17 +479,32 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, res
   // A resize restarts the computer, which ends its shells and its desktop's session: the panes open again after it.
   if (restartingTo !== null) return <>{tabs}<div className="p-terminal-ground flex min-h-0 flex-1 flex-col"><Restarting to={restartingTo === "" ? null : restartingTo} /></div></>;
 
+  if (unlisted && sessions?.failure === null && tab !== "desktop") return <>{tabs}<ListWaits /></>;
+
   const showing = tab === "desktop" && desktop !== null
     ? [tab]
     : [tab, ...(wide && shown.split !== null && shown.split !== tab ? [shown.split] : [])];
 
   const pane = (id: string, place: PanePlace) => (id === "desktop" && desktop !== null
-    ? <DesktopView name={name} src={desktop} />
-    : <SessionPane workspace={workspace} exec={exec} device={device} session={id} sessions={sessions}
+    ? <DesktopPane name={name} desktop={desktop} />
+    : <SessionPane workspace={workspace} exec={exec} device={device} session={id} sessions={unlisted ? null : sessions}
       executorOutputs={executorOutputs} onExecute={onExecute} named={place !== "kept" && showing.length > 1}
       trailing={wide && sessions !== null ? <SplitToggle sessions={sessions} shown={shown} showing={id} /> : null} />);
 
   return <>{tabs}<MachinePanes showing={showing} sessions={sessions} pane={pane} /></>;
+}
+
+/** The tab a machine shows: the one chosen, or its first session where its list lacks the chosen one (a closed
+ *  session's, or a PC's chosen before its list read, whose ids are its daemon's). */
+function shownTab(chosen: string, listed: readonly TerminalSession[] | null): string {
+  if (chosen === "desktop" || listed === null || listed.some((session) => session.id === chosen)) return chosen;
+
+  return listed[0]?.id ?? chosen;
+}
+
+/** A PC's pane waits for its list, so it opens the session it will keep showing. */
+function ListWaits() {
+  return <div className="flex min-h-0 flex-1 items-center justify-center"><Loader size="sm" /></div>;
 }
 
 /** Where a pane sits: the one shown or the split's first, the split's second, or kept open out of sight. */
@@ -474,7 +528,7 @@ const PANE_PLACES: Record<PanePlace, string> = {
  */
 function MachinePanes({ showing, sessions, pane }: {
   showing: readonly string[];
-  sessions: ComputerSessions | null;
+  sessions: MachineSessions | null;
   pane: (id: string, place: PanePlace) => ReactNode;
 }) {
   const [opened, setOpened] = useState<readonly string[]>(showing);
@@ -504,7 +558,7 @@ function SessionPane({ workspace, exec, device, session, sessions, executorOutpu
   exec: ExecutorInfo;
   device: string | null;
   session: string;
-  sessions: ComputerSessions | null;
+  sessions: MachineSessions | null;
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   /** Two panes side by side name theirs. */
@@ -525,7 +579,7 @@ function SessionPane({ workspace, exec, device, session, sessions, executorOutpu
 }
 
 /** The wide column's split: a second pane with the next session, or one pane again. */
-function SplitToggle({ sessions, shown, showing }: { sessions: ComputerSessions; shown: Shown; showing: string }) {
+function SplitToggle({ sessions, shown, showing }: { sessions: MachineSessions; shown: Shown; showing: string }) {
   const others = (sessions.sessions ?? []).filter((session) => session.id !== showing);
 
   if (shown.split === showing) {
@@ -542,17 +596,38 @@ function SplitToggle({ sessions, shown, showing }: { sessions: ComputerSessions;
   );
 }
 
+/** A machine's Desktop tab: its screen, or what it needs first, said where the screen would be. */
+function DesktopPane({ name, desktop }: { name: string; desktop: NonNullable<MachineDesktop> }) {
+  if (desktop.kind === "screen") return <DesktopView name={name} src={desktop.src} width={desktop.width} height={desktop.height} />;
+
+  return <div className="p-terminal-ground flex min-h-0 flex-1 flex-col"><DesktopStep name={name} state={desktop.state} detail={desktop.detail} /></div>;
+}
+
+/** What each step before a PC's screen says: what is on the PC, and what opens it. */
+const DESKTOP_STEPS = {
+  setup: (name: string, detail: string | null) => ({ title: `${name} needs one step first`, body: detail ?? "" }),
+  permission: (name: string) => ({
+    title: `Allow screen sharing on ${name}`,
+    body: `A prompt on ${name} asks to share its screen with Kinu. Its screen opens here once it is allowed there.`,
+  }),
+} satisfies Record<"setup" | "permission", (name: string, detail: string | null) => { readonly title: string; readonly body: ReactNode }>;
+
+function DesktopStep({ name, state, detail }: { name: string; state: "setup" | "permission"; detail: string | null }) {
+  const { title, body } = DESKTOP_STEPS[state](name, detail);
+
+  return <Absence icon={DesktopIcon} title={title}>{body}</Absence>;
+}
+
 /**
- * The computer's screen under its strip: in the column, or expanded over the workspace area with the rail folded. One
+ * A machine's screen under its strip: in the column, or expanded over the workspace area with the rail folded. One
  * frame either way, so expanding moves no client and reconnects nothing. Production f9c17ac7b opened a second client
  * in a new tab instead, on a page that drew it as a thin strip (the owner, 2026-10-14).
  */
-function DesktopView({ name, src }: { name: string; src: string }) {
+function DesktopView({ name, src, width, height }: { name: string; src: string; width: number; height: number }) {
   const title = `${name}'s desktop`;
   const area = useWorkspaceArea();
   const [expanded, setExpanded] = useState(false);
   const cover = useCover(area, expanded);
-  const { width, height } = DESKTOP_SIZE;
 
   return (
     <div data-desktop-view={cover === null ? undefined : "expanded"} style={cover ?? undefined}

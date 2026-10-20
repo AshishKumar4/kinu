@@ -19,13 +19,13 @@ import {
   actorNamespaces, SURFACE_POLICY, type ServedStores, type SurfaceActor,
   isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
   projectJsonValue, failedToolOutcome,
-  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
+  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile, webSearchChainOf,
   WORKSPACE_RUN_ID, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import { synthesizeToolFallback } from '../../packages/core/src/utils/evidence-window';
 import {
-  createDefaultWebSearchProvider, restBrowserRunAccess,
+  createDefaultWebSearchProvider, chainWebSearch, restBrowserRunAccess,
 } from '../../packages/core/src/web/index';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
@@ -120,8 +120,14 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const sql = rt.storage.sql;
   const facts = createFactsStore(sql, rt.actor);
 
+  // A machine signed out of any Kinu account: the default chain, with no keys and no deployment to bill.
   const webSearch = createDefaultWebSearchProvider({
-    fetch: globalThis.fetch.bind(globalThis), browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch.bind(globalThis) }),
+    fetch: globalThis.fetch.bind(globalThis),
+    search: chainWebSearch({
+      fetch: globalThis.fetch.bind(globalThis), getAuth: async () => null, report: liveModelCallSink(sql, rt.actor),
+      chain: async () => webSearchChainOf(BUILTIN_PROFILE_CATALOG),
+    }),
+    browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch.bind(globalThis) }),
   });
 
 

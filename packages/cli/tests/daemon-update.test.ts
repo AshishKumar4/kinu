@@ -29,13 +29,13 @@ const NEW_DAEMON = `${DAEMON_FILES['pc-agent.js']}\n// build ${NEW}\n`;
 
 const NEW_FILES = { ...DAEMON_FILES, 'pc-agent.js': NEW_DAEMON };
 
-/** The daemon production ran on device protocol 2 (packages/pc-agent/tests/fixtures/protocol-2). */
-const PROTOCOL_2 = join(repoRoot, 'packages/pc-agent/tests/fixtures/protocol-2');
+/** The daemon production runs on device protocol 3, as it installs (packages/pc-agent/tests/fixtures/protocol-3). */
+const PROTOCOL_3 = join(repoRoot, 'packages/pc-agent/tests/fixtures/protocol-3');
 
-const PROTOCOL_2_FILES: Record<string, string> = Object.fromEntries([
-  ['pc-agent.js', 'index.js'], ['sandbox.js', 'sandbox.js'], ['pty.js', 'pty.js'], ['update.js', 'update.js'],
-  ['chatgpt.js', 'chatgpt.js'], ['device-protocol.json', 'device-protocol.json'],
-].map(([name, fixture]) => [name, readFileSync(join(PROTOCOL_2, `${fixture}.txt`), 'utf8')]));
+const PROTOCOL_3_FILES: Record<string, string> = Object.fromEntries(
+  ['pc-agent.js', 'sandbox.js', 'pty.js', 'update.js', 'chatgpt.js', 'device-protocol.json']
+    .map((name) => [name, readFileSync(join(PROTOCOL_3, `${name}.txt`), 'utf8')]),
+);
 
 const AnnouncedSchema = v.looseObject({ protocolVersion: v.number(), features: v.array(v.string()) });
 
@@ -241,48 +241,26 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   });
 
 
-  test('a protocol-2 daemon from the previous release takes the pushed build, comes back on this protocol and serves', async () => {
+  test('a protocol-3 daemon from the previous release takes the pushed build, comes back on this protocol and serves', async () => {
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
-    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_2_FILES);
+    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_3_FILES);
     startPipedDaemon(home, await releaseSigningEnv());
 
     await served.sockets.until((hellos) => hellos[1] !== undefined);
-    const [previous, successor] = [present(served.sockets.items[0], 'the protocol-2 HELLO'), present(served.sockets.items[1], 'the successor HELLO')];
+    const [previous, successor] = [present(served.sockets.items[0], 'the protocol-3 HELLO'), present(served.sockets.items[1], 'the successor HELLO')];
     const before = v.parse(AnnouncedSchema, previous.hello);
     const after = v.parse(AnnouncedSchema, successor.hello);
 
-    expect({ protocol: before.protocolVersion, checked: before.features.includes('writeFileIfDigest') }).toEqual({ protocol: 2, checked: false });
-    expect({ protocol: after.protocolVersion, checked: after.features.includes('writeFileIfDigest'), version: successor.hello.version })
-      .toEqual({ protocol: 3, checked: true, version: NEW });
+    expect({ protocol: before.protocolVersion, sessions: before.features.includes('ptyList') }).toEqual({ protocol: 3, sessions: false });
+    expect({ protocol: after.protocolVersion, sessions: after.features.includes('ptyList'), version: successor.hello.version })
+      .toEqual({ protocol: 4, sessions: true, version: NEW });
 
     // It serves on the new protocol: a digest-checked write lands, outside the Kinu home the tunnel never serves.
-    const file = join(scratchDir('protocol-2-updated'), 'landed.txt');
+    const file = join(scratchDir('protocol-3-updated'), 'landed.txt');
 
     successor.send({ id: 'checked', method: 'writeFileIfDigest', params: [file, 'after the update', null, {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
     expect(v.parse(ReplySchema, await successor.waitForReply('checked'))).toMatchObject({ result: { ok: true } });
     expect(readFileSync(file, 'utf8')).toBe('after the update');
-  });
-
-  test('a protocol-2 daemon whose successor refuses its config at start rolls back and keeps serving', async () => {
-    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
-    const home = installedMachine(served.origin, OLD, {}, PROTOCOL_2_FILES);
-    // Linked before `kinu connect` recorded a directory: protocol 2 serves it; this build refuses it after taking the pidfile.
-    writeFileSync(join(home, 'device.json'), `${JSON.stringify({ user: 'user_1', token: `pdt_${'a'.repeat(32)}`, origin: served.origin }, null, 2)}\n`, { mode: 0o600 });
-    const daemon = startPipedDaemon(home, await releaseSigningEnv());
-    const version = join(home, 'pc-agent.version');
-
-    await waitForFileText(version, NEW, daemon.proc.exited);
-    await waitForFileText(version, OLD, daemon.proc.exited);
-    expect(installed(home, 'pc-agent.js')).toBe(PROTOCOL_2_FILES['pc-agent.js']);
-    expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
-
-    await served.sockets.until((hellos) => hellos.some(socket => socket.hello.version === OLD));
-    const restored = present(served.sockets.items.filter(socket => socket.hello.version === OLD).at(-1), 'the restored protocol-2 connection');
-    const file = join(scratchDir('protocol-2-rolled-back'), 'landed.txt');
-
-    restored.send({ id: 'restored-write', method: 'writeFile', params: [file, 'after the rollback', {}], sandbox: { tier: 'raw', agentHome: '', roots: [] } });
-    expect(v.parse(ReplySchema, await restored.waitForReply('restored-write'))).toMatchObject({ result: { success: true } });
-    expect(readFileSync(file, 'utf8')).toBe('after the rollback');
   });
 
   test('a build that ships a daemon file this one never had lands it, and comes up on it', async () => {
@@ -578,10 +556,13 @@ describe('the daemon answers the hub in core\'s frames', () => {
     const proved = v.parse(ProvedHelloSchema, socket.hello);
 
     if (proved.sandbox.capability !== 'sandboxed') return;
-    const session = 'rpc-terminal00-1';
     const sandbox = { tier: 'sandboxed' as const, agentHome: join(proved.agentRoot, 'ws-terminal', 'home'), roots: [scratchDir('daemon-terminal')] };
-    socket.send({ id: session, method: DEVICE_METHOD.ptyOpen, params: [80, 24], sandbox });
-    expect(v.parse(ReplySchema, await socket.waitForReply(session)).error).toBeUndefined();
+    socket.send({ id: 'rpc-terminal00-1', method: DEVICE_METHOD.ptyOpen, workspace: 'ws-terminal', params: [80, 24], sandbox });
+    const reply = v.parse(ReplySchema, await socket.waitForReply('rpc-terminal00-1'));
+    // The workspace's first session, named by the daemon.
+    const session = v.parse(v.object({ session: v.string() }), reply.result).session;
+
+    expect(reply.error).toBeUndefined();
     socket.send({ type: DEVICE_FRAMES.ptyInput, session, data: Buffer.from('echo $((6 * 7))\r').toString('base64') });
 
     const ofSession = (type: string) => socket.frames.items.filter((frame) => frame.type === type && frame.session === session);

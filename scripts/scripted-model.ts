@@ -14,6 +14,7 @@ import { createServer as createHttpServer, type ServerResponse } from 'node:http
 import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
+import { CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_WORKERS_AI_SCOPES, type EvalAccount, type WebSearchRoute } from '../packages/core/src/index';
 import { apiJson } from './live-app-harness';
 import { settleCatalog, type CatalogNeed } from '../evals/src/workspace-roster';
 import { SCRIPTED_MODELS_BODY, pacedStream, rateLimitedAnswer, readScriptedRequest, scriptedBody, type ScriptedAnswer, type ScriptedModel, type ScriptedPace, type ScriptedRequest } from './scripted-protocol';
@@ -148,23 +149,53 @@ export async function registerScriptedModel(
   });
 }
 
-/** Point the account's `tavily` search credential at the scripted search the tiers' Worker serves (scripted-search.ts),
- *  so a `web` search takes the keyed path end to end without a real provider. */
-export async function registerScriptedSearch(origin: string, baseURL: string, headers: Record<string, string>, token: string): Promise<void> {
-  await apiJson(origin, '/api/user/credentials/tavily', {
+/** What each eval account searches with: `scripted` a choice that is not the default, so its case proves a choice in
+ *  Settings reaches its provider; every other the default chain, as a person who never chose. */
+function searchChainOf(account: EvalAccount): CatalogNeed {
+  const chosen: readonly WebSearchRoute[] | undefined = account === 'scripted' ? [{ provider: 'linkup', billing: 'cloudflare' }] : undefined;
+
+  return (catalog) => {
+    if (JSON.stringify(catalog.webSearch) === JSON.stringify(chosen)) return null;
+    const { webSearch: _replaced, ...rest } = catalog;
+
+    return chosen === undefined ? rest : { ...rest, webSearch: chosen };
+  };
+}
+
+/** Choose the account's search chain (`searchChainOf`). */
+export async function chooseSearch(origin: string, headers: Record<string, string>, account: EvalAccount): Promise<void> {
+  await settleCatalog(origin, headers, [searchChainOf(account)]);
+}
+
+/**
+ * Hold `token`, a Cloudflare API token with Workers AI Read and AI Gateway Read on `accountId` (the Web Search API's
+ * documented permissions), as the account's Cloudflare login granting web search. Staging offers no Cloudflare
+ * sign-in, so this is the closest a tier gets to a person who signed in with Cloudflare: the same stored row, read by
+ * the same `cloudflare.web-search` view, searching the same REST API on that account's `default` gateway.
+ */
+export async function connectCloudflare(origin: string, headers: Record<string, string>, input: { readonly token: string; readonly accountId: string }): Promise<void> {
+  await apiJson(origin, `/api/user/credentials/${CLOUDFLARE_OAUTH_CRED_KEY}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ kind: 'bearer', token, baseURL }),
+    body: JSON.stringify({
+      kind: 'oauth', accessToken: input.token,
+      metadata: { accountId: input.accountId, accounts: [{ id: input.accountId, name: 'Kinu eval' }], scopes: CLOUDFLARE_WORKERS_AI_SCOPES.split(' ') },
+    }),
   });
 }
 
-/** The scripted model as the account's default tier, so every workspace it makes runs on it, the ones made from the
- *  home page included. */
-const SCRIPTED_DEFAULT: CatalogNeed = (catalog) => catalog.tiers.default.model === SCRIPTED_MODEL_SPEC
+/**
+ * The scripted model as the account's default and fast tiers, so every workspace it makes runs on it, the ones made
+ * from the home page included, and its titles, sleep-time and triage answer from the script. Fast is set as an owner
+ * sets it: unset, it picks itself from the account's providers, a real model (rc24 staging, 2026-10-20: titled-chat's
+ * title came from Workers AI).
+ */
+const SCRIPTED_TIERS: CatalogNeed = (catalog) => catalog.tiers.default.model === SCRIPTED_MODEL_SPEC && catalog.tiers.fast?.model === SCRIPTED_MODEL_SPEC
   ? null
-  : { ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, model: SCRIPTED_MODEL_SPEC } } };
+  : { ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, model: SCRIPTED_MODEL_SPEC }, fast: { model: SCRIPTED_MODEL_SPEC } } };
 
-/** Make the scripted model the default tier of the account `headers` name. Its credential must be registered first. */
+/** Make the scripted model the default and fast tiers of the account `headers` name. Its credential must be
+ *  registered first. */
 export async function defaultToScriptedModel(origin: string, headers: Record<string, string> = {}): Promise<void> {
-  await settleCatalog(origin, headers, [SCRIPTED_DEFAULT]);
+  await settleCatalog(origin, headers, [SCRIPTED_TIERS]);
 }

@@ -246,8 +246,11 @@ describe('MCP presets', () => {
       const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
 
       try {
-        await page.waitForSelector('[aria-label="MCP servers"] button');
-        await page.click('[aria-label="MCP servers"] button');
+        // Manage is the page's own action, at the end of its title row.
+        const manage = 'xpath/.//header//button[normalize-space()="Manage"]';
+
+        await page.waitForSelector(manage);
+        await page.click(manage);
         await page.waitForSelector('[role="dialog"]');
         await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent?.includes('Add custom server'))?.click());
         await page.type('[role="dialog"] input[placeholder="github"]', 'tracker');

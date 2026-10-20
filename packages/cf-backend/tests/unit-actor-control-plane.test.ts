@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { UIMessage } from 'ai';
-import { actorConnectionTag, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
+import { actorConnectionTag, CHAT_REWOUND_EVENT, classifyProgrammaticTurn, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import {
   hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, storedChat, type HarnessOrchestratorAgent,
   type RecordedUserPlaneCalls, workspaceMainActor,
@@ -178,5 +178,73 @@ describe('the workspace root answers the walk-back', () => {
     await turns.settle({ messageId: 'second-answer', text: 'ok' });
     await landing;
     expect(lines(await storedChat(harness))).toEqual(['first ask', 'ok', 'second ask', 'ok']);
+  });
+
+  // REWIND-0924: a chat-only rewind takes the chat back, but the computer keeps what the rewound turns did; the agent
+  // is told, at its next turn, and no turn starts for it.
+  describe('a chat-only rewind tells the agent what its rewound turns left', () => {
+    /** A conversation whose second turn wrote a file, failed an edit, and ran a command; its second ask's id. */
+    const rewound = async () => {
+      const harness = orchestratorHarness();
+      const { agent } = harness;
+      const turns = chatSessionTurns(agent);
+
+      await turns.run('first ask');
+      await turns.prepare({ messages: [{ role: 'user', content: 'write the plan' }] });
+      await turns.settle({
+        messageId: 'second-answer', text: 'Wrote it.',
+        calls: [
+          { name: 'file', input: { op: 'write', path: 'notes/plan.md', content: 'step one\nstep two' } },
+          { name: 'file', input: { op: 'edit', path: 'notes/absent.md', edits: [{ old_text: 'never', new_text: 'there' }] } },
+          { name: 'shell', input: { runtime: 'workspace', command: 'echo started > notes/log.txt' } },
+          // Most work runs in programs: their own writes go unlisted, but that they ran is told.
+          { name: 'eval', input: { code: 'return 1 + 1;' } },
+        ],
+      });
+
+      return { harness, agent, turns };
+    };
+
+    test('its next turn reads what the rewound turns changed, and the rewind starts none', async () => {
+      const { harness, agent, turns } = await rewound();
+      const before = (await storedChat(harness)).filter((message) => message.role === 'user').at(-1);
+
+      if (before === undefined) throw new Error('the harness recorded no user message');
+      await agent.revertConversation(before.id, { chatOnly: true });
+      const kept = await storedChat(harness);
+      const notice = kept.at(-1);
+
+      expect(lines(kept).slice(0, 2)).toEqual(['first ask', 'ok']);
+      expect(kept).toHaveLength(3);
+      // The harness wrote it, so the chat draws it as `system`; the model reads it as the user row it is stored as.
+      expect(notice?.role).toBe('system');
+
+      const card = classifyProgrammaticTurn({ metadata: notice?.metadata });
+
+      // A card of its own, from the notice's fields: the file written, and the command that ran.
+      expect(card?.kind === 'system_event' ? card.event : card?.kind).toBe(CHAT_REWOUND_EVENT);
+      expect(v.parse(v.looseObject({ rewoundPaths: v.array(v.string()), rewoundCommands: v.number(), rewoundPrograms: v.number() }), notice?.metadata))
+        .toMatchObject({ rewoundPaths: ['notes/plan.md'], rewoundCommands: 1, rewoundPrograms: 1 });
+
+      const next = await turns.prepare({ messages: [{ role: 'user', content: 'what changed?' }] });
+      const read = JSON.stringify(next.prompt);
+
+      expect(read).toContain('notes/plan.md');
+      // A command that ran is told though it failed: whatever it did stands.
+      expect(read).toContain('echo started > notes/log.txt');
+      // A refused edit changed nothing, so the agent is not told of it.
+      expect(read).not.toContain('notes/absent.md');
+      await turns.settle({ messageId: 'third-answer', text: 'ok' });
+    });
+
+    test('a rewind with the files told of nothing: the chat ends at the cut', async () => {
+      const { harness, agent } = await rewound();
+      const before = (await storedChat(harness)).filter((message) => message.role === 'user').at(-1);
+
+      if (before === undefined) throw new Error('the harness recorded no user message');
+      await agent.revertConversation(before.id, { chatOnly: false });
+
+      expect(lines(await storedChat(harness))).toEqual(['first ask', 'ok']);
+    });
   });
 });

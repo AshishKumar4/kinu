@@ -99,35 +99,35 @@ function setup(opts = {}) {
 }
 
 /**
- * A git that holds the first staging it is asked for, a snapshot's `add`, until the test lets it go. The hold is
- * a directory the held git makes and the release a FIFO it reads, so each side waits on the other's act.
+ * A git that holds the first staging it is asked for, a snapshot's `add`, until the test lets it go. The hold and
+ * the release are each a FIFO, so each side waits on the other's act: the held git writes `held`, which a `cat` the
+ * test started reads and exits on, then reads `release`. Never a file-change event: Bun's fs.watch dropped one in
+ * 40 runs under load (2026-10-20, linux-screen.test.js), and a wait on it hangs the suite.
  */
 async function heldGit() {
   const dir = scratchDir('held-git');
-  const marker = path.join(dir, 'held');
+  const marker = path.join(dir, 'first');
+  const held = path.join(dir, 'held');
   const release = path.join(dir, 'release');
-  const made = await runToExit(['mkfifo', release]);
+  const made = await runToExit(['mkfifo', held, release]);
 
   if (made.exitCode !== 0) throw new Error(`mkfifo failed: ${made.stderr}`);
   const bin = path.join(dir, 'git');
   fs.writeFileSync(bin, [
     '#!/bin/bash',
-    `if [ "$1" = add ] && mkdir '${marker}' 2>/dev/null; then read -r _ < '${release}'; fi`,
+    `if [ "$1" = add ] && mkdir '${marker}' 2>/dev/null; then echo held > '${held}'; read -r _ < '${release}'; fi`,
     'exec git "$@"',
     '',
   ].join('\n'), { mode: 0o755 });
 
-  const held = Promise.withResolvers();
+  // Unreferenced: a test that never reaches the hold leaves no reader keeping the suite alive.
+  const reader = Bun.spawn(['cat', held], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
 
-  const watcher = fs.watch(dir, () => {
-    if (fs.existsSync(marker)) held.resolve();
-  });
-
-  watcher.unref();
+  reader.unref();
 
   return {
     bin,
-    held: held.promise.finally(() => { watcher.close(); }),
+    held: reader.exited,
     release: () => fs.promises.writeFile(release, 'go\n'),
   };
 }
@@ -987,6 +987,150 @@ describe('daemon device path confinement', () => {
     expect(escaped).toEqual({});
     expect(swapper.signalCode).toBe('SIGTERM');
     expect(refused).toBeGreaterThan(0);
+  });
+
+  // L111 #2, the macOS half: a listing that held the directory but read its names by its path again, keeping those the
+  // held directory also has, told a command which of the names it planted a swapped-in private directory shares: a
+  // listing showing only some of them. Every listing shows all the planted names or none of them, and no private one.
+  // (That a listing mid-rename is of the directory named, never a sibling, is the next test's.)
+  test('a listing tells a command nothing of a private directory it swaps in for the checked one', async () => {
+    const root = scratchDir('daemon-list-planted');
+    const project = path.join(root, 'project');
+    const inner = path.join(project, 'inner');
+    const outside = path.join(root, 'private');
+    const planted = ['guess-1.md', 'guess-2.md', 'guess-3.md', 'guess-4.md'];
+
+    fs.mkdirSync(inner, { recursive: true });
+    fs.mkdirSync(outside);
+
+    for (const name of planted) fs.writeFileSync(path.join(inner, name), 'planted');
+    // The private directory holds one of the guesses, and a name of its own.
+    fs.writeFileSync(path.join(outside, 'guess-3.md'), 'private');
+    fs.writeFileSync(path.join(outside, 'payroll.xlsx'), 'private');
+    const shown = {};
+    let refused = 0;
+
+    const swapper = Bun.spawn({
+      cmd: [process.execPath, '-e', SWAPPER],
+      env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+
+    try {
+      await swapper.stdout.getReader().read();
+
+      for (let attempt = 0; attempt < 2000; attempt += 1) {
+        const ws = fakeWs();
+
+        handle({ id: 'list-race', method: 'listFiles', sandbox: scoped([project]), params: [inner] }, ws, {});
+        const answer = await ws.response('list-race');
+
+        if (answer.error !== undefined) refused += 1;
+        else {
+          const names = answer.result.map((entry) => entry.name).sort((a, b) => a.localeCompare(b)).join(' ');
+
+          shown[names] = (shown[names] ?? 0) + 1;
+        }
+      }
+    } finally {
+      swapper.kill();
+      await swapper.exited;
+    }
+
+    const whole = planted.join(' ');
+
+    const told = Object.keys(shown).filter((names) => names.includes('payroll.xlsx')
+      || (names !== whole && planted.some((name) => names.split(' ').includes(name))));
+
+    expect({ told, whole: (shown[whole] ?? 0) > 0 }).toEqual({ told: [], whole: true });
+    expect(swapper.signalCode).toBe('SIGTERM');
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  // LEDGER-L111's open defect (2026-10-19): mid-rename, the view judged `project/inner` with Bun 1.4.3's realpathSync,
+  // which answered the project itself or the folder set aside, so a frame naming `inner` acted beside it. A decoy of the
+  // same name in the project tells the two apart: a frame reads and lists `inner`, or answers an error, and never the
+  // project. Before the fix, reads answered the decoy and listings the project's own names.
+  test('a frame acts on the path it named while a command moves a folder of it aside, a link in its place, and back', async () => {
+    const root = scratchDir('daemon-rename-race');
+    const project = path.join(root, 'project');
+    const inner = path.join(project, 'inner');
+
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(path.join(inner, 'planted.md'), 'planted');
+    fs.writeFileSync(path.join(project, 'planted.md'), 'the project\'s decoy');
+    const answered = {};
+    let refused = 0;
+
+    const outside = path.join(root, 'private');
+
+    fs.mkdirSync(outside);
+
+    const renamer = Bun.spawn({
+      cmd: [process.execPath, '-e', SWAPPER],
+      env: { ...process.env, KINU_SWAP: JSON.stringify([inner, outside]) },
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'inherit',
+    });
+
+    try {
+      await renamer.stdout.getReader().read();
+
+      for (let attempt = 0; attempt < 2000; attempt += 1) {
+        const ws = fakeWs();
+        const reading = attempt % 2 === 1;
+        const params = reading ? [path.join(inner, 'planted.md'), 0, 64] : [inner];
+
+        handle({ id: 'rename-race', method: reading ? 'readRange' : 'listFiles', sandbox: scoped([project]), params }, ws, {});
+        const answer = await ws.response('rename-race');
+
+        if (answer.error !== undefined) {
+          refused += 1;
+          continue;
+        }
+
+        const seen = reading ? Buffer.from(answer.result.content, 'base64').toString('utf8') : answer.result.map((entry) => entry.name).sort().join(' ');
+
+        answered[seen] = (answered[seen] ?? 0) + 1;
+      }
+    } finally {
+      renamer.kill();
+      await renamer.exited;
+    }
+
+    expect(Object.keys(answered).sort()).toEqual(['planted', 'planted.md']);
+    expect({ renaming: renamer.signalCode, raced: refused > 0 }).toEqual({ renaming: 'SIGTERM', raced: true });
+  });
+
+  // A libc that cannot be bound lists nothing another way: the listing is refused, saying why.
+  test('a listing is refused, not read by its path, when the descriptor cannot be enumerated', async () => {
+    const project = scratchDir('daemon-list-unbound');
+    const ws = fakeWs();
+    const held = require('../src/daemon/held.js');
+
+    const failing = held.heldModule((name) => {
+      if (name === 'bun:ffi') throw new Error('no libc binding here');
+
+      return require(name);
+    });
+
+    fs.writeFileSync(path.join(project, 'a.txt'), 'a');
+
+    const refusal = (() => {
+      try {
+        failing.atJudged({ raw: false }, project, {}, (at) => at.list((entries) => entries));
+
+        return null;
+      } catch (cause) {
+        return { code: cause.code, said: cause.message.includes('cannot list') };
+      }
+    })();
+
+    handle({ id: 'listed', method: 'listFiles', sandbox: scoped([project]), params: [project] }, ws, {});
+    expect({ refusal, listed: (await ws.response('listed')).result.map((entry) => entry.name) }).toEqual({ refusal: { code: 'ENOTSUP', said: true }, listed: ['a.txt'] });
   });
 
   // L111 #2's review: a stat walked from / threw when a directory of its path was missing, where an absent path is null.
@@ -2376,6 +2520,14 @@ describe('daemon process under Bun against a local hub', () => {
   // with its own named wait inside.
   });
 
+  /** What a terminal session drew, as the fake hub received it. */
+  function terminalOutput(hub, session) {
+    return hub.frames
+      .filter((f) => f.type === 'PTY_OUT' && f.session === session)
+      .map((f) => Buffer.from(f.data, 'base64').toString('utf-8'))
+      .join('');
+  }
+
   // A signal never reaches the socket's close handler, which is where the
   // terminals were hung up. When the daemon's pty master closes, the kernel
   // hangs up the shell, and the shell passes the hangup on to the jobs it
@@ -2399,20 +2551,19 @@ describe('daemon process under Bun against a local hub', () => {
         try {
           const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
           expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
-          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', sandbox: RAW, params: [80, 24] }));
+          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', workspace: 'ws-signal', sandbox: RAW, params: [80, 24] }));
           const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptysignal0-1'));
 
           if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);
           expect(opened.result.pid).toBeGreaterThan(0);
+          // The workspace's first session, named by the daemon.
+          const session = opened.result.session;
 
-          const output = () => hub.frames
-            .filter((f) => f.type === 'PTY_OUT' && f.session === 'rpc-ptysignal0-1')
-            .map((f) => Buffer.from(f.data, 'base64').toString('utf-8'))
-            .join('');
+          const output = () => terminalOutput(hub, session);
 
           hub.socket().send(JSON.stringify({
             type: 'PTY_IN',
-            session: 'rpc-ptysignal0-1',
+            session,
             data: Buffer.from('sleep 600 & job=$!; disown $job; echo started $job\r').toString('base64'),
           }));
           const started = await untilHub(() => /started (\d+)/.exec(output()));
@@ -2424,7 +2575,61 @@ describe('daemon process under Bun against a local hub', () => {
           child.kill('SIGTERM');
           await child.exited;
           expect(await until(() => !isRunning(job), 10_000)).toBe(true);
-          expect(daemonLog()).toContain('device.terminals_closed_with_daemon rpc-ptysignal0-1');
+          expect(daemonLog()).toContain(`device.terminals_closed_with_daemon ${session}`);
+        } finally {
+          child.kill('SIGTERM');
+          await child.exited;
+        }
+      } finally {
+        await hub.close();
+      }
+    } finally {
+      if (job > 0) tolerate(() => process.kill(job, 'SIGKILL'), 'esrch');
+    }
+  // One daemon spawn, one terminal, and the shell's own prompt inside it,
+  // each with its own named wait.
+  });
+
+  // 1014-t: a terminal outlives its socket, detached, so a socket the hub
+  // closed for good (the owner revoked the machine) is the one close that must
+  // still end every shell: nothing may reach them again, and a live shell keeps
+  // the rejected daemon running.
+  test('a machine whose credential is rejected hangs up every job in its terminals', async () => {
+    if (process.platform !== 'linux') return;
+    const root = scratchDir('daemon-rejected-terminal');
+    let job = 0;
+
+    try {
+      const hub = startFakeHub();
+
+      try {
+        makeConfig(root, hub.origin);
+        const { child, logPath } = spawnDaemon(root);
+
+        try {
+          const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+          expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
+          hub.socket().send(JSON.stringify({ id: 'rpc-ptyreject0-1', method: 'ptyOpen', workspace: 'ws-rejected', sandbox: RAW, params: [80, 24] }));
+          const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptyreject0-1'));
+
+          if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);
+          const session = opened.result.session;
+
+          const output = () => terminalOutput(hub, session);
+
+          hub.socket().send(JSON.stringify({
+            type: 'PTY_IN',
+            session,
+            data: Buffer.from('sleep 600 & job=$!; disown $job; echo started $job\r').toString('base64'),
+          }));
+          const started = await untilHub(() => /started (\d+)/.exec(output()));
+
+          if (!started) throw new Error(`the shell never started the job: log says ${daemonLog()}`);
+          job = Number(started[1]);
+          hub.socket().close(4401, 'device credentials were rejected');
+
+          expect(await until(() => !isRunning(job), 10_000)).toBe(true);
+          expect(daemonLog()).toContain(`device.terminals_closed_with_credential ${session}`);
         } finally {
           child.kill('SIGTERM');
           await child.exited;

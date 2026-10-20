@@ -101,7 +101,7 @@ export class UserSessions {
     expiresAt: number,
     identity: BrowserSessionIdentity & { credentialGeneration?: number },
   ): Promise<void> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.mint');
     this.host.sqlx(
       `INSERT INTO user_browser_sessions
          (token_hash, expires_at, email, display_name, provider, provider_sub, auth_time)
@@ -252,7 +252,7 @@ export class UserSessions {
   /** Revoke exactly this session; the row's absence is the revocation. The write is durable before the fan-out, so a
    *  failed push cannot keep a socket authorized (see retireCliAuthority). */
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.revoke');
     this.host.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);
     closeEndedRosterSockets(rosterSockets(this.host.ctx), this.sessionStands);
     await this.pushSessionSocketRevocation(tokenHash);
@@ -317,7 +317,7 @@ export class UserSessions {
   async mintCliToken(
     caller: UserCaller, userId: string, authorizationHash: string, label?: string,
   ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.mint');
 
     if (!/^[a-f0-9]{32}$/.test(userId)) throw new KinuError('bad_input', 'invalid user id');
 
@@ -385,7 +385,7 @@ export class UserSessions {
   }
 
   async revokeCliTokenHash(caller: UserCaller, tokenHash: string): Promise<{ ok: boolean }> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.revoke');
     this.host.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
     await this.retireCliAuthority();
 
@@ -394,7 +394,7 @@ export class UserSessions {
 
   /** Ends every browser session and CLI token of this account, and refuses any session of a lower generation. */
   async raiseCredentialFloor(caller: UserCaller, generation: number): Promise<void> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.revoke');
 
     const sessions = this.host.ctx.storage.transactionSync(() => {
       this.host.sqlx(`INSERT INTO user_credential_floor (id, generation) VALUES (1, ?)
@@ -415,7 +415,7 @@ export class UserSessions {
   }
 
   async revokeAllCliTokens(caller: UserCaller): Promise<{ revoked: number }> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.revoke');
 
     const revoked = this.host.sqlx<{ n: number }>(
       `SELECT COUNT(*) AS n FROM user_cli_tokens WHERE revoked_at IS NULL`,
@@ -474,7 +474,7 @@ export class UserSessions {
   /** Step-up policy is enforced by the CLI routes; this DO owns hash-only storage and
    * name/scope validation. */
   async mintAccessToken(caller: UserCaller, userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.mint');
 
     return mintAccessTokenRow(this.host.ctx.storage.sql, userId, name, scopes);
   }
@@ -504,7 +504,7 @@ export class UserSessions {
   }
 
   async revokeAccessToken(caller: UserCaller, ref: string): Promise<{ ok: true; revoked: boolean }> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.revoke');
     const result = revokeAccessTokenRow(this.host.ctx.storage.sql, ref);
     // Unconditional: `revoked: false` also covers an already-revoked token, and a spurious
     // generation rise is cheap while a skipped one leaves a socket open.
@@ -518,7 +518,7 @@ export class UserSessions {
     agentName: string;
     cliTokenHash: string;
   }): Promise<{ ok: boolean; ticket?: string; expiresAt?: number; error?: string }> {
-    await this.host.requireTier(caller, 'auth_tokens');
+    await this.host.requireTier(caller, 'auth_tokens.mint');
 
     if (!/^[a-f0-9]{32}$/.test(input.userId)) return { ok: false, error: 'invalid user id' };
 

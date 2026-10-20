@@ -55,13 +55,6 @@
     "inputs_json TEXT NOT NULL",
     "PRIMARY KEY(actor_id,inputs_key)"
   ],
-  "actor_program_state@packages/core/src/identity/program-state.ts": [
-    "actor_id TEXT NOT NULL",
-    "key TEXT NOT NULL",
-    "value TEXT NOT NULL",
-    "updated_at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, key)"
-  ],
   "actor_requests@packages/core/src/session/schema.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "request_id TEXT NOT NULL",
@@ -253,6 +246,14 @@
     "settled INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
+  "agent_workspaces@packages/core/src/identity/agent-workspaces.ts": [
+    "actor_id TEXT NOT NULL",
+    "workspace TEXT NOT NULL",
+    "name TEXT NOT NULL",
+    "brief TEXT NOT NULL",
+    "created_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, workspace)"
+  ],
   "alternate_takes@packages/core/src/mcts/takes.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -264,18 +265,6 @@
     "settlement_key TEXT",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
-  ],
-  "artifact_trials@packages/core/src/evolution/artifact-schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "trial_id TEXT NOT NULL",
-    "artifact_id TEXT NOT NULL",
-    "version INTEGER NOT NULL",
-    "status TEXT NOT NULL CHECK (status IN (${sqlCheckList(TRIAL_STATUSES)}))",
-    "looks INTEGER NOT NULL DEFAULT 0",
-    "started_at INTEGER NOT NULL",
-    "decided_at INTEGER",
-    "verdict TEXT",
-    "PRIMARY KEY (actor_id, trial_id)"
   ],
   "artifact_versions@packages/core/src/evolution/artifact-schema.ts": [
     "actor_id TEXT NOT NULL",
@@ -567,8 +556,11 @@
     "code TEXT NOT NULL DEFAULT ''",
     "created_at INTEGER NOT NULL DEFAULT 0",
     "updated_at INTEGER NOT NULL DEFAULT 0",
-    "score REAL NOT NULL DEFAULT 0.5",
-    "uses INTEGER NOT NULL DEFAULT 0",
+    "offered INTEGER NOT NULL DEFAULT 0",
+    "chosen INTEGER NOT NULL DEFAULT 0",
+    "rated INTEGER NOT NULL DEFAULT 0",
+    "rating_sum REAL NOT NULL DEFAULT 0",
+    "broken TEXT",
     "last_used_at INTEGER NOT NULL DEFAULT 0"
   ],
   "deferred_approval_hits@packages/core/src/safety/deferred-approval.ts": [
@@ -799,60 +791,47 @@
     "want_files INTEGER NOT NULL DEFAULT 0",
     "published INTEGER NOT NULL DEFAULT 0"
   ],
-  "gallery_listings@packages/core/src/slates/gallery.ts": [
+  "gallery_installs@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
     "workspace TEXT NOT NULL",
-    "slate TEXT NOT NULL",
+    "item TEXT NOT NULL",
+    "user_id TEXT NOT NULL",
+    "at INTEGER NOT NULL",
+    "PRIMARY KEY (kind, workspace, item, user_id)"
+  ],
+  "gallery_listings@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
+    "workspace TEXT NOT NULL",
+    "item TEXT NOT NULL",
     "share TEXT NOT NULL",
     "title TEXT NOT NULL",
     "line TEXT NOT NULL",
     "category TEXT NOT NULL",
     "owner_name TEXT NOT NULL",
+    "maker TEXT NOT NULL DEFAULT 'person' CHECK (maker IN ('person', 'kinu'))",
     "url TEXT NOT NULL",
     "picture TEXT",
+    "needs TEXT",
     "listed_at INTEGER NOT NULL",
     "viewers INTEGER NOT NULL DEFAULT 0",
-    "PRIMARY KEY (workspace, slate)"
+    "PRIMARY KEY (kind, workspace, item)"
   ],
   "gallery_reports@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
     "workspace TEXT NOT NULL",
-    "slate TEXT NOT NULL",
+    "item TEXT NOT NULL",
     "email TEXT NOT NULL",
     "reason TEXT NOT NULL",
     "at INTEGER NOT NULL",
-    "PRIMARY KEY (workspace, slate, email)"
+    "PRIMARY KEY (kind, workspace, item, email)"
   ],
   "gallery_stars@packages/core/src/slates/gallery.ts": [
+    "kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace'))",
     "workspace TEXT NOT NULL",
-    "slate TEXT NOT NULL",
+    "item TEXT NOT NULL",
     "email TEXT NOT NULL",
     "at INTEGER NOT NULL",
-    "PRIMARY KEY (workspace, slate, email)"
-  ],
-  "gepa_candidates@packages/core/src/evolution/gepa/persistence.ts": [
-    "actor_id TEXT NOT NULL",
-    "id TEXT NOT NULL",
-    "run_id TEXT NOT NULL",
-    "parent_id TEXT",
-    "source TEXT NOT NULL",
-    "scores_json TEXT NOT NULL",
-    "feedback_json TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "iteration INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, id)"
-  ],
-  "gepa_runs@packages/core/src/evolution/gepa/persistence.ts": [
-    "actor_id TEXT NOT NULL",
-    "run_id TEXT NOT NULL",
-    "target TEXT NOT NULL",
-    "target_ref TEXT",
-    "started_at INTEGER NOT NULL",
-    "ended_at INTEGER",
-    "status TEXT NOT NULL CHECK (status IN ('running','completed','aborted'))",
-    "stop_reason TEXT",
-    "winner_id TEXT",
-    "metric_calls INTEGER NOT NULL DEFAULT 0",
-    "iterations INTEGER NOT NULL DEFAULT 0",
-    "PRIMARY KEY (actor_id, run_id)"
+    "PRIMARY KEY (kind, workspace, item, email)"
   ],
   "github_items@packages/core/src/github/activity.ts": [
     "repo TEXT NOT NULL",
@@ -960,6 +939,7 @@
     "path TEXT NOT NULL",
     "digest TEXT NOT NULL",
     "decision TEXT NOT NULL CHECK (decision IN ('approved', 'revoked'))",
+    "origin TEXT NOT NULL DEFAULT 'owner' CHECK (origin IN ('owner', 'dream'))",
     "PRIMARY KEY (actor_id, scope, path)"
   ],
   "kinu_agent_identity@packages/core/src/vfs/agent-home.ts": [
@@ -1141,6 +1121,7 @@
     "turn_ids TEXT NOT NULL",
     "debt_key TEXT",
     "proposal TEXT",
+    "review_json TEXT",
     "routes TEXT NOT NULL",
     "detail TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
@@ -1313,9 +1294,9 @@
     "revoked_at INTEGER",
     "mode TEXT NOT NULL DEFAULT 'own' CHECK (mode IN ('own', 'owner'))",
     "grant_revision TEXT",
-    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
     "listing_line TEXT",
     "listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun'))",
+    "CHECK ((mode = 'owner') = (grant_revision IS NOT NULL))",
     "CHECK ((listing_line IS NULL) = (listing_category IS NULL))",
     "CHECK (listing_line IS NULL OR mode = 'own')"
   ],
@@ -1466,14 +1447,6 @@
     "updated_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "trial_turns@packages/core/src/evolution/artifact-schema.ts": [
-    "actor_id TEXT NOT NULL",
-    "trial_id TEXT NOT NULL",
-    "turn_id TEXT NOT NULL",
-    "segment_id TEXT NOT NULL",
-    "at INTEGER NOT NULL",
-    "PRIMARY KEY (actor_id, trial_id, turn_id)"
-  ],
   "triggers@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -1516,6 +1489,8 @@
     "answer TEXT NOT NULL",
     "followup TEXT",
     "scaffold_version INTEGER",
+    "artifacts_json TEXT",
+    "rejects TEXT",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
@@ -1619,15 +1594,6 @@
     "update_check INTEGER NOT NULL DEFAULT 1",
     "unstopped_at INTEGER"
   ],
-  "user_egress_secrets@packages/core/src/safety/egress-vault.ts": [
-    "id TEXT PRIMARY KEY",
-    "label TEXT NOT NULL",
-    "host TEXT NOT NULL",
-    "placeholder TEXT NOT NULL UNIQUE",
-    "secret TEXT NOT NULL",
-    "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
-    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
-  ],
   "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
     "headers TEXT",
@@ -1641,6 +1607,20 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "onboarded_at INTEGER"
+  ],
+  "user_secret_grants@packages/core/src/safety/egress-vault.ts": [
+    "workspace TEXT NOT NULL",
+    "name TEXT NOT NULL",
+    "reveal INTEGER NOT NULL DEFAULT 0 CHECK (reveal IN (0, 1))",
+    "PRIMARY KEY (workspace, name)"
+  ],
+  "user_secrets@packages/core/src/safety/egress-vault.ts": [
+    "name TEXT PRIMARY KEY",
+    "hosts TEXT NOT NULL",
+    "position TEXT NOT NULL",
+    "placeholder TEXT NOT NULL UNIQUE",
+    "secret TEXT NOT NULL",
+    "updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)"
   ],
   "user_share_cards@packages/core/src/state/user-schema.ts": [
     "owner_user_id TEXT NOT NULL",
@@ -1732,14 +1712,5 @@
     "activity TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED CHECK (activity IN ('working', 'unfinished', 'idle'))",
     "decisions INTEGER GENERATED ALWAYS AS (json_extract(overview, '$.decisionsWaiting')) STORED NOT NULL",
     "overview TEXT NOT NULL"
-  ],
-  "workspace_proposals@packages/core/src/safety/workspace-proposals.ts": [
-    "id TEXT PRIMARY KEY",
-    "name TEXT NOT NULL",
-    "soul TEXT NOT NULL",
-    "brief TEXT NOT NULL",
-    "status TEXT NOT NULL DEFAULT 'pending'",
-    "requested_at INTEGER NOT NULL",
-    "decided_at INTEGER"
   ]
 }

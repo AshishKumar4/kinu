@@ -7,6 +7,9 @@ export const DEVICE_CONNECT_PATH = '/pc/connect';
 // Browser terminal socket for a device, forwarded into the same UserDO as the device socket.
 export const DEVICE_TERMINAL_PATH = '/pc/terminal';
 
+// Browser desktop socket for a device's screen, forwarded into the same UserDO as the device socket.
+export const DEVICE_SCREEN_PATH = '/pc/screen';
+
 // Workers Logs stores a header's value unless its name holds one of these (Tail Handler docs, header redaction).
 type PlatformRedactedHeader = `${string}${'auth' | 'key' | 'secret' | 'token' | 'jwt'}${string}`;
 
@@ -16,10 +19,17 @@ export const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity-secret' satisfies Platfo
 export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
 
 /** Each its own user: `devices` (the fleet), `scripted` (scripted-model tiers), `settings` (the one case that writes
- *  account-wide settings, which rows running beside it as `scripted` read). */
-export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings'] as const;
+ *  account-wide settings, which rows running beside it as `scripted` read), `keyless` (the scripted model, no search
+ *  key and no Cloudflare login, so a search takes the deployment's own gateway, as a person's who never chose does),
+ *  `gateway` (signed in to Cloudflare, so its searches bill its own account's gateway). */
+export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gateway'] as const;
 
 export const EVAL_TRIAL_ACCOUNTS = 512;
+
+/** The header naming the Worker version that answered: every published host's response carries it (cf-backend's
+ *  server.ts). A deploy and a secret change each make a new version, and every Durable Object restarts on it, so the
+ *  tooling reads it to tell a build's change from a version's (evals/src/target.ts). */
+export const WORKER_VERSION_HEADER = 'x-kinu-version';
 
 export type EvalAccount = (typeof EVAL_ACCOUNTS)[number] | `trial-${number}`;
 
@@ -76,11 +86,19 @@ const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
   'user_profile', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
 ]);
 
-/** A positive catalog CAS version proves its sole stored configuration row. It routes the trial's models; every
- *  other configuration row, and every runtime row from earlier work, still belongs to the isolation check. */
-export function inheritedRows(held: Readonly<Record<string, number>>, catalogVersion = 0): Record<string, number> {
+/**
+ * The configuration rows a trial account's provisioning writes, each of which routes the trial's models: its stored
+ * model catalog (a positive catalog CAS version proves it) and the AI Gateway selected for a gateway model (a selected
+ * id proves it). Each is one `user_config` row; every other configuration row, and every runtime row from earlier work,
+ * still belongs to the isolation check.
+ */
+export interface ProvisionedConfig { readonly catalog: boolean; readonly gateway: boolean }
+
+export function inheritedRows(held: Readonly<Record<string, number>>, provisioned: ProvisionedConfig = { catalog: false, gateway: false }): Record<string, number> {
+  const written = Number(provisioned.catalog) + Number(provisioned.gateway);
+
   return Object.fromEntries(Object.entries(held)
-    .map(([table, rows]) => [table, rows - Number(table === 'user_config' && catalogVersion > 0)] satisfies [string, number])
+    .map(([table, rows]) => [table, rows - (table === 'user_config' ? written : 0)] satisfies [string, number])
     .filter(([table, rows]) => rows > 0 && !TRIAL_ACCOUNT_KEEPS.has(table)));
 }
 

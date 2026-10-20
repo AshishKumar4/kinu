@@ -215,14 +215,14 @@ export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/q
 // Turn ratings: the one signal evolution decides by.
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
-  listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
+  listTurnRatings, ratingOf, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
   retractThumbs, listThumbs, satisfactionInterval, qualitySeries, qualityWindow, renderQualitySeries, isTrivialTurn,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
 
 export {
-  recordLesson, listLessons, corroborateLessonsForTurn, initLessonTables,
+  recordLesson, listLessons, initLessonTables,
 } from './evolution/lessons';
 
 export {
@@ -240,7 +240,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  awaitingTheOwner, buildChangelog, countUnseenChangelog,
+  buildChangelog, countUnseenChangelog,
   revertChangelogEntryById, ChangelogEntrySchema, ChangelogRevertResultSchema,
   type ChangelogEntry, type ChangelogEntryKind,
   type ChangelogRevertResult,
@@ -321,6 +321,8 @@ export {
   GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GalleryPageSchema, GallerySlateSchema, galleryPath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
   GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
+  EXPLORE_KINDS, ExplorePageSchema, BlueprintPageSchema, explorePath, workspaceBlueprintPath,
+  type ExploreKind, type ExploreItem, type ExplorePage, type WorkspaceCard, type BlueprintPage,
 } from './slates/gallery-api';
 
 // The part and consent contracts the client parses: `./slates` pulls the server's runtime, so the browser reads them here.
@@ -471,7 +473,7 @@ export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
 export type { LLMProviderConfig } from './llm';
 
 export {
-  createWorkersAIEmbedder, type WorkersAiWebSearch, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+  createWorkersAIEmbedder, type WorkersAiWebSearch, generateObjectReported, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
 } from './providers/model-invocation';
 
 // Every surface that counts tokens speaks this usage report.
@@ -854,7 +856,7 @@ export { toolDescription } from './utils/tool-description';
 export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
-  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability,
+  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability, type SecretsInContext,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';
@@ -1003,10 +1005,17 @@ export {
   type PendingScaffold, type ScaffoldDecisionEvents,
 } from './scaffold/versions';
 
-// CraftStore quality
-export { effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
+// Crafted tools by preference
+export { craftPreference, craftPreferences, rankByPreference, type CraftPreferenceRow } from './craft/preference';
 
-export { CRAFT_NEUTRAL_PRIOR, type CraftCall } from './craft/in-episode';
+// Scaffold replay against recorded turns
+export { activateReplayedScaffold } from './scaffold/replay-gate';
+
+export {
+  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn, type ReplayVerdict,
+} from './scaffold/replay';
+
+export { type CraftCall } from './craft/in-episode';
 
 export { TurnCraftLedger } from './craft/turn-ledger';
 
@@ -1085,6 +1094,10 @@ export {
 } from './execution/device-terminal';
 
 export {
+  DeviceScreenHub, screenFromSocket, readScreenData,
+} from './execution/device-screen';
+
+export {
   nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
   type NimbusExecResult, type NimbusPortInfo, nimbusSessionFiles,
 } from './execution/nimbus';
@@ -1135,7 +1148,7 @@ export {
 } from './vfs/workspace-path';
 
 export {
-  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid,
+  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots,
   actorHomeName,
@@ -1185,7 +1198,7 @@ export {
 
 export {
   withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
-  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
+  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps, removeWhole,
   type VfsMount, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
 } from './vfs/mounts';
@@ -1369,6 +1382,7 @@ export type { Credential, OAuthCredential, OpenAICompatCredential } from './cred
 export {
   createCredentialCipher,
   type CredentialCipher,
+  type CredentialEncryptionEnv,
 } from './credentials/envelope';
 
 export {
@@ -1443,16 +1457,19 @@ export {
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
   EVAL_TRIAL_ACCOUNTS,
+  WORKER_VERSION_HEADER,
   EVAL_WORKSPACE_BEAT_MS,
   EVAL_WORKSPACE_LEASE_MS,
   EVAL_WORKSPACE_PREFIX,
   evalAccountEmail,
   inheritedRows,
+  type ProvisionedConfig,
   isEvalAccountEmail,
   parseEvalAccount,
   type EvalAccount,
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
+  DEVICE_SCREEN_PATH,
   ORCHESTRATOR_AGENT_SLUG,
 } from './cloud-wire';
 
@@ -1485,9 +1502,9 @@ export {
 } from './safety/approval-gate';
 
 export {
-  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, egressGrants,
-  grantedEgressBindings, findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
-  createScrubStream, type EgressSecretBinding, type EgressRequestFacts,
+  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, revealHeader, revealUrl, positionWords,
+  findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
+  createScrubStream, SecretPositionSchema, type EgressSecretBinding, type EgressRequestFacts, type SecretPosition,
   type ScrubReplacement,
 } from './safety/egress-gate';
 
@@ -1499,9 +1516,10 @@ export {
 } from './safety/deferred-approval';
 
 export {
-  initEgressVaultTables, listEgressSecrets, putEgressSecret, revokeEgressSecret, resolveEgressInjection,
-  type EgressSecretSummary, type PutEgressSecretInput, type EgressInjection, type EgressInjectionResult,
-  type EgressVaultDeps,
+  initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
+  grantedSecrets, revealedSecrets, resolveEgressInjection,
+  type SecretSummary, type SecretGrant, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
+  type EgressInjectionResult, type EgressVaultDeps,
 } from './safety/egress-vault';
 
 export {
@@ -1529,13 +1547,15 @@ export {
 } from './safety/device-consent';
 
 export {
-  WorkspaceProposals, WorkspaceProposalStore, initWorkspaceProposalsTable, proposedSoul, type WorkspaceProposal,
-  type WorkspaceProposalAnswer, type WorkspaceProposalInput, type WorkspaceProposalReceipt,
-} from './safety/workspace-proposals';
+  AgentWorkspaceStore, createAgentWorkspace, initAgentWorkspacesTable,
+  type AgentWorkspace, type AgentWorkspaceDeps, type AgentWorkspaceInput, type AgentWorkspaceReceipt,
+} from './identity/agent-workspaces';
 
 export {
-  SECRET_PATTERNS, redactSecrets, type SecretPattern,
+  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern, type SecretProvider,
 } from './safety/secret-patterns';
+
+export { parseDotenv, pastedSecrets, type DotenvEntry, type PastedSecret } from './safety/pasted-secrets';
 
 export {
   scanText, countDetections, secretSightings, type SecretFinding, type SecretSighting,
@@ -1700,6 +1720,8 @@ export {
 
 export type { DeliveredRun } from './orchestrator/chat-queue';
 
+export { CHAT_REWOUND_EVENT, type RewindComputer, type RewindTold } from './orchestrator/rewind-notice';
+
 export { startActorTurn } from './orchestrator/actor-turn';
 
 export {
@@ -1807,26 +1829,21 @@ export type {
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
-// GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
+// The scaffold's versions.
 export {
-  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
+  getEvolutionStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runScaffoldOnce,
   type EvolutionStatus, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
+  type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
-// The proposer, its artifact store and live trials (docs/EVOLUTION-REDESIGN.md §3-5).
+// The artifact store a dream's section and tool edits stage in (docs/EVOLUTION-REDESIGN.md §3-4).
 export {
-  artifactOverrides, artifactVersion, bundledArtifact, currentArtifacts, listArtifactVersions,
-  sectionArtifact, toolArtifact, writeCandidate,
+  artifactOverrides, artifactVersion, currentArtifacts, listArtifactVersions,
+  sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
   type ArtifactOverrides, type ArtifactStatus, type ArtifactVersion,
 } from './evolution/artifacts';
 
-export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
-
-export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
-
-export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
 
 export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
@@ -1846,29 +1863,10 @@ export {
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
 export {
-  listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+  listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
-export {
-  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute, RefinementDecisionResultSchema, StagedSkillResultSchema,
-  type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult, type StagedSkillView,
-} from './evolution/refinement-skill';
-
-export {
-  runGepa,
-  DEFAULT_GEPA_BUDGET,
-  initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks, aggregateScore,
-} from './evolution/gepa/index';
-
-export type {
-  EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
-  GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
-  GepaIterationState, GepaProgressHooks, GepaResult,
-  GepaRunSummary, GepaStopReason,
-  GepaParetoEntry,
-} from './evolution/gepa/index';
+export { activateDreamSkills } from './evolution/refinement-skill';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
@@ -2029,6 +2027,15 @@ export type {
 
 export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage, type ChatWindow } from './read-models/status';
 
+export { WORKSPACE_LAYOUTS, WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
+
+export {
+  WorkspaceBlueprintSchema, blueprintPage, blueprintSeed,
+  type BlueprintInstall, type BlueprintNeed, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
+} from './blueprints/workspace';
+
+export { PERSONAL_ASSISTANT_ID, kinuBlueprint, kinuListings } from './blueprints/kinu';
+
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
@@ -2115,7 +2122,7 @@ export {
 export { isAdvisorSeverity } from './types/advisor';
 
 export {
-  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 
 export { EvolutionChangelogViewSchema, type EvolutionChangelogView } from './read-models/evolution-views';
@@ -2126,7 +2133,7 @@ export {
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
   profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
-  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING,
+  ProfileCatalogEnvelopeSchema, betaSwarms, SWARMS_BETA_SETTING, webSearchChainOf,
 } from './profiles';
 
 export type {
@@ -2145,6 +2152,7 @@ export {
   DEFAULT_ROLE_ID,
   providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
+  fastAssignment, fastCandidatesOf, type FastCandidate,
   agentRoleSwitch, changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
@@ -2153,6 +2161,8 @@ export {
 export { clockTime, fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { ownedStream, relayedAnswer } from './utils/relayed-answer';
+
+export { pulledThrough } from './utils/pulled-stream';
 
 export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
 
@@ -2202,7 +2212,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposed, sandboxPreviewExposures,
+  sandboxPreviewExposure, sandboxPreviewExposures,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 
@@ -2240,6 +2250,8 @@ export {
   DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
   type DeviceUpdateFrame, type DeviceUpdateState,
 } from './http/device-update';
+
+export { DeviceDesktopSchema, NO_DESKTOP, type DeviceDesktop } from './execution/device-desktop';
 
 export {
   COPY_SCRIPT, GITHUB_ICON, REPO_URL,
@@ -2485,7 +2497,7 @@ export {
 
 export {
   sandboxIdForWorkspace,
-  isKinuSandboxId,
+  workspaceOfSandbox,
 } from './preview/sandbox-id';
 
 export {
@@ -2582,6 +2594,12 @@ export {
   type HostedNodeHome,
   withHostedNodeExecution,
 } from './execution/node-home';
+
+export { withCommandEnvironment, type CommandEnvironment } from './execution/command-environment';
+
+export { isViewerProcess, providersWithoutOwnerSecrets, withholdingOwnerSecrets, type SecretsCaller } from './execution/secrets-caller';
+
+export { viewerCred, withViewerPrincipal, type ViewerPlace } from './execution/viewer-principal';
 
 export {
   objectNamed, type ObjectNamespace,

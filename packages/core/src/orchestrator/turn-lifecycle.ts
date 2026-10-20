@@ -253,6 +253,7 @@ export function snapshotCompletedTurn(turn: { readonly acc: TurnAccumulator; rea
     assistantResponse: opts.assistantResponse,
     toolCalls: acc.toolCalls,
     craftedToolsUsed: acc.craftedToolsUsed(),
+    craftedOffered: acc.craftedOffered(),
     steps: acc.stepCount,
     durationMs: acc.startedAt > 0 ? Date.now() - acc.startedAt : 0,
     feedback: null,
@@ -262,6 +263,8 @@ export function snapshotCompletedTurn(turn: { readonly acc: TurnAccumulator; rea
     struggles: turn.steering.struggles(),
     shownLessons: acc.lessonsShown(),
     ...(acc.askedOwner && { askedOwner: true }),
+    artifacts: acc.artifactVersions,
+    scaffold: { version: acc.scaffoldVersion, ...(acc.scaffoldThrew !== null && { threw: acc.scaffoldThrew }) },
   };
 
   if (opts.turnId !== undefined) completed.turnId = opts.turnId;

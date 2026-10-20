@@ -6,14 +6,17 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { MockLanguageModelV3 } from 'ai/test';
 import { createTestActors, unpricedLedger } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
-import { createWorkersAIEmbedder, generateReported, streamTextReported } from '../src/providers/model-invocation';
+import { createWorkersAIEmbedder, generateObjectReported, generateReported, streamTextReported } from '../src/providers/model-invocation';
 import { createChatModel } from '../src/llm';
-import { withModelStack } from '../src/providers/wire-model';
+import { createWireModel, withModelStack } from '../src/providers/wire-model';
+import { asFetchFunction } from '../src/providers/fetch-shim';
 import { buildCfWebSearchProvider } from '../src/web/provider-factory';
+import { DEFAULT_WEB_SEARCH_CHAIN } from '../src/providers/web-search';
 import type { ModelCallSink } from '../src/events/model-call';
 import type { Usage } from '../src/usage';
 
@@ -100,6 +103,56 @@ describe('an endpoint model files every call it makes', () => {
   });
 });
 
+describe('a structured call', () => {
+  const Fact = v.object({ key: v.string(), value: v.unknown(), note: v.optional(v.string()) });
+
+  /** A model that answers `text`, stopping as `finish` says, having read 9 tokens and written 2. */
+  const answering = (text: string, finish: 'stop' | 'length' = 'stop') => new MockLanguageModelV3({
+    doGenerate: async () => ({
+      content: [{ type: 'text' as const, text }], finishReason: { unified: finish, raw: undefined }, warnings: [],
+      usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
+    }),
+  });
+
+  test('an answer off the schema is refused as wrong, and was billed like any answer', async () => {
+    const { report, producers } = ledger();
+    const spend = { source: 'fast', report } as const;
+
+    expect(await generateObjectReported({ model: answering('{"key":"build.dir","value":"dist"}'), prompt: 'p' }, Fact, { spend })).toEqual({ key: 'build.dir', value: 'dist' });
+
+    for (const text of ['not json', '{"value":1}']) {
+      await expect(generateObjectReported({ model: answering(text), prompt: 'p' }, Fact, { spend })).rejects.toMatchObject({ code: 'bad_input' });
+    }
+
+    expect(producers()).toEqual({ fast: { calls: 3, unmeasured: 0, usage: { input: 27, output: 6 } } });
+  });
+
+  // Cut off, the answer is incomplete rather than wrong: asked again, the model may finish it.
+  test('an answer stopped at the output limit is no answer yet, not a wrong one', async () => {
+    const { report } = ledger();
+
+    await expect(generateObjectReported({ model: answering('{"key":"build', 'length'), prompt: 'p' }, Fact, { spend: { source: 'fast', report } }))
+      .rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  // OpenAI's strict mode refuses a schema with an optional field or an open value before answering.
+  test('the schema goes to the Responses API as a schema, not strict', async () => {
+    const sent: unknown[] = [];
+
+    const model = createWireModel({
+      name: 'opencode-go', modelId: 'gpt-6-luna', baseURL: 'https://opencode.example/v1', protocol: 'responses', reasoning: true,
+      fetch: asFetchFunction(async (_input, init) => {
+        sent.push(await new Response(init?.body).json());
+
+        return Response.json({ error: { message: 'recorded' } }, { status: 400 });
+      }),
+    });
+
+    await expect(generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Fact, { spend: { source: 'fast', report: () => {} } })).rejects.toThrow();
+    expect(sent).toEqual([expect.objectContaining({ text: { format: expect.objectContaining({ type: 'json_schema', strict: false }) } })]);
+  });
+});
+
 describe('the Workers AI utility bindings file unmeasured platform spend', () => {
   test('each embedding request is one row, however many texts it carries', async () => {
     const { report, producers } = ledger();
@@ -131,12 +184,12 @@ describe('the Workers AI utility bindings file unmeasured platform spend', () =>
       const converting = buildCfWebSearchProvider({
         AI: { toMarkdown: async () => [{ format: 'markdown', data: '# Title' }] },
         BROWSER: unusedBrowser,
-      }, () => undefined, report);
+      }, { auth: () => undefined, chain: async () => ({ routes: DEFAULT_WEB_SEARCH_CHAIN, retries: 0 }) }, report);
 
       expect((await converting.fetch('https://example.test/')).markdown).toContain('# Title');
       expect(producers()).toEqual({ platform: { calls: 1, unmeasured: 1, usage: {} } });
 
-      await buildCfWebSearchProvider({ BROWSER: unusedBrowser }, () => undefined, report).fetch('https://example.test/');
+      await buildCfWebSearchProvider({ BROWSER: unusedBrowser }, { auth: () => undefined, chain: async () => ({ routes: DEFAULT_WEB_SEARCH_CHAIN, retries: 0 }) }, report).fetch('https://example.test/');
       expect(producers()).toEqual({ platform: { calls: 1, unmeasured: 1, usage: {} } });
     } finally {
       globalThis.fetch = realFetch;

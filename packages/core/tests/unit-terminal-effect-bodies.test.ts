@@ -66,7 +66,7 @@ describe('a task reminder', () => {
     const owed: Parameters<OwedTurnQueue['appendOwedTurn']>[0][] = [];
 
     const effect = present(chatTerminalEffects({
-      chat: () => ({ announcementOnDisk: () => false, announcementInFlight: () => false, appendOwedTurn: (turn) => { owed.push(turn); } }),
+      chat: () => ({ announcementOnDisk: () => false, announcementInFlight: () => false, announcementHeld: () => false, appendOwedTurn: (turn) => { owed.push(turn); } }),
       orchestrator: () => null,
       engine: { learnFromTurn: () => Promise.reject(new Error('a reminder learns nothing')) },
     }).task_reminder, 'the reminder body');
@@ -108,7 +108,7 @@ describe('a held owed outcome', () => {
 
         return { status: 'owed', held: true, detail: 'carrier live' };
       } }),
-      craft_usage: terminalEffect({ input: v.object({}), runSync: () => {
+      task_reminder: terminalEffect({ input: v.object({}), runSync: () => {
         looks.failing += 1;
 
         return { status: 'owed', detail: 'undelivered' };
@@ -127,20 +127,20 @@ describe('a held owed outcome', () => {
 
     const run = await ledger.run('seq', [
       { name: 'branches', scope: '', input: {}, lane },
-      { name: 'craft_usage', scope: '', input: {}, lane },
+      { name: 'task_reminder', scope: '', input: {}, lane },
     ]);
 
     await run.reported;
 
     for (const step of [1, 2, 3]) {
-      now = row('craft_usage')?.next_attempt_at ?? now;
+      now = row('task_reminder')?.next_attempt_at ?? now;
       await ledger.replayOwed('seq');
       expect(looks).toEqual({ held: step + 1, failing: step + 1 });
       expect(row('branches')).toEqual({ attempts: 0, next_attempt_at: now + TERMINAL_EFFECT_RETRY_BASE_MS });
-      expect(row('craft_usage')?.attempts).toBe(step + 1);
+      expect(row('task_reminder')?.attempts).toBe(step + 1);
     }
 
-    expect(row('craft_usage')?.next_attempt_at).toBeGreaterThan(now + TERMINAL_EFFECT_RETRY_BASE_MS);
+    expect(row('task_reminder')?.next_attempt_at).toBeGreaterThan(now + TERMINAL_EFFECT_RETRY_BASE_MS);
     db.close();
   });
 });

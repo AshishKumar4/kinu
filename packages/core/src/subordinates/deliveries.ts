@@ -327,13 +327,15 @@ export class DeliveryInbox implements AgentInbox {
 
   async send(signal: AgentSignal): Promise<SendOutcome> {
     if (signal.user !== undefined) return settleSync(Effect.fail(new KinuError('bad_input', "A person's words are delivered as words, never as a signal.")));
-    const cardId = signal.idempotencyKey === undefined ? `sig-${nanoid()}` : signalCardId(signal.idempotencyKey);
+    // One key names the delivery and its card on both sides: the turn that reads it cards it by the same key.
+    const key = signal.idempotencyKey ?? nanoid();
+    const cardId = signalCardId(key);
     const metadata: JsonObject = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: cardId };
 
     this.deps.broadcast(metadataBroadcastEvent('signal_card', metadata, { id: cardId, state: 'pending', text: signal.text }));
 
     const answer = await this.deps.deliver({
-      id: signal.idempotencyKey ?? cardId,
+      id: key,
       input: {
         kind: 'turn', text: signal.text, metadata,
         ...(signal.stepText !== undefined && { stepText: signal.stepText }),

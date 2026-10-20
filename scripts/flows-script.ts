@@ -27,19 +27,17 @@ export const AGENT_PLAN_ASK = 'Flow agent plan: plan the release checklist.';
 
 export const AGENT_PLAN = '# Release checklist\n\n1. Tag the build.\n2. Write the notes.';
 
-/** The proposed-workspace row's ask in the workspace's own pane, and the workspace its turn proposes. */
-export const WORKSPACE_PROPOSAL_ASK = 'Flow proposal: propose the pricing workspace.';
+/** The agent-workspace row's ask in the workspace's own pane, and the workspace its turn creates. */
+export const AGENT_WORKSPACE_ASK = 'Flow agent workspace: start the release notes workspace.';
 
-export const PROPOSED_WORKSPACE = {
-  name: 'Flow pricing watch',
-  brief: 'Flow proposal brief: watch competitor pricing.',
+export const AGENT_WORKSPACE = {
+  name: 'Flow release notes',
+  brief: 'Flow workspace brief: write the v2 release notes from the merged pull requests.',
   soul: 'You keep notes short.',
 } as const;
 
-/** What the wake says when the owner approves, before the new workspace's link; the turn repeats the link. */
-export const PROPOSAL_APPROVED_WAKE = 'Your owner approved the workspace';
-
-export const PROPOSAL_LINK_REPLY = 'NEW WORKSPACE';
+/** The turn's reply, before the link `agent.createWorkspace` answered. */
+export const AGENT_WORKSPACE_REPLY = 'NEW WORKSPACE';
 
 /** The account-memory row: what the owner says in one workspace, the fact its agent proposes for the account, and the
  *  ask in another workspace whose agent recalls it and repeats the value. */
@@ -60,42 +58,48 @@ export const STACK_RECALL_ASK = 'Flow stack memory: which editor do I use?';
 
 export const STACK_RECALL_REPLY = 'YOUR EDITOR IS';
 
-/** The splice row: one answer draws a page whose Ping tells the agent a word; the next turn sleeps while it is clicked. */
+/** The splice row: one answer draws a page whose Ping tells the agent a numbered word; the next turn works in steps,
+ *  each waiting on the build while Ping is clicked once more, then names the pings it heard. */
 export const SPLICE_PAGE_ASK = 'Flow splice: draw a page with a Ping button.';
 
-export const SPLICE_WORK_ASK = 'Flow splice: wait on the build, then say whether a ping came.';
+export const SPLICE_WORK_ASK = 'Flow splice: wait on the build in steps, then say which pings came.';
 
-/** What the page sends; built from two halves in the page, so its source never shows the word itself. */
+/** What the page sends, numbered by its click (`-1`, `-2`, ...); built from two halves in the page, so its source never
+ *  shows the word itself. */
 export const SPLICE_SENT = 'flow-splice-ping-6b1e';
 
-/** The work turn's words before it sleeps, and its answer once the ping reached it mid-turn. */
-export const SPLICE_BEFORE = 'WAITING ON THE BUILD';
+/** The work turn's words at each step before it waits, one step per ping. */
+export const SPLICE_STEPS = ['WAITING ON THE BUILD', 'STILL BUILDING', 'LINKING THE BUILD'] as const;
 
-export const SPLICE_HEARD = 'PING HEARD';
+/** The work turn's answer, before the pings it heard, in the order they reached it. */
+export const SPLICE_HEARD = 'PINGS HEARD';
 
-/** Long enough to click the page while the turn waits on it. */
-const SPLICE_SLEEP = 'sleep 25';
+/** Long enough to click the page while a step waits on it, and three steps no longer than the one 25 s wait they
+ *  replace: a ping is read at the step after the wait, which it does not cut short. */
+const SPLICE_SLEEP = 'sleep 8';
 
 const SPLICE_PAGE = [
   '<slate-ui name="ping">',
   '<!doctype html><html><body><button id="ping">Ping</button><script type="module">',
   'import { workspace } from "kinu:slate";',
-  `document.getElementById("ping").onclick = () => workspace.agent.send({ text: ${JSON.stringify(SPLICE_SENT.slice(0, 11))} + ${JSON.stringify(SPLICE_SENT.slice(11))} });`,
+  'let clicks = 0;',
+  `document.getElementById("ping").onclick = () => workspace.agent.send({ text: ${JSON.stringify(SPLICE_SENT.slice(0, 11))} + ${JSON.stringify(SPLICE_SENT.slice(11))} + "-" + String(++clicks) });`,
   '</script></body></html>',
   '</slate-ui>',
 ].join('\n');
 
-/** The splice row's turns; a ping that reaches the agent ends its turn whether it came mid-turn or after. */
+/** The splice row's turns: a step's words and its wait per step, then the pings that reached the turn, in order. A
+ *  page's word arrives as a message of its own, so the turn's ask is the latest message that is not a ping. */
 function spliceScript(request: ScriptedRequest, latest: string): ScriptedAnswer | null {
-  if (latest.includes(SPLICE_SENT)) return { text: SPLICE_HEARD };
-
   if (latest.includes(SPLICE_PAGE_ASK)) return { text: `Here is the page.\n\n${SPLICE_PAGE}` };
 
-  if (!latest.includes(SPLICE_WORK_ASK)) return null;
+  if ([...request.userTexts].reverse().find((text) => !text.includes(SPLICE_SENT))?.includes(SPLICE_WORK_ASK) !== true) return null;
+  const step = SPLICE_STEPS.find((words) => !request.assistantTexts.includes(words));
 
-  return request.turn.length > 0
-    ? { text: 'NO PING' }
-    : { text: SPLICE_BEFORE, toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: SPLICE_SLEEP } } };
+  if (step !== undefined) return { text: step, toolCall: { name: 'shell', arguments: { runtime: 'workspace', command: SPLICE_SLEEP } } };
+  const heard = request.userTexts.flatMap((text) => new RegExp(`${SPLICE_SENT}-(\\d+)`, 'u').exec(text)?.[1] ?? []);
+
+  return { text: `${SPLICE_HEARD}: ${heard.length === 0 ? 'none' : heard.join(', ')}` };
 }
 
 /** The approvals row's ask: one turn whose two commands each reach outside the workspace, so each parks for its owner. */
@@ -462,18 +466,16 @@ function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnsw
  * the real model wrote none, or wrote a React slate the ask did not name, in 2 of 6 runs (2026-09-25). Each ask gets
  * the calls it names, in order; null for every other request (titles, the mission, a one-word reply).
  */
-/** The proposed-workspace row's turns: the proposal, and the reply to the wake that brings its link. */
-function proposalAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
-  // The workspace's own agent proposes; the owner's approval wakes it with the link, which its reply repeats.
-  const approved = latest.includes(PROPOSAL_APPROVED_WAKE) ? /\bhttps?:\/\/\S+\/workspace\/\S+/u.exec(latest)?.[0] : undefined;
+/** The agent-workspace row's turn: the workspace's own agent creates the workspace, and repeats the link it answered. */
+function agentWorkspaceAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (!latest.includes(AGENT_WORKSPACE_ASK)) return undefined;
+  const [created] = request.turn;
 
-  if (approved !== undefined) return { text: `${PROPOSAL_LINK_REPLY} ${approved}` };
+  if (created === undefined) {
+    return { toolCall: { name: 'eval', arguments: { code: `return await agent.createWorkspace(${[AGENT_WORKSPACE.name, AGENT_WORKSPACE.brief, AGENT_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
+  }
 
-  if (!latest.includes(WORKSPACE_PROPOSAL_ASK)) return undefined;
-
-  return request.turn.length > 0
-    ? { text: 'PROPOSED' }
-    : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${[PROPOSED_WORKSPACE.name, PROPOSED_WORKSPACE.brief, PROPOSED_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
+  return { text: `${AGENT_WORKSPACE_REPLY} ${/https?:\/\/[^\s"\\]+\/workspace\/[a-z0-9-]+/u.exec(created.result)?.[0] ?? `none: ${created.result.slice(0, 200)}`}` };
 }
 
 /** An account-memory row's turns: propose a fact for the account, and recall it. */
@@ -590,7 +592,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
-  const proposed = proposalAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? ownerAskAnswer(request, latest);
+  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? ownerAskAnswer(request, latest);
 
   if (proposed !== undefined) return proposed;
 

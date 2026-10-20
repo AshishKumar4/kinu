@@ -9,7 +9,8 @@ import {
   createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
-import { WORKSPACE_TITLE_MAX } from '@kinu.run/core';
+import { RECOVERY_BACKOFF_CEILING_MS, WORKSPACE_TITLE_MAX } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import { unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
 import { orchestratorHarness } from './helpers/actor-harness';
@@ -19,6 +20,23 @@ import { pictureKey, type PictureBucket } from '../src/slates/pictures';
 const OVERFLOW = 205;
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
+/** The jobs the account's alarm holds; the SDK makes its job table at the first job it is given. */
+function armedJobs(harness: TestUserDO): string[] {
+  return harness.db.query(`SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'`).get() === null ? []
+    : harness.db.query<{ id: string }, []>(`SELECT id FROM cf_agents_jobs ORDER BY id`).all().map((row) => row.id);
+}
+
+/** A lap on, the account's alarm runs what came due, as the platform's would. */
+async function lapLater(harness: TestUserDO): Promise<void> {
+  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS));
+
+  try {
+    await harness.userDO.alarm();
+  } finally {
+    setSystemTime();
+  }
+}
 
 async function seedRoster(harness: TestUserDO, count: number) {
   const owner = await testOwner();
@@ -96,9 +114,9 @@ describe('a deletion that could not finish', () => {
     harness.close();
   });
 
-  test('the next read finishes the cleanup and drops the row', async () => {
-    // The owner's next read is the retry; this object has no wake of its own. Typed so the
-    // mutation below type-checks.
+  // Staging 2026-10-19, eval-office-3-dj5qhl: a teardown whose destroy failed waited for its owner's next read, which
+  // never came, and the workspace woke its agent about once a minute for six hours.
+  test('a teardown that failed runs again a lap later and lands, with no read', async () => {
     const options: TestUserDOOptions = {
       durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go',
     };
@@ -109,11 +127,11 @@ describe('a deletion that could not finish', () => {
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
 
     options.destroyWorkspaceError = undefined;
-    const list = await harness.userDO.listWorkspaces(owner);
+    await lapLater(harness);
 
     expect(harness.destroyedWorkspaces).toEqual(['half-gone']);
     expect(pendingRows(harness)).toEqual([]);
-    expect(list.entries).toEqual([]);
+    expect(armedJobs(harness)).toEqual([]);
     harness.close();
   });
 
@@ -128,7 +146,7 @@ describe('a deletion that could not finish', () => {
     await harness.userDO.registerWorkspace(owner, 'healthy');
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
 
-    // The row is the retry, so the listing answers rather than failing.
+    // The listing answers without waiting on the teardown, which its own job runs again.
     const list = await harness.userDO.listWorkspaces(owner);
 
     expect(list.entries.map((w) => w.name)).toEqual(['healthy']);
@@ -136,6 +154,12 @@ describe('a deletion that could not finish', () => {
       { name: 'half-gone', delete_pending: 1 },
       { name: 'healthy', delete_pending: 0 },
     ]);
+    await lapLater(harness);
+    expect(pendingRows(harness)).toEqual([
+      { name: 'half-gone', delete_pending: 1 },
+      { name: 'healthy', delete_pending: 0 },
+    ]);
+    expect(armedJobs(harness)).toEqual(['workspace-deletion:half-gone']);
     harness.close();
   });
 
@@ -221,7 +245,7 @@ describe('a deletion that could not finish', () => {
   });
 
   test('a reset carries the intent, and the next activation finishes the job', async () => {
-    // The marker is durable, so an eviction before the retry loses nothing.
+    // The marker and its job are durable, so an eviction before the retry loses nothing.
     const storage = new Database(':memory:');
 
     const first = createTestUserDO({
@@ -234,11 +258,136 @@ describe('a deletion that could not finish', () => {
     first.close();
 
     const next = createTestUserDO({ durableObjectId: USER_ID, storage });
-    const list = await next.userDO.listWorkspaces(owner);
+    await lapLater(next);
 
     expect(next.destroyedWorkspaces).toEqual(['half-gone']);
     expect(pendingRows(next)).toEqual([]);
-    expect(list.entries).toEqual([]);
+    expect((await next.userDO.listWorkspaces(owner)).entries).toEqual([]);
+    next.close();
+    storage.close();
+  });
+
+  // A second teardown of one name at once would run its own cleanup, keyed by the name alone, over a workspace
+  // recreated after the first one ended.
+  test("a create of a name whose deletion is running waits for it, and the deletion runs once", async () => {
+    const destroying = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let destroys = 0;
+
+    const harness = createTestUserDO({
+      durableObjectId: USER_ID,
+      destroyWorkspaceGate: async () => {
+        destroys += 1;
+
+        if (destroys > 1) return;
+        destroying.resolve();
+        await release.promise;
+      },
+    });
+
+    const owner = await testOwner();
+
+    await harness.userDO.registerWorkspace(owner, 'ledger');
+    const removed = harness.userDO.removeWorkspace(owner, 'ledger', USER_ID);
+
+    await destroying.promise;
+    const created = harness.userDO.registerWorkspace(owner, 'ledger');
+
+    // A read that checks its caller as the create did, asked after it: the create is past that check, so it waits on the
+    // deletion, or has begun a teardown of its own.
+    await harness.userDO.listActiveWorkspaces(owner);
+    release.resolve();
+    await removed;
+    await created;
+
+    expect({ destroys, listed: (await harness.userDO.listWorkspaces(owner)).entries.map((w) => w.name), armed: armedJobs(harness) })
+      .toEqual({ destroys: 1, listed: ['ledger'], armed: [] });
+    harness.close();
+  });
+
+  // A create that retried every marked name, read before it waited on its own, tore down one recreated meanwhile.
+  test("a create retries only its own name's deletion, and leaves a workspace recreated meanwhile standing", async () => {
+    const destroying = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let holding = false;
+
+    const options: TestUserDOOptions = {
+      durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go',
+      destroyWorkspaceGate: async (name) => {
+        if (!holding || name !== 'alpha') return;
+        destroying.resolve();
+        await release.promise;
+      },
+    };
+
+    const harness = createTestUserDO(options);
+    const owner = await testOwner();
+
+    await harness.userDO.registerWorkspace(owner, 'alpha');
+    await harness.userDO.registerWorkspace(owner, 'beta');
+    await expect(harness.userDO.removeWorkspace(owner, 'alpha', USER_ID)).rejects.toThrow();
+    await expect(harness.userDO.removeWorkspace(owner, 'beta', USER_ID)).rejects.toThrow();
+    options.destroyWorkspaceError = undefined;
+    holding = true;
+
+    // A create of alpha runs alpha's deletion again, and waits on its destroy.
+    const alpha = harness.userDO.registerWorkspace(owner, 'alpha');
+
+    await destroying.promise;
+    // Meanwhile beta's deletion lands, and beta is made again.
+    await harness.userDO.removeWorkspace(owner, 'beta', USER_ID);
+    await harness.userDO.registerWorkspace(owner, 'beta');
+    release.resolve();
+    await alpha;
+
+    expect({ destroyed: harness.destroyedWorkspaces, listed: (await harness.userDO.listWorkspaces(owner)).entries.map((w) => w.name).sort() })
+      .toEqual({ destroyed: ['beta', 'alpha'], listed: ['alpha', 'beta'] });
+    harness.close();
+  });
+
+  test('a deletion refused parks until its account starts again, and does not wake it each lap', async () => {
+    const storage = new Database(':memory:');
+    let refusing = true;
+
+    const gate = async (): Promise<void> => {
+      if (refusing) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
+    };
+
+    const first = createTestUserDO({ durableObjectId: USER_ID, storage, destroyWorkspaceGate: gate });
+    const owner = await testOwner();
+
+    await first.userDO.registerWorkspace(owner, 'half-gone');
+    await expect(first.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toMatchObject({ code: 'denied' });
+    await lapLater(first);
+    expect({ marked: pendingRows(first), armed: armedJobs(first) }).toEqual({ marked: [{ name: 'half-gone', delete_pending: 1 }], armed: [] });
+    first.close();
+
+    refusing = false;
+    const next = createTestUserDO({ durableObjectId: USER_ID, storage, destroyWorkspaceGate: gate });
+    next.userDO.onStart();
+    await lapLater(next);
+
+    expect({ destroyed: next.destroyedWorkspaces, marked: pendingRows(next) }).toEqual({ destroyed: ['half-gone'], marked: [] });
+    next.close();
+    storage.close();
+  });
+
+  test('a row an earlier build marked, with no job of its own, lands once its account starts', async () => {
+    const storage = new Database(':memory:');
+    const first = createTestUserDO({ durableObjectId: USER_ID, storage });
+    const owner = await testOwner();
+
+    await first.userDO.registerWorkspace(owner, 'half-gone');
+    // As a build before the deletion's job left it: marked, and nothing armed to finish it.
+    storage.exec(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = 'half-gone'`);
+    first.close();
+
+    const next = createTestUserDO({ durableObjectId: USER_ID, storage });
+    next.userDO.onStart();
+    await lapLater(next);
+
+    expect(next.destroyedWorkspaces).toEqual(['half-gone']);
+    expect(pendingRows(next)).toEqual([]);
     next.close();
     storage.close();
   });
@@ -282,7 +431,7 @@ describe("a removed workspace's pictures", () => {
     harness.close();
   });
 
-  test('R2 refused keeps the workspace marked, and the next read deletes them', async () => {
+  test('R2 refused keeps the workspace marked, and its deletion deletes them a lap later', async () => {
     const bucket = memoryBucket();
     let refused = true;
 
@@ -303,7 +452,7 @@ describe("a removed workspace's pictures", () => {
     expect((await harness.userDO.listWorkspaces(owner)).total).toBe(0);
 
     refused = false;
-    await harness.userDO.listWorkspaces(owner);
+    await lapLater(harness);
 
     expect([...bucket.objects.keys()]).toEqual([]);
     expect(harness.db.prepare(`SELECT name FROM user_workspaces`).all()).toEqual([]);

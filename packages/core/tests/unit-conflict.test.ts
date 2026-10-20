@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { checkConflictsBeforeAdding, upsertCraftedTool } from '../src/craft/conflict';
+import { craftPreferences, markCraftBroken } from '../src/craft/preference';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { ExecuteResult, Executor } from '../src/types/primitives';
@@ -11,7 +12,7 @@ describe('CraftStore conflict detection', () => {
     rt.craftStore.create({ name: 'parse_csv', description: 'Parse CSV files', code: 'fn()' });
 
     const result = checkConflictsBeforeAdding(rt, {
-      name: 'parse_csv', description: 'Different desc', code: 'other()', score: 0.9,
+      name: 'parse_csv', description: 'Different desc', code: 'other()',
     });
 
     expect(result.conflicting).toContain('parse_csv');
@@ -27,7 +28,7 @@ describe('CraftStore conflict detection', () => {
     const result = checkConflictsBeforeAdding(rt, {
       name: 'csv_parser',
       description: 'parse and extract CSV data from files with headers and delimiters',
-      code: 'other()', score: 0.9,
+      code: 'other()',
     });
 
     expect(result.conflicting.length).toBeGreaterThan(0);
@@ -42,7 +43,7 @@ describe('CraftStore conflict detection', () => {
 
     const result = checkConflictsBeforeAdding(rt, {
       name: 'send_email', description: 'send transactional email via SMTP',
-      code: 'other()', score: 0.9,
+      code: 'other()',
     });
 
     expect(result.conflicting).toHaveLength(0);
@@ -65,16 +66,16 @@ function evaluatingExecutor(): Executor {
   };
 }
 
+/** Admission must compile the code the runtime will compile, not just check for a name. */
+function runtime(): AgentRuntime {
+  const { rt } = createTestRuntime();
+  initCraftedToolsTables(rt.storage.sql);
+
+  return { ...rt, executor: evaluatingExecutor() };
+}
+
 describe('upsertCraftedTool — the admission check', () => {
-  // Admission must compile the code the runtime will compile, not just check for a name.
-  function runtime(): AgentRuntime {
-    const { rt } = createTestRuntime();
-    initCraftedToolsTables(rt.storage.sql);
-
-    return { ...rt, executor: evaluatingExecutor() };
-  }
-
-  const scored = (rt: AgentRuntime, name: string): number =>
+  const stored = (rt: AgentRuntime, name: string): number =>
     rt.craftStore.list().filter((t) => t.name === name).length;
 
   test('rejects the verbatim production body that calls an object literal', async () => {
@@ -82,13 +83,13 @@ describe('upsertCraftedTool — the admission check', () => {
 
     const result = await upsertCraftedTool(rt, {
       name: 'run_command', description: 'run a shell command',
-      code: 'await ({ runtime })(command)', score: 0.7,
+      code: 'await ({ runtime })(command)',
     });
 
     expect(result.accepted).toBe(false);
     expect(result.vetoReason).toContain('run_command');
     expect(rt.craftStore.get('run_command')).toBeFalsy();
-    expect(scored(rt, 'run_command')).toBe(0);
+    expect(stored(rt, 'run_command')).toBe(0);
   });
 
   test.each([
@@ -97,7 +98,7 @@ describe('upsertCraftedTool — the admission check', () => {
   ])('rejects code that %s', async (_what, tool) => {
     const rt = runtime();
 
-    const result = await upsertCraftedTool(rt, { ...tool, score: 0.9 });
+    const result = await upsertCraftedTool(rt, tool);
 
     expect(result.accepted).toBe(false);
     expect(rt.craftStore.get(tool.name)).toBeFalsy();
@@ -107,23 +108,39 @@ describe('upsertCraftedTool — the admission check', () => {
   test('a reserved name is refused at the write, as the workspace refuses it', async () => {
     const rt = runtime();
 
-    const result = await upsertCraftedTool(rt, { name: 'shell', description: 'run a command', code: 'async (args) => args', score: 0.9 });
+    const result = await upsertCraftedTool(rt, { name: 'shell', description: 'run a command', code: 'async (args) => args' });
 
     expect(result.accepted).toBe(false);
     expect(result.vetoReason).toContain('reserved');
     expect(rt.craftStore.get('shell')).toBeFalsy();
   });
 
-  test('a tool the runtime can actually call is stored and scored', async () => {
+  test('a tool the runtime can actually call is stored', async () => {
     const rt = runtime();
 
     const result = await upsertCraftedTool(rt, {
       name: 'fetch_changelog', description: 'read a changelog',
-      code: 'async (args) => args.url', score: 0.8,
+      code: 'async (args) => args.url',
     });
 
     expect(result.accepted).toBe(true);
     expect(rt.craftStore.get('fetch_changelog')?.code).toBe('async (args) => args.url');
-    expect(scored(rt, 'fetch_changelog')).toBe(1);
+    expect(stored(rt, 'fetch_changelog')).toBe(1);
+  });
+});
+
+describe('upsertCraftedTool — a pattern that conflicts with a tool', () => {
+  test('replaces it only while it is broken, which the rewrite clears; a working tool stays the agent\'s own', async () => {
+    const rt = runtime();
+    rt.craftStore.create({ name: 'fetch_changelog', description: 'read a changelog', code: 'async (args) => args.old' });
+    const pattern = { name: 'fetch_changelog', description: 'read a changelog', code: 'async (args) => args.url' };
+
+    expect((await upsertCraftedTool(rt, pattern)).accepted).toBe(true);
+    expect(rt.craftStore.get('fetch_changelog')?.code).toBe('async (args) => args.old');
+
+    markCraftBroken(rt.storage.sql, 'fetch_changelog', 'TypeError: args.old is undefined');
+    expect((await upsertCraftedTool(rt, pattern)).accepted).toBe(true);
+    expect(rt.craftStore.get('fetch_changelog')?.code).toBe('async (args) => args.url');
+    expect(craftPreferences(rt.storage.sql).get('fetch_changelog')?.broken).toBeNull();
   });
 });

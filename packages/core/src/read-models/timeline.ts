@@ -14,7 +14,7 @@ import { boundedInt } from '../utils/bounds';
 
 type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'swarm' | 'scaffold' | 'shadow-eval'
-  | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa'
+  | 'craft' | 'reflection' | 'head-split' | 'head-merge'
   | 'curriculum' | 'trigger' | 'event-ingress' | 'background' | 'error' | 'abort' | 'recovery' | 'other';
 
 export interface TimelineSpan {
@@ -47,8 +47,6 @@ function classifyEvolutionType(type: string): TimelineKind {
   if (type === 'consolidation' || type === 'craft_discovered') return 'craft';
 
   if (type === 'fiber_recovered') return 'recovery';
-
-  if (type.startsWith('gepa')) return 'gepa';
 
   if (type.startsWith('curriculum')) return 'curriculum';
 
@@ -97,6 +95,15 @@ function isDiagnosisOnly(e: RunEvent): e is DiagnosisOnlyEvent {
   return DIAGNOSIS_ONLY_EVENTS.has(e.type);
 }
 
+/** A scaffold decision's label, and a rollback's reason when a replay or the watch decided it. */
+function scaffoldSpan(e: Extract<RunEvent, { type: 'scaffold_promotion' | 'scaffold_rollback' | 'scaffold_replayed' }>) {
+  switch (e.type) {
+    case 'scaffold_promotion': return { label: `Scaffold promoted v${e.fromVersion} -> v${e.toVersion}` };
+    case 'scaffold_rollback': return { label: `Scaffold rolled back v${e.fromVersion} -> v${e.toVersion}`, ...(e.reason !== undefined && { detail: e.reason }) };
+    case 'scaffold_replayed': return { label: `Scaffold v${e.version} passed its replay of ${e.turns} turns` };
+  }
+}
+
 function runEventToSpan(e: RunEvent): TimelineSpan {
   const ts = Date.parse(e.timestamp) || Date.now();
   const base = { ts, source: 'shell' as const, rawType: e.type };
@@ -127,9 +134,9 @@ function runEventToSpan(e: RunEvent): TimelineSpan {
         detail: e.rationale || e.reason, refId: e.rootId,
       };
     case 'scaffold_promotion':
-      return { ...base, kind: 'scaffold', label: `Scaffold promoted v${e.fromVersion} -> v${e.toVersion}` };
     case 'scaffold_rollback':
-      return { ...base, kind: 'scaffold', label: `Scaffold rolled back v${e.fromVersion} -> v${e.toVersion}` };
+    case 'scaffold_replayed':
+      return { ...base, kind: 'scaffold', ...scaffoldSpan(e) };
     case 'memory_write':
       return { ...base, kind: 'craft', label: 'Memory write', detail: `${e.path} (${e.bytes}b)` };
     case 'fiber_recovered':

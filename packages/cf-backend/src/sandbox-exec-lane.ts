@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "exec" | "execStream" | "killExec" | "releaseExec" | "resolveReadiness" | "readFile" | "writeFile" | "writeFileIfDigest" | "listFiles" | "statFile"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "supervisedLogs" | "portToken" | "probePort" | "resize" | "portListeners" | "answerRest" | "desktop" | "releaseDesktop">;
+  | "stopSupervised" | "listSupervised" | "supervisedLogs" | "portToken" | "probePort" | "resize" | "portListeners" | "stampedProcesses" | "answerRest" | "desktop" | "releaseDesktop">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -245,6 +245,7 @@ export function adaptCloudflareSandbox(
     },
     // Not `onContainer`: a read never starts a container.
     portListeners: (stamp, ports) => settle(callDevbox(() => handle.portListeners(stamp, ports))),
+    stampedProcesses: (stamp, value) => settle(callDevbox(() => handle.stampedProcesses(stamp, value))),
     probePort: (port) => settle(onContainer(() => handle.probePort(port))),
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
     writeFile: (path, content, opts) =>
@@ -327,7 +328,7 @@ export function adaptCloudflareSandbox(
       return rows;
     })),
     startSupervisedProcess: (command, opts) =>
-      settle(onContainer(() => handle.startSupervised(command, opts?.cwd))),
+      settle(onContainer(() => handle.startSupervised(command, opts?.cwd, opts?.env, opts?.reveal === true))),
     stopSupervisedProcess: (processId) => settle(onContainer(() => handle.stopSupervised(processId))),
     supervisedProcessLogs: (processId, limits) => settle(onContainer(() => handle.supervisedLogs(processId, limits))),
     listSupervisedProcesses: () => settle(onContainer(async () =>

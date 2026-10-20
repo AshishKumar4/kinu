@@ -1015,7 +1015,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/pre-commit-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/decision-agreement.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/pre-commit-hook.test.ts scripts/lean-citations.test.ts scripts/nightly-sweeps.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/error-model.test.ts scripts/tui-capture.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1148,7 +1148,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -2519,8 +2519,9 @@ export const LADDER: readonly Gate[] = [
       + "this pull request's name. It also creates workspaces, links real machines and spends "
       + 'model calls on a shared account, none of which belongs on a pull request.',
     evidence: 'first-run',
-    // sign-in-advertised signs in through the login page as the upgrade fixture's built-in account (m1922a).
-    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD'],
+    // sign-in-advertised signs in through a login page that offers a password as the upgrade fixture's built-in account
+    // (m1922a); the scripted tier signs its gateway account in to Cloudflare with the gateway token on its account.
+    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD', 'WEBSEARCH_CF_ACCOUNT', 'WEBSEARCH_CF_TOKEN'],
     phase: 'post-publish',
     deadline: {
       seconds: 720,

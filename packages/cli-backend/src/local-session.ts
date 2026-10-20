@@ -19,7 +19,7 @@ import {
 } from '@kinu.run/compaction';
 import type {
   TurnContinuity, FiberCtx,
-  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding, CountableRequest,
+  RoutedLLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding, CountableRequest,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions, SendState,
   ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -67,11 +67,11 @@ import { ActorSession, type ActorTurnLease,
   type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
   buildActorTools, buildMcpToolSet, currentDateForPrompt,
   type ActorToolsetDeps,
-  turnArtifactBodies, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
+  turnArtifacts, artifactOverrides, currentArtifacts, openingCacheCold, type TurnOpeningAsk, type ClaimedRound,
   turnTags, type TurnReason,
   actorAffinity, bindRoute, routedLlm, type ModelAffinity,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  createDefaultWebSearchProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, chainWebSearch, restBrowserRunAccess, REAL_CLOCK, webSearchChainOf, type Clock, type WebSearchProvider,
   actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, actorPolicy, actorReach, type ActorReach,
   type CodemodeProvider,
   agentRoleSwitch, builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores, type TurnTools,
@@ -84,14 +84,12 @@ import { ActorSession, type ActorTurnLease,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, getEvolutionStatus, runOptimization,
-  type ProposerOutcome, type ScaffoldControl,
-  type ScaffoldDecisionResult, createScaffoldCandidateSurface,
+  getEvolutionStatus, recordedTurns, type RecordedTurn,
+  type ScaffoldControl,
+  createScaffoldCandidateSurface,
   type EvolutionStatus,
-  decideRefinementRoute, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
-  showRefinementRoute, type RefinementLaneStep,
-  type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult,
+  activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
+  type RefinementLaneStep,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
   latestAlternateTakeSet,
@@ -570,6 +568,7 @@ export class LocalAgentSession {
       ledger: this.actorSession.dynamic,
       logger: compactionDiagnostics,
       summarizer: () => this.ensureModelState(),
+      reads: this.actorSession.orchestrator.acc.ledgers.files,
       spend: { report: (report) => this.modelCallSink(report) },
     });
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions());
@@ -755,7 +754,6 @@ export class LocalAgentSession {
       plans: ownsAsks && active?.status === 'pending'
         ? [{ actor: this.rt.actor.actorId, id: active.id, revision: active.revision, content: active.content, updatedAt: active.updatedAt }]
         : [],
-      proposals: [],
       consents: [],
       questions: ownsAsks ? await this.listOwnerQuestions() : [],
       nameOf: (actorId) => localActorDirectory(this.rt.actor).directory.retained(actorId)?.name ?? actorId,
@@ -873,7 +871,7 @@ export class LocalAgentSession {
 
     const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.getActiveRoleId() });
     this.chat.reviseContext({ counted: true });
-    await this.terminal.modelSettingsChanged();
+    await this.terminal.ownerActed();
 
     return changed;
   }
@@ -885,7 +883,7 @@ export class LocalAgentSession {
       onChanged: () => {
         this.rebuildToolSurface();
         this.chat.reviseContext({ counted: true });
-        this.tracked(() => this.terminal.modelSettingsChanged());
+        this.tracked(() => this.terminal.ownerActed());
       },
     }, spec);
   }
@@ -901,7 +899,7 @@ export class LocalAgentSession {
   setProviderAccount(provider: string, account: string | null): ReturnType<typeof setProviderAccount> {
     const set = setProviderAccount(this.config, provider, account);
 
-    this.tracked(() => this.terminal.modelSettingsChanged());
+    this.tracked(() => this.terminal.ownerActed());
 
     return set;
   }
@@ -997,7 +995,7 @@ export class LocalAgentSession {
 
   /** Revert one changelog entry; invalidates model-bound state so a retired tool disappears. */
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore, events: this.eventRecorder }, id);
+    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore, events: this.eventRecorder, skills: this.refinementDeps }, id);
 
     if (result.ok) this.invalidateModelState();
 
@@ -1011,7 +1009,7 @@ export class LocalAgentSession {
   /** Record the pick; a pick differing from the answered take queues a continuation turn. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), engine: this.engine, inbox: this.actorSession.orchestrator.signals },
+      { sql: this.rt.storage.sql, actor: this.rt.actor, turnPair: historyTurnPairs(this.stores.history), inbox: this.actorSession.orchestrator.signals },
       takeId, nodeId);
   }
 
@@ -1188,9 +1186,10 @@ export class LocalAgentSession {
     return this.chat.interrupt(cutoff === null ? undefined : { producer: 'self', seq: cutoff });
   }
 
-  /** Continue from before `entryId`; refused while a turn is held. */
-  revertConversation(entryId: string): Promise<void> {
-    return this.chat.revertTo(entryId);
+  /** Continue from before `entryId`; refused while a turn is held. A chat-only walk-back tells the agent what its
+   *  rewound turns left; this machine's processes and ports have no reader here, so the notice names none. */
+  revertConversation(entryId: string, options?: { readonly chatOnly?: boolean }): Promise<void> {
+    return this.chat.revertTo(entryId, options?.chatOnly === true ? {} : undefined);
   }
 
   clearConversation(): Promise<KinuError | null> {
@@ -1671,13 +1670,17 @@ export class LocalAgentSession {
   private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease, opening: TurnOpeningAsk, round: ClaimedRound): Promise<PreparedTurn> {
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
 
-    // Read once per turn: a live trial's arm holds for its whole segment, and the prompt prefix moves only with it. No
-    // warming lane keeps a local conversation's cache.
-    const artifacts = turnArtifactBodies(this.rt.storage.sql, this.rt.actor, {
-      answerId: opening.answerId, cacheCold: openingCacheCold(opening, null), main: this.rt.actor.parentActorId === null,
-    });
+    // Read once per turn, and moved only by a turn whose prompt cache is cold: the prompt prefix holds within a segment.
+    // No warming lane keeps a local conversation's cache. A dream's skills land at the same turns.
+    const cold = openingCacheCold(opening, null);
+    this.turnArtifacts = artifactOverrides(turnArtifacts(this.rt.storage.sql, this.rt.actor, cold));
 
-    this.turnArtifacts = artifactOverrides(artifacts.bodies);
+    if (cold) {
+      await activateDreamSkills(this.refinementDeps);
+      // Before the turn's program is chosen, so this turn runs the version it promotes.
+      await activateReplayedScaffold(this.refinementDeps.control);
+    }
+
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
@@ -1709,7 +1712,7 @@ export class LocalAgentSession {
 
     return {
       execution: withCompactionTrigger(assembled.execution, this.compactionState, sessionKey, historyLength),
-      sessionKey, contextWindow: assembled.window.contextWindow, historyLength, trial: artifacts.trial, cacheKeptAliveUntil: null,
+      sessionKey, contextWindow: assembled.window.contextWindow, historyLength, cacheKeptAliveUntil: null,
     };
   }
 
@@ -2023,6 +2026,7 @@ export class LocalAgentSession {
       transcript: () => this.stores.history.transcript(CHAT_SESSION_ID), llm: () => this.rt.fastLlm ?? this.rt.llm,
       transactionSync: (write) => this.rt.storage.transactionSync(write),
       armWake: () => { this.scheduleSleepTimeWake(); }, workspace: this.rt.actor.actorId,
+      idle: () => idleDream(this.refinementDeps, this.engine.recordsTurns),
     });
   }
 
@@ -2109,23 +2113,24 @@ export class LocalAgentSession {
     return conversationKey(this.conversation(), this.sessionId);
   }
 
-  /** Search through the signed-in account's own (Cloudflare's Web Search API), or a stored `tavily` credential, which
-   *  wins; local HTML→markdown. */
+  /** Signed in, the account's own search through its deployment; signed out, this machine's chain with its own keys.
+   *  Local HTML→markdown. */
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
-    const getAuth = this.modelResolver?.getAuth;
-    const firstParty = this.modelResolver?.firstPartySearch;
+    const resolver = this.modelResolver;
+    const getAuth = resolver?.getAuth ?? (async () => null);
 
-    const options: DefaultWebSearchProviderDeps = {
+    this._webSearchProvider = createDefaultWebSearchProvider({
       fetch: globalThis.fetch,
+      search: resolver?.accountSearch ?? chainWebSearch({
+        fetch: globalThis.fetch,
+        getAuth,
+        report: this.modelCallSink,
+        chain: async () => webSearchChainOf((await this.profiles().envelope()).catalog),
+      }),
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
       browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch }),
-    };
-
-    if (getAuth) options.getAuth = getAuth;
-
-    if (firstParty !== undefined) options.firstParty = firstParty;
-    this._webSearchProvider = createDefaultWebSearchProvider(options);
+    });
 
     return this._webSearchProvider;
   }
@@ -2166,6 +2171,8 @@ export class LocalAgentSession {
       facts: this.factsStore,
       approvals: this.instructionApprovals,
       refiner: this.teamDeps?.temporary ?? null,
+      skillsVfs: this.rt.ownFiles,
+      recordedTurns: () => this.recordedTurns(),
     };
   }
 
@@ -2203,41 +2210,17 @@ export class LocalAgentSession {
     return this.listRefinements(1).requests[0] ?? view;
   }
 
-  /** The owner decides one staged edit. Never reachable from a tool surface. */
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    const result = await decideRefinementRoute(this.refinementDeps, input);
-
-    // A promoted skill changes the next prompt and tool surface.
-    if (result.ok) this.invalidateModelState();
-
-    return result;
-  }
-
-  /** The whole staged file plus the digest a decision must quote back. Never truncated: it is the approval surface. */
-  showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return showRefinementRoute(this.refinementDeps, { requestId, routeIndex });
-  }
-
   listRefinements(limit = 20) {
     return listRefinements(this.refinementDeps, limit);
   }
 
+  /** The newest answered turns as recorded, which a pending scaffold is replayed against (`scaffold/replay.ts`). */
+  recordedTurns(limit?: number): Promise<RecordedTurn[]> {
+    return recordedTurns(this.stores, limit);
+  }
+
   getEvolutionStatus(): EvolutionStatus {
     return getEvolutionStatus(this.rt.storage.sql, this.rt.actor);
-  }
-
-  /** The owner's decision on the pending scaffold; a promote swaps the live scaffold, so model-bound state is dropped. */
-  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-    const result = await applyScaffoldDecision(this.scaffoldControl, mode);
-
-    this.invalidateModelState();
-
-    return result;
-  }
-
-  /** One proposer search on `target` (default the scaffold); the edit waits like any other. */
-  runOptimization(target?: string): Promise<ProposerOutcome> {
-    return runOptimization(this.scaffoldControl, target);
   }
 
   /** `host.history`: a read-only, budgeted page, resolved per call. */
@@ -2437,8 +2420,8 @@ export class LocalAgentSession {
     return inheritedContextFromTranscript(this.stores.history.transcript(CHAT_SESSION_ID));
   }
 
-  /** One routed non-turn lane as an {@link LLM}; `system` carries core-declared prompt pairs. */
-  private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
+  /** One routed non-turn lane as a {@link RoutedLLM}; `system` carries core-declared prompt pairs. */
+  private localRouteLlm(resolution: ModelRouteResolution, system?: string): RoutedLLM {
     const canonical = { ...resolution, model: this.profiles().normalizeSpec(resolution.model) };
 
     return routedLlm((route) => this.bindRouteModel(route), canonical, { report: this.modelCallSink, operations: this.modelOperations }, system);
@@ -2693,7 +2676,7 @@ export class LocalAgentSession {
 
     const compaction = hostedActorCompaction(actor, {
       logger: compactionDiagnostics, models, report: (_actor, call) => report(call), operations,
-      turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic },
+      turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic, reads: actor.session.orchestrator.acc.ledgers.files },
     });
 
     return {

@@ -15,7 +15,7 @@ import {
   type RecoveryFinding,
 } from '../src/evolution/recovery';
 import {
-  corroborateLessonsForTurn, initLessonTables, listLessons,
+  initLessonTables, listLessons,
 } from '../src/evolution/lessons';
 import { composePrepareStep } from '../src/prompting/prepare-step';
 import {
@@ -94,13 +94,6 @@ describe('the ledger', () => {
     }
 
     expect(listRecoveryFindings(sql, actor)).toHaveLength(MAX_RECOVERY_FINDINGS);
-  });
-
-  test('corroboration can never touch a finding: bound to no turn, it stays provisional forever', () => {
-    const { sql, actor } = ledgerDb();
-    recordRecoveryFinding(sql, actor, finding());
-    expect(corroborateLessonsForTurn(sql, actor, 'turn-1')).toEqual([]);
-    expect(listLessons(sql, actor, { source: 'execution_recovery' })[0].status).toBe('provisional');
   });
 
   test('an empty ledger reads as empty, never as a throw', () => {

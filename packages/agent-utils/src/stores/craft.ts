@@ -30,8 +30,11 @@ export function initCraftedToolsTables(sql: SqlExecutor): void {
 			code TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL DEFAULT 0,
 			updated_at INTEGER NOT NULL DEFAULT 0,
-			score REAL NOT NULL DEFAULT 0.5,
-			uses INTEGER NOT NULL DEFAULT 0,
+			offered INTEGER NOT NULL DEFAULT 0,
+			chosen INTEGER NOT NULL DEFAULT 0,
+			rated INTEGER NOT NULL DEFAULT 0,
+			rating_sum REAL NOT NULL DEFAULT 0,
+			broken TEXT,
 			last_used_at INTEGER NOT NULL DEFAULT 0
 		)
 	`;
@@ -77,12 +80,14 @@ export class CraftStore {
 		markStoreChanged(this.sql);
 	}
 
+	/** A rewrite clears the broken flag: the new body has not raised yet. */
 	update(name: string, patch: { description?: string; code?: string }): void {
 		void this.sql`
 			UPDATE crafted_tools
 			SET description = COALESCE(${patch.description ?? null}, description),
 				code = COALESCE(${patch.code ?? null}, code),
-				updated_at = ${Date.now()}
+				updated_at = ${Date.now()},
+				broken = NULL
 			WHERE name = ${name}
 		`;
 		markStoreChanged(this.sql);

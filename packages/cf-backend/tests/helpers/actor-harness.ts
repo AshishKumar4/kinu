@@ -27,7 +27,7 @@ import type { AgentTurns } from '../../src/agent-turns';
 import type { PictureBucket } from '../../src/slates/pictures';
 import { isWorkMode, turnTags, type UserProfile } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
-import { present, admitTestClaim } from '@kinu.run/test-utils';
+import { answeredAs, present, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
@@ -41,7 +41,7 @@ import {
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, actorAffinity,
-  type AgentRuntime, type LLM,
+  type AgentRuntime, type LLM, type RoutedLLM,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RoleCatalog, type SqlExecutor,
   type TierAssignments,
@@ -49,7 +49,7 @@ import {
   type WorkMode, type PromptFile, type JsonObject, type SerializableToolDescriptor, renderSoulMarkdown,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
-  type EgressSecretSummary,
+  type GrantedSecrets,
 } from '@kinu.run/core';
 import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, joinHarnessFibersOf, mockAgentsSdk, trackHarnessLane } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
@@ -726,19 +726,25 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessScriptSleepTimeModel(answer: SleepTimeUpdate | string, prompts: string[]): void {
     this.config.setSleepTimeComputeEnabled(true);
 
-    Object.defineProperty(this.rt, 'fastLlm', {
-      configurable: true,
-      value: {
-        stream: async function* () { yield ''; },
-        complete: async (prompt: string) => {
-          prompts.push(prompt);
+    const raw = v.safeParse(v.string(), answer);
+    const text = raw.success ? raw.output : JSON.stringify(answer);
 
-          const raw = v.safeParse(v.string(), answer);
+    const fast: RoutedLLM = {
+      stream: async function* () { yield ''; },
+      complete: async (prompt) => {
+        prompts.push(prompt);
 
-          return raw.success ? raw.output : JSON.stringify(answer);
-        },
+        return text;
       },
-    });
+      // Sleep-time asks for its update's schema; the answer is read through it, as the fast lane reads one.
+      object: async (prompt, schema) => {
+        prompts.push(prompt);
+
+        return answeredAs(schema, text);
+      },
+    };
+
+    Object.defineProperty(this.rt, 'fastLlm', { configurable: true, value: fast });
   }
 
   observeActorHost(): ActorHost<SeatedActor> { return this.actorHost(); }
@@ -1798,11 +1804,11 @@ export function makeEnv(
 
             return profile === null ? null : { displayName: null, createdAt: 0, lastSeenAt: 0, onboardedAt: null, workspaceCount: 1, ...profile };
           },
-          // No stored egress secrets; `failVault` drives an unreadable vault.
-          listEgressSecrets: async (): Promise<EgressSecretSummary[]> => {
+          // No secret granted here; `failVault` drives an unreadable vault.
+          grantedSecrets: async (): Promise<GrantedSecrets> => {
             if (userPlane?.failVault) throw userPlane.failVault;
 
-            return [];
+            return { granted: [], withheld: 0 };
           },
           // A job holding no device commands: what the hub answers when nothing needs stopping.
           cancelDeviceRequestsForBackgroundJob: async (): Promise<[]> => [],

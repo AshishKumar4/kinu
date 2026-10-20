@@ -27,7 +27,7 @@ test('many writes in one tick send one frame naming each moved read once', () =>
   const owed: (() => void)[] = [];
   const notice = new LiveReadsNotice((frame) => { frames.push(frame); }, (flush) => { owed.push(flush); });
 
-  for (let write = 0; write < 500; write++) notice.moved(readsWrittenBy('UPDATE crafted_tools SET uses = ?'));
+  for (let write = 0; write < 500; write++) notice.moved(readsWrittenBy('UPDATE crafted_tools SET chosen = ?'));
   notice.moved([]);
 
   for (const flush of owed.splice(0)) flush();

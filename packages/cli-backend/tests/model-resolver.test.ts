@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { generateText, streamText } from 'ai';
+import { generateText, jsonSchema, Output, streamText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
@@ -15,7 +15,6 @@ import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
-import { WEB_SEARCH_INDEX } from '@kinu.run/core';
 
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
@@ -62,23 +61,26 @@ describe('createLocalModelResolver', () => {
     }
   });
 
-  test("a signed-in CLI searches through its account's route; signed out it has no search of its own", async () => {
+  test("a signed-in CLI searches through its account's route; signed out it has no account search", async () => {
     const seen: Array<{ path: string; authorization: string | null; body: string }> = [];
 
-    // The platform at its HTTP edge, answering as Cloudflare's Web Search API does through the route.
+    // The platform at its HTTP edge, answering as its route does: the account's search, as the `web` tool reads it.
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
       seen.push({ path: new URL(request.url).pathname, authorization: request.headers.get('authorization'), body: await request.text() });
 
-      return Response.json({ items: [{ url: 'https://example.com/a', title: 'First', description: 'The first.' }] });
+      return Response.json({ query: 'wrangler deploy', source: 'exa', results: [{ title: 'Wrangler', url: 'https://developers.cloudflare.com/workers/wrangler/', snippet: 'The CLI.', position: 1 }] });
     } });
 
     try {
       const signedIn = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_search' } });
-      const provider = createDefaultWebSearchProvider({ fetch, browser: { quickActions: async () => new Response('this test renders no page', { status: 500 }) }, ...(signedIn.firstPartySearch !== undefined && { firstParty: signedIn.firstPartySearch }) });
+      const search = signedIn.accountSearch;
 
-      expect(await provider.search('raleigh events', { limit: 4 })).toMatchObject({ source: WEB_SEARCH_INDEX, results: [{ url: 'https://example.com/a', title: 'First' }] });
-      expect(seen).toEqual([{ path: USER_WEB_SEARCH_PATH, authorization: 'Bearer ptc_search', body: JSON.stringify({ query: 'raleigh events', limit: 4 }) }]);
-      expect(createLocalModelResolver({ llm: null }).firstPartySearch).toBeUndefined();
+      if (search === undefined) throw new Error('a signed-in resolver searches as its account');
+      const provider = createDefaultWebSearchProvider({ fetch, search, browser: { quickActions: async () => new Response('this test renders no page', { status: 500 }) } });
+
+      expect(await provider.search('wrangler deploy', { limit: 4 })).toMatchObject({ source: 'exa', results: [{ url: 'https://developers.cloudflare.com/workers/wrangler/', title: 'Wrangler' }] });
+      expect(seen).toEqual([{ path: USER_WEB_SEARCH_PATH, authorization: 'Bearer ptc_search', body: JSON.stringify({ query: 'wrangler deploy', limit: 4 }) }]);
+      expect(createLocalModelResolver({ llm: null }).accountSearch).toBeUndefined();
     } finally {
       await server.stop(true);
     }
@@ -124,6 +126,38 @@ describe('createLocalModelResolver', () => {
         })).rejects.toThrow();
         expect(received).toEqual(Array.from({ length: retries + 1 }, () => false));
       }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // Staging rc24: a fast model sent no schema answered sleep-time without `rationale`; the deployment's binding sends it.
+  test('a structured call to Workers AI sends its schema, through the local gateway as through the account relay', async () => {
+    const sent: unknown[] = [];
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      sent.push(await request.json());
+
+      return Response.json({
+        id: 'c', object: 'chat.completion', created: 1, model: 'm', usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+        choices: [{ index: 0, message: { role: 'assistant', content: '{"key":"build.dir"}' }, finish_reason: 'stop' }],
+      });
+    } });
+
+    const output = Output.object({ schema: jsonSchema<{ key: string }>({ type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }) });
+    const affinity = { sessionAffinity: 'relay', workspaceAffinity: 'relay' };
+
+    try {
+      for (const resolver of [
+        createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_transport' } }),
+        createLocalModelResolver({ llm: { name: 'workers-ai', baseURL: server.url.toString(), headers: { Authorization: 'Bearer test' }, model: '@cf/test/relay' } }),
+      ]) {
+        const model = resolver.resolveModel('workers-ai/@cf/test/relay', affinity);
+
+        expect((await generateText({ model, prompt: 'where does the build go?', output, maxRetries: 0 })).output).toEqual({ key: 'build.dir' });
+      }
+
+      expect(sent).toEqual([0, 1].map(() => expect.objectContaining({ response_format: expect.objectContaining({ type: 'json_schema' }) })));
     } finally {
       await server.stop(true);
     }

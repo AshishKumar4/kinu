@@ -39,6 +39,141 @@ function heldModule(load) {
     };
   }
 
+  /** How this system's libc reads a directory through its descriptor: the calls, and where a struct dirent holds its
+   *  kind and name (glibc's dirent64; macOS's 64-bit-inode dirent, whose x86_64 calls carry the $INODE64 suffix). */
+  const DIRENT = process.platform === 'darwin'
+    ? {
+      library: '/usr/lib/libSystem.B.dylib',
+      fdopendir: process.arch === 'x64' ? 'fdopendir$INODE64' : 'fdopendir',
+      readdir: process.arch === 'x64' ? 'readdir$INODE64' : 'readdir',
+      errno: '__error',
+      type: 20,
+      name: 21,
+    }
+    : { library: 'libc.so.6', fdopendir: 'fdopendir', readdir: 'readdir64', errno: '__errno_location', type: 18, name: 19 };
+
+  /** dirent.h's d_type values, alike on both: one the filesystem does not report is read from the entry's stat. */
+  const DT_UNKNOWN = 0;
+
+  const DT_DIR = 4;
+
+  const DT_LNK = 10;
+
+  let libcDirent = null;
+
+  function direntCalls() {
+    if (libcDirent !== null) return libcDirent;
+    const { dlopen, read, toArrayBuffer, CString } = load('bun:ffi');
+
+    const { symbols } = dlopen(DIRENT.library, {
+      dup: { args: ['i32'], returns: 'i32' },
+      close: { args: ['i32'], returns: 'i32' },
+      [DIRENT.fdopendir]: { args: ['i32'], returns: 'ptr' },
+      [DIRENT.readdir]: { args: ['ptr'], returns: 'ptr' },
+      closedir: { args: ['ptr'], returns: 'i32' },
+      [DIRENT.errno]: { args: [], returns: 'ptr' },
+    });
+
+    libcDirent = {
+      dup: (fd) => symbols.dup(fd),
+      close: (fd) => symbols.close(fd),
+      fdopendir: (fd) => symbols[DIRENT.fdopendir](fd),
+      readdir: (dir) => symbols[DIRENT.readdir](dir),
+      closedir: (dir) => symbols.closedir(dir),
+      // This thread's errno, which readdir sets only on a failure: it answers null at the end too, so it is cleared first.
+      errno: () => new Int32Array(toArrayBuffer(symbols[DIRENT.errno](), 0, 4)),
+      typeOf: (entry) => read.u8(entry, DIRENT.type),
+      nameOf: (entry) => new CString(entry, DIRENT.name).toString(),
+    };
+
+    return libcDirent;
+  }
+
+  /** A libc call's failure `errno`, as node:fs words one, naming `shown`. */
+  function libcFailure(errno, syscall, shown) {
+    const code = util.getSystemErrorName(-errno);
+
+    return Object.assign(new Error(`${code}: ${util.getSystemErrorMessage(-errno)}, ${syscall} '${shown}'`), { errno: -errno, code, syscall, path: shown });
+  }
+
+  /**
+   * The names the directory `held` holds, read through that descriptor (libc's fdopendir on a copy of it), never through
+   * a path: a link swapped in for the directory since it was opened lends it none of its names. Reading by the path
+   * and keeping the names the held directory also has (2026-10-19, the macOS half) still told a command which names it
+   * planted the linked directory shares. Refused, never read another way, when this system's libc cannot be bound.
+   */
+  function namesIn(held, shown) {
+    let calls;
+
+    try {
+      calls = direntCalls();
+    } catch (cause) {
+      throw Object.assign(new Error(`this device cannot list '${shown}' through the directory it checked: ${cause.message}`), { code: 'ENOTSUP', cause });
+    }
+
+    const errno = calls.errno();
+    const copy = calls.dup(held);
+
+    if (copy < 0) throw libcFailure(errno[0], 'dup', shown);
+    const dir = calls.fdopendir(copy);
+
+    if (dir === null) {
+      const failed = libcFailure(errno[0], 'fdopendir', shown);
+
+      calls.close(copy);
+      throw failed;
+    }
+
+    try {
+      const entries = [];
+
+      for (;;) {
+        errno[0] = 0;
+        const entry = calls.readdir(dir);
+
+        if (entry === null) {
+          if (errno[0] !== 0) throw libcFailure(errno[0], 'readdir', shown);
+
+          return entries;
+        }
+
+        const name = calls.nameOf(entry);
+
+        if (name !== '.' && name !== '..') entries.push({ name, type: calls.typeOf(entry) });
+      }
+    } finally {
+      calls.closedir(dir);
+    }
+  }
+
+  /**
+   * The entries of the directory `held`: its names (`namesIn`) with the kind the directory reports, each entry's own stat
+   * read there by `statOf` only when it is asked (a page of a large folder stats its page alone), undefined once the
+   * entry is gone. A kind the filesystem does not report is read from that stat.
+   */
+  function listedIn(held, shown, statOf) {
+    return namesIn(held, shown).map(({ name, type }) => {
+      let read = false;
+      let stat;
+
+      const own = () => {
+        if (!read) {
+          stat = statOf(name);
+          read = true;
+        }
+
+        return stat;
+      };
+
+      return {
+        name,
+        isDirectory: () => (type === DT_UNKNOWN ? own()?.isDirectory() === true : type === DT_DIR),
+        isSymbolicLink: () => (type === DT_UNKNOWN ? own()?.isSymbolicLink() === true : type === DT_LNK),
+        stat: own,
+      };
+    });
+  }
+
   /**
    * One entry of a held directory: its name, its kind as the directory reports it, and its own stat, a link's being the
    * link's (`stat()`, undefined once it is gone), read through the directory while `list(read)` runs `read`. A link is never
@@ -85,8 +220,7 @@ function heldModule(load) {
         try {
           const through = `/proc/self/fd/${held}`;
 
-          return read(fs.readdirSync(through, { withFileTypes: true })
-            .map((child) => listed(child.name, child, () => fs.lstatSync(`${through}/${child.name}`, { throwIfNoEntry: false }))));
+          return read(listedIn(held, shown, (child) => fs.lstatSync(`${through}/${child}`, { throwIfNoEntry: false })));
         } finally {
           fs.closeSync(held);
         }
@@ -219,18 +353,12 @@ function heldModule(load) {
       unlink: () => { ok(symbols.unlinkat(dir, bytes, 0), 'unlink'); },
       rmdir: () => { ok(symbols.unlinkat(dir, bytes, DARWIN_AT_REMOVEDIR), 'rmdir'); },
       stat: () => lstatAt(dir, bytes, shown),
-      // macOS has no path to a held directory to read it by (/dev/fd/N is no directory): its names are read where it is
-      // named, and each is kept only as the held directory holds it, kind and stat from there. A link swapped in for it
-      // meanwhile adds no name it does not hold, and shows nothing of its own.
+      // The directory is held by its own descriptor while it is read, so a link swapped in for it meanwhile reads nothing.
       list: (read) => {
-        const held = ok(openat(dir, bytes, DARWIN_O_SEARCH | O_NOFOLLOW, 0), 'open');
+        const held = ok(openat(dir, bytes, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0), 'open');
 
         try {
-          return read(fs.readdirSync(shown).flatMap((child) => {
-            const stat = child.includes('\0') ? undefined : lstatAt(held, Buffer.from(`${child}\0`), path.join(shown, child));
-
-            return stat === undefined ? [] : [{ name: child, isDirectory: () => stat.isDirectory(), isSymbolicLink: () => stat.isSymbolicLink(), stat: () => stat }];
-          }));
+          return read(listedIn(held, shown, (child) => lstatAt(held, Buffer.from(`${child}\0`), path.join(shown, child))));
         } finally {
           fs.closeSync(held);
         }

@@ -5,16 +5,18 @@ import { Link, useLocation } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
   PlugsConnectedIcon, UserCircleIcon, ArrowSquareOutIcon,
-  ArrowLeftIcon,
+  GearSixIcon,
 } from "@phosphor-icons/react";
 import { setDisplayName, type UserProfile } from "../lib/user-api";
 import { Card } from "@/components/ui/form";
+import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAccount } from "@/hooks/use-account";
 import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
+import { SecretsPanel } from "@/components/account/SecretsPanel";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
@@ -25,6 +27,7 @@ import { ComputerSizeSettings } from "@/components/ComputerSize";
 import { BetaSettings } from "@/components/BetaSettings";
 import { AccountMemoryCard } from "@/components/account/AccountMemoryCard";
 import { AppearanceCard } from "@/components/account/AppearanceCard";
+import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { showing, detach } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -59,21 +62,6 @@ function ProfileNameEditor({ profile, onSaved }: {
   );
 }
 
-function PageHeader() {
-  return (
-    <header className="border-b p-border pb-6">
-      <Link to="/" className="p-btn-ghost -ml-2 mb-4 inline-flex h-6.5 items-center gap-1 rounded-md px-2 text-xs">
-        <ArrowLeftIcon size={12} /> Home
-      </Link>
-      <p className="p-eyebrow">Account</p>
-      <h1 className="p-display mt-1 text-[26px] leading-8">Account settings</h1>
-      <p className="mt-1.5 p-row-text p-text-3">
-        What you set here applies to every workspace you own.
-      </p>
-    </header>
-  );
-}
-
 export default function UserSettingsPage() {
   // The shell's one profile read: a name saved here is the name the bar and the sidebar show.
   const { profile: resource, reload, set } = useAccount();
@@ -85,8 +73,8 @@ export default function UserSettingsPage() {
   if (profile.resource.status === "loading" || profile.resource.status === "error") {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="mx-auto max-w-5xl space-y-8 px-5 py-8 sm:px-6">
-          <PageHeader />
+        <div className={`max-w-5xl space-y-8 ${PAGE_BODY}`}>
+          <PageHeader icon={<GearSixIcon size={22} />} title="Settings" />
           {profile.resource.status === "loading"
             ? <div className="flex justify-center py-10"><Loader size="base" /></div>
             : <LoadFailure what="your account" message={profile.resource.message} onRetry={profile.reload} />}
@@ -97,10 +85,14 @@ export default function UserSettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl space-y-8 px-5 py-8 sm:px-6">
-        <PageHeader />
+      {/* A page of forms: it starts on every page's left edge and stops at a reading width. */}
+      <div className={`max-w-5xl ${PAGE_BODY}`}>
         <div className="flex flex-col gap-7 lg:flex-row lg:gap-10">
-          <SettingsRail active={section} />
+          {/* The title heads the sections' column, as Drive's heads its places. */}
+          <div className="space-y-5 lg:sticky lg:top-8 lg:w-48 lg:shrink-0 lg:self-start">
+            <PageHeader icon={<GearSixIcon size={22} />} title="Settings" />
+            <SettingsRail active={section} />
+          </div>
           <div className="min-w-0 flex-1 lg:max-w-[820px]">
             <SettingsSectionHead section={section} />
             <div className="space-y-5">
@@ -152,7 +144,11 @@ export default function UserSettingsPage() {
           </>
         )}
 
+        {section === "secrets" && <SecretsPanel />}
+
         {section === "models" && <ProfileCatalogSettings />}
+
+        {section === "search" && <WebSearchSettings place="settings" returnTo="/user/settings#search" />}
 
         {section === "computer" && <ComputerSizeSettings />}
 

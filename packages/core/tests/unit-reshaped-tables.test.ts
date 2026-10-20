@@ -15,7 +15,6 @@ import { readSearchTree } from '../src/read-models/search-tree';
 import { insertSearchNode } from '../src/mcts/record-node';
 import { TaskListStore } from '../src/tools/task-store';
 import { HeadJournal } from '../src/heads/journal';
-import { bestAggregate, loadGepaCandidates, startGepaRun } from '../src/evolution/gepa/index';
 import { agentArtifactDirectory } from '../src/vfs/agent-home';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { createTestActor, createTestWorkspace, makeSqlExec, type TestWorkspace } from './helpers';
@@ -301,32 +300,4 @@ test('tasks and head steps re-keyed by their seq keep the ids the build before w
   expect(tasks.add(['Ship'], null, 5).added.map(({ id }) => id)).toEqual(['t4']);
   journal.appendStep('h1', 3, { parts: [{ type: 'text', text: 'step 3' }] });
   expect(journal.readSteps('h1').map(({ parts }) => parts)).toEqual([0, 1, 2, 3].map((seq) => [{ type: 'text', text: `step ${seq}` }]));
-});
-
-const GEPA_CANDIDATES_BEFORE = `CREATE TABLE IF NOT EXISTS gepa_candidates (
-  actor_id TEXT NOT NULL, id TEXT NOT NULL, run_id TEXT NOT NULL, parent_id TEXT, source TEXT NOT NULL,
-  scores_json TEXT NOT NULL, feedback_json TEXT NOT NULL, aggregate REAL NOT NULL,
-  created_at INTEGER NOT NULL, iteration INTEGER NOT NULL,
-  PRIMARY KEY (actor_id, id))`;
-
-test("a search's candidates lose their stored aggregate and still rank by the mean of their scores", () => {
-  const world = workspace();
-  const { ws, actor } = world;
-  const runId = startGepaRun(ws.sql, actor, { target: 'scaffold' });
-
-  asBuiltBefore(ws.db, 'gepa_candidates', GEPA_CANDIDATES_BEFORE);
-  ws.db.exec('CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_aggregate ON gepa_candidates(actor_id, run_id, aggregate DESC)');
-
-  // As the build before wrote them: each aggregate stored beside the scores it is the mean of.
-  for (const [iteration, [id, scores, aggregate]] of ([['seed', { a: 0.5, b: 0.25 }, 0.375], ['child', { a: 1, b: 0.5 }, 0.75]] as const).entries()) {
-    void ws.sql`INSERT INTO gepa_candidates (actor_id, id, run_id, parent_id, source, scores_json, feedback_json, aggregate, created_at, iteration)
-      VALUES (${actor.actorId}, ${id}, ${runId}, ${iteration === 0 ? null : 'seed'}, ${`source of ${id}`}, ${JSON.stringify(scores)}, '{}', ${aggregate}, ${iteration}, ${iteration})`;
-  }
-
-  const before = loadGepaCandidates(ws.sql, actor, runId);
-
-  rebuild(world, ['gepa_candidates']);
-
-  expect(loadGepaCandidates(ws.sql, actor, runId)).toEqual(before);
-  expect(bestAggregate(loadGepaCandidates(ws.sql, actor, runId)).id).toBe('child');
 });

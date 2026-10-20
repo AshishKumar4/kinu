@@ -9,6 +9,7 @@ import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hook
 import type { RosterFilterBucket } from "@/lib/user-api";
 import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
+import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
 import { NewWorkspaceButton } from "@/components/workspaces/NewWorkspaceButton";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 
@@ -87,37 +88,34 @@ export default function WorkspacesPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-4xl space-y-6 px-6 py-8">
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <SquaresFourIcon size={22} className="shrink-0 p-text-3" />
-          <h1 className="p-display text-2xl">Workspaces</h1>
-          <div className="ml-auto flex items-center gap-1">
-            <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
-              icon={<ListIcon size={14} />} onClick={() => setView("list")} />
-            <Button variant="ghost" size="sm" aria-label="Tiled view" aria-pressed={view === "tiled"}
-              icon={<SquaresFourIcon size={14} />} onClick={() => setView("tiled")} />
-            {/* Beside the sidebar's own, the page's would say it twice; on a phone the sidebar is folded away. */}
-            <NewWorkspaceButton className="ml-2 h-8 px-3 text-sm md:hidden" />
-          </div>
-        </header>
+      <div className={`space-y-6 ${PAGE_BODY}`}>
+        <PageHeader icon={<SquaresFourIcon size={22} />} title="Workspaces">
+          <Button variant="ghost" size="sm" aria-label="List view" aria-pressed={view === "list"}
+            icon={<ListIcon size={14} />} onClick={() => setView("list")} />
+          <Button variant="ghost" size="sm" aria-label="Tiled view" aria-pressed={view === "tiled"}
+            icon={<SquaresFourIcon size={14} />} onClick={() => setView("tiled")} />
+          {/* Beside the sidebar's own, the page's would say it twice; on a phone the sidebar is folded away. */}
+          <NewWorkspaceButton className="ml-2 h-8 px-3 text-sm md:hidden" />
+        </PageHeader>
 
+        {/* The filter on the left; what it left out, then the search, at the row's right end. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by name"
-            aria-label="Search workspaces"
-            className={`${inputCls} w-full sm:w-auto sm:max-w-xs`}
-          />
           <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={SEGMENTS} />
           {/* The count says what a filter or search left out; with nothing left out it has nothing to say. */}
           {total > 0 && (matching < total || roster.counts.unreported > 0) && (
-            <span className="p-meta p-text-4 tabular-nums sm:ml-auto">
+            <span className="p-meta p-text-4 tabular-nums">
               {matching < total ? `${String(matching)} of ${String(total)}` : ""}
               {matching < total && roster.counts.unreported > 0 ? " · " : ""}
               {roster.counts.unreported > 0 && `${String(roster.counts.unreported)} not yet reported`}
             </span>
           )}
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search by name"
+            aria-label="Search workspaces"
+            className={`${inputCls} w-full sm:ml-auto sm:w-64`}
+          />
         </div>
 
         {error !== null && (
@@ -149,7 +147,7 @@ export default function WorkspacesPage() {
                 ))}
               </div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {shown.map((workspace) => (
                   <WorkspaceOverviewCard key={workspace.name} workspace={workspace} variant="tile" />
                 ))}

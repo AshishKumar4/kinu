@@ -1,14 +1,7 @@
 /** The web: search, a page as Markdown, a screenshot, and remote browser sessions a program drives. */
 import * as v from 'valibot';
 import { defineOperation, described, type Impact } from './operation';
-
-/**
- * The index Kinu's own web search reads through Cloudflare's Web Search API, and the `source` its answers name. Exa, the
- * best of the three the API offers on 36 queries judged blind (2026-10-19): relevance 3.92 of 4 and 35 answerable,
- * against Linkup's 3.17 and 32 and Ceramic.ai's 1.72 and 11, at $7.00 per 1,000 searches
- * (developers.cloudflare.com/web-search/providers).
- */
-export const WEB_SEARCH_INDEX = 'exa' as const;
+import { WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS } from '../providers/web-search';
 
 /** Kitesurf has no session to keep: `connectBrowser` starts one per program under this id. */
 export const KITESURF_SESSION_ID = 'kitesurf';
@@ -33,7 +26,7 @@ export const WEB = {
       query: v.string(),
       answer: v.optional(v.string()),
       results: v.array(v.strictObject({ title: v.string(), url: v.string(), snippet: v.string(), date: v.optional(v.string()), position: v.number() })),
-      source: v.picklist(['tavily', WEB_SEARCH_INDEX]),
+      source: v.picklist(WEB_SEARCH_PROVIDER_IDS),
     }),
     text: ({ query, answer, results, source }) => {
       if (results.length === 0) return `No web results for "${query}".`;
@@ -41,7 +34,7 @@ export const WEB = {
       return [
         ...(answer === undefined ? [] : [`Answer: ${answer}`, '']),
         ...results.map((r) => `${r.position}. ${r.title}${r.date === undefined ? '' : ` (${r.date})`}\n   ${r.url}\n   ${r.snippet}`),
-        '', `[${results.length} results via ${source}]`,
+        '', `[${results.length} results via ${WEB_SEARCH_PROVIDERS[source].label}]`,
       ].join('\n');
     },
   }),

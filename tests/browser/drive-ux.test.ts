@@ -52,7 +52,7 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   return page;
 }
 
-/** The Drive at My stuff's root, chosen from the column: a first visit lands on Slates when there is a slate. */
+/** The Drive at My stuff's root, chosen from the column, where a first visit lands when My stuff holds anything. */
 async function myStuff(gallery: Gallery, theme: 'dark' | 'light'): Promise<Page> {
   const page = await freshPage(gallery, 'drive', theme, 'desktop');
 
@@ -167,19 +167,22 @@ declare global {
 }
 
 describe('the Drive', () => {
-  test('Slates tiles every slate by its workspace; My stuff tiles folders and files, and a folder link, an upload and New folder work', async () => {
+  test('My stuff lists folders and tiles files; Slates tiles every slate by its workspace; a folder link, an upload and New folder work', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
 
       try {
-        // A first visit lands on Slates: every slate across the workspaces, each labelled with its workspace.
+        // A first visit lands on My stuff, files first (owner, 2026-10-19). The column places My stuff, Slates, then
+        // Shared with something new in it.
+        await page.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+        expect(await places(page)).toEqual([['mine', 'page', false], ['slates', null, false], ['shared', null, true]]);
+
+        // Slates: every slate across the workspaces, each labelled with its workspace, opening in it on its own tab.
+        await page.click('[data-drive-place="slates"]');
         await page.waitForSelector('[data-drive-place="slates"][aria-current="page"]');
         expect(await sections(page)).toEqual([{ title: 'Slates', tiles: ['Issue triage', 'Landing perf report', 'Standup notes'] }]);
-        // A slate opens in its workspace, on its own tab.
         expect(await page.$eval('[data-drive-slate="issue-triage"] a', (a) => a.getAttribute('href')))
           .toBe('/workspace/api-worker?slate=issue-triage');
-        // The column places Slates, My stuff, then Shared with something new in it.
-        expect(await places(page)).toEqual([['slates', 'page', false], ['mine', null, false], ['shared', null, true]]);
         await shoot(page, 'drive-slates-dark');
 
         // My stuff holds files and folders; Skills leads the folders, and the tree lists them.
@@ -265,7 +268,7 @@ describe('the Drive', () => {
   test('a slate tile shows its picture, and its cover while it has none or when the picture fails', async () => {
     await withGallery(async (gallery) => {
       // Issue triage's picture answers; Landing perf report's is missing; Standup notes has none yet.
-      expect(await drawnPictures(gallery, 'drive', '[data-drive-slate]', 'data-drive-slate'))
+      expect(await drawnPictures(gallery, 'slates', '[data-drive-slate]', 'data-drive-slate'))
         .toEqual([['issue-triage', 'picture'], ['lighthouse', 'cover'], ['standup', 'cover']]);
     });
   });
@@ -319,7 +322,7 @@ describe('the Drive', () => {
     });
   });
 
-  test('a first visit offers nothing to press until it knows where it lands, then lands on Slates', async () => {
+  test('a first visit offers nothing to press until it knows where it lands, then lands on My stuff', async () => {
     await withGallery(async (gallery) => {
       const page = await gallery.newPage();
 
@@ -331,7 +334,7 @@ describe('the Drive', () => {
         expect(await page.$('[data-drive-new]')).toBeNull();
 
         await page.evaluate(() => { window.__releaseLibrary?.(); });
-        await page.waitForSelector('[data-drive-place="slates"][aria-current="page"]');
+        await page.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
         expect(await page.$('[data-drive-landing]')).toBeNull();
       } finally {
         await page.close();

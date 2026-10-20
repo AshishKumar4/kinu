@@ -1,183 +1,273 @@
-// The egress secret vault against real bun:sqlite and the real AES-GCM envelope, so encryption and AAD binding are exercised.
+// The account's secrets on the real owner object, over real bun:sqlite and the real AES-GCM envelope: who may add and
+// grant them, what a workspace ever sees of them, and that a value is opened only for a workspace the owner granted.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { Database } from 'bun:sqlite';
-import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@kinu.run/core';
-import { createCredentialCipher } from '@kinu.run/core';
-import {
-  initEgressVaultTables, listEgressSecrets, putEgressSecret,
-  resolveEgressInjection, revokeEgressSecret,
-  type EgressVaultDeps,
-} from '@kinu.run/core';
+import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder, type EgressRequestFacts, type SecretInput, type UserCaller } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
-import {
-  TEST_USER_ENV, createTestUserDO, sqlExec, testOwner,
-} from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 
 const SECRET = ['sk_live_', '0123456789abcdefghij'].join('');
 
-async function vault(): Promise<EgressVaultDeps & { db: Database }> {
-  const db = new Database(':memory:');
-  const sql = sqlExec(db);
-  initEgressVaultTables(sql);
-  const cipher = await createCredentialCipher(TEST_USER_ENV);
+const AUTHORIZATION = { kind: 'authorization' } as const;
 
-  return { db, sql, cipher, aad: (id) => `test-user-do:egress:${id}` };
+const STRIPE: SecretInput = { name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position: AUTHORIZATION, value: SECRET };
+
+/** Assembled, so no scanner reads a hardcoded password here. */
+const DB_VALUE = ['hunter2', 'db'].join('-');
+
+/** An owner's account with two workspaces, `shop` and `blog`, each holding its own capability. */
+const USER_ID = '0123456789abcdef0123456789abcdef';
+
+async function account(): Promise<TestUserDO & { owner: UserCaller; shop: UserCaller; blog: UserCaller }> {
+  const harness = createTestUserDO({ durableObjectId: USER_ID });
+
+  return Object.assign(harness, {
+    owner: await testOwner(),
+    shop: { workspaceToken: await provisionTestWorkspace(harness, 'shop') },
+    blog: { workspaceToken: await provisionTestWorkspace(harness, 'blog') },
+  });
 }
 
-const STRIPE = { id: 'stripe', label: 'Stripe live', host: 'api.stripe.com', secret: SECRET };
+function charge(placeholder: string, url = 'https://api.stripe.com/v1/charges'): EgressRequestFacts {
+  return { host: new URL(url).hostname, url, headers: [['authorization', `Bearer ${placeholder}`]] };
+}
 
-describe('the vault stores a secret without ever handing it back', () => {
-  test('a placeholder is minted, and it is not derived from the secret', async () => {
-    const deps = await vault();
-    const binding = await putEgressSecret(deps, STRIPE);
-    expect(isEgressPlaceholder(binding.placeholder)).toBe(true);
-    // The mint draws lowercase letters and digits (`nanoid`), a subset of the base64url grammar the scanner reads.
-    expect(binding.placeholder).toMatch(new RegExp(`^${EGRESS_PLACEHOLDER_PREFIX}[0-9a-z]{43}$`));
-    // The placeholder is fresh randomness, not a transform of the secret.
-    expect(binding.placeholder).not.toContain(SECRET);
-    expect(binding.placeholder).not.toContain(SECRET.slice(0, 8));
+async function placeholderIn(harness: TestUserDO, workspace: UserCaller, name: string): Promise<string> {
+  const held = (await harness.userDO.grantedSecrets(workspace)).granted.find((secret) => secret.name === name);
 
-    // A container cannot learn that two of its dummies stand for one value.
-    const other = await putEgressSecret(deps, { ...STRIPE, id: 'stripe-2' });
-    expect(other.placeholder).not.toBe(binding.placeholder);
+  if (held === undefined) throw new Error(`${name} is not granted to this workspace`);
+
+  return held.placeholder;
+}
+
+describe('the owner adds secrets, and nothing ever hands a value back', () => {
+  test('a granted workspace holds a random placeholder, never derived from the value; the owner\'s list holds neither', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
+
+    expect(isEgressPlaceholder(placeholder)).toBe(true);
+    expect(placeholder).toMatch(new RegExp(`^${EGRESS_PLACEHOLDER_PREFIX}[0-9a-z]{43}$`));
+    expect(placeholder).not.toContain(SECRET.slice(0, 8));
+
+    const listed = await harness.userDO.listSecrets(harness.owner);
+    expect(listed).toEqual([{ name: 'STRIPE_SECRET_KEY', hosts: ['api.stripe.com'], position: AUTHORIZATION, updatedAt: expect.any(Number), grants: [{ workspace: 'shop', title: 'shop', reveal: false }] }]);
+    expect(JSON.stringify(listed)).not.toContain(SECRET);
+    expect(JSON.stringify(listed)).not.toContain(placeholder);
+    expect(JSON.stringify(await harness.userDO.grantedSecrets(harness.shop))).not.toContain(SECRET);
   });
 
-  test('the listing surfaces carry no secret material at all', async () => {
-    const deps = await vault();
-    await putEgressSecret(deps, STRIPE);
-    const serialized = JSON.stringify(listEgressSecrets(deps.sql));
-    expect(serialized).not.toContain(SECRET);
-    expect(serialized).toContain('api.stripe.com');
+  test('the value is sealed at rest and bound to its own name: a ciphertext moved to another row does not open', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE, { name: 'OTHER_KEY', hosts: ['api.other.com'], position: AUTHORIZATION, value: 'other-value-0123' }], ['shop']);
+    const sealed = v.parse(v.string(), harness.sql.exec(`SELECT secret FROM user_secrets WHERE name = 'STRIPE_SECRET_KEY'`).toArray()[0]?.secret);
+
+    expect(sealed).not.toContain(SECRET);
+    harness.sql.exec(`UPDATE user_secrets SET secret = ?, hosts = 'api.stripe.com' WHERE name = 'OTHER_KEY'`, sealed);
+    const other = await placeholderIn(harness, harness.shop, 'OTHER_KEY');
+
+    await expect(harness.userDO.resolveEgressInjection(harness.owner, charge(other), 'shop')).rejects.toThrow();
   });
 
-  test('the stored column is sealed, not plaintext', async () => {
-    const deps = await vault();
-    await putEgressSecret(deps, STRIPE);
-    const stored = v.parse(v.string(), deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
-    expect(stored.startsWith('pce1.')).toBe(true);
-    expect(stored).not.toContain(SECRET);
+  test('replacing a value keeps its placeholder, so a workspace needs nothing new; the next request spends the new value', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    const before = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
+
+    await harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, value: 'sk_live_rotated_value_0123' }], []);
+
+    expect(await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY')).toBe(before);
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, charge(before), 'shop'))
+      .toEqual({ kind: 'forward', substitutions: [{ placeholder: before, secret: 'sk_live_rotated_value_0123' }] });
   });
 
-  test('a secret sealed for one binding cannot be opened as another', async () => {
-    const deps = await vault();
-    await putEgressSecret(deps, STRIPE);
-    const stored = v.parse(v.string(), deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
-    await expect(deps.cipher.open(deps.aad('some-other-binding'), stored))
-      .rejects.toThrow('Record "test-user-do:egress:some-other-binding" failed to decrypt');
-  });
-});
+  test('a batch with one bad entry writes nothing', async () => {
+    const harness = await account();
 
-describe('add, rotate, revoke', () => {
-  test('rotating a secret keeps its placeholder, so the container needs no change', async () => {
-    const deps = await vault();
-    const first = await putEgressSecret(deps, STRIPE);
-    const rotated = await putEgressSecret(deps, { ...STRIPE, secret: 'sk_live_rotated_value_here' });
-    expect(rotated.placeholder).toBe(first.placeholder);
-
-    const resolved = await resolveEgressInjection(
-      deps,
-      { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [['authorization', `Bearer ${first.placeholder}`]] },
-      [rotated],
-    );
-
-    expect(resolved.kind).toBe('forward');
-    expect(resolved.kind === 'forward' && resolved.substitutions[0].secret).toBe('sk_live_rotated_value_here');
+    await expect(harness.userDO.putSecrets(harness.owner, [STRIPE, { name: 'BAD', hosts: ['*'], position: AUTHORIZATION, value: 'x' }], ['shop'])).rejects.toThrow();
+    expect(await harness.userDO.listSecrets(harness.owner)).toEqual([]);
   });
 
-  test('revoke reports whether anything went away', async () => {
-    const deps = await vault();
-    await putEgressSecret(deps, STRIPE);
-    expect(revokeEgressSecret(deps.sql, 'stripe')).toBe(true);
-    expect(revokeEgressSecret(deps.sql, 'stripe')).toBe(false);
-    expect(listEgressSecrets(deps.sql)).toEqual([]);
+  test.each([
+    ['a bare wildcard', '*'],
+    ['a wildcard that lets the program pick the domain', 'api.*'],
+    ['a scheme', 'https://api.stripe.com'],
+    ['a port', 'api.stripe.com:443'],
+    ['a path', 'api.stripe.com/v1'],
+    ['a single label', 'localhost'],
+  ])('a host written as %s is refused, since it would send the secret where the owner did not mean', async (_case, host) => {
+    const harness = await account();
+
+    await expect(harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, hosts: [host] }], [])).rejects.toThrow('is not a host');
   });
 
-  test('a revoked secret is refused, not forwarded as a dummy', async () => {
-    const deps = await vault();
-    const binding = await putEgressSecret(deps, STRIPE);
-    revokeEgressSecret(deps.sql, 'stripe');
+  test('every host under a domain is written *.example.com', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, hosts: ['*.Stripe.com'] }], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
 
-    // The window between revocation and reconfiguration must fail closed.
-    const resolved = await resolveEgressInjection(
-      deps,
-      { host: 'api.stripe.com', url: 'https://api.stripe.com/', headers: [['authorization', `Bearer ${binding.placeholder}`]] },
-      [binding],
-    );
-
-    expect(resolved.kind).toBe('refuse');
-    expect(resolved.kind === 'refuse' && resolved.status).toBe(403);
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder, 'https://files.stripe.com/x'), 'shop')).kind).toBe('forward');
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder, 'https://stripe.com.attacker.test/x'), 'shop')).kind).toBe('refuse');
   });
 
-  test('a host with no scheme, port or space is required', async () => {
-    const deps = await vault();
-    await expect(putEgressSecret(deps, { ...STRIPE, host: 'https://api.stripe.com' }))
-      .rejects.toThrow('Invalid egress host "https://api.stripe.com": a hostname or a * glob, with no scheme, port, path or space.');
-    await expect(putEgressSecret(deps, { ...STRIPE, host: 'api.stripe.com:443' }))
-      .rejects.toThrow('Invalid egress host "api.stripe.com:443": a hostname or a * glob, with no scheme, port, path or space.');
-  });
+  test('a name that is no variable name, a placeholder for a value, or a grant to a workspace that does not exist is refused', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
 
-  test('a placeholder cannot be stored AS a secret', async () => {
-    const deps = await vault();
-    const binding = await putEgressSecret(deps, STRIPE);
-    await expect(putEgressSecret(deps, { ...STRIPE, id: 'x', secret: binding.placeholder }))
-      .rejects.toThrow('That value is a placeholder, not a secret.');
+    await expect(harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, name: 'stripe-key' }], [])).rejects.toThrow('cannot name a secret');
+    await expect(harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, name: 'COPY', value: placeholder }], [])).rejects.toThrow('placeholder');
+    await expect(harness.userDO.putSecrets(harness.owner, [STRIPE], ['nowhere'])).rejects.toThrow('no workspace');
   });
 });
 
-describe('destination is re-checked on every request', () => {
-  test('the same placeholder is substituted for its host and refused for another', async () => {
-    const deps = await vault();
-    const binding = await putEgressSecret(deps, STRIPE);
-    const headers: readonly (readonly [string, string])[] = [['authorization', `Bearer ${binding.placeholder}`]];
+describe('the owner object opens a secret only for a workspace it is granted to', () => {
+  test('the granted workspace\'s request is substituted; the same placeholder from another workspace is refused', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
 
-    const allowed = await resolveEgressInjection(
-      deps, { host: 'api.stripe.com', url: 'https://api.stripe.com/v1', headers }, [binding],
-    );
+    expect(await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder), 'shop'))
+      .toEqual({ kind: 'forward', substitutions: [{ placeholder, secret: SECRET }] });
 
-    expect(allowed.kind).toBe('forward');
-    expect(allowed.kind === 'forward' && allowed.substitutions[0].secret).toBe(SECRET);
-
-    const denied = await resolveEgressInjection(
-      deps, { host: 'attacker.test', url: 'https://attacker.test/collect', headers }, [binding],
-    );
-
-    expect(denied.kind).toBe('refuse');
-    expect(JSON.stringify(denied)).not.toContain(SECRET);
+    const elsewhere = await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder), 'blog');
+    expect(elsewhere).toMatchObject({ kind: 'refuse', status: 403 });
+    expect(JSON.stringify(elsewhere)).not.toContain(SECRET);
   });
 
-  test('traffic with no placeholder never opens anything', async () => {
-    const deps = await vault();
-    const binding = await putEgressSecret(deps, STRIPE);
+  test('a grant revoked, or a secret deleted, refuses the next request', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop', 'blog']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
 
-    const resolved = await resolveEgressInjection(
-      deps, { host: 'example.com', url: 'https://example.com/', headers: [] }, [binding],
-    );
+    await harness.userDO.revokeSecretGrant(harness.owner, { name: 'STRIPE_SECRET_KEY', workspace: 'shop' });
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder), 'shop')).kind).toBe('refuse');
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder), 'blog')).kind).toBe('forward');
 
-    expect(resolved).toEqual({ kind: 'forward', substitutions: [] });
+    await harness.userDO.deleteSecret(harness.owner, 'STRIPE_SECRET_KEY');
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder), 'blog')).kind).toBe('refuse');
+    expect(harness.sql.exec(`SELECT count(*) AS n FROM user_secret_grants`).toArray()[0]?.n).toBe(0);
+  });
+
+  test('the hosts can change without the value: the next request is judged against the new ones', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
+
+    await harness.userDO.setSecretDestination(harness.owner, 'STRIPE_SECRET_KEY', { hosts: ['api.stripe.test'], position: AUTHORIZATION });
+
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder), 'shop')).kind).toBe('refuse');
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder, 'https://api.stripe.test/v1'), 'shop')).kind).toBe('forward');
+  });
+
+  test('the position can change without the value, and is judged on the next request', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
+    const inHeader: EgressRequestFacts = { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [['x-api-key', placeholder]] };
+
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, inHeader, 'shop')).kind).toBe('refuse');
+    await harness.userDO.setSecretDestination(harness.owner, 'STRIPE_SECRET_KEY', { hosts: ['api.stripe.com'], position: { kind: 'header', name: 'X-API-Key' } });
+
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, inHeader, 'shop')).kind).toBe('forward');
+    expect((await harness.userDO.resolveEgressInjection(harness.owner, charge(placeholder), 'shop')).kind).toBe('refuse');
+    expect((await harness.userDO.listSecrets(harness.owner))[0]?.position).toEqual({ kind: 'header', name: 'x-api-key' });
+  });
+
+  test.each([
+    ['the Host header', { kind: 'header', name: 'Host' }],
+    ['Authorization by name', { kind: 'header', name: 'authorization' }],
+    ['a header name with a space', { kind: 'header', name: 'X API Key' }],
+    ['a query parameter with a slash', { kind: 'query', name: 'a/b' }],
+  ] as const)('a position naming %s is refused', async (_case, position) => {
+    const harness = await account();
+
+    await expect(harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, position }], [])).rejects.toThrow('can be sent in');
+  });
+
+  test('a stored position that means nothing fails its read rather than becoming Authorization', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    harness.sql.exec(`UPDATE user_secrets SET position = 'authorization:x-api-key'`);
+
+    await expect(harness.userDO.listSecrets(harness.owner)).rejects.toThrow('no secret position');
+  });
+
+  test('a workspace reads the values of only the secrets its agents were let read, and only its own', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE, { name: 'DATABASE_PASSWORD', hosts: ['db.example.com'], position: AUTHORIZATION, value: DB_VALUE }], ['shop', 'blog']);
+
+    expect(await harness.userDO.revealedSecrets(harness.shop)).toEqual({});
+    await harness.userDO.grantSecret(harness.owner, { name: 'DATABASE_PASSWORD', workspace: 'shop', reveal: true });
+
+    expect(await harness.userDO.revealedSecrets(harness.shop)).toEqual({ DATABASE_PASSWORD: DB_VALUE });
+    expect(await harness.userDO.revealedSecrets(harness.blog)).toEqual({});
+    expect((await harness.userDO.grantedSecrets(harness.shop)).granted.map((secret) => [secret.name, secret.reveal]))
+      .toEqual([['DATABASE_PASSWORD', true], ['STRIPE_SECRET_KEY', false]]);
+  });
+
+  test('a workspace learns how many secrets are withheld from it, never their names', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    await harness.userDO.putSecrets(harness.owner, [{ name: 'BLOG_TOKEN', hosts: ['api.blog.example'], position: AUTHORIZATION, value: 'blog-token-value' }], ['blog']);
+
+    const seen = await harness.userDO.grantedSecrets(harness.shop);
+    expect(seen.granted.map((secret) => secret.name)).toEqual(['STRIPE_SECRET_KEY']);
+    expect(seen.withheld).toBe(1);
+    expect(JSON.stringify(seen)).not.toContain('BLOG_TOKEN');
+  });
+
+  test('deleting a workspace deletes its grants', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop', 'blog']);
+    await harness.userDO.removeWorkspace(harness.owner, 'shop', USER_ID);
+
+    expect((await harness.userDO.listSecrets(harness.owner))[0]?.grants).toEqual([{ workspace: 'blog', title: 'blog', reveal: false }]);
   });
 });
 
-describe('the owner object reads its vault against the grants a request carries', () => {
-  test('a granted secret is spent, and the same request without its grant is refused', async () => {
-    const { userDO } = createTestUserDO();
-    const owner = await testOwner();
-    const binding = await userDO.putEgressSecret(owner, STRIPE);
-    const facts = { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [['authorization', `Bearer ${binding.placeholder}`]] as const };
+describe('only the owner manages secrets, and only the egress opens one', () => {
+  test('a workspace can neither add, list, grant, nor open a placeholder, its own included', async () => {
+    const harness = await account();
+    await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
+    const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
 
-    expect(await userDO.resolveEgressInjection(owner, facts, [{ rule: 'egress-secret:stripe', executor: 'computer' }]))
-      .toEqual({ kind: 'forward', substitutions: [{ placeholder: binding.placeholder, secret: SECRET }] });
-    expect(await userDO.resolveEgressInjection(owner, facts, [{ rule: 'egress-secret:stripe', executor: 'device' }]))
-      .toMatchObject({ kind: 'refuse' });
+    await expect(harness.userDO.putSecrets(harness.shop, [{ ...STRIPE, name: 'MINE' }], ['shop'])).rejects.toThrow('account authority');
+    await expect(harness.userDO.listSecrets(harness.shop)).rejects.toThrow('account authority');
+    await expect(harness.userDO.grantSecret(harness.blog, { name: 'STRIPE_SECRET_KEY', workspace: 'blog', reveal: true })).rejects.toThrow('account authority');
+    await expect(harness.userDO.resolveEgressInjection(harness.shop, charge(placeholder), 'shop')).rejects.toThrow('account authority');
+  });
+
+  test('the owner capability names no workspace, so it reads no workspace\'s grants', async () => {
+    const harness = await account();
+
+    await expect(harness.userDO.grantedSecrets(harness.owner)).rejects.toThrow('Only a workspace');
+  });
+});
+
+describe('a workspace whose secrets changed is told, so its next command reads them as they stand', () => {
+  test('adding, granting, re-hosting, revoking and deleting each tell exactly the workspaces they touch', async () => {
+    const harness = await account();
+
+    const told = async (change: () => Promise<void>): Promise<string[]> => {
+      harness.secretsMoved.length = 0;
+      await change();
+
+      return [...harness.secretsMoved].sort();
+    };
+
+    expect(await told(() => harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']))).toEqual(['shop']);
+    expect(await told(() => harness.userDO.grantSecret(harness.owner, { name: 'STRIPE_SECRET_KEY', workspace: 'blog', reveal: false }))).toEqual(['blog']);
+    expect(await told(() => harness.userDO.setSecretDestination(harness.owner, 'STRIPE_SECRET_KEY', { hosts: ['api.stripe.com', 'files.stripe.com'], position: AUTHORIZATION }))).toEqual(['blog', 'shop']);
+    expect(await told(() => harness.userDO.revokeSecretGrant(harness.owner, { name: 'STRIPE_SECRET_KEY', workspace: 'shop' }))).toEqual(['shop']);
+    expect(await told(() => harness.userDO.deleteSecret(harness.owner, 'STRIPE_SECRET_KEY'))).toEqual(['blog']);
   });
 });
 
 describe('reachability', () => {
-  // A UserDO method absent from USER_DO_METHODS is silently unreachable over a stub; the outbound handler's
-  // SAFETY comment rests on this.
-  test('every vault method the egress path calls is on the RPC surface', () => {
-    const called = ['resolveEgressInjection', 'listEgressSecrets', 'putEgressSecret', 'revokeEgressSecret'];
-    expect(called.length).toBeGreaterThan(0);
+  // A UserDO method absent from USER_DO_METHODS is silently unreachable over a stub.
+  test('every secrets method the egress, the workspace and Settings call is on the RPC surface', () => {
+    const called = ['resolveEgressInjection', 'listSecrets', 'putSecrets', 'setSecretDestination', 'deleteSecret', 'grantSecret', 'revokeSecretGrant', 'grantedSecrets', 'revealedSecrets'];
     expect(called.filter((name) => !USER_DO_RPC_SURFACE.includes(name))).toEqual([]);
   });
 });

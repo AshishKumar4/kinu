@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
-import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementListing, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
-import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported, type ProposerOutcome } from '@kinu.run/core';
+import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementListing, RefinementRequestView, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
+import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported } from '@kinu.run/core';
 import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -99,17 +99,6 @@ export function cancelLocalJob(name: string, id: string, daemonPid: number | nul
       return await client.cancelJob(id);
     }).pipe(Effect.ensuring(Effect.promise(() => client.close())));
   }));
-}
-
-/** Core's proposer, the same one the cloud backend drives: one search on `target` (default the scaffold). */
-export async function runLocalOptimization(name: string, target?: string): Promise<ProposerOutcome> {
-  const client = await openLocalAgentClient(name, { surface: 'one-shot' });
-
-  try {
-    return await client.runOptimization(target);
-  } finally {
-    await client.close();
-  }
 }
 
 export interface LocalAgentClientDeps {
@@ -312,7 +301,8 @@ export class LocalAgentClient implements AgentClient {
     const pivotRow = rows[findForkPivot(rows, point)];
 
     if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
-    await this.session.revertConversation(pivotRow.id);
+    // A walk-back leaves files as they are: the agent is told what its rewound turns left.
+    await this.session.revertConversation(pivotRow.id, { chatOnly: true });
     this.activeCliSession = createCliSession(this.agentName, {
       ...this.deps.transcript,
       conversationId: CHAT_SESSION_ID,
@@ -329,10 +319,6 @@ export class LocalAgentClient implements AgentClient {
   async settleBackgroundWork(): Promise<void> {
     if (this.closed) return;
     await this.session.settleBackgroundWork();
-  }
-
-  runOptimization(target?: string): Promise<ProposerOutcome> {
-    return this.session.runOptimization(target);
   }
 
   /** Ends its sessions, releases the lease so the daemon can drive again at once, and gives the handle back. */
@@ -394,14 +380,6 @@ export class LocalAgentClient implements AgentClient {
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
     return this.session.requestRefinement(opts);
-  }
-
-  async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
-    return this.session.decideRefinement(input);
-  }
-
-  async showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult> {
-    return this.session.showRefinement(requestId, routeIndex);
   }
 
   async latestTakes() {

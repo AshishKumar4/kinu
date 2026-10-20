@@ -1,4 +1,4 @@
-import { KinuMcpOAuthProvider } from './mcp-oauth-provider';
+import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import type { OAuthClientMetadata, StoredOAuthClientInformation } from '@modelcontextprotocol/client';
 
 export interface RegisteredAppProviderInit {
@@ -8,6 +8,8 @@ export interface RegisteredAppProviderInit {
   clientId: string;
   clientSecret: string;
   scope: string | undefined;
+  /** The preset's own authorize parameters (`McpPreset.authorize`). */
+  authorize?: Readonly<Record<string, string>> | undefined;
 }
 
 /**
@@ -16,15 +18,17 @@ export interface RegisteredAppProviderInit {
  * `saveClientInformation` is a no-op: the env is the registration's source of truth.
  * Kept out of `mcp.ts`, whose static test imports would bind the real SDK before the stub.
  */
-export class RegisteredAppOAuthClientProvider extends KinuMcpOAuthProvider {
+export class RegisteredAppOAuthClientProvider extends DurableObjectOAuthClientProvider {
   private readonly clientSecret: string;
   private readonly scope: string | undefined;
+  private readonly authorize: Readonly<Record<string, string>>;
 
   constructor(init: RegisteredAppProviderInit) {
     super(init.storage, init.clientName, init.baseRedirectUrl);
     this.clientId = init.clientId;
     this.clientSecret = init.clientSecret;
     this.scope = init.scope;
+    this.authorize = init.authorize ?? {};
   }
 
   override get clientMetadata(): OAuthClientMetadata {
@@ -47,4 +51,24 @@ export class RegisteredAppOAuthClientProvider extends KinuMcpOAuthProvider {
   }
 
   override async saveClientInformation(): Promise<void> {}
+
+  /**
+   * The SDK asks for every scope the server lists (its protected-resource `scopes_supported`) before the client's own,
+   * so GitHub's sign-in asked for write:packages, gist and project access nobody chose. A preset declares what Kinu
+   * asks for, and that replaces the server's list; a scope the server challenged for, or `offline_access`, stays. The
+   * preset's own authorize parameters are set here too, as Google's `access_type=offline`.
+   */
+  override async redirectToAuthorization(authUrl: URL): Promise<void> {
+    const listed = (await this.discoveryState())?.resourceMetadata?.scopes_supported ?? [];
+    const asked = (authUrl.searchParams.get('scope') ?? '').split(' ').filter((scope) => scope !== '');
+    const refresh = asked.filter((scope) => scope === 'offline_access');
+    const theServersList = listed.length > 0 && asked.filter((scope) => scope !== 'offline_access').join(' ') === listed.join(' ');
+    const scoped = new URL(authUrl);
+
+    if (this.scope !== undefined && theServersList) scoped.searchParams.set('scope', [...this.scope.split(' '), ...refresh].join(' '));
+
+    for (const [name, value] of Object.entries(this.authorize)) scoped.searchParams.set(name, value);
+
+    return super.redirectToAuthorization(scoped);
+  }
 }

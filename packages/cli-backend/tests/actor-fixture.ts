@@ -59,7 +59,7 @@ export function fixtureRunSources(
     agentsMd: async () => ({ admitted: [], referenced: [] }),
     identity: async () => ({ agent: actor.record.name }),
     memoryTail: () => readMemoryTail(actor.runtime.memory),
-    artifacts: () => ({ sections: {}, tools: { descriptions: {}, fields: {} } }),
+    artifacts: () => ({ sections: {}, tools: { descriptions: {}, fields: {} }, versions: [] }),
     taskPlan: () => null,
     conversationKey: () => conversationKey('fixture', actor.record.actorId),
     scaffoldSpend: { source: 'scaffold', report: () => {} },

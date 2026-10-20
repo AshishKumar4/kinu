@@ -15,7 +15,7 @@ import {
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
-import { censusOf, type ChatWindow, type MediaRef, type Repair, type StoreCensus, type StoredImage } from '@kinu.run/core';
+import { censusOf, type ChatWindow, type MediaRef, type Repair, type RewindTold, type StoreCensus, type StoredImage } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -25,7 +25,7 @@ import type {
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
-import { getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
+import { encodeRecordedTurns, getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
 
 export interface AgentFacetEnv {
   readonly WORKSPACE: AgentWorkspaceCalls;
@@ -63,7 +63,8 @@ export interface AgentFacetCalls {
   /** The next request is measured on the new settings, and a refusal only the owner could fix may answer now. */
   modelSettingsChanged(snapshot: AgentSnapshot): Promise<void>;
   /** The chat continues from before `entryId`; refused while a turn runs. */
-  revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void>;
+  /** With `told`, a chat-only rewind that tells the agent what its rewound turns left. */
+  revertTo(snapshot: AgentSnapshot, entryId: string, told?: RewindTold): Promise<void>;
   /** The owner's Clear; answers why the emptied request went unmeasured, if it did. */
   clearConversation(snapshot: AgentSnapshot): Promise<string | null>;
   owed(snapshot: AgentSnapshot): Promise<boolean>;
@@ -127,6 +128,8 @@ export interface AgentFacetCalls {
   workingContext(snapshot: AgentSnapshot): Promise<readonly JsonValue[]>;
   turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex>;
   turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage>;
+  /** In the session codec's durable form (`encodeRecordedTurns`). */
+  recordedTurns(snapshot: AgentSnapshot, limit?: number): Promise<JsonValue[]>;
   spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger>;
   context(snapshot: AgentSnapshot, editor: ContextEditor): Promise<ContextTreeRemote>;
   searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
@@ -323,8 +326,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await settle(this.withChat(snapshot, (chat) => chat.modelSettingsChanged()));
   }
 
-  async revertTo(snapshot: AgentSnapshot, entryId: string): Promise<void> {
-    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId)));
+  async revertTo(snapshot: AgentSnapshot, entryId: string, told?: RewindTold): Promise<void> {
+    return await settle(this.withChat(snapshot, (chat) => chat.session.revertTo(entryId, told)));
   }
 
   async clearConversation(snapshot: AgentSnapshot): Promise<string | null> {
@@ -496,6 +499,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex> {
     return this.open(snapshot).turnRequests(turnId);
+  }
+
+  async recordedTurns(snapshot: AgentSnapshot, limit?: number): Promise<JsonValue[]> {
+    return encodeRecordedTurns(await this.open(snapshot).recordedTurns(limit));
   }
 
   async turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage> {

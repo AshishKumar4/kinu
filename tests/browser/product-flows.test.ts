@@ -16,13 +16,13 @@ import { withBrowser, withDevServer } from '../../scripts/live-app-harness';
 import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } from '../../scripts/scripted-model';
 import { tierModel } from '../../scripts/tier-model';
 import {
-  DRIVE_SLATE, agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces,
+  DRIVE_SLATE, agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentCreatesAWorkspace, accountMemoryCrossesWorkspaces,
   accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone,
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
   computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, type AgentPlanVerdict, type AgentReturnVerdict,
-  type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
+  type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict,
@@ -31,7 +31,7 @@ import {
 import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
-  INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, PROPOSED_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
+  INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, AGENT_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
   THREAD_REPLY,
 } from '../../scripts/flows-script';
 import {
@@ -160,26 +160,36 @@ describe(productFlowTestName('splice', 'what reaches the agent while it answers 
     observed = await flowRow('splice', spliceSitsWhereItWasRead);
   });
 
+  /** Positions found and strictly ascending. */
   const ordered = (order: readonly number[]) => order.every((at) => at >= 0) && order.every((at, i) => i === 0 || at > (order[i - 1] ?? -1));
 
-  test('while the agent works, the card waits amber', () => {
-    const { waited } = verdictOf(observed, 'splice');
+  const pings = (count: number) => Array.from({ length: count }, (_, i) => i + 1);
 
-    expect(['pending', 'shown']).toContain(waited.state ?? 'none');
+  // 1008-x: every card piled at the bottom of a running turn; each is drawn as it arrives, after the step it arrived in.
+  test('while the agent works, each card is drawn as it arrives, amber, after the words of its step', () => {
+    const { arrivals } = verdictOf(observed, 'splice');
+
+    expect(arrivals.map((arrival, i) => ({
+      drawn: arrival.cards.map((card) => card.ping),
+      working: arrival.working,
+      newest: ['pending', 'shown'].includes(arrival.cards.at(-1)?.state ?? 'none'),
+      ordered: ordered(arrival.order.slice(0, 2 * (i + 1))),
+    }))).toEqual(pings(arrivals.length).map((count) => ({ drawn: pings(count), working: true, newest: true, ordered: true })));
+    expect(arrivals).toHaveLength(3);
   });
 
-  test('once read, it sits inside the answer between the words before it and the answer after it, green', () => {
-    const { answered } = verdictOf(observed, 'splice');
+  test('once read, every card sits inside the answer where it arrived, green, and the agent heard each in order', () => {
+    const { answered, heard } = verdictOf(observed, 'splice');
 
-    expect({ spliced: answered.spliced, state: answered.state, tone: answered.tone, ordered: ordered(answered.order) })
-      .toEqual({ spliced: true, state: 'seen', tone: 'p-success', ordered: true });
+    expect({ cards: answered.cards, ordered: ordered(answered.order), heard })
+      .toEqual({ cards: pings(3).map((ping) => ({ ping, state: 'seen', tone: 'p-success', spliced: true })), ordered: true, heard: 'PINGS HEARD: 1, 2, 3' });
   });
 
-  test('a reload draws it there still', () => {
+  test('a reload draws every card there still', () => {
     const { reloaded } = verdictOf(observed, 'splice');
 
-    expect({ spliced: reloaded.spliced, state: reloaded.state, tone: reloaded.tone, ordered: ordered(reloaded.order) })
-      .toEqual({ spliced: true, state: 'seen', tone: 'p-success', ordered: true });
+    expect({ cards: reloaded.cards, ordered: ordered(reloaded.order) })
+      .toEqual({ cards: pings(3).map((ping) => ({ ping, state: 'seen', tone: 'p-success', spliced: true })), ordered: true });
   });
 });
 
@@ -199,27 +209,27 @@ describe(productFlowTestName('stack-memory', "an account fact an agent proposes 
   });
 });
 
-describe(productFlowTestName('workspace-proposal', 'a workspace the agent proposes exists only once its owner approves it'), () => {
-  let observed: WorkspaceProposalVerdict | null = null;
+describe(productFlowTestName('agent-workspace', 'a workspace the agent creates exists at once, recorded, with nothing asked'), () => {
+  let observed: AgentWorkspaceVerdict | null = null;
 
   beforeAll(async () => {
-    observed = await flowRow('workspace-proposal', agentProposesAWorkspace);
+    observed = await flowRow('agent-workspace', agentCreatesAWorkspace);
   });
 
-  test('the owner sees its name and the SOUL.md approving writes, and nothing exists before the approval', () => {
-    const flow = verdictOf(observed, 'workspace-proposal');
+  test('it is on the account under the name the agent gave it, and the agent has its link', () => {
+    const flow = verdictOf(observed, 'agent-workspace');
 
-    expect(flow.cardTitle).toContain(PROPOSED_WORKSPACE.name);
-    expect(flow.cardSoul).toContain(PROPOSED_WORKSPACE.brief);
-    expect(flow.cardSoul).toContain(PROPOSED_WORKSPACE.soul);
-    expect(flow.existedBeforeApproval).toBeFalse();
-  });
-
-  test('approved, it is on the account under its proposed name, and the agent that asked has its link', () => {
-    const flow = verdictOf(observed, 'workspace-proposal');
-
-    expect(flow.created?.displayName).toBe(PROPOSED_WORKSPACE.name);
+    expect(flow.existedBefore).toBeFalse();
+    expect(flow.created?.displayName).toBe(AGENT_WORKSPACE.name);
     expect(flow.link).toContain(`/workspace/${flow.created?.name ?? '(none)'}`);
+  });
+
+  test('nothing waits on the owner, and the Changelog records it with a way to open it', () => {
+    const flow = verdictOf(observed, 'agent-workspace');
+
+    expect(flow.needsYou).toBe(0);
+    expect(flow.changelog?.summary).toContain(`Created workspace "${AGENT_WORKSPACE.name}"`);
+    expect(flow.changelog?.opens).toBe(`/workspace/${flow.created?.name ?? '(none)'}`);
   });
 });
 

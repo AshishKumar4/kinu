@@ -1325,8 +1325,6 @@ const HANDED = new Map([
   ['event-overflow', OVERFLOW_RETRY_TEXT.slice(0, 40)],
   ['event-gate', 'a mechanical gate'],
   ['event-consent', 'Re-issue the approved commands'],
-  ['event-proposal', 'Your owner approved'],
-  ['event-proposal-declined', 'Your owner declined'],
   ['event-sandbox', 'Incident id'],
   ['event-plan-approved', 'approved-plan'],
   ['event-plan-feedback', 'submit_plan'],
@@ -1925,6 +1923,8 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
       );
 
       expect(await revertAttributes(page, 'data-revert-turn')).toEqual(['rv-u1']);
+      // The conversation alone: the agent is told what its rewound turns left on the computer (REWIND-0924).
+      expect(await page.evaluate(() => document.documentElement.dataset.galleryRevertChatOnly)).toBe('true');
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).toContain('Add the missing-binding regression test');
       expect(body).not.toContain('so none reads the binding itself');
@@ -1959,6 +1959,11 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
         'conversation-and-device-files', 'conversation',
       ]);
       await page.screenshot({ path: join(TAB_SHOTS, 'revert-with-device-files-dialog.png') });
+
+      // With the device files: their restore is offered next, and the rewind sends the agent no notice.
+      await page.click('[data-revert-action="conversation-and-device-files"]');
+      await page.waitForFunction(() => document.documentElement.dataset.galleryRevertChatOnly !== undefined);
+      expect(await page.evaluate(() => document.documentElement.dataset.galleryRevertChatOnly)).toBe('false');
       await page.close();
     });
   });

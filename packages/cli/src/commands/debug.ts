@@ -25,7 +25,7 @@ import { asRecord, numberField, parsePositiveInt, stringField } from '../options
 import { listTranscripts } from '../session';
 import {
   getLocalAgentInfo, getLocalChangelog, getLocalChatHistory, getLocalFacts,
-  getLocalScaffoldVersions, listLocalGepaRuns, listLocalHeads, listLocalJobs,
+  getLocalScaffoldVersions, listLocalHeads, listLocalJobs,
   listLocalMcts, listLocalMctsSearchRuns, listLocalRecordCells, listLocalRecordObjectives,
   listLocalRunEvents, listLocalRuns, listLocalTriggers, readLocalMemory, readLocalRecordCell,
   getLocalToolSurface,
@@ -218,7 +218,6 @@ interface DebugSource {
   backgroundJobs(limit: number): Effect.Effect<DebugBackgroundJob[]>;
   changelog(limit: number): Effect.Effect<DebugChangelogView>;
   scaffoldVersions(limit: number): Effect.Effect<JsonObject[]>;
-  gepaRuns(limit: number): Effect.Effect<JsonObject[]>;
   triggers(): Effect.Effect<JsonValue>;
   toolDescriptions(): Effect.Effect<JsonValue>;
   facts(limit: number): Effect.Effect<JsonObject[]>;
@@ -254,7 +253,6 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     backgroundJobs: (limit) => rpc('listBackgroundJobs', v.array(DebugBackgroundJobSchema), [limit]),
     changelog: (limit) => rpc('getEvolutionChangelog', DebugChangelogViewSchema, [{ limit }]),
     scaffoldVersions: (limit) => rpc('listScaffoldVersions', JsonRowsSchema, [limit]),
-    gepaRuns: (limit) => rpc('getGepaRuns', JsonRowsSchema, [limit]),
     triggers: () => rpc('listTriggers', JsonValueSchema),
     toolDescriptions: () => rpc('getToolDescriptions', JsonValueSchema),
     facts: (limit) => rpc('getFacts', JsonRowsSchema, [limit]),
@@ -298,7 +296,6 @@ function localDebugSource(localName: string): DebugSource {
     backgroundJobs: (limit) => Effect.sync(() => parseLocal(v.array(DebugBackgroundJobSchema), { value: listLocalJobs(localName, limit) })),
     changelog: (limit) => Effect.sync(() => parseLocal(DebugChangelogViewSchema, { value: getLocalChangelog(localName, limit) })),
     scaffoldVersions: (limit) => Effect.sync(() => parseLocal(JsonRowsSchema, { value: getLocalScaffoldVersions(localName, limit) })),
-    gepaRuns: (limit) => Effect.sync(() => parseLocal(JsonRowsSchema, { value: listLocalGepaRuns(localName, limit) })),
     triggers: () => Effect.sync(() => decodeJsonValue({ value: listLocalTriggers(localName) })),
     toolDescriptions: () => Effect.sync(() => decodeJsonValue({ value: getLocalToolSurface(localName) })),
     facts: (limit) => Effect.sync(() => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) })),
@@ -385,7 +382,6 @@ interface DebugSummary {
   backgroundJobs: DebugBackgroundJob[];
   changelogUnseen: number;
   scaffoldVersionCount: number;
-  gepaRunCount: number;
   factCount: number;
   errors: Array<{ runId: string; message: string }>;
   sectionFailures: Array<{ section: string; message: string }>;
@@ -630,7 +626,7 @@ function writeDebugBundle(target: DebugTarget, source: DebugSource, opts: DebugO
 
     const summary: DebugSummary = {
       identity: {}, messageCount: 0, runs: [], headRuns: [], mctsSearches: [],
-      backgroundJobs: [], changelogUnseen: 0, scaffoldVersionCount: 0, gepaRunCount: 0,
+      backgroundJobs: [], changelogUnseen: 0, scaffoldVersionCount: 0,
       recordObjectives: [],
       factCount: 0, errors: [], sectionFailures: [],
     };
@@ -731,11 +727,6 @@ function writeDebugBundle(target: DebugTarget, source: DebugSource, opts: DebugO
         summary.scaffoldVersionCount = scaffoldVersions.length;
 
         for (const version of scaffoldVersions) writer.write({ t: 'scaffold_version', ...version });
-
-        const gepaRuns = yield* safe('gepa_runs', source.gepaRuns(sectionLimit), []);
-        summary.gepaRunCount = gepaRuns.length;
-
-        for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
 
         const triggers = yield* safe('triggers', source.triggers(), null);
 
@@ -887,7 +878,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     }
   }
 
-  console.log(`\n${DIM(`evolution: ${summary.changelogUnseen} unseen changelog entries, ${summary.scaffoldVersionCount} scaffold version(s), ${summary.gepaRunCount} GEPA run(s), ${summary.factCount} fact(s)`)}`);
+  console.log(`\n${DIM(`evolution: ${summary.changelogUnseen} unseen changelog entries, ${summary.scaffoldVersionCount} scaffold version(s), ${summary.factCount} fact(s)`)}`);
 
   if (summary.errors.length > 0) {
     console.log(`\n${ERR('Errors')} (${summary.errors.length})`);

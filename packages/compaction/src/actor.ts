@@ -15,6 +15,8 @@ export interface ActorCompactionDeps {
   readonly summarizer: () => LanguageModel;
   readonly spend: Omit<ModelCallSpend, 'source'>;
   readonly modelSpec?: () => string;
+  /** The actor's file ledger: a compaction ends every read's authority to edit, as what it showed may be gone from view. */
+  readonly reads?: { forgetReads(): void };
 }
 
 export const compactionDiagnostics: EnginePorts['logger'] = {
@@ -30,9 +32,11 @@ export function createActorCompaction(deps: ActorCompactionDeps): CompactionExte
     archive: deps.state.archive,
     summarize: createModelSummarizer(deps.summarizer, { source: 'compaction', ...deps.spend }, deps.modelSpec),
     ephemeral: deps.ledger,
-    // Only a byte-stable replay keeps the ledger's frozen positions.
+    // Only a byte-stable replay keeps the ledger's frozen positions, and what reads showed in view.
     onOutcome: ({ outcome }) => {
-      if (outcome !== 'replayed') deps.ledger.reset();
+      if (outcome === 'replayed') return;
+      deps.ledger.reset();
+      deps.reads?.forgetReads();
     },
     attachments: { files: deps.files },
   });
@@ -49,8 +53,9 @@ export function hostedActorCompaction(actor: SeatedActor, deps: {
   readonly models: Pick<TurnModelSources, 'normalize' | 'resolve'>;
   report(actor: SeatedActor, report: ModelCallReport): void;
   readonly operations?: ModelOperationSink;
-  /** The turn's profile and dynamic block, where its turn runs here; elsewhere none, and its own config names its model. */
-  readonly turn?: { readonly profile: () => ResolvedTurnProfile | null; readonly ledger: DynamicContextLedger };
+  /** The turn's profile, dynamic block and file ledger, where its turn runs here; elsewhere none, and its own config
+   *  names its model. */
+  readonly turn?: { readonly profile: () => ResolvedTurnProfile | null; readonly ledger: DynamicContextLedger; readonly reads?: ActorCompactionDeps['reads'] };
 }): HostedActorCompaction {
   const state = createCompactionStateStore(actor.runtime.storage.sql, actor.handle);
   const spec = () => deps.models.normalize(deps.turn?.profile()?.tier.model ?? actor.stores.config.getModel() ?? '');
@@ -58,7 +63,7 @@ export function hostedActorCompaction(actor: SeatedActor, deps: {
   return {
     extension: createActorCompaction({
       files: () => actor.runtime, state, ledger: deps.turn?.ledger ?? new DynamicContextLedger(), logger: deps.logger,
-      summarizer: () => deps.models.resolve(spec()), modelSpec: spec,
+      summarizer: () => deps.models.resolve(spec()), modelSpec: spec, ...(deps.turn?.reads !== undefined && { reads: deps.turn.reads }),
       spend: { report: (report) => deps.report(actor, report), operations: deps.operations },
     }),
     trigger: { state, key: actor.record.actorId },

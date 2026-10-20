@@ -1,14 +1,13 @@
 import { DesktopTowerIcon } from "@phosphor-icons/react";
 import { DevicesCard } from "@/components/devices/DevicesCard";
+import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
 
 export default function DevicesPage() {
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-4xl space-y-6 px-6 py-8">
-        <header className="flex items-center gap-3">
-          <DesktopTowerIcon size={22} className="shrink-0 p-text-3" />
-          <h1 className="p-display text-2xl">Devices</h1>
-        </header>
+      {/* A page of forms: it starts on every page's left edge and stops at a reading width. */}
+      <div className={`max-w-4xl space-y-6 ${PAGE_BODY}`}>
+        <PageHeader icon={<DesktopTowerIcon size={22} />} title="Devices" />
         <DevicesCard />
       </div>
     </div>

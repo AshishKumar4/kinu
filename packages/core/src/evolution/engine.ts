@@ -29,7 +29,7 @@ import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
-import { updateCraftScores } from '../craft/ema';
+import { countCraftOffers, rateCraftedTools } from '../craft/preference';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { TurnPairReader } from '../identity/conversation-store';
@@ -37,33 +37,30 @@ import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
 } from '../advisor/review';
-import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
+import { initLessonTables } from './lessons';
+import { dreamChangesFor } from './watch';
 import {
   applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, owesTurnLessons, recordTurnStruggles,
   scoreToolLessons, StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
 } from './struggles';
 import {
-  initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, hasLowRating,
-  isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs,
+  initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf,
+  isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs,
   isTrivialTurn,
-  type RatingVerdict, type TurnRating,
+  type TurnRating,
 } from './ratings';
 import type { DecisionPort } from '../providers/decision-model';
 import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
 } from '../experience/imports';
 import {
-  initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore,
+  initCompletedTurnTable, completedTurnRanWith, createCompletedTurnStore, type CompletedTurnStore,
   MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
 } from './session-window';
 import { initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { buildChangelog } from './changelog';
-import { DELEGATION_RUBRIC, delegationFeatures, renderDelegationFeatures } from './delegation-features';
-import { getCurrentScaffoldVersion } from '../scaffold/versions';
-import { advanceTrial, runningTrial, startTrial } from './trials';
-import { runProposer } from './proposer';
 
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
@@ -73,57 +70,17 @@ const GeneralizedToolSchema = v.object({
 
 import type { AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
+import { nowMs } from '../utils/date';
 
-
-/** Bounded because the lesson reaches every later turn once corroborated. */
-const TURN_REFLECTION_MAX_CHARS = 240;
-
-/**
- * The good/bad pair asks for a trigger and an action; otherwise a model writes about
- * the incident, which the session receiving the lesson cannot use.
- */
-function buildTurnReflectionPrompt(input: {
-  turn: CompletedTurn;
-  rating: RatingVerdict;
-  followup: string | null;
-}): string {
-  const { turn, rating, followup } = input;
-
-  const toolSummary = turn.toolCalls.length > 0
-    ? `Tools used: ${turn.toolCalls.map((call) => call.name).join(', ')}`
-    : 'No tools used';
-
-  return (
-    `A recent interaction was rated ${rating.score.toFixed(1)}/5 by the user's reply` +
-    `${rating.wrong !== null && rating.wrong !== 'nothing' ? `; what went wrong: ${rating.wrong.replaceAll('_', ' ')}` : ''}.\n` +
-    `User asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n` +
-    `Response: "${evidenceWindow(turn.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse)}"\n` +
-    `${toolSummary}\n` +
-    `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
-    `${DELEGATION_RUBRIC}\n` +
-    `${turn.hadError ? 'An error occurred.\n' : ''}` +
-    `${followup ? `The user then replied: "${evidenceWindow(followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n` : ''}\n` +
-    `In one sentence of at most ${String(TURN_REFLECTION_MAX_CHARS)} characters, what specifically ` +
-    `should be done differently next time? It is stored as a lesson and read by later turns that ` +
-    `have none of the evidence above, so name the trigger and the action, not the incident.\n` +
-    `  Good: "When a run result's text begins \`Error (exit N)\`, treat it as a failure and re-run ` +
-    `before reporting the work done."\n` +
-    `  Bad: "Should have been more careful here.": no trigger, no action, and nothing a later reader ` +
-    `can apply.`
-  );
-}
 
 /** Tombstone scope for one turn's two durable rating writes (`turn_ratings` row
  *  and craft EMA). Distinct from `turn_review`: a refusal after these writes retries
  *  the rest, not the writes. */
 const TURN_GRADED_SCOPE = 'turn_graded';
 
-/** Tombstone scope for the review's later writes (reflection lesson, extracted
- * pattern), so a refusal between them resumes rather than repeats. */
+/** Tombstone scope for the review's later writes (an extracted pattern, a turn's
+ * struggle lessons), so a refusal between them resumes rather than repeats. */
 const TURN_REVIEW_STEP_SCOPE = 'turn_review_step';
-
-/** A reply the model reads this surely as a correction is the user's own negative, as a thumbs-down is. */
-const CORROBORATING_CORRECTION = 0.8;
 
 /** The rating the review decides by: the ledger's effective row, or an unkeyed turn's own reading. */
 type EffectiveRating = Pick<TurnRating, 'score' | 'corrected' | 'wrong' | 'source'>;
@@ -131,6 +88,13 @@ type EffectiveRating = Pick<TurnRating, 'score' | 'corrected' | 'wrong' | 'sourc
 /** Read-only calls prove nothing about whether the turn's work landed, so the pattern extractor skips them. */
 function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'op'>): boolean {
   return call.name === 'memory' && v.is(v.picklist(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']), call.op);
+}
+
+/** Chosen means offered and called: a tool the turn made and then called was not offered to it. */
+function chosenCraftedTools(turn: CompletedTurn): string[] {
+  const offered = turn.craftedOffered ?? [];
+
+  return (turn.craftedToolsUsed ?? []).filter((name) => offered.includes(name));
 }
 
 export class EvolutionEngine {
@@ -347,6 +311,7 @@ export class EvolutionEngine {
     // counts, so a thumb cleared later falls back to it.
     const reading = graded || followup === null || decide === undefined ? null : await rateTurn(decide, {
       request: turn.userMessage, actions: renderActions(turn.toolCalls), answer: turn.assistantResponse, followup,
+      changes: dreamChangesFor(this.rt.storage.sql, this.rt.actor, turn.artifacts ?? null),
     }, turn.toolCalls.length);
 
     const effective = (): EffectiveRating | null => {
@@ -354,9 +319,6 @@ export class EvolutionEngine {
 
       return reading === null ? null : { ...reading, source: 'model' };
     };
-
-    // Crafted tools are codemode-only, so they come from the turn record, not from the non-builtin tool names.
-    const craftedToolNames = turn.craftedToolsUsed ?? [];
 
     // One commit for the rating row, craft scores, tombstone and announcement: a synchronous run is atomic
     // inside a Durable Object but not against a CLI kill. Announced last, so a death cannot replay the writes.
@@ -372,16 +334,15 @@ export class EvolutionEngine {
           actions: renderActions(turn.toolCalls),
           answer: turn.assistantResponse,
           followup,
-          scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+          scaffoldVersion: turn.scaffold?.version ?? null,
+          artifacts: turn.artifacts ?? null,
         });
       }
 
       const rated = effective();
 
-      // A failed EMA write silences the retirement signal, so it is not swallowed.
-      if (rated !== null && craftedToolNames.length > 0) {
-        updateCraftScores(this.rt.storage.sql, craftedToolNames, ratingQuality(rated.score));
-      }
+      // Under the graded tombstone, so a resumed review rates nothing twice.
+      if (rated !== null) rateCraftedTools(this.rt.storage.sql, chosenCraftedTools(turn), rated.score);
 
       if (gradedKey !== null) {
         recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_GRADED_SCOPE, key: gradedKey });
@@ -394,54 +355,17 @@ export class EvolutionEngine {
 
     if (rating === null) return;
 
-    const low = isLowRating(rating.score);
-
     if (!graded) turn.feedback = feedbackOf(rating.score);
-
-    // Only the user's own negative corroborates provisional lessons: a thumb, a pick, or a reply the model reads
-    // as a clear correction.
-    const corroborated = low && (rating.source !== 'model' || rating.corrected >= CORROBORATING_CORRECTION);
-
-    if (corroborated) this.corroborateLessons(turn.turnId);
 
     await this.settleImports(turn.turnId, rating.score);
 
-    if (low) {
-      // The lesson's own tombstone stops a retry from writing a second copy.
-      const reflectionKey = gradedKey === null ? null : `${gradedKey}:reflection`;
-
-      if (reflectionKey === null
-        || !effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, reflectionKey)) {
-        const reflection = await this.generateTurnReflection(turn, rating, followup);
-
-        const lesson = {
-          turnIds: turn.turnId ? [turn.turnId] : [],
-          text: reflection,
-          source: 'turn_reflection',
-          status: corroborated ? 'corroborated' : 'provisional',
-        } satisfies Parameters<typeof recordLesson>[2];
-
-        // Keyed, so a death between insert and tombstone replays into the same row.
-        recordLesson(
-          this.rt.storage.sql, this.rt.actor,
-          reflectionKey === null ? lesson : { ...lesson, key: reflectionKey },
-        );
-
-        if (reflectionKey !== null) {
-          recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_REVIEW_STEP_SCOPE, key: reflectionKey });
-        }
-
-        this.emit({ type: 'reflection', message: corroborated ? reflection : `[provisional] ${reflection}` });
-      }
-    }
-
-    if (isHighRating(rating.score) && turn.toolCalls.length > 0) {
+    if (isHighRating(rating.score) && turn.toolCalls.length > 0 && this.agentConfig.getCrafting()) {
       // The key travels into the body so the marker lands beside the writes.
       const patternKey = gradedKey === null ? null : `${gradedKey}:pattern`;
 
       if (patternKey === null
         || !effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, patternKey)) {
-        await this.extractPattern(turn, ratingQuality(rating.score), patternKey);
+        await this.extractPattern(turn, patternKey);
       }
     }
   }
@@ -563,8 +487,8 @@ export class EvolutionEngine {
   }
 
   /**
-     * A thumb from setTurnFeedback is the user's own rating: it wins over the model's, and a thumbs-down
-     * corroborates provisional lessons. Cleared, the turn falls back to the model's rating.
+     * A thumb from setTurnFeedback is the user's own rating: it wins over the model's. Cleared, the turn falls back
+     * to the model's rating.
      */
   async applyExplicitFeedback(messageId: string, feedback: 'positive' | 'negative' | null): Promise<void> {
     if (feedback === null) {
@@ -581,22 +505,11 @@ export class EvolutionEngine {
       source: 'thumbs',
       request: pair?.request ?? '',
       answer: pair?.response ?? '',
-      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+      ...completedTurnRanWith(this.rt.storage.sql, this.rt.actor, messageId),
     });
 
-    if (feedback === 'negative') this.corroborateLessons(messageId);
   }
 
-  /** The rating is already written by recordTakePick; picking an alternate corroborates like a thumbs-down. */
-  applyTakePick(turnId: string | null, delivered: boolean): void {
-    if (!delivered && turnId) this.corroborateLessons(turnId);
-  }
-
-  /** A row-status change only; readers derive from that status. */
-  private corroborateLessons(turnId?: string): void {
-    if (!turnId) return;
-    corroborateLessonsForTurn(this.rt.storage.sql, this.rt.actor, turnId);
-  }
   /**
      * The only path by which another workspace's imported experience joins this one,
      * settled by a graded turn's verdict. An ungraded turn settles nothing.
@@ -630,18 +543,11 @@ export class EvolutionEngine {
     });
   }
 
-  /**
-     * Called by AgentOrchestrator when a session window closes. Reflects only when the
-     * window carries negative signal.
-     */
+  /** Called by AgentOrchestrator when a session window closes: the lifetime cadence and the changelog digest. */
   async onSessionComplete(session: CompletedSession): Promise<void> {
     if (!this.enabled) return;
 
     const windowsClosed = this.agentConfig.countClosedTurnWindow();
-
-    if (session.turns.length >= 3 && this.sessionWarrantsReflection(session)) {
-      await this.onSessionReflection(session);
-    }
 
     if (windowsClosed % this.config.lifetimeEvolutionInterval === 0) {
       await this.onLifetimeEvolution();
@@ -649,32 +555,6 @@ export class EvolutionEngine {
 
     // Session-end changelog digest over the ledgers; never blocks.
     this.emitChangelogDigest(session.startedAt);
-  }
-
-  /**
-     * The cadence lane's evolution pass: a look at the live trial, then a waiting candidate's trial when the owner
-     * has trials on, then, with no trial running, one proposer search if a trigger holds. Never rejects: each step's
-     * rows are durable, so a failure is said and the next pass resumes.
-     */
-  async runDueEvolution(): Promise<void> {
-    if (!this.recordsTurns || this.rt.actor.parentActorId !== null) return;
-    const { sql } = this.rt.storage;
-    const { actor } = this.rt;
-
-    try {
-      const looked = runningTrial(sql, actor);
-      const undecided = looked !== null && advanceTrial(sql, actor, looked) === null ? looked : null;
-      const trial = undecided ?? (this.agentConfig.getLiveTrials() ? startTrial(sql, actor) : null);
-
-      if (trial !== null || this.rt.decide === undefined) return;
-      const outcome = await runProposer({ rt: this.rt, decide: this.rt.decide, reflect: this.rt.judgeModel ?? this.rt.llm, now: Date.now() });
-
-      if (outcome.kind === 'searched') {
-        this.emit({ type: 'reflection', message: `Proposer searched ${outcome.artifactId}: ${outcome.detail}` });
-      }
-    } catch (err) {
-      diagnostics.failure('evolution.proposer_failed', toKinuError({ doing: 'run the evolution pass', cause: err, otherwise: 'unavailable' }));
-    }
   }
 
   private emitChangelogDigest(since: number): void {
@@ -692,61 +572,20 @@ export class EvolutionEngine {
     });
   }
 
-  /** An error, or a turn rated low. */
-  private sessionWarrantsReflection(session: CompletedSession): boolean {
-    if (session.turns.some(t => t.hadError || t.feedback === 'negative')) return true;
-    const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => id !== undefined && id !== '');
-
-    return hasLowRating(this.rt.storage.sql, this.rt.actor, turnIds);
-  }
-
-  /** Self-scored prose enters corroborated lessons only when a recorded outcome
-     *  already backs the window; otherwise it stays provisional. */
-  private async onSessionReflection(session: CompletedSession): Promise<void> {
-    // Input is the ledger's corroborated lessons, not a memory file's contents.
-    const recentLessons = renderRecentLessons(this.rt.storage.sql, this.rt.actor, 5);
-
-    if (!recentLessons.trim()) return;
-
-    const reflection = await this.fastLlm.complete(
-      `You are reflecting on your recent interactions to improve yourself.\n\n` +
-      `Recent lessons:\n${evidenceWindow(recentLessons, EVIDENCE_BUDGETS.lessons)}\n\n` +
-      `In 2-3 bullet points, what patterns do you see? What should you do differently?\n` +
-      `Focus on actionable changes to your behavior.`,
-    );
-
-    const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => id !== undefined && id !== '');
-    const corroborated = hasLowRating(this.rt.storage.sql, this.rt.actor, turnIds);
-    recordLesson(this.rt.storage.sql, this.rt.actor, {
-      turnIds,
-      text: reflection,
-      source: 'session_reflection',
-      status: corroborated ? 'corroborated' : 'provisional',
-    });
-
-    this.emit({ type: 'reflection', message: `Session reflection${corroborated ? '' : ' [provisional]'}: ${reflection.slice(0, 100)}...` });
-  }
-
   /** Lifetime cycle, automatic every N windows. */
+  /** A recorded turn's offers: each crafted tool its declarations offered, and of those each it called. */
+  countCraftOffers(turn: CompletedTurn): void {
+    countCraftOffers(this.rt.storage.sql, { offered: turn.craftedOffered ?? [], chosen: chosenCraftedTools(turn), at: nowMs() });
+  }
+
   async onLifetimeEvolution(): Promise<void> {
     await periodicCraftConsolidation(this.rt);
     this.emit({ type: 'consolidation', message: 'CraftStore consolidation complete' });
   }
 
-  /** The user's correction is the strongest context when present. The answer is
-     *  truncated rather than rejected (as in advisor/review.ts). */
-  private async generateTurnReflection(
-    turn: CompletedTurn, rating: RatingVerdict, followup: string | null,
-  ): Promise<string> {
-    const raw = await this.reviewLlm(turn).complete(buildTurnReflectionPrompt({ turn, rating, followup }));
-
-    return raw.trim().slice(0, TURN_REFLECTION_MAX_CHARS);
-  }
-
   /** Pure-lookup calls are skipped: they encode no reusable pattern. */
   private async extractPattern(
     turn: CompletedTurn,
-    quality: number,
     /** Written next to the upsert so no await separates the tool from its record. */
     patternKey: string | null,
   ): Promise<void> {
@@ -796,7 +635,6 @@ export class EvolutionEngine {
       name: parsed.output.name,
       description: parsed.output.description ?? '',
       code: parsed.output.code,
-      score: quality,
     });
 
     // One commit for the discovery event, marker and answer retirement, so a kill

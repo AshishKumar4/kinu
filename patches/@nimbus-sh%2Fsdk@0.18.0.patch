@@ -1,0 +1,41 @@
+diff --git a/dist/sandbox.d.ts b/dist/sandbox.d.ts
+index 462e03dbece46d8ce7da1cdc4d66e38a1f76a33f..8bf1aaa49d939ab1238b55a6d0aed659db3788b4 100644
+--- a/dist/sandbox.d.ts
++++ b/dist/sandbox.d.ts
+@@ -2,6 +2,7 @@
+  * @nimbus-sh/sdk/sandbox - programmatic Nimbus sandbox handle.
+  */
+ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
++import type { VfsCasResult } from '@nimbus-sh/core/vfs/vfs.js';
+ /**
+  * The identities `files.as` takes by name: the session's user (what every
+  * file method uses by default), and the kernel, which an embedder holding
+@@ -49,6 +50,12 @@ export interface NimbusSandboxFiles {
+     read(path: string): Promise<string | null>;
+     readBytes(path: string): Promise<Uint8Array | null>;
+     write(path: string, content: string | Uint8Array): Promise<void>;
++    /**
++     * Kinu patch (NIMBUS-ASKS #55): `write` only if the file is still at `expected`, the revision its `stat` gave
++     * (0: no file there), in one step at the session; otherwise nothing is written and the answer names the revision
++     * there now. A file with no revision (a mount's) is refused ENOTSUP.
++     */
++    writeIfRevision(path: string, content: string | Uint8Array, expected: number): Promise<VfsCasResult>;
+     stat(path: string): Promise<NimbusFileStat | null>;
+     /** stat without following a symlink leaf. */
+     lstat(path: string): Promise<NimbusFileStat | null>;
+diff --git a/dist/sandbox.js b/dist/sandbox.js
+index 74084709a850582a642ec7dc0909a6a017c5f389..1611d228388722a5a53808c7e29570d0f2ee5864 100644
+--- a/dist/sandbox.js
++++ b/dist/sandbox.js
+@@ -348,6 +348,11 @@ export class NimbusSandbox {
+                 await this.ready();
+                 await this.rpc(this.stub()._rpcWriteFile(path, content, undefined, cred));
+             },
++            // Kinu patch (NIMBUS-ASKS #55).
++            writeIfRevision: async (path, content, expected) => {
++                await this.ready();
++                return this.rpc(this.stub()._rpcWriteFileIfRevision(path, content, expected, undefined, cred));
++            },
+             stat: async (path) => {
+                 await this.ready();
+                 return this.rpc(this.stub()._rpcStat(path, undefined, cred));
