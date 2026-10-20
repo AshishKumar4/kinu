@@ -38,6 +38,18 @@ const { createTerminalRecords } = require('../src/daemon/terminals.js');
 /** The workspace every frame here is from, as the hub names the proven one. */
 const WORKSPACE = 'workspace-a';
 
+/** The raw shells' home. A raw session's shell runs as the owner, with the daemon's HOME: with the developer's, every
+ *  command this file types landed in their ~/.bash_history. A sandboxed plan sets its own HOME inside its argv. */
+const SHELL_HOME = scratchDir('pty-protocol-home');
+
+/** A daemon's session registry whose raw shells start at {@link SHELL_HOME}; everything else is the production one. */
+function scratchHomeSessions() {
+  return createSessions({
+    log: () => {},
+    spawn: (argv, options) => Bun.spawn(argv, { ...options, env: options.env?.HOME === undefined ? options.env : { ...options.env, HOME: SHELL_HOME } }),
+  });
+}
+
 /** The block a hub with the owner's Sandbox switch OFF sends. */
 const RAW = { tier: 'raw', agentHome: '', roots: [] };
 
@@ -75,7 +87,7 @@ function fakeWs(bufferedAmount = 0) {
  */
 function context() {
   const plans = [];
-  const sessions = createSessions({ log: () => {} });
+  const sessions = scratchHomeSessions();
   const realOpen = sessions.open;
 
   const wrapped = {
@@ -379,7 +391,7 @@ describe("a workspace's named sessions", () => {
     const records = path.join(scratchDir('pty-named-restart'), 'terminals.json');
     const before = createTerminalRecords({ file: records });
     const [shell] = before.list(WORKSPACE);
-    const firstLife = createSessions({ log: () => {} });
+    const firstLife = scratchHomeSessions();
 
     live.push(firstLife);
     const ws = fakeWs();
@@ -389,7 +401,7 @@ describe("a workspace's named sessions", () => {
     await endAll(firstLife);
     // The next daemon reads the same file and holds no shell.
     const after = createTerminalRecords({ file: records });
-    const secondLife = createSessions({ log: () => {} });
+    const secondLife = scratchHomeSessions();
 
     live.push(secondLife);
     const again = fakeWs();
