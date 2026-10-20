@@ -2,6 +2,7 @@
 // parts stream before the completion exists, concurrent turns on one binding stay apart whatever shape `Ai.run` hands
 // each (workerd rereads its options after awaiting), and a refusal keeps the status the stack's retry reads.
 import { describe, test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { APICallError, generateText, stepCountIs, streamText, tool, jsonSchema, type ModelMessage, type TextStreamPart, type ToolSet } from 'ai';
 import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -13,6 +14,9 @@ const PORTABLE = /^[A-Za-z0-9_.:-]+$/u;
 const MODEL = '@cf/moonshotai/kimi-k2.6';
 
 const PROMPT = 'the exact words the person typed';
+
+/** A stream chunk, as far as its text goes; the usage report at the end carries no `choices`. */
+const ChunkSchema = v.looseObject({ choices: v.optional(v.array(v.looseObject({ delta: v.looseObject({ content: v.optional(v.string()) }) })), []) });
 
 /** An upstream body driven frame by frame, so "before the completion exists" is a state, not a race. */
 function manualStream() {
@@ -282,6 +286,16 @@ describe('Workers AI binding — usage and finish', () => {
     expect(await result.reasoningText).toBe('because');
     expect(await result.finishReason).toBe('stop');
     expect(await result.usage).toMatchObject({ inputTokens: 3, outputTokens: 1 });
+  });
+
+  // llama-3.3-70b streams each token in both `response` and `choices[0].delta.content` (recorded from /ai/run,
+  // 2026-10-20): read once, or every word arrives twice (kinu-logs/agents-upstream/workers-ai-provider-json-stream.md).
+  test('a chunk carrying its token in both response and choices is read once', async () => {
+    const recorded = readFileSync(new URL('./fixtures/workers-ai/llama-3.3-70b-both-fields.sse', import.meta.url), 'utf8');
+    const { model } = bindingModel(() => eventStreamOf(recorded), { modelId: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' });
+    const said = recorded.split('\n').flatMap((line) => (line.startsWith('data: {') ? [v.parse(ChunkSchema, JSON.parse(line.slice(6)))] : []));
+
+    expect(await streamText({ model, prompt: PROMPT, maxRetries: 0 }).text).toBe(said.map((chunk) => chunk.choices[0]?.delta.content ?? '').join(''));
   });
 
   test('a usage-only frame that omits choices still reports its usage after an upstream finish', async () => {

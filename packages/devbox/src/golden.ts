@@ -152,8 +152,9 @@ function deleteRetired(ports: GoldenPorts): Effect.Effect<void> {
 }
 
 function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<GoldenState, 'current' | 'previous'>, DevboxError> {
-  // Each step is recorded as it begins: a waiting box's caller holds while the step moves on (D79).
-  const at = (step: string) => Effect.sync(() => { ports.write({ ...ports.read(), building: step }); });
+  // Each step is recorded as it begins: a waiting box's caller holds while the step moves on (D79). A build under way
+  // replaces the last one's failure, so a box asking meanwhile waits on the rebuild instead of reading that failure.
+  const at = (step: string) => Effect.sync(() => { ports.write({ ...ports.read(), building: step, failure: undefined }); });
 
   const run = (doing: string, command: string) => Effect.gen(function* () {
     yield* at(doing);

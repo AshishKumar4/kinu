@@ -80,8 +80,8 @@ const DRIVER = [
 ].join('\n');
 
 /**
- * A class that reads `ai.stream`, or the reply `agent.ask` answers, as its page would, a piece at a time, and answers
- * what it read and in how many pieces.
+ * A class that reads `ai.stream`'s text, or the reply `agent.ask` answers as UTF-8 bytes, as its page would, a piece at a
+ * time, and answers what it read and in how many pieces; or, `ask-whole`, reads the reply as the slates skill writes it.
  */
 const TYPIST = [
   'import { SlateObject } from "kinu:slate";',
@@ -89,7 +89,9 @@ const TYPIST = [
   '  async fetch(request) {',
   '    const url = new URL(request.url);',
   '    const say = url.searchParams.get("say");',
-  '    const stream = url.searchParams.get("via") === "ask" ? (await this.env.workspace.agent.ask({ text: say })).reply : await this.env.workspace.ai.stream({ prompt: say });',
+  '    const via = url.searchParams.get("via");',
+  '    if (via === "ask-whole") return Response.json([await new Response((await this.env.workspace.agent.ask({ text: say })).reply).text()]);',
+  '    const stream = via === "ask" ? (await this.env.workspace.agent.ask({ text: say })).reply.pipeThrough(new TextDecoderStream()) : await this.env.workspace.ai.stream({ prompt: say });',
   '    const pieces = [];',
   '    for await (const piece of stream) {',
   '      pieces.push(piece);',
@@ -441,8 +443,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   #typing = Promise.withResolvers<void>();
 
   /** What the typist slate's class read from `ai.stream`, or `agent.ask`'s reply, through the runner and the binding. */
-  async typed(say: string, via: 'stream' | 'ask' = 'stream'): Promise<string> {
+  async typed(say: string, via: 'stream' | 'ask' | 'ask-whole' = 'stream'): Promise<string> {
     this.#typing = Promise.withResolvers<void>();
+
+    // Read whole, the reply's last piece cannot wait on the reader having text already.
+    if (via === 'ask-whole') this.#typing.resolve();
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir('/slates/typist', { recursive: true });
     files.writeFile('/slates/typist/package.json', JSON.stringify({ main: 'server.js' }));

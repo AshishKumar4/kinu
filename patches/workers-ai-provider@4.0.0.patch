@@ -1,5 +1,5 @@
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994ea507ca22 100644
+index 764cbf5325502a9836710b1c218e03d2356cd192..039a5a636e789259155a69f9da7cf59932ba0a81 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -46,6 +46,24 @@ function apiCallErrorFromResponse(response, errorBody, context) {
@@ -87,7 +87,21 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  				return;
  			}
  			if (chunk.usage) usage = mapWorkersAIUsage(chunk);
-@@ -792,6 +826,12 @@ function getMappedStream(response, salvageContext) {
+@@ -702,7 +736,12 @@ function getMappedStream(response, salvageContext) {
+ 			const directFinishReason = chunk.finish_reason;
+ 			if (choiceFinishReason != null) finishReason = mapWorkersAIFinishReason(choiceFinishReason);
+ 			else if (directFinishReason != null) finishReason = mapWorkersAIFinishReason(directFinishReason);
+-			const nativeResponse = chunk.response;
++			/**
++			* Kinu patch: some models (llama-3.3-70b) stream each token in both `response` and `choices[0].delta.content`,
++			* so reading both doubled every word. A chunk carrying `choices` is read from its delta alone. Upstream report:
++			* kinu-logs/agents-upstream/workers-ai-provider-json-stream.md.
++			*/
++			const nativeResponse = Array.isArray(choices) && choices.length > 0 ? null : chunk.response;
+ 			if (nativeResponse != null && nativeResponse !== "") {
+ 				const responseText = String(nativeResponse);
+ 				if (responseText.length > 0) if (bufferContentForSalvage) contentBuffer += responseText;
+@@ -792,6 +831,12 @@ function getMappedStream(response, salvageContext) {
  			}
  		},
  		flush(controller) {
@@ -100,7 +114,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  			for (const [idx] of activeToolCalls) {
  				if (closedToolCalls.has(idx)) continue;
  				closeToolCall(idx, controller);
-@@ -859,23 +899,34 @@ function getMappedStream(response, salvageContext) {
+@@ -859,23 +904,34 @@ function getMappedStream(response, salvageContext) {
  				type: "text-end",
  				id: textId
  			});
@@ -140,7 +154,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  	/**
  	* Emit tool-input-end + tool-call for a tool call that is complete.
  	*/
-@@ -914,13 +965,13 @@ function getMappedStream(response, salvageContext) {
+@@ -914,13 +970,13 @@ function getMappedStream(response, salvageContext) {
  				if (lastActiveToolIndex != null) closeToolCall(lastActiveToolIndex, controller);
  				continue;
  			}
@@ -156,7 +170,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  				const id = createAISDKToolCallId(tcId);
  				const toolName = tcName || "";
  				activeToolCalls.set(tcIndex, {
-@@ -1201,10 +1252,10 @@ var WorkersAIChatLanguageModel = class {
+@@ -1201,10 +1257,10 @@ var WorkersAIChatLanguageModel = class {
  	* option, then settings.
  	*/
  	buildRunInputs(args, messages, options) {
@@ -169,7 +183,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  		const chatTemplateKwargs = "chat_template_kwargs" in perCall ? perCall.chat_template_kwargs : this.settings.chat_template_kwargs;
  		return {
  			max_tokens: args.max_tokens,
-@@ -1214,7 +1265,10 @@ var WorkersAIChatLanguageModel = class {
+@@ -1214,7 +1270,10 @@ var WorkersAIChatLanguageModel = class {
  			...args.tool_choice ? { tool_choice: args.tool_choice } : {},
  			top_p: args.top_p,
  			...args.response_format ? { response_format: args.response_format } : {},
@@ -181,7 +195,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  			...reasoningEffort !== void 0 ? { reasoning_effort: reasoningEffort } : {},
  			...chatTemplateKwargs !== void 0 ? { chat_template_kwargs: chatTemplateKwargs } : {}
  		};
-@@ -1226,15 +1280,17 @@ var WorkersAIChatLanguageModel = class {
+@@ -1226,15 +1285,17 @@ var WorkersAIChatLanguageModel = class {
  	* here — they belong on the `inputs` object (see `buildRunInputs`), not on
  	* the `options` (3rd) arg of binding.run() or the REST query string.
  	*/
@@ -201,7 +215,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  			...passthroughOptions
  		};
  	}
-@@ -1267,6 +1323,9 @@ var WorkersAIChatLanguageModel = class {
+@@ -1267,6 +1328,9 @@ var WorkersAIChatLanguageModel = class {
  			finishReason: salvaged ? {
  				unified: "tool-calls",
  				raw: "stop"
@@ -211,7 +225,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  			} : mapWorkersAIFinishReason(outputRecord)
  		};
  	}
-@@ -1277,7 +1336,7 @@ var WorkersAIChatLanguageModel = class {
+@@ -1277,7 +1341,7 @@ var WorkersAIChatLanguageModel = class {
  			providerOptions: options.providerOptions,
  			reasoning: options.reasoning
  		});
@@ -220,7 +234,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  		let output;
  		try {
  			output = await this.config.binding.run(args.model, inputs, {
-@@ -1290,7 +1349,10 @@ var WorkersAIChatLanguageModel = class {
+@@ -1290,7 +1354,10 @@ var WorkersAIChatLanguageModel = class {
  				requestBodyValues: inputs
  			});
  		}
@@ -232,7 +246,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  		const outputRecord = output;
  		const { reasoningContent, text, toolCalls, finishReason } = this.extractContent(outputRecord, args, warnings);
  		return {
-@@ -1318,7 +1380,7 @@ var WorkersAIChatLanguageModel = class {
+@@ -1318,7 +1385,7 @@ var WorkersAIChatLanguageModel = class {
  			providerOptions: options.providerOptions,
  			reasoning: options.reasoning
  		});
@@ -241,7 +255,7 @@ index 764cbf5325502a9836710b1c218e03d2356cd192..09d67ce15a4d9aafa47ff3d17c3d994e
  		let response;
  		try {
  			response = await this.config.binding.run(args.model, inputs, {
-@@ -1331,10 +1393,14 @@ var WorkersAIChatLanguageModel = class {
+@@ -1331,10 +1398,14 @@ var WorkersAIChatLanguageModel = class {
  				requestBodyValues: inputs
  			});
  		}

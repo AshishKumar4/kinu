@@ -398,6 +398,9 @@ export class FakeSandbox {
   readonly bootReadFaults: Error[] = [];
   /** Parks the next read of the kernel's boot id in the container; a container stopped meanwhile never answers it. */
   bootReadGate: Gate | undefined;
+  /** Parks the next tools install in the container; a container destroyed meanwhile loses the exec, as the platform
+   *  reports it ("Network connection lost."). */
+  installGate: Gate | undefined;
   /** Thrown by the next commands that trust the intercept's CA, as a configuration the container refuses. */
   readonly trustFaults: Error[] = [];
   /** How many times the box recorded a container of record. */
@@ -588,6 +591,17 @@ export class FakeSandbox {
     // The tools install: the archive must have arrived, and the stamp names what it installed.
     if (command.includes(`> ${TOOLS_STAMP}`)) {
       this.sequence.push('exec:tools-install');
+      const held = this.installGate;
+      const destroysBefore = this.destroys;
+
+      if (held !== undefined) {
+        this.installGate = undefined;
+        held.enter();
+        await held.promise;
+
+        if (this.destroys !== destroysBefore) throw new Error('Network connection lost.');
+      }
+
       const archive = /tar -C \/ -xzf '([^']+)'/.exec(command)?.[1] ?? '';
       const pin = /printf %s '([^']+)' > /.exec(command)?.[1] ?? '';
       const bytes = this.binaryFiles.get(archive);
