@@ -150,13 +150,13 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.thread(id)));
   }
 
-  async update(id: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
-    if (this.refusal !== undefined) return settleSync(Effect.fail(this.refusal));
-    const summary = this.store.update(id, change);
+  update(id: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
+    return settle(this.changed(change, () => this.store.update(id, change)));
+  }
 
-    if (change.trashed === true) await this.arm();
-
-    return summary;
+  /** The one way a thread changes, the person's or an agent's: one moved to Trash arms the alarm that empties it. */
+  private changed(change: { trashed?: boolean }, apply: () => MailThreadSummary): Effect.Effect<MailThreadSummary, KinuError> {
+    return Effect.tap(this.served(apply), () => (change.trashed === true ? Effect.promise(async () => this.arm()) : Effect.void));
   }
 
   draft(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
@@ -220,7 +220,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
-    return settle(this.served(() => this.store.updateFor(caller, thread, change)));
+    return settle(this.changed(change, () => this.store.updateFor(caller, thread, change)));
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): Promise<MailBox> {

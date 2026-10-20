@@ -247,6 +247,23 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   readPrivateSourceAsAgent(): Promise<{ content?: string; error?: string }>;
 }
 
+/** The account's Mailbox (src/mail/mailbox-do.ts) as `mailbox-probe.ts` serves it, by the calls its tests make. */
+interface MailboxProbeRpc extends Rpc.DurableObjectBranded {
+  open(account: { userId: string; email: string; username: string; assistant: null }): Promise<{ path: string; address: string }>;
+  draftFor(caller: MailboxProbeCaller, message: { to: string[]; subject: string; text: string }): Promise<{ id: string; threadId: string }>;
+  update(id: string, change: { trashed?: boolean }): Promise<{ id: string }>;
+  updateFor(caller: MailboxProbeCaller, thread: string, change: { trashed?: boolean }): Promise<{ id: string }>;
+  alarmAt(): Promise<number | null>;
+}
+
+interface MailboxProbeCaller {
+  workspace: string;
+  title: string;
+  mainActorId: string;
+  actorId: string;
+  name: string;
+}
+
 interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   seed(): Promise<{ hashes: Record<'ws-alpha' | 'ws-beta', string | null> }>;
   counts(): Promise<Record<string, number>>;
@@ -542,6 +559,7 @@ declare global {
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
       DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;
+      MAILBOX: DurableObjectNamespace<MailboxProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
       DEVICE_USER_PROBE: DurableObjectNamespace<DeviceUserProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;

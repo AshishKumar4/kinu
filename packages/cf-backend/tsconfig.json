@@ -36,6 +36,7 @@
     "tests/workerd/slate-actor-probe.ts",
     "tests/workerd/slate-durability-probe.ts",
     "tests/workerd/device-user-probe.ts",
+    "tests/workerd/mailbox-probe.ts",
     "tests/workerd/slate-share-probe.ts",
     "tests/workerd/account-reset-probe.ts",
     "tests/workerd/store-reset-probe.ts",
