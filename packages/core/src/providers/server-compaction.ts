@@ -8,6 +8,7 @@ import type { AssistantContent, AssistantModelMessage, ModelMessage, ProviderMet
 import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 import type { ProviderOptions } from './effort';
+import { servingRoute } from './serving-route';
 
 /** Where Kinu compacts, as a percentage of the context window: the ladder's trigger and the provider's. */
 export const COMPACTION_TRIGGER_PERCENT = 85;
@@ -27,18 +28,25 @@ const OPENAI_COMPACTING = /^gpt-(?:[5-9]|\d{2,})/u;
 
 /** The Codex backend takes no threshold: a step asks by a trailing `compaction_trigger` (ADR P3). The plan's API route
  *  refuses that item (400 `subscription_sharing_unsupported_capability`, 2026-10-06) and takes the threshold. */
-const CODEX_ROUTE = /^codex(?:@[^/]*)?\//u;
+function codexRoute(spec: string | undefined): boolean {
+  return servingRoute(spec ?? '')?.provider === 'codex';
+}
 
 /** Whose summary a model reads and writes: only that provider's adapters carry it. */
 export type ServerCompactor = 'anthropic' | 'openai';
 
-/** The provider a model compacts with, or null for a model compacted the local way. */
+/** The provider a model compacts with, by the API serving it (`servingRoute`), or null for a model compacted the local way. */
 export function serverCompactor(spec: string | undefined): ServerCompactor | null {
-  if (CODEX_ROUTE.test(spec ?? '')) return 'openai';
-  const match = /^(anthropic|claude|openai|chatgpt)(?:@[^/]*)?\/(?:.*\/)?([^/]+)$/u.exec(spec ?? '');
+  const served = servingRoute(spec ?? '');
 
-  if (match?.[1] === 'openai' || match?.[1] === 'chatgpt') return OPENAI_COMPACTING.test(match[2] ?? '') ? 'openai' : null;
-  const model = COMPACTING.exec(match?.[2] ?? '');
+  if (served?.provider === 'codex') return 'openai';
+  // The model's own name, past any author or path it is served under.
+  const name = served === null ? '' : served.modelId.slice(served.modelId.lastIndexOf('/') + 1);
+
+  if (served?.provider === 'openai' || served?.provider === 'chatgpt') return OPENAI_COMPACTING.test(name) ? 'openai' : null;
+
+  if (served?.provider !== 'anthropic' && served?.provider !== 'claude') return null;
+  const model = COMPACTING.exec(name);
 
   if (model === null) return null;
 
@@ -59,7 +67,7 @@ export function serverCompactionOptions(
   const threshold = triggerTokens(contextWindow);
   const vendor = serverCompactor(spec);
 
-  if (vendor === null || CODEX_ROUTE.test(spec ?? '') || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+  if (vendor === null || codexRoute(spec) || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
 
   if (vendor === 'openai' && forcedInput === undefined && sinceLatest !== null && sinceLatest < threshold) return undefined;
 
@@ -77,7 +85,7 @@ export function compactionTriggerOptions(
 ): ProviderOptions | undefined {
   const threshold = triggerTokens(contextWindow);
 
-  if (!CODEX_ROUTE.test(spec ?? '') || inputTokens === undefined || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
+  if (!codexRoute(spec) || inputTokens === undefined || threshold < SERVER_COMPACTION_MIN_TOKENS) return undefined;
 
   return inputTokens >= (forced ? SERVER_COMPACTION_MIN_TOKENS : threshold) ? { openai: { compactionTrigger: true } } : undefined;
 }

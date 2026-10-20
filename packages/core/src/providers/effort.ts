@@ -5,6 +5,7 @@
 
 import type { streamText } from 'ai';
 import type { ReasoningEffort } from './reasoning-effort';
+import { servingRoute } from './serving-route';
 
 export {
   REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts,
@@ -30,12 +31,14 @@ export function workersAIEffortOption(
 /** Levels Anthropic's `effort` accepts; others leave the model on its default rather than being refused. */
 const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+/** `effort` as the API serving `spec` takes it (`servingRoute`): a gateway's Claude route is Anthropic's. */
 export function reasoningEffortOptions(
   effort: ReasoningEffort | null | undefined,
-  providerFamily: string,
+  spec: string,
 ): ProviderOptions | undefined {
-  if (!effort) return undefined;
-  const family = providerFamily.split(':', 1)[0];
+  const family = servingRoute(spec)?.provider.split(':', 1)[0];
+
+  if (!effort || family === undefined) return undefined;
 
   switch (family) {
     case 'workers-ai':

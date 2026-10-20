@@ -171,7 +171,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return {
       model: this.resolveModel(normalized),
       provider,
-      providerOptions: reasoningEffortOptions(effort, provider),
+      providerOptions: reasoningEffortOptions(effort, normalized),
     };
   }
 

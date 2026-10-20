@@ -13,7 +13,8 @@ import {
   WORKERS_AI_PREFERRED_MODEL_IDS,
 } from './workers-ai-catalog';
 import { heardFetch } from './middleware/attempt';
-import { lazyModel, workersAiModelId } from './wire-model';
+import { lazyModel } from './wire-model';
+import { workersAiModelId } from './serving-route';
 
 const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
 

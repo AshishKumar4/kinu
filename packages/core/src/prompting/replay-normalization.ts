@@ -6,7 +6,7 @@
 
 import type { AssistantContent, AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
 import { toolCallIdFor } from '../providers/tool-call-id';
-import { routeProtocol } from '../providers/wire-model';
+import { servingRoute } from '../providers/serving-route';
 import { StableCopies } from './stable-copies';
 import * as v from 'valibot';
 
@@ -81,7 +81,8 @@ export function normalizeReplayForDestination(
   // No resolved destination: preserve the prepare-step no-op contract.
   if (!destination?.providerId) return undefined;
   // Signed reasoning goes back only over Anthropic's own Messages API, whoever relays it.
-  const destinationIsAnthropic = routeProtocol(destination.providerId, destination.modelId) === 'messages';
+  const served = destination.modelId === undefined ? destination.providerId : servingRoute(`${destination.providerId}/${destination.modelId}`)?.provider;
+  const destinationIsAnthropic = served === 'anthropic' || served === 'claude';
   progress.resume(`${destination.providerId}\n${destination.modelId ?? ''}`, messages);
   let read = 0;
   let changed = false;
