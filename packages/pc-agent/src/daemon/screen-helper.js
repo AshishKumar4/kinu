@@ -35,6 +35,8 @@ const SHARE_STEP = 'Share this PC\'s screen once: run `kinu desktop share` on it
 /** The portal's Start allowed, but handed back no restore token: every open would ask the person at the PC again. */
 const NOT_KEPT = 'this desktop allowed sharing once but keeps no share to restore, so each open would ask again';
 
+const TURNED_OFF = 'sharing was turned off while the share was asked for';
+
 /** The helper's exit when the person at the PC refused, in the portal's prompt. */
 const REFUSED_EXIT = 3;
 
@@ -262,17 +264,26 @@ function createHelperSource({
     /** Asks the person at the PC, in the portal's prompt, to allow sharing; keeps the token it hands back. */
     share() {
       if (sharing !== null) return sharing;
-      sharing = prepare().then((ready) => (ready.ok ? this.ask() : failShare(ready.why))).finally(() => {
-        sharing = null;
-        setAsking(false);
-      });
+      const at = generation;
+
+      // The system is asked again first: a step the PC named (a compiler installed since) may be done now.
+      sharing = this.probe()
+        .then(async (found) => (found.ok ? await prepare() : { ok: false, why: found.why }))
+        .then((ready) => {
+          if (generation !== at) return { ok: false, why: TURNED_OFF };
+
+          return ready.ok ? this.ask(at) : failShare(ready.why);
+        })
+        .finally(() => {
+          sharing = null;
+          setAsking(false);
+        });
 
       return sharing;
     },
 
-    /** The share's own prompt, once the helper is ready to show it. */
-    ask() {
-      const at = generation;
+    /** The share's own prompt, once the helper is ready to show it; `at` is the share's generation. */
+    ask(at) {
       let kept = false;
 
       const helper = run('share', {
@@ -291,7 +302,7 @@ function createHelperSource({
         cancel();
 
         // Unshared while the prompt was up: nothing is kept, and nothing is said in desktop.json, which is gone.
-        if (generation !== at) return { ok: false, why: 'sharing was turned off while the prompt was up' };
+        if (generation !== at) return { ok: false, why: TURNED_OFF };
 
         if (code === 0 && kept) {
           log('device.screen_shared', '');
@@ -358,8 +369,9 @@ function createHelperSource({
             };
             resolve(screen);
           },
+          // A frame the helper drew before it said it was ready (a Mac's can) is the screen's first, not dropped.
           onFrame: (bytes) => {
-            if (screen === null || closed) return;
+            if (closed) return;
             serial += 1;
             onFrame({ serial, width: bytes.readUInt16BE(0), height: bytes.readUInt16BE(2), jpeg: bytes.subarray(4) });
           },

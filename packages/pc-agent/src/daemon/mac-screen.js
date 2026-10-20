@@ -29,6 +29,7 @@ const MAC_SCREEN_SWIFT = String.raw`
 // u32 length, a kind byte (0 an event in JSON, 1 a frame), then the record; a frame is its u16 width and height and
 // its JPEG. Its stdin is a line the daemon sends first (a Linux helper's restore token, unused here), then one JSON
 // command a line: a key by its macOS key code, the pointer's position in frame pixels, a button, a wheel turn.
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import CoreImage
@@ -102,31 +103,45 @@ final class Frames: NSObject, SCStreamOutput, SCStreamDelegate {
   }
 }
 
-/// The viewer's input, posted as the Mac's own events.
+/// The viewer's input, posted as the Mac's own events. Everything held down is let up when the viewer goes.
 final class Input {
   let display: SCDisplay
   let pixels: (width: Int, height: Int)
   var position = CGPoint.zero
   var held: Set<Int> = []
-  var flags: CGEventFlags = []
+  var keys: Set<Int> = []
+  var capsLock = false
+  var lastClick: (button: Int, at: TimeInterval, position: CGPoint, count: Int64) = (0, 0, .zero, 0)
 
   init(display: SCDisplay, pixels: (width: Int, height: Int)) {
     self.display = display
     self.pixels = pixels
   }
 
-  static let modifiers: [Int: CGEventFlags] = [
-    0x38: .maskShift, 0x3C: .maskShift, 0x3B: .maskControl, 0x3E: .maskControl,
-    0x3A: .maskAlternate, 0x3D: .maskAlternate, 0x37: .maskCommand, 0x36: .maskCommand, 0x39: .maskAlphaShift,
+  /// Shift, Control, Option and Command by both their keys, held while either is.
+  static let modifiers: [(CGEventFlags, [Int])] = [
+    (.maskShift, [0x38, 0x3C]), (.maskControl, [0x3B, 0x3E]), (.maskAlternate, [0x3A, 0x3D]), (.maskCommand, [0x37, 0x36]),
   ]
 
+  var flags: CGEventFlags {
+    var flags: CGEventFlags = capsLock ? [.maskAlphaShift] : []
+    for (flag, codes) in Input.modifiers where codes.contains(where: { keys.contains($0) }) { flags.insert(flag) }
+    return flags
+  }
+
   func key(_ code: Int, _ down: Bool) {
-    if let flag = Input.modifiers[code] {
-      if down { flags.insert(flag) } else { flags.remove(flag) }
-    }
+    // Caps Lock toggles as it goes down, and holds through its release.
+    if code == 0x39 && down && !keys.contains(code) { capsLock.toggle() }
+    if down { keys.insert(code) } else { keys.remove(code) }
     guard let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: down) else { return }
     event.flags = flags
     event.post(tap: .cghidEventTap)
+  }
+
+  /// Lets up every key and button the viewer left down, as the stream ends.
+  func releaseAll() {
+    for code in held { button(code, false) }
+    for code in keys where code != 0x39 { key(code, false) }
   }
 
   func motion(_ x: Double, _ y: Double) {
@@ -144,7 +159,16 @@ final class Input {
     ]
     guard let kind = kinds[code] else { return }
     if down { held.insert(code) } else { held.remove(code) }
-    CGEvent(mouseEventSource: nil, mouseType: down ? kind.0 : kind.1, mouseCursorPosition: position, mouseButton: kind.2)?.post(tap: .cghidEventTap)
+    // A press soon after the last, of the same button and in the same place, is the next click of a double or triple.
+    if down {
+      let now = ProcessInfo.processInfo.systemUptime
+      let again = lastClick.button == code && now - lastClick.at <= NSEvent.doubleClickInterval
+        && abs(lastClick.position.x - position.x) <= 4 && abs(lastClick.position.y - position.y) <= 4
+      lastClick = (code, now, position, again ? lastClick.count + 1 : 1)
+    }
+    guard let event = CGEvent(mouseEventSource: nil, mouseType: down ? kind.0 : kind.1, mouseCursorPosition: position, mouseButton: kind.2) else { return }
+    event.setIntegerValueField(.mouseEventClickState, value: lastClick.count)
+    event.post(tap: .cghidEventTap)
   }
 
   func scroll(_ axis: Int, _ steps: Int) {
@@ -191,6 +215,8 @@ func serve() async {
     guard let data = line.data(using: .utf8), let command = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
     DispatchQueue.main.async { input.apply(command) }
   }
+  // The viewer went: what it left down is let up, after every command it sent.
+  DispatchQueue.main.sync { input.releaseAll() }
   try? await stream.stopCapture()
   exit(0)
 }
@@ -225,6 +251,8 @@ const NO_COMPILER = 'Install the Command Line Tools (xcode-select --install), th
 
 /** Turned on once the Mac proof's screen section passes on a Mac: the helper has been parsed, never compiled or run. */
 const MAC_SCREEN_PROVEN = false;
+
+const UNPROVEN = 'the Mac screen helper has not passed the Mac proof yet';
 
 /** ScreenCaptureKit came with macOS 12.3, Darwin 21.4. */
 const FIRST_DARWIN = [21, 4];
@@ -306,7 +334,7 @@ function createMacSource({ home, log, spawn = Bun.spawn, release = os.release(),
       return code === null ? null : { type: 'key', code, down };
     },
     async probe() {
-      if (!proven) return { ok: false, why: "the Mac screen helper has not passed the Mac proof yet" };
+      if (!proven) return { ok: false, why: UNPROVEN };
 
       if (!hasScreenCaptureKit(release)) return { ok: false, why: `macOS on Darwin ${release} predates ScreenCaptureKit (macOS 12.3)` };
       const found = await ran(['xcrun', '--find', 'swiftc']);
@@ -315,6 +343,8 @@ function createMacSource({ home, log, spawn = Bun.spawn, release = os.release(),
     },
     // Built when its source changed since the last share, never otherwise: a rebuilt helper asks macOS's prompts again.
     async prepare() {
+      if (!proven) return { ok: false, why: UNPROVEN };
+
       if (current()) return { ok: true, why: '' };
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       const source = `${binary}.swift`;

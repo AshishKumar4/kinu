@@ -15,8 +15,8 @@
 #      (System Settings › General › Sharing) for the measurement to say anything, and turn it back off after;
 #   4. the daemon's screen helper (1014-t), through the daemon's own Mac source (mac-screen.js): it builds the Swift
 #      helper with swiftc, asks for Screen Recording and Accessibility in macOS's own prompts, then serves the main
-#      display for a few seconds: its first frame's size and bytes, frames drawn by 20 pointer moves (so input reaches
-#      the Mac), and how long a second open took. The first run usually stops at the prompts, as macOS applies a new
+#      display for a few seconds: its first frame's size and bytes; where macOS puts the pointer after 20 moves, read
+#      back from AppKit and compared with where they aimed (so input reaches the Mac); and how long a second open took. The first run usually stops at the prompts, as macOS applies a new
 #      grant only to a helper started after it: allow the terminal app this runs in under System Settings › Privacy &
 #      Security, in Screen Recording and in Accessibility, and run the script again. Skip it with KINU_SKIP_SCREEN=1.
 #
@@ -119,7 +119,18 @@ if [ "${KINU_SKIP_SCREEN:-}" != 1 ]; then
         screen.pointer(0, 200 + 30 * move, 200 + 20 * move, { x: 0, y: 0 });
         await Bun.sleep(100);
       }
+      await Bun.sleep(300);
       result.framesAfterMoves = frames.length - 1;
+      // Where the pointer is now, in points from the top left of the main screen, against where the last move aimed.
+      const where = Bun.spawnSync(["osascript", "-l", "JavaScript", "-e",
+        "ObjC.import(\"AppKit\"); var p = $.NSEvent.mouseLocation; var f = $.NSScreen.mainScreen.frame;"
+        + " JSON.stringify({ x: p.x, y: f.size.height - p.y, width: f.size.width, height: f.size.height })"]);
+      const pointer = JSON.parse(where.stdout.toString() || "null");
+      if (pointer !== null && frame !== null) {
+        const aimed = { x: (200 + 30 * 19) * pointer.width / frame.width, y: (200 + 20 * 19) * pointer.height / frame.height };
+        result.pointer = { at: { x: Math.round(pointer.x), y: Math.round(pointer.y) }, aimed: { x: Math.round(aimed.x), y: Math.round(aimed.y) } };
+        result.pointerReached = Math.abs(pointer.x - aimed.x) <= 2 && Math.abs(pointer.y - aimed.y) <= 2;
+      }
       screen.close();
       const again = performance.now();
       const reopened = await source.open({ onFrame: () => {}, onEnd: () => {} });
@@ -128,7 +139,7 @@ if [ "${KINU_SKIP_SCREEN:-}" != 1 ]; then
     }
     result.said = said;
     console.log(JSON.stringify(result));
-    process.exit(result.share.ok && result.frame?.jpeg && result.framesAfterMoves > 0 ? 0 : 1);
+    process.exit(result.share.ok && result.frame?.jpeg && result.pointerReached === true ? 0 : 1);
   ' 2>&1)" || screen_ok=no
   echo "$screen"
 fi

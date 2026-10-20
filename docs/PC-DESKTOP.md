@@ -68,7 +68,9 @@ Where the daemon's screen comes from depends on the system:
     helper's protocol (`screen-helper.js`). `kinu desktop share` has the daemon compile it with `xcrun swiftc` into
     `~/.kinu/desktop/kinu-screen`, a path that stays put across daemon updates, and again only when its source changes.
   - The daemon maps the viewer's X keysyms to macOS key codes (the ANSI layout), and the helper posts them, with the
-    pointer, button and wheel, as CGEvents. Frames are ScreenCaptureKit's main display at 15 fps, JPEG at 0.7.
+    pointer, button and wheel, as CGEvents: modifiers held while either of their keys is, Caps Lock toggled, click
+    counts for double and triple clicks, and everything the viewer left down let up when it goes. Frames are
+    ScreenCaptureKit's main display at 15 fps, JPEG at 0.7.
   - **none**: macOS older than ScreenCaptureKit (12.3). **setup**: no `swiftc` (the Command Line Tools:
     `xcode-select --install`), or never shared. **permission**: macOS's own Screen Recording and Accessibility
     prompts. macOS applies a grant only to a helper started after it, so the first share usually ends asking for

@@ -53,11 +53,57 @@ function mac({ release = '23.1.0', compiler = () => null, told = {} } = {}) {
 }
 
 describe("a Mac's screen source", () => {
-  test('until the Mac proof has passed, a Mac shares nothing, whatever it has', async () => {
-    const made = createMacSource({ home: scratchDir('mac-screen-unproven'), log: () => {}, release: '23.1.0', spawn: () => exitedWith(0) });
+  test('until the Mac proof has passed, a Mac shares nothing, whatever it has, and a share neither builds nor asks', async () => {
+    const compiled = [];
+
+    const spawn = (argv) => {
+      compiled.push(argv.join(' '));
+
+      return exitedWith(0);
+    };
+
+    const made = createMacSource({ home: scratchDir('mac-screen-unproven'), log: () => {}, release: '23.1.0', spawn });
 
     await made.probe();
-    expect(made.desktop()).toEqual({ state: 'none' });
+
+    expect({ shared: await made.share(), desktop: made.desktop(), compiled }).toEqual({
+      shared: { ok: false, why: 'the Mac screen helper has not passed the Mac proof yet' }, desktop: { state: 'none' }, compiled: [],
+    });
+  });
+
+  test('a compiler installed after the daemon started is found by the next share', async () => {
+    let installed = false;
+    const { made } = mac({ compiler: () => (installed ? null : exitedWith(1, 'xcrun: error: unable to find utility "swiftc"')), told: { share: 'allow', token: 'permission', width: 3024, height: 1964 } });
+
+    await made.probe();
+    const before = made.desktop().detail;
+
+    installed = true;
+
+    expect({ before, shared: await made.share(), after: made.desktop() }).toEqual({
+      before: 'Install the Command Line Tools (xcode-select --install), then run kinu desktop share on this Mac.',
+      shared: { ok: true, why: '' }, after: { state: 'ready', width: 3024, height: 1964 },
+    });
+  });
+
+  test('unsharing while the helper builds ends the share before it asks, and keeps nothing', async () => {
+    const building = Promise.withResolvers();
+
+    const { made, file, compiled } = mac({
+      compiler: (argv) => (argv[1] === 'swiftc' ? { exited: building.promise, stderr: new Response('').body } : null),
+      told: { share: 'allow', token: 'permission', width: 3024, height: 1964 },
+    });
+
+    await made.probe();
+    const sharing = made.share();
+
+    while (!compiled.includes('swiftc -O')) await new Promise((resolve) => { setImmediate(resolve); });
+
+    fs.rmSync(file, { force: true });
+    await made.reread();
+    building.resolve(0);
+
+    expect({ shared: await sharing, file: fs.existsSync(file) }).toEqual({ shared: { ok: false, why: 'sharing was turned off while the share was asked for' }, file: false });
   });
 
   test('a Mac older than ScreenCaptureKit shares nothing; one with no compiler names the step; one with it can share', async () => {
@@ -86,7 +132,7 @@ describe("a Mac's screen source", () => {
 
     expect({ first, again, desktop: made.desktop(), compiled }).toEqual({
       first: { ok: true, why: '' }, again: { ok: true, why: '' }, desktop: { state: 'ready', width: 3024, height: 1964 },
-      compiled: ['--find swiftc', 'swiftc -O', 'swiftc -O'],
+      compiled: ['--find swiftc', '--find swiftc', 'swiftc -O', '--find swiftc', '--find swiftc', 'swiftc -O'],
     });
   });
 
