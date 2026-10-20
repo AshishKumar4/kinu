@@ -56,7 +56,10 @@ function readRecords(file, log) {
     for (const [workspace, list] of Object.entries(JSON.parse(text))) {
       if (!Array.isArray(list)) continue;
       records.set(workspace, list.filter((record) => record && typeof record.id === 'string' && typeof record.name === 'string')
-        .map((record) => ({ id: record.id, name: record.name, cwd: typeof record.cwd === 'string' ? record.cwd : null })));
+        .map((record) => ({
+          id: record.id, name: record.name, cwd: typeof record.cwd === 'string' ? record.cwd : null,
+          ...typeof record.history === 'string' && { history: record.history },
+        })));
     }
   } catch (err) {
     log('device.terminal_records_unreadable', file, err instanceof Error ? err.message : String(err));
@@ -142,6 +145,17 @@ function createTerminalRecords({ file, log = () => {}, mint = () => `pty-${crypt
     });
   }
 
+  /** The file a session's shell keeps its history in, forgotten with the session. */
+  function keepHistory(workspace, id, history) {
+    over(workspace, (held, changed) => {
+      const record = held.find((candidate) => candidate.id === id);
+
+      if (record === undefined || record.history === history) return;
+      record.history = history;
+      changed();
+    });
+  }
+
   /** Forgets a session; the shell, if one runs, is the caller's to end. */
   function remove(workspace, id) {
     return over(workspace, (held, changed) => {
@@ -155,7 +169,7 @@ function createTerminalRecords({ file, log = () => {}, mint = () => `pty-${crypt
     });
   }
 
-  return { list, find, create, rename, settle, remove };
+  return { list, find, create, rename, settle, keepHistory, remove };
 }
 
 module.exports = { createTerminalRecords };

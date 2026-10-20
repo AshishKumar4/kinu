@@ -2191,6 +2191,30 @@ describe('daemon process under Bun against a local hub', () => {
     }, root);
   });
 
+  test("a sandboxed session keeps its history in the agent's home, never the machine's, and its close deletes it", async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if ((await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
+    const { machine, root, agentHome, block } = homeRootedMachine();
+
+    await withDaemon({ HOME: machine }, async ({ hub, reply }) => {
+      hub.socket().send(JSON.stringify({ id: 'rpc-boxhist00-1', method: 'ptyOpen', workspace: 'ws-1', sandbox: block, params: [80, 24] }));
+      const { session } = (await reply('rpc-boxhist00-1')).result;
+      const history = path.join(agentHome, '.terminals', `${session}.history`);
+
+      hub.socket().send(JSON.stringify({ type: 'PTY_IN', session, data: Buffer.from('echo boxed-$((2 * 3)); exit\r').toString('base64') }));
+      expect(await untilHub(() => hub.frames.find((f) => f.type === 'PTY_EXIT' && f.session === session))).not.toBeNull();
+      const kept = fs.readFileSync(history, 'utf8');
+
+      hub.socket().send(JSON.stringify({ id: 'rpc-boxhist00-2', method: 'ptyClose', workspace: 'ws-1', params: [session] }));
+      await reply('rpc-boxhist00-2');
+
+      expect({ kept: kept.includes('echo boxed-$((2 * 3))'), machine: fs.existsSync(path.join(machine, '.bash_history')), closed: fs.existsSync(history) })
+        .toEqual({ kept: true, machine: false, closed: false });
+    }, root);
+  });
+
   test('a command\'s checkpoint covers its working tree, and one run from the home itself says undo cannot', async () => {
     if (process.platform !== 'linux') return;
     const sandbox = require('../src/sandbox.js');

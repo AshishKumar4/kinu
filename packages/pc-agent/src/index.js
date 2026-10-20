@@ -103,6 +103,8 @@ const { KINU_BUN_VERSION, approvedBun, bunResolutionShell } = require('../../cor
 
 const { DAEMON_PREDECESSOR_ENV } = require('../../core/src/cli/command-env.ts');
 
+const { shellQuote } = require('../../core/src/utils/shell.ts');
+
 const protocol = require('./device-protocol.json');
 
 const METHODS = Object.fromEntries(Object.keys(protocol.methods).map((name) => [name, name]));
@@ -673,14 +675,16 @@ function rawWorkingDirectory(msg, roots) {
  * the terminal it was just given. `statusFd` is the descriptor the sandbox
  * reports on, which only a command's supervisor holds open: a terminal's
  * program has its pty alone, and a sandbox told to write to a descriptor it
- * does not have exits before the shell starts.
+ * does not have exits before the shell starts. `command` may be a function of
+ * the agent's home (null when raw), called once the frame's refusals have passed.
  */
 async function planFromFrame(msg, command, { source = process.env, statusFd } = {}) {
   const frame = frameSandbox(msg);
+  const commandIn = typeof command === 'function' ? command : () => command;
 
   if (frame.tier === 'raw') {
     return sandbox.plan({
-      tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: rawWorkingDirectory(msg, frame.roots), source, dotenv: LAUNCH_DOTENV,
+      tier: 'raw', deviceHome: DEVICE_HOME, command: commandIn(null), cwd: rawWorkingDirectory(msg, frame.roots), source, dotenv: LAUNCH_DOTENV,
     });
   }
 
@@ -707,7 +711,7 @@ async function planFromFrame(msg, command, { source = process.env, statusFd } = 
     deviceHome: DEVICE_HOME,
     roots: frame.roots,
     cwd: msg.cwd === undefined ? agentHome : path.resolve(parseString(msg.cwd, 'exec cwd must be a path')),
-    command,
+    command: commandIn(agentHome),
     source,
     dotenv: LAUNCH_DOTENV,
     ...(statusFd !== undefined && { statusFd }),
@@ -943,16 +947,38 @@ function listPage(listed, offset, limit, show) {
 }
 
 /**
+ * What a session's shell reads in place of ~/.bashrc: that rc, then the session's own history file. A session's
+ * commands are its own (the owner's call, 2026-10-20): with the owner's HOME they went to ~/.bash_history, and an rc
+ * naming its own HISTFILE took them there just the same, so the file is set after the rc, and bash reads it after its
+ * startup files. Sandboxed, `~` is the agent's home.
+ */
+const SESSION_RC = '[ -f ~/.bashrc ] && . ~/.bashrc\nHISTFILE=$KINU_SESSION_HISTORY\nunset KINU_SESSION_HISTORY\nshopt -s histappend\n';
+
+/** Where a session's history and the rc that names it are kept: Kinu's directory, or under a sandbox the agent's home
+ *  (`agentHome`), where Kinu's own directory is masked. */
+function sessionHistoryDir(agentHome) {
+  return agentHome === null ? path.join(DEVICE_HOME, 'terminals') : path.join(agentHome, '.terminals');
+}
+
+/**
  * The program a terminal session runs.
  *
  * `plan()` builds `bash -c <command>` for every tier, and this is that command:
- * become an interactive shell. The `exec` makes it one process rather than a
+ * become an interactive shell, reading {@link SESSION_RC}. The `exec` makes it one process rather than a
  * shell inside a shell, and going through `plan` unchanged is the point — a
  * session is confined by exactly the argv, environment and mounts a command
  * on this device is confined by, computed by the same function, with no second
- * policy for terminals to drift from.
+ * policy for terminals to drift from. The history file rides in the command, past the environment's allow-list.
  */
-const SESSION_COMMAND = `exec ${COMMAND_SHELL} -i`;
+function sessionCommand(dir, history) {
+  const rc = path.join(dir, 'session.bashrc');
+
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
+  if (!fs.existsSync(rc) || fs.readFileSync(rc, 'utf8') !== SESSION_RC) fs.writeFileSync(rc, SESSION_RC, { mode: 0o600 });
+
+  return `KINU_SESSION_HISTORY=${shellQuote(history)} exec ${COMMAND_SHELL} --rcfile ${shellQuote(rc)} -i`;
+}
 
 /**
  * The environment the session's plan is built from.
@@ -1080,7 +1106,16 @@ async function openTerminalSession(msg, ws, ctx) {
 
   // Its folder, where its shell opened before: a restart brings the session back there, as the computer's do (D90).
   const framed = record.cwd !== null && msg.cwd === undefined ? { ...msg, cwd: record.cwd } : msg;
-  const plan = await planFromFrame(framed, SESSION_COMMAND, { source: sessionSource() });
+  let history = '';
+
+  // Named once the frame's tier and home are proved: a sandbox's refusals come before any file is made.
+  const plan = await planFromFrame(framed, (agentHome) => {
+    const dir = sessionHistoryDir(agentHome);
+
+    history = path.join(dir, `${record.id}.history`);
+
+    return sessionCommand(dir, history);
+  }, { source: sessionSource() });
 
   // A close that landed while this open planned forgot the session: nothing could list or close its shell.
   if (ctx.terminals.find(workspace, record.id) === null) throw new Error('that terminal session was closed while it opened');
@@ -1097,6 +1132,7 @@ async function openTerminalSession(msg, ws, ctx) {
   });
 
   if (typeof plan.cwd === 'string') ctx.terminals.settle(workspace, record.id, plan.cwd);
+  ctx.terminals.keepHistory(workspace, record.id, history);
 
   return { session: record.id, pid: opened.pid, cols: opened.cols, rows: opened.rows, resumed: false };
 }
@@ -1137,6 +1173,15 @@ async function closeTerminal(msg, ctx) {
   }
 
   terminals.remove(msg.workspace, record.id);
+
+  // Its history goes with it; one left behind is said, and the close still stands.
+  if (typeof record.history === 'string') {
+    try {
+      fs.rmSync(record.history, { force: true });
+    } catch (err) {
+      log('device.terminal_history_unremoved', record.id, errorDetail(err));
+    }
+  }
 
   return null;
 }
@@ -2478,7 +2523,6 @@ module.exports = {
   relayRefusal,
   CHATGPT_METHODS,
   CHATGPT_SIGNED_OUT,
-  SESSION_COMMAND,
   INFLIGHT_ROOT,
   watchOutput,
   createCheckpoints,
