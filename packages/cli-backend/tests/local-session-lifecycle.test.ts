@@ -242,6 +242,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const seen: string[] = [];
     rt.setModelForRoute?.(route => ({
       async *stream() { yield ''; },
+      object: async () => { throw new Error('no schema is asked of this lane'); },
       complete: async () => {
         seen.push(route.model);
 
@@ -1498,6 +1499,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
 
         return 'verify the cluster name before rotating keys';
       },
+      object: async (): Promise<never> => { throw new Error('no schema is asked of the review'); },
     };
 
     rt.decide = async ({ state }) => {

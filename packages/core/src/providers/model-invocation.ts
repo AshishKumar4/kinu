@@ -4,7 +4,9 @@
  * when the call returns. A call that threw was not billed and files none.
  */
 
-import { generateText, streamText } from 'ai';
+import { generateText, jsonSchema, NoObjectGeneratedError, Output, streamText } from 'ai';
+import { toJsonSchema } from '@valibot/to-json-schema';
+import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
 import { KinuError, settle } from '../obs/index';
 import {
@@ -67,6 +69,42 @@ export function generateReported(
 }
 
 /** Files the row once the stream drains; an abandoned stream leaves only the start row. */
+/** What a structured call sends: the routed call's model, prompt and options; the output is the schema's. */
+export interface ObjectRequest {
+  readonly model: GenerateRequest['model'];
+  readonly prompt: string;
+  readonly system?: string;
+  readonly maxRetries?: number;
+  readonly providerOptions?: GenerateRequest['providerOptions'];
+}
+
+/**
+ * One answer of `schema`'s shape, through the model's structured output: the provider is sent the schema as JSON
+ * Schema (`toJsonSchema`; a value it cannot express, as a JSON value, is any value there), and the answer is read back
+ * through `schema` itself. Billed as {@link generateReported} bills. An answer off the schema was billed and is no
+ * answer: it fails `unavailable`, caused by the SDK's `NoObjectGeneratedError` or the schema's `ValiError`, so a route
+ * walk hands the call to its next model.
+ */
+export function generateObjectReported<S extends v.GenericSchema>(request: ObjectRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
+  const { system, ...sent } = request;
+
+  const generated: GenerateRequest = {
+    ...sent, ...(system !== undefined && { system }), output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
+  };
+
+  const offSchema = (cause: Error) => new KinuError('unavailable', `${call.spec ?? 'the model'} answered off its schema`, { cause });
+
+  return settle(Effect.promise(() => generateReported(generated, call)).pipe(
+    // Any other failure is the provider's, kept as it came for the route walk to read.
+    Effect.catchDefect((defect) => (NoObjectGeneratedError.isInstance(defect) ? Effect.fail(offSchema(defect)) : Effect.die(defect))),
+    Effect.flatMap((result) => {
+      const parsed = v.safeParse(schema, result.output);
+
+      return parsed.success ? Effect.succeed(parsed.output) : Effect.fail(offSchema(new v.ValiError(parsed.issues)));
+    }),
+  ));
+}
+
 export async function* streamTextReported(
   request: StreamRequest,
   call: ReportedCall,

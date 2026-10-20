@@ -19,7 +19,7 @@ import {
 } from '@kinu.run/compaction';
 import type {
   TurnContinuity, FiberCtx,
-  LLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding, CountableRequest,
+  RoutedLLM, ModelCallReport, ModelCallSink, ModelRouteResolution, RouteModelBinding, CountableRequest,
   BackendHost, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions, SendState,
   ActiveSkillSet, FactsStore,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
@@ -2419,8 +2419,8 @@ export class LocalAgentSession {
     return inheritedContextFromTranscript(this.stores.history.transcript(CHAT_SESSION_ID));
   }
 
-  /** One routed non-turn lane as an {@link LLM}; `system` carries core-declared prompt pairs. */
-  private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
+  /** One routed non-turn lane as a {@link RoutedLLM}; `system` carries core-declared prompt pairs. */
+  private localRouteLlm(resolution: ModelRouteResolution, system?: string): RoutedLLM {
     const canonical = { ...resolution, model: this.profiles().normalizeSpec(resolution.model) };
 
     return routedLlm((route) => this.bindRouteModel(route), canonical, { report: this.modelCallSink, operations: this.modelOperations }, system);

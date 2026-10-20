@@ -2,7 +2,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { DecisionPort } from './providers/decision-model';
 /** Composes a backend's raw primitives into a full AgentRuntime. */
 
-import type { SqlExecutor, RawSqlExec, Memory, Identity, LLM, Executor, Schedule, Shell } from './types/primitives';
+import type { SqlExecutor, RawSqlExec, Memory, Identity, LLM, RoutedLLM, Executor, Schedule, Shell } from './types/primitives';
 import type { AgentRuntime, CraftStore, RequestShellApproval } from './types/agent-runtime';
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
@@ -50,7 +50,7 @@ export interface RuntimeComponents {
 /** Lanes are derived getters but callers assign them; an assignment pins and wins over routing thereafter. */
 interface PinnedLanes {
   judge?: LLM;
-  fast?: LLM;
+  fast?: RoutedLLM;
 }
 
 export function buildRuntime(components: RuntimeComponents): AgentRuntime {
@@ -90,7 +90,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     get judgeModel() { return pinned.judge ?? routed.judge; },
     set judgeModel(model: LLM | undefined) { pinned.judge = model; },
     get fastLlm() { return pinned.fast ?? routed.fast; },
-    set fastLlm(model: LLM | undefined) { pinned.fast = model; },
+    set fastLlm(model: RoutedLLM | undefined) { pinned.fast = model; },
     ...(components.decide !== undefined && { decide: components.decide }),
     executionRouter: components.executionRouter,
     shell: components.shell,
