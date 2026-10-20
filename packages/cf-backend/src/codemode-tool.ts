@@ -5,9 +5,9 @@
 
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import { type Tool, type ToolSet } from 'ai';
+import { type Tool } from 'ai';
 import { DESKTOP_MEMBERS, execCallArgs, execContext, readDeviceRequestChannel, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
-import { renderCodemodeDescription, programDeclarations, describeProgramSource, nativeToolFunctions, toolsNamespace, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
+import { renderCodemodeDescription, programDeclarations, describeProgramSource, nativeToolFunctions, programProviders, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
@@ -119,19 +119,11 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       return call(input);
     },
     toolFor(surface, scope) {
-      const reach = (tools: ToolSet): ToolSet => Object.fromEntries(Object.entries(tools).filter(([name]) => scope.reach.allowsTool(name)));
-
-      const reachable = reach(surface.native);
-
       // Built per call with the call's signal and channel: createCodeTool runs its executor without the tool call's
       // options, so a program's tool calls are stopped with its eval, and owned by it, only through what this binds.
       const build = (mode: WorkMode, signal: AbortSignal | undefined, channel: DeviceRequestChannel | undefined): Tool => {
-        // No prelude here: createCodeTool drops every one; the per-call executor below restores them. A native name
-        // shadows an external one.
-        const toolsProvider = toolsNamespace({ ...toolsInWorkMode(mode, reach(surface.external())), ...reachable }, signal);
-
-        const providers = scope.namespaces(programExecutor(signal, channel));
-        const reached = [...scope.reach.narrowProviders([toolsProvider]), ...providersInWorkMode(mode, scope.reach.narrowProviders(providers))];
+        // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
+        const reached = programProviders({ surface, namespaces: scope.namespaces(programExecutor(signal, channel)), reach: scope.reach, mode, signal });
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describeProgramSource(programDeclarations(bound)));

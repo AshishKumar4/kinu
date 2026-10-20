@@ -10,12 +10,9 @@ import type { AgentSignal } from '../types/signals';
 import type { RecoveryFinding } from '../evolution/recovery';
 import type { Struggle } from '../evolution/struggles';
 import { fnv1a64 } from '../utils/fnv1a';
+import { stableStringify } from '../safety/argument-digest';
 import { detached } from '../utils/text';
-import {
-  isJsonObject,
-  type JsonObject,
-  type JsonValue,
-} from '../utils/json';
+import type { JsonObject } from '../utils/json';
 
 export const IDENTICAL_CALLS_BEFORE_STEER = 3;
 
@@ -63,31 +60,13 @@ function isFailingToolResult(ctx: ToolResultContext): boolean {
 
 /** Hashed rather than stored: an `eval` program can be large. */
 function callSignature(toolName: string, args: JsonObject): string {
-  return signatureOf(toolName, stableArgs(args));
+  return signatureOf(toolName, stableStringify(args));
 }
 
+/** Key-order-independent (`stableStringify`), so `{a,b}` and `{b,a}` are one call; named by its tool first, as a run's
+ *  recoveries record it (`failedSignature`). */
 function signatureOf(toolName: string, rendered: string): string {
   return `${toolName}${fnv1a64(rendered)}`;
-}
-
-/** Key-order-independent serialization, so `{a,b}` and `{b,a}` are one call. */
-function sortJsonValue(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map(sortJsonValue);
-
-  if (!isJsonObject(value)) return value;
-
-  const sorted: JsonObject = {};
-  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
-
-  for (const [key, child] of entries) {
-    sorted[key] = sortJsonValue(child);
-  }
-
-  return sorted;
-}
-
-function stableArgs(args: JsonObject): string {
-  return JSON.stringify(sortJsonValue(args));
 }
 
 /** Kept for the turn, so a copy of its own: a slice of a long program pinned all of it, every distinct call's (#103). */
@@ -155,7 +134,7 @@ export class TurnSteering {
   /** Returns a recovery only when a steer-worthy failure streak is broken by a different call
    *  (evolution/recovery.ts); the same call finally working is a lucky retry, not a recovery. */
   onToolResult(ctx: ToolResultContext): RecoveryFinding | null {
-    const rendered = stableArgs(ctx.args);
+    const rendered = stableStringify(ctx.args);
     const signature = signatureOf(ctx.toolName, rendered);
     let recovery: RecoveryFinding | null = null;
 
