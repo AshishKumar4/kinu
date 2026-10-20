@@ -8,11 +8,17 @@ export const CLI_DIST_PLATFORMS = [
   'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64',
 ] as const;
 
-/** Written into `dist/client/downloads/` by scripts/build-cli-dist.sh; each has a sibling `.sha256`. */
+/** A platform's CLI archive. These names are the one inventory: scripts/build-cli-dist.sh writes each into
+ *  `dist/client/downloads/` with a sibling `.sha256`, deploy.sh checks each is there, and the launcher and the
+ *  update protocol download them. */
+export function cliArchiveName(platform: (typeof CLI_DIST_PLATFORMS)[number]): string {
+  return `kinu-cli-${platform}.tar.gz`;
+}
+
 export const CLI_RUNTIME_PATH = '/downloads/kinu-runtime-cpython.tar.gz';
 
 export const CLI_DIST_PATHS: string[] = [
-  ...CLI_DIST_PLATFORMS.map((platform) => `/downloads/kinu-cli-${platform}.tar.gz`),
+  ...CLI_DIST_PLATFORMS.map((platform) => `/downloads/${cliArchiveName(platform)}`),
   CLI_RUNTIME_PATH,
 ];
 
