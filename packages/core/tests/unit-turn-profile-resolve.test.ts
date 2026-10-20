@@ -649,6 +649,19 @@ describe('an account that never set its fast tier', () => {
     expect(profileOver([micro, ...WORKERS], { default: { model: 'openai-compat/fake-live' } }).tiers.fast.model).toBe('workers-ai/@cf/zai-org/glm-5.3-flash');
   });
 
+  // Main, 2026-10-20: opencode lists `-free` rows at 0 and `contributor` rows below their own model; both are
+  // promotional, rate-limited and may train on what they are sent.
+  test('never picks a promotional row, however cheap; a person may still set one', () => {
+    const promotional = [
+      row('opencode', 'glm-5.3-flash-free', 1_048_576, { input: 0, output: 0 }),
+      row('opencode-go', 'muse-spark-1.3-contributor', 1_048_576, { input: 0.01, output: 0.02 }),
+    ];
+
+    expect(profileOver([...promotional, ...WORKERS]).tiers.fast.model).toBe('workers-ai/@cf/zai-org/glm-5.3-flash');
+    expect(profileOver([...promotional, ...WORKERS], { default: { model: 'workers-ai/@cf/zai-org/glm-5.3' }, fast: { model: 'opencode/glm-5.3-flash-free' } }).tiers.fast.model)
+      .toBe('opencode/glm-5.3-flash-free');
+  });
+
   test("prices a plan's model as the same model's API row, and an unpriced one after every priced", () => {
     const plan = [{ provider: 'chatgpt', id: 'gpt-6-luna', capabilities: ['tools' as const], contextWindow: 1_050_000 }];
 
