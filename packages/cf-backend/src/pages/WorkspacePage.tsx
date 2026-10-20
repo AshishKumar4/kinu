@@ -501,8 +501,8 @@ type SideSource = (typeof SIDE_SOURCES)[number]["source"];
 type WorkspaceState = ReturnType<typeof useKinu>;
 
 /** The workspace's bar, with the dialogs its delete controls open. In the `focus` layout the chat tabs give way to
- *  who is talking and what they are doing, until the person asks for the tabs. */
-function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, inspector, actions, focus }: {
+ *  who is talking and what they are doing, until the person asks for the tabs. Until its layout is known it is bare. */
+function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, inspector, actions, focus, pending }: {
   workspace: string;
   title: string;
   editValue: string;
@@ -514,6 +514,8 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   actions: (agent: PanelAgent) => ChatTab;
   /** The `focus` layout's identity: the name it goes by and its line. */
   focus: FocusIdentity | null;
+  /** Neither the workspace's status nor the roster has said which layout it is. */
+  pending: boolean;
 }) {
   const drawer = useLayoutDrawer();
   const agentsNav = useAgentsNav();
@@ -526,6 +528,8 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   const menu = drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>;
   const barActions = <WorkspaceBarActions workspace={workspace} working={working} view={view} inspector={inspector} onAgents={() => agentsNav.enter(workspace)} />;
   const speaking = shown ?? agents.find((agent) => agent.category === "main");
+
+  if (pending) return <header className="p-bar" data-workspace-bar data-layout="pending">{menu && <div className="p-bar-menu">{menu}</div>}</header>;
 
   if (focus !== null && !tabsShown && view === undefined) {
     return (
@@ -658,6 +662,14 @@ function focusOf(layout: WorkspaceLayout | undefined, given: FocusIdentity | und
   const speaking = agents.shown ?? agents.all.find((agent) => agent.category === "main");
 
   return { label: speaking?.label ?? title, line: activityLine(speaking) };
+}
+
+/** Neither the workspace's status nor its caller has named its layout, and the roster may yet say it is Home's assistant,
+ *  whose own address goes Home: until one answers, no workbench is drawn. */
+function useLayoutPending(known: WorkspaceLayout | undefined): boolean {
+  const { loading, error } = useWorkspaceRoster();
+
+  return known === undefined && loading && error === null;
 }
 
 /** What the composer says while no turn runs: in `focus`, whom it addresses. */
@@ -867,6 +879,9 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
   const panelSlate = (control: InspectorControl): string | null =>
     control.beside && !control.collapsed && surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
 
+  const knownLayout = state.status?.layout ?? layout;
+  const pending = useLayoutPending(knownLayout);
+
   if (!agentId) return null;
 
   const as = state.actorSnapshot;
@@ -874,14 +889,14 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
   const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
   // Blank until the row is read: `agentId` is the URL slug, not a title, and "Untitled" would be a false one.
   const shownTitle = rosterEntry === undefined ? "" : workspaceDisplayTitle(rosterEntry);
-  const focus = focusOf(state.status?.layout ?? layout, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list, loaded: rosterLoaded });
+  const focus = focusOf(knownLayout, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list, loaded: rosterLoaded });
 
   // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
     <>
       <WorkspaceBar workspace={agentId} title={shownTitle} editValue={rosterEntry === undefined ? "" : workspaceTitleDraft(rosterEntry)}
         state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions}
-        focus={focus} />
+        focus={focus} pending={pending} />
       <DeleteChat chat={deletingChat} workspace={agentId} shown={subName} dismiss={state.dismissSubordinate} onClose={() => setDeletingChat(null)} />
     </>
   );

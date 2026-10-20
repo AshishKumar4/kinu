@@ -140,14 +140,25 @@ describe('Explore', () => {
 
       const opened = await gallery.newPage();
 
+      // The workbench's bar is the one with no layout named; the bare bar waits for the roster, held here 1.5 s.
       await opened.evaluateOnNewDocument(() => {
+        const drawn: string[] = [];
+
         new MutationObserver(() => {
-          if (document.querySelector('[data-workspace-bar]') !== null) document.documentElement.dataset.workbenchDrawn = '1';
-        }).observe(document, { childList: true, subtree: true });
+          const bar = document.querySelector('[data-workspace-bar]');
+          const layout = bar?.getAttribute('data-layout') ?? 'workbench';
+
+          if (bar === null || drawn.at(-1) === layout) return;
+          drawn.push(layout);
+          document.documentElement.dataset.barsDrawn = drawn.join(' ');
+        }).observe(document, { childList: true, subtree: true, attributeFilter: ['data-layout'] });
       });
       await opened.goto(`${gallery.origin}/gallery.html?frame=explore&assistant=1&at=assistant`, { waitUntil: 'load' });
       await opened.waitForSelector('[data-gallery-home]', SOON);
-      expect(await opened.$eval('html', (root) => root.dataset.workbenchDrawn ?? null)).toBeNull();
+      const drawn = (await opened.$eval('html', (root) => root.dataset.barsDrawn ?? '')).split(' ').filter((bar) => bar !== '');
+
+      expect(drawn).toContain('pending');
+      expect(drawn).not.toContain('workbench');
     });
   });
 });

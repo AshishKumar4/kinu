@@ -2,17 +2,16 @@
  * Explore in the gallery: `explore` (the feed; `&kind=`, `&category=`, `&q=` as its URL takes them) and
  * `explore-workspace&id=<blueprint>` (`&install=1` with Install open; `&assistant=1` once it is the person's), in the
  * product's own shell. With `&assistant=1` the roster holds the assistant marked Home, and `&at=assistant` opens its
- * own address once the roster is read, as a link inside the app would. `/api/explore` is
+ * own address with the roster's read held 1.5 s, so the page draws before it knows it is Home. `/api/explore` is
  * answered here from a fixed feed of the owner's kind of work, ranked as the index would. Kinu's blueprints show their
  * served pictures; an app's picture is a listing's read, which a test or a shot answers.
  */
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
 import { RosterPageSchema, type GalleryListing, type RosterEntry } from "@kinu.run/core";
 import Layout from "@/components/layout";
-import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import type { BlueprintPage, ExploreItem, ExploreNeed, WorkspaceCard } from "@/lib/explore-api";
 
 const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
@@ -174,11 +173,13 @@ function installExploreFixture(): void {
     }
 
     // `&assistant=1`: the person already has the Personal assistant, and the roster lists it as Home.
-    const assistant = new URLSearchParams(location.search).has("assistant");
+    const query = new URLSearchParams(location.search);
+    const assistant = query.has("assistant");
 
     if (url.pathname === "/api/user/assistant") return Response.json({ workspace: assistant ? ASSISTANT.name : null });
 
     if (url.pathname === "/api/user/workspaces" && assistant) {
+      if (query.get("at") === "assistant") await new Promise((resolve) => setTimeout(resolve, 1500));
       const page = v.parse(RosterPageSchema, await (await next(input, init)).json());
 
       return Response.json({ ...page, entries: [ASSISTANT, ...page.entries], total: page.total + 1, counts: { ...page.counts, all: page.counts.all + 1, idle: page.counts.idle + 1 } });
@@ -204,11 +205,6 @@ const ASSISTANT: RosterEntry = {
   name: "personal-assistant-4f2a", displayName: "Personal assistant", createdAt: NOW - DAY, lastVisited: NOW, overview: null, decisions: 0, logo: null, home: true,
 };
 
-/** Its children once the roster is read, as a page opened from a link inside the app finds it. */
-function AfterRoster({ children }: { children: ReactNode }) {
-  return useWorkspaceRoster().loading ? null : children;
-}
-
 const loading = (node: React.ReactNode) => <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{node}</Suspense>;
 
 /** `explore` or `explore-workspace`, in the product's shell. */
@@ -226,7 +222,7 @@ export function exploreFrame(frame: string) {
         <Route element={<Layout />}>
           <Route path="/explore" element={loading(<ExplorePage />)} />
           <Route path="/explore/workspaces/:blueprint" element={loading(<ExploreWorkspacePage />)} />
-          {search.get("at") === "assistant" && <Route path="/workspace/:agentId" element={<AfterRoster>{loading(<WorkspacePage />)}</AfterRoster>} />}
+          {search.get("at") === "assistant" && <Route path="/workspace/:agentId" element={loading(<WorkspacePage />)} />}
           <Route index element={<div className="h-full" data-gallery-home />} />
           <Route path="*" element={<div className="h-full" data-gallery-blank />} />
         </Route>
