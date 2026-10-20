@@ -222,8 +222,12 @@ export const LONG_TURN_ALLOCATED_BOUND_BYTES = 295_000_000;
  *  there and 2.6-2.7 MB in main's over 3 runs once setup joins main's load and both are read. Those reads came before
  *  the turns ran: an admission answers once its turn is queued, and the read caught the third in flight with nine queued.
  *  Read once all twelve ended and settled, 2026-10-12: 2.55-2.58 MB in the workspace's and 6.57-6.58 MB in main's over 10
- *  runs (armada 20261012110831-e3858893, 20261012111603-1a3edf49), main's the twelve answers its conversation keeps. */
-export const IDLE_RETAINED_BOUND_BYTES = { workspace: 4_000_000, main: 7_900_000 } as const;
+ *  runs (armada 20261012110831-e3858893, 20261012111603-1a3edf49), main's the twelve answers its conversation keeps.
+ *  On 44ce0e110, 2026-10-20, the workspace's read 3.9-4.0 MB over 5 runs: by snapshots at setup and idle, 3.0 MB code V8
+ *  compiled during the turns and 0.3 MB data. Streaming the memory lane's structured call (667221f68) compiles 0.11 MB
+ *  more there and keeps no more data: 4.1-4.2 MB over 7 runs. The workspace's bound is that and 0.8 MB, which one answer
+ *  kept a turn, 2.4 MB, still trips. */
+export const IDLE_RETAINED_BOUND_BYTES = { workspace: 5_000_000, main: 7_900_000 } as const;
 
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
