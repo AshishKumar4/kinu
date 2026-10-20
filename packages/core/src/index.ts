@@ -1359,7 +1359,7 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  buildModelCallEvent, pricedModelCallEvent,
+  pricedModelCallEvent,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
