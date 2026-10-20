@@ -104,10 +104,13 @@ import {
   missingSubordinateHistory, ownerAsks,
   DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubordinateInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
-  type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
+  type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type SubordinateInspectionResult, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry } from "@kinu.run/core";
-import { workspaceRpc, type SocketCall } from "@/lib/workspace-rpc";
+import { answeringRpc, wireOf, workspaceRpc, type SocketCall, type WorkspaceAnswer, type WorkspaceAnswers, type WorkspaceRpc } from "@/lib/workspace-rpc";
+import { QUIET_ACTIVITY, UNRATED_WEEK } from "@/components/landing/landing-fixtures";
+import type { ComputerSizeState } from "@/computer-size";
+import { BoxSizeSchema, type BoxSize } from "@kinu.run/devbox/sizes";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { buildTree, type MctsRow } from "@kinu.run/core";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
@@ -1739,32 +1742,30 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
     if (request.type !== "rpc" || !request.method) return;
     const method = request.method;
 
-    const answerRpc = () => {
-      // The computer's size and its restart, as the page's injected `Rpc` answers them.
-      if (method === "getComputerSize") return galleryComputerSize(null);
+    const answerRpc = async (): Promise<JsonValue> => {
+      const agent = AGENT_RPC.get(method);
 
-      if (method === "resizeComputer") return galleryResize(request.args ?? []);
+      if (agent !== undefined) return agent;
 
-      if (AGENT_RPC.has(method)) return AGENT_RPC.get(method);
+      // Column C's injected `Rpc` and this socket must resolve the same fixture stores.
+      if (EXPLORATION_READS.has(method)) return v.parse(JsonValueSchema, explorationRead(method, request.args ?? []));
 
-      // Answered here, not by the blanket `[]` fall-through (wrong shape for non-array reads); Column C's injected `Rpc` and this socket must resolve the same fixture stores.
-      if (EXPLORATION_READS.has(method)) return explorationRead(method, request.args ?? []);
-
-      if (method.startsWith("list") || method.startsWith("get")) return [];
-
-      return {};
+      // Everything else as the gallery answers it, typed; a method it does not answer is refused.
+      return v.parse(JsonValueSchema, await stubRpc<JsonValue>(method, request.args ?? []) ?? null);
     };
 
-    const answer = (result: Awaited<ReturnType<typeof answerRpc>>) => {
-      const message = new MessageEvent("message", {
-        data: JSON.stringify({ type: "rpc", id: request.id, success: true, result }),
-      });
+    // As the Agents SDK frames a call's outcome: its result, or its failure for the client to reject with.
+    const reply = (body: JsonObject) => {
+      const message = new MessageEvent("message", { data: JSON.stringify({ type: "rpc", id: request.id, ...body }) });
 
       this.onmessage?.(message);
       this.dispatchEvent(message);
     };
 
-    Promise.resolve(answerRpc()).then(answer, String);
+    answerRpc().then(
+      (result) => { reply({ success: true, result }); },
+      (...rejection: [unknown]) => { reply({ success: false, error: toKinuError({ doing: `answering ${method}`, cause: rejection[0], otherwise: "io" }).message }); },
+    );
   }
 
   close(): void {
@@ -1921,7 +1922,7 @@ const MESSAGES: UIMessage[] = [
 ];
 
 
-function galleryPlanInspection(request: SubordinateInspectionRequest, plans: readonly PlanReview[]) {
+function galleryPlanInspection(request: SubordinateInspectionRequest, plans: readonly PlanReview[]): SubordinateInspectionResult {
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
 
   if (request.view === 'children') {
@@ -1946,60 +1947,111 @@ function galleryPlanInspection(request: SubordinateInspectionRequest, plans: rea
   throw new Error('Unexpected gallery plan inspection');
 }
 
-const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === 'inspectSubordinate') {
-    const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
-
-    return rpcResult(v.parse(JsonValueSchema, galleryPlanInspection(request, []))).json<T>();
-  }
-
-  // A record, not an array: read as `result.ports`, so the blanket `[]` below throws. Empty so no live-preview chip enters the fork screenshots.
-  if (method === "getExposedPorts") return rpcResult({ ports: [] }).json<T>();
-
+/**
+ * Every read and act a frame may ask, each answered as the product answers it: empty where the product's type has an
+ * empty, an act's own outcome where it echoes its input. A read with no honest empty (a snapshot, an opening) is not
+ * here: the frame that draws it gives its own, and any other asking it is refused, never answered a shape it did not ask.
+ */
+const GALLERY_ANSWERS: WorkspaceAnswers = {
+  inspectSubordinate: (request) => galleryPlanInspection(request, []),
+  inspectWork: () => [],
+  getExposedPorts: () => ({ ports: [] }),
   // `ExecutorDiffResult` (core read-models/workspace-diff.ts) always carries `files`; `vfs-baseline` is the answer for an empty `executors` prop.
-  if (method === "getExecutorDiff") return rpcResult({ files: [], mode: "vfs-baseline" }).json<T>();
-
-  // A listing, read as `result.entries`: the blanket `[]` below has `entries`, the array's own method.
-  if (method === "getExecutorFiles") return rpcResult({ path: "/", entries: [] }).json<T>();
-
-  // Read as `result.plans` / `result.tasks`.
-  if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
-
-  // A `ComputerSizeState`: the blanket `[]` below reads as a start refused for `undefined`.
-  if (method === "getComputerSize") return rpcResult(galleryComputerSize(null)).json<T>();
-
-  if (method === "resizeComputer") return rpcResult(await galleryResize(args ?? [])).json<T>();
-
-  if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
-
-  if (method.endsWith("DeviceSession") || method === "listDeviceSessions") return rpcResult(v.parse(JsonValueSchema, galleryDeviceSessions(method, args ?? []))).json<T>();
-
+  getExecutorDiff: () => ({ files: [], mode: "vfs-baseline" }),
+  getExecutorFiles: (_executor, path) => ({ path, entries: [] }),
+  getExecutors: () => [],
+  listMounts: () => [],
+  listWorkspaceWork: () => ({ plans: [], tasks: [] }),
+  getComputerSize: () => galleryComputerSize(null),
+  startComputer: () => galleryComputerSize(null),
+  stopStalledComputer: () => galleryComputerSize(null),
+  resizeComputer: (size) => galleryResize(size),
+  getComputerPreviewPublic: () => ({ public: null }),
+  setComputerPreviewPublic: (_port, open) => ({ public: open }),
+  listComputerSessions: () => GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })),
+  openComputerSession: () => openGallerySession(GALLERY_SESSIONS, (count) => ({ id: `s${String(count + 2)}`, name: `shell ${String(count + 1)}`, cwd: "/workspace" })),
+  renameComputerSession: (id, name) => renameGallerySession(GALLERY_SESSIONS, id, name),
+  closeComputerSession: (id) => { closeGallerySession(GALLERY_SESSIONS, id); },
+  listDeviceSessions: () => GALLERY_DEVICE_SESSIONS,
+  openDeviceSession: () => openGallerySession(GALLERY_DEVICE_SESSIONS, (count) => ({ id: `pty-${String(count + 1)}`, name: `shell ${String(count + 1)}`, cwd: "" })),
+  renameDeviceSession: (_device, id, name) => renameGallerySession(GALLERY_DEVICE_SESSIONS, id, name) ?? { id, name, cwd: "" },
+  closeDeviceSession: (_device, id) => { closeGallerySession(GALLERY_DEVICE_SESSIONS, id); },
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
-  if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
-
-  // Records the server answers, read by their fields: the blanket `[]` below has none.
-  if (method === "getAlwaysActiveSkills") return rpcResult({ names: [] }).json<T>();
-
-  if (method === "listTriggers") return rpcResult({ triggers: [] }).json<T>();
-
-  // `AgentMail | null`, read as `mail.threads`: none, as before the person has an address.
-  if (method === "agentMail") return rpcResult(null).json<T>();
-
-  if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
-
-  return rpcResult({}).json<T>();
+  getToolDescriptions: () => ({ builtIn: [], executors: [], crafted: [] }),
+  getAlwaysActiveSkills: () => ({ names: [] }),
+  listTriggers: () => ({ triggers: [] }),
+  // None, as before the person has an address.
+  agentMail: () => null,
+  getActivePlanReview: () => null,
+  getActivitySnapshot: () => QUIET_ACTIVITY,
+  getChangeNotes: () => [],
+  getEvolutionChangelog: () => ({ entries: [], unseenCount: 0, seenAt: 0 }),
+  markChangelogSeen: () => ({ ok: true, seenAt: Date.now() }),
+  getFacts: () => [],
+  getForkRun: () => null,
+  getHeadRun: () => null,
+  getMemoryContent: () => "",
+  getNodeTranscript: () => null,
+  getQuality: () => [],
+  getQualityWindow: () => UNRATED_WEEK,
+  getSearchTree: () => [],
+  getShellApprovalGrants: () => ({ grants: [] }),
+  revokeShellApprovalGrants: () => ({ grants: [] }),
+  listAlternateTakes: () => ({}),
+  listBackgroundJobs: () => [],
+  listOwedIntents: () => [],
+  listPendingActions: () => [],
+  listPendingConsents: () => [],
+  listScaffoldVersions: () => [],
+  listSlates: () => ({ slates: [], problems: [] }),
+  listSubordinates: () => [],
+  listTurnFeedback: () => ({}),
+  listWorkspaceAgents: () => [],
+  readInstructionApproval: () => null,
+  searchMemoryHybrid: () => [],
+  answerOwnerQuestions: () => null,
+  decideDeferredApprovals: () => ({ decided: [] }),
+  dismissOwnerQuestions: () => ({ closed: 0 }),
+  dismissSubordinate: (name) => ({ ok: true, name, historyKept: true }),
+  deleteExecutorFile: () => ({ ok: true }),
+  renameExecutorFile: () => ({ ok: true }),
+  namePhases: () => false,
+  recoverStrandedTurn: () => ({ recovered: "none" }),
+  regenerateWorkspaceLogo: () => ({ drawn: false, refusal: null }),
+  renameMainChat: (title) => ({ title }),
+  resolveDeviceConsent: () => ({ ok: true }),
+  restoreWorkspaceBaseline: () => ({ ok: true, capturedAt: Date.now() }),
+  setDisplayName: (displayName) => ({ displayName }),
+  setLayout: (layout) => ({ layout }),
+  setModel: (spec) => ({ ok: true, spec }),
+  setShellApprovalMode: (mode) => ({ ok: true, mode }),
+  setTurnFeedback: (messageId, feedback) => ({ ok: true, messageId, feedback }),
+  clearConversation: () => {},
+  revertConversation: () => {},
+  send: () => {},
+  stopSwarmWorker: () => {},
 };
 
+/** A frame's rpc: the gallery's answers, with its own in their place. */
+function galleryRpc(overrides: WorkspaceAnswers = {}): WorkspaceRpc {
+  return answeringRpc({ ...GALLERY_ANSWERS, ...overrides });
+}
+
+/** The gallery's answers over the wire, for frames whose own client reads them as a socket would. */
+const stubRpc: SocketCall = wireOf(GALLERY_ANSWERS);
+
 /** The computer's size as its box reads it: running only while it is awake. */
-function galleryComputerSize(running: string | null): JsonValue {
+function galleryComputerSize(running: BoxSize | null): ComputerSizeState {
   return { account: null, chosen: null, size: running ?? "medium", running: computerAwake ? running ?? "medium" : null, startRefused: null, stalled: null };
 }
 
 /** A resize restarts the computer at the size asked for; `resize=held` answers it only at `__kinuEndResize()`. */
-async function galleryResize(args: readonly unknown[]): Promise<JsonValue> {
+async function galleryResize(size: string | null): Promise<ComputerSizeState> {
   if (new URLSearchParams(location.search).get("resize") === "held") await new Promise<void>((resolve) => { window.__kinuEndResize = resolve; });
+  // As the server reads the size asked: a name no size has is no choice.
+  const asked = v.safeParse(BoxSizeSchema, size);
 
-  return galleryComputerSize(typeof args[0] === "string" ? args[0] : null);
+  return galleryComputerSize(asked.success ? asked.output : null);
 }
 
 /** The computer's sessions (D90) as its box keeps them: a shell, a dev server listening, a test run that failed. */
@@ -2011,23 +2063,30 @@ const GALLERY_SESSIONS: TerminalSession[] = [
   { id: "j-4f0c9a2e", name: "npm run deploy", cwd: "/workspace/api-worker", open: true, running: "node", last: null, ports: [], branch: "main", needsInput: true, job: "4f0c9a2e-77d1-4f5b-9a63-0b2f6f0e1c55" },
 ];
 
-function gallerySessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
-  if (method === "openComputerSession") {
-    const record = { id: `s${String(GALLERY_SESSIONS.length + 2)}`, name: `shell ${String(GALLERY_SESSIONS.length + 1)}`, cwd: "/workspace" };
+/** A session opened on `sessions`, named as its box names the next one. */
+function openGallerySession(sessions: TerminalSession[], named: (count: number) => SessionRecord): SessionRecord {
+  const record = named(sessions.length);
 
-    GALLERY_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
+  sessions.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
 
-    return record;
-  }
+  return record;
+}
 
-  const at = GALLERY_SESSIONS.findIndex((session) => session.id === args[0]);
-  const found = GALLERY_SESSIONS[at];
+/** `id` renamed on `sessions`, its record answered; null when there is no such session. */
+function renameGallerySession(sessions: TerminalSession[], id: string, name: string): SessionRecord | null {
+  const at = sessions.findIndex((session) => session.id === id);
+  const found = sessions[at];
 
-  if (method === "renameComputerSession" && typeof args[1] === "string" && found !== undefined) GALLERY_SESSIONS[at] = { ...found, name: args[1] };
+  if (found === undefined) return null;
+  sessions[at] = { ...found, name };
 
-  if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
+  return { id, name, cwd: found.cwd };
+}
 
-  return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
+function closeGallerySession(sessions: TerminalSession[], id: string): void {
+  const at = sessions.findIndex((session) => session.id === id);
+
+  if (at >= 0) sessions.splice(at, 1);
 }
 
 /** The PC's sessions (1014-t) as its daemon lists them (1019-aa): its shell, a dev server on a port, and a deploy asking
@@ -2038,24 +2097,6 @@ const GALLERY_DEVICE_SESSIONS: TerminalSession[] = [
   { id: "pty-deploy", name: "deploy", cwd: "/Users/ashish/work/storefront/infra", open: true, running: "npm", last: null, ports: [], branch: "main", needsInput: true },
 ];
 
-function galleryDeviceSessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
-  if (method === "openDeviceSession") {
-    const record = { id: `pty-${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, name: `shell ${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, cwd: "" };
-
-    GALLERY_DEVICE_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
-
-    return record;
-  }
-
-  const at = GALLERY_DEVICE_SESSIONS.findIndex((session) => session.id === args[1]);
-  const found = GALLERY_DEVICE_SESSIONS[at];
-
-  if (method === "renameDeviceSession" && typeof args[2] === "string" && found !== undefined) GALLERY_DEVICE_SESSIONS[at] = { ...found, name: args[2] };
-
-  if (method === "closeDeviceSession" && found !== undefined) GALLERY_DEVICE_SESSIONS.splice(at, 1);
-
-  return method === "listDeviceSessions" ? GALLERY_DEVICE_SESSIONS : null;
-}
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";
@@ -4147,24 +4188,19 @@ const QUALITY_WINDOW = {
   rated: 26, thumbs: 6, turns: 35,
 };
 
-const evolutionRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getQuality") return rpcResult(QUALITY_DAYS).json<T>();
-
-  if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
-
-  // A record: the blanket `[]` reads as a changelog that failed to load.
-  if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
-
-  if (method === "getFacts") return rpcResult([
+const EVOLUTION_ANSWERS: WorkspaceAnswers = {
+  getQuality: () => QUALITY_DAYS,
+  getQualityWindow: () => QUALITY_WINDOW,
+  getEvolutionChangelog: () => CHANGELOG,
+  getFacts: () => [
     { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
     { key: "api.sessions_binding", value: "SESSIONS_DB since Tuesday", confidence: 1, source: "wrangler.jsonc", lastObservedAt: NOW - 26e5 },
-  ]).json<T>();
-
+  ],
   // `&mail=1`: the workspace's own address and the mail in it (docs/MAIL.md §7); otherwise none, as before an address.
-  if (method === "agentMail") return rpcResult(new URLSearchParams(location.search).get("mail") === "1" ? AGENT_MAIL : null).json<T>();
-
-  return stubRpc<T>(method, args);
+  agentMail: () => (new URLSearchParams(location.search).get("mail") === "1" ? AGENT_MAIL : null),
 };
+
+const evolutionRpc = galleryRpc(EVOLUTION_ANSWERS);
 
 /** Two runs of the same task under different policies must read differently; older forks have none (the ledger prunes settled rows after a day). */
 const FORK_PARAMS: ForkRunParams[] = [
@@ -4547,7 +4583,7 @@ function Shell(
     headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS, notices = [], providerWait = null,
   }:
   {
-    surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: SocketCall;
+    surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: WorkspaceRpc;
     pendingActions?: PendingAction[];
     headActivity?: ReadonlyMap<string, number>;
     /** Empty is the liveness case: with no running job or streaming turn the fork list drops to its idle cadence. */
@@ -4579,7 +4615,7 @@ function Shell(
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTrees={mctsTrees} headActivity={headActivity} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={backgroundJobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={pendingActions}
-                rpc={workspaceRpc(rpc)}
+                rpc={rpc}
               />
             </div>
           </div>
@@ -5531,19 +5567,17 @@ const BRAIN_STATUS = {
 const GALLERY_SLATE_ID = "sandbox-probe";
 
 /** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
-const slateRpc: SocketCall = async <T,>(method: string, args?: Parameters<SocketCall>[1]): Promise<T> => {
-  if (method === "previewSlate") {
-    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }).json<T>();
-  }
-
-  return stubRpc<T>(method, args);
+const SLATE_ANSWERS: WorkspaceAnswers = {
+  previewSlate: () => ({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }),
 };
+
+const slateRpc = galleryRpc(SLATE_ANSWERS);
 
 function SlatePreviewFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5">
-        <SlateFrame id={GALLERY_SLATE_ID} rpc={workspaceRpc(slateRpc)} />
+        <SlateFrame id={GALLERY_SLATE_ID} rpc={slateRpc} />
       </div>
     </div>
   );
@@ -5563,7 +5597,7 @@ const SLATE_THREAD: UIMessage[] = [
 
 function ChatSlateFrame() {
   const thread = buildTranscript(SLATE_THREAD, []);
-  const inline = { rpc: workspaceRpc(slateRpc), openSlate: () => {} };
+  const inline = { rpc: slateRpc, openSlate: () => {} };
 
   return (
     <SlateInlineContext.Provider value={inline}>
@@ -5586,7 +5620,9 @@ function ChatSlateFrame() {
 }
 
 // The plan at its real shape: several steps, one active, one with subtasks, one dropped.
-const AGENT_TASKS = [
+type WorkspaceWork = WorkspaceAnswer<"listWorkspaceWork">;
+
+const AGENT_TASKS: WorkspaceWork["tasks"][number]["tasks"] = [
   {
     id: "t1", parentId: null, title: "Reproduce the /api/health 500", status: "done",
     updatedAt: NOW - 44e5, note: null, subtasks: [],
@@ -5611,7 +5647,7 @@ const AGENT_TASKS = [
 ];
 
 /** Root plan and tasks plus one subordinate's plan, so both owners' rows draw. */
-const WORKSPACE_WORK = {
+const WORKSPACE_WORK: WorkspaceWork = {
   plans: [
     {
       owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] },
@@ -5840,7 +5876,7 @@ function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint";
 
   return (
     <div className="h-screen p-bg p-text">
-      <ShareSlateDialog workspace="api-worker" slate="issue-triage" title="Issue triage" rpc={workspaceRpc(workRpc)} onClose={() => {}}
+      <ShareSlateDialog workspace="api-worker" slate="issue-triage" title="Issue triage" rpc={workRpc} onClose={() => {}}
         fixture={{
           mode,
           live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL, preapproved: STANDING },
@@ -5863,13 +5899,12 @@ function BlueprintFrame() {
   );
 }
 
-const workRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listWorkspaceWork") return rpcResult(WORKSPACE_WORK).json<T>();
-
-  if (method === "getEvolutionChangelog") return rpcResult(v.parse(JsonValueSchema, CHANGELOG)).json<T>();
-
-  return stubRpc<T>(method, args);
+const WORK_ANSWERS: WorkspaceAnswers = {
+  listWorkspaceWork: () => WORKSPACE_WORK,
+  getEvolutionChangelog: () => CHANGELOG,
 };
+
+const workRpc = galleryRpc(WORK_ANSWERS);
 
 function PlanReviewFrame() {
   return (
@@ -5881,27 +5916,24 @@ function PlanReviewFrame() {
 
 
 /** One decision waiting, no background work: the plan read has only a closed task and no job has ever run. */
-const settledOnlyRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listWorkspaceWork") return rpcResult({
+const settledOnlyRpc = galleryRpc({
+  ...WORK_ANSWERS,
+  listWorkspaceWork: () => ({
     plans: [],
     tasks: [{
       owner: { actorId: "actor-main", name: "main", title: "main", retired: false, path: [] }, plan: null,
       tasks: AGENT_TASKS.filter((task) => task.id === "t1"),
     }],
-  }).json<T>();
-
-  return workRpc<T>(method, args);
-};
+  }),
+});
 
 /** Both reads refuse: Now owes the plan read's retry, and the changelog's is the Agent tab's. The running job is a prop,
  *  so Now still shows it. */
-const failedReadsRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listWorkspaceWork") throw new Error("plan fixture failed");
-
-  if (method === "getEvolutionChangelog") throw new Error("journal fixture failed");
-
-  return workRpc<T>(method, args);
-};
+const failedReadsRpc = galleryRpc({
+  ...WORK_ANSWERS,
+  listWorkspaceWork: () => { throw new Error("plan fixture failed"); },
+  getEvolutionChangelog: () => { throw new Error("journal fixture failed"); },
+});
 
 const NO_QUEUE: PendingAction[] = [];
 
@@ -6000,7 +6032,7 @@ function WorkFrame() {
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={jobs} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={lane.queue}
           tabPresence={presence} presencePending={presence === undefined}
-          rpc={workspaceRpc(lane.rpc)}
+          rpc={lane.rpc}
         />
       </div>
     </div>
@@ -6029,25 +6061,22 @@ const SHELL_GRANTS = [
   { rule: "docker-destructive", executor: "computer" },
 ];
 
-const approvalsRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getShellApprovalGrants") return rpcResult({ grants: SHELL_GRANTS }).json<T>();
-
-  if (method === "revokeShellApprovalGrants") return rpcResult({ ok: true, grants: SHELL_GRANTS }).json<T>();
-
+const approvalsRpc = galleryRpc({
+  ...WORK_ANSWERS,
+  getShellApprovalGrants: () => ({ grants: SHELL_GRANTS }),
+  revokeShellApprovalGrants: () => ({ grants: SHELL_GRANTS }),
   // `&parked=gone`: decided elsewhere.
-  if (method === "reviewParkedWrite") {
+  reviewParkedWrite: () => {
     galleryReadFault(new URLSearchParams(location.search).get("parked") === "gone" ? "1" : undefined,
       "This change is no longer waiting: it was decided, or its content is gone.");
-  }
 
-  if (method === "reviewParkedWrite") return rpcResult(v.parse(JsonValueSchema, PARKED_WRITE_REVIEW)).json<T>();
-
-  return workRpc<T>(method, args);
-};
+    return PARKED_WRITE_REVIEW;
+  },
+});
 
 /** Parked commands where they are decided, the attention stack, beside Work's rows that open it. */
 function ApprovalsFrame() {
-  const rpc = workspaceRpc(approvalsRpc);
+  const rpc = approvalsRpc;
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -6060,9 +6089,9 @@ function ApprovalsFrame() {
           onSearchMemory={() => {}} mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={PARKED_ONLY}
-          rpc={workspaceRpc(approvalsRpc)}
+          rpc={approvalsRpc}
         />
-        <StandingApprovalsCard rpc={workspaceRpc(approvalsRpc)} />
+        <StandingApprovalsCard rpc={approvalsRpc} />
       </div>
     </div>
   );
@@ -6070,13 +6099,8 @@ function ApprovalsFrame() {
 
 const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
-const settledEmptyRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listWorkspaceWork") return rpcResult({ plans: [], tasks: [] }).json<T>();
-
-  if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
-
-  return stubRpc<T>(method, args);
-};
+// The gallery's own empty plans and journal: none.
+const settledEmptyRpc = galleryRpc();
 
 function WorkEmptyFrame() {
   return (
@@ -6089,7 +6113,7 @@ function WorkEmptyFrame() {
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={() => {}} pendingActions={[]}
           tabPresence={{ explorations: false, work: false }}
-          rpc={workspaceRpc(settledEmptyRpc)}
+          rpc={settledEmptyRpc}
         />
       </div>
     </div>
@@ -6666,10 +6690,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
   log: [],
 };
 
-const activityRpc = (snapshot: ActivitySnapshot): SocketCall =>
-  async <T,>(method: string, args?: unknown[]): Promise<T> => (
-    method === "getActivitySnapshot" ? rpcResult(v.parse(JsonValueSchema, snapshot)).json<T>() : stubRpc<T>(method, args)
-  );
+const activityRpc = (snapshot: ActivitySnapshot): WorkspaceRpc => galleryRpc({ getActivitySnapshot: () => snapshot });
 
 /** One message per state the `chat` frame folds or cannot pre-expand; auto-expanded on mount below. */
 const TOOLCALL_MESSAGES: UIMessage[] = [
@@ -7005,7 +7026,7 @@ function AgentPanel(
       <GalleryComposer notices={banner ? [workspaceLoadNotice(banner, () => {})] : []} />
       <AgentSurface
         snapshot={snapshot} memory={WORK_MEMORIES} memoryContent={memoryContent}
-        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={workspaceRpc(evolutionRpc)} workspace={WORKSPACE_PAGE_NAME}
+        onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={evolutionRpc} workspace={WORKSPACE_PAGE_NAME}
       />
     </section>
   );
@@ -7042,7 +7063,7 @@ function AgentFrame() {
 
 
 /** The Agent tab's mail, as `agentMail` answers it: Cloudflare's alert, verified, and one that claims to be the owner. */
-const AGENT_MAIL: JsonValue = {
+const AGENT_MAIL: WorkspaceAnswer<"agentMail"> = {
   address: "api-worker.ashish@kinu.run", unread: 1,
   threads: [
     {
@@ -7074,7 +7095,7 @@ function AgentTabFrame() {
     <div className="p-bg min-h-screen flex justify-center">
       <div data-gallery-inspector className="w-[380px] max-w-full min-h-screen border-x p-border p-sidebar px-4 py-5">
         <AgentSurface snapshot={{ status: "ready", value: BRAIN_STATUS }} memory={fresh ? [] : AGENT_TAB_NOTES} memoryContent={fresh ? "" : BRAIN_MEMORY}
-          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={workspaceRpc(fresh ? workspacePageRpc : evolutionRpc)} workspace={WORKSPACE_PAGE_NAME} />
+          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={fresh ? workspaceRpc(workspacePageRpc) : evolutionRpc} workspace={WORKSPACE_PAGE_NAME} />
       </div>
     </div>
   );
@@ -8101,7 +8122,7 @@ async function mount() {
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "slate") node = <SlatePreviewFrame />;
-  else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
+  else if (frame === "workslatefallback") node = <SlateFallbackFrame answers={{ ...GALLERY_ANSWERS, ...WORK_ANSWERS }} />;
   else if (frame === "previewtabs") ({ node, entries } = previewTabsFrame());
   else if (frame === "compactpreview") node = <CompactPreviewGallery />;
   else if (frame === "work") node = <WorkFrame />;

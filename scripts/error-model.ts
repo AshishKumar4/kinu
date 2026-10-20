@@ -270,6 +270,8 @@ export const DECLARED = byFile([
       'gallery fixtures that mirror the Drive HTTP bodies'],
     ['packages/cf-backend/src/gallery-preview-tabs.tsx', ['rpc', 'workerRpc'],
       'gallery fixtures that mirror workspace RPC answers'],
+    ['packages/cf-backend/src/gallery.tsx', ['GALLERY_ANSWERS', 'SLATE_ANSWERS', 'approvalsRpc', 'send'],
+      'gallery fixtures typed as the workspace RPC answers they mirror, and the Agents SDK frame its socket replies in'],
     ['packages/cf-backend/src/gallery-slate-fallback.tsx', ['frameRpc'],
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
     ['packages/cf-backend/src/gallery-parts.tsx', ['previewRpc'],

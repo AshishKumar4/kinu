@@ -52,6 +52,28 @@ export function answeringRpc(answers: WorkspaceAnswers): WorkspaceRpc {
   }));
 }
 
+/** Whether `answers` has an answer for the method a wire named. */
+function answered(answers: WorkspaceAnswers, method: string): method is WorkspaceMethod {
+  return Object.hasOwn(answers, method);
+}
+
+/**
+ * `answers` as a socket serves them, for a page whose own client reads them over the wire: the method a frame names,
+ * its arguments decoded as the wire decodes them, each answer typed where it is written. A method `answers` lacks is
+ * refused.
+ */
+export function wireOf(answers: WorkspaceAnswers): SocketCall {
+  const rpc = answeringRpc(answers);
+
+  return <T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
+    if (!answered(answers, method)) return yield* new KinuError("unsupported", `This fixture answers no ${method}.`);
+    const decoded = yield* Effect.promise(() => new Response(JSON.stringify(args ?? [])).json<Parameters<WorkspaceStub[typeof method]>>());
+    const answer = yield* Effect.promise(() => rpc(method, decoded));
+
+    return yield* Effect.promise(() => new Response(JSON.stringify(v.parse(JsonValueSchema, answer ?? null))).json<T>());
+  }));
+}
+
 /** `rpc`, `count` told as each call goes (+1) and as it is answered or refused (-1). */
 export function countingRpc(rpc: WorkspaceRpc, count: (delta: 1 | -1) => void): WorkspaceRpc {
   return <K extends WorkspaceMethod>(method: K, args: Parameters<WorkspaceStub[K]>): Promise<WorkspaceAnswer<K>> => {
