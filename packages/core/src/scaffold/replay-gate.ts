@@ -10,7 +10,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue } from '../utils/json';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
-import { applyPromotionDecision, getPendingScaffold, readScaffoldVersion } from './versions';
+import { applyPromotionDecision, getPendingScaffold, scaffoldSource } from './versions';
 import { replayScaffold, type RecordedTurn } from './replay';
 
 const ReplayedSchema = v.object({ version: v.number(), turns: v.number() });
@@ -32,7 +32,7 @@ export async function replayPendingScaffold(control: ScaffoldControl, turns: () 
   const pending = getPendingScaffold(sql, rt.actor);
 
   if (pending === null || replayed(sql, rt.actor, pending.version)) return;
-  const source = await readScaffoldVersion(rt, pending.version);
+  const source = await scaffoldSource(rt, pending.version);
   const recorded = await turns();
 
   const verdict = source === null

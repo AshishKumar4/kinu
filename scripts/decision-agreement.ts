@@ -20,7 +20,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import type { LanguageModel } from 'ai';
 import {
-  isHighRating, isLowRating, rateTurn, renderRating, type RatedTurnInput, type RatingVerdict,
+  isHighRating, isLowRating, rateTurn, renderRatedTurn, type RatedTurnInput, type RatingVerdict,
 } from '../packages/core/src/evolution/ratings';
 import { TRIAGE } from '../packages/core/src/evolution/refinement-lane';
 import {
@@ -98,7 +98,7 @@ export function agreement(pairs: readonly RatedPair[]): RatingAgreement {
   };
 }
 
-function turnsFrom(values: { readonly turns?: string; readonly db?: string; readonly limit: number }): RatedTurnInput[] {
+export function turnsFrom(values: { readonly turns?: string; readonly db?: string; readonly limit: number }): RatedTurnInput[] {
   if (values.turns !== undefined) {
     return readFileSync(values.turns, 'utf8').split('\n').filter((line) => line.trim() !== '')
       .map((line) => v.parse(TurnSchema, JSON.parse(line))).slice(0, values.limit);
@@ -122,7 +122,7 @@ function isDecisionModel(spec: string): spec is DecisionModel {
 }
 
 /** Clef's `/ai/run` on the account. */
-function clefRun(account: string, token: string): DecisionRun {
+export function clefRun(account: string, token: string): DecisionRun {
   return async (modelId, body): Promise<JsonObject> => {
     const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${modelId}`, {
       method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -158,7 +158,7 @@ function structuredPort(spec: string, model: LanguageModel): DecisionPort {
   return (request) => answerStructured(lane, { source: 'fast', tier: 'fast', model: spec, reasoningEffort: null, fallbacks: [], retries: 0 }, request);
 }
 
-async function rated(decide: DecisionPort, turn: RatedTurnInput): Promise<RatingVerdict | null> {
+export async function rated(decide: DecisionPort, turn: RatedTurnInput): Promise<RatingVerdict | null> {
   try {
     return await rateTurn(decide, turn, turn.actions.split('\n').filter((line) => line !== '').length);
   } catch (cause) {
@@ -168,13 +168,15 @@ async function rated(decide: DecisionPort, turn: RatedTurnInput): Promise<Rating
   }
 }
 
-/** Five turns as a cadence dream batches them, in the state triage reads (`refinement-lane.ts`); stride two. */
-function triageStates(turns: readonly RatedTurnInput[]): string[] {
-  const rendered = turns.map((turn) => renderRating({
-    ...turn, id: '', turnId: '', source: 'model', score: 3, corrected: 0, wrong: null, scaffoldVersion: null, artifacts: null, picks: null, rejects: null, createdAt: 0,
+/** Five rated turns as a cadence dream batches them, each with Clef's verdict, as triage reads them; stride two. */
+export function triageWindows(turns: readonly { readonly turn: RatedTurnInput; readonly verdict: RatingVerdict }[]): { readonly state: string; readonly rated: readonly RatingVerdict[] }[] {
+  const rendered = turns.map(({ turn, verdict }) => renderRatedTurn({
+    ...turn, ...verdict, id: '', turnId: '', source: 'model', rejects: null, scaffoldVersion: null, artifacts: null, picks: null, createdAt: 0,
   }));
 
-  return Array.from({ length: Math.max(0, Math.floor((rendered.length - 5) / 2) + 1) }, (_, at) => rendered.slice(at * 2, at * 2 + 5).join('\n\n---\n\n'));
+  return Array.from({ length: Math.max(0, Math.floor((rendered.length - 5) / 2) + 1) }, (_, at) => ({
+    state: rendered.slice(at * 2, at * 2 + 5).join('\n\n---\n\n'), rated: turns.slice(at * 2, at * 2 + 5).map(({ verdict }) => verdict),
+  }));
 }
 
 async function triaged(decide: DecisionPort, state: string): Promise<string | null> {
@@ -190,7 +192,7 @@ async function triaged(decide: DecisionPort, state: string): Promise<string | nu
 }
 
 /** Four items at a time: a reasoning model takes seconds a call, and the report is a sample, not a load test. */
-async function inFours<Item, Pair>(items: readonly Item[], pair: (item: Item) => Promise<Pair>): Promise<Pair[]> {
+export async function inFours<Item, Pair>(items: readonly Item[], pair: (item: Item) => Promise<Pair>): Promise<Pair[]> {
   const pairs: Pair[] = [];
 
   for (let at = 0; at < items.length; at += 4) pairs.push(...await Promise.all(items.slice(at, at + 4).map(pair)));
@@ -225,7 +227,14 @@ if (import.meta.main) {
     : structuredPort(measured, chatModel(measured, { account, token }));
 
   const ratings = await inFours(turns, async (turn) => ({ clef: await rated(clef, turn), structured: await rated(structured, turn) }));
-  const triages = await inFours(triageStates(turns), async (state): Promise<ReadPair> => [await triaged(clef, state), await triaged(structured, state)]);
+
+  const windows = triageWindows(turns.flatMap((turn, at) => {
+    const verdict = ratings[at]?.clef;
+
+    return verdict === undefined || verdict === null ? [] : [{ turn, verdict }];
+  }));
+
+  const triages = await inFours(windows, async ({ state }): Promise<ReadPair> => [await triaged(clef, state), await triaged(structured, state)]);
 
   console.log(JSON.stringify({ model: parseModelSpec(values.model).modelId, against: DEFAULT_DECISION_MODEL, turns: turns.length, ...agreement(ratings), worth: share(triages) }));
 }

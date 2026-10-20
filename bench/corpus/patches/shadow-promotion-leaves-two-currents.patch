@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/scaffold/versions.ts b/packages/core/src/scaffold/versions.ts
+index d0e7314b9..88e9ce1f6 100644
 --- a/packages/core/src/scaffold/versions.ts
 +++ b/packages/core/src/scaffold/versions.ts
-@@ -124,7 +124,7 @@
+@@ -123,7 +123,7 @@ export function applyPromotionDecision(
            SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
            WHERE actor_id = ${rt.actor.actorId}
              AND (version = ${pending.version}
 -                 OR (status = 'current' AND version != ${pending.version}))`;
 +                 OR (status = 'current' AND version = ${pending.version}))`;
        markStoreChanged(sql);
-       yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
        yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: currentVersion, toVersion: pending.version });
+ 

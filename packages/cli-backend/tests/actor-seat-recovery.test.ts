@@ -171,7 +171,6 @@ test('a child keeps the inherited loop but edits only its own scaffold, never it
     const inherited = 'export default async function main() { return "inherited parent loop"; }';
 
     await writeText(parent.agentStateVfs, `${parent.identity.scaffold.path}.v0`, inherited);
-    await parent.identity.scaffold.write(inherited);
     const node = await owner.hostNode({ nodeId: 'program-node', rootId: 'program-work', depth: 1 });
 
     expect(await node.actor.runtime.identity.scaffold.read()).toBe(inherited);
@@ -179,7 +178,6 @@ test('a child keeps the inherited loop but edits only its own scaffold, never it
     const nodeVersion = await node.actor.runtime.identity.scaffold.version();
 
     await writeText(node.actor.runtime.agentStateVfs, `${node.actor.runtime.identity.scaffold.path}.v${nodeVersion}`, nodeEdit);
-    await node.actor.runtime.identity.scaffold.write(nodeEdit);
     expect(await node.actor.runtime.identity.scaffold.read()).toBe(nodeEdit);
     expect(await parent.identity.scaffold.read()).toBe(inherited);
     const branchInput = { ...head('program-head'), loop: { kind: 'inherit' } } satisfies HeadInput;
@@ -190,7 +188,6 @@ test('a child keeps the inherited loop but edits only its own scaffold, never it
     const headVersion = await branch.actor.runtime.identity.scaffold.version();
 
     await writeText(branch.actor.runtime.agentStateVfs, `${branch.actor.runtime.identity.scaffold.path}.v${headVersion}`, headEdit);
-    await branch.actor.runtime.identity.scaffold.write(headEdit);
     expect(await branch.actor.runtime.identity.scaffold.read()).toBe(headEdit);
     expect(await parent.identity.scaffold.read()).toBe(inherited);
     await branch.release();
@@ -213,7 +210,6 @@ test('a retained child without its owned program bytes names the required local 
   const before = await parent.identity.scaffold.read();
 
   await files.unlink(`${program.path}.v${version}`);
-  await files.unlink(program.path);
   await first.close();
   const cold = new LocalAgentHost(workspace.options);
 
@@ -239,7 +235,6 @@ test('refusing a head layout happens before it can leave an observer on the pare
   const state = branch.actor.runtime.agentStateVfs;
 
   await state.unlink(`${program.path}.v${version}`);
-  await state.unlink(program.path);
   await first.close();
   const cold = new LocalAgentHost(workspace.options);
 

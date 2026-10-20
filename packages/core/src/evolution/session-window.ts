@@ -22,7 +22,8 @@ import { nowMs } from '../utils/date';
 import { ToolOutcomeSchema } from '../tools/outcome';
 import { StruggleSchema } from './struggles';
 import type { CompletedTurn } from './types';
-import { turnPicks, type TurnPicks } from './picks';
+import { turnPicks } from './picks';
+import type { TurnPicks } from './ratings';
 
 /** A completed turn, as stored and read; `CompletedTurn` (`types.ts`) is its type, so the two cannot drift. */
 export const CompletedTurnSchema = v.object({

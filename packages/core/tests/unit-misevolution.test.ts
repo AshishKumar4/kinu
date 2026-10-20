@@ -21,6 +21,7 @@ import {
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
+import { writeScaffoldVersion } from '../src/scaffold/versions';
 
 const RATIONALE = 'A rationale comfortably longer than the fifty-character gate-1 minimum length.';
 
@@ -151,7 +152,7 @@ async function* run(rt, task) { yield { type: 'chunk', data: task }; }`)).toEqua
 describe('scaffold surface — modifyScaffold acceptance veto', () => {
   test('a proposal that opens raw egress is refused at gate 1 with a recorded reason', async () => {
     const rt = setupScaffoldRt();
-    await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
+    await writeScaffoldVersion(rt, 0, INITIAL_SCAFFOLD_SOURCE);
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
 
@@ -175,7 +176,7 @@ describe('scaffold surface — promotion-time recheck (VFS tamper)', () => {
   test('a pending whose version file was tampered after acceptance is rolled back, not promoted', async () => {
     const rt = setupScaffoldRt();
     const v0 = 'async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }';
-    await rt.identity.scaffold.write(v0);
+    await writeScaffoldVersion(rt, 0, v0);
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
 
@@ -257,7 +258,7 @@ describe('criteria immutability from agent-reachable paths', () => {
     expect(checkMisevolution(evil).ok).toBe(false);
 
     // And the gate still fires end-to-end after the tamper attempts.
-    await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
+    await writeScaffoldVersion(rt, 0, INITIAL_SCAFFOLD_SOURCE);
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
     const result = await modifyScaffold(rt, RATIONALE, evil);

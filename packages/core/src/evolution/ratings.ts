@@ -10,7 +10,6 @@ import { parseJsonValue } from '../utils/json';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn, ToolCallRecord } from './types';
-import { TurnPicksSchema, type TurnPicks } from './picks';
 import type { DecisionPort, DecisionQuestion } from '../providers/decision-model';
 import { evidenceWindow } from '../utils/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -97,6 +96,15 @@ export interface RatingVerdict {
   readonly rejects?: string | null;
 }
 
+/** What a turn picked (`turnPicks`, `evolution/picks.ts`): the skills it read, in order, and the crafted tools it used. */
+const TurnPicksSchema = v.object({
+  /** In the order they were read, a re-read of the same one not repeated. */
+  skills: v.pipe(v.array(v.string()), v.readonly()),
+  tools: v.pipe(v.array(v.string()), v.readonly()),
+});
+
+export type TurnPicks = v.InferOutput<typeof TurnPicksSchema>;
+
 export interface TurnRating extends RatingVerdict {
   readonly id: string;
   readonly turnId: string;
@@ -126,6 +134,13 @@ export function isLowRating(score: number): boolean {
 
 export function isHighRating(score: number): boolean {
   return score >= HIGH_FROM;
+}
+
+/** From this the rater read the user's next words as a correction. */
+const CORRECTED_FROM = 0.5;
+
+export function isCorrected(rating: Pick<RatingVerdict, 'corrected'>): boolean {
+  return rating.corrected >= CORRECTED_FROM;
 }
 
 /** The turn's feedback as the review hands it on: a neutral rating is none. */
@@ -344,6 +359,10 @@ export const renderRating = (rating: TurnRating): string => [
   `AGENT FINAL ANSWER:\n${rating.answer}`,
   ...(rating.followup === null ? [] : [`USER'S NEXT MESSAGE:\n${rating.followup}`]),
 ].join('\n\n');
+
+/** A rated turn as triage reads it: the turn, and what the rater made of the user's next words. */
+export const renderRatedTurn = (rating: TurnRating): string => `${renderRating(rating)}\n\nRATED: ${rating.score.toFixed(1)} of 5; `
+  + `the user's next words corrected the turn with probability ${rating.corrected.toFixed(2)}; what went wrong: ${(rating.wrong ?? 'nothing').replaceAll('_', ' ')}`;
 
 export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: RatingQuery = {}): TurnRating[] {
   actor.assertCurrent();

@@ -5,6 +5,7 @@ import { basename, join, resolve } from "node:path";
 import { childEnv, runToExit, scratchDir, type Exited } from "@kinu.run/test-utils";
 import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
+import { CLI_DIST_PLATFORMS } from "../packages/core/src/http/deployed-assets";
 import {
   DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, deployOrder, type DeployPhase,
 } from "./ladder";
@@ -1380,6 +1381,15 @@ describe('CLI distribution signing prerequisites', () => {
 });
 
 describe("CLI distribution artifacts", () => {
+  // Core names the platforms and archives the launcher downloads; build-cli-dist.sh and deploy.sh each spelled their
+  // own list as well, two more to keep in step and nothing comparing them.
+  test("the build and the deploy take the CLI's archives from core's inventory, spelling no platform", () => {
+    const spelled = ["scripts/build-cli-dist.sh", "scripts/deploy.sh"]
+      .map((script) => [script, CLI_DIST_PLATFORMS.filter((platform) => readFileSync(join(REPO_ROOT, script), "utf8").includes(platform))]);
+
+    expect(spelled).toEqual([["scripts/build-cli-dist.sh", []], ["scripts/deploy.sh", []]]);
+  });
+
   const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"] as const;
   const CPYTHON = "kinu-runtime-cpython.tar.gz";
   // Cloudflare's static-asset limit, per file, on both plans.

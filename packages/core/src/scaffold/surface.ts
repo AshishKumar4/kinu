@@ -1,8 +1,7 @@
-import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * `.vN` files are canonical, the `status='current'` row is the pointer, and the
- * live file is a rebuildable view. Mutations write source before metadata and
- * refresh the view after the pointer commits.
+ * `.vN` files are canonical and the `status='current'` row is the pointer: the loop an actor runs is the current
+ * version's file, and nothing else holds a copy of it.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -13,7 +12,7 @@ export interface ScaffoldSurfaceOpts {
   vfs: VFS;
   sql: SqlExecutor;
   /** The current pointer is per-actor; a wrongly bound surface would run a peer's program. */
-  actor: ActorHandle;
+  actor: Pick<ActorHandle, 'actorId' | 'assertCurrent'>;
   path: string;
 }
 
@@ -22,27 +21,10 @@ export function createScaffoldSurface({ vfs, sql, actor, path }: ScaffoldSurface
 
   return {
     path,
-    exists: async (): Promise<boolean> => {
-      if (await exists(vfs, path)) return true;
-      const current = getCurrentScaffoldVersion(sql, actor);
-
-      return current !== null && (await exists(vfs, versionedPath(current)));
-    },
-    read: async (): Promise<string> => {
-      const current = getCurrentScaffoldVersion(sql, actor);
-
-      if (current !== null && (await exists(vfs, versionedPath(current)))) {
-        return readText(vfs, versionedPath(current));
-      }
-
-      return readText(vfs, path);
-    },
-    write: async (code: string): Promise<void> => {
-      const slash = path.lastIndexOf('/');
-
-      if (slash > 0) await vfs.mkdir(path.slice(0, slash), { recursive: true });
-      await writeText(vfs, path, code);
-    },
+    /** An actor no version row names runs v0. */
+    exists: async (): Promise<boolean> => exists(vfs, versionedPath(getCurrentScaffoldVersion(sql, actor) ?? 0)),
+    /** Throws for an actor no loop was seeded for: the turn falls back to the built-in loop and says so. */
+    read: async (): Promise<string> => readText(vfs, versionedPath(getCurrentScaffoldVersion(sql, actor) ?? 0)),
     version: async (): Promise<number> => getCurrentScaffoldVersion(sql, actor) ?? 0,
   };
 }

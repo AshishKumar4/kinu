@@ -153,8 +153,8 @@ export interface Identity {
     /** Version archives append `.vN` to this path. */
     path: string;
     exists(): Promise<boolean>;
+    /** The current version's source. */
     read(): Promise<string>;
-    write(code: string): Promise<void>;
     version(): Promise<number>;
   };
 }

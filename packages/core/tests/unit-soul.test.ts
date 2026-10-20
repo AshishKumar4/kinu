@@ -124,7 +124,7 @@ describe('workspace birth', () => {
       name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', home: bornSoul().home,
     });
 
-    expect((await rt.storage.vfs.stat('scaffold/agent.js'))?.type).toBe('file');
+    expect((await rt.storage.vfs.stat('scaffold/agent.js.v0'))?.type).toBe('file');
     expect(await readText(rt.storage.vfs, 'memory/MEMORY.md')).toContain('Atlas');
   });
 

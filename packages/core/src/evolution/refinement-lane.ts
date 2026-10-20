@@ -23,7 +23,7 @@ import * as v from 'valibot';
 import { scoreAuthoredEdit } from './judge';
 import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
-import { listTurnRatings, renderRating, type TurnRating } from './ratings';
+import { isCorrected, isLowRating, listTurnRatings, renderRatedTurn, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
@@ -115,18 +115,23 @@ export const TRIAGE = {
   worth: {
     type: 'noul',
     instructions: 'Does any of these turns show something the agent should change about how it works: a correction or a '
-      + 'repeated request from the user, a tool it struggled with, a misunderstanding, or needless length?',
+      + 'repeated request from the user, a tool it struggled with, a misunderstanding, or needless length? Each turn\'s '
+      + 'RATED line is how its user\'s next words read.',
   },
 } as const satisfies Record<string, DecisionQuestion>;
 
-/** A yes is more likely than a no. */
-const TRIAGE_YES = 0.5;
+/**
+ * Above every batch of only well-rated, uncorrected turns Clef triaged among 98 recorded batches (the highest 0.22), so
+ * such a batch stops; a middling one Clef sees something in goes on (`scripts/triage-recall.ts`, 2026-10-20).
+ */
+const TRIAGE_YES = 0.25;
 
 /**
- * An automatic dream, or null when none is owed. `cadence` needs five new rated turns, `idle` one. The decision model
- * triages the batch first: below an even chance of something worth changing, the dream ends there, its turns covered,
- * and nothing is drafted. Safe every tick: the debt key is the idempotency key, and a taken batch stops counting.
- * No decision model, or one that refused (already said to the owner), opens nothing and leaves the turns owed.
+ * An automatic dream, or null when none is owed. `cadence` needs five new rated turns, `idle` one. A batch with a turn
+ * rated low or likely corrected goes to the dreamer by rule; the decision model triages any other: below `TRIAGE_YES`
+ * the dream ends there, its turns covered, and nothing is drafted. Safe every tick: the debt key is the idempotency
+ * key, and a taken batch stops counting. No decision model, or one that refused (already said to the owner), opens
+ * nothing and leaves the turns owed.
  */
 export async function dreamRequest(
   deps: RefinementDeps,
@@ -137,18 +142,19 @@ export async function dreamRequest(
 
   if (debt.turnIds.length === 0 || (trigger === 'cadence' && !debt.owed) || rt.decide === undefined) return null;
   const turns = listTurnRatings(sql, rt.actor, { turnIds: debt.turnIds });
-  const triaged = await rt.decide({ state: turns.map(renderRating).join('\n\n---\n\n'), questions: TRIAGE });
-  const worth = triaged?.answers.worth;
+  const flagged = turns.some((turn) => isLowRating(turn.score) || isCorrected(turn));
+  const worth = flagged ? null : (await rt.decide({ state: turns.map(renderRatedTurn).join('\n\n---\n\n'), questions: TRIAGE }))?.answers.worth;
 
-  if (worth?.type !== 'noul') return null;
+  if (!flagged && worth?.type !== 'noul') return null;
   const opened = await requestRefinement(deps, { trigger, scope: 'workspace', turnIds: debt.turnIds, debtKey: debt.key });
 
   if (opened.stage !== 'requested') return opened;
   const store = createRefinementStore(sql, rt.actor);
-  const of = `${String(turns.length)} turn${turns.length === 1 ? '' : 's'} (p=${worth.noul.toFixed(2)})`;
+  const of = `${String(turns.length)} turn${turns.length === 1 ? '' : 's'}`;
 
-  if (worth.noul < TRIAGE_YES) store.advance(opened.id, 'requested', 'refused', { detail: `Triage found nothing worth changing in ${of}` });
-  else store.record(opened.id, 'requested', { detail: `Triage found something worth a look in ${of}` });
+  if (worth?.type !== 'noul') store.record(opened.id, 'requested', { detail: `A turn was rated low or corrected among ${of}` });
+  else if (worth.noul < TRIAGE_YES) store.advance(opened.id, 'requested', 'refused', { detail: `Triage found nothing worth changing in ${of} (p=${worth.noul.toFixed(2)})` });
+  else store.record(opened.id, 'requested', { detail: `Triage found something worth a look in ${of} (p=${worth.noul.toFixed(2)})` });
 
   const settled = store.get(opened.id);
 
