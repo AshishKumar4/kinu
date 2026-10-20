@@ -5,7 +5,7 @@
 import { useCallback, useState } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  BrainIcon, ChartLineUpIcon, GitBranchIcon, GlobeHemisphereWestIcon, IdentificationCardIcon, MagnifyingGlassIcon,
+  BrainIcon, ChartLineUpIcon, EnvelopeSimpleIcon, GitBranchIcon, GlobeHemisphereWestIcon, IdentificationCardIcon, MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
 import type { AgentStatus } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
@@ -19,6 +19,8 @@ import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
 import { ChatMascot, mascotSeed } from "@/components/Marks";
+import { mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
+import { Link } from "react-router-dom";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
@@ -68,7 +70,11 @@ export interface AgentSurfaceProps {
   readMoves?: ReadMoves;
   /** The workspace's name, which the agent's mascot is drawn from. */
   workspace?: string | undefined;
+  /** The agent the tab is about, by actor id; absent, the workspace's main agent. */
+  actorId?: string | undefined;
 }
+
+type AgentMail = NonNullable<Awaited<ReturnType<OrchestratorAgent["agentMail"]>>>;
 
 function Chip({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {
   return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
@@ -78,7 +84,7 @@ function Quiet({ children }: { children: React.ReactNode }) {
   return <p className="p-row-text p-text-3">{children}</p>;
 }
 
-function Who({ as, workspace }: { as: AgentStatus; workspace: string | undefined }) {
+function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | undefined; address: string | null }) {
   const title = workspaceDisplayTitle({ name: as.name, displayName: as.displayName });
   const since = new Date(as.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 
@@ -91,6 +97,7 @@ function Who({ as, workspace }: { as: AgentStatus; workspace: string | undefined
           </span>
           <div className="min-w-0">
             <div className="p-title truncate p-text" title={title}>{title}</div>
+            {address !== null && <div className="truncate font-mono p-meta p-text-2" data-agent-address>{address}</div>}
             <div className="truncate p-meta p-text-3" title={as.name}>Since {since}</div>
           </div>
         </div>
@@ -100,6 +107,31 @@ function Who({ as, workspace }: { as: AgentStatus; workspace: string | undefined
           <Chip>{as.messageCount} {as.messageCount === 1 ? "message" : "messages"}</Chip>
           <Chip>Prompt v{as.scaffoldVersion}</Chip>
         </div>
+      </div>
+    </Section>
+  );
+}
+
+/** The agent's own mail, shown only while it has any (docs/MAIL.md §7); each thread opens in Mail. */
+function Mail({ mail }: { mail: AgentMail }) {
+  if (mail.threads.length === 0) return null;
+
+  return (
+    <Section id="agent-mail" title="Mail" icon={<EnvelopeSimpleIcon size={14} className="p-text-2" />}
+      badge={mail.unread > 0 ? <Badge variant="secondary">{mail.unread}</Badge> : undefined}>
+      <div className="p-group">
+        {mail.threads.map((thread) => (
+          <Link key={thread.id} to={`/mail/${encodeURIComponent(thread.id)}`} className={mailRowCls(false)} data-agent-mail-thread={thread.id}>
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className={`min-w-0 flex-1 truncate p-row-text ${thread.unread ? "font-semibold p-text" : "p-text-2"}`}>
+                {thread.from.map((party) => party.name ?? party.address).join(", ")}
+              </span>
+              <span className="shrink-0 p-meta tabular-nums p-text-3">{mailTime(thread.at)}</span>
+            </span>
+            <span className={`block truncate p-row-text ${thread.unread ? "p-text" : "p-text-2"}`}>{thread.subject}</span>
+            <span className="block truncate p-meta p-text-3">{thread.verified ? thread.snippet : `Not verified · ${thread.snippet}`}</span>
+          </Link>
+        ))}
       </div>
     </Section>
   );
@@ -229,8 +261,10 @@ function Changing({ rpc, readMoves, version }: {
 }
 
 export function AgentSurface(
-  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, rpc, readMoves = {}, workspace }: AgentSurfaceProps,
+  { snapshot, memory, memoryContent, onSearchMemory, onRetryLoad, rpc, readMoves = {}, workspace, actorId }: AgentSurfaceProps,
 ) {
+  const loadMail = useCallback(() => rpc("agentMail", [actorId]), [rpc, actorId]);
+  const mail = lastValue(useAsyncResource(loadMail).resource) ?? null;
   // "Nothing noticed" may only be claimed about a listing that came back.
   const loadFacts = useCallback(() => rpc("getFacts", [100]), [rpc]);
   const { resource: factsResource, reload: reloadFacts } = useAsyncResource(loadFacts);
@@ -239,7 +273,8 @@ export function AgentSurface(
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {as !== null && <Who as={as} workspace={workspace} />}
+      {as !== null && <Who as={as} workspace={workspace} address={mail?.address ?? null} />}
+      {mail !== null && <Mail mail={mail} />}
       <Knows read={readOf(as !== null, snapshot.status === "error", onRetryLoad)} memory={memory} memoryContent={memoryContent}
         onSearchMemory={onSearchMemory} facts={facts} factsResource={factsResource} reloadFacts={reloadFacts} workspace={as?.name ?? null} />
       <Section id="agent-doing" title="Activity" icon={<ChartLineUpIcon size={14} className="p-text-2" />}>

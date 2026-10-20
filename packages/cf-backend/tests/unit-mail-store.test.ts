@@ -183,6 +183,19 @@ describe('threads, views and search', () => {
     expect(store.list({ view: 'important' }).threads).toEqual([]);
   });
 
+  test('a reply given only its thread answers the thread\'s newest message, as its headers say', async () => {
+    open('ashish@kinu.run');
+    const box = store.boxFor({ kind: 'agent', workspace: 'api-worker', name: 'scout', actorId: 'actor-scout' });
+
+    const arrived = await delivered({ raw: stranger('Webhook deliveries to /hooks/v2 failing with 500', 'Every delivery to /hooks/v2 gets a 500.'),
+      envelopeFrom: 'dana@northwind.io', recipient: { username: 'ashish', path: box.path, tag: null } });
+
+    const reply = await store.queue({ path: box.path, threadId: arrived.threadId, to: ['dana@northwind.io'], subject: 'Re: Webhook deliveries', text: 'It is ours.' });
+
+    expect(reply.inReplyTo).toBe(`<${arrived.headerId ?? ""}>`);
+    expect(arrived.headerId).not.toBeNull();
+  });
+
   test('Important is the person\'s box only, with the reason; unread counts what is unread there', async () => {
     open('ashish@kinu.run');
     const delivery = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });

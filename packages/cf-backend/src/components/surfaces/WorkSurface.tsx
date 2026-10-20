@@ -337,6 +337,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 memory={props.memory} memoryContent={props.memoryContent}
                 onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
                 rpc={props.rpc} readMoves={props.readMoves} workspace={props.workspace}
+                actorId={props.agents?.list.find((agent) => agent.key === props.agents?.shown)?.actorId}
               />
             )}
             {surface === "Environment" && (

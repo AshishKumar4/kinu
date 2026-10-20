@@ -100,6 +100,20 @@ beforeEach(() => {
 });
 
 describe('an agent reads only its own boxes', () => {
+  test('before the person has an address, an agent has none either', async () => {
+    const sql = makeSqlExec(new Database(':memory:'));
+
+    initMailboxTables(sql);
+    store = new MailStore({
+      sql, domain: 'kinu.run', now: () => NOW, id: () => crypto.randomUUID(), parse: () => Promise.reject(new Error('not parsed here')),
+      blobs: { put: () => Promise.resolve(), text: () => Promise.resolve(null), delete: () => Promise.resolve() },
+      digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+    });
+
+    expect(await call(SCOUT, 'address', {})).toEqual({ own: '', boxes: [] });
+    await expect(call(SCOUT, 'send', { to: ['dana@northwind.io'], subject: 'x', text: 'y' })).rejects.toThrow('do not read the box');
+  });
+
   test('its address is its own box, made on first ask, beside its workspace\'s', async () => {
     expect(await call(SCOUT, 'address', {})).toEqual({
       own: 'scout.api-worker.ashish@kinu.run',
