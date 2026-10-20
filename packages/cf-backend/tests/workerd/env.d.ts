@@ -174,6 +174,16 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   sandboxStopped(): Promise<void>;
   acceptSandboxLifecycleIncident(body: null): Promise<void>;
   workspaceTitle(): Promise<void>;
+  // What a workspace's creation calls on it (`CloudWorkspaceBirth`), each reached with no arguments.
+  claimOwner(): Promise<void>;
+  setInitialDisplayName(): Promise<void>;
+  setSoul(): Promise<void>;
+  resetWorkspaceBaseline(): Promise<void>;
+  setModel(): Promise<void>;
+  setReasoningEffort(): Promise<void>;
+  setRole(): Promise<void>;
+  beginGenesisTurn(): Promise<void>;
+  seedBlueprint(): Promise<void>;
 }
 
 /** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */

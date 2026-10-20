@@ -278,6 +278,8 @@ const ORCHESTRATOR_METHODS = [
   'recordGitHubEgress',
   // Never `@callable`.
   'admitBlueprint',
+  // The account's install, DO-to-DO (`workspace-create.ts`): a blueprint's layout, agent and owner schedules.
+  'seedBlueprint',
   'blueprintBundle',
   'readBlueprint',
   'shareBlueprintWith',
