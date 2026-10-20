@@ -111,6 +111,7 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Gener
   return settle(Effect.gen(function* () {
     // Drained before anything is read, so the call is filed whatever its answer; a provider's failure is kept as it came
     // for the route walk to read.
+    // Read part by part, which raises a provider's failure as it came: the text stream ends on one with no cause.
     const result = yield* Effect.promise(() => drained(streamTextReported(streamed, call, () => {})));
 
     // Read to its end, a stream returns its result: only a reader's `return` ends one without.

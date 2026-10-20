@@ -30,8 +30,8 @@ export async function readAiRun(request: Pick<Request, 'json' | 'headers'>): Pro
 const DECISION_MODEL_IDS: ReadonlySet<string> = new Set(['@cf/cloudflare/clef', '@cf/cloudflare/clef-flash']);
 
 /** The product lanes that call the binding, each known by its real request shape: a decision model's `state` and
- *  `questions` (rating), a chat led by a system message (title), a user-only chat (sleep-time judge). Turns stream over
- *  the HTTP seam, never here. */
+ *  `questions` (rating), a completion led by a system message (title), a user-only chat (sleep-time judge, streamed as
+ *  every structured call is). Turns stream over the HTTP seam, never here. */
 export const AI_LANES = ['decision', 'title', 'sleep'] as const;
 
 export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | null {
@@ -39,9 +39,9 @@ export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | nu
 
   const messages = inputs.messages ?? [];
 
-  if (inputs.stream === true || messages.length === 0) return null;
+  if (messages.length === 0) return null;
 
-  if (messages[0]?.role === 'system') return 'title';
+  if (messages[0]?.role === 'system') return inputs.stream === true ? null : 'title';
 
   return messages.every((message) => message.role === 'user') ? 'sleep' : null;
 }
