@@ -41,7 +41,7 @@ const STRIPPED_REQUEST_HEADERS: readonly string[] = [
   'x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-real-ip',
 ];
 
-type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialEndpoint' | 'getAuthHeaders'>;
+type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialEndpoint' | 'getAuth'>;
 
 type ProxyAuthority = CliAuthAuthority & ProxyCredentialSource;
 
@@ -131,8 +131,10 @@ function forwardUpstream(
       return errorResponse(403, `${credKey} is not served by this proxy: Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
     }
 
-    const base = (yield* Effect.promise(() => userDO.getCredentialEndpoint(owner, credKey)))?.baseURL
-      ?? (yield* Effect.promise(() => providerProxyBaseURL(credKey, { fetch })));
+    // One opened credential answers both: the key sent is the one whose endpoint the target is checked against, even
+    // if the owner replaces the credential while this forward runs.
+    const auth = yield* Effect.promise(() => userDO.getAuth(owner, credKey));
+    const base = auth?.baseURL ?? (yield* Effect.promise(() => providerProxyBaseURL(credKey, { fetch })));
 
     if (!base) {
       return errorResponse(400, `No upstream endpoint is known for credential "${credKey}", so it cannot be proxied.`);
@@ -142,8 +144,6 @@ function forwardUpstream(
       return errorResponse(403, `${request.method} "${target}" is outside what credential "${credKey}" may be spent on (${base}).`);
     }
 
-    const auth = yield* Effect.promise(() => userDO.getAuthHeaders(owner, credKey));
-
     if (!auth) {
       return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Kinu user settings.`);
     }
@@ -152,7 +152,7 @@ function forwardUpstream(
 
     for (const name of STRIPPED_REQUEST_HEADERS) headers.delete(name);
 
-    for (const [name, value] of Object.entries(auth)) headers.set(name, value);
+    for (const [name, value] of Object.entries(auth.headers)) headers.set(name, value);
 
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
 
