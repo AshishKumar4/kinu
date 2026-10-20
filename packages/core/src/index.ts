@@ -473,7 +473,7 @@ export { CHARS_PER_TOKEN, estimateTokens } from './token-estimate';
 export type { LLMProviderConfig } from './llm';
 
 export {
-  createWorkersAIEmbedder, type WorkersAiWebSearch, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
+  createWorkersAIEmbedder, type WorkersAiWebSearch, generateObjectReported, generateReported, streamTextReported, type GenerateRequest, type StreamRequest,
 } from './providers/model-invocation';
 
 // Every surface that counts tokens speaks this usage report.

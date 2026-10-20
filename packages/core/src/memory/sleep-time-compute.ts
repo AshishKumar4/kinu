@@ -3,15 +3,13 @@
 // packages/coding-agent/src/prompts/system/memory-extraction-system.md): stated, stable facts only, never inferred.
 
 import * as v from 'valibot';
-import { Effect } from 'effect';
-import type { LLM } from '../types/primitives';
+import type { RoutedLLM } from '../types/primitives';
 import type { FactsStore, Veracity } from './facts';
 import { normalizeFactKey, renderFactValue, VERACITIES } from './facts';
 import type { AccountProposal } from './account';
 import { turnTags } from '../types/turn-metadata';
 import type { ConversationProjection } from '../session/transcript';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
-import { KinuError, settleSync } from '../obs/index';
+import { jsonObjectOnlyInstruction } from '../providers/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { SLEEP_TIME_PROMPT_OPENING } from '../utils/prompt-sections';
@@ -213,16 +211,16 @@ export const SleepTimeUpdateSchema: v.GenericSchema<SleepTimeUpdate> = v.object(
   }))),
 });
 
+/**
+ * The update, through the model's structured output: the provider is held to `SleepTimeUpdateSchema` where it can be,
+ * and an answer off it hands the call to the next model on the route (`generateObjectReported`). rc24 staging: on
+ * text alone, a fast model left `rationale` out and sleep-time wrote nothing.
+ */
 export async function runSleepTimeCompute(
-  judge: LLM,
+  judge: Pick<RoutedLLM, 'object'>,
   input: SleepTimeInput,
 ): Promise<SleepTimeUpdate> {
-  const text = await judge.complete(PROMPT(input));
-
-  return settleSync(Effect.try({
-    try: () => v.parse(SleepTimeUpdateSchema, extractJsonObject(text)),
-    catch: (cause) => new KinuError('bad_input', 'the sleep-time compute returned no usable update', { cause }),
-  }));
+  return await judge.object(PROMPT(input), SleepTimeUpdateSchema);
 }
 
 export function applySleepTimeUpdate(

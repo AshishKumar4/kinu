@@ -1,4 +1,8 @@
+import * as v from 'valibot';
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
+import { createRoutedModelLane, routedLlm } from '../src/profiles/model-lane';
+import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
 import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SLEEP_TIME_CADENCE,
@@ -156,11 +160,50 @@ describe('Sleep-time compute', () => {
     expect(judge.prompts[0]).toContain('existing.key_30');
   });
 
-  test('unparseable output is a definitive failure with its parser cause', async () => {
+  test('an answer off the schema is no update, and a definitive failure', async () => {
     const judge = createScriptedLLM(['Live answer from the fake model.']);
 
-    await expect(runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] }))
-      .rejects.toMatchObject({ code: 'bad_input', cause: expect.any(SyntaxError) });
+    await expect(runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] })).rejects.toMatchObject({ code: 'bad_input' });
+  });
+
+  // rc24 staging: the fast tier's model left `rationale` out on text alone, and on a replay of those turns
+  // glm-4.7-flash once answered `{}`. Asked through the structured output, an answer off the schema goes to the next
+  // model on the route, and the update that comes back is the schema's.
+  test('is asked for its schema, and an answer off it ends the route walk, as a wrong answer does', async () => {
+    const formats: string[] = [];
+
+    const answering = (text: string) => new MockLanguageModelV3({
+      doGenerate: async (options) => {
+        formats.push(options.responseFormat?.type === 'json' && options.responseFormat.schema !== undefined ? 'json schema' : 'text');
+
+        return {
+          content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined }, warnings: [],
+          usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
+        };
+      },
+    });
+
+    // The fast lane a host builds: glm-4.7-flash serving, glm-5.3-flash its fallback.
+    const lane = (first: string) => {
+      const served = new Map([['workers-ai/glm-4.7-flash', answering(first)], ['workers-ai/glm-5.3-flash', answering('{"upserts":[],"decay":[]}')]]);
+      const tiers = { default: { model: 'workers-ai/glm-5.3-flash' }, fast: { model: 'workers-ai/glm-4.7-flash' } };
+      const catalog = { roles: {}, tiers, modelFallbacks: { 'workers-ai/glm-4.7-flash': ['workers-ai/glm-5.3-flash'] } };
+
+      return createRoutedModelLane({ actorId: 'actor-test', workspaceId: 'ws-test', parentActorId: null }, 'fast', {
+        llm: (serving) => routedLlm((bound) => ({ model: present(served.get(bound.model), bound.model) }), serving, { report: () => {} }),
+        resolveProfile: async () => resolveTurnProfile({
+          envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+          provider: { revision: 'r', availableModels: [...served.keys()] },
+          roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [],
+        }),
+      });
+    };
+
+    expect(await runSleepTimeCompute(lane('{"upserts":[{"key":"build.dir","value":"dist","confidence":0.9,"rationale":"the build said so"}],"decay":[]}'), { turns: ONE_TURN, currentFacts: [] }))
+      .toEqual({ upserts: [{ key: 'build.dir', value: 'dist', confidence: 0.9, rationale: 'the build said so' }], decay: [] });
+    // The fallback is never asked: a wrong answer is not the serving model's outage.
+    await expect(runSleepTimeCompute(lane('{}'), { turns: ONE_TURN, currentFacts: [] })).rejects.toMatchObject({ code: 'bad_input' });
+    expect(formats).toEqual(['json schema', 'json schema']);
   });
 
   test('applySleepTimeUpdate upserts facts + decays existing', () => {
@@ -270,10 +313,10 @@ describe('an idle wake dreams first', () => {
     const built = new SleepTimeLane({
       sql: rt.storage.sql, actor: rt.actor, config: stores.config, facts: stores.facts,
       transcript: () => ({ newestFirst: async () => turns(count) }),
-      llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: async () => {
+      llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: () => { throw new Error('sleep-time asks for a schema'); }, object: async (_prompt, schema) => {
         order.push('facts');
 
-        return JSON.stringify({ upserts: [], decay: [] });
+        return v.parse(schema, { upserts: [], decay: [] });
       } }),
       transactionSync: (write) => write(),
       armWake: () => {},

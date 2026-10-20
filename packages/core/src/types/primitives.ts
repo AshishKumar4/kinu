@@ -120,6 +120,11 @@ export interface LLM {
   complete(prompt: string): Promise<string>;
 }
 
+/** An LLM a profile route binds: it also answers to a schema, through the model's structured output. */
+export interface RoutedLLM extends LLM {
+  object<S extends v.GenericSchema>(prompt: string, schema: S): Promise<v.InferOutput<S>>;
+}
+
 /** Fiber checkpoint context. stash() is a synchronous SQLite write. */
 export interface FiberCtx {
   stash(data: JsonValue): void;
