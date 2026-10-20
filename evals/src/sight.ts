@@ -115,11 +115,21 @@ export function look(names: readonly string[], press: Press | null): Looked {
   const patterns = new Map(names.map((name) => [name, new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'iu')]));
   const naming = (name: string, text: string): boolean => patterns.get(name)?.test(text) ?? false;
 
+  // What an element says on its own line: its text and inline pieces, without a block inside it (a cell's name, then a
+  // line of detail under it). A name said there is labelled by that alone.
+  const ownLine = (element: Element): string => [...element.childNodes].map((node) => {
+    if (node instanceof Text) return node.data;
+
+    return node instanceof Element && ['inline', 'inline-block', 'contents'].includes(getComputedStyle(node).display) ? textIn(node) : ' ';
+  }).join('');
+
   const labels = new Map(names.map((name) => [name, [...holding].filter((element) => {
     const text = textIn(element);
+    const own = ownLine(element);
+    const labelled = naming(name, own) ? own : text;
 
     return naming(name, text) && !names.some((other) => other !== name && naming(other, text))
-      && text.replace(patterns.get(name) ?? '', '').replace(/[^\p{L}]/gu, '').length <= LABEL_LETTERS
+      && labelled.replace(patterns.get(name) ?? '', '').replace(/[^\p{L}]/gu, '').length <= LABEL_LETTERS
       && ![...element.children].some((child) => naming(name, textIn(child)));
   })]));
 
@@ -135,6 +145,13 @@ export function look(names: readonly string[], press: Press | null): Looked {
       || (element instanceof HTMLInputElement ? element.value : '') || (element.getAttribute('title') ?? ''),
   }));
 
+  // The box holding both.
+  const spanning = (one: DOMRect, other: DOMRect): DOMRect => {
+    const left = Math.min(one.left, other.left), top = Math.min(one.top, other.top);
+
+    return new DOMRect(left, top, Math.max(one.right, other.right) - left, Math.max(one.bottom, other.bottom) - top);
+  };
+
   // What lies in the column under or over `cell`, within the table, grid or drawing holding it; null when none does.
   const columnOf = (cell: Element): ((node: Node) => boolean) | null => {
     let holder = cell.parentElement;
@@ -143,17 +160,38 @@ export function look(names: readonly string[], press: Press | null): Looked {
       holder = holder.parentElement;
     }
 
-    // A flex chart can put its bars and axis labels in separate rows under one drawing, rather than in one grid.
-    if (holder !== null && ['flex', 'inline-flex'].includes(getComputedStyle(holder).display)) holder = holder.parentElement;
+    // A flex chart can put its bars and axis labels in separate rows under one drawing, rather than in one grid. Drawn
+    // straight in the page, with no drawing around them, the drawing is the axis and the row before it.
+    const axis = holder !== null && ['flex', 'inline-flex'].includes(getComputedStyle(holder).display) ? holder : null;
 
-    if (holder === null || holder === document.body) return null;
-    const across = cell.getBoundingClientRect(), group = holder.getBoundingClientRect();
+    if (axis !== null) holder = axis.parentElement;
+    const bars = holder === document.body ? axis?.previousElementSibling ?? null : null;
+
+    if (holder === null || (holder === document.body && bars === null)) return null;
+    const across = cell.getBoundingClientRect();
+    const group = bars === null || axis === null ? holder.getBoundingClientRect() : spanning(bars.getBoundingClientRect(), axis.getBoundingClientRect());
 
     return (node) => {
       const box = boxes.get(node) ?? (node instanceof Element ? node.getBoundingClientRect() : undefined);
       const middle = box === undefined ? NaN : box.left + box.width / 2;
 
       return box !== undefined && middle >= across.left && middle <= across.right && box.top >= group.top - 1 && box.bottom <= group.bottom + 1;
+    };
+  };
+
+  // What lies beside `cell` in its grid's row band, when the grid lays its rows out with no element for each: a cell
+  // with the others of its row as its siblings; null when the grid has rows of its own.
+  const bandOf = (cell: Element): ((node: Node) => boolean) | null => {
+    const grid = cell.parentElement;
+
+    if (grid === null || !['grid', 'inline-grid'].includes(getComputedStyle(grid).display)) return null;
+    const across = cell.getBoundingClientRect();
+
+    return (node) => {
+      const box = boxes.get(node) ?? (node instanceof Element ? node.getBoundingClientRect() : undefined);
+      const middle = box === undefined ? NaN : box.top + box.height / 2;
+
+      return box !== undefined && grid.contains(node) && middle >= across.top && middle <= across.bottom;
     };
   };
 
@@ -199,6 +237,9 @@ export function look(names: readonly string[], press: Press | null): Looked {
       const columns = columnsOf(row);
 
       parts.push({ inside: (node) => row.contains(node), occurrence, columns });
+      const band = bandOf(row);
+
+      if (band !== null && !othersIn(name, band)) parts.push({ inside: band, occurrence, columns });
 
       let cell = label;
 
