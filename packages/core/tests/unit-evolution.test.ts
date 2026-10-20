@@ -114,6 +114,18 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     expect(listTurnRatings(rt.storage.sql, rt.actor)[0]?.score).toBeCloseTo(4.6);
   });
 
+  test('a rated turn keeps the skills it read, for dreams to read', async () => {
+    const { rt, stores } = createTestRuntime();
+    ratedAs(rt, 'accepted');
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
+
+    await engine.reviewTurn(makeTurn({
+      toolCalls: [compactToolCall({ name: 'file', args: { op: 'read', path: '/skills/slates/SKILL.md' } })],
+    }), 'great, now the next one');
+
+    expect(listTurnRatings(rt.storage.sql, rt.actor)[0]?.picks).toEqual({ skills: ['slates'], tools: [] });
+  });
+
   test('with crafting off the same accepted turn is rated, and no tool is extracted from it', async () => {
     const { rt, stores } = createTestRuntime({
       llmResponses: {
