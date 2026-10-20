@@ -162,7 +162,8 @@ class FakeCloudflare implements CloudflareTransport {
       return { status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }], result: null } };
     }
 
-    if (rest === 'email/routing/enable') { this.routing.enabled.add(id);
+    // Email Routing is enabled through its DNS: `routing/enable` is deprecated and not served here.
+    if (rest === 'email/routing/dns' && call.method === 'POST') { this.routing.enabled.add(id);
 
  return ok({ enabled: true }); }
 
@@ -170,15 +171,23 @@ class FakeCloudflare implements CloudflareTransport {
 
  return ok({ enabled: true }); }
 
+    // As the API answers it: a sending subdomain is named by its `tag`, and creating one that exists is refused.
+    if (rest === 'email/sending/subdomains' && call.method === 'GET') {
+      const name = this.routing.sending.get(id);
+
+      return ok(name === undefined ? [] : [{ tag: `tag-${name}`, name, enabled: true }]);
+    }
+
     if (rest === 'email/sending/subdomains') {
       const name = bodyText(call.body ?? {}, 'name');
 
+      if (this.routing.sending.has(id)) return { status: 409, body: { success: false, errors: [{ code: 1000, message: 'Sending subdomain already exists' }], result: null } };
       this.routing.sending.set(id, name);
 
-      return ok({ id: `sending-${name}`, name });
+      return ok({ tag: `tag-${name}`, name, enabled: true });
     }
 
-    if (/^email\/sending\/subdomains\/[^/]+\/dns$/u.test(rest)) {
+    if (/^email\/sending\/subdomains\/tag-[^/]+\/dns$/u.test(rest)) {
       const name = this.routing.sending.get(id) ?? '';
 
       return ok([
@@ -713,6 +722,15 @@ describe('a guided run', () => {
       'TXT cf-bounce._domainkey.raman.dev v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN',
       'TXT _dmarc.raman.dev v=DMARC1; p=none; rua=mailto:dmarc@raman.dev',
     ]);
+  });
+
+  test('a domain already sending is onboarded again without a second sending domain, its records read by its tag', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.routing.sending.set('zone-raman', 'raman.dev');
+    const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
+
+    expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done', detail: expect.stringContaining('Mail onboarded on raman.dev') });
+    expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.raman.dev', 'TXT cf-bounce._domainkey.raman.dev', 'TXT _dmarc.raman.dev']);
   });
 
   test('a domain\'s own DMARC and the records it already holds are kept, not written again', async () => {

@@ -218,8 +218,9 @@ export default function MailPage() {
       {account?.address != null ? <MailInbox account={account} owner={person?.email ?? ""} /> : <>
         <PageHeader icon={<EnvelopeSimpleIcon size={22} />} title="Mail" />
         {boxes.resource.status === "loading" && <div role="status" aria-label="Loading mail" className="mt-5"><Loader /></div>}
-        {account !== null && account.canClaim && profile.status !== "loading" && <Claim email={person?.email ?? ""} onClaimed={boxes.reload} />}
-        {account !== null && !account.canClaim && <p className="mt-5 p-row-text p-text-2">Addresses on this deployment are its operators' only.</p>}
+        {account !== null && !account.enabled && <p data-mail-off className="mt-5 p-row-text p-text-2">Mail is off on this deployment.</p>}
+        {account?.enabled === true && account.canClaim && profile.status !== "loading" && <Claim email={person?.email ?? ""} onClaimed={boxes.reload} />}
+        {account?.enabled === true && !account.canClaim && <p className="mt-5 p-row-text p-text-2">Addresses on this deployment are its operators' only.</p>}
       </>}
       {boxes.resource.status === "error" && <LoadFailure what="your addresses" message={boxes.resource.message} onRetry={boxes.reload} className="mt-5" />}
     </div></div>

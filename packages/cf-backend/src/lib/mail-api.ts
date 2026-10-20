@@ -20,7 +20,8 @@ const ImportantMailSchema = v.object({
 
 export type ImportantMail = v.InferOutput<typeof ImportantMailSchema>;
 
-const ImportantSchema = v.object({ unread: v.number(), items: v.array(ImportantMailSchema) });
+/** `enabled`: whether this deployment has mail at all (a mail domain); without it there is no Mail to show. */
+const ImportantSchema = v.object({ enabled: v.boolean(), unread: v.number(), items: v.array(ImportantMailSchema) });
 
 export type Important = v.InferOutput<typeof ImportantSchema>;
 
@@ -35,7 +36,7 @@ const BoxSchema = v.object({
   workspace: v.nullable(v.string()), actorId: v.nullable(v.string()), wake: v.picklist(MAIL_WAKES),
 }) satisfies v.GenericSchema<unknown, MailBox>;
 
-const BoxesSchema = v.object({ address: v.nullable(v.string()), canClaim: v.boolean(), boxes: v.array(BoxSchema) });
+const BoxesSchema = v.object({ enabled: v.boolean(), address: v.nullable(v.string()), canClaim: v.boolean(), boxes: v.array(BoxSchema) });
 
 export type MailBoxes = v.InferOutput<typeof BoxesSchema>;
 
