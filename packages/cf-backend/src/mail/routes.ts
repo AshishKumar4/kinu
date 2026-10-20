@@ -10,11 +10,9 @@
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
-  err, isMailLabel, json, mailAddressOf, objectNamed, publicError, safeJson,
+  err, isMailLabel, json, mailAddressOf, objectNamed, safeJson,
   type MailListQuery, type MailView, type ObjectNamespace,
 } from '@kinu.run/core';
-import { Effect } from 'effect';
-import { CODE_IS_REFUSAL, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
 import type { FamilyEnv } from '../api/context';
 import type { MailboxDO } from './mailbox-do';
 import type { MailNameDO } from './mailname-do';
@@ -69,27 +67,14 @@ async function addressOf(c: MailContext): Promise<string | null> {
   return (await mailbox(c).boxes()).find((box) => box.path === '')?.address ?? null;
 }
 
-/**
- * The route's answer, or its refusal. A refusal the Mailbox or MailName classified is answered in its own words, written
- * for the person (native RPC keeps the words where it drops the class); anything else in the generic text for its class.
- */
-async function answer<Body>(work: () => Promise<Body>): Promise<Response> {
-  return await settle(Effect.tryPromise({
-    try: work,
-    catch: (cause) => toKinuError({ doing: 'answering a mail request', cause, otherwise: 'io' }),
-  }).pipe(Effect.match({
-    onSuccess: (body) => json({ body }),
-    onFailure: (failure) => publicError(CODE_IS_REFUSAL[failure.code] && failure.cause instanceof Error ? new KinuError(failure.code, failure.cause.message) : failure),
-  })));
-}
-
 export const mailRoutes = new Hono<FamilyEnv<MailRoutesEnv>>();
 
-mailRoutes.get('/api/user/mail/boxes', async (c) => answer(async () => {
+mailRoutes.get('/api/user/mail/boxes', async (c) => {
   const address = await addressOf(c);
+  const canClaim = address === null && mayClaim(c.env, c.get('identity').email);
 
-  return { address, canClaim: address === null && mayClaim(c.env, c.get('identity').email), boxes: address === null ? [] : await mailbox(c).boxes() };
-}));
+  return json({ body: { address, canClaim, boxes: address === null ? [] : await mailbox(c).boxes() } });
+});
 
 mailRoutes.post('/api/user/mail/claim', async (c) => {
   const identity = c.get('identity');
@@ -99,32 +84,38 @@ mailRoutes.post('/api/user/mail/claim', async (c) => {
 
   if (!mayClaim(c.env, identity.email)) return err(403, 'Addresses on this deployment are its operators\' only.');
 
-  return answer(async () => {
-    const held = await addressOf(c);
+  const held = await addressOf(c);
 
-    if (held !== null) return { address: held };
+  if (held !== null) return json({ body: { address: held } });
 
-    await objectNamed(c.env.MAILNAME, body.username).claim(body.username, identity.userId);
-    const box = await mailbox(c).open({ userId: identity.userId, email: identity.email, username: body.username, assistant: null });
+  const name = objectNamed(c.env.MAILNAME, body.username);
+  const holder = await name.lookup();
 
-    return { address: box.address };
-  });
+  // Said in its own words here; a claim that races another still fails, in the API's.
+  if (holder !== null && holder.user_id !== identity.userId) return err(403, `"${body.username}" is taken.`);
+
+  await name.claim(body.username, identity.userId);
+
+  const box = await mailbox(c).open({ userId: identity.userId, email: identity.email, username: body.username, assistant: null });
+
+  return json({ body: { address: box.address } });
 });
 
-mailRoutes.get('/api/user/mail/important', async (c) => answer(async () => {
+mailRoutes.get('/api/user/mail/important', async (c) => {
   const limit = Math.min(20, Math.max(1, Number(c.req.query('limit') ?? '3') || 3));
 
-  if (await addressOf(c) === null) return { unread: 0, items: [] };
+  if (await addressOf(c) === null) return json({ body: { unread: 0, items: [] } });
+
   const listing = await mailbox(c).list({ view: 'important', limit });
 
-  return {
+  return json({ body: {
     unread: listing.unread,
     items: listing.threads.map((thread) => ({
       thread: thread.id, from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? '', address: thread.from[0]?.address ?? '' },
       to: mailAddressOf('', thread.path, c.env.EMAIL_DOMAIN ?? ''), subject: thread.subject, reason: thread.important ?? '', at: thread.at, unread: thread.unread,
     })),
-  };
-}));
+  } });
+});
 
 mailRoutes.get('/api/user/mail/threads', async (c) => {
   const view = v.safeParse(v.picklist(VIEWS), c.req.query('view') ?? 'all');
@@ -139,45 +130,38 @@ mailRoutes.get('/api/user/mail/threads', async (c) => {
     view: view.output, path: c.req.query('path'), query: c.req.query('q'), before: Number.isFinite(before) && before > 0 ? before : undefined, limit: 50,
   };
 
-  return answer(() => mailbox(c).list(query));
+  return json({ body: await mailbox(c).list(query) });
 });
 
-mailRoutes.get('/api/user/mail/threads/:id', async (c) => answer(async () => {
+mailRoutes.get('/api/user/mail/threads/:id', async (c) => {
   const thread = await mailbox(c).thread(c.req.param('id'));
 
-  if (thread === null) throw new KinuError('missing', 'No such thread.');
-
-  return thread;
-}));
+  return thread === null ? err(404, 'No such thread.') : json({ body: thread });
+});
 
 mailRoutes.patch('/api/user/mail/threads/:id', async (c) => {
   const change = await safeJson(c.req.raw, Change);
 
   if (change === null) return err(400, 'read and trashed (booleans) are what a person changes; Important is the assistant\'s.');
 
-  return answer(() => mailbox(c).update(c.req.param('id'), change));
+  return json({ body: await mailbox(c).update(c.req.param('id'), change) });
 });
 
-mailRoutes.post('/api/user/mail/send', async (c) => {
-  const outgoing = await safeJson(c.req.raw, Outgoing);
+// A message the person writes: sent now, or kept as a draft. Both take the same fields.
+for (const [path, act] of [['/api/user/mail/send', 'send'], ['/api/user/mail/drafts', 'draft']] as const) {
+  mailRoutes.post(path, async (c) => {
+    const outgoing = await safeJson(c.req.raw, Outgoing);
 
-  if (outgoing === null) return err(400, 'path, to, subject and text are required.');
+    if (outgoing === null) return err(400, 'path, to, subject and text are required.');
 
-  return answer(() => mailbox(c).send(outgoing));
-});
-
-mailRoutes.post('/api/user/mail/drafts', async (c) => {
-  const outgoing = await safeJson(c.req.raw, Outgoing);
-
-  if (outgoing === null) return err(400, 'path, to, subject and text are required.');
-
-  return answer(() => mailbox(c).draft(outgoing));
-});
+    return json({ body: await mailbox(c)[act](outgoing) });
+  });
+}
 
 mailRoutes.put('/api/user/mail/boxes/wake', async (c) => {
   const body = await safeJson(c.req.raw, Wake);
 
   if (body === null) return err(400, 'wake is one of owner, allowlist, verified, never.');
 
-  return answer(() => mailbox(c).setWake(body.path, body.wake, body.allow));
+  return json({ body: await mailbox(c).setWake(body.path, body.wake, body.allow) });
 });

@@ -148,9 +148,18 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
     expect((await store.thread(delivery.threadId))?.messages[0]?.deliveredTo).toBe('ashish+receipts@kinu.run');
   });
 
-  test('a box the account does not have is no delivery', async () => {
+  test('mail to a workspace or agent label the person does not have is kept in their own box, and wakes nothing', async () => {
+    // Accepted, so a sender cannot learn which workspaces exist by which addresses bounce (docs/MAIL.md §4).
     open('ashish@kinu.run');
-    expect(await store.deliver({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: { username: 'ashish', path: 'nowhere', tag: null } })).toBeNull();
+
+    const delivery = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: { username: 'ashish', path: 'payroll', tag: null } });
+
+    expect(delivery).toMatchObject({ box: '', woke: null, wake: null });
+    expect((await store.thread(delivery.threadId))?.messages[0]?.deliveredTo).toBe('payroll.ashish@kinu.run');
+  });
+
+  test('before the person has a box, nothing is delivered', async () => {
+    expect(await store.deliver({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: { username: 'ashish', path: '', tag: null } })).toBeNull();
   });
 });
 

@@ -167,7 +167,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 1. Email Routing's catch-all calls the Worker's `email()`.
 2. The Worker reads the address and drops the `+tag` for routing. It finds the username's `MailName` and gets the account.
 3. **An unknown username is rejected with SMTP 550.** Usernames are public, and a reject tells the sender.
-4. **An unknown workspace or agent label under a known person is accepted** into their "Unknown address" view, so senders cannot enumerate workspace names.
+4. **An unknown workspace or agent label under a known person is accepted** into their own box, where All lists it under the address it was sent to, and wakes nothing, so senders cannot enumerate workspace names.
 5. The Worker stores the raw message and attachments in R2, parses it with `postal-mime` (Cloudflare's documented parser, and what Kinu and Mailflare already use), and calls `Mailbox.deliver`.
 6. `deliver` is idempotent per Message-ID and content hash.
 

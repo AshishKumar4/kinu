@@ -13,7 +13,8 @@ import {
   MailStore, type MailBlobs,
 } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
-import { diagnostics, KinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { parseMail } from './parse';
 
 /** Sends a day for an account that is not one of the deployment's operators (the owner, 2026-10-19). */
@@ -44,8 +45,11 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
 
   private readonly outbox: EmailOutbox;
 
-  /** Why this account's mail may not be read: its repair could not bring it to this build. */
-  private readonly storageRefusal: StoragePredatesReleaseError | undefined;
+  /** Why this account's mail may not be read: its repair could not bring it to this build, or the deployment has no
+   *  bucket for its bytes. Every call answers it before reading anything. */
+  private readonly refusal: KinuError | undefined;
+
+  private readonly bucket: R2Bucket | null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -58,10 +62,15 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
       schema: 'mailbox', tables: SCHEMA_TABLES.mailbox, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
     }, `mailbox ${ctx.id.toString()}`);
 
-    if (repair?.refused != null) this.storageRefusal = new StoragePredatesReleaseError('mailbox', repair.refused);
+    this.bucket = env.MAIL_BUCKET ?? null;
+
+    if (repair?.refused != null) this.refusal = new StoragePredatesReleaseError('mailbox', repair.refused);
     else if (repair === null) init();
 
-    if (unmade && this.storageRefusal === undefined) writeStamp(stamps, 'mailbox');
+    if (unmade && this.refusal === undefined) writeStamp(stamps, 'mailbox');
+
+    // A deployment with no bucket for mail's bytes answers no call; its rows wait for one.
+    if (this.bucket === null) this.refusal ??= new KinuError('unavailable', 'This deployment has no MAIL_BUCKET.');
     this.outbox = new EmailOutbox(ctx.storage.sql, (at) => this.arm(at));
     this.store = new MailStore({
       sql: ctx.storage.sql, blobs: this.blobs(), domain: env.EMAIL_DOMAIN ?? '', now: () => Date.now(), id: () => crypto.randomUUID(),
@@ -81,21 +90,19 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
   private blobs(): MailBlobs {
     const key = (relative: string): string => `mail/${this.identity()?.user_id ?? 'unopened'}/${relative}`;
 
-    const bucket = (): R2Bucket => {
-      if (this.env.MAIL_BUCKET === undefined) throw new KinuError('unavailable', 'This deployment has no MAIL_BUCKET.');
-
-      return this.env.MAIL_BUCKET;
-    };
+    // Never null where it is reached: every call answers `refusal` first.
+    const bucket = this.bucket;
 
     return {
-      put: async (relative, value) => { await bucket().put(key(relative), value); },
-      text: async (relative) => (await bucket().get(key(relative)))?.text() ?? null,
-      delete: async (keys) => { if (keys.length > 0) await bucket().delete(keys.map(key)); },
+      put: async (relative, value) => { await bucket?.put(key(relative), value); },
+      text: async (relative) => (await bucket?.get(key(relative)))?.text() ?? null,
+      delete: async (keys) => { if (keys.length > 0) await bucket?.delete(keys.map(key)); },
     };
   }
 
-  private ready(): void {
-    if (this.storageRefusal !== undefined) throw this.storageRefusal;
+  /** A call's answer from the store, or the refusal every call answers first. */
+  private served<Answer>(work: () => Answer | Promise<Answer>): Effect.Effect<Answer, KinuError> {
+    return this.refusal === undefined ? Effect.promise(async () => await work()) : Effect.fail(this.refusal);
   }
 
   /** The alarm serves both clocks: the outbox's next retry and the Trash's next emptying. */
@@ -108,7 +115,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
   }
 
   override async alarm(): Promise<void> {
-    this.ready();
+    if (this.refusal !== undefined) return settleSync(Effect.fail(this.refusal));
 
     if (this.env.EMAIL !== undefined) await this.outbox.reconcile(this.env.EMAIL, Date.now());
 
@@ -119,43 +126,31 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
   }
 
   open(account: { userId: string; email: string; username: string; assistant: { workspace: string; actorId: string } | null }): Promise<MailBox> {
-    this.ready();
-
-    return Promise.resolve(this.store.open(account));
+    return settle(this.served(() => this.store.open(account)));
   }
 
   boxFor(owner: { kind: 'workspace' | 'agent'; workspace: string; name: string; actorId: string }): Promise<MailBox> {
-    this.ready();
-
-    return Promise.resolve(this.store.boxFor(owner));
+    return settle(this.served(() => this.store.boxFor(owner)));
   }
 
   boxes(): Promise<readonly MailBox[]> {
-    this.ready();
-
-    return Promise.resolve(this.store.boxes());
+    return settle(this.served(() => this.store.boxes()));
   }
 
   deliver(input: { raw: Uint8Array; envelopeFrom: string; recipient: MailRecipient }): Promise<MailDelivery | null> {
-    this.ready();
-
-    return this.store.deliver(input);
+    return settle(this.served(() => this.store.deliver(input)));
   }
 
   list(query: MailListQuery): Promise<MailListing> {
-    this.ready();
-
-    return Promise.resolve(this.store.list(query));
+    return settle(this.served(() => this.store.list(query)));
   }
 
   thread(id: string): Promise<MailThreadView | null> {
-    this.ready();
-
-    return this.store.thread(id);
+    return settle(this.served(() => this.store.thread(id)));
   }
 
   async update(id: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
-    this.ready();
+    if (this.refusal !== undefined) return settleSync(Effect.fail(this.refusal));
     const summary = this.store.update(id, change);
 
     if (change.trashed === true) await this.arm();
@@ -164,19 +159,17 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
   }
 
   draft(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    this.ready();
-
-    return this.store.draft(outgoing);
+    return settle(this.served(() => this.store.draft(outgoing)));
   }
 
   async send(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    this.ready();
+    if (this.refusal !== undefined) return settleSync(Effect.fail(this.refusal));
 
     if (!isMailOperator(this.env, this.identity()?.email ?? '') && this.store.sentToday() >= DAILY_SEND_CAP) {
-      throw new KinuError('budget', `This account has sent ${String(DAILY_SEND_CAP)} messages in the last day; mail goes again as the day's first ones age out.`);
+      return settleSync(Effect.fail(new KinuError('budget', `This account has sent ${String(DAILY_SEND_CAP)} messages in the last day; mail goes again as the day's first ones age out.`)));
     }
 
-    if (this.env.EMAIL === undefined) throw new KinuError('unavailable', 'This deployment cannot send mail yet: it has no Email Sending binding.');
+    if (this.env.EMAIL === undefined) return settleSync(Effect.fail(new KinuError('unavailable', 'This deployment cannot send mail yet: it has no Email Sending binding.')));
 
     const { view, headerId, from } = await this.store.queue(outgoing);
 
@@ -192,8 +185,6 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): Promise<MailBox> {
-    this.ready();
-
-    return Promise.resolve(this.store.setWake(path, wake, allow));
+    return settle(this.served(() => this.store.setWake(path, wake, allow)));
   }
 }

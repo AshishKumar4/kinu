@@ -4,7 +4,8 @@
  * attachments) live in R2, content-addressed, and go when the last row naming them goes.
  */
 import * as v from 'valibot';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import type {
@@ -95,12 +96,9 @@ const snippetOf = (text: string): string => text.replace(/\s+/gu, ' ').trim().sl
 export class MailStore {
   constructor(private readonly deps: MailStoreDeps) {}
 
-  private identity(): v.InferOutput<typeof IdentityRow> {
-    const [row] = rows(IdentityRow, this.deps.sql.exec('SELECT user_id, email, username FROM mail_box WHERE id = 1'));
-
-    if (row === undefined) throw new KinuError('missing', 'This account has no mail address yet.');
-
-    return row;
+  /** Who the account is; null before `open`, when it also has no box to read. */
+  private identity(): v.InferOutput<typeof IdentityRow> | null {
+    return rows(IdentityRow, this.deps.sql.exec('SELECT user_id, email, username FROM mail_box WHERE id = 1'))[0] ?? null;
   }
 
   private box(path: string): MailBox | null {
@@ -112,7 +110,7 @@ export class MailStore {
   private boxOf(row: v.InferOutput<typeof BoxRow>): MailBox {
     return {
       path: row.path, kind: row.kind, workspace: row.workspace, actorId: row.actor_id, wake: row.wake,
-      address: mailAddressOf(this.identity().username, row.path, this.deps.domain),
+      address: mailAddressOf(this.identity()?.username ?? '', row.path, this.deps.domain),
     };
   }
 
@@ -160,7 +158,7 @@ export class MailStore {
   setWake(path: string, wake: MailWake, allow?: readonly string[]): MailBox {
     const box = this.box(path);
 
-    if (box === null) throw new KinuError('missing', `No box at "${path}".`);
+    if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${path}".`)));
     this.deps.sql.exec('UPDATE mail_addresses SET wake = ? WHERE path = ?', wake, path);
 
     if (allow !== undefined) {
@@ -178,7 +176,7 @@ export class MailStore {
   private wakeOf(box: MailBox, verdict: { verified: boolean; from: string | null }): MailWoke | null {
     if (box.workspace === null || !verdict.verified || verdict.from === null) return null;
 
-    if (verdict.from === this.identity().email) return 'owner';
+    if (verdict.from === this.identity()?.email) return 'owner';
 
     if (box.wake === 'verified') return 'input';
 
@@ -207,7 +205,10 @@ export class MailStore {
   }
 
   async deliver(input: { raw: Uint8Array; envelopeFrom: string; recipient: MailRecipient }): Promise<MailDelivery | null> {
-    const box = this.box(input.recipient.path);
+    const named = this.box(input.recipient.path);
+    // A label the person does not have is kept in their own box and wakes nothing, so no bounce tells a sender which
+    // workspaces exist (docs/MAIL.md §4). `delivered_to` keeps the address it was sent to.
+    const box = named ?? this.box('');
 
     if (box === null) return null;
 
@@ -229,7 +230,7 @@ export class MailStore {
     }
 
     const at = this.deps.now();
-    const woke = this.wakeOf(box, verdict);
+    const woke = named === null ? null : this.wakeOf(box, verdict);
     const threadId = this.threadFor(box.path, parsed, at);
     const messageId = this.deps.id();
     const keys = await this.keep(input.raw, parsed);
@@ -375,7 +376,7 @@ export class MailStore {
   update(id: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): MailThreadSummary {
     const [thread] = rows(ThreadRow, this.deps.sql.exec('SELECT id, path, subject, important, trashed_at FROM mail_threads WHERE id = ?', id));
 
-    if (thread === undefined) throw new KinuError('missing', `No thread "${id}".`);
+    if (thread === undefined) return settleSync(Effect.fail(new KinuError('missing', `No thread "${id}".`)));
 
     if (change.read !== undefined) this.deps.sql.exec("UPDATE mail_messages SET read = ? WHERE thread_id = ? AND direction = 'in'", change.read ? 1 : 0, id);
 
@@ -383,23 +384,19 @@ export class MailStore {
 
     if (change.important !== undefined) {
       // The assistant picks from the box it reads: the person's own.
-      if (thread.path !== '') throw new KinuError('denied', 'Only mail to the person\'s own address can be marked Important.');
+      if (thread.path !== '') return settleSync(Effect.fail(new KinuError('denied', 'Only mail to the person\'s own address can be marked Important.')));
       this.deps.sql.exec('UPDATE mail_threads SET important = ? WHERE id = ?', change.important === null ? null : change.important.slice(0, 280), id);
     }
 
     const summary = this.summary(id);
 
-    if (summary === null) throw new KinuError('missing', `No thread "${id}".`);
+    if (summary === null) return settleSync(Effect.fail(new KinuError('missing', `No thread "${id}".`)));
 
     return summary;
   }
 
   /** An outgoing message's row: a draft, or one queued to send. Its thread is the one it answers, or a new one. */
-  private writeOut(outgoing: MailOutgoing & { threadId?: string }, state: 'draft' | 'queued') {
-    const box = this.box(outgoing.path);
-
-    if (box === null) throw new KinuError('missing', `No box at "${outgoing.path}".`);
-
+  private writeOut(box: MailBox, outgoing: MailOutgoing & { threadId?: string }, state: 'draft' | 'queued') {
     const at = this.deps.now();
     let threadId = outgoing.threadId ?? null;
 
@@ -429,12 +426,19 @@ export class MailStore {
   }
 
   async draft(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
+    const box = this.box(outgoing.path);
+
+    if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
+
     // One draft per thread: a new one replaces the old.
     if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
 
-    const { id, threadId } = this.writeOut(outgoing, 'draft');
+    const { id, threadId } = this.writeOut(box, outgoing, 'draft');
+    const view = await this.messageView(threadId, id);
 
-    return this.messageView(threadId, id);
+    if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
+
+    return view;
   }
 
   private dropDrafts(threadId: string): void {
@@ -454,10 +458,16 @@ export class MailStore {
 
   /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
   async queue(outgoing: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; headerId: string; from: string }> {
+    const box = this.box(outgoing.path);
+
+    if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
+
     if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
 
-    const { id, headerId, threadId } = this.writeOut(outgoing, 'queued');
+    const { id, headerId, threadId } = this.writeOut(box, outgoing, 'queued');
     const view = await this.messageView(threadId, id);
+
+    if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
 
     return { view, headerId, from: view.from.address };
   }
@@ -466,12 +476,8 @@ export class MailStore {
     this.deps.sql.exec('UPDATE mail_messages SET send_state = ? WHERE id = ?', state, messageId);
   }
 
-  private async messageView(threadId: string, id: string): Promise<MailMessageView> {
-    const message = (await this.thread(threadId))?.messages.find((each) => each.id === id);
-
-    if (message === undefined) throw new KinuError('missing', `No message "${id}".`);
-
-    return message;
+  private async messageView(threadId: string, id: string): Promise<MailMessageView | null> {
+    return (await this.thread(threadId))?.messages.find((each) => each.id === id) ?? null;
   }
 
   /** Empties the Trash of what has been in it 30 days: its rows, its search entries, and bytes no row names any more. */

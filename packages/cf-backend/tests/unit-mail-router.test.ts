@@ -99,7 +99,7 @@ describe('the recipient names a box, or the message is refused', () => {
     expect(routed.delivered.map((each) => [each.userId, each.recipient.path])).toEqual([['u-ashish', ''], ['u-ashish', 'api-worker']]);
   });
 
-  test('an unclaimed or retired label, another domain, or a box the account lacks is refused at SMTP time', async () => {
+  test('an unclaimed or retired label, another domain, or an account with no box yet is refused at SMTP time', async () => {
     for (const to of ['nobody@kinu.run', 'gone@kinu.run', 'ashish@example.com', 'a.b.c.ashish@kinu.run']) {
       const message = inbound(to);
 
@@ -107,7 +107,8 @@ describe('the recipient names a box, or the message is refused', () => {
       expect(message.rejected).toBe('No such address here.');
     }
 
-    const lacking = inbound('nowhere.ashish@kinu.run');
+    // The Mailbox files an unknown label in the person's own box; it answers nothing only before the person has one.
+    const lacking = inbound('ashish@kinu.run');
 
     expect(await routeInboundMail(lacking, deps(null))).toMatchObject({ outcome: 'refused' });
     expect(lacking.rejected).toBe('No such address here.');

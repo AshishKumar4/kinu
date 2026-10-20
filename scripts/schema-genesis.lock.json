@@ -1110,7 +1110,7 @@
     "exhausted_at INTEGER",
     "PRIMARY KEY (actor_id, label)"
   ],
-  "monitor_incidents@packages/cf-backend/src/monitor/incidents.ts": [
+  "monitor_incidents@packages/core/src/monitor/incidents.ts": [
     "probe TEXT PRIMARY KEY",
     "detail TEXT NOT NULL",
     "opened_at INTEGER NOT NULL",

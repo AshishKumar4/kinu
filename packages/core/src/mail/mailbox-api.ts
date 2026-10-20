@@ -148,8 +148,8 @@ export interface MailboxCalls {
   boxFor(owner: { readonly kind: 'workspace' | 'agent'; readonly workspace: string; readonly name: string; readonly actorId: string }): Promise<MailBox>;
   boxes(): Promise<readonly MailBox[]>;
   /**
-   * Files a raw message that reached `recipient`; decides, by the box's wake and the verdict, whom it wakes. Null when
-   * the account has no box at that path: the router refuses the message as an unknown address.
+   * Files a raw message that reached `recipient`; decides, by the box's wake and the verdict, whom it wakes. A label
+   * the person does not have is filed in their own box and wakes nothing. Null only before the person has a box.
    */
   deliver(input: { readonly raw: Uint8Array; readonly envelopeFrom: string; readonly recipient: MailRecipient }): Promise<MailDelivery | null>;
   list(query: MailListQuery): Promise<MailListing>;

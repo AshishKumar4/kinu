@@ -9,7 +9,7 @@ import { MailStore } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
 import { Hono } from 'hono';
 import { mailRoutes, type MailRoutesEnv } from '../src/mail/routes';
-import type { FamilyEnv } from '../src/api/context';
+import { routeError, type FamilyEnv } from '../src/api/context';
 import type { MailNameClaim } from '../src/mail/mailname-do';
 
 // The person's own mail over HTTP: the account is the signed-in identity's, never one the request names. The Mailbox is
@@ -97,7 +97,8 @@ async function call(who: { userId: string; email: string }, request: { method: s
   // As the API mounts it: behind the session gate, which names the signed-in identity.
   const app = new Hono<FamilyEnv<MailRoutesEnv>>()
     .use('*', async (c, next) => { c.set('identity', { userId: who.userId, email: who.email, sub: who.userId }); await next(); })
-    .route('/', mailRoutes);
+    .route('/', mailRoutes)
+    .onError(routeError);
 
   const response = await app.fetch(new Request(`${ORIGIN}${path}`, {
     method, headers: { 'content-type': 'application/json' }, body: body === undefined ? null : JSON.stringify(body),

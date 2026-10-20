@@ -5,7 +5,8 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { KinuError } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { KinuError, settleSync } from '@kinu.run/core/obs';
 import { durableStamps, initMailNameTables, isMailLabel, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
 
 /** Labels no account may claim: the mailbox names mail systems and people expect to reach a deployment's operator. */
@@ -42,7 +43,7 @@ export class MailNameDO extends DurableObject<Env> {
 
   /** Who holds the label, and how; null while nobody does. */
   lookup(): Promise<MailNameClaim | null> {
-    if (this.storageRefusal !== undefined) throw this.storageRefusal;
+    if (this.storageRefusal !== undefined) return settleSync(Effect.fail(this.storageRefusal));
     const [row] = this.ctx.storage.sql.exec('SELECT label, user_id, kind, target_path, state FROM mail_name').toArray();
 
     return Promise.resolve(row === undefined ? null : v.parse(ClaimRow, row));
@@ -50,11 +51,11 @@ export class MailNameDO extends DurableObject<Env> {
 
   /** Claims the label for `userId`; the holder already is that account when it answers. A reserved label is refused. */
   async claim(label: string, userId: string, kind: 'username' | 'alias' = 'username', targetPath: string | null = null): Promise<MailNameClaim> {
-    if (!isMailLabel(label) || RESERVED_LABELS.has(label)) throw new KinuError('bad_input', `"${label}" cannot be an address.`);
+    if (!isMailLabel(label) || RESERVED_LABELS.has(label)) return settleSync(Effect.fail(new KinuError('bad_input', `"${label}" cannot be an address.`)));
     const held = await this.lookup();
 
     if (held !== null) {
-      if (held.user_id !== userId || held.state === 'retired') throw new KinuError('denied', `"${label}" is taken.`);
+      if (held.user_id !== userId || held.state === 'retired') return settleSync(Effect.fail(new KinuError('denied', `"${label}" is taken.`)));
 
       return held;
     }
