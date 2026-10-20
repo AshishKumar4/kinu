@@ -113,6 +113,8 @@ import { ActorSession, type ActorTurnLease,
   type PromptIdentity,
   narrowToolSurface, codemodeCapabilitiesFor,
   type ResolvedTurnProfile,
+  type TurnReads,
+  approvedTaskPlan,
   decodeJsonValue, projectJsonValue,
   agentSelfHost, ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, isSubordinateOrigin, type OwnerWaitsHost, type ScopedOwnerWait,
   cancelBackgroundJob, listBackgroundJobs,
@@ -183,7 +185,7 @@ function seatOf(hosted: LocalHostedSession | undefined, rt: CLIRuntime, stores: 
   return { reference: actorReferenceOf(record), record, handle: rt.actor, stores, runtime: rt };
 }
 
-type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
+type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata' | 'idempotencyKey'>;
 
 const NEXT_OWNER_TURN: TurnAsked = { kind: 'user', text: '' };
 
@@ -1792,7 +1794,13 @@ export class LocalAgentSession {
       identity: async () => this.promptIdentity(),
       memoryTail: () => readMemoryTail(this.rt.memory),
       artifacts: () => this.currentTurnArtifacts(),
-      taskPlan: () => null,
+      // A turn the owner's approval started implements that revision: the tasks it makes are the plan's, written through the
+      // store the builtins open over this runtime's own SQL (core withTaskPlan).
+      taskPlan: () => {
+        const plan = approvedTaskPlan(item, this.stores.planReviews);
+
+        return plan === null ? null : { sql: [this.rt.storage.sql], plan };
+      },
       conversationKey: () => this.compactionKey(),
       budget: this.budget,
       operations: this.modelOperations,
@@ -2748,20 +2756,22 @@ export class LocalAgentSession {
       scaffoldSpend: { source: 'scaffold', report: compaction.report, operations: compaction.operations },
       attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
       extensions: () => [compaction.extension],
-      dynamic: () => (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+      // The turn's own reads, read once by core (turn-assembly), as the chat's and the cloud's actors take them.
+      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.actorDynamicContext(actor, profile, tools, { memoryTail, activeSkills }),
       operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId, turnId: null }),
     };
   }
 
-  /** Per-step context from the hosted actor's own stores, never this session's. */
-  private actorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
+  /** Per-step context from the hosted actor's own stores, never this session's, with the reads its turn made. */
+  private actorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet, reads: Pick<TurnReads, 'memoryTail' | 'activeSkills'>): DynamicContext {
     return collectDynamicContext({
       rt: actor.runtime,
       stores: actor.stores,
       profile,
       tools,
       runtime: this.runtimeFacts(profile),
-      memoryTail: undefined,
+      ...(reads.activeSkills !== null && { activeSkills: reads.activeSkills }),
+      memoryTail: reads.memoryTail,
       missingCapabilities: [],
       subordinateDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
