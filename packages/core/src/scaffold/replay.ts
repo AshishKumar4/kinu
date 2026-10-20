@@ -295,30 +295,32 @@ export interface ReplayVerdict {
   readonly failed: string | null;
 }
 
-/** One recorded turn under `source`. */
-async function replayTurn(rt: AgentRuntime, source: string, turn: RecordedTurn): Promise<ReplayVerdict> {
+/** One recorded turn under `source`; its program is ended at `deadlineMs`, waiting on the host or not. */
+async function replayTurn(rt: AgentRuntime, source: string, turn: RecordedTurn, deadlineMs: number): Promise<ReplayVerdict> {
   const bound = stepsOf(turn.output).length * 2 + SPARE_HOST_CALLS;
   const watch: ReplayWatch = { outside: [], hostCalls: 0, bound, overBound: false, stop: new AbortController() };
-  const signal = AbortSignal.any([watch.stop.signal, AbortSignal.timeout(REPLAY_DEADLINE_MS)]);
-  const events: ScaffoldEvent[] = [];
+  const started = Date.now();
+  const signal = AbortSignal.any([watch.stop.signal, AbortSignal.timeout(deadlineMs)]);
   // No machine is reachable and memory writes stay here: nothing a replay does reaches the agent.
   const isolated: AgentRuntime = { ...rt, memory: replayMemory(rt.memory), executionRouter: undefined };
 
   const host = new ReplayHost(turn, watch);
 
   const result = await runScaffold({
-    rt: isolated, task: turn.task, emit: (event) => { events.push(event); }, stores: null, scaffoldCodeOverride: source, signal,
+    rt: isolated, task: turn.task, emit: () => {}, stores: null, scaffoldCodeOverride: source, signal, deadlineMs,
     llmStream: () => host.llmStream(), callTool: (name, args) => host.callTool(name, args), history: host.history,
     defaultInference: () => host.defaultInference(),
   });
 
-  return { turnId: turn.turnId, failed: failure(watch, signal, result, host.skipped()) };
+  const late = signal.aborted || Date.now() - started >= deadlineMs ? deadlineMs : null;
+
+  return { turnId: turn.turnId, failed: failure(watch, late, result, host.skipped()) };
 }
 
-function failure(watch: ReplayWatch, signal: AbortSignal, result: ScaffoldRunResult, skipped: readonly string[]): string | null {
+function failure(watch: ReplayWatch, late: number | null, result: ScaffoldRunResult, skipped: readonly string[]): string | null {
   if (watch.overBound) return `it passed its bound of ${String(watch.bound)} model and tool calls`;
 
-  if (signal.aborted) return `it did not finish within ${String(REPLAY_DEADLINE_MS / 1000)} s`;
+  if (late !== null) return `it did not finish within ${String(late / 1000)} s`;
 
   if (!result.ok) return `it threw: ${result.error ?? 'without a message'}`;
 
@@ -335,11 +337,13 @@ function failure(watch: ReplayWatch, signal: AbortSignal, result: ScaffoldRunRes
  * Every turn replayed in order; the first that fails decides, and later turns are not run. With no recorded turn there
  * is nothing to hold the version to, which is a failure, never a pass.
  */
-export async function replayScaffold(rt: AgentRuntime, source: string, turns: readonly RecordedTurn[]): Promise<ReplayVerdict | null> {
+export async function replayScaffold(
+  rt: AgentRuntime, source: string, turns: readonly RecordedTurn[], deadlineMs = REPLAY_DEADLINE_MS,
+): Promise<ReplayVerdict | null> {
   if (turns.length === 0) return { turnId: null, failed: 'no answered turn is recorded to replay it against' };
 
   for (const turn of turns) {
-    const verdict = await replayTurn(rt, source, turn);
+    const verdict = await replayTurn(rt, source, turn, deadlineMs);
 
     if (verdict.failed !== null) return verdict;
   }

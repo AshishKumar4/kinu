@@ -21,11 +21,6 @@ import {
   type RefinementDeps, type RefinementEdit, type RefinementRequest, type RefinementRoute,
 } from './refinement';
 
-/** Where the turn's skills index reads, so a dream's skill lands where discovery finds it. */
-function planeOf(deps: Pick<RefinementDeps, 'skillsVfs'>): VFS {
-  return deps.skillsVfs;
-}
-
 async function readText(vfs: VFS, path: string): Promise<string | null> {
   if (!await exists(vfs, path)) return null;
   const read = await nimbusReadText(vfs, path);
@@ -103,7 +98,7 @@ export async function routeSkill(
         + 'a dream must not talk over it. Propose a differently-named skill');
   }
 
-  const vfs = planeOf(deps);
+  const vfs = deps.skillsVfs;
 
   if (await exists(vfs, canonical)) {
     return refused(`${canonical} already exists: those bytes are the owner's or another `
@@ -152,7 +147,7 @@ export function activateDreamSkills(deps: RefinementDeps): Promise<void> {
 
         // Trust first; see the module header. A failed promotion stays staged for the next cold turn.
         if (standing === null) approvals.approve(route.target, route.digest, 'dream');
-        const promoted = yield* Effect.result(promoteStagedSkill(planeOf(deps), request, route));
+        const promoted = yield* Effect.result(promoteStagedSkill(deps.skillsVfs, request, route));
 
         if (Result.isSuccess(promoted) && promoted.success) diagnostics.event('dream.skill_applied', { change: route.target, dream: request.id });
       }
@@ -243,7 +238,7 @@ export function settleDreamSkill(
 ): Promise<{ readonly state: 'applied' | 'rolled_back' | 'pending'; readonly reason?: string }> {
   return settle(Effect.gen(function* () {
     const standing = deps.approvals?.get(route.target);
-    const vfs = planeOf(deps);
+    const vfs = deps.skillsVfs;
 
     if (standing === null || standing === undefined) return { state: 'pending' as const };
 
@@ -297,7 +292,7 @@ export async function revertDreamSkill(
   }
 
   approvals.revoke(route.target);
-  const vfs = planeOf(skills);
+  const vfs = skills.skillsVfs;
   const file = await readText(vfs, route.target);
   const removed = file !== null && instructionDigest(file) === route.digest;
 

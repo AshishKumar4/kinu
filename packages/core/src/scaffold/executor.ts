@@ -16,7 +16,7 @@ import type { ChatEvent } from '../chat';
 import type { UIMessageChunk } from 'ai';
 import { nanoid } from '../utils/nanoid';
 import { failedToolOutcome, ToolOutcomeSchema, type ToolOutcome } from '../tools/outcome';
-import type { Executor } from '../types/primitives';
+import type { Executor, ProgramStop } from '../types/primitives';
 import {
   assertJsonValue,
   isJsonObject,
@@ -170,8 +170,8 @@ export type ScaffoldHistoryReader = (
   query?: ScaffoldHistoryQuery,
 ) => Promise<ScaffoldHistoryPage>;
 
-export interface ScaffoldRunControl {
-  readonly signal?: AbortSignal;
+/** `signal` also refuses its host calls once aborted. */
+export interface ScaffoldRunControl extends ProgramStop {
   readonly assertActive?: () => void;
 }
 
@@ -475,7 +475,9 @@ export function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult
     }
 
     assertScaffoldActive(opts);
-    const result = yield* Effect.promise(() => runWorkModeInvocation(mode, () => exec.execute(wrapperCode, providers)));
+    // A program awaiting nothing of the host would never meet `assertScaffoldActive`: the executor ends it.
+    const stop: ProgramStop = { ...(opts.signal !== undefined && { signal: opts.signal }), ...(opts.deadlineMs !== undefined && { deadlineMs: opts.deadlineMs }) };
+    const result = yield* Effect.promise(() => runWorkModeInvocation(mode, () => exec.execute(wrapperCode, providers, stop)));
     const durationMs = Date.now() - startedAt;
 
     if (result.error) {

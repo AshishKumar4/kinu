@@ -83,6 +83,14 @@ export interface ExecuteResult {
   logs?: string[];
 }
 
+/** What ends a program before it finishes. */
+export interface ProgramStop {
+  /** Ends the run when it aborts: it answers at once, with an error that says so. */
+  readonly signal?: AbortSignal;
+  /** The run is ended after this long, by the sandbox itself where the executor has one; absent: no deadline. */
+  readonly deadlineMs?: number;
+}
+
 /** Sandboxed; network blocked by default (globalOutbound: null on CF); no persistent state. */
 export interface Executor {
   /** Languages this executor can actually run, in preference order. */
@@ -90,7 +98,7 @@ export interface Executor {
   execute(
     code: string,
     providers: ResolvedProvider[] | Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>,
-    opts?: {
+    opts?: ProgramStop & {
       /** Omitted means the executor's first declared language. */
       language?: string;
     },

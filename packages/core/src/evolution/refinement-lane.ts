@@ -379,7 +379,7 @@ function review(
       if (rounds.length === 0) {
         rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
 
-        if (!claim.record(reviewRounds(rounds))) return null;
+        if (!claim.record({ review: { rounds } })) return null;
       }
 
       const latest = rounds[rounds.length - 1];
@@ -399,7 +399,7 @@ function review(
         if (Result.isFailure(judged)) return { refused: judged.failure };
         rounds[round] = { evidence: latest.evidence, verdicts: [...judged.success] };
 
-        if (!claim.record(reviewRounds(rounds))) return null;
+        if (!claim.record({ review: { rounds } })) return null;
         continue;
       }
 
@@ -421,14 +421,9 @@ function review(
       proposal = revised.success;
       rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
 
-      if (!claim.record({ ...reviewRounds(rounds), proposal, detail: proposal.summary })) return null;
+      if (!claim.record({ review: { rounds }, proposal, detail: proposal.summary })) return null;
     }
   });
-}
-
-/** The review so far, as the row records it. */
-function reviewRounds(rounds: RefinementRequest['review']['rounds']): SettleRefinementPatch {
-  return { review: { rounds } };
 }
 
 /** What the reviewer reads about each edit, measured before it is judged; a static gate's refusal routes it nowhere. */
