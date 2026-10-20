@@ -436,7 +436,7 @@ async function writeSkill(rt: AgentRuntime, path: string, source: string): Promi
 /** What the prompt would see: `discoverSkills` over the skill roots. */
 async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs;
-  const discovery = await discoverSkills(vfs, { admissionTokens: 100_000 });
+  const discovery = await discoverSkills(vfs, { admissionTokens: 100_000, trust: () => 'unverified' });
 
   return discovery.skills.filter((skill) => skill.bodyRef.kind === 'file').map((skill) => skill.name);
 }

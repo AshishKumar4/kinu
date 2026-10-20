@@ -108,7 +108,7 @@ async function admitTurnSkills(
   },
   admissionTokens: number,
 ): Promise<TurnSkillSurface> {
-  const discovery = await discoverSkills(opts.vfs, { admissionTokens });
+  const discovery = await discoverSkills(opts.vfs, { admissionTokens, trust: opts.trust });
   const available = admitSkillsIndex(discovery, admissionTokens);
 
   const activated = resolveActiveSkills({

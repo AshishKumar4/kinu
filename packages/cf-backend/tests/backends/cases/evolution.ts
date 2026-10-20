@@ -114,7 +114,9 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
 
       expect(prefixOf('second')).toBe(prefixOf('first'));
       expect(prefixOf('second')).not.toContain('**terse-replies**');
+      // Trusted, its index line states when it applies.
       expect(prefixOf('third')).toContain('**terse-replies**');
+      expect(prefixOf('third')).toContain('Answer in one short line when the owner asks a yes-or-no question.');
       expect(prefixOf('fourth')).toBe(prefixOf('third'));
       expect(prefixOf('fifth')).not.toContain('**terse-replies**');
       expect(await exists(files, target)).toBe(false);

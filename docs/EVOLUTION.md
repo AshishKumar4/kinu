@@ -221,6 +221,8 @@ Writing the file to `/home/main/skills/<name>/SKILL.md` and relying on content-a
 
 So the bytes go to `refinementStagingPath(requestId, name)` under `.kinu/`, which neither `discoverSkills` nor `gatherApprovableInstructions` walks. The route reads `staged`. At a turn whose prompt cache is cold, before its skills are read, `activateDreamSkills` writes the trust row (origin `dream`) and then the file; each host calls it beside `turnArtifacts`, the cloud only for the workspace agent's own turn, since the skills root is the workspace's. The lane never writes the skills root: it only reads where each skill stands.
 
+In the index a trusted skill, the owner's or a dream's, states its description, so the agent knows when it applies; an untrusted file is named with where it lives and "reference material until the owner approves it" (`admitSkillsIndex`, `core/src/skills/loader.ts`), its description unread.
+
 The whole path (staging, activation, settling, reverting) lives in `core/src/evolution/refinement-skill.ts`.
 
 ### The activation order, and why nothing half-lands

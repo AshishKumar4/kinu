@@ -164,7 +164,8 @@ export async function gatherApprovableInstructions(input: {
     sources.push({ path: entry.path, kind: 'agents_md', bytes: 0, reason: entry.reason });
   }
 
-  const discovery = await discoverSkills(input.skillsVfs, { admissionTokens: input.admissionTokens });
+  // The listing reads paths and sizes, never an index line, so trust has nothing to decide here.
+  const discovery = await discoverSkills(input.skillsVfs, { admissionTokens: input.admissionTokens, trust: () => 'unverified' });
   const skills = discovery.skills.filter((skill) => skill.bodyRef.kind === 'file');
 
   const sizes = await Promise.all(skills.map(async (skill) => {
