@@ -1973,6 +1973,9 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
 
   if (method === "listTriggers") return rpcResult({ triggers: [] }).json<T>();
 
+  // `AgentMail | null`, read as `mail.threads`: none, as before the person has an address.
+  if (method === "agentMail") return rpcResult(null).json<T>();
+
   if (method === "getGepaRun") return rpcResult({ run: null, candidates: [], pareto: [] }).json<T>();
 
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
