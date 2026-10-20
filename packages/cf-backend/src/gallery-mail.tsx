@@ -15,7 +15,7 @@ import {
   GitBranchIcon, IdentificationCardIcon, MagnifyingGlassIcon, NotePencilIcon, PaperclipIcon, PaperPlaneTiltIcon, PencilSimpleIcon, SealCheckIcon,
   ShieldWarningIcon, SparkleIcon, TrashIcon, TrayIcon, XIcon,
 } from "@phosphor-icons/react";
-import { cardWords, mainPanelAgent, sandboxedHtml, type PanelAgent, type TurnLiveness, type WorkMode } from "@kinu.run/core";
+import { cardWords, mainPanelAgent, type PanelAgent, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import { WorkspaceBarActions, WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { MessageView } from "@/components/MessageView";
@@ -35,6 +35,7 @@ import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
 import { MailSendBody, type MailSend } from "@/components/mail/MailSendBody";
+import { mailExcerpt as firstLine, MailBody as Body, SealedMailHtml as SealedHtml } from "@/components/mail/MailMessage";
 import type { ImportantMail } from "@/lib/mail-api";
 
 const NOW = Date.now();
@@ -283,6 +284,8 @@ const THREADS: readonly Thread[] = [
   },
 ];
 
+export { ADDRESSES as mailAddresses, THREADS as mailThreads, OWNER as mailOwner };
+
 
 const VIEWS = ["important", "all", "sent", "drafts", "trash"] as const;
 
@@ -331,22 +334,6 @@ function participants(thread: Thread): string {
   const names = thread.mail.filter((mail) => mail.sent === undefined || mail.sent.by === "you").map((mail) => (isOwner(mail) ? "You" : mail.from.name));
 
   return [...new Set(names)].join(", ");
-}
-
-/** A mail's own words and the earlier mail it quotes, split where the quote begins. */
-function quoted(text: string): { readonly own: string; readonly quote: string | null } {
-  const lines = text.split("\n");
-  const at = lines.findIndex((line) => /^On .+ wrote:$/u.test(line) || line.startsWith(">"));
-
-  return at < 0 ? { own: text, quote: null } : { own: lines.slice(0, at).join("\n").trimEnd(), quote: lines.slice(at).join("\n") };
-}
-
-/** A mail's first words past its greeting and before any quote. */
-function firstLine(text: string): string {
-  const lines = quoted(text).own.split("\n").map((line) => line.trim()).filter(Boolean);
-  const greeting = /^(hi|hello|hey)\b[^.!?]{0,24},$/iu.test(lines[0] ?? "");
-
-  return (greeting ? lines.slice(1) : lines).join(" ");
 }
 
 const importantOf = (thread: Thread): ImportantMail => ({
@@ -402,42 +389,6 @@ function MailRow({ thread, open, box, draft = false, onOpen }: { thread: Thread;
         </span>
       </span>
     </button>
-  );
-}
-
-/**
- * A message's HTML, sealed: an empty sandbox, no remote loads, so tracking images never fetch. A sealed frame can't be
- * measured from outside, so it opens at a height read off the text's length and the reader can drag it taller.
- */
-function SealedHtml({ html }: { html: string }) {
-  const height = Math.min(520, Math.max(220, Math.round(html.replace(/<[^>]+>/gu, "").length * 0.85)));
-
-  return (
-    <div className="resize-y overflow-hidden rounded-lg border p-border bg-white" style={{ height }}>
-      <iframe title="Message" sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(html)} data-mail-sealed className="block h-full w-full" />
-    </div>
-  );
-}
-
-/** A mail's words, the quote it carries folded until asked for. */
-function Body({ text }: { text: string }) {
-  const [shown, setShown] = useState(false);
-  const { own, quote } = quoted(text);
-
-  return (
-    <div className="space-y-2">
-      <div className="space-y-3 text-[14px] leading-6 p-text">
-        {own.split(/\n{2,}/u).map((paragraph, index) => <p key={index} className="whitespace-pre-wrap break-words">{paragraph}</p>)}
-      </div>
-      {quote !== null && (
-        shown
-          ? <p data-mail-quote className="whitespace-pre-wrap break-words border-l-2 p-border pl-3 p-row-text p-text-3">{quote}</p>
-          : (
-            <button type="button" onClick={() => setShown(true)} data-mail-show-quote aria-label="Show the quoted mail" title="Show the quoted mail"
-              className="rounded-full bg-[var(--c-neutral-tint)] px-2 leading-4 p-meta p-text-3 hover:p-text">•••</button>
-          )
-      )}
-    </div>
   );
 }
 

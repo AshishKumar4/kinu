@@ -1,13 +1,11 @@
-/**
- * The mail the assistant marked Important: what it is, who sent it, and the assistant's one-line reason. The Mail lane
- * (feat/mail) owns the route and the row; this is the read the shell's Mail icon makes of it.
- */
+/** The signed-in person's Mailbox: the page and shell read the same HTTP contract. */
 import * as v from "valibot";
 import { settle } from "@kinu.run/core/obs";
+import type { MailBox, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailThreadSummary, MailThreadView } from "@kinu.run/core";
 import { request } from "./http";
 
 const ImportantMailSchema = v.object({
-  /** Opens `/mail?thread=<id>`. */
+  /** Opens `/mail/<id>`. */
   thread: v.string(),
   from: v.object({ name: v.string(), address: v.string() }),
   /** The box it reached. */
@@ -27,4 +25,71 @@ export type Important = v.InferOutput<typeof ImportantSchema>;
 
 export function readImportantMail(limit: number): Promise<Important> {
   return settle(request(ImportantSchema, `/api/user/mail/important?limit=${String(limit)}`));
+}
+
+const PartySchema = v.object({ name: v.nullable(v.string()), address: v.string() });
+
+const BoxSchema = v.object({
+  path: v.string(), address: v.string(), kind: v.picklist(["person", "workspace", "agent"]),
+  workspace: v.nullable(v.string()), actorId: v.nullable(v.string()), wake: v.picklist(["owner", "allowlist", "verified", "never"]),
+}) satisfies v.GenericSchema<unknown, MailBox>;
+
+const BoxesSchema = v.object({ address: v.nullable(v.string()), canClaim: v.boolean(), boxes: v.array(BoxSchema) });
+
+export type MailBoxes = v.InferOutput<typeof BoxesSchema>;
+
+const SummarySchema = v.object({
+  id: v.string(), path: v.string(), subject: v.string(), from: v.array(PartySchema), snippet: v.string(), at: v.number(),
+  count: v.number(), unread: v.boolean(), verified: v.boolean(), attachments: v.boolean(), important: v.nullable(v.string()),
+  trashedAt: v.nullable(v.number()), draft: v.boolean(), outgoing: v.boolean(),
+}) satisfies v.GenericSchema<unknown, MailThreadSummary>;
+
+const MessageSchema = v.object({
+  id: v.string(), threadId: v.string(), direction: v.picklist(["in", "out"]), from: PartySchema,
+  to: v.array(PartySchema), cc: v.array(PartySchema), deliveredTo: v.nullable(v.string()), subject: v.string(), at: v.number(),
+  verified: v.boolean(), auth: v.nullable(v.string()), woke: v.nullable(v.picklist(["owner", "input"])), text: v.string(), html: v.nullable(v.string()),
+  attachments: v.array(v.object({ id: v.string(), filename: v.string(), contentType: v.string(), size: v.number() })),
+  writtenBy: v.nullable(v.string()), sendState: v.nullable(v.picklist(["draft", "queued", "sent", "delivered", "bounced", "failed", "complained"])), read: v.boolean(),
+}) satisfies v.GenericSchema<unknown, MailMessageView>;
+
+const ThreadSchema = v.object({ thread: SummarySchema, messages: v.array(MessageSchema) }) satisfies v.GenericSchema<unknown, MailThreadView>;
+
+const ListingSchema = v.object({ threads: v.array(SummarySchema), unread: v.number() }) satisfies v.GenericSchema<unknown, MailListing>;
+
+export type MailWrite = MailOutgoing & { readonly threadId?: string };
+
+export function readMailBoxes(): Promise<MailBoxes> {
+  return settle(request(BoxesSchema, "/api/user/mail/boxes"));
+}
+
+export function claimMailAddress(username: string): Promise<{ address: string }> {
+  return settle(request(v.object({ address: v.string() }), "/api/user/mail/claim", { method: "POST", json: { username } }));
+}
+
+export function listMailThreads(query: MailListQuery): Promise<MailListing> {
+  const params = new URLSearchParams({ view: query.view });
+
+  if (query.path !== undefined) params.set("path", query.path);
+
+  if (query.query !== undefined && query.query !== "") params.set("q", query.query);
+
+  if (query.before !== undefined) params.set("before", String(query.before));
+
+  return settle(request(ListingSchema, `/api/user/mail/threads?${params.toString()}`));
+}
+
+export function readMailThread(id: string): Promise<MailThreadView> {
+  return settle(request(ThreadSchema, `/api/user/mail/threads/${encodeURIComponent(id)}`));
+}
+
+export function updateMailThread(id: string, change: { readonly read?: boolean; readonly trashed?: boolean }): Promise<MailThreadSummary> {
+  return settle(request(SummarySchema, `/api/user/mail/threads/${encodeURIComponent(id)}`, { method: "PATCH", json: change }));
+}
+
+export function sendMail(message: MailWrite): Promise<MailMessageView> {
+  return settle(request(MessageSchema, "/api/user/mail/send", { method: "POST", json: message }));
+}
+
+export function saveMailDraft(message: MailWrite): Promise<MailMessageView> {
+  return settle(request(MessageSchema, "/api/user/mail/drafts", { method: "POST", json: message }));
 }

@@ -8023,6 +8023,7 @@ async function mount() {
 
       return mailFrame();
     }],
+    ["mailpage", async () => (await import("@/gallery-mailpage")).default()],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
     ["qualitylive", () => {
       serveGalleryRpc(workspacePageRpc);
