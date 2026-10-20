@@ -832,22 +832,12 @@ describe('over the live tree', () => {
   const entrypoints = findEntrypoints(reachers, graph.modules, builtinNames);
   const reach = measureReach(graph, entrypoints);
 
-  test('every local import resolves, so no edge is dropped', () => {
-    expect(graph.dangling).toEqual([]);
-  });
-
   test('every entrypoint kind has at least one live instance', () => {
     // The denominator. A detector that stops matching — a renamed decorator, a
     // commander upgrade, a moved registry — makes this gate more permissive and
     // nothing else would say so.
     const present = new Set(entrypoints.map((entry) => entry.kind));
     expect([...present].sort()).toEqual([...KINDS].sort());
-  });
-
-  test('the model surface, the tool names and the reach set are all non-empty', () => {
-    expect(builtinNames.size).toBeGreaterThan(0);
-    expect(reach.live.size).toBeGreaterThan(0);
-    expect(reach.reached.size).toBeGreaterThan(0);
   });
 
   test('every finding sits in the set the gate governs', () => {

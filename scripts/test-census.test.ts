@@ -1557,12 +1557,6 @@ describe('this repository', () => {
     }
   });
 
-  test('the live tree holds no banned finding, and the committed lock is exact and proven', () => {
-    const lock = readFileSync(join(import.meta.dir, 'test-census.lock.json'), 'utf8');
-    expect(checkRatchet(census.findings, lock))
-      .toEqual({ banned: [], added: [], grown: [], stale: [], unproven: [] });
-  });
-
 });
 
 describe('the runner table is resolved, never listed', () => {

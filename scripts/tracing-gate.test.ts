@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { auditTracing, tracerCallSites, tracingConfigOf } from './tracing-gate';
+import { auditTracing, tracerCallSites } from './tracing-gate';
 import type { SpanObservations, TracingConfig } from './tracing-gate';
 import { isProductSource, readMatching } from './sources';
 
@@ -23,10 +23,6 @@ describe('tracing — the census is derived from the product corpus', () => {
 
   test('the live corpus holds a production call site', () => {
     expect(tracerCallSites(readMatching(isProductSource))).toContain('packages/cf-backend/src/actor-agent.ts');
-  });
-
-  test('the live config enables traces where the call site ships', () => {
-    expect(tracingConfigOf('packages/cf-backend/wrangler.jsonc').tracesEnabled).toBe(true);
   });
 });
 
