@@ -1,7 +1,7 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
-import { OPENCODE_GO_CATALOG, present } from '@kinu.run/test-utils';
+import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
   agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
   wakeForDelegatedTask, workspaceMainActor,
@@ -153,16 +153,16 @@ test("a hired agent's model call authenticates with the provider account the own
   user.close();
 });
 
-// The InternalFish audit: the workspace runtime's lanes (titles, sleep-time, decisions) built their registry with no
-// account choice, so they called on main while the chat used the account the owner selected.
-test("the workspace's own fast lane calls on the provider account the owner selected", async () => {
+// The InternalFish audit: the workspace runtime's lanes (sleep-time, ratings, decisions, the curriculum's judge) built
+// their registry with no account choice. Inside a turn a call carries the turn's; outside one, as proposing the next
+// tasks is, the lane called on main while the chat used the account the owner selected.
+test("the workspace's own lanes call on the provider account the owner selected", async () => {
   const { user, workspace, used } = await workAccountWorkspace('lanes');
 
-  // The fake provider refuses every call, so the lane's answer is a refusal; the key it presented is what is read.
-  await expect(present(workspace.agent.harnessFastLane(), 'the fast lane').complete('Title this.')).rejects.toThrow();
+  // The fake provider refuses the judge's call; the key it presented is what is read.
+  await expect(workspace.agent.proposeCurriculumTasks(1)).rejects.toThrow();
   expect(used.length).toBeGreaterThan(0);
-  expect(used.join(' ')).toContain('sk-work');
-  expect(used.join(' ')).not.toContain('sk-main');
+  expect(new Set(used)).toEqual(new Set(['sk-work']));
   await user.joinFibers();
   user.close();
 });
