@@ -20,6 +20,7 @@ import {
 } from "@kinu.run/core";
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { PageHeader, toolFrame, toolVariant } from "@/components/ui/PageHeader";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
@@ -141,8 +142,10 @@ function FolderTree({ listings, parent, current, depth }: {
 }
 
 /** From `lg`, the Drive's places in a column: My stuff with its folder tree, Slates, then Shared. */
-function DriveColumn({ tab, path, shown, places, unseen }: {
+function DriveColumn({ tab, path, shown, places, unseen, titled }: {
   tab: DriveTab; path: string; shown: DriveListing | null; places: readonly DriveTab[]; unseen: boolean;
+  /** The column names the place; with the page's own title row above it (`toolVariant`), it does not. */
+  titled: boolean;
 }) {
   // Drawn only from `lg`; the tree in it reads nothing while it is not drawn.
   const drawn = useMediaQuery("(min-width: 1024px)");
@@ -151,12 +154,14 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   if (!drawn) return null;
 
   return (
-    <aside aria-label="Drive" className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
-      <div className="flex h-8 items-center gap-2.5 px-2.5">
-        <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-        <h1 className="p-display text-2xl">Drive</h1>
-      </div>
-      <nav aria-label="Drive places" className="mt-6 space-y-0.5">
+    <aside aria-label="Drive" className={`hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 lg:flex ${titled ? "pt-8" : "pt-2"}`}>
+      {titled && (
+        <div className="flex h-8 items-center gap-2.5 px-2.5">
+          <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
+          <h1 className="p-display text-2xl">Drive</h1>
+        </div>
+      )}
+      <nav aria-label="Drive places" className={`space-y-0.5 ${titled ? "mt-6" : ""}`}>
         {PLACES.filter((each) => places.includes(each.id)).map((each) => {
           const active = each.id === tab;
           const here = active && (each.id !== "mine" || path === "/");
@@ -188,18 +193,22 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
  * The page's head, one tree laid out twice: below `lg` the title, the switch, the search and the crumbs stack; from
  * `lg` the title and the places are the column's, and the crumbs share a row with New or the search.
  */
-function DriveHead({ tab, path, subtitle, places, unseen, search, action }: {
+function DriveHead({ tab, path, subtitle, places, unseen, search, action, titled }: {
   tab: DriveTab; path: string; subtitle: ReactNode; places: readonly DriveTab[]; unseen: boolean;
   search: { readonly query: string; readonly set: (query: string) => void }; action: ReactNode;
+  /** Named here below `lg`, unless the page's own title row names it at every width. */
+  titled: boolean;
 }) {
   const isRoot = path === "/";
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] lg:[grid-template-areas:'crumbs_action_search']">
-      <header className="flex items-center gap-3 [grid-area:title] lg:hidden">
-        <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-        <h1 className="p-display text-2xl">Drive</h1>
-      </header>
+      {titled && (
+        <header className="flex items-center gap-3 [grid-area:title] lg:hidden">
+          <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
+          <h1 className="p-display text-2xl">Drive</h1>
+        </header>
+      )}
       {action && <div className="ml-3 [grid-area:action]">{action}</div>}
       {places.length > 1 && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}
       {tab === "shared" && (
@@ -214,6 +223,20 @@ function DriveHead({ tab, path, subtitle, places, unseen, search, action }: {
       )}
     </div>
   );
+}
+
+/** Where Drive's title sits. */
+interface DriveTitle {
+  readonly row: ReactNode;
+  readonly inColumn: boolean;
+  readonly bodyTop: string;
+}
+
+/** In its column as it ships; on the title row every page has under any other tool variant. */
+function driveTitle(): DriveTitle {
+  if (toolVariant() === "today") return { row: null, inColumn: true, bodyTop: "pt-6 lg:pt-8" };
+
+  return { row: <div className="px-5 pt-6 sm:px-8 lg:pt-8"><PageHeader icon={<HardDrivesIcon size={22} />} title="Drive" /></div>, inColumn: false, bodyTop: "pt-2" };
 }
 
 /** Opening Shared with something new in it sees it, on every device; the library is read again so the dot goes. */
@@ -988,12 +1011,16 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
 
+  const title = driveTitle();
+
   return (
-    <div className="flex h-full min-h-0">
-      <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
+    <div className={`flex h-full min-h-0 flex-col ${toolFrame()}`}>
+      {title.row}
+      <div className="flex min-h-0 flex-1">
+      <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} titled={title.inColumn} />
       <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className="px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
-        <DriveHead tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }}
+      <div className={`px-5 pb-20 sm:px-8 ${title.bodyTop}`}>
+        <DriveHead titled={title.inColumn} tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }}
           action={tab === "mine" && (
             <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
               onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
@@ -1023,6 +1050,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         {tab === "shared" && <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>}
       </div>
 
+      </div>
       </div>
 
       {opened !== undefined && <FileDrawer path={joinDir(path, opened.name)} entry={opened} onClose={() => show("file", null)} />}

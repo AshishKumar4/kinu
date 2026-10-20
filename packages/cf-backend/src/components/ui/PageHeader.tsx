@@ -6,7 +6,7 @@
 import type { ReactNode } from "react";
 
 /** Where every top-level page's content starts: 32 px from the sidebar on a desktop, the same top on every page. */
-export const PAGE_BODY = "px-5 pb-16 pt-6 sm:px-8 lg:pt-8";
+const PAGE_BODY = "px-5 pb-16 pt-6 sm:px-8 lg:pt-8";
 
 /**
  * What a page is, for its margins: a tool keeps its own columns full width (Mail, Drive); a browse page lays out things to
@@ -47,6 +47,36 @@ export function pageBody(kind: PageKind, today: string): string {
   const measure = { today, a: CENTRED[kind], b: FRAME }[direction];
 
   return `${measure} ${PAGE_BODY}`;
+}
+
+/**
+ * A tool's place in the same system (Mail, Drive), under review as `data-tools`, in any margin direction: `today` as it
+ * ships; `i` full width, its title on the row every page's title is on; `ii` in a centred frame widened for tools,
+ * 1440, with the pages' gutter; `iii` its left edge on the centred pages' frame line, open to the right edge.
+ */
+export type ToolVariant = "today" | "i" | "ii" | "iii";
+
+export function toolVariant(): ToolVariant {
+  const named = typeof document === "undefined" ? undefined : document.documentElement.dataset.tools;
+
+  return named === "i" || named === "ii" || named === "iii" ? named : "today";
+}
+
+/** Where a tool's frame sits: the whole page beside the rail, a 1440 frame centred in it, or from the frame line on. */
+const TOOL_FRAME: Record<ToolVariant, string> = {
+  today: "w-full",
+  i: "w-full",
+  ii: "mx-auto w-full max-w-[90rem]",
+  iii: "w-full sm:pl-[max(0px,calc((100%_-_72rem)/2))]",
+};
+
+export function toolFrame(): string {
+  return TOOL_FRAME[toolVariant()];
+}
+
+/** A tool page's own body inside its frame: its gutter, as every page's. */
+export function toolBody(): string {
+  return `${toolFrame()} ${PAGE_BODY}`;
 }
 
 /** Under `b`, a form's rows keep the reading measure from the frame's left line while its title row spans the frame. */

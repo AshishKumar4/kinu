@@ -34,6 +34,8 @@ const ExploreWorkspacePage = lazy(() => import("@/pages/ExploreWorkspacePage"));
 
 const WelcomePage = lazy(() => import("@/pages/WelcomePage"));
 
+const NewWorkspacePage = lazy(async () => ({ default: (await import("@/pages/HomePage")).NewWorkspacePage }));
+
 const loading = (page: ReactNode): ReactNode => (
   <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{page}</Suspense>
 );
@@ -59,14 +61,15 @@ function Seeder({ transcript }: { transcript: (name: string) => void }) {
 const IN_PHONE = new URLSearchParams(location.search).get("device") === "frame";
 
 function Pages() {
-  // Keyed on the margins, so a page's body takes the direction asked for at once (PageHeader.tsx `pageBody`).
-  const { layout } = useDesign();
+  // Keyed on the margins, so a page's body takes the direction asked for at once (PageHeader.tsx `pageBody`, `toolBody`).
+  const { layout, tools, background } = useDesign();
 
   return (
-    <Routes key={layout}>
+    <Routes key={`${layout}/${tools}/${background}`}>
       <Route element={<Layout />}>
         <Route index element={<AssistantHome />} />
         <Route path={APP_ROUTES.workspaces} element={loading(<WorkspacesPage />)} />
+        <Route path={APP_ROUTES.newWorkspace} element={loading(<NewWorkspacePage />)} />
         <Route path={APP_ROUTES.drive} element={<DriveRoute tab="mine" />} />
         <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
         <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates" />} />

@@ -7,7 +7,7 @@ import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
 import { MAIL_VIEW_LABEL, MailRow, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
 import { Compose } from "@/components/mail/MailEditor";
-import { PageHeader, PAGE_BODY } from "@/components/ui/PageHeader";
+import { PageHeader, toolBody } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
 import { Choice, inputCls } from "@/components/ui/form";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -214,7 +214,7 @@ export default function MailPage() {
   const person = lastValue(profile);
 
   return (
-    <div data-mail-page className="h-full overflow-y-auto"><div className={`w-full ${PAGE_BODY}`}>
+    <div data-mail-page className="h-full overflow-y-auto"><div className={toolBody()}>
       {account?.address != null ? <MailInbox account={account} owner={person?.email ?? ""} /> : <>
         <PageHeader icon={<EnvelopeSimpleIcon size={22} />} title="Mail" />
         {boxes.resource.status === "loading" && <div role="status" aria-label="Loading mail" className="mt-5"><Loader /></div>}
