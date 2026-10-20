@@ -184,6 +184,7 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   setRole(): Promise<void>;
   beginGenesisTurn(): Promise<void>;
   seedBlueprint(): Promise<void>;
+  connectionsChanged(): Promise<void>;
 }
 
 /** The production UserDO's device chokepoint, with the identities a test cannot mint from outside. */
