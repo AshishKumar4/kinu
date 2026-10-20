@@ -54,6 +54,8 @@ export interface ArmRun {
   readonly spend: unknown;
   /** What its dreams did, read before its workspace was deleted. */
   readonly evolution?: ArmEvolution;
+  /** What stopped it before its plan ended; its segments are those it ran. */
+  readonly error?: string;
 }
 
 export interface ArmEvolution {

@@ -10,6 +10,7 @@ import { type EvalTarget } from './workspace-roster';
 import { graded, taskTurns, type EvalTask, type EvalTurn } from './task';
 import { TrialTimeline } from './timeline';
 import { measure } from './transcript';
+import { renderThrownChain } from '../../packages/core/src/obs/index';
 
 const newRuns = (events: readonly RunEvent[], before: ReadonlySet<string>) => events.filter((event) => !before.has(event.runId));
 
@@ -90,21 +91,16 @@ export async function runArm(input: {
   const session = await openWorkspace(target, { subject: `reactive-${input.arm}-${String(input.seed)}`, mission: 'Help with each task as it comes.', model: input.model });
   const rng = new Seeded(input.seed * 7919 + REACTIVE_ARMS.indexOf(input.arm) + 1);
   const segments: SegmentResult[] = [];
-  let mid = { sum: 0, n: 0 };
+  const mid = { sum: 0, n: 0 };
 
   try {
-    await ARMS.find((arm) => arm.id === input.arm)?.apply(session);
-
-    for (const [at, family] of input.plan.entries()) {
-      const task = input.tasks.get(family);
-
-      if (task === undefined) throw new Error(`no task named ${family}`);
-
-      if (at === input.plan.length - LAST_SEGMENTS) mid = await satisfaction(session);
-      const segment = await runSegment(session, task, rng, say);
-      segments.push(segment);
-      say(`segment ${String(at + 1)} of ${String(input.plan.length)}, ${family}: ${segment.passed ? 'passed' : 'failed'} in ${String(segment.replies)} replies`);
-    }
+    // An arm that stops keeps what it ran: its segments, its error, and what its dreams did by then.
+    const failed = await runPlan(input, {
+      segments, mid, say,
+      apply: async () => { await ARMS.find((arm) => arm.id === input.arm)?.apply(session); },
+      segment: (task) => runSegment(session, task, rng, say),
+      satisfaction: () => satisfaction(session),
+    });
 
     const end = await satisfaction(session);
     const rated = end.n - mid.n;
@@ -113,8 +109,45 @@ export async function runArm(input: {
 
     return {
       arm: input.arm, seed: input.seed, segments, lastSatisfaction: rated > 0 ? (end.sum - mid.sum) / rated : null, spend: await session.spend(), evolution,
+      ...(failed !== null && { error: failed }),
     };
   } finally {
     await session.teardown();
+  }
+}
+
+/** The arm's segments in order, until one throws: null when all ran, else what stopped it. */
+export async function runPlan<Task>(
+  input: { readonly plan: readonly string[]; readonly tasks: ReadonlyMap<string, Task> },
+  run: {
+    readonly segments: SegmentResult[];
+    readonly mid: { sum: number; n: number };
+    readonly say: (line: string) => void;
+    /** The arm's setting, before its first segment. */
+    readonly apply: () => Promise<void>;
+    readonly segment: (task: Task) => Promise<SegmentResult>;
+    readonly satisfaction: () => Promise<{ sum: number; n: number }>;
+  },
+): Promise<string | null> {
+  try {
+    await run.apply();
+
+    for (const [at, family] of input.plan.entries()) {
+      const task = input.tasks.get(family);
+
+      if (task === undefined) throw new Error(`no task named ${family}`);
+
+      if (at === input.plan.length - LAST_SEGMENTS) Object.assign(run.mid, await run.satisfaction());
+      const segment = await run.segment(task);
+      run.segments.push(segment);
+      run.say(`segment ${String(at + 1)} of ${String(input.plan.length)}, ${family}: ${segment.passed ? 'passed' : 'failed'} in ${String(segment.replies)} replies`);
+    }
+
+    return null;
+  } catch (error) {
+    const failed = renderThrownChain({ cause: error });
+    run.say(`stopped after ${String(run.segments.length)} segments: ${failed}`);
+
+    return failed;
   }
 }

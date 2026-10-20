@@ -11,6 +11,7 @@ import { test } from 'vitest';
 import { evalMatrix } from '../src/config';
 import { collectEvalTasks } from '../src/eval';
 import { learningVerdict, REACTIVE_ARMS, reactivePlan, type ArmRun } from '../src/reactive';
+import { renderThrownChain } from '../../packages/core/src/obs/index';
 import { runArm } from '../src/reactive-run';
 import { trialSlot } from '../src/slot';
 import { ARMS, resolveEvalTarget } from '../src/target';
@@ -31,24 +32,40 @@ test('learning on beats learning off', async () => {
 
   if (model === undefined || heldOut === undefined) throw new Error('KINU_EVAL_MODELS names no model, or no task is declared');
   const runs: { on: ArmRun; off: ArmRun; craftingOff: ArmRun; heldOut: string }[] = [];
+  const arms: ArmRun[] = [];
 
   for (let seed = 1; seed <= seeds; seed++) {
     const plan = reactivePlan(families, segments, seed, heldOut);
     const runner = basename(import.meta.filename);
 
-    const [on, off, craftingOff] = await Promise.all(REACTIVE_ARMS.map((arm) => runArm({
+    // Each arm apart: one that cannot open, or stops, is recorded with why, and the others run on.
+    const settled = await Promise.allSettled(REACTIVE_ARMS.map((arm) => runArm({
       target, model, arm, seed, plan, tasks,
       account: trialSlot({ taskFiles: [runner], task: runner, matrix, model, arm, trial: seed }),
     })));
 
-    if (on !== undefined && off !== undefined && craftingOff !== undefined) runs.push({ on, off, craftingOff, heldOut });
+    const [on, off, craftingOff] = settled.map((result, at): ArmRun => (result.status === 'fulfilled' ? result.value : {
+      arm: REACTIVE_ARMS[at] ?? 'unknown', seed, segments: [], lastSatisfaction: null, spend: null, error: renderThrownChain({ cause: result.reason }),
+    }));
+
+    arms.push(...[on, off, craftingOff].filter((arm) => arm !== undefined));
+
+    // Only a seed every arm ran to its end is judged.
+    if (on !== undefined && off !== undefined && craftingOff !== undefined && [on, off, craftingOff].every((arm) => arm.error === undefined)) {
+      runs.push({ on, off, craftingOff, heldOut });
+    }
   }
 
   const verdict = learningVerdict(runs);
   const crafting = learningVerdict(runs.map((run) => ({ on: run.on, off: run.craftingOff, heldOut: run.heldOut })));
   const out = join(env.BENCH_ARTIFACTS ?? tmpdir(), `reactive-${String(Date.now())}.json`);
   mkdirSync(join(out, '..'), { recursive: true });
-  writeFileSync(out, `${JSON.stringify({ runs, verdict, crafting }, null, 2)}\n`);
+  writeFileSync(out, `${JSON.stringify({ arms, runs, verdict, crafting }, null, 2)}\n`);
+
+  for (const arm of arms.filter((ran) => ran.error !== undefined)) {
+    process.stdout.write(`[reactive] ${arm.arm} seed ${String(arm.seed)} stopped after ${String(arm.segments.length)} segments: ${arm.error ?? ''}\n`);
+  }
+
   process.stdout.write(`[reactive] ${verdict.wins ? 'learning wins' : 'learning does not win'}: ${JSON.stringify(verdict)}\n`);
   process.stdout.write(`[reactive] ${crafting.wins ? 'crafting wins' : 'crafting does not win'}: ${JSON.stringify(crafting)}; evidence ${out}\n`);
 });
