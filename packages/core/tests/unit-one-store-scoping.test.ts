@@ -177,11 +177,11 @@ describe('two actors, one database: lessons', () => {
 
     // `key` makes the row id deterministic, so both actors collide.
     const idA = recordLesson(w.sql, w.a, {
-      turnIds: ['turn-1'], text: 'from-a', source: 'turn_reflection', status: 'provisional', key: 'k1',
+      turnIds: ['turn-1'], text: 'from-a', source: 'execution_recovery', status: 'provisional', key: 'k1',
     });
 
     const idB = recordLesson(w.sql, w.b, {
-      turnIds: ['turn-1'], text: 'from-b', source: 'turn_reflection', status: 'provisional', key: 'k1',
+      turnIds: ['turn-1'], text: 'from-b', source: 'execution_recovery', status: 'provisional', key: 'k1',
     });
 
     expect(idA).toBe(idB);

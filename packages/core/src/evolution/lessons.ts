@@ -1,7 +1,4 @@
-/**
- * The lesson ledger (`lessons`): what execution recoveries and imports taught. Turn and session reflections wrote
- * here before the dream replaced them; nothing writes those sources now.
- */
+/** The lesson ledger (`lessons`): what execution recoveries and imports taught. */
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
@@ -15,7 +12,7 @@ import { parseJsonValue } from '../utils/json';
  *  this list. `execution_recovery` is bound to no turn, so it is never corroborated;
  *  `import` is born corroborated. Corroboration is the row's `corroborated_at`: provisional while it is null. */
 const LESSON_SOURCES = [
-  'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
+  'execution_recovery', 'import',
 ] as const;
 
 export type LessonSource = (typeof LESSON_SOURCES)[number];
