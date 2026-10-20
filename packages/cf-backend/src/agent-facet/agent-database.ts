@@ -24,7 +24,7 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, type Repair } from '@kinu.run/core';
+import { durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, stoppedProgram, writeStamp, type Repair } from '@kinu.run/core';
 import type { ChatWindow, MediaRef, MediaUrl, StoredImage } from '@kinu.run/core';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
@@ -428,7 +428,15 @@ export class AgentDatabase {
   /** The execution's facts are frozen with its first preparation: a later one, its recovery's after a reset, finds them. */
   prepare(bound: TurnBound, prepared: PreparedAgentTurn): void {
     this.priced = { model: prepared.sources.model, pricing: prepared.pricing };
-    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(bound, ...args) };
+    this.execution = {
+      languages: prepared.languages,
+      // A signal cannot cross the call: the stop is answered here, and the deadline travels for the sandbox to keep.
+      execute: (code, providers, opts) => {
+        const { signal, ...sent } = opts ?? {};
+
+        return stoppedProgram(() => this.workspace.program(bound, code, providers, sent), signal === undefined ? {} : { signal });
+      },
+    };
     this.storage.transactionSync(() => {
       this.selectScaffold(prepared.scaffold);
       this.turnFacts.freeze(bound, prepared.facts);

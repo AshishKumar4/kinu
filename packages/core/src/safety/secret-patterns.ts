@@ -180,10 +180,14 @@ const REDACTION_PASSES = [...SECRET_PATTERNS, ...REDACTION_ONLY_PATTERNS].map((p
   one: new RegExp(pattern.regex.source, pattern.regex.flags.replace('g', '')),
 }));
 
-/** Applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a match that is itself a
- *  pattern's `benign` form stays) and masks with `<redacted>`, the marker every redacted line carries. */
+/** A private key from its first line to its last, or to the end of the text where its last line was cut: a per-line
+ *  pass masks only the header and would leave the key's body. */
+const PRIVATE_KEY_BLOCK = /-----BEGIN[^-\n]*PRIVATE KEY[^-\n]*-----[\s\S]*?(?:-----END[^-\n]*PRIVATE KEY[^-\n]*-----|$)/g;
+
+/** Masks each private key whole, then applies `SECRET_PATTERNS` and `REDACTION_ONLY_PATTERNS` per line (a match that is
+ *  itself a pattern's `benign` form stays), with `<redacted>`, the marker every redacted line carries. */
 export function redactSecrets(text: string): string {
-  return text.split('\n').map((line) => {
+  return text.replaceAll(PRIVATE_KEY_BLOCK, '<redacted>').split('\n').map((line) => {
     let redacted = line;
 
     for (const { pattern, one } of REDACTION_PASSES) {

@@ -60,6 +60,26 @@ const SLOW_LISTING_MS = 2_000;
 
 
 
+/** Each provider's chosen account, by provider id. */
+export type ProviderAccounts = Readonly<Record<string, string>>;
+
+/**
+ * The account each provider's calls use, as every host's `accountFor` reads it: the actor's own choice, else its
+ * workspace's (the main actor's; the same store for the main actor itself), else the profile catalog's default.
+ * `accountDeps` then falls back to `main`, then to the only account. Read per call, so a changed choice applies to the
+ * next call.
+ */
+export function providerAccounts(choices: ProviderAccountChoices) {
+  return { ...choices.catalog, ...choices.workspace, ...choices.actor };
+}
+
+/** The three places a provider's account is chosen, most specific first. */
+export interface ProviderAccountChoices {
+  readonly actor: ProviderAccounts;
+  readonly workspace: ProviderAccounts;
+  readonly catalog: ProviderAccounts | undefined;
+}
+
 /** `named`, else `accountFor`'s, else `main`, else the only one; several unchosen: refused. */
 export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: string, named?: string): Deps {
   const chosen = (): string | undefined => named ?? deps.accountFor?.(providerId);

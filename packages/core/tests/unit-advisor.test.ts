@@ -473,7 +473,7 @@ describe('advisor prompt secret obfuscation', () => {
   const providerKey = 'sk' + '-ant-' + 'x'.repeat(24);
   const privateKey = '-----BE' + 'GIN RSA PRIVATE KEY-----\nMIIB fake body\n-----END RSA PRIVATE KEY-----';
 
-  test('tool args and results carrying credentials reach the prompt obfuscated, by shape class', () => {
+  test('tool args and results carrying credentials reach the prompt redacted, a private key body and all', () => {
     const prompt = buildAdvisorPrompt(aTurn({
       toolCalls: [compactToolCall({
         name: 'shell',
@@ -482,15 +482,8 @@ describe('advisor prompt secret obfuscation', () => {
       })],
     }));
 
-    expect(prompt).not.toContain(bearer);
-    expect(prompt).not.toContain(awsKey);
-    expect(prompt).not.toContain(kinuToken);
-    expect(prompt).not.toContain(providerKey);
-    expect(prompt).not.toContain(privateKey);
-    expect(prompt).toContain('[redacted bearer]');
-    expect(prompt).toContain('[redacted api-key]');
-    expect(prompt).toContain('[redacted kinu-token]');
-    expect(prompt).toContain('[redacted private-key]');
+    for (const secret of [bearer, awsKey, kinuToken, providerKey, 'MIIB fake body']) expect(prompt).not.toContain(secret);
+    expect(prompt).toContain('<redacted>');
   });
 
   test('secret-free values pass through verbatim, including lookalikes', () => {

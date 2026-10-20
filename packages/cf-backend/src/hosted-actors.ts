@@ -6,7 +6,7 @@ import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { EventLog, titleActorFromMessage, spawnSeatedHead, admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, receiveSubordinateEvent, subordinateForkContext, type SubordinateInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, subordinateDescendants, actorReferenceOf, terminalTaskReport, owedSubordinateTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff, type SubordinateReportOrigin, type SubordinateReportHandoff, type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime, type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
-  AgentToolDescriptor, ArtifactOverrides, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
+  AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
   ReceiptExecution, ReportDeps, RunTurnSources, TaskPlan, TurnAssemblySources, TurnLedgers,
   TurnOpening, TurnSurface,
 } from '@kinu.run/core';
@@ -65,6 +65,8 @@ export interface SourcesTurn {
   readonly resolved: ResolvedSurface;
   readonly artifacts: ArtifactOverrides;
   readonly tools: ToolSet;
+  /** The skills this agent's segment does not index yet (`dreamSkillsHidden`). */
+  readonly hidesSkills: NonNullable<DiscoverOpts['hides']>;
 }
 
 interface ResolvedSurface {

@@ -5,18 +5,17 @@
  */
 
 import { Result } from 'effect';
-import type { ActorHandle } from '../identity/actor-handle';
-import type { SqlExecutor } from '../types/primitives';
 import { createFactsStore, type FactsStore } from '../memory/facts';
 import { parseSkillFile } from '../skills/parse';
 import { evidenceWindow } from '../utils/evidence-window';
 import { diagnostics } from '../obs/index';
 import { RunEventRecorder } from '../events/recorder';
-import { artifactLabel, artifactVersion, type ArtifactStatus } from './artifacts';
+import { artifactLabel, artifactVersion } from './artifacts';
+import { changeStanding, type ChangeOwners, type ChangeStanding, type Standing } from './change-standing';
 import { executeChangelogRevert, type ChangelogRevertAction } from './changelog';
 import { listRejections, listTurnRatings, type TurnRating } from './ratings';
 import {
-  createRefinementStore, type RefinementDeps, type RefinementDisposition, type RefinementEdit, type RefinementRequest, type RefinementRoute,
+  createRefinementStore, type RefinementDeps, type RefinementEdit, type RefinementRequest, type RefinementRoute,
 } from './refinement';
 
 /** A rejection read as a correction at least this surely is an explicit stop: the change is reverted. */
@@ -46,6 +45,8 @@ export interface DreamChange {
   readonly since: number;
   /** How the owner would revert it. */
   readonly revert: ChangelogRevertAction;
+  /** Where it stands now: a turn may have run with a text version since replaced. */
+  readonly standing: ChangeStanding;
 }
 
 interface Routed {
@@ -55,36 +56,37 @@ interface Routed {
   readonly index: number;
 }
 
-function textChange(sql: SqlExecutor, actor: ActorHandle, { route }: Routed, ran: ReadonlySet<string>): DreamChange | null {
+function textChange(owners: ChangeOwners, standing: Standing, { route }: Routed, ran: ReadonlySet<string>): DreamChange | null {
   const at = route.target.lastIndexOf('@');
-  const row = at <= 0 || !ran.has(route.target) ? null : artifactVersion(sql, actor, route.target.slice(0, at), Number(route.target.slice(at + 1)));
+  const row = at <= 0 || !ran.has(route.target) ? null : artifactVersion(owners.sql, owners.actor, route.target.slice(0, at), Number(route.target.slice(at + 1)));
 
   if (row === null) return null;
 
   return {
     id: route.target,
     describe: `${artifactLabel(row.artifactId)} was reworded; it now reads: "${evidenceWindow(row.body, DESCRIBED_CHARS)}"`,
-    since: row.decidedAt ?? row.writtenAt,
+    since: standing.since,
     revert: { type: 'artifact_revert', target: route.target },
+    standing: standing.standing,
   };
 }
 
-function factChange(facts: FactsStore, { request, route }: Routed): DreamChange | null {
+function factChange(facts: FactsStore, standing: Standing, { route }: Routed): DreamChange | null {
   const fact = facts.recall(route.target);
 
-  // A later write by anyone else makes the fact theirs.
-  if (route.disposition !== 'applied' || fact?.source !== `refinement:${request.id}`) return null;
+  if (standing.standing !== 'in_effect' || fact === null) return null;
 
   return {
     id: `fact:${route.target}`,
     describe: `the agent remembers ${route.target}: ${evidenceWindow(JSON.stringify(fact.value), DESCRIBED_CHARS)}`,
-    since: fact.lastObservedAt,
+    since: standing.since,
     revert: { type: 'fact_forget', target: route.target },
+    standing: standing.standing,
   };
 }
 
-function skillChange({ request, route, edit, index }: Routed): DreamChange | null {
-  if (route.disposition !== 'applied' || edit.kind !== 'skill') return null;
+function skillChange(standing: Standing, { request, route, edit, index }: Routed): DreamChange | null {
+  if (standing.standing !== 'in_effect' || edit.kind !== 'skill') return null;
   const parsed = parseSkillFile(edit.source, 'agent');
 
   if (Result.isFailure(parsed)) return null;
@@ -92,8 +94,9 @@ function skillChange({ request, route, edit, index }: Routed): DreamChange | nul
   return {
     id: `skill:${route.target}`,
     describe: `the agent follows a skill it wrote, ${parsed.success.name}: ${evidenceWindow(parsed.success.description, DESCRIBED_CHARS)}`,
-    since: request.updatedAt,
+    since: standing.since,
     revert: { type: 'skill_revert', target: `${request.id}#${String(index)}` },
+    standing: standing.standing,
   };
 }
 
@@ -101,11 +104,11 @@ function skillChange({ request, route, edit, index }: Routed): DreamChange | nul
  * The dream changes in effect for a turn, newest first, at most `limit`: each text version it ran with (`ranWith`),
  * each fact a dream still holds, and each skill a dream wrote that is trusted.
  */
-export function dreamChangesFor(sql: SqlExecutor, actor: ActorHandle, ranWith: readonly string[] | null, limit = LISTED_CHANGES): DreamChange[] {
+export function dreamChangesFor(owners: ChangeOwners, ranWith: readonly string[] | null, limit = LISTED_CHANGES): DreamChange[] {
   const ran = new Set(ranWith ?? []);
-  const facts = createFactsStore(sql, actor);
+  const facts = createFactsStore(owners.sql, owners.actor);
 
-  return dreamRoutes(sql, actor, DREAMS_READ)
+  return dreamRoutes(owners, DREAMS_READ)
     .flatMap((routed) => {
       const change = changeOf(routed);
 
@@ -114,18 +117,22 @@ export function dreamChangesFor(sql: SqlExecutor, actor: ActorHandle, ranWith: r
     .sort((a, b) => b.since - a.since).slice(0, limit);
 
   function changeOf(routed: Routed): DreamChange | null {
+    const standing = changeStanding(owners, facts, routed);
+
+    if (standing === null || standing.standing === 'refused') return null;
+
     switch (routed.route.kind) {
       case 'prompt_section':
-      case 'tool_description': return textChange(sql, actor, routed, ran);
-      case 'fact': return factChange(facts, routed);
-      case 'skill': return skillChange(routed);
+      case 'tool_description': return textChange(owners, standing, routed, ran);
+      case 'fact': return factChange(facts, standing, routed);
+      case 'skill': return skillChange(standing, routed);
       case 'subagent_spec': return null;
     }
   }
 }
 
 /** Each edit the last `dreams` dreams routed, with the drafted edit it came from. */
-function dreamRoutes(sql: SqlExecutor, actor: ActorHandle, dreams: number): Routed[] {
+function dreamRoutes({ sql, actor }: ChangeOwners, dreams: number): Routed[] {
   return createRefinementStore(sql, actor).list(dreams).flatMap((request) => request.routes.flatMap((route, index) => {
     const edit = request.proposal?.edits[index];
 
@@ -133,19 +140,13 @@ function dreamRoutes(sql: SqlExecutor, actor: ActorHandle, dreams: number): Rout
   }));
 }
 
-const TEXT_STATUS = {
-  current: 'in effect',
-  staged: 'waiting for a cold turn',
-  rolled_back: 'reverted',
-  historical: 'replaced by a later version',
-} as const satisfies Record<ArtifactStatus, string>;
-
-const SKILL_STATUS = {
-  applied: 'in effect',
-  staged: 'waiting for a cold turn',
-  rejected: 'reverted',
+const STANDING_TEXT = {
   refused: 'refused',
-} as const satisfies Record<RefinementDisposition, string>;
+  waiting: 'waiting for a cold turn',
+  in_effect: 'in effect',
+  reverted: 'reverted',
+  replaced: 'replaced by a later version',
+} as const satisfies Record<ChangeStanding, string>;
 
 interface Watched {
   readonly what: string;
@@ -156,36 +157,36 @@ interface Watched {
   readonly id: string;
 }
 
-function watched(sql: SqlExecutor, actor: ActorHandle, facts: FactsStore, { request, route, edit }: Routed): Watched | null {
-  if (route.disposition === 'refused') return null;
+function watched(owners: ChangeOwners, facts: FactsStore, routed: Routed): Watched | null {
+  const standing = changeStanding(owners, facts, routed);
 
-  switch (edit.kind) {
+  if (standing === null || standing.standing === 'refused') return null;
+  const { route } = routed;
+  const status = STANDING_TEXT[standing.standing];
+  const effective = standing.standing === 'in_effect';
+
+  switch (route.kind) {
     case 'prompt_section':
     case 'tool_description': {
       const at = route.target.lastIndexOf('@');
-      const row = at <= 0 ? null : artifactVersion(sql, actor, route.target.slice(0, at), Number(route.target.slice(at + 1)));
+      const row = artifactVersion(owners.sql, owners.actor, route.target.slice(0, at), Number(route.target.slice(at + 1)));
 
-      if (row === null) return null;
-
-      return {
-        id: route.target, what: `${artifactLabel(row.artifactId)}, reworded`, status: TEXT_STATUS[row.status],
-        since: row.decidedAt ?? row.writtenAt, carried: (rating) => rating.artifacts?.includes(route.target) === true,
+      return row === null ? null : {
+        id: route.target, what: `${artifactLabel(row.artifactId)}, reworded`, status,
+        since: standing.since, carried: (rating) => rating.artifacts?.includes(route.target) === true,
       };
     }
 
-    case 'fact': {
-      const held = facts.recall(route.target)?.source === `refinement:${request.id}`;
-
+    case 'fact':
       return {
-        id: `fact:${route.target}`, what: `remembering ${route.target}`, status: held ? 'in effect' : 'forgotten or replaced',
-        since: request.updatedAt, carried: (rating) => held && rating.createdAt > request.updatedAt,
+        id: `fact:${route.target}`, what: `remembering ${route.target}`, status: effective ? status : 'forgotten or replaced',
+        since: standing.since, carried: (rating) => effective && rating.createdAt > standing.since,
       };
-    }
 
     case 'skill':
       return {
-        id: `skill:${route.target}`, what: `the skill at ${route.target}`, status: SKILL_STATUS[route.disposition],
-        since: request.updatedAt, carried: (rating) => route.disposition === 'applied' && rating.createdAt > request.updatedAt,
+        id: `skill:${route.target}`, what: `the skill at ${route.target}`, status,
+        since: standing.since, carried: (rating) => effective && rating.createdAt > standing.since,
       };
 
     case 'subagent_spec':
@@ -204,13 +205,14 @@ function turnsSummary(ratings: readonly TurnRating[]): string {
  * What earlier dreams changed and how the turns went with it, one line per change: its status, the rated turns that
  * ran with it against as many rated just before it, and the replies that rejected it. Both of a dream's agents read it.
  */
-export function renderWatch(sql: SqlExecutor, actor: ActorHandle): string {
+export function renderWatch(owners: ChangeOwners): string {
+  const { sql, actor } = owners;
   const facts = createFactsStore(sql, actor);
   const ratings = listTurnRatings(sql, actor, { limit: RATINGS_READ });
   const rejections = listRejections(sql, actor, 0);
 
-  return dreamRoutes(sql, actor, WATCHED_DREAMS).flatMap((routed) => {
-    const change = watched(sql, actor, facts, routed);
+  return dreamRoutes(owners, WATCHED_DREAMS).flatMap((routed) => {
+    const change = watched(owners, facts, routed);
 
     if (change === null) return [];
     const after = ratings.filter(change.carried);
@@ -226,14 +228,6 @@ export function renderWatch(sql: SqlExecutor, actor: ActorHandle): string {
   }).join('\n');
 }
 
-/** A text version is in effect while it is current; a fact or skill change is listed only while it is. */
-function stillInEffect(sql: SqlExecutor, actor: ActorHandle, change: DreamChange): boolean {
-  if (change.revert.type !== 'artifact_revert') return true;
-  const at = change.id.lastIndexOf('@');
-
-  return artifactVersion(sql, actor, change.id.slice(0, at), Number(change.id.slice(at + 1)))?.status === 'current';
-}
-
 /**
  * The owner's explicit stops, kept: each change a rated reply rejected, sure it corrected the turn, that is still in
  * effect and took effect before that reply, is reverted as the owner's own revert would. Runs before a dream, so the
@@ -242,11 +236,12 @@ function stillInEffect(sql: SqlExecutor, actor: ActorHandle, change: DreamChange
 export async function revertRejectedChanges(deps: RefinementDeps): Promise<void> {
   const { sql, rt } = deps.control;
   const events = new RunEventRecorder(sql, rt.actor);
+  const owners: ChangeOwners = { sql, actor: rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
 
   for (const rejection of listRejections(sql, rt.actor, EXPLICIT_STOP)) {
-    const change = dreamChangesFor(sql, rt.actor, rejection.artifacts, Infinity).find((listed) => listed.id === rejection.rejects);
+    const change = dreamChangesFor(owners, rejection.artifacts, Infinity).find((listed) => listed.id === rejection.rejects);
 
-    if (change === undefined || change.since >= rejection.at || !stillInEffect(sql, rt.actor, change)) continue;
+    if (change === undefined || change.since >= rejection.at || change.standing !== 'in_effect') continue;
     const reverted = await executeChangelogRevert({ rt, facts: deps.facts, events, skills: deps }, change.revert);
 
     if (reverted.ok) diagnostics.event('dream.change_rejected', { change: change.id, turn: rejection.turnId });

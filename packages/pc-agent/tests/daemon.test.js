@@ -1865,7 +1865,7 @@ describe('daemon process under Bun against a local hub', () => {
     if (!fs.existsSync(inflight)) return;
 
     for (const entry of fs.readdirSync(inflight)) {
-      const supervisor = recordedIn(path.join(inflight, entry, 'state'), /^pid=(\d+)$/m);
+      const supervisor = recordedIn(path.join(inflight, entry, 'state'), inflight, /^pid=(\d+)$/m);
 
       if (supervisor !== null) await killAndAwaitExit(supervisor, { group: true });
     }
@@ -2507,7 +2507,7 @@ describe('daemon process under Bun against a local hub', () => {
         expect(done.result.stdout).toContain('orphan-check');
 
         // Terminal, un-acknowledged: the supervisor is on its ack FIFO now.
-        supervisor = recordedIn(path.join(requestDir, 'state'), /^pid=(\d+)$/m);
+        supervisor = recordedIn(path.join(requestDir, 'state'), requestDir, /^pid=(\d+)$/m);
 
         if (supervisor === null) throw new Error(`no supervisor state under ${requestDir}: log says ${firstLog()}`);
         const supervisorPid = supervisor.pid;

@@ -60,6 +60,8 @@ export const AGENT_CONFIG_KEYS = {
   /** 'true' enables the turn reviewer; off by default since it costs a model call per turn. */
   advisorEnabled: 'advisor_enabled',
   alwaysActiveSkills: 'always_active_skills',
+  /** The dream skills this agent's turns index, as its last cold turn found them: a sibling's cold turn moves no warm prefix. */
+  dreamSkills: 'dream_skills',
   /** Executor namespace of the last tool run; UI defaults to it. */
   lastActiveExecutor: 'last_active_executor',
   /** Epoch ms of the last Evolution Changelog view; newer entries drive the unseen badge. */
@@ -149,6 +151,8 @@ export interface AgentConfigStore {
   setAdvisorMinSeverity(severity: AdvisorSeverity): void;
   getAlwaysActiveSkills(): string[];
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
+  getDreamSkills(): string[];
+  setDreamSkills(names: ReadonlyArray<string>): void;
   getLastActiveExecutor(): string | null;
   /** Ignores values that are not a plausible executor namespace. */
   setLastActiveExecutor(name: string): void;
@@ -226,6 +230,20 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
 
     if (keys.some((name) => name === AGENT_CONFIG_KEYS.learning || name === AGENT_CONFIG_KEYS.changelogSeenAt)) markStoreChanged(sql);
   };
+
+  /** A list of skill names, kebab-case so a comma never occurs in one; none stored is an empty list. */
+  const names = (key: string) => ({
+    get: (): string[] => (get(key) ?? '').split(',').map((name) => name.trim()).filter(Boolean),
+    set: (listed: ReadonlyArray<string>): void => {
+      const joined = Array.from(new Set(listed.map((name) => name.trim()).filter(Boolean))).join(',');
+
+      if (joined.length === 0) remove(key);
+      else set(key, joined);
+    },
+  });
+
+  const alwaysActive = names(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+  const dreamSkills = names(AGENT_CONFIG_KEYS.dreamSkills);
 
   const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
     valid ? Effect.sync(() => set(key, value)) : Effect.die(new Error(`Invalid ${what}: ${value}`));
@@ -397,19 +415,10 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setAdvisorMinSeverity(severity) {
       return settleSync(setValid(AGENT_CONFIG_KEYS.advisorMinSeverity, severity, isAdvisorSeverity(severity), 'advisor severity'));
     },
-    getAlwaysActiveSkills() {
-      const stored = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
-
-      if (!stored) return [];
-
-      return stored.split(',').map(s => s.trim()).filter(Boolean);
-    },
-    setAlwaysActiveSkills(names) {
-      const joined = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
-
-      if (joined.length === 0) remove(AGENT_CONFIG_KEYS.alwaysActiveSkills);
-      else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, joined);
-    },
+    getAlwaysActiveSkills: alwaysActive.get,
+    setAlwaysActiveSkills: alwaysActive.set,
+    getDreamSkills: dreamSkills.get,
+    setDreamSkills: dreamSkills.set,
     getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
     setLastActiveExecutor(name) {
       // Shape check only: executors register dynamically.

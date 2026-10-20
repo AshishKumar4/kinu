@@ -3,7 +3,8 @@ import { expect, test } from 'bun:test';
 import { DEV_IDENTITY_ACCOUNT_HEADER } from '@kinu.run/core';
 import { evalMatrix } from './config';
 import { REACTIVE_ARMS } from './reactive';
-import { runArm } from './reactive-run';
+import { runArm, runPlan } from './reactive-run';
+import type { SegmentResult } from './reactive';
 import { trialSlot } from './slot';
 
 test('each reactive arm and seed prepares its own real-runner slot before creating a workspace', async () => {
@@ -41,4 +42,20 @@ test('each reactive arm and seed prepares its own real-runner slot before creati
   } finally {
     await server.stop(true);
   }
+});
+
+test('an arm that stops keeps the segments it ran and says what stopped it, and nothing escapes to its siblings', async () => {
+  const said: string[] = [];
+  const segments: SegmentResult[] = [];
+  const passed: SegmentResult = { family: 'chess', passed: true, replies: 1, toolErrors: 0, steps: 2, thumbs: 0 };
+  const tasks = new Map([['chess', { id: 'chess' }]]);
+
+  const failed = await runPlan({ plan: ['chess', 'chess', 'gone'], tasks }, {
+    segments, mid: { sum: 0, n: 0 }, say: (line) => { said.push(line); }, apply: async () => {},
+    segment: async () => passed, satisfaction: async () => ({ sum: 0, n: 0 }),
+  });
+
+  expect({ failed, segments: segments.length, said: said.at(-1) }).toEqual({
+    failed: expect.stringContaining('no task named gone'), segments: 2, said: expect.stringContaining('stopped after 2 segments: '),
+  });
 });
