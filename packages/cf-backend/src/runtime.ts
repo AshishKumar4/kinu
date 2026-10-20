@@ -227,7 +227,7 @@ export interface CFRuntimeHooks {
   /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
      *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
-  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  slate?: (operation: SlateOperation, turn?: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A computer port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */

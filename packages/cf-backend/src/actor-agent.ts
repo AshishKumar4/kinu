@@ -2271,7 +2271,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
-        slate: (operation) => this.slate(operation),
+        slate: (operation, turn) => this.programSlate(operation, turn),
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -2345,7 +2345,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+    return await this.programSlate(operation);
+  }
+
+  /** A slate operation from this actor's own program, which `turn` runs (`SlateInvocation.turn`); never a browser's. */
+  protected async programSlate(operation: SlateOperation, turn?: string): Promise<SlateCallResult> {
+    return await workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation, turn);
   }
 
   /** Whether a slate still builds, asked as this actor; a check, never a preview. */
@@ -2505,35 +2510,7 @@ export abstract class ActorAgent extends Agent<Env> {
           return v.parse(JsonValueSchema, JSON.parse(answered));
         }
 
-        case 'agent': {
-          // `said` is the slate's own message, for the person's card; the text adds what the agent is told.
-          const metadata: JsonObject = { slate: route.slate, said: cardWords(route.text), ask: route.ask === true };
-
-          if (route.data !== undefined) metadata.data = route.data;
-
-          if (route.viewer !== undefined) metadata.viewer = route.viewer;
-
-          const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
-
-          context.admit?.();
-
-          if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
-
-          // Asked: the reply is open before the message is sent, so the turn it lands in feeds it from its first word. A
-          // send that opens a turn settles only when that turn ends, so the reply is answered now and only the wait is
-          // detached; a message that never lands says so on its card, which ends the reply.
-          const key = `ask:${crypto.randomUUID()}`;
-          const reply = this.replies.open(signalCardId(key));
-
-          const sent = this.slateInbox().send({
-            kind: 'slate', idempotencyKey: key, metadata,
-            text: `${said}\nYour answer's text streams to slate ${route.slate} as you write it: answer it in prose.`,
-          });
-
-          this.detachOwned(Effect.promise(async () => { await this.keepAliveWhile(async () => sent); }));
-
-          return { reply };
-        }
+        case 'agent': return yield* this.slateAgentCall(route, context);
 
         case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route, undefined, context.admit));
 
@@ -2545,6 +2522,49 @@ export abstract class ActorAgent extends Agent<Env> {
 
         case 'app': return yield* new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
       }
+    });
+  }
+
+  /** A slate's `agent.send` or `agent.ask`, delivered to this agent's turn inbox. */
+  private slateAgentCall(route: Extract<SlateRoute, { kind: 'agent' }>, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      // `said` is the slate's own message, for the person's card; the text adds what the agent is told.
+      const metadata: JsonObject = { slate: route.slate, said: cardWords(route.text), ask: route.ask === true };
+
+      if (route.data !== undefined) metadata.data = route.data;
+
+      if (route.viewer !== undefined) metadata.viewer = route.viewer;
+
+      const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
+
+      // A program this agent's running turn waits on began the chain: the reply could come only once that turn ends,
+      // and the turn waits on the program, so the ask is refused now rather than held until the turn gives up on it.
+      if (route.ask === true && context.turn !== undefined && context.turn === this.mainChatTurn()) {
+        return yield* new KinuError('unsupported', `agent.ask came from a program the agent is running in its turn, which waits on that program: the agent can answer only once the program returns, so the ask would wait on itself. A slate the agent's own program calls answers without asking it (ai.run), and a page asks it outside its turns.`);
+      }
+
+      context.admit?.();
+
+      if (route.ask !== true) {
+        const delivered: SlateSurfaceValue = { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
+
+        return delivered;
+      }
+
+      // Asked: the reply is open before the message is sent, so the turn it lands in feeds it from its first word. A
+      // send that opens a turn settles only when that turn ends, so the reply is answered now and only the wait is
+      // detached; a message that never lands says so on its card, which ends the reply.
+      const key = `ask:${crypto.randomUUID()}`;
+      const reply = this.replies.open(signalCardId(key));
+
+      const sent = this.slateInbox().send({
+        kind: 'slate', idempotencyKey: key, metadata,
+        text: `${said}\nYour answer's text streams to slate ${route.slate} as you write it: answer it in prose.`,
+      });
+
+      this.detachOwned(Effect.promise(async () => { await this.keepAliveWhile(async () => sent); }));
+
+      return { reply };
     });
   }
 
