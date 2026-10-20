@@ -1814,7 +1814,9 @@ describe('daemon process under Bun against a local hub', () => {
 
     const child = Bun.spawn({
       cmd: [process.execPath, DAEMON_PATH],
-      env: { ...process.env, KINU_HOME: root, KINU_INFLIGHT_ROOT: path.join(root, 'inflight'), ...extraEnv },
+      // A scratch HOME unless the case names one: a raw terminal's shell runs as the owner, so with the developer's
+      // HOME every command typed into it landed in their ~/.bash_history.
+      env: { ...process.env, HOME: scratchDir('daemon-home'), KINU_HOME: root, KINU_INFLIGHT_ROOT: path.join(root, 'inflight'), ...extraEnv },
       // Stdio to the log FILE, never pipes: bun's runner exits when the last
       // open handle closes, and a piped child holds its pipe open for as long
       // as it lives. The log is read from the file, so nothing needs the pipe.

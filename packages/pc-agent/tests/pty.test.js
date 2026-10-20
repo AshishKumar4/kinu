@@ -14,7 +14,7 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
-const { AwaitedList, awaitExit, runToExit } = require('@kinu.run/test-utils');
+const { AwaitedList, awaitExit, runToExit, scratchDir } = require('@kinu.run/test-utils');
 
 const { shellQuote } = require('@kinu.run/core');
 
@@ -66,6 +66,10 @@ function harness(options = {}) {
 }
 
 
+/** The shells' home: a scratch one, never the developer's. An interactive shell reads its rc files from HOME and
+ *  saves the commands typed into it there, so a real HOME took every run's commands into ~/.bash_history. */
+const SHELL_HOME = scratchDir('pty-home');
+
 /** A shell on a terminal, as the daemon starts one for a device with no
  *  sandbox: the plan's own argv, and the terminal named in the environment. */
 function shellArgv() {
@@ -75,7 +79,7 @@ function shellArgv() {
 function shellEnv() {
   return {
     PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    HOME: SHELL_HOME,
     TERM: TERMINAL_NAME,
   };
 }
@@ -83,8 +87,8 @@ function shellEnv() {
 /**
  * Wait until the shell is reading commands.
  *
- * The prompt cannot be the signal: this is the developer's own machine and
- * their `.bashrc` owns `PS1`. So the shell is asked to COMPUTE something — the
+ * The prompt cannot be the signal: the machine's own bash.bashrc owns `PS1`.
+ * So the shell is asked to COMPUTE something — the
  * echo of the typed line contains the sum, and the shell's answer contains
  * only the total, which is a string the request itself never carries.
  */
