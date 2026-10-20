@@ -159,12 +159,14 @@ describe('a structured call', () => {
     }
   });
 
-  test('an answer off its schema says each path it got wrong, what was expected and what type came', async () => {
+  test('an answer off its schema names each path it got wrong and the type that came, never the value', async () => {
     const Count = v.object({ count: v.number(), tags: v.array(v.string()) });
-    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering('{"count":"many","tags":[1]}'), prompt: 'p' }, Count, { spend: { source: 'fast', report: () => {} } })]);
+    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering('{"count":"many-fold","tags":[90210]}'), prompt: 'p' }, Count, { spend: { source: 'fast', report: () => {} } })]);
+    const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
 
-    expect(refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered')
-      .toEndWith('count: expected number, received string; tags.0: expected string, received number');
+    for (const named of ['count', 'tags.0', 'string', 'number']) expect(chain).toContain(named);
+
+    for (const value of ['many-fold', '90210']) expect(chain).not.toContain(value);
   });
 
   // Cut off, the answer is incomplete rather than wrong: asked again, the model may finish it.

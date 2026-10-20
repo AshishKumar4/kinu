@@ -189,8 +189,13 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
   ));
 }
 
-/** The most of one path key {@link renderIssuesUnquoted} shows: a record's keys are the input's own text. */
-const UNQUOTED_KEY_CHARS = 40;
+/** The most of one path key an issue's path shows: a record's keys are the input's own text. */
+const ISSUE_KEY_CHARS = 40;
+
+/** Where an issue is, as dotted keys; '' for the input itself. */
+function issuePath(issue: v.BaseIssue<unknown>): string {
+  return issue.path?.map((segment) => String(segment.key).slice(0, ISSUE_KEY_CHARS)).join('.') ?? '';
+}
 
 /**
  * A valibot failure as one line without a value of its input: per issue, its path, what was expected and the type that
@@ -200,7 +205,7 @@ const UNQUOTED_KEY_CHARS = 40;
 export function renderIssuesUnquoted(issues: readonly v.BaseIssue<unknown>[]): string {
   return issues
     .map((issue) => {
-      const path = issue.path?.map((segment) => String(segment.key).slice(0, UNQUOTED_KEY_CHARS)).join('.') ?? '';
+      const path = issuePath(issue);
       const check = issue.kind === 'schema' ? '' : ` (${issue.type})`;
 
       return `${path === '' ? 'the answer' : path}: expected ${issue.expected ?? issue.type}${check}, received ${receivedType(issue)}`;
@@ -219,9 +224,9 @@ function receivedType(issue: v.BaseIssue<unknown>): string {
 export function renderIssues(issues: readonly v.BaseIssue<unknown>[]): string {
   return issues
     .map((issue) => {
-      const path = issue.path?.map((segment) => String(segment.key)).join('.');
+      const path = issuePath(issue);
 
-      return path ? `${path}: ${issue.message}` : issue.message;
+      return path === '' ? issue.message : `${path}: ${issue.message}`;
     })
     .join('; ');
 }
