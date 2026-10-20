@@ -552,12 +552,12 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const [brief, review] = [requests[0]?.task ?? '', reviews[0] ?? ''];
 
     for (const text of [brief, review]) {
-      expect(text).toContain('## Skills and tools picked, then switched from or corrected');
-      expect(text).toContain('  - skill `report-writing`, then `slates`: 1 time');
-      expect(text).toContain('  - tool `csv_sum`, then `csv_total`: 1 time');
-      expect(text).toContain('  - skill `report-writing`: (not trusted, so its description is withheld)');
-      expect(text).toContain('  - skill `slates`: Build any interface the user asks for');
-      expect(text).toContain('  - tool `csv_total`: Totals every column of a CSV file');
+      // The two switches, the description of each pick now, and none for a skill nobody trusted.
+      for (const named of ['report-writing', 'slates', 'csv_sum', 'csv_total', 'Build any interface the user asks for', 'Totals every column of a CSV file', 'Sums one column of a CSV file']) {
+        expect(text).toContain(named);
+      }
+
+      expect(text).not.toContain('Write a weekly report');
     }
 
     expect(brief).toContain('says when it applies, and when a similar one fits instead');

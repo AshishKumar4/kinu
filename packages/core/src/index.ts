@@ -1040,7 +1040,7 @@ export { craftPreference, craftPreferences, rankByPreference, type CraftPreferen
 export { activateReplayedScaffold } from './scaffold/replay-gate';
 
 export {
-  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn, type ReplayVerdict,
+  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn,
 } from './scaffold/replay';
 
 export { type CraftCall } from './craft/in-episode';

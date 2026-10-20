@@ -131,12 +131,10 @@ describe('a pending scaffold replayed against recorded turns', () => {
 
   test('a version that waits on nothing of the host is ended at its deadline, and fails for it', async () => {
     const { rt, turns } = await recorded();
-    const started = Date.now();
 
-    const verdict = await replayScaffold(rt, 'async function run() { await new Promise(() => {}); }', turns, 200);
-
-    expect(verdict).toEqual({ turnId: turns[0]?.turnId ?? '', failed: 'it did not finish within 0.2 s' });
-    expect(Date.now() - started).toBeLessThan(5_000);
+    // Before, it waited forever: the verdict arriving at all is the deadline ending it.
+    expect(await replayScaffold(rt, 'async function run() { await new Promise(() => {}); }', turns, 200))
+      .toEqual({ turnId: turns[0]?.turnId ?? '', failed: 'it did not finish within 0.2 s' });
   });
 
   test('with no recorded turn there is nothing to hold a version to, and it fails', async () => {

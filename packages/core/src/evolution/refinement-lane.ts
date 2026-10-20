@@ -379,7 +379,7 @@ function review(
       if (rounds.length === 0) {
         rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
 
-        if (!claim.record({ review: { rounds } })) return null;
+        if (!claim.record({ review: { rounds } } satisfies SettleRefinementPatch)) return null;
       }
 
       const latest = rounds[rounds.length - 1];
@@ -399,7 +399,7 @@ function review(
         if (Result.isFailure(judged)) return { refused: judged.failure };
         rounds[round] = { evidence: latest.evidence, verdicts: [...judged.success] };
 
-        if (!claim.record({ review: { rounds } })) return null;
+        if (!claim.record({ review: { rounds } } satisfies SettleRefinementPatch)) return null;
         continue;
       }
 
@@ -421,7 +421,7 @@ function review(
       proposal = revised.success;
       rounds.push({ evidence: yield* scoreEdits(deps, proposal, request, reviewed), verdicts: null });
 
-      if (!claim.record({ review: { rounds }, proposal, detail: proposal.summary })) return null;
+      if (!claim.record({ review: { rounds }, proposal, detail: proposal.summary } satisfies SettleRefinementPatch)) return null;
     }
   });
 }
@@ -483,6 +483,13 @@ function parseProposal(scope: RefinementScope) {
     return parsed.output.scope === scope ? Result.succeed(parsed.output) : Result.fail(`the dreamer proposed at ${parsed.output.scope} scope and this dream is ${scope} scope`);
   };
 }
+
+/** The headings the dreamer's and the reviewer's briefs share. */
+const DREAM_BRIEF_HEADINGS = {
+  watch: '## What changed since, and how the turns went',
+  picks: '## Skills and tools picked, then switched from or corrected',
+  answer: '## Your answer',
+} as const;
 
 /** One of the nine error codes, so owner-visible refusals use the shared vocabulary. */
 const OFF_SCHEMA_ANSWER: ErrorCode = 'bad_input';
@@ -652,17 +659,17 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     history || '  (this is the first refinement)',
     '',
-    '## What changed since, and how the turns went',
+    DREAM_BRIEF_HEADINGS.watch,
     '',
     renderWatch(sql, actor) || '  (no earlier dream changed anything)',
     '',
-    PICKS_HEADING,
+    DREAM_BRIEF_HEADINGS.picks,
     '',
     picks || NO_CONFUSED_PICKS,
     '',
     `## Files you may read yourself: ${contextRefs.length === 0 ? '(none in this workspace)' : contextRefs.join(', ')}`,
     '',
-    '## Your answer',
+    DREAM_BRIEF_HEADINGS.answer,
     '',
     `One JSON object carrying exactly these keys: ${answerKeys}, and no others. Every level is`,
     'strict: a key that is not named here refuses the whole proposal rather than being dropped, so',
@@ -756,11 +763,11 @@ async function renderReviewerBrief(
       '',
       dreamHistory(sql, rt.actor, request) || '  (this is the first dream)',
       '',
-      '## What changed since, and how the turns went',
+      DREAM_BRIEF_HEADINGS.watch,
       '',
       renderWatch(sql, rt.actor) || '  (no earlier dream changed anything)',
       '',
-      PICKS_HEADING,
+      DREAM_BRIEF_HEADINGS.picks,
       '',
       await picksSection(deps, input.reviewed) || NO_CONFUSED_PICKS,
       '',
@@ -774,7 +781,7 @@ async function renderReviewerBrief(
       'is 10% over the bundled size, a placeholder until a measurement of prompt sizes against the cache\'s cost sets it:',
       'an edit that grows them past it must shrink something else.',
       '',
-      '## Your answer',
+      DREAM_BRIEF_HEADINGS.answer,
       '',
       'One JSON object with one verdict per edit, by its number: `accept` routes it, `reject` drops it, and `revise`',
       'sends it back to its author once with your note, after which you judge it again. Every verdict carries a note.',
@@ -811,8 +818,6 @@ async function renderReviseBrief(
     ].join('\n'),
   };
 }
-
-const PICKS_HEADING = '## Skills and tools picked, then switched from or corrected';
 
 const NO_CONFUSED_PICKS = '  (no turn here switched picks, or was corrected after one)';
 

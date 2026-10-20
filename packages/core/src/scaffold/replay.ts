@@ -288,7 +288,7 @@ function answerOf(events: readonly ScaffoldEvent[], finalResult: JsonValue | und
   return typeof finalResult === 'string' ? finalResult : '';
 }
 
-export interface ReplayVerdict {
+interface ReplayVerdict {
   /** The turn it failed on; null when there was none to replay. */
   readonly turnId: string | null;
   /** Null when the turn passed; otherwise why it did not. */
