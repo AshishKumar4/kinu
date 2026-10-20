@@ -382,7 +382,7 @@ worker.get('/gallery', (c) => c.redirect(`${APP_ROUTES.explore}?kind=app`));
 // Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority.
 // A listed slate's page, a live share's entry and a shared slate's part frames are only their shell: their own routes
 // decide what a visitor reads, and whom a share admits.
-for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);
+for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH, '/privacy', '/terms']) worker.all(path, appShell);
 
 for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
 

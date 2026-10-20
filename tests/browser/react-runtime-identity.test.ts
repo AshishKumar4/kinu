@@ -717,7 +717,16 @@ describe('the application and the Agents UI share that one runtime', () => {
     expect(entries.length).toBeGreaterThan(1);
 
     for (const entry of entries) {
-      expect(entry.imports).toContain(reactChunk);
+      const reached = new Set<string>();
+      const pending = [...entry.imports];
+
+      for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+        if (reached.has(file)) continue;
+        reached.add(file);
+        pending.push(...(production.chunks.find((chunk) => chunk.fileName === file)?.imports ?? []));
+      }
+
+      expect([...reached]).toContain(reactChunk);
     }
   });
 

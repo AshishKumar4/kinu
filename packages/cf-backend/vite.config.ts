@@ -160,6 +160,7 @@ export default defineConfig(({ command }) => ({
           input: {
             app: resolve(__dirname, "index.html"),
             landing: resolve(__dirname, "landing.html"),
+            legal: resolve(__dirname, "legal.html"),
           },
         },
       },

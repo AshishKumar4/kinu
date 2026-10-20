@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/assets/kinu-icon.svg" />
+    <title>Kinu</title>
+    <link rel="preload" href="/assets/fonts/schibsted-latin-var.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/assets/fonts/fragmentmono-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <script>
+      (() => {
+        const stored = localStorage.getItem('theme');
+        const mode = stored === 'light' || stored === 'dark'
+          ? stored
+          : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.mode = mode;
+        document.documentElement.style.colorScheme = mode;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="legal-root"></div>
+    <script type="module" src="/src/landing.tsx"></script>
+  </body>
+</html>

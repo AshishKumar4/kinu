@@ -172,6 +172,7 @@ export function authDocument(title: string, body: string, script?: string): stri
   <a class="modal-close" href="/" aria-label="Close sign in">×</a>
   <h1 id="auth-title">${escapeHtml(title)}</h1>
   ${body}
+  <p class="muted"><a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a></p>
 </section></main>\n`,
     ...(script !== undefined && { script }),
   });
@@ -203,6 +204,7 @@ border-radius:var(--r-card);background:var(--c-surface);box-shadow:var(--shadow-
 .card .lede{margin:16px 0 0;font-size:15px;max-width:none}
 .card p{margin:16px 0 0;color:var(--c-text-2);font-size:15px}
 .card .muted{color:var(--c-text-3);font-size:13px}
+.card p a{color:var(--c-accent-fg)}
 .card code{overflow-wrap:anywhere}
 .modal-close{position:absolute;top:16px;right:16px;display:flex;align-items:center;
 justify-content:center;width:30px;height:30px;border-radius:var(--r-row);color:var(--c-text-3);

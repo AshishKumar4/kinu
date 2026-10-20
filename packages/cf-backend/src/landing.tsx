@@ -38,7 +38,11 @@ function answerAccount(path: string, method: string, body: () => Promise<string>
   return Promise.resolve(Response.json({ error: `The sample answers no ${method} ${path}.` }, { status: 404 }));
 }
 
-window.fetch = Object.assign(
+const mount = document.getElementById('landing-root') ?? document.getElementById('legal-root');
+
+if (mount === null) throw new Error('public page root is missing');
+
+if (mount.id === 'landing-root') window.fetch = Object.assign(
   (input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]): Promise<Response> => {
     const parsedRequest = v.safeParse(v.instance(Request), input);
     const url = requestUrl(input);
@@ -55,10 +59,18 @@ window.fetch = Object.assign(
   { preconnect: realFetch.preconnect },
 );
 
-const mount = document.getElementById('landing-root');
+async function publicPage(root: HTMLElement) {
+  if (root.id === 'legal-root') {
+    const { default: LegalDocument } = await import('./legal');
 
-if (mount === null) throw new Error('landing root is missing');
+    return <LegalDocument />;
+  }
 
-// The build writes the page's markup into `landing.html` (scripts/prerender-landing.ts); a dev server's has none.
-if (mount.firstElementChild === null) createRoot(mount).render(<LandingPage />);
-else hydrateRoot(mount, <LandingPage />);
+  return <LandingPage />;
+}
+
+const page = await publicPage(mount);
+
+// scripts/prerender-landing.ts fills the built public documents; dev templates keep an empty root.
+if (mount.firstElementChild === null) createRoot(mount).render(page);
+else hydrateRoot(mount, page);

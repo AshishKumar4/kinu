@@ -5,6 +5,8 @@
  * or serves the shell where a door should answer.
  */
 import { describe, expect, test } from 'bun:test';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
 import { CLI_VERSION_PATH, DEV_IDENTITY_HEADER, VISITOR_PAGE_ATTRIBUTE, type UserCaller } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { workerContext, workerEnv } from './helpers/bindings';
@@ -15,6 +17,8 @@ mockAgentsSdk();
 // Dynamic: a static import hoists above mockAgentsSdk(), and the entry's DO graph reaches `cloudflare:*`
 // modules that exist only inside workerd.
 const { default: worker } = await import('../src/server');
+
+const { default: LegalPage } = await import('../src/components/landing/LegalPage');
 
 const APP_HOST = 'app.example.com';
 
@@ -35,7 +39,7 @@ interface Answer {
   readonly visitor: boolean;
 }
 
-function env(assets: string[]): Env {
+function env(assets: string[], documents: ReadonlyMap<string, string> = new Map()): Env {
   const objects = <Stub>(stub: Stub) => ({ idFromName: (name: string) => name, get: () => stub });
 
   const reached: Partial<Env> = {
@@ -48,9 +52,11 @@ function env(assets: string[]): Env {
     CONTROL_PLANE_ACCESS_AUD: 'aud',
     ASSETS: {
       fetch: async (input: RequestInfo | URL) => {
-        assets.push(new URL(input instanceof Request ? input.url : String(input)).pathname);
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
 
-        return new Response('<!doctype html><html><head></head><body>shell</body></html>', { headers: { 'content-type': 'text/html' } });
+        assets.push(path);
+
+        return new Response(documents.get(path) ?? '<!doctype html><html><head></head><body>shell</body></html>', { headers: { 'content-type': 'text/html' } });
       },
       connect: () => { throw new Error('ASSETS.connect: not reachable in this test'); },
     },
@@ -99,6 +105,35 @@ async function send(caller: Caller, method: string, path: string): Promise<Answe
 const shell = (path: string): Partial<Answer> => ({ status: 200, assets: [path, CLI_VERSION_PATH] });
 
 const door = (status: number): Partial<Answer> => ({ status, assets: [] });
+
+test('legal pages answer with their heading signed out; an unknown page still requires sign-in', async () => {
+  const documents = new Map<string, string>();
+
+  for (const name of ['privacy', 'terms']) {
+    const content = await Bun.file(new URL(`../src/components/landing/legal/${name}.md`, import.meta.url)).text();
+
+    documents.set(`/${name}`, `<!doctype html><html><head></head><body>${renderToString(createElement(LegalPage, { content }))}</body></html>`);
+  }
+
+  for (const path of documents.keys()) {
+    const response = await worker.fetch(new Request(`https://${APP_HOST}${path}`, { headers: { accept: 'text/html' } }), env([], documents), workerContext());
+
+    expect(response.status).toBe(200);
+    let heading = '';
+
+    await new HTMLRewriter().on('main h1', { text(chunk) { heading += chunk.text; } }).transform(response).text();
+    expect(heading.trim().length).toBeGreaterThan(0);
+  }
+
+  const unknown = '/privacy-not-a-page';
+  const response = await worker.fetch(new Request(`https://${APP_HOST}${unknown}`, { headers: { accept: 'text/html' } }), env([], documents), workerContext());
+
+  expect(response.status).toBe(302);
+  const location = new URL(response.headers.get('location') ?? '', `https://${APP_HOST}`);
+
+  expect(location.pathname).toBe('/login');
+  expect(location.searchParams.get('return_to')).toBe(unknown);
+});
 
 const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   // Access runs before every bypass, on `/control*` and `/api/control*` only: its 404 stands where the
