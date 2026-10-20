@@ -318,30 +318,11 @@ export const REVIEWED_ADVISORIES = {
       + 'if either package enters the Worker bundle. No fixed release exists: 2.0.1 is its last publish.',
     ids: [1139346, 1193685],
   },
-  nanoid: {
-    reason: 'transitive: postcss requires ^3.3.12 <- vite <- vitest. The non-secure generator '
-      + 'loops forever on a negative or zero size; postcss calls it with a fixed size. Build '
-      + 'and test only.',
-    ids: [1138811, 1139427],
-  },
-  postcss: {
-    reason: 'transitive: vite 8.0.16 requires ^8.5.15 <- vitest. Path traversal via '
-      + 'sourceMappingURL auto-loading, at build time over CSS in this repository. Fixed above '
-      + '8.5.22, inside vite\'s range.',
-    ids: [1130709, 1139510],
-  },
-  'react-router': {
-    reason: 'SHIPS IN CODE WE SERVE: react-router-dom 7.16.0 <- @kinu.run/cf-backend (^7.14.1). '
-      + 'Open redirect via backslash, RSC XSS and CSRF bypass, constructor injection through '
-      + 'deserializeErrors, and route-matching DoS. Our own ^7.14.1 admits the fixed 7.18.2, so '
-      + 'a lockfile refresh clears all five: accepted until that refresh, not indefinitely.',
-    ids: [1124268, 1124271, 1124272, 1124276, 1138769],
-  },
   valibot: {
-    reason: 'direct: the root manifest and @kinu.run/cf-backend both require ^1.4.1. record() '
-      + 'issue paths can make flatten() throw for an inherited Object property name, and '
-      + 'flatten() is called in no package src. `bun update --dry-run` resolves 1.4.2, outside '
-      + 'the vulnerable <=1.4.1 — the next lockfile refresh clears it.',
+    reason: 'transitive: armada (github:AshishKumar4/armada#eefcd6d) pins valibot 1.4.1 exactly; the '
+      + 'root and @kinu.run/cf-backend resolve 1.5.0. record() issue paths can make flatten() throw '
+      + 'for an inherited Object property name, and armada\'s src calls flatten() nowhere. Cleared '
+      + 'by armada moving its pin to ^1.5.0 upstream.',
     ids: [1124298],
   },
 } satisfies Record<string, ReviewedPackage>;

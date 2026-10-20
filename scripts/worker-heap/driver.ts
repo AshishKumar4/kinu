@@ -6,6 +6,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { SCRIPTED_MODEL_SPEC } from '../../packages/test-utils/src/scripted-model-spec';
 import { readScriptedRequest, SCRIPTED_MODELS_BODY, scriptedBody as compatBody, type ScriptedAnswer } from '../scripted-protocol';
+import { asksSleepTime, SLEEP_TIME_ANSWER } from '../sleep-time-script';
 
 /** The product RPC setup calls, as the account plane calls it; the classes live in the built bundle. */
 interface WorkspaceRpc extends Rpc.DurableObjectBranded {
@@ -138,11 +139,29 @@ const HELPER_STEPS = 4;
 
 const USAGE = `data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`;
 
-/** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
-async function scriptedBody(inputs: { readonly stream?: boolean; readonly messages?: readonly object[] }): Promise<string> {
-  model.calls += 1;
+type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly object[] };
 
-  if (inputs.stream !== true) return JSON.stringify({ response: '{"upserts":[],"decay":[]}' });
+/**
+ * What a call that is no turn's step answers, at once: a completion, and the memory lane's structured call, which
+ * streams as every structured call has since 667221f68. Answered a step's prose until 2026-10-20, that call failed off
+ * its schema, and each failure's three 0.2 MB log lines stayed live in the DevTools console this gate attaches: the idle
+ * workspace held 6.6 MB where it had held 3.9 MB (armada evo-42). Null for a turn's step.
+ */
+function laneAnswer(inputs: BindingInputs): string | null {
+  if (inputs.stream !== true) return JSON.stringify({ response: SLEEP_TIME_ANSWER });
+  const first = inputs.messages?.[0];
+
+  return first !== undefined && 'content' in first && typeof first.content === 'string' && asksSleepTime(first.content)
+    ? `data: ${JSON.stringify({ response: SLEEP_TIME_ANSWER })}\n\n${USAGE}data: [DONE]\n\n`
+    : null;
+}
+
+/** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
+async function scriptedBody(inputs: BindingInputs): Promise<string> {
+  model.calls += 1;
+  const lane = laneAnswer(inputs);
+
+  if (lane !== null) return lane;
 
   noteWide(JSON.stringify(inputs));
   model.parked += 1;

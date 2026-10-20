@@ -4,7 +4,7 @@
  * when the call returns. A call that threw was not billed and files none.
  */
 
-import { generateText, jsonSchema, NoObjectGeneratedError, Output, streamText } from 'ai';
+import { generateText, JSONParseError, jsonSchema, NoObjectGeneratedError, Output, streamText, TypeValidationError } from 'ai';
 import { toJsonSchema } from '@valibot/to-json-schema';
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
@@ -14,6 +14,7 @@ import {
 } from '../events/model-call';
 import type { Embedder } from '../memory/vector-store';
 import { normalizeUsage, type Usage } from '../usage';
+import { sha256Hex } from '../safety/argument-digest';
 import { callAccountOf } from './quota';
 import { mergeProviderOptions, type ProviderOptions } from './effort';
 
@@ -22,6 +23,9 @@ export type GenerateRequest = Parameters<typeof generateText>[0];
 export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
 
 export type StreamRequest = Parameters<typeof streamText>[0];
+
+/** A structured call's request: one prompt, and only the options it sends on. */
+export type ObjectRequest = Pick<StreamRequest, 'model' | 'system' | 'maxRetries' | 'abortSignal' | 'providerOptions'> & { readonly prompt: string };
 
 export interface ReportedCall {
   readonly spend: ModelCallSpend;
@@ -90,40 +94,76 @@ const NON_STRICT: ProviderOptions = { openai: { strictJsonSchema: false }, opena
 /**
  * One answer of `schema`'s shape, through the model's structured output: the provider is sent the schema as JSON
  * Schema (`toJsonSchema`; a value it cannot express, as a JSON value, is any value there), and the answer is read back
- * through `schema` itself. Billed as {@link generateReported} bills. An answer off the schema was billed and is no
- * answer: it fails `bad_input`, as a wrong answer does, and is not asked of another model; an answer stopped at the
- * output limit fails `unavailable`, as {@link generateReported}'s does.
+ * through `schema` itself. Streamed, and filed as {@link streamTextReported} files a drained stream: a model that
+ * reasons for minutes keeps its connection, where a provider ends a request that answers nothing for as long (Workers
+ * AI's 408 at 10 minutes, 2026-10-20). An answer off the schema was billed and is no answer: it fails `bad_input`, as a
+ * wrong answer does, and is not asked of another model; an answer stopped at the output limit fails `unavailable`.
  */
-export function generateObjectReported<S extends v.GenericSchema>(request: GenerateRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
-  const generated: GenerateRequest = {
+export function generateObjectReported<S extends v.GenericSchema>(request: ObjectRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
+  const streamed: StreamRequest = {
     ...request,
     output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
     providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
   };
 
-  const offSchema = (cause: Error) => new KinuError('bad_input', `${call.spec ?? 'the model'} answered off its schema`, { cause });
+  // Named by its length and digest: each layer the refusal crosses logs its chain, and the answer in it was three log
+  // lines of 0.2 MB for one refused memory pass (2026-10-20).
+  const offSchema = (text: string, cause: Error) => new KinuError('bad_input',
+    `${call.spec ?? 'the model'} answered off its schema (${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`, { cause });
 
-  return settle(Effect.promise(() => generateReported(generated, call)).pipe(
-    // Any other failure is the provider's, kept as it came for the route walk to read.
-    Effect.catchDefect((defect) => {
-      if (!NoObjectGeneratedError.isInstance(defect)) return Effect.die(defect);
+  return settle(Effect.gen(function* () {
+    // Drained before anything is read, so the call is filed whatever its answer; a provider's failure is kept as it came
+    // for the route walk to read.
+    // Read part by part, which raises a provider's failure as it came: the text stream ends on one with no cause.
+    const result = yield* Effect.promise(() => drained(streamTextReported(streamed, call, () => {})));
 
-      return Effect.fail(defect.finishReason === 'length' ? outputLimitFailure(defect.response?.modelId ?? call.spec ?? 'the model', 'length', defect) : offSchema(defect));
-    }),
-    Effect.flatMap((result) => {
-      const parsed = v.safeParse(schema, result.output);
+    // Read to its end, a stream returns its result: only a reader's `return` ends one without.
+    if (result === undefined) return yield* Effect.fail(new KinuError('unavailable', 'the model\'s stream ended without its result'));
+    const finishReason = yield* Effect.promise(async () => await result.finishReason);
+    const modelId = (yield* Effect.promise(async () => await result.response)).modelId;
 
-      return parsed.success ? Effect.succeed(parsed.output) : Effect.fail(offSchema(new v.ValiError(parsed.issues)));
-    }),
-  ));
+    if (finishReason === 'length') return yield* Effect.fail(outputLimitFailure(modelId, 'length'));
+
+    const output = yield* Effect.tryPromise({ try: async () => await result.output, catch: (cause) => cause }).pipe(
+      Effect.catch((cause) => (NoObjectGeneratedError.isInstance(cause) ? Effect.fail(offSchema(cause.text ?? '', withoutAnswer(cause))) : Effect.die(cause))),
+    );
+
+    const parsed = v.safeParse(schema, output);
+
+    if (parsed.success) return parsed.output;
+    const text = yield* Effect.promise(async () => await result.text);
+
+    return yield* Effect.fail(offSchema(text, new v.ValiError(parsed.issues)));
+  }));
 }
 
-/** Files the row once the stream drains; an abandoned stream leaves only the start row. */
+/** The SDK's refusal of an answer that is no object, less the answer its parse and validation errors quote whole: their
+ *  own cause says why. */
+function withoutAnswer(refused: NoObjectGeneratedError): Error {
+  const quoting = refused.cause;
+  const why = JSONParseError.isInstance(quoting) || TypeValidationError.isInstance(quoting) ? quoting.cause : quoting;
+
+  return why instanceof Error ? new Error(refused.message, { cause: why }) : new Error(refused.message);
+}
+
+/** A reported stream read to its end; what it returned, its result with every promise settled. */
+async function drained(parts: AsyncGenerator<string, StreamResult | undefined>): Promise<StreamResult | undefined> {
+  for (;;) {
+    const step = await parts.next();
+
+    if (step.done === true) return step.value;
+  }
+}
+
+/**
+ * Files the row once the stream drains, and returns its result; an abandoned stream leaves only the start row, and a
+ * reader that ends it early (`return`) gets none.
+ */
 export async function* streamTextReported(
   request: StreamRequest,
   call: ReportedCall,
   onPart?: (part: StreamPart) => void,
-): AsyncGenerator<string> {
+): AsyncGenerator<string, StreamResult | undefined> {
   const operation = beginModelOperation(call.spend, 'stream', { spec: call.spec });
   let result;
 
@@ -150,6 +190,8 @@ export async function* streamTextReported(
   const response = await result.response;
   operation.completed({ usage, modelId: response.modelId });
   call.spend.report(reportOf(call, usage, response));
+
+  return result;
 }
 
 /** Structural: core compiles without the Worker's `Env`. */

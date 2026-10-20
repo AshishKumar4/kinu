@@ -11,7 +11,6 @@ import { Database } from 'bun:sqlite';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 import * as v from 'valibot';
 
 import {
@@ -21,17 +20,14 @@ import {
   openWorkspaceMainActor,
   type JsonObject,
   type LLMProviderConfig,
-  type CompletedTurn,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import {
-  makeSql, soulIn, type CLIRuntime,
-} from '../../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, collectStepText, createStepToolCallLog, type LiveToolCall } from './harness';
+import { makeSql, soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { evalSession, scriptedEvalModel, type EvalSession } from './harness';
 import { localTargetFolder, provisionLocalTarget } from './target-local';
-import { seedTranscriptEntry, finalIntegerAnswer,
-liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
+import { finalIntegerAnswer,
+liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
 UNCONFIGURED_LLM, workspaceDatabase,
 } from '@kinu.run/test-utils';
 
@@ -54,9 +50,9 @@ const MEMORY_CODE = 'lifecycle-amber-9c7d2';
 /**
  * WHERE the fact actually landed, across both memory write surfaces.
  *
- * `memory` offers two legitimate ways to store one: `save` appends to
+ * `memory` offers two legitimate ways to store one: `note` appends to
  * `memory/MEMORY.md`, `remember` upserts a keyed row in `agent_facts`
- * (core/src/tools/memory-tool.ts:158-170). A prompt that says "save this fact"
+ * (core/src/operations/memory.ts). A prompt that says "save this fact"
  * admits either, so an assertion pinned to one of them measures which branch the
  * model picked and calls the other branch a failure.
  *
@@ -73,12 +69,12 @@ const MEMORY_CODE = 'lifecycle-amber-9c7d2';
  * arm's scorers, over a corpus, where one model's choice is a data point rather
  * than a gate.
  */
-/** A tool call's `action` argument as a name to print; `?` when the call
- *  carried none, which is how a tool with no actions reads. */
-function actionName(args: JsonObject): string {
-  const action = v.safeParse(v.string(), args.action);
+/** A tool call's `op` argument as a name to print; `?` when the call carried none, which is how a tool with no
+ *  operations reads. */
+function opName(args: JsonObject): string {
+  const op = v.safeParse(v.string(), args.op);
 
-  return action.success ? action.output : '?';
+  return op.success ? op.output : '?';
 }
 
 function storedMemoryFact(db: Database, memoryFile: string | null): string | null {
@@ -95,76 +91,26 @@ function storedMemoryFact(db: Database, memoryFile: string | null): string | nul
   return fact ? `agent_facts[${fact.key}]` : null;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────
-
-async function chatTurn(
-  model: LanguageModel,
-  rt: CLIRuntime,
-  tools: ToolSet,
-  userMessage: string,
-): Promise<CompletedTurn & { readonly calls: readonly LiveToolCall[] }> {
-  const start = Date.now();
-  const soul = soulIn(rt.space) ?? '';
-  const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
-
-  const log = createStepToolCallLog();
-
-  const result = await generateText({
-    model,
-    instructions: [
-      soul,
-      `\nKnowledge:\n${knowledge}`,
-      `\nAfter using any tools, always provide a text summary of what you did and the results.`,
-    ].join(''),
-    messages: [{ role: 'user' as const, content: userMessage }],
-    tools,
-    stopWhen: isStepCount(500),
-    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
-  });
-
-  recordLiveModelSpend(result.usage);
-  // BUG 1 fix: collect text from all steps when final step has no text
-  const responseText = collectStepText(result);
-
-  const id = crypto.randomUUID();
-  await seedTranscriptEntry(rt.stores.history, 'e2e-full', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
-  await seedTranscriptEntry(rt.stores.history, 'e2e-full', {
-    id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
-  });
-
-  return {
-    userMessage,
-    assistantResponse: responseText,
-    toolCalls: log.records(),
-    calls: log.calls,
-    steps: log.steps,
-    durationMs: Date.now() - start,
-    feedback: null,
-    hadError: false,
-  };
-}
-
 // ── Tests ────────────────────────────────────────────────────────
 
 describe('E2E Full Lifecycle', () => {
   let db: InstanceType<typeof Database>;
   let rt: CLIRuntime;
-  let tools: ToolSet;
-  let model: LanguageModel;
   let agentId: string;
   let agentName: string;
+  /** The product's own session over the workspace, made by the first live turn. */
+  let agent: EvalSession | undefined;
+
+  const live = (): EvalSession => {
+    agent ??= evalSession({ rt, db, llm: LLM_CONFIG });
+
+    return agent;
+  };
 
   beforeAll(async () => {
-    // Provisioned through the seam: birth, the whole schema, open, the
-    // executor-surface and sandbox guards and the pre-turn profile — the same
-    // sequence every live suite drives, once. The birth runtime carries no
-    // `preBuilt` deps, so `eval` answered every call with
-    // "eval is not configured on this runtime" — measured live, while
-    // step 4 ("code execution") still passed, because it asserts only that the
-    // reply is non-empty. `openWorkspaceCLI` builds `createCLIRuntime`, the
-    // same spine `kinu exec` runs, so the tool the prompt names exists.
-    // `db` and `rt` stay reassignable because step 6 closes and reopens the
-    // store; afterAll below therefore still closes whichever handle is live.
+    // Provisioned through the seam: birth, the whole schema, open, the executor-surface and sandbox guards and the
+    // pre-turn profile, the same sequence every live suite drives, once. `db` and `rt` stay reassignable because step
+    // 6 closes and reopens the store; afterAll therefore still closes whichever handle is live.
     const target = await provisionLocalTarget({
       dir: TEST_DIR,
       workspace: 'lifecycle-test',
@@ -174,17 +120,14 @@ describe('E2E Full Lifecycle', () => {
 
     db = target.db;
     rt = target.runtime;
-
-    // Model first: the production actor root builds `agents` from deps carrying
-    // the model a search expands with, so a surface built before it would be the
-    // product's minus its delegation tool.
-    model = liveChatModel(LLM_CONFIG);
-    tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
     agentId = rt.identity.id;
     agentName = rt.identity.name;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await agent?.end();
+
+    if (agent !== undefined) recordLiveModelEpisode(rt.storage.sql, rt.actor);
     reportLiveModelSpend('E2E Full Lifecycle');
     db.close();
     rmSync(TEST_DIR, { recursive: true, force: true });
@@ -210,83 +153,93 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 2: Verify tools ─────────────────────────────────────
 
-  // The direct-generate eval uses the production actor factory and the local
-  // runtime's real swarm dependency.
-  test('2. the live tool surface executes', async () => {
-    console.log(`  Tools: ${Object.keys(tools).join(', ')}`);
-    const execute = tools.eval;
-
-    if (!execute) throw new Error('eval is absent');
-
-    const result = await toolExecute<{ code: string }, unknown>(execute)({
-      code: 'return 6 * 7;',
+  // Credential-free: the session's own `eval` runs a program a scripted model sends, in a workspace of its own.
+  test('2. the session\'s tool surface executes', async () => {
+    const own = await provisionLocalTarget({
+      dir: `${TEST_DIR}-scripted`, workspace: 'lifecycle-scripted', purpose: 'A coding assistant.', llm: LLM_CONFIG,
     });
 
-    // Structural: the dispatcher answers `{result}`, the same shape the
-    // harness-wiring and evolution-proof suites hold it to.
-    expect(result).toEqual({ result: 42 });
+    const scripted = evalSession({ rt: own.runtime, db: own.db, model: scriptedEvalModel([{ call: 'eval', input: { code: 'return 6 * 7;' } }, { text: 'done' }]) });
+
+    try {
+      const { calls } = await scripted.turn('Work out six times seven with eval.');
+
+      // Structural: the dispatcher answers `{result}`, the shape every live suite reads.
+      expect(calls.map((call) => ({ name: call.name, result: call.result }))).toEqual([{ name: 'eval', result: { result: 42 } }]);
+    } finally {
+      await scripted.end();
+      own.teardown();
+    }
   });
 
   // ── Step 3: Chat turn 1 — simple, no tools ──────────────────
 
   liveTest('3. chat turn 1: simple math question', async () => {
-    const turn = await chatTurn(model, rt, tools, 'What is 2+2? Answer briefly.');
-    console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 120)}`);
-    console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
+    const { text, calls } = await live().turn('What is 2+2? Answer briefly.');
+    console.log(`  Response (${text.length} chars): ${text.slice(0, 120)}`);
+    console.log(`  Tools: ${calls.map((call) => call.name).join(', ') || 'none'}`);
     // The extracted integer, not a substring: any '4' anywhere in the reply
     // would satisfy `toContain`, including one from the question's echo.
-    expect(finalIntegerAnswer(turn.assistantResponse)).toBe(4);
+    expect(finalIntegerAnswer(text)).toBe(4);
   }, 120_000);
 
   // ── Step 4: Chat turn 2 — should use eval ──────────
 
   liveTest('4. chat turn 2: code execution', async () => {
-    const turn = await chatTurn(
-      model, rt, tools,
+    const { text, calls } = await live().turn(
       'Use eval to write and run a JS prime checker for 7, 10, and 13. '
         + 'Print the results as one JSON object mapping each input to a boolean. '
         + 'Summarize which inputs are prime, then end your answer with their total count as a standalone integer.',
     );
 
-    console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
-    console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
+    console.log(`  Response (${text.length} chars): ${text.slice(0, 200)}`);
+    console.log(`  Tools: ${calls.map((call) => call.name).join(', ') || 'none'}`);
 
-    const execution = turn.calls.find((call) => call.name === 'eval');
-    expect(execution, 'the model did not use eval').toBeDefined();
-    const output = v.parse(v.object({ logs: v.array(v.string()) }), execution?.result);
-    expect(output.logs.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
+    const executions = calls.filter((call) => call.name === 'eval');
+    expect(executions.length, 'the model did not use eval').toBeGreaterThan(0);
+
+    // What its programs said, printed or returned: the subject is that the code ran, not which of the two it used.
+    const said = executions.flatMap((call) => {
+      const output = v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), call.result);
+
+      return [...output.logs ?? [], JSON.stringify(output.result ?? null)];
+    });
+
+    expect(said.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
       .toContainEqual({ 7: true, 10: false, 13: true });
-    expect(finalIntegerAnswer(turn.assistantResponse)).toBe(2);
+    expect(finalIntegerAnswer(text)).toBe(2);
   }, 300_000);
 
   // ── Step 5: Chat turn 3 — persist a memory note ───────────────
 
   liveTest('5. chat turn 3: save note to memory', async () => {
-    const turn = await chatTurn(
-      model, rt, tools,
+    const { text, calls } = await live().turn(
       `The project's recovery identifier is ${MEMORY_CODE}. Use the memory tool to save it for a later conversation.`,
     );
 
-    console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
-    console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
+    console.log(`  Response (${text.length} chars): ${text.slice(0, 200)}`);
+    console.log(`  Tools: ${calls.map((call) => call.name).join(', ') || 'none'}`);
 
-    const wrote = turn.calls.find((call) => call.name === 'memory'
-      && (call.args.action === 'save' || call.args.action === 'remember'));
+    const wrote = calls.find((call) => call.name === 'memory' && (call.args.op === 'note' || call.args.op === 'remember'));
 
     expect(wrote, 'the model never wrote through the memory tool — it called '
-      + (turn.calls.map((call) => `${call.name}.${actionName(call.args)}`).join(', ')
+      + (calls.map((call) => `${call.name}.${opName(call.args)}`).join(', ')
         || 'nothing'))
       .toBeDefined();
     const where = storedMemoryFact(db, await rt.memory.read('memory/MEMORY.md'));
     expect(where, 'the memory tool reported a write but neither memory/MEMORY.md nor agent_facts '
       + 'holds the fact, so nothing was persisted for step 6 to find')
       .not.toBeNull();
-    console.log(`  Stored via memory.${wrote === undefined ? '?' : actionName(wrote.args)} in ${String(where)}`);
+    console.log(`  Stored via memory.${wrote === undefined ? '?' : opName(wrote.args)} in ${String(where)}`);
   }, 120_000);
 
   // ── Step 6: Close and reopen with openWorkspaceCLI ──────────────────
 
   liveTest('6. close and reopen agent — verify persistence', async () => {
+    // The session ends as `kinu` ends one, before its store closes; its spend is read while the store is open.
+    await agent?.end();
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
+    agent = undefined;
     db.close();
 
     const db2 = workspaceDatabase(DB_PATH);

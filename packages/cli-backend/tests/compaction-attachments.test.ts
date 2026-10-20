@@ -143,13 +143,36 @@ function workspace(models: { readonly primary: TestLanguageModelV2; readonly fal
   return { rt, session };
 }
 
+
+/** The settled turns' sleep-time compute asks for facts as a structured answer: it gets none, and it is no request a
+ *  test here reads. */
+const sleepTime = (format: { readonly type: string } | undefined): boolean => format?.type === 'json';
+
+const NO_FACTS = '{"upserts":[],"decay":[]}';
+
+/** gpt-4o-mini answering `text` to every request it is sent, each recorded in `asked`. */
+function miniAnswering(text: string, asked: Prompt[]): TestLanguageModelV2 {
+  return new TestLanguageModelV2({
+    provider: 'fake', modelId: 'gpt-4o-mini',
+    doStream: async ({ prompt, responseFormat }) => {
+      if (sleepTime(responseFormat)) return answer(textStream(NO_FACTS, usage));
+
+      asked.push(prompt);
+
+      return answer(textStream(text, usage));
+    },
+  });
+}
+
 describe('older screenshots leave as links, priced for the model serving the request', () => {
   test('a turn its Claude model is refused falls back to gpt-4o-mini, which is sent the newest few and links to the rest', async () => {
     const asked = { primary: new Array<Prompt>(), fallback: new Array<Prompt>() };
 
     const primary = new TestLanguageModelV2({
       provider: 'fake', modelId: 'claude-sonnet-4-5',
-      doStream: async ({ prompt }) => {
+      doStream: async ({ prompt, responseFormat }) => {
+        if (sleepTime(responseFormat)) return answer(textStream(NO_FACTS, usage));
+
         if (!JSON.stringify(prompt).includes(FOLLOW_UP)) return conversationTurn(prompt);
         asked.primary.push(prompt);
 
@@ -157,14 +180,7 @@ describe('older screenshots leave as links, priced for the model serving the req
       },
     });
 
-    const fallback = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'gpt-4o-mini',
-      doStream: async ({ prompt }) => {
-        asked.fallback.push(prompt);
-
-        return answer(textStream('It said the disk is full.', usage));
-      },
-    });
+    const fallback = miniAnswering('It said the disk is full.', asked.fallback);
 
     const { rt, session } = workspace({ primary, fallback });
 
@@ -187,7 +203,9 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const primary = new TestLanguageModelV2({
       provider: 'fake', modelId: 'claude-sonnet-4-5',
-      doStream: async ({ prompt }) => {
+      doStream: async ({ prompt, responseFormat }) => {
+        if (sleepTime(responseFormat)) return answer(textStream(NO_FACTS, usage));
+
         if (!JSON.stringify(prompt).includes(SEARCH_ASK)) return conversationTurn(prompt);
         const searched = prompt.some((message) => message.role === 'tool' && JSON.stringify(message.content).includes('agents'));
 
@@ -198,14 +216,7 @@ describe('older screenshots leave as links, priced for the model serving the req
       },
     });
 
-    const fallback = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'gpt-4o-mini',
-      doStream: async ({ prompt }) => {
-        nodes.push(prompt);
-
-        return answer(textStream('Tokenize with a lookup table.', usage));
-      },
-    });
+    const fallback = miniAnswering('Tokenize with a lookup table.', nodes);
 
     const { rt, session } = workspace({ primary, fallback });
 
@@ -227,7 +238,9 @@ describe('older screenshots leave as links, priced for the model serving the req
 
     const primary = new TestLanguageModelV2({
       provider: 'fake', modelId: 'claude-sonnet-4-5',
-      doStream: async ({ prompt, tools }) => {
+      doStream: async ({ prompt, tools, responseFormat }) => {
+        if (sleepTime(responseFormat)) return answer(textStream(NO_FACTS, usage));
+
         // A node is offered no `agents` tool: it delegates nothing.
         if (!(tools ?? []).some((tool) => tool.name === 'agents')) {
           asked.primary.push(prompt);
@@ -245,14 +258,7 @@ describe('older screenshots leave as links, priced for the model serving the req
       },
     });
 
-    const fallback = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'gpt-4o-mini',
-      doStream: async ({ prompt }) => {
-        asked.fallback.push(prompt);
-
-        return answer(textStream('Tokenize with a lookup table.', usage));
-      },
-    });
+    const fallback = miniAnswering('Tokenize with a lookup table.', asked.fallback);
 
     const { rt, session } = workspace({ primary, fallback });
 
