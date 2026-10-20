@@ -29,14 +29,6 @@ const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
 
 const TOOL_NAMESPACE = 'functions';
 
-export function chatgptEgressAllowed(input: { readonly method: string; readonly url: string }): boolean {
-  const url = URL.parse(input.url);
-
-  if (url?.protocol !== 'https:' || url.hostname !== 'api.openai.com' || url.port !== '') return false;
-
-  return (input.method === 'GET' && url.pathname === '/v1/models') || (input.method === 'POST' && url.pathname === '/v1/responses');
-}
-
 export interface ChatGptDeviceRoute {
   readonly fetch: typeof fetch;
   unavailableReason(): Promise<string | undefined>;
