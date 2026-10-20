@@ -484,6 +484,11 @@ function parseProposal(scope: RefinementScope) {
   };
 }
 
+/** The owner's order for where a lesson goes, which the dreamer drafts by and the reviewer holds it to. */
+const EDIT_PRIORITY = 'Put a lesson in the first place that can carry it: a prompt section or a tool description, then a '
+  + 'memory fact, and a skill last. A skill is for a multi-step procedure that no prompt section or tool description '
+  + 'can carry; the owner does not want skills that could have been avoided.';
+
 /** The headings the dreamer's and the reviewer's briefs share. */
 const DREAM_BRIEF_HEADINGS = {
   watch: '## What changed since, and how the turns went',
@@ -597,17 +602,18 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   const trajectory = reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n');
   const picks = await picksSection(deps, reviewed);
 
+  // Each as the agent reads it now, so an edit replaces the text in effect, not the bundled one.
+  const current = (label: string, text: string): string => `### ${label} (${String(Buffer.byteLength(text, 'utf8'))} bytes)\n${text.trimEnd()}`;
+
   const sections = PROMPT_SECTIONS
-    .map((section) => `  - ${section.id} (${String(Buffer.byteLength(section.source, 'utf8'))} bytes)`)
-    .join('\n');
+    .map((section) => current(section.id, artifactBody(sql, actor, sectionArtifact(section.id)) ?? section.source))
+    .join('\n\n');
 
   const tools = Object.keys(BUILTIN_TOOL_DESCRIPTIONS).map((tool) => {
-    const description = artifactBody(sql, actor, toolArtifact(tool, 'description')) ?? '';
     const schema = artifactBody(sql, actor, toolArtifact(tool, 'schema'));
 
-    return `  - ${tool}: description ${String(Buffer.byteLength(description, 'utf8'))} bytes`
-      + (schema === null ? '' : `, schema ${String(Buffer.byteLength(schema, 'utf8'))} bytes`);
-  }).join('\n');
+    return [current(`${tool} description`, artifactBody(sql, actor, toolArtifact(tool, 'description')) ?? ''), ...(schema === null ? [] : [current(`${tool} schema`, schema)])].join('\n\n');
+  }).join('\n\n');
 
   const facts = deps.facts.recentTopK(20);
 
@@ -632,13 +638,17 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     '## The artifacts you may address, and their owners',
     '',
-    'Registered prompt sections (`prompt_section`): replacing one costs every turn its bytes,',
-    'and a longer section must earn them with a strictly better measured score:',
+    EDIT_PRIORITY,
+    '',
+    'Registered prompt sections (`prompt_section`), each as it reads now: replacing one costs every turn its bytes,',
+    'and a longer section must earn them with a strictly better measured score.',
+    '',
     sections,
     '',
-    'Built-in tool texts (`tool_description`): what the agent reads about each tool on every turn, its',
-    'description or its input fields\' descriptions (`schema`, one JSON object). Change one where the turns show',
-    'the agent misusing that tool, or picking it where another fits; it costs every turn its bytes too:',
+    'Built-in tool texts (`tool_description`), each as it reads now: what the agent reads about each tool on every',
+    'turn, its description or its input fields\' descriptions (`schema`, one JSON object). Change one where the turns',
+    'show the agent misusing that tool, or picking it where another fits; it costs every turn its bytes too.',
+    '',
     tools,
     '',
     'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
@@ -646,8 +656,9 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     'quote is not in the trajectory is refused:',
     factLines,
     '',
-    'Skill files (`skill`): a procedure the agent follows when its description matches the work. An accepted',
-    'skill becomes trusted at the next turn whose prompt cache is cold, and the owner can revert it.',
+    'Skill files (`skill`): a procedure the agent follows when its description matches the work, and the last',
+    'resort: only a multi-step procedure that no prompt section or tool description can carry. An accepted skill',
+    'becomes trusted at the next turn whose prompt cache is cold, and the owner can revert it.',
     '',
     'Every description you write, for a skill or a tool, says when it applies, and when a similar one fits instead.',
     '',
@@ -754,6 +765,9 @@ async function renderReviewerBrief(
       'Another agent read this agent\'s recent turns and drafted the edits below to how it works. You judge them for',
       'quality (is it right, and in the right place), effectiveness (would it have changed the turns that went wrong,',
       'without harming the ones that went well) and size (does it earn every byte it adds to every future turn).',
+      '',
+      EDIT_PRIORITY,
+      'Reject a skill that an edit to a prompt section or a tool description would cover.',
       '',
       `## The turns it read (${String(input.reviewed.length)})`,
       '',

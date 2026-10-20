@@ -19,7 +19,7 @@ import { initTurnRatingTables, rateTurn } from '../src/evolution/ratings';
 import { dreamChangesFor, renderWatch } from '../src/evolution/watch';
 import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import {
-  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, toolArtifact, turnArtifacts,
+  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
 } from '../src/evolution/artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../src/tools/registry';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
@@ -518,6 +518,33 @@ describe('refinement request — durable, and behaviourally inert', () => {
 });
 
 describe('the refiner — bounded references, prior history, strict typed answer', () => {
+  test('the dreamer reads each section and tool text as the agent reads it now, and both briefs put a skill last', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const evolved = `${INCUMBENT.trimEnd()} Answer in one line when the owner asks a yes-or-no question.`;
+    stageArtifact(fx.rt.storage.sql, fx.rt.actor, { artifactId: ARTIFACT, body: evolved, rationale: 'an earlier dream', evidence: { turns: ['t'], reason: 'incorrect' } });
+    turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+
+    const edit = { kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'three corrected turns asked for a one-line yes or no' } as const;
+    const { port, requests } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'shorter yes-or-no answers', edits: [edit] }));
+    const reviews: string[] = [];
+
+    const deps = fx.deps(port, undefined, undefined, (review, edits) => {
+      reviews.push(review);
+
+      return acceptEvery(review, edits);
+    });
+
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const brief = requests[0]?.task ?? '';
+
+    expect(brief).toContain(evolved);
+    expect(brief).toContain(BUILTIN_TOOL_DESCRIPTIONS.file);
+
+    for (const text of [brief, reviews[0] ?? '']) expect(text).toContain('a memory fact, and a skill last');
+  });
+
   test('the brief and the review name the picks the turns switched from or corrected, with their descriptions now', async () => {
     const fx = fixture();
     fx.rt.craftStore.create({ name: 'csv_sum', description: 'Sums one column of a CSV file', code: 'async () => 0' });
@@ -2020,8 +2047,12 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     const tool = toolArtifact('shell', 'description');
     const shell = () => artifactOverrides(currentArtifacts(fx.rt.storage.sql, fx.rt.actor)).tools.descriptions.shell;
 
-    expect(requests[0]?.task).toMatch(/- shell: description \d+ bytes, schema \d+ bytes/u);
-    expect(requests[0]?.task).toMatch(/- agents: description \d+ bytes\n/u);
+    // Both of the tool's texts, as the agent reads them now.
+    expect(requests[0]?.task).toContain(BUILTIN_TOOL_DESCRIPTIONS.shell);
+    expect(requests[0]?.task).toMatch(/### shell schema \(\d+ bytes\)/u);
+    // A tool with no field descriptions shows its description alone.
+    expect(requests[0]?.task).toMatch(/### agents description \(\d+ bytes\)/u);
+    expect(requests[0]?.task).not.toContain('### agents schema');
     expect(briefs[0]).toContain(`### Edit 0: tool_description ${tool} (artifact_versions)`);
     expect(briefs[0]).toContain('Measured: the decision model judged it to fix 1.00');
     expect(briefs[0]).toMatch(/The prompt sections and tool texts are \d+ bytes, against \d+ as bundled/u);
