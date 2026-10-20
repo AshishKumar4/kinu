@@ -1518,6 +1518,7 @@
     "answer TEXT NOT NULL",
     "followup TEXT",
     "scaffold_version INTEGER",
+    "artifacts_json TEXT",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],

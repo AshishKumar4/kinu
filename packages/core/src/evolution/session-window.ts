@@ -63,6 +63,8 @@ export const CompletedTurnSchema = v.object({
   shownLessons: v.optional(v.pipe(v.array(v.pipe(v.object({ id: v.string(), revision: v.number() }), v.readonly())), v.readonly())),
   /** The turn ended on a question to its owner: its call waits for the answer, so no tool result records it. */
   askedOwner: v.optional(v.boolean()),
+  /** `<artifactId>@<version>` of each promoted text the turn ran with; its rating keeps them. Absent on turns before. */
+  artifacts: v.optional(v.pipe(v.array(v.string()), v.readonly())),
 });
 
 const APPEND_SCOPE = 'turn_append';
@@ -214,6 +216,22 @@ interface TurnRow { id: string; turn: string; followup: string | null; created_a
 
 /** Bound to one actor: ids can collide across actors, and window size, queue
  *  depth and stale-claim sweeps are counts. */
+/**
+ * The versions a turn ran with while its record is still in the window: a thumb or a pick lands on a turn whose review
+ * has not run, which is the one rating that reads them from the turn itself. Null once the window let it go.
+ */
+export function completedTurnArtifacts(sql: SqlExecutor, actor: ActorHandle, turnId: string): readonly string[] | null {
+  actor.assertCurrent();
+
+  const row = sql<{ turn: string }>`SELECT turn FROM completed_turns
+    WHERE actor_id = ${actor.actorId} AND json_extract(turn, '$.turnId') = ${turnId} ORDER BY created_at DESC LIMIT 1`[0];
+
+  if (row === undefined) return null;
+  const turn = v.safeParse(CompletedTurnSchema, parseJsonValue(row.turn));
+
+  return turn.success ? turn.output.artifacts ?? null : null;
+}
+
 export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): CompletedTurnStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;

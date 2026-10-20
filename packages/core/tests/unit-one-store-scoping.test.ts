@@ -523,13 +523,13 @@ describe('two actors, one database: artifact_versions', () => {
 
     turnArtifacts(w.sql, w.a, true, 2);
     expect(w.count('artifact_versions')).toBe(2);
-    expect(currentArtifacts(w.sql, w.a)[id]).toBe('a-source');
-    expect(currentArtifacts(w.sql, w.b)[id]).toBeUndefined();
+    expect(currentArtifacts(w.sql, w.a).find((row) => row.artifactId === id)?.body).toBe('a-source');
+    expect(currentArtifacts(w.sql, w.b).find((row) => row.artifactId === id)).toBeUndefined();
     expect(artifactBody(w.sql, w.b, id)).toBe(section.source);
     expect(listArtifactVersions(w.sql, w.b, id)[0]?.status).toBe('staged');
 
     revertArtifact(w.sql, w.b, id, 1);
-    expect(currentArtifacts(w.sql, w.a)[id]).toBe('a-source');
+    expect(currentArtifacts(w.sql, w.a).find((row) => row.artifactId === id)?.body).toBe('a-source');
     expect(listArtifactVersions(w.sql, w.b, id)[0]?.status).toBe('rolled_back');
     w.close();
   });

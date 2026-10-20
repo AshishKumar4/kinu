@@ -51,6 +51,16 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       // Past every cache lifetime and any warming: the next turn opens cold.
       const pause = () => { setSystemTime(new Date(Date.now() + 3 * 60 * 60_000)); };
 
+      // Read before the fifth turn closes the window, which lets its turns go.
+      const recordedTurns = () => Object.fromEntries(sql<{ turn: string }>`SELECT turn FROM completed_turns WHERE actor_id = ${actor.actorId}`
+        .map((row) => v.parse(v.object({ userMessage: v.string(), artifacts: v.optional(v.array(v.string())) }), JSON.parse(row.turn)))
+        .map((turn) => [turn.userMessage, turn.artifacts]));
+
+      let ranWith: Record<string, string[] | undefined> = {};
+
+      // A turn is recorded only while the agent learns.
+      actor.config.setLearning(true);
+
       try {
         await surface.send('first');
         stageArtifact(sql, actor, { artifactId, body: edited, rationale: 'r', evidence: { turns: ['t'], reason: 'verbose_or_slow' } });
@@ -58,6 +68,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
         pause();
         await surface.send('third');
         await surface.send('fourth');
+        ranWith = recordedTurns();
         const changelog = await surface.getEvolutionChangelog(10);
         const current = changelog.entries.find((entry) => entry.kind === 'artifact' && entry.revert !== undefined);
 
@@ -75,6 +86,9 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       expect(prefixOf('fourth')).toBe(prefixOf('third'));
       // The owner's revert is the one move that does not wait.
       expect(prefixOf('fifth')).toBe(prefixOf('first'));
+
+      // Each turn reaches the workspace's window carrying the versions it ran with, which its rating keeps.
+      expect(ranWith).toEqual({ first: [], second: [], third: [`${artifactId}@1`], fourth: [`${artifactId}@1`] });
     },
   },
   {

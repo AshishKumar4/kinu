@@ -24,6 +24,7 @@ import { initRunEventTables } from '../events/recorder';
 import { initActorClaimTables } from '../orchestrator/actor-claims';
 import { initLessonTables } from '../evolution/lessons';
 import { initTurnRatingTables } from '../evolution/ratings';
+import { initCompletedTurnTable } from '../evolution/session-window';
 import { initStruggleTables } from '../evolution/struggles';
 import { initRefinementTables } from '../evolution/refinement';
 import { initImportedExperienceTable } from '../experience/imports';
@@ -165,6 +166,8 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   // A woken actor can record outcomes before any turn constructs EvolutionEngine.
   initLessonTables(execRaw);
   initTurnRatingTables(execRaw);
+  // A thumb or a pick reads the versions a turn ran with from its window record.
+  initCompletedTurnTable(execRaw);
   initStruggleTables(execRaw);
   initRefinementTables(execRaw);
   // Spec: docs/ARCHITECTURE.md, "Events and ingress".

@@ -53,7 +53,7 @@ import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
 } from '../experience/imports';
 import {
-  initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore,
+  initCompletedTurnTable, completedTurnArtifacts, createCompletedTurnStore, type CompletedTurnStore,
   MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
 } from './session-window';
@@ -329,6 +329,7 @@ export class EvolutionEngine {
           answer: turn.assistantResponse,
           followup,
           scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+          artifacts: turn.artifacts ?? null,
         });
       }
 
@@ -501,6 +502,7 @@ export class EvolutionEngine {
       request: pair?.request ?? '',
       answer: pair?.response ?? '',
       scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
+      artifacts: completedTurnArtifacts(this.rt.storage.sql, this.rt.actor, messageId),
     });
 
   }

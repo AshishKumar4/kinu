@@ -4,7 +4,9 @@
  * model rates. A turn nobody answered stays unrated: no rule infers a verdict from tool exits.
  */
 
+import * as v from 'valibot';
 import { markStoreChanged } from '@kinu.run/agent-utils';
+import { parseJsonValue } from '../utils/json';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn, ToolCallRecord } from './types';
@@ -101,6 +103,8 @@ export interface TurnRating extends RatingVerdict {
   readonly answer: string;
   readonly followup: string | null;
   readonly scaffoldVersion: number | null;
+  /** The promoted text versions the turn ran with, from whichever of its rows recorded them; null when none did. */
+  readonly artifacts: readonly string[] | null;
   readonly createdAt: number;
 }
 
@@ -215,6 +219,7 @@ const TURN_RATINGS_DDL = `(
     answer TEXT NOT NULL,
     followup TEXT,
     scaffold_version INTEGER,
+    artifacts_json TEXT,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
   )`;
@@ -233,6 +238,8 @@ export interface RecordTurnRatingInput extends RatingVerdict {
   readonly answer: string;
   readonly followup?: string | null;
   readonly scaffoldVersion?: number | null;
+  /** `<artifactId>@<version>` the turn ran with, where the writer knows them (`CompletedTurn.artifacts`). */
+  readonly artifacts?: readonly string[] | null;
   readonly now?: number;
 }
 
@@ -247,12 +254,13 @@ export function recordTurnRating(sql: SqlExecutor, actor: ActorHandle, input: Re
     : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup);
 
   void sql`INSERT INTO turn_ratings
-      (actor_id, id, turn_id, score, corrected, wrong, source, request, actions, answer, followup, scaffold_version, created_at)
+      (actor_id, id, turn_id, score, corrected, wrong, source, request, actions, answer, followup, scaffold_version, artifacts_json, created_at)
     VALUES
       (${actor.actorId}, ${id}, ${input.turnId}, ${input.score}, ${input.corrected}, ${input.wrong}, ${input.source},
        ${evidenceWindow(input.request, EVIDENCE_BUDGETS.storedUserMessage)}, ${input.actions ?? ''},
        ${evidenceWindow(input.answer, EVIDENCE_BUDGETS.storedAssistantResponse)}, ${followup},
-       ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()})`;
+       ${input.scaffoldVersion ?? null}, ${input.artifacts === undefined || input.artifacts === null ? null : JSON.stringify(input.artifacts)},
+       ${input.now ?? nowMs()})`;
   markStoreChanged(sql);
 
   return id;
@@ -261,14 +269,20 @@ export function recordTurnRating(sql: SqlExecutor, actor: ActorHandle, input: Re
 interface RawRatingRow {
   id: string; turn_id: string; score: number; corrected: number; wrong: WrongReason | null; source: RatingSource;
   request: string; actions: string; answer: string; followup: string | null; scaffold_version: number | null;
+  /** `artifacts_json` of the newest of the turn's rows that has one. */
+  ran_with: string | null;
   created_at: number;
 }
+
+const RanWithSchema = v.array(v.string());
 
 function toRating(row: RawRatingRow): TurnRating {
   return {
     id: row.id, turnId: row.turn_id, score: row.score, corrected: row.corrected, wrong: row.wrong,
     source: row.source, request: row.request, actions: row.actions, answer: row.answer, followup: row.followup,
-    scaffoldVersion: row.scaffold_version, createdAt: row.created_at,
+    scaffoldVersion: row.scaffold_version,
+    artifacts: row.ran_with === null ? null : v.parse(RanWithSchema, parseJsonValue(row.ran_with)),
+    createdAt: row.created_at,
   };
 }
 
@@ -305,7 +319,8 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
 
   const rows = query.turnIds === undefined
     ? sql<RawRatingRow>`
-      SELECT r.* FROM turn_ratings r
+      SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with FROM turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.created_at >= ${query.since ?? 0}
         AND r.score < ${below} AND r.score >= ${from}
         AND NOT EXISTS (SELECT 1 FROM turn_ratings s
@@ -316,7 +331,9 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
                 OR (s.created_at = r.created_at AND s.rowid > r.rowid)))))
       ORDER BY r.created_at DESC, r.id DESC LIMIT ${limit}`
     : sql<RawRatingRow>`
-      SELECT r.* FROM json_each(${JSON.stringify([...new Set(query.turnIds)])}) AS wanted CROSS JOIN turn_ratings r
+      SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with
+      FROM json_each(${JSON.stringify([...new Set(query.turnIds)])}) AS wanted CROSS JOIN turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.turn_id = wanted.value
         AND r.score < ${below} AND r.score >= ${from}
         AND NOT EXISTS (SELECT 1 FROM turn_ratings s

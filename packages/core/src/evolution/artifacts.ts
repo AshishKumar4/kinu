@@ -133,20 +133,28 @@ export function bundledArtifact(artifactId: string): string | null {
   return fields === null ? null : JSON.stringify(fields, null, 2);
 }
 
-/** Each artifact's promoted body, by id. */
-export function currentArtifacts(sql: SqlExecutor, actor: ActorHandle): Readonly<Record<string, string>> {
+/** One artifact's promoted version. */
+export interface CurrentArtifact {
+  readonly artifactId: string;
+  readonly version: number;
+  readonly body: string;
+}
+
+/** Each artifact's promoted version, in id order. */
+export function currentArtifacts(sql: SqlExecutor, actor: ActorHandle): readonly CurrentArtifact[] {
   actor.assertCurrent();
 
-  return Object.fromEntries(sql<{ artifact_id: string; body: string }>`
-    SELECT artifact_id, body FROM artifact_versions WHERE actor_id = ${actor.actorId} AND status = 'current'`
-    .map((row) => [row.artifact_id, row.body]));
+  return sql<{ artifact_id: string; version: number; body: string }>`
+    SELECT artifact_id, version, body FROM artifact_versions WHERE actor_id = ${actor.actorId} AND status = 'current'
+      ORDER BY artifact_id`
+    .map((row) => ({ artifactId: row.artifact_id, version: row.version, body: row.body }));
 }
 
 /**
  * The bodies a turn assembles from. A turn whose prompt cache is cold first makes each staged version current, in place
  * of the version it replaces: the one moment an automatic change moves the prompt prefix.
  */
-export function turnArtifacts(sql: SqlExecutor, actor: ActorHandle, cacheCold: boolean, now = nowMs()): Readonly<Record<string, string>> {
+export function turnArtifacts(sql: SqlExecutor, actor: ActorHandle, cacheCold: boolean, now = nowMs()): readonly CurrentArtifact[] {
   if (cacheCold) activateStaged(sql, actor, now);
 
   return currentArtifacts(sql, actor);
@@ -174,7 +182,7 @@ function activateStaged(sql: SqlExecutor, actor: ActorHandle, now: number): void
 
 /** The text a turn runs now: the promoted body, else the bundled one. */
 export function artifactBody(sql: SqlExecutor, actor: ActorHandle, artifactId: string): string | null {
-  return currentArtifacts(sql, actor)[artifactId] ?? bundledArtifact(artifactId);
+  return currentArtifacts(sql, actor).find((row) => row.artifactId === artifactId)?.body ?? bundledArtifact(artifactId);
 }
 
 export function listArtifactVersions(sql: SqlExecutor, actor: ActorHandle, artifactId?: string): ArtifactVersion[] {
@@ -335,15 +343,17 @@ export function revertArtifact(sql: SqlExecutor, actor: ActorHandle, artifactId:
 export interface ArtifactOverrides {
   readonly sections: PromptSectionOverrides;
   readonly tools: ToolTextOverrides;
+  /** `<artifactId>@<version>` for each promoted version the turn runs with: what its admission records. */
+  readonly versions: readonly string[];
 }
 
-/** The bodies a prompt and a tool surface take, from one id map. */
-export function artifactOverrides(bodies: Readonly<Record<string, string>>): ArtifactOverrides {
+/** The bodies a prompt and a tool surface take, and the versions they are. */
+export function artifactOverrides(current: readonly CurrentArtifact[]): ArtifactOverrides {
   const sections: Record<string, string> = {};
   const descriptions: Record<string, string> = {};
   const fields: Record<string, Record<string, string>> = {};
 
-  for (const [artifactId, body] of Object.entries(bodies)) {
+  for (const { artifactId, body } of current) {
     const parsed = parseArtifactId(artifactId);
 
     if (parsed?.kind === 'section') sections[parsed.id] = body;
@@ -355,6 +365,6 @@ export function artifactOverrides(bodies: Readonly<Record<string, string>>): Art
     }
   }
 
-  return { sections, tools: { descriptions, fields } };
+  return { sections, tools: { descriptions, fields }, versions: current.map((row) => `${row.artifactId}@${String(row.version)}`) };
 }
 

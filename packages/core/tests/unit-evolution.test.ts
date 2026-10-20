@@ -14,6 +14,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { historyTurnPairs } from '../src/identity/conversation-store';
+import { createCompletedTurnStore } from '../src/evolution/session-window';
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
@@ -368,6 +369,35 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     await engine.applyExplicitFeedback('a1', 'negative');
     expect(listTurnRatings(rt.storage.sql, rt.actor))
       .toMatchObject([{ turnId: 'a1', score: 1, source: 'thumbs', request: 'the task', answer: 'the answer' }]);
+  });
+
+  test('a rating keeps the versions its turn ran with, from the review or from the turn still in the window', async () => {
+    const { rt, stores } = createTestRuntime();
+    ratedAs(rt, 'corrected');
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
+    const ran = ['section:guidance/operating@2', 'tool:shell.description@1'];
+
+    // The review rates a turn that carries its versions.
+    await engine.reviewTurn(makeTurn({ turnId: 'reviewed', artifacts: ran }), 'No, I said staging.');
+    // A thumb on a turn whose review has not run reads them from its record in the window.
+    createCompletedTurnStore(rt.storage.sql, rt.actor).append(makeTurn({ turnId: 'parked', artifacts: ran }), { awaitsFollowup: true });
+    await engine.applyExplicitFeedback('parked', 'positive');
+    // A turn recorded before turns carried versions has none to give.
+    await engine.applyExplicitFeedback('older', 'negative');
+
+    const versions = Object.fromEntries(listTurnRatings(rt.storage.sql, rt.actor).map((rating) => [rating.turnId, rating.artifacts]));
+    expect(versions).toEqual({ reviewed: ran, parked: ran, older: null });
+  });
+
+  test('a thumb over a reviewed turn reads its versions through the review\'s row', async () => {
+    const { rt } = createTestRuntime();
+    const ran = ['section:guidance/operating@2'];
+
+    recordTurnRating(rt.storage.sql, rt.actor, { turnId: 't', score: 2, corrected: 0.9, wrong: 'misunderstood', source: 'model', request: 'r', answer: 'a', artifacts: ran, now: 1 });
+    recordTurnRating(rt.storage.sql, rt.actor, { turnId: 't', score: 5, corrected: 0, wrong: null, source: 'thumbs', request: 'r', answer: 'a', now: 2 });
+
+    // The thumb is the effective rating; the versions are the turn's, whichever of its rows recorded them.
+    expect(listTurnRatings(rt.storage.sql, rt.actor)).toMatchObject([{ turnId: 't', source: 'thumbs', score: 5, artifacts: ran }]);
   });
 
   test('respects enabled=false config', async () => {

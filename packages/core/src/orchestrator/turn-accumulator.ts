@@ -110,6 +110,8 @@ export class TurnAccumulator {
   lastFinishReason: string | undefined = undefined;
   /** The turn stopped on its question to the owner: its pending call is the end it meant, not a defect. */
   askedOwner = false;
+  /** The promoted text versions the turn assembled from (`ArtifactOverrides.versions`), set once it is admitted. */
+  artifactVersions: readonly string[] = [];
   /** The turn's last request, for providers/cache-warming.ts. Held by reference, never copied. `fallback`: the spec that
    *  served it, where a fallback did. */
   lastRequest: { readonly body: unknown; readonly sentAt: number; readonly usage: Usage; readonly fallback: string | undefined } | undefined = undefined;
@@ -150,6 +152,7 @@ export class TurnAccumulator {
     this.lastRequest = undefined;
     this.lastFinishReason = undefined;
     this.askedOwner = false;
+    this.artifactVersions = [];
     this.hadError = false;
     this.firstChunkSeen = false;
     this.startedAt = now;
