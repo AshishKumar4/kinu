@@ -66,8 +66,9 @@ export type WorkspaceBlueprint = v.InferOutput<typeof WorkspaceBlueprintSchema>;
 export interface BlueprintInstall {
   readonly agent?: string;
   readonly brief?: string;
-  /** The owner's offset from UTC in minutes (`-new Date().getTimezoneOffset()`), so their 08:00 is theirs. */
-  readonly utcOffsetMinutes: number;
+  /** The owner's IANA time zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`): their 08:00 stays theirs across a
+   *  daylight-saving change. */
+  readonly timeZone: string;
   readonly owner: string;
 }
 
@@ -76,15 +77,15 @@ export interface WorkspaceSeed {
   readonly blueprint: string;
   readonly layout: WorkspaceLayout;
   readonly agent: string;
-  readonly schedules: readonly { readonly label: string; readonly cron: string; readonly prompt: string }[];
+  /** Each with the zone whose wall clock its cron names (a daily one's, the owner's); absent, UTC. */
+  readonly schedules: readonly { readonly label: string; readonly cron: string; readonly timeZone?: string; readonly prompt: string }[];
 }
 
-/** A daily `HH:MM` of the owner's, as the UTC cron the trigger hub reads (hour and minute fields only). */
-function dailyCron(at: string, utcOffsetMinutes: number): string {
+/** A daily `HH:MM`, as a cron of hour and minute in the zone the schedule names. */
+function dailyCron(at: string): string {
   const [hours = 0, minutes = 0] = at.split(':').map(Number);
-  const utc = (((hours * 60 + minutes - utcOffsetMinutes) % 1440) + 1440) % 1440;
 
-  return `${String(utc % 60)} ${String(Math.floor(utc / 60))} * * *`;
+  return `${String(minutes)} ${String(hours)} * * *`;
 }
 
 function everyCron(minutes: number): string {
@@ -111,7 +112,9 @@ export function blueprintSeed(blueprint: WorkspaceBlueprint, install: BlueprintI
       agent,
       schedules: blueprint.automations.map(({ label, when, prompt, brief }) => ({
         label,
-        cron: when.kind === 'every' ? everyCron(when.minutes) : dailyCron(brief === true ? install.brief ?? when.at : when.at, install.utcOffsetMinutes),
+        ...(when.kind === 'every'
+          ? { cron: everyCron(when.minutes) }
+          : { cron: dailyCron(brief === true ? install.brief ?? when.at : when.at), timeZone: install.timeZone }),
         prompt: fill(prompt),
       })),
     },
@@ -137,7 +140,7 @@ export function blueprintPage(blueprint: WorkspaceBlueprint, card: WorkspaceCard
       automations: blueprint.automations.map((automation) => ({ label: automation.label, when: whenText(automation), does: automation.about })),
       slates: [],
       layout: blueprint.layout,
-      soul: blueprintSeed(blueprint, { owner: 'the owner', utcOffsetMinutes: 0 }).soul,
+      soul: blueprintSeed(blueprint, { owner: 'the owner', timeZone: 'UTC' }).soul,
     },
     asks: blueprint.asks,
     version: blueprint.version,

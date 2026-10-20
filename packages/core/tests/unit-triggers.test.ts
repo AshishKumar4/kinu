@@ -438,6 +438,23 @@ describe('timer ingress', () => {
     expect(t.alarm.requested).toContain(rearmedAt);
   });
 
+  test('a schedule in a zone keeps its wall clock as it re-arms, and an unknown zone is refused before a row exists', async () => {
+    const t = timers();
+    // 07:59 UTC on 30 Oct 2026; 08:00 in New York is 12:00 UTC until 1 Nov, then 13:00 UTC.
+    const before = Date.UTC(2026, 9, 30, 7, 59);
+    const timer = await createTimerTrigger(t.registry, { cron: '0 8 * * *', timeZone: 'America/New_York', label: 'brief' }, before);
+
+    const rearmed = () => new Date(present(present(t.registry.get(timer.id), 'the brief').next_fire_at, 'the re-arm')).toISOString();
+
+    expect(new Date(present(timer.nextFireAt, 'the first fire')).toISOString()).toBe('2026-10-30T12:00:00.000Z');
+    await t.fire(Date.UTC(2026, 9, 30, 12));
+    expect(rearmed()).toBe('2026-10-31T12:00:00.000Z');
+    await t.fire(Date.UTC(2026, 9, 31, 12));
+    expect(rearmed()).toBe('2026-11-01T13:00:00.000Z');
+    await expect(createTimerTrigger(t.registry, { cron: '0 8 * * *', timeZone: 'Mars/Olympus_Mons' }, before)).rejects.toThrow('Unknown time zone: Mars/Olympus_Mons');
+    expect(t.registry.list()).toHaveLength(1);
+  });
+
   test('a one-shot fires once and revokes itself', async () => {
     const t = timers();
 

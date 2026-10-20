@@ -133,8 +133,7 @@ const InstalledSchema = v.object({ workspace: v.string() });
 describe('installing a workspace blueprint', () => {
   test('the Personal assistant is born with its soul, focus layout, name and schedules before its first turn, and becomes Home', async () => {
     const owner = account();
-    // 08:30 in UTC+2 is 06:30 UTC.
-    const answer = await owner.install('personal-assistant', { agent: 'Jarvis', brief: '08:30', utcOffsetMinutes: 120, home: true });
+    const answer = await owner.install('personal-assistant', { agent: 'Jarvis', brief: '08:30', timeZone: 'Europe/Berlin', home: true });
     const { workspace } = v.parse(InstalledSchema, answer.body);
     const birth = present(owner.births[0], 'the assistant');
 
@@ -145,7 +144,7 @@ describe('installing a workspace blueprint', () => {
     expect(birth.seed).toEqual({
       blueprint: 'personal-assistant', layout: 'focus', agent: 'Jarvis',
       schedules: [
-        { label: 'Daily brief', cron: '30 6 * * *', prompt: expect.stringContaining("Write Ashish's brief for today") },
+        { label: 'Daily brief', cron: '30 8 * * *', timeZone: 'Europe/Berlin', prompt: expect.stringContaining("Write Ashish's brief for today") },
         { label: 'GitHub check', cron: '*/15 * * * *', prompt: expect.stringContaining('GitHub tools') },
         { label: 'Gmail check', cron: '*/15 * * * *', prompt: expect.stringContaining("Ashish's Gmail") },
       ],
@@ -158,20 +157,20 @@ describe('installing a workspace blueprint', () => {
 
   test('installing the assistant again opens the one the owner has; once it is removed, Home has none and a new one is made', async () => {
     const owner = account();
-    const first = v.parse(InstalledSchema, (await owner.install('personal-assistant', { utcOffsetMinutes: 0 })).body).workspace;
+    const first = v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace;
 
-    expect(v.parse(InstalledSchema, (await owner.install('personal-assistant', { utcOffsetMinutes: 0 })).body).workspace).toBe(first);
+    expect(v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace).toBe(first);
     expect(owner.births).toHaveLength(1);
 
     owner.active.splice(0);
     expect(await owner.home()).toBeNull();
-    await owner.install('personal-assistant', { utcOffsetMinutes: 0 });
+    await owner.install('personal-assistant', { timeZone: 'UTC' });
     expect(owner.births).toHaveLength(2);
   });
 
   test("another blueprint keeps its own layout and the owner's title, Home stays as it was, and a count Explore missed undoes nothing", async () => {
     const owner = account();
-    const answer = await owner.install('release-manager', { displayName: 'API Worker v2 release', utcOffsetMinutes: -420 });
+    const answer = await owner.install('release-manager', { displayName: 'API Worker v2 release', timeZone: 'America/Los_Angeles' });
     const birth = present(owner.births[0], 'the release workspace');
 
     expect(answer.status).toBe(201);
@@ -182,11 +181,12 @@ describe('installing a workspace blueprint', () => {
     expect(owner.counted).toEqual([]);
   });
 
-  test('a blueprint Kinu does not keep is refused as missing, and a body without the owner\'s offset is refused', async () => {
+  test('a blueprint Kinu does not keep is refused as missing, and a body without a time zone the runtime knows is refused', async () => {
     const owner = account();
 
-    expect((await owner.install('pricing-watch', { utcOffsetMinutes: 0 })).status).toBe(404);
+    expect((await owner.install('pricing-watch', { timeZone: 'UTC' })).status).toBe(404);
     expect((await owner.install('personal-assistant', { brief: '08:00' })).status).toBe(400);
+    expect((await owner.install('personal-assistant', { brief: '08:00', timeZone: 'Mars/Olympus_Mons' })).status).toBe(400);
     expect(owner.births).toHaveLength(0);
   });
 });

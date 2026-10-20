@@ -6465,7 +6465,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     config.setChatTitle(seed.agent);
 
     for (const schedule of seed.schedules) {
-      await this.createTimerTrigger({ cron: schedule.cron, label: schedule.label, payload: { prompt: schedule.prompt }, trust: 'owner' });
+      await this.createTimerTrigger({
+        cron: schedule.cron, ...(schedule.timeZone !== undefined && { timeZone: schedule.timeZone }), label: schedule.label, payload: { prompt: schedule.prompt }, trust: 'owner',
+      });
     }
   }
 
