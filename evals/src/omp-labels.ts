@@ -37,7 +37,7 @@ const SHOWN = {
 const cut = (text: string, chars: number): string => (text.length <= chars ? text : `${text.slice(0, chars).trimEnd()} …`);
 
 /** `count` of `items` in a seeded order, none twice. */
-function drawn<T>(items: readonly T[], count: number, rng: Seeded): T[] {
+export function drawn<T>(items: readonly T[], count: number, rng: Seeded): T[] {
   const pool = [...items];
 
   return Array.from({ length: Math.min(count, pool.length) }, () => pool.splice(rng.int(0, pool.length - 1), 1)[0]).filter((item) => item !== undefined);
