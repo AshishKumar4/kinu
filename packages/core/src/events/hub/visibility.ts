@@ -8,7 +8,7 @@ import { evidenceWindow } from '../../utils/evidence-window';
 import { redactSecrets } from '../../safety/secret-patterns';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,
-  type EmailPayload, type PayloadPolicy, type KinuEvent, type IngressDescriptor, type SubordinateReportHandoff,
+  type EmailPayload, type TimerPayload, type PayloadPolicy, type KinuEvent, type IngressDescriptor, type SubordinateReportHandoff,
 } from './types';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
@@ -240,6 +240,16 @@ function emailBrief(p: EmailPayload): string {
   return `"${p.subject}"${attachNote}: ${briefWindow(p.body_text)}${rest('body', p.body_path, p.body_unsaved)}`;
 }
 
+/** What a schedule asks of the turn: its `prompt` (a blueprint's), else the payload its creator gave it, else its label.
+ *  The label names who woke the turn (`friendlySource`), never the task in its place. */
+function timerBrief(p: TimerPayload): string {
+  const asked = v.safeParse(v.looseObject({ prompt: v.string() }), p.user_payload);
+
+  if (asked.success) return briefWindow(asked.output.prompt);
+
+  return p.user_payload === undefined ? p.label ?? 'a schedule' : briefWindow(JSON.stringify(p.user_payload) ?? 'undefined');
+}
+
 function briefForVariant(event: KinuEvent): string {
   if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
     const parsed = v.safeParse(JsonObjectSchema, event.payload);
@@ -286,16 +296,8 @@ function briefForVariant(event: KinuEvent): string {
       return `${p.command.slice(0, 60)} exit=${p.exit_code}${stderr}${full}`;
     }
 
-    // What the schedule asks of the turn: its `prompt` (a blueprint's), else the payload its creator gave it, else its
-    // label. The label names who woke the turn (`friendlySource`), never the task in its place.
-    case 'timer': {
-      const p = event.payload;
-      const asked = v.safeParse(v.looseObject({ prompt: v.string() }), p.user_payload);
-
-      if (asked.success) return briefWindow(asked.output.prompt);
-
-      return p.user_payload === undefined ? p.label ?? 'a schedule' : briefWindow(JSON.stringify(p.user_payload) ?? 'undefined');
-    }
+    case 'timer':
+      return timerBrief(event.payload);
 
     case 'peer_agent': {
       const p = event.payload;
