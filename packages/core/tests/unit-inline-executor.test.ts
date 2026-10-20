@@ -1,3 +1,4 @@
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** workspace.* provider (InlineExecutor): listTools shape, case-preserving upserting createTool. */
 
@@ -111,6 +112,24 @@ describe('workspace provider (InlineExecutor)', () => {
     const fresh = new Function('__kinu', 'workspace', 'cwd', 'return __kinu.createRequire({ workspace, builtins: {}, cwd })("fs").promises.appendFile("fresh.md", "first\\n");');
     await fresh(kinu, workspace, WORKSPACE_ROOT);
     expect(await readText(rt.toolFiles, `${WORKSPACE_ROOT}/fresh.md`)).toBe('first\n');
+  });
+
+  // The SufficientKoala audit: the bridge collapsed '..' before the file plane walked the link, so a program writing
+  // link/../config wrote the working root's config, where file.write reaches the link's parent's.
+  test("the Node fs adapter walks a link before its '..', as file.write does", async () => {
+    const { rt, workspace: bundle } = createTestRuntime();
+    const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+
+    await kernel.mkdir('/scratch/project/subdir', { recursive: true });
+    await kernel.symlink('/scratch/project/subdir', `${WORKSPACE_ROOT}/link`);
+    const workspace = nestedMembers(Object.fromEntries(Object.entries(buildExec(rt).tools).map(([name, entry]) => [name, entry.execute])));
+    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+
+    const write = new Function('__kinu', 'workspace', 'cwd', 'return __kinu.createRequire({ workspace, builtins: {}, cwd })("fs").promises.writeFile("link/../config", "from the program");');
+
+    await write(kinu, workspace, WORKSPACE_ROOT);
+    expect(new TextDecoder().decode(await kernel.readFile('/scratch/project/config'))).toBe('from the program');
+    expect(() => kernel.readFile(`${WORKSPACE_ROOT}/config`)).toThrow('ENOENT');
   });
 
   test('the Node fs adapter reads ENOENT only where the host said the file is absent', async () => {
