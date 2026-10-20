@@ -150,7 +150,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 
 **`mail.send` approval:**
 
-- **What is approved:** exactly the bytes sent (from, recipients, subject, body hash, attachment hashes), as a new approval kind `mail-send`, modelled on `slate-effect`.
+- **What is approved:** exactly the bytes sent (from, recipients, subject, body hash, attachment hashes), as a new approval kind `mail-send` of the gate's existing parked effect (`deferred_action`, `safety/approval-kind.ts`), modelled on `slate-effect`. The card draws it with `MailSendBody`.
+- **Where it waits:** in the workspace that asked, as every parked effect does. The Mailbox holds nothing for it until it is sent, so there is one place to decide.
 - **Where:** one card in the existing Needs-you (`AttentionStack` on the composer, and the Work tab's list), and nowhere else (§7).
 - **Every agent send asks** (the owner, 2026-10-19). No standing approval skips the card.
 
@@ -391,6 +392,7 @@ There are two new Durable Object classes, each with its own schema class: `mailn
 - **`mail_threads`** loses `folder`, `starred`, `triage`, `summary` and `summarized_by`, and gains `important`, the assistant's reason. Unverified is a message's verdict, and All, Sent and Drafts are queries, so none needs a column.
 - **`mail_addresses.reads_person`** goes. The person's box names its reader, the Personal assistant, in `workspace` and `actor_id`.
 - **`mail_labels`** goes. The design has no labels, and a `+tag` stays in `delivered_to`.
+- **`mail_messages.send_state` loses `'approval'`, and `send_digest` goes.** An agent's send waits in its workspace as a parked effect of approval kind `mail-send` (§3), not in the Mailbox.
 - **`mail_messages.woke`** is new.
   - Writer: `deliver`. Readers: the Mail page and the Agent tab's mail ("main read it and may draft").
   - It records the wake decision under the address's policy at delivery. That policy can change later, so the decision cannot be derived afterwards.
@@ -505,12 +507,10 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   size        INTEGER NOT NULL,
   read        INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1)),
   written_by  TEXT,                       -- the agent that wrote it (out)
-  send_state  TEXT    CHECK (send_state IS NULL OR send_state IN ('draft', 'approval', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained')),
-  send_digest TEXT,                       -- the hash of exactly what an approval allows to go
+  send_state  TEXT    CHECK (send_state IS NULL OR send_state IN ('draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained')),
   CHECK ((direction = 'in') = (send_state IS NULL)),
   CHECK (direction = 'out' OR (raw_key IS NOT NULL AND written_by IS NULL)),
   CHECK (text_body IS NULL OR text_key IS NULL),
-  CHECK ((send_state = 'approval') = (send_digest IS NOT NULL AND written_by IS NOT NULL)),
   CHECK (woke IS NULL OR (direction = 'in' AND verdict = 'verified')),
   UNIQUE (thread_id, header_id)
 );
@@ -518,7 +518,7 @@ CREATE TABLE IF NOT EXISTS mail_messages (
 CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages (thread_id, at);
 CREATE INDEX IF NOT EXISTS mail_messages_header ON mail_messages (header_id) WHERE header_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS mail_messages_sent ON mail_messages (direction, at);
-CREATE INDEX IF NOT EXISTS mail_messages_waiting ON mail_messages (send_state) WHERE send_state IN ('draft', 'approval');
+CREATE INDEX IF NOT EXISTS mail_messages_drafts ON mail_messages (send_state) WHERE send_state = 'draft';
 
 -- A file a message carries; its bytes are content-addressed under the account in R2.
 CREATE TABLE IF NOT EXISTS mail_attachments (
