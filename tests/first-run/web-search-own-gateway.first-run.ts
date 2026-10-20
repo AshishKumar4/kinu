@@ -46,8 +46,8 @@ describe(SUITE, () => {
       budgetMs: 5 * 60_000,
       genesis: false,
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
-      async run({ session, plan }) {
-        return await searchSubgoals(session, plan, { provider: 'exa', payer: 'account' });
+      async run({ session }) {
+        return await searchSubgoals(session, { provider: 'exa', payer: 'account' });
       },
     }, observations);
   });
