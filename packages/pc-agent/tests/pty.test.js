@@ -237,21 +237,32 @@ describe('a device terminal is a real one', () => {
 });
 
 describe('the session registry answers for what it holds', () => {
-  const secondOpenRefusals = [
-    { name: 'a second terminal cannot take a name that is in use', options: {}, second: 'pane-1' },
-    { name: 'the machine refuses more terminals than it holds', options: { maxSessions: 1 }, second: 'pane-2' },
-  ];
+  test('a second terminal cannot take a name that is in use', () => {
+    const h = harness();
+    h.sessions.open({ session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
+    expect(() => h.sessions.open({
+      session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send,
+    })).toThrow();
+    expect(h.sessions.size()).toBe(1);
+  });
 
-  for (const refusal of secondOpenRefusals) {
-    test(refusal.name, () => {
-      const h = harness(refusal.options);
-      h.sessions.open({ session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
-      expect(() => h.sessions.open({
-        session: refusal.second, cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send,
-      })).toThrow();
-      expect(h.sessions.size()).toBe(1);
-    });
-  }
+  // The owner, 2026-10-20: the cap should go. A machine refused a ninth terminal by a count nothing measured.
+  test('a machine holds every terminal its person opens, past the eight it once refused at', () => {
+    const h = harness();
+    const names = Array.from({ length: 12 }, (_, at) => `pane-${String(at + 1)}`);
+
+    for (const session of names) h.sessions.open({ session, cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
+
+    expect({ held: h.sessions.size(), running: names.every((name) => h.sessions.pidOf(name) > 0) }).toEqual({ held: 12, running: true });
+  });
+
+  test("a terminal the system cannot open is refused in the system's own words", () => {
+    const h = harness({ spawn: () => { throw new Error('ENOSPC: no space left on device, open /dev/ptmx'); } });
+
+    expect(() => h.sessions.open({ session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send }))
+      .toThrow('could not open a terminal on this machine: ENOSPC: no space left on device, open /dev/ptmx');
+    expect(h.sessions.size()).toBe(0);
+  });
 
   test('input, resize and close name the session they cannot find', () => {
     const h = harness();

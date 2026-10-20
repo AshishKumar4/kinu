@@ -35,15 +35,12 @@ import { gatherApprovableInstructions } from '../src/read-models/instruction-app
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { DecisionPort, DecisionResult } from '../src/providers/decision-model';
-import { SYSTEM_ROLE_DEFINITIONS } from '../src/profiles/catalog';
 import type { AgentStores } from '../src/state/agent-stores';
-import type {
-  TemporaryAgentPort, TemporaryRunOutcome, TemporaryRunRequest,
-} from '../src/subordinates/temporary';
+import type { RoutedLLM } from '../src/types/primitives';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
-  createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementStagingPath,
-  type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRequestView, type RefinementRoute,
+  createRefinementStore, DreamVerdictsSchema, evolutionDebt, initRefinementTables, refinementStagingPath,
+  type RefinementDeps, type RefinementEdit, type RefinementProposal, type RefinementRoute,
 } from '../src/evolution/refinement';
 import { extractJsonObject } from '../src/providers/structured';
 import { renderIssues } from '../src/utils/json';
@@ -53,24 +50,19 @@ import { renderIssues } from '../src/utils/json';
 const DREAM_CADENCE = 5;
 
 import {
-  advanceRefinementLane as advanceLane, dreamRequest, requestRefinement, type RefinementLaneStep,
+  advanceRefinementLane, dreamRequest, requestRefinement,
 } from '../src/evolution/refinement-lane';
-import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../src/identity/evolution-helpers';
 import { activateDreamSkills, dreamSkillsHidden } from '../src/evolution/refinement-skill';
 import { createAgentConfigStore, type AgentConfigStore } from '../src/config/store';
 import { resolveTurnSkills } from '../src/orchestrator/turn-surface';
 import { renderSkillsIndexSection } from '../src/skills/render';
 import { idleDream, refinementPass } from '../src/evolution/refinement-host';
-import { createMemoryVfs, createTestSql, present } from '@kinu.run/test-utils';
+import { createTestSql, present } from '@kinu.run/test-utils';
 import { createLineLogger, renderThrownChain, setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
-import { Database } from 'bun:sqlite';
-import {
-  EventLog, SubordinateRosterStore, WorkspaceActorDirectory, createTemporaryAgentPort, initEventsHubTables,
-  receiveSubordinateEvent, type SubordinateHandoff, type SubordinateRuntime,
-} from '../src/index';
-import { buildDrainBatch } from '../src/events/hub/drain';
-import { createTestActor, createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers';
+import type { Database } from 'bun:sqlite';
+import { createTestRuntime } from './helpers';
+import { estimateTokens } from '../src/token-estimate';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
 // A section with no slots: the fixtures below rewrite its last words, which must not cut a `{{slot}}`.
@@ -102,63 +94,51 @@ function scriptedControl(rt: AgentRuntime): ScaffoldControl {
 }
 
 /** Records every brief so tests can assert what the refiner saw. */
-function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => string)) {
+/** What a dream's helper was asked: its role, read off the schema it answered, the tier it was asked on, and its brief. */
+interface HelperAsk {
+  readonly role: 'dreamer' | 'dream_reviewer';
+  readonly tier: 'deep' | 'fast';
+  readonly task: string;
+}
+
+/**
+ * The dream's helpers as the runtime's routes answer them: the dreamer (and its reviser) answer `answer`, as text
+ * holding the proposal; the reviewer is the fixture's. Each answer is held to the schema it was asked for, as the
+ * provider's structured output holds it, so an answer off it fails the call.
+ */
+function scriptedRefiner(answer: string | ((request: HelperAsk) => string | Promise<string>)) {
   const answerOf = answer instanceof Function ? answer : () => answer;
-  const requests: TemporaryRunRequest[] = [];
+  const requests: HelperAsk[] = [];
 
+  return { requests, port: { requests, answerOf } };
+}
+
+type ScriptedRefiner = ReturnType<typeof scriptedRefiner>['port'];
+
+/** The dream's reviewer: the verdict on each drafted edit, from the brief it was given; or the raw text a model wrote. */
+type Reviewer = (brief: string, edits: number) => readonly { readonly edit: number; readonly verdict: 'accept' | 'reject' | 'revise'; readonly note: string }[] | string;
+
+const acceptEvery = (_brief: string, edits: number) => Array.from({ length: edits }, (_, edit) => ({ edit, verdict: 'accept' as const, note: 'it fits the turns' }));
+
+/** `refiner` and `reviewer` as one tier answers a structured call. */
+function helperRoute(tier: HelperAsk['tier'], refiner: ScriptedRefiner, reviewer: Reviewer): RoutedLLM {
   return {
-    requests,
-    port: {
-      // Started, it answers onto its helper row, which a later pass reclaims.
-      start: async (request: TemporaryRunRequest) => {
-        requests.push(request);
+    complete: async () => { throw new Error('a dream asks for structured answers only'); },
+    object: async (prompt, schema) => {
+      const role = Object.is(schema, DreamVerdictsSchema) ? 'dream_reviewer' : 'dreamer';
+      refiner.requests.push({ role, tier, task: prompt });
 
-        const outcome: TemporaryRunOutcome = {
-          status: 'working', agent: 'refiner-1', lifetime: 'task', role: 'task', answer: 'working', transcript: 'kept',
-        };
+      if (role === 'dreamer') return v.parse(schema, extractJsonObject(await refiner.answerOf({ role, tier, task: prompt })));
+      const edits = prompt.match(/^### Edit \d+:/gmu)?.length ?? 0;
+      const answered = reviewer(prompt, edits);
 
-        return outcome;
-      },
-      release: () => {},
-      // A lane's own helper answers it: the dreamer's draft, or its revision.
-      reclaim: (lane: EvolutionLaneRequest): EvolutionHelperAnswer | null => {
-        const asked = requests.filter((request) => request.lane?.requestId === lane.requestId).at(-1);
-
-        return asked === undefined ? null : { state: 'answered', name: 'refiner-1', status: 'completed', answer: answerOf(asked) };
-      },
-      answered: () => [],
-      forget: () => {},
+      return v.parse(schema, typeof answered === 'string' ? JSON.parse(answered) : { verdicts: answered });
     },
   };
 }
 
-/** The dream's reviewer: the verdict on each drafted edit, from the brief it was given. */
-type Reviewer = (brief: string, edits: number) => readonly { readonly edit: number; readonly verdict: 'accept' | 'reject' | 'revise'; readonly note: string }[];
-
-const acceptEvery: Reviewer = (_brief, edits) => Array.from({ length: edits }, (_, edit) => ({ edit, verdict: 'accept' as const, note: 'it fits the turns' }));
-
-/** `port` with the dream's reviewer in front of it: a reviewer's lane answers from `reviewer`, every other from `port`. */
-function withReviewer(port: TemporaryAgentPort | null | undefined, reviewer: Reviewer, reviews: Map<string, string>): TemporaryAgentPort | null | undefined {
-  if (port === null || port === undefined) return port;
-
-  return {
-    ...port,
-    start: async (request) => {
-      if (request.role !== 'dream-reviewer') return port.start(request);
-      const edits = request.task.match(/^### Edit \d+:/gmu)?.length ?? 0;
-      reviews.set(request.lane?.requestId ?? '', JSON.stringify({ verdicts: reviewer(request.task, edits) }));
-
-      return { status: 'working', agent: 'reviewer-1', lifetime: 'task', role: 'dream-reviewer', answer: 'working', transcript: 'kept' };
-    },
-    reclaim: (lane) => {
-      const answer = reviews.get(lane.requestId);
-
-      if (answer !== undefined) return { state: 'answered', name: 'reviewer-1', status: 'completed', answer };
-
-      return lane.requestId.includes(':review:') ? null : port.reclaim(lane);
-    },
-  };
-}
+/** The heading only the dreamer's one revision brief carries. */
+const REVISION_HEADING = '## Your earlier proposal, and the reviewer\'s verdicts on it';
 
 function proposalText(proposal: RefinementProposal): string {
   return `Here is my proposal.\n\n${JSON.stringify(proposal)}`;
@@ -170,66 +150,28 @@ function proposalText(proposal: RefinementProposal): string {
  */
 function deferredRefiner(...answers: readonly RefinementProposal[]) {
   let asks = 0;
-  let answered: RefinementProposal | null = null;
   const gate = Promise.withResolvers<void>();
 
   return {
     asks: () => asks,
     release: () => { gate.resolve(); },
-    port: {
-      start: async () => {
-        asks += 1;
-        // Bound before the wait: the held pass's child answers what it was asked.
-        const mine = answers[Math.min(asks, answers.length) - 1] ?? null;
+    port: scriptedRefiner(async () => {
+      asks += 1;
+      // Bound before the wait: the held pass's call answers what it was asked.
+      const mine = answers[Math.min(asks, answers.length) - 1];
 
-        if (asks === 1) await gate.promise;
-        answered = mine;
+      if (asks === 1) await gate.promise;
 
-        const outcome: TemporaryRunOutcome = {
-          status: 'working', agent: 'refiner-1', lifetime: 'task', role: 'task', answer: 'working', transcript: 'kept',
-        };
+      if (mine === undefined) throw new Error('no answer scripted');
 
-        return outcome;
-      },
-      release: () => {},
-      reclaim: (): EvolutionHelperAnswer | null => answered === null
-        ? null
-        : { state: 'answered', name: 'refiner-1', status: 'completed', answer: proposalText(answered) },
-      answered: () => [],
-      forget: () => {},
-    },
+      return proposalText(mine);
+    }).port,
   };
 }
 
-/** A refiner whose child answers `answer()` onto its helper row once started; a throw is the start's own failure. */
-function answeringPort(answer: () => string): TemporaryAgentPort {
-  let stored: string | null = null;
-
-  return {
-    start: async () => {
-      stored = answer();
-
-      return { status: 'working', agent: 'refiner', lifetime: 'task', role: 'task', answer: 'working', transcript: 'kept' };
-    },
-    release: () => {},
-    reclaim: () => stored === null ? null : { state: 'answered', name: 'refiner', status: 'completed', answer: stored },
-    answered: () => [],
-    forget: () => {},
-  };
-}
-
-/**
- * Passes until one moves the dream: the first starts the dreamer, the next takes its draft and starts the reviewer, the
- * third takes the verdicts and routes.
- */
-async function advanceRefinementLane(deps: RefinementDeps): Promise<RefinementLaneStep> {
-  for (let pass = 0; pass < 2; pass += 1) {
-    const step = await advanceLane(deps);
-
-    if (step.step !== 'idle') return step;
-  }
-
-  return advanceLane(deps);
+/** A dreamer whose call answers `answer()`; a throw is the call's own failure. */
+function answeringPort(answer: () => string): ScriptedRefiner {
+  return scriptedRefiner(() => answer()).port;
 }
 
 interface Fixture {
@@ -239,7 +181,7 @@ interface Fixture {
   facts: FactsStore;
   approvals: InstructionApprovalStore;
   /** `refiner` drafts; the dream's reviewer accepts every edit unless `reviewer` says otherwise. */
-  deps(refiner: TemporaryAgentPort, score?: (candidate: string) => number, worth?: number, reviewer?: Reviewer): RefinementDeps;
+  deps(refiner: ScriptedRefiner, score?: (candidate: string) => number, worth?: number, reviewer?: Reviewer): RefinementDeps;
   /** The triage questions the decision model was asked, in order. */
   triaged: string[];
 }
@@ -254,8 +196,6 @@ function fixture(): Fixture {
   initRefinementTables(rt.storage.execRaw);
   const facts = createFactsStore(rt.storage.sql, rt.actor);
   const triaged: string[] = [];
-  // The reviewer's answers by lane, across every `deps` of this fixture, as its helper rows would hold them.
-  const reviews = new Map<string, string>();
 
   const approvals = new InstructionApprovalStore(
     rt.storage.sql, rt.actor, 'test-workspace',
@@ -283,7 +223,10 @@ function fixture(): Fixture {
         return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
       };
 
-      return { control: scriptedControl(rt), facts, refiner: withReviewer(refiner, reviewer, reviews), approvals, skillsVfs: rt.agentStateVfs, recordedTurns: async () => [] };
+      rt.fastLlm = helperRoute('fast', refiner, reviewer);
+      rt.judgeModel = helperRoute('deep', refiner, reviewer);
+
+      return { control: scriptedControl(rt), facts, approvals, skillsVfs: rt.agentStateVfs, recordedTurns: async () => [] };
     },
   };
 }
@@ -545,6 +488,49 @@ describe('the refiner — bounded references, prior history, strict typed answer
     for (const text of [brief, reviews[0] ?? '']) expect(text).toContain('a memory fact, and a skill last');
   });
 
+  test('a reviewer is asked with its schema, so a model that would write `verdict` answers `verdicts`', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const edit = { kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'three corrected turns asked for a one-line yes or no' } as const;
+    const deps = fx.deps(scriptedRefiner(proposalText({ scope: 'workspace', summary: 'shorter yes-or-no answers', edits: [edit] })).port);
+    const reviewer = present(fx.rt.fastLlm, 'the fast route');
+    const asked: string[] = [];
+
+    // A model left to itself writes `verdict`, as one did on staging; its structured output takes the keys the schema it
+    // was sent names.
+    fx.rt.fastLlm = {
+      ...reviewer,
+      complete: async () => JSON.stringify({ verdict: 'accept' }),
+      object: async (prompt, schema) => {
+        if (!Object.is(schema, DreamVerdictsSchema)) return reviewer.object(prompt, schema);
+        const key = Object.keys(DreamVerdictsSchema.entries)[0] ?? 'verdict';
+        asked.push(key);
+
+        return v.parse(schema, { [key]: [{ edit: 0, verdict: 'accept', note: 'it fits the turns' }] });
+      },
+    };
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+
+    expect(asked).toEqual(['verdicts']);
+    expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('evaluating');
+  });
+
+  test('a reviewer answering off its schema refuses the dream, naming every key it got wrong', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const edit = { kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'three corrected turns asked for a one-line yes or no' } as const;
+    const deps = fx.deps(scriptedRefiner(proposalText({ scope: 'workspace', summary: 'shorter yes-or-no answers', edits: [edit] })).port, undefined, undefined, () => JSON.stringify({ verdict: 'accept' }));
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
+
+    expect(row?.stage).toBe('refused');
+    expect(row?.detail).toContain('did not answer in its shape');
+    expect(row?.detail).toContain('verdict');
+  });
+
   test('the brief and the review name the picks the turns switched from or corrected, with their descriptions now', async () => {
     const fx = fixture();
     fx.rt.craftStore.create({ name: 'csv_sum', description: 'Sums one column of a CSV file', code: 'async () => 0' });
@@ -626,8 +612,30 @@ describe('the refiner — bounded references, prior history, strict typed answer
     expect(secondRequests[0].task).toContain(first.id);
   });
 
-  test('the refiner reads context refs itself — only the files this workspace has, at their real paths', async () => {
-    // The lane must offer only paths that exist; the temporary-agent port refuses absent ones.
+  test('a brief at its largest (twelve turns at their full windows, both files at their cap) stays under 64k tokens', async () => {
+    const fx = fixture();
+    const long = 'x'.repeat(50_000);
+
+    for (let turn = 0; turn < 12; turn += 1) {
+      recordTurnRating(fx.rt.storage.sql, fx.rt.actor, {
+        turnId: `long-${String(turn)}`, score: 1.5, corrected: 0.9, wrong: 'incorrect', source: 'model',
+        request: long, answer: long, followup: long, now: SEED_EPOCH + (seeded += 1),
+      });
+    }
+
+    await writeText(fx.rt.storage.vfs, 'memory/MEMORY.md', long);
+    await writeText(fx.rt.storage.vfs, 'AGENTS.md', long);
+    const { port, requests } = scriptedRefiner(proposalText(FACT_PROPOSAL));
+    await requestRefinement(fx.deps(port), { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(fx.deps(port));
+    const brief = present(requests.find((request) => request.role === 'dreamer'), 'the dreamer\'s brief').task;
+
+    // Every turn the dream covers is in it, each cut to its window; under half of a 128k window.
+    expect(brief.match(/^### Turn \d+:/gmu)).toHaveLength(12);
+    expect(estimateTokens(brief.length)).toBeLessThan(64_000);
+  });
+
+  test('the dreamer reads the instruction files this workspace has, in its brief, and no file it lacks', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     await fx.rt.storage.vfs.mkdir('memory', { recursive: true });
@@ -641,10 +649,10 @@ describe('the refiner — bounded references, prior history, strict typed answer
     await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    expect(requests[0].contextRefs).toEqual(['memory/MEMORY.md']);
-    expect(requests[0].mode).toBe('plan');
+    expect(requests[0]?.task).toContain('### memory/MEMORY.md\n# memory');
+    expect(requests[0]?.task).not.toContain('### AGENTS.md');
 
-    // With an AGENTS.md in place it is offered too; nothing absent ever is.
+    // With an AGENTS.md in place it is read too.
     const withAgentsMd = fixture();
     seedGradedTurns(withAgentsMd.rt, 3);
     await withAgentsMd.rt.storage.vfs.mkdir('memory', { recursive: true });
@@ -654,7 +662,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const secondDeps = withAgentsMd.deps(second.port);
     await requestRefinement(secondDeps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(secondDeps);
-    expect(second.requests[0].contextRefs).toEqual(['memory/MEMORY.md', 'AGENTS.md']);
+    expect(second.requests[0]?.task).toContain('### AGENTS.md\n# project');
   });
 
   test('an unparsable or off-schema answer refuses the request — it never half-applies', async () => {
@@ -670,43 +678,33 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const row = store.get(opened.id);
     expect(row?.stage).toBe('refused');
-    expect(row?.detail).toContain('proposal');
+    expect(row?.detail).toContain('the dreamer did not answer');
     expect(fx.facts.all()).toEqual([]);
   });
 
-  test('a refiner that could not start refuses the request and says why', async () => {
+  test('a dreamer whose call fails refuses the request and says why', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
-
-    const deps: RefinementDeps = {
-      ...fx.deps(scriptedRefiner('{}').port),
-      refiner: {
-        start: async () => ({
-          status: 'failed', agent: 'ask-refiner-x', lifetime: 'task', role: 'refiner', answer: 'no roster substrate here', transcript: 'none', reason: 'unavailable',
-        }),
-        release: () => {},
-        reclaim: () => null,
-        answered: () => [],
-        forget: () => {},
-      },
-    };
+    const deps = fx.deps(answeringPort(() => { throw new Error('the provider refused the request (HTTP 429)'); }));
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
     const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
     expect(row?.stage).toBe('refused');
-    expect(row?.detail).toContain('no roster substrate here');
+    expect(row?.detail).toContain('HTTP 429');
   });
 
-  test.each([undefined, null])('a host with no refiner (%p) leaves the request `requested` for a host that has one', async (refiner) => {
+  test('a host with no deep route refuses the request and says so', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
-    const deps: RefinementDeps = { ...fx.deps(scriptedRefiner('{}').port), refiner };
+    const deps = fx.deps(scriptedRefiner('{}').port);
+    fx.rt.judgeModel = undefined;
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
-    const step = await advanceRefinementLane(deps);
-    expect(step.step).toBe('idle');
-    expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('requested');
+    await advanceRefinementLane(deps);
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
+    expect(row?.stage).toBe('refused');
+    expect(row?.detail).toContain('no deep route');
   });
 });
 
@@ -916,7 +914,6 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(routeFor(row.routes, 'skill').reason).toContain('ENOTDIR');
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(row.stage).not.toBe('refused');
-    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, fx.rt.actor.actorId)).toBeNull();
   });
 
   test('a skill edit stages OUTSIDE discovery — zero prompt influence before a cold turn', async () => {
@@ -1160,7 +1157,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(route.owner).toBe('');
   });
 
-  test('the request table and the lane hold, owning no artifact, in exactly the shape they ship', () => {
+  test('the request table, owning no artifact, in exactly the shape it ships', () => {
     // A bare database, so what this init creates is exactly what is measured.
     const bare = createTestSql();
 
@@ -1171,7 +1168,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     initRefinementTables(bare.execRaw);
     const added = tables().filter((name) => !before.has(name));
 
-    expect(added).toEqual(['refinement_lane_holds', 'refinement_requests']);
+    expect(added).toEqual(['refinement_requests']);
 
     // Names that would betray a second authority for an artifact.
     for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
@@ -1510,21 +1507,22 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     const fx = fixture();
     seedGradedTurns(fx.rt, 4);
     let asks = 0;
+    const deps = fx.deps(scriptedRefiner(proposalText(EVERY_OWNER_PROPOSAL)).port);
+    const decide = present(fx.rt.decide, 'the judge');
 
-    // The port rejects mid-call: the pass unwinds without refusing or recording.
-    const port = answeringPort(() => {
+    // The judge rejects mid-pass, outside any helper: the pass unwinds without refusing or recording.
+    fx.rt.decide = async (request) => {
       asks += 1;
 
-      if (asks === 1) throw new Error('the refiner host went away');
+      if (asks === 1) throw new Error('the judge host went away');
 
-      return proposalText(EVERY_OWNER_PROPOSAL);
-    });
+      return decide(request);
+    };
 
-    const deps = fx.deps(port);
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
-    await failsFrom(advanceRefinementLane(deps), 'the refiner host went away');
+    await failsFrom(advanceRefinementLane(deps), 'the judge host went away');
     // Left claimed by a dead pass; no owner touched.
     expect(store.get(opened.id)?.stage).toBe('planning');
     expect(fx.facts.all()).toEqual([]);
@@ -1532,7 +1530,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     // The next pass in this process re-queues and finishes it.
     const step = await advanceRefinementLane(deps);
     expect(step.step).toBe('planned');
-    expect(asks).toBe(2);
+    expect(asks).toBeGreaterThan(1);
     const row = present(store.get(opened.id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
     expect(row.routes).toHaveLength(3);
@@ -1986,7 +1984,7 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
 
     const { port, requests } = scriptedRefiner((request) => proposalText({
       scope: 'workspace', summary: 'a section',
-      edits: [{ ...SECTION_EDIT, source: request.lane?.requestId.endsWith(':revise:0') === true ? REVISED : CANDIDATE }],
+      edits: [{ ...SECTION_EDIT, source: request.task.includes(REVISION_HEADING) ? REVISED : CANDIDATE }],
     }));
 
     // The judge passes both texts, so the reviewer decides between them.
@@ -1998,9 +1996,9 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
 
-    for (let pass = 0; pass < 5; pass += 1) await advanceLane(deps);
+    for (let pass = 0; pass < 5; pass += 1) await advanceRefinementLane(deps);
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
-    const revise = present(requests.find((request) => request.lane?.requestId.endsWith(':revise:0') === true), 'the revision brief');
+    const revise = present(requests.find((request) => request.task.includes(REVISION_HEADING)), 'the revision brief');
 
     expect(revise.task).toContain('Edit 0: revise: say terse, not asked');
     expect(revise.task).toContain(JSON.stringify(CANDIDATE).slice(1, 40));
@@ -2017,7 +2015,7 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     const deps = fx.deps(port, undefined, undefined, () => [{ edit: 0, verdict: 'revise', note: 'still too loose' }]);
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
 
-    for (let pass = 0; pass < 5; pass += 1) await advanceLane(deps);
+    for (let pass = 0; pass < 5; pass += 1) await advanceRefinementLane(deps);
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
 
     expect(routeFor(row.routes, 'prompt_section')).toMatchObject({
@@ -2128,29 +2126,16 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     expect(listArtifactVersions(fx.rt.storage.sql, fx.rt.actor, toolArtifact('shell', 'schema'))).toEqual([]);
   });
 
-  test('the dreamer drafts on the deep tier and the reviewer judges on the fast one, each read-only on its own lane', async () => {
+  test('the dreamer drafts on the deep tier and the reviewer judges on the fast one, each in one structured call', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const { port, requests } = scriptedRefiner(proposalText(FACT_PROPOSAL));
-    const started: TemporaryRunRequest[] = [];
+    const deps = fx.deps(port);
 
-    const watching: TemporaryAgentPort = {
-      ...port,
-      start: async (request) => {
-        started.push(request);
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
 
-        return port.start(request);
-      },
-    };
-
-    const opened = await requestRefinement(fx.deps(watching), { trigger: 'explicit', scope: 'workspace' });
-
-    await advanceRefinementLane(fx.deps(watching));
-
-    expect(requests.map((request) => [request.role, request.mode, request.lane?.requestId])).toEqual([['dreamer', 'plan', opened.id]]);
-    expect(SYSTEM_ROLE_DEFINITIONS.dreamer.tier).toBe('deep');
-    expect(SYSTEM_ROLE_DEFINITIONS['dream-reviewer']).toMatchObject({ tier: 'fast', allowedTools: [] });
-    expect(started.map((request) => request.role)).toEqual(['dreamer']);
+    expect(requests.map((request) => [request.role, request.tier])).toEqual([['dreamer', 'deep'], ['dream_reviewer', 'fast']]);
   });
 });
 
@@ -2668,216 +2653,5 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 
     expect(card?.items?.[0]?.evidence.length).toBeLessThan(long.length);
     expect(card?.items?.[0]?.evidence).toContain('chars');
-  });
-});
-
-/** One workspace database for the roster and the root's rail, as both hosts keep them. */
-/** `over`: the lane's own database, so the helper's parent is the actor whose lane asked it, as in a workspace. */
-function refinerRail(over?: { readonly db: Database; readonly workspaceId: string }) {
-  const db = over?.db ?? new Database(':memory:');
-  const workspaceId = over?.workspaceId ?? 'refiner-workspace';
-  const exec = makeSqlExec(db);
-  initEventsHubTables(exec);
-  createTestActor(makeSql(db), makeExecRaw(db), workspaceId, 'main');
-  const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId, ownerUserId: '' });
-  const root = directory.main();
-  const roster = new SubordinateRosterStore(exec, root);
-  roster.ensureSchema();
-  const assigned = Promise.withResolvers<void>();
-  const recordAssignment = roster.recordAssignmentEvent.bind(roster);
-
-  roster.recordAssignmentEvent = (name, eventId) => {
-    recordAssignment(name, eventId);
-    assigned.resolve();
-  };
-
-  const log = new EventLog(exec, root);
-  const handoff: SubordinateHandoff = { eventId: 'evt-refine', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
-
-  const runtime: SubordinateRuntime = {
-    spawn: async (input) => directory.apply(root, [], { action: 'register', name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime }).reference,
-    cancelBirth: async () => { throw new Error('no birth is cancelled here'); },
-    assign: async () => handoff,
-    status: async () => ({ lastActivity: null, recentSteps: [] }),
-    message: async () => handoff,
-    dismiss: async () => ({ stoppedJobs: [] }),
-    rename: async () => undefined,
-  };
-
-  const retires: Promise<void>[] = [];
-
-  /** A fresh port is a fresh activation. */
-  const port = () => createTemporaryAgentPort({
-    roster, runtime, createName: (role) => `${role}-a1b2c3`, now: () => SEED_EPOCH,
-    // The rail's runtime dismisses synchronously; a failure would fail the test through the rejected promise it returns.
-    afterTurn: (_child, work) => { retires.push(work()); },
-  });
-
-  return {
-    root,
-    roster,
-    log,
-    port,
-    assigned: assigned.promise,
-    helper: 'ask-dreamer-a1b2c3',
-    reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
-    deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
-      log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
-      announce: () => undefined, onAdmitted: () => undefined, evolutionAnswerStored: () => undefined, onEvolutionAnswer: () => undefined, temporary,
-    }, {
-      fromSubordinate: 'ask-dreamer-a1b2c3', status: 'completed', content, origin: 'turn_end',
-      sequenceId: 'refiner:turn-1', mode: 'plan',
-    }, SEED_EPOCH),
-  };
-}
-
-/** A pass that starts the refiner and returns at once, its helper still working. */
-async function startRefiner(fx: ReturnType<typeof fixture>, rail: ReturnType<typeof refinerRail>): Promise<RefinementRequestView> {
-  const port = rail.port();
-  const opened = await requestRefinement(fx.deps(port), { trigger: 'explicit', scope: 'workspace' });
-
-  expect((await advanceLane(fx.deps(port))).step).toBe('idle');
-
-  return opened;
-}
-
-describe('a refiner answer returns to the lane, never to the root', () => {
-  test('after an eviction the answer is stored, the row released, and the next pass routes it', async () => {
-    const fx = fixture();
-    seedGradedTurns(fx.rt, 3);
-    const rail = refinerRail();
-    const opened = await startRefiner(fx, rail);
-    expect(rail.roster.get(rail.helper)?.origin).toBe('evolution');
-
-    let asks = 0;
-    const resumed = rail.port();
-
-    const counted: TemporaryAgentPort = {
-      ...resumed,
-      start: (request) => {
-        asks += 1;
-
-        return resumed.start(request);
-      },
-    };
-
-    // The helper is still working: the next pass waits for it instead of asking a second refiner.
-    expect((await advanceRefinementLane(fx.deps(counted))).step).toBe('idle');
-    expect(asks).toBe(0);
-
-    // The child's turn, resumed on the new activation, reports through the real ingress.
-    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
-    expect(rail.reports()).toEqual([]);
-    expect(buildDrainBatch(rail.log.pending())).toBeNull();
-    expect(rail.roster.get(rail.helper)?.status).toBe('dismissed');
-
-    const step = await advanceRefinementLane(fx.deps(counted));
-    expect(step.step).toBe('planned');
-    expect(asks).toBe(0);
-    expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('applied');
-    expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
-    expect(rail.reports()).toEqual([]);
-  });
-
-  test('a stored answer owes the lane a pass at once, and the pass that routes it clears that', async () => {
-    // Without it, an answer stored after an eviction waits for the owner's next turn.
-    const fx = fixture();
-    seedGradedTurns(fx.rt, 3);
-    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
-    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
-    await startRefiner(fx, rail);
-    expect(owed()).toBeNull();
-
-    const resumed = rail.port();
-    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
-    const due = owed();
-
-    expect(due).not.toBeNull();
-    expect(due ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(Date.now());
-
-    expect((await advanceRefinementLane(fx.deps(resumed))).step).toBe('planned');
-    expect(owed()).toBeNull();
-  });
-
-  test('it owes nothing while an older request is ahead in the lane, which the next pass would take instead', async () => {
-    // A due source the pass will not route would re-arm the wake at once, lap after lap.
-    const fx = fixture();
-    seedGradedTurns(fx.rt, 3);
-    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
-    await startRefiner(fx, rail);
-    await rail.deliver(rail.port(), proposalText(FACT_PROPOSAL));
-    createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 });
-
-    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
-  });
-
-  test('a store read that throws while planning a stored answer refuses that request with its cause', async () => {
-    const fx = fixture();
-    seedGradedTurns(fx.rt, 3);
-    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
-    const opened = await startRefiner(fx, rail);
-    const resumed = rail.port();
-    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
-
-    // The reviewed turns are read synchronously, after the answer is taken and before any route.
-    void fx.rt.storage.sql`ALTER TABLE turn_ratings RENAME TO turn_ratings_away`;
-    await advanceRefinementLane(fx.deps(resumed));
-    void fx.rt.storage.sql`ALTER TABLE turn_ratings_away RENAME TO turn_ratings`;
-
-    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
-    expect(row.stage).toBe('refused');
-    expect(row.detail).toContain('turn_ratings');
-    expect(nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId)).toBeNull();
-  });
-
-  test('any throw in a pass holds the lane: its stored answer stops reading as due', async () => {
-    const fx = fixture();
-    seedGradedTurns(fx.rt, 3);
-    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
-    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
-    await startRefiner(fx, rail);
-    const resumed = rail.port();
-    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
-    expect(owed()).not.toBeNull();
-
-    fx.db.run(`CREATE TRIGGER refuse_claim BEFORE UPDATE ON refinement_requests
-      BEGIN SELECT RAISE(ABORT, 'the request table refused the write'); END`);
-    await failsFrom(refinementPass(fx.deps(resumed)), 'the request table refused the write');
-    expect(owed()).toBeNull();
-
-    fx.db.run('DROP TRIGGER refuse_claim');
-    // The draft goes to the reviewer, whose verdicts the next pass routes.
-    expect((await refinementPass(fx.deps(resumed))).step).toBe('idle');
-    expect((await refinementPass(fx.deps(resumed))).step).toBe('planned');
-  });
-
-  test('a pass that fails for no one request holds the lane with its cause, owing no wake until new input', async () => {
-    // Still due, every wake would re-run the same failing settle.
-    const fx = fixture();
-    seedGradedTurns(fx.rt, 3);
-    const rail = refinerRail({ db: fx.db, workspaceId: 'test-agent-id' });
-    const owed = () => nextEvolutionAnswerAt(fx.rt.storage.sql, rail.root.actorId);
-    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
-    const answered = await startRefiner(fx, rail);
-    const resumed = rail.port();
-    await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
-    const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;
-    // A staged text edit, whose standing its settle reads from the versions' table.
-    store.record(stuck.id, 'requested', { routes: [{ kind: 'prompt_section', owner: 'artifact_versions', target: `${ARTIFACT}@1`, disposition: 'staged' }] });
-    void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'gated' WHERE id = ${stuck.id}`;
-    void fx.rt.storage.sql`ALTER TABLE artifact_versions RENAME TO artifact_versions_away`;
-    expect(owed()).not.toBeNull();
-
-    expect((await refinementPass(fx.deps(resumed))).step).toBe('idle');
-    expect(store.get(stuck.id)?.detail).toContain('artifact_versions');
-    expect(owed()).toBeNull();
-    expect(store.get(answered.id)?.stage).not.toBe('applied');
-
-    void fx.rt.storage.sql`ALTER TABLE artifact_versions_away RENAME TO artifact_versions`;
-    await refinementPass(fx.deps(resumed));
-    await refinementPass(fx.deps(resumed));
-    await refinementPass(fx.deps(resumed));
-    expect(store.get(answered.id)?.stage).toBe('applied');
-    expect(owed()).toBeNull();
   });
 });

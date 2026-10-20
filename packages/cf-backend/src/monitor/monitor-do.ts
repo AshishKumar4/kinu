@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import { EmailOutbox } from '@kinu.run/core';
 import { sampleFleet, settleFleet, type MonitorIncident } from '@kinu.run/core/control-plane';
-import { declaredSignInProviders, ensureMonitorSchema, listIncidents, recordProbeRun, runSyntheticProbes, type MonitorRunResult } from '@kinu.run/core';
+import { declaredSignInProviders, ensureMonitorSchema, listIncidents, plainFetch, recordProbeRun, runSyntheticProbes, type MonitorRunResult } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { KinuError, settle } from '@kinu.run/core/obs';
@@ -44,7 +44,7 @@ export class MonitorDO extends DurableObject<Env> {
 
       const probes = yield* Effect.promise(async () => runSyntheticProbes({
         origin,
-        fetch: (input, init) => fetch(input, init),
+        fetch: plainFetch(fetch),
         signIn: {
           declared: declaredSignInProviders(this.env.SIGN_IN_PROVIDERS),
           configured: listConfiguredOAuthProviders(this.env).map((provider) => provider.id),

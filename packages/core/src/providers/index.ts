@@ -73,7 +73,7 @@ export {
 } from './claude-oauth';
 
 export {
-  CLAUDE_LOGIN_ISSUER, renewableLogin, rotateLogin, subscriptionIssuer, usableLogin, type LoginRenewal, type SubscriptionIssuer,
+  CLAUDE_LOGIN_ISSUER, heldLogin, renewableLogin, rotateLogin, subscriptionIssuer, usableLogin, type LoginRenewal, type SubscriptionIssuer,
 } from './subscription-login';
 
 export * from './fetch-shim';

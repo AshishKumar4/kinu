@@ -115,6 +115,17 @@ that a role imposes is captured before terminal effects and stops automatic
 improvement lanes that would change the project. Plan adds no second approval
 queue and no new persisted format.
 
+## The inert boundary
+
+A measured session (the OMP measurement, `evals/omp/`) runs its turns behind `toolsBehindBoundary`
+(`execution/work-mode.ts`), set through the workspace's open config (`CLIOpenConfig.boundary`) and by nothing else; every
+agent the workspace hires inherits it with the rest of its parent's open config. The turn stays Build, so
+its authored scaffold and its evolution accounting run as they would. Each tool call runs as Plan would run it: what
+Plan permits runs (reads, research, the agent's own memory), and a call in which Plan refused an operation never runs.
+It is recorded as intended (`ToolBoundary.intended`) and answered from a record of the same call where the measurement
+holds one, or with `NOT_RUN`. Plan's own classification decides; there is no second list. On the CLI that keeps every
+shell command and in-process program from running, as Plan does.
+
 ## file: the file plane
 
 `FILE` (`operations/file.ts`) declares `read`, `text`, `write`, `edit`, `list`,

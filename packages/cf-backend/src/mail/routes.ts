@@ -3,17 +3,18 @@
  * the request names; its Mailbox is reached by the Worker alone. Mounted behind the session gate, ahead of
  * `userRoutes`' catch-all.
  *
- * A person claims their address once: the deployment's operators always, anyone else once `MAIL_ACCOUNTS` is
- * `everyone`. The person reads, sends from any of their boxes and keeps drafts; Important is the assistant's pick, set
- * through its `mail.update`, so the person cannot set it here. A thread they send to one of their workspaces goes there
- * behind the workspace gate, which proves they own it. Their own box is read by their Personal assistant: it is handed
- * over at their claim when they have one, and at its install when they do not yet.
+ * A person creates their address once, in setup or where Mail would show their mailbox: the deployment's operators
+ * always, anyone else once `MAIL_ACCOUNTS` is `everyone`. The person reads, sends from any of their boxes and keeps
+ * drafts; Important is the assistant's pick, set through its `mail.update`, so the person cannot set it here. A thread
+ * they send to one of their workspaces goes there behind the workspace gate, which proves they own it. Their own box
+ * is read by their Personal assistant: it is handed over when they create their address if they have one, and at its
+ * install when they do not yet.
  */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, isMailLabel, json, MAIL_MESSAGE_FIELDS, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
+  err, json, MAIL_MESSAGE_FIELDS, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
   type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
@@ -48,7 +49,7 @@ const Outgoing = v.object({
   threadId: v.optional(v.string()),
 });
 
-const Claim = v.object({ username: v.string() });
+const Username = v.object({ username: v.string() });
 
 const Change = v.strictObject({ read: v.optional(v.boolean()), trashed: v.optional(v.boolean()) });
 
@@ -61,7 +62,7 @@ const Wake = v.object({
 });
 
 /** Whether the signed-in person may hold an address on this deployment (docs/MAIL.md §1). */
-function mayClaim(env: MailRoutesEnv, email: string): boolean {
+function mayCreate(env: MailRoutesEnv, email: string): boolean {
   if (env.MAIL_ACCOUNTS === 'everyone') return true;
 
   return isListedOperator(env, email);
@@ -69,7 +70,7 @@ function mayClaim(env: MailRoutesEnv, email: string): boolean {
 
 const mailbox = (c: MailContext): MailboxReach => objectNamed(c.env.MAILBOX, c.get('identity').userId);
 
-/** Their Personal assistant, if they have one, reads their box; a failed hand-over is said, and the claim stands. */
+/** Their Personal assistant, if they have one, reads their box; a failed hand-over is said, and the address stands. */
 function handToAssistant(c: MailContext): Effect.Effect<void> {
   const { userId } = c.get('identity');
 
@@ -80,10 +81,10 @@ function handToAssistant(c: MailContext): Effect.Effect<void> {
   }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, {}); })));
 }
 
-/** Whether this deployment has mail: a mail domain its deploy gave it. Without one there is no address to claim or read. */
+/** Whether this deployment has mail: a mail domain its deploy gave it. Without one there is no address to create or read. */
 const mailOn = (c: MailContext): boolean => (c.env.EMAIL_DOMAIN ?? '') !== '';
 
-/** The person's address, from the boxes their Mailbox holds; null before they claimed one. */
+/** The person's address, from the boxes their Mailbox holds; null before they create one. */
 async function addressOf(c: MailContext): Promise<string | null> {
   return (await mailbox(c).boxes()).find((box) => box.path === '')?.address ?? null;
 }
@@ -91,47 +92,73 @@ async function addressOf(c: MailContext): Promise<string | null> {
 export const mailRoutes = new Hono<FamilyEnv<MailRoutesEnv>>();
 
 mailRoutes.get('/api/user/mail/boxes', async (c) => {
-  if (!mailOn(c)) return json({ body: { enabled: false, address: null, canClaim: false, boxes: [] } });
+  if (!mailOn(c)) return json({ body: { enabled: false, domain: null, address: null, canCreate: false, boxes: [] } });
 
   const address = await addressOf(c);
-  const canClaim = address === null && mayClaim(c.env, c.get('identity').email);
+  const canCreate = address === null && mayCreate(c.env, c.get('identity').email);
 
-  return json({ body: { enabled: true, address, canClaim, boxes: address === null ? [] : await mailbox(c).boxes() } });
+  return json({ body: { enabled: true, domain: c.env.EMAIL_DOMAIN ?? '', address, canCreate, boxes: address === null ? [] : await mailbox(c).boxes() } });
 });
 
-/** The address the person holds once this returns: claimed now, or the one they had; a refusal is its answer. */
-async function claimAddress(c: MailContext): Promise<{ address: string } | Response> {
+/** Why `username` cannot be the person's: not a name or reserved (core's rules), or another account's; null when it can. */
+async function usernameRefusal(c: MailContext, username: string): Promise<'invalid' | 'reserved' | 'taken' | null> {
+  const refusal = mailUsernameRefusal(username);
+
+  if (refusal !== null) return refusal;
+  const holder = await objectNamed(c.env.MAILNAME, username).lookup();
+
+  return holder !== null && holder.user_id !== c.get('identity').userId ? 'taken' : null;
+}
+
+/** A refused username, in its status and words. */
+function refused(refusal: 'invalid' | 'reserved' | 'taken'): Response {
+  if (refusal === 'taken') return err(403, 'That name is taken.');
+
+  return err(400, refusal === 'reserved' ? 'That name is kept for mail systems.' : 'A username is 1 to 20 lowercase letters, digits and inner hyphens.');
+}
+
+/** The address the person holds once this returns: created now, or the one they had; a refusal is its answer. */
+async function createAddress(c: MailContext): Promise<{ address: string } | Response> {
   if (!mailOn(c)) return err(503, 'Mail is off on this deployment: it has no mail domain.');
   const identity = c.get('identity');
-  const body = await safeJson(c.req.raw, Claim);
+  const body = await safeJson(c.req.raw, Username);
 
-  if (body === null || !isMailLabel(body.username)) return err(400, 'A username is 1 to 20 lowercase letters, digits and inner hyphens.');
+  const named = body === null ? 'invalid' : mailUsernameRefusal(body.username);
 
-  if (!mayClaim(c.env, identity.email)) return err(403, 'Addresses on this deployment are its operators\' only.');
+  if (body === null || named !== null) return refused(named ?? 'invalid');
+
+  if (!mayCreate(c.env, identity.email)) return err(403, 'Addresses on this deployment are its operators\' only.');
 
   const held = await addressOf(c);
 
   if (held !== null) return { address: held };
+  const refusal = await usernameRefusal(c, body.username);
 
-  const name = objectNamed(c.env.MAILNAME, body.username);
-  const holder = await name.lookup();
+  // Said in its own words here; one that races another account still fails, in MailName's.
+  if (refusal !== null) return refused(refusal);
 
-  // Said in its own words here; a claim that races another still fails, in the API's.
-  if (holder !== null && holder.user_id !== identity.userId) return err(403, `"${body.username}" is taken.`);
-
-  await name.claim(body.username, identity.userId);
+  await objectNamed(c.env.MAILNAME, body.username).claim(body.username, identity.userId);
 
   const box = await mailbox(c).open({ userId: identity.userId, email: identity.email, username: body.username, assistant: null });
 
   return { address: box.address };
 }
 
-mailRoutes.post('/api/user/mail/claim', async (c) => {
-  const claimed = await claimAddress(c);
+/** Whether a username may be the person's, read as they type: it holds nothing. */
+mailRoutes.get('/api/user/mail/address', async (c) => {
+  if (!mailOn(c)) return err(503, 'Mail is off on this deployment: it has no mail domain.');
+  const username = c.req.query('username') ?? '';
+  const refusal = await usernameRefusal(c, username);
 
-  if (claimed instanceof Response) return claimed;
+  return json({ body: { username, available: refusal === null, refusal } });
+});
 
-  return settle(Effect.as(handToAssistant(c), json({ body: claimed })));
+mailRoutes.post('/api/user/mail/address', async (c) => {
+  const created = await createAddress(c);
+
+  if (created instanceof Response) return created;
+
+  return settle(Effect.as(handToAssistant(c), json({ body: created })));
 });
 
 mailRoutes.get('/api/user/mail/important', async (c) => {

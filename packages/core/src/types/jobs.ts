@@ -37,6 +37,24 @@ export const InvocationSurfaceSchema = v.picklist(['interactive', 'one-shot']);
 
 export type InvocationSurface = v.InferOutput<typeof InvocationSurfaceSchema>;
 
+/** The turn-metadata key under which a wake that resumes parked calls carries the surface they were made on: the turn
+ *  it opens re-issues them, under the background policy of the turn they were parked from. */
+export const RESUMED_SURFACE = 'kinuSurface';
+
+/**
+ * The wake metadata that resumes calls parked on `surfaces` (an owner's answer to a device consent or to a parked
+ * action alike), so the turn it opens runs them under the surface they were made on. Calls parked from both are
+ * re-issued as interactive ones, since a call detached at its window still ends, as a job that wakes its agent, while
+ * one held past its own holds a turn a person watches. None when no call recorded one (a denial, or a call made in no
+ * turn).
+ */
+export function resumedSurfaceMetadata(surfaces: readonly (InvocationSurface | undefined)[]) {
+  const recorded = new Set(surfaces.flatMap((surface) => surface ?? []));
+  const resumed: readonly InvocationSurface[] = recorded.size === 0 ? [] : [recorded.has('interactive') ? 'interactive' : 'one-shot'];
+
+  return Object.fromEntries(resumed.map((surface) => [RESUMED_SURFACE, surface]));
+}
+
 export interface BackgroundPolicy {
   readonly detachAfterMs: number;
   /** How long teardown waits on work that has not settled before leaving it. */
