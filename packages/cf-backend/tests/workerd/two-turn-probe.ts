@@ -164,7 +164,7 @@ const FACET_CALLS = Object.keys({
   activePlanReview: true, planReviews: true, savePlanReviewAnnotations: true, dismissPlanReview: true,
   ownerQuestions: true, dismissOwnerQuestions: true, admit: true, landing: true, sendState: true, awaitSend: true,
   interruptChat: true, wake: true, modelSettingsChanged: true, revertTo: true, clearConversation: true, owed: true,
-  owedWork: true, answerTexts: true, answer: true, newestFirst: true, armCompaction: true, forkHas: true,
+  owedWork: true, answerTexts: true, answer: true, newestFirst: true, namePhases: true, armCompaction: true, forkHas: true,
   forkPlan: true, forkCount: true, forkRows: true, forkClear: true, forkStage: true, forkPublish: true,
   drainAnswers: true, lastUserMetadata: true, turnPair: true, standing: true, steps: true, runSteps: true,
   listRuns: true, runSummaries: true, runEvents: true, runEventText: true, idle: true, deliverAdvice: true,

@@ -1,8 +1,11 @@
 /**
- * How the chat lays out a turn's parts (the owner, 2026-10-17): a run of two or more tool calls in a row, with the
- * thinking around and between them, is one group, folded behind a line that says what it is doing or did. What the
- * owner reads or answers stands outside a run and splits it: the turn's words, a question for the owner, a call that
- * started a preview, a file.
+ * How the chat lays out a turn's parts (the owner, 2026-10-17, 2026-10-19): a run of two or more tool calls is one
+ * phase, folded behind a line that says in a few words what it did or is doing. Thinking streams as it always has: a
+ * thought before a phase's first call or after its last stands outside it, and only the thoughts between its calls go
+ * in. What the owner reads or answers stands outside a phase and ends it: the turn's words, a question for the owner, a
+ * call that started a preview, a file. A long turn rolls up once more: its earlier phases, with the thinking and words
+ * among them, under one line, the newest phase open below it while it runs, and the answer under all of it once it
+ * lands.
  */
 import { isToolUIPart, getToolName } from "ai";
 import type { DynamicToolUIPart, ReasoningUIPart, ToolUIPart, UIMessage } from "ai";
@@ -13,6 +16,7 @@ import { ASK_OWNER_TOOL } from '../tools/registry';
 import { tolerate } from "../obs/index";
 import { type JsonObject, type JsonValue } from '../utils/json';
 import { extractPreviewUrl } from '../preview/preview-origin';
+import { ongoing, phaseTitle } from './tool-phase-title';
 
 type Part = UIMessage["parts"][number];
 
@@ -24,11 +28,14 @@ export type RunStep =
   | { kind: "tool"; part: AnyToolPart }
   | { kind: "reasoning"; parts: ReasoningUIPart[] };
 
-/** `reasoning`: a run of thinking, across steps; `run`: a run of calls and the thinking among them. */
+/** `reasoning`: a run of thinking, across steps; `run`: a phase, its calls and the thinking between them. */
 export type PartBlock =
   | { kind: "part"; part: Part }
   | { kind: "run"; steps: RunStep[] }
   | { kind: "reasoning"; parts: ReasoningUIPart[] };
+
+/** A turn's blocks, its earlier phases and the words among them rolled up into one `turn`. */
+export type TurnBlock = PartBlock | { kind: "turn"; blocks: PartBlock[] };
 
 /** The calls a run holds before it groups. */
 const RUN_MIN = 2;
@@ -52,13 +59,36 @@ function addThought(list: (PartBlock | RunStep)[], part: ReasoningUIPart): void 
   else list.push({ kind: "reasoning", parts: [part] });
 }
 
+/** The last index `test` holds at; -1 for none. ES2022's arrays have no `findLastIndex`. */
+function lastIndex<T>(list: readonly T[], test: (item: T) => boolean): number {
+  for (let at = list.length - 1; at >= 0; at--) {
+    const item = list[at];
+
+    if (item !== undefined && test(item)) return at;
+  }
+
+  return -1;
+}
+
+/** Each thought before a phase's first call, or after its last, as the blocks outside it. */
+function addThoughts(blocks: PartBlock[], steps: readonly RunStep[]): void {
+  for (const step of steps) if (step.kind === "reasoning") for (const part of step.parts) addThought(blocks, part);
+}
+
 export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
   const blocks: PartBlock[] = [];
   let run: RunStep[] = [];
 
   // Too few calls to group: each call is its own row, and its thinking its own block.
   const flush = () => {
-    if (run.filter((step) => step.kind === "tool").length >= RUN_MIN) blocks.push({ kind: "run", steps: run });
+    const first = run.findIndex((step) => step.kind === "tool");
+    const last = lastIndex(run, (step) => step.kind === "tool");
+
+    if (run.filter((step) => step.kind === "tool").length >= RUN_MIN) {
+      addThoughts(blocks, run.slice(0, first));
+      blocks.push({ kind: "run", steps: run.slice(first, last + 1) });
+      addThoughts(blocks, run.slice(last + 1));
+    }
     else for (const step of run) {
       if (step.kind === "tool") blocks.push({ kind: "part", part: step.part });
       else for (const part of step.parts) addThought(blocks, part);
@@ -84,75 +114,76 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
   return blocks;
 }
 
-/** One kind of work a call does, as a run's line says it while it runs: once, and `count` times. */
-interface Activity {
-  readonly key: string;
-  readonly doing: (count: number) => string;
+/** A block of the turn's work: a phase, or a call on its own row. */
+function isWorkBlock(block: PartBlock): boolean {
+  return block.kind === "run" || (block.kind === "part" && isRunCall(block.part));
 }
 
-const counted = (one: string, many: (count: number) => string) => (count: number) => (count === 1 ? one : many(count));
-
-const ACTIVITIES = {
-  search: { key: "web-search", doing: () => "searching the web" },
-  page: { key: "web-page", doing: counted("reading a page", (n) => `reading ${String(n)} pages`) },
-  screenshot: { key: "web-shot", doing: counted("taking a screenshot", (n) => `taking ${String(n)} screenshots`) },
-  read: { key: "file-read", doing: counted("reading a file", (n) => `reading ${String(n)} files`) },
-  edit: { key: "file-edit", doing: counted("editing a file", (n) => `editing ${String(n)} files`) },
-  look: { key: "file-look", doing: () => "looking through files" },
-  command: { key: "command", doing: counted("running a command", (n) => `running ${String(n)} commands`) },
-  program: { key: "program", doing: counted("running a tool program", (n) => `running ${String(n)} tool programs`) },
-  agents: { key: "agents", doing: () => "working with agents" },
-  memory: { key: "memory", doing: () => "checking memory" },
-  tasks: { key: "tasks", doing: () => "updating the plan" },
-  report: { key: "report", doing: () => "reporting back" },
-} satisfies Record<string, Activity>;
-
-/** Each kind of work by the name it is looked up by: a file's or the web's operation, or a tool's own name. */
-const FILE_ACTIVITY = new Map<string, Activity>([["read", ACTIVITIES.read], ["write", ACTIVITIES.edit], ["edit", ACTIVITIES.edit]]);
-
-const WEB_ACTIVITY = new Map<string, Activity>([["fetch", ACTIVITIES.page], ["screenshot", ACTIVITIES.screenshot]]);
-
-const TOOL_ACTIVITY = new Map<string, Activity>([
-  ["shell", ACTIVITIES.command], ["run", ACTIVITIES.command], ["eval", ACTIVITIES.program], ["agents", ACTIVITIES.agents],
-  ["memory", ACTIVITIES.memory], ["tasks", ACTIVITIES.tasks], ["report", ACTIVITIES.report],
-]);
-
-/** The kind of work a call does; a tool the chat has no words for is used by its own name. */
-function activityOf(part: AnyToolPart): Activity {
-  const name = getToolName(part);
-  const op = v.safeParse(v.object({ op: v.string() }), part.input);
-  const said = op.success ? op.output.op : "";
-
-  if (name === "file") return FILE_ACTIVITY.get(said) ?? ACTIVITIES.look;
-
-  if (name === "web") return WEB_ACTIVITY.get(said) ?? ACTIVITIES.search;
-
-  return TOOL_ACTIVITY.get(name) ?? { key: `tool:${name}`, doing: counted(`using ${name}`, (n) => `using ${name} ${String(n)} times`) };
+/** What the owner reads or answers, never rolled up: a question, a preview, a file, a call that waits on them. */
+function ownerFacing(block: PartBlock): boolean {
+  return block.kind === "part" && block.part.type !== "text" && !isWorkBlock(block);
 }
 
-/** A run as its line reads: its calls, those that failed, and the two newest kinds of work it does. */
+/** The phases a stretch holds before it rolls up: a long turn's, never an ordinary one's, which reads as it did. */
+const TURN_MIN = 3;
+
+/**
+ * The turn as it reads: while it runs, the newest phase, and the thought that opened it, open, and the work before it
+ * under one line once three phases lie there; once it has run, all its work under that line and the answer
+ * after it, when it holds as many. What the owner reads or answers is never rolled up, so it splits the line in two.
+ */
+export function rollUpTurn(blocks: readonly PartBlock[], live: boolean): TurnBlock[] {
+  const newest = lastIndex(blocks, isWorkBlock);
+
+  if (newest < 0) return [...blocks];
+  const opened = live && blocks[newest - 1]?.kind === "reasoning" ? newest - 1 : newest;
+  const tail = live ? opened : newest + 1;
+  const rolled: TurnBlock[] = [];
+  let stretch: PartBlock[] = [];
+
+  const close = () => {
+    if (stretch.filter((block) => block.kind === "run").length >= TURN_MIN) rolled.push({ kind: "turn", blocks: stretch });
+    else rolled.push(...stretch);
+    stretch = [];
+  };
+
+  for (const block of blocks.slice(0, tail)) {
+    if (ownerFacing(block)) {
+      close();
+      rolled.push(block);
+    }
+    else stretch.push(block);
+  }
+
+  close();
+
+  return [...rolled, ...blocks.slice(tail)];
+}
+
+/** A phase's calls, in order. */
+export function phaseCalls(steps: readonly RunStep[]): AnyToolPart[] {
+  return steps.flatMap((step) => (step.kind === "tool" ? [step.part] : []));
+}
+
+/** A phase as its line reads: its calls, those that failed, what it did, and what is running in it now. */
 export interface ToolRunSummary {
   readonly calls: number;
   readonly failed: number;
-  readonly doing: string;
+  readonly title: string;
+  readonly now: string;
 }
 
+const running = (part: AnyToolPart) => part.state === "input-streaming" || part.state === "input-available";
+
 export function toolRunSummary(steps: readonly RunStep[]): ToolRunSummary {
-  const calls = steps.flatMap((step) => (step.kind === "tool" ? [step.part] : []));
-  const kinds = new Map<string, { activity: Activity; count: number }>();
+  const calls = phaseCalls(steps);
+  const newest = calls.at(-1);
+  const done = calls.filter((call) => !running(call));
 
-  // Each kind moves to the end as a call of it comes, so the newest two are the last two.
-  for (const call of calls) {
-    const activity = activityOf(call);
-    const seen = kinds.get(activity.key);
-
-    kinds.delete(activity.key);
-    kinds.set(activity.key, { activity, count: (seen?.count ?? 0) + 1 });
-  }
-
-  const doing = [...kinds.values()].slice(-2).map(({ activity, count }) => activity.doing(count)).join(" · ");
-
-  return { calls: calls.length, failed: calls.filter(callFailed).length, doing: doing.charAt(0).toUpperCase() + doing.slice(1) };
+  return {
+    calls: calls.length, failed: calls.filter(callFailed).length,
+    title: phaseTitle(done), now: newest !== undefined && running(newest) ? ongoing(newest) : "",
+  };
 }
 
 /** `partFailed`, plus the refusal a provisioned runtime returns as a result; a tool's `{error}` data is neither. */

@@ -137,7 +137,7 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
     const entry: AgentModelEntry = {
       spec,
       label,
-      provider: provider || spec.split('/', 1)[0] || 'model',
+      provider: provider || (specProvider(spec) ?? 'model'),
     };
 
     const capabilityNames = capabilities.success

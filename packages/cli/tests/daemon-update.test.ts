@@ -235,9 +235,10 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(installed(home, 'pc-agent.version').trim()).toBe(NEW);
     expect(installed(home, 'pc-agent.version.prev').trim()).toBe(OLD);
     expect(existsSync(join(home, 'pc-agent.update-pending'))).toBe(false);
-    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([PLATFORM_ARTIFACT, `${PLATFORM_ARTIFACT}.sha256`]);
+    // The archive alone: its signed checksum is the authority, so the `.sha256` beside it is never asked.
+    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([PLATFORM_ARTIFACT]);
     await successor.settle();
-    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toHaveLength(2);
+    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([PLATFORM_ARTIFACT]);
   });
 
 
@@ -316,6 +317,19 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     await daemon.waitForLog('device.update_ignored reason=bad_signature');
 
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
+  });
+
+  // The CLI refresh took the signed checksums as the one authority; the daemon also asked the unsigned `.sha256` beside
+  // the archive, and refused a build its signature covered when the two disagreed.
+  test("the signed checksums decide: a .sha256 beside the archive that disagrees refuses nothing", async () => {
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), sidecarDisagrees: true });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home, await releaseSigningEnv());
+
+    // Whichever comes first: the successor's HELLO, or the update's failure.
+    await Promise.race([served.sockets.until((hellos) => hellos[1] !== undefined), daemon.waitForLog('device.update_failed')]);
+
+    expect({ successor: served.sockets.items[1]?.hello.version, failed: daemon.log().includes('device.update_failed') }).toEqual({ successor: NEW, failed: false });
   });
 
   test('a corrupt archive (checksum mismatch) lands nothing; the old daemon keeps the machine', async () => {

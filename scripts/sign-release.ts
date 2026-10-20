@@ -14,8 +14,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { RELEASE_SIGNING_PUBLIC_KEY } from '../packages/core/src/http/release-message';
-import { verifyRelease } from '../packages/core/src/http/release-message';
+import { releasePublicKey, verifyRelease } from '../packages/core/src/http/release-message';
 import { signRelease, type ReleaseChecksums, type SignedRelease } from '../packages/core/src/http/release-signing';
 
 if (process.argv.length === 3 && process.argv[2] === '--check') {
@@ -63,7 +62,7 @@ async function signConfiguredRelease(buildVersion: string, artifactChecksums: Re
   const privateKey = process.env.KINU_RELEASE_SIGNING_KEY ?? (existsSync(keyFile) ? readFileSync(keyFile, 'utf-8').trim() : '');
 
   if (privateKey === '') refuseSigning(`no signing key — set KINU_RELEASE_SIGNING_KEY or create ${keyFile}`);
-  const publicKey = process.env.KINU_RELEASE_SIGNING_PUBLIC_KEY ?? RELEASE_SIGNING_PUBLIC_KEY;
+  const publicKey = releasePublicKey(process.env);
 
   if (!/^[0-9a-f]{64}$/i.test(publicKey)) refuseSigning('no valid public pin — an Ed25519 public key is 64 hex characters');
   const release = await signRelease(buildVersion, artifactChecksums, privateKey);

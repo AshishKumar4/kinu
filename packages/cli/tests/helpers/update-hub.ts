@@ -102,6 +102,8 @@ export interface UpdateHubOptions {
   served: string;
   archive: Uint8Array;
   corrupt?: boolean;
+  /** The `.sha256` beside the archive names other bytes than the signed checksums do. */
+  sidecarDisagrees?: boolean;
   /** The daemon's own gates are then what the test reads. */
   pushAlways?: boolean;
   /** Checksums the test key never signed: unsigned, or signed by the hub's own key. */
@@ -145,7 +147,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
       if (pathname === PLATFORM_ARTIFACT) return new Response(Buffer.from(opts.archive));
 
-      if (pathname === `${PLATFORM_ARTIFACT}.sha256`) return new Response(`${digest}  ${PLATFORM_ARTIFACT.slice('/downloads/'.length)}\n`);
+      if (pathname === `${PLATFORM_ARTIFACT}.sha256`) return new Response(`${opts.sidecarDisagrees === true ? '0'.repeat(64) : digest}  ${PLATFORM_ARTIFACT.slice('/downloads/'.length)}\n`);
 
       return new Response('not found', { status: 404 });
     },

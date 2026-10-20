@@ -5,9 +5,9 @@ import {
   PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane, answerDrawsPages,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
-  bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle,
+  bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, writePhaseLines, type PhaseLinePorts,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
-  type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts,
+  type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts, type ProfileAuthorityInputs, type ResolvedTurnProfile,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
   refusedRun, turnAttemptOf, endedStandingOf, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
@@ -242,6 +242,7 @@ export class FacetChat {
       // A measure between turns binds nothing: no turn is open to bind it to.
       settle: async (profile, inputs) => {
         if (bind === undefined) return;
+        this.routing = { prepared, profile, inputs };
         await bind(profile, inputs);
         await bundle.settle?.(profile, inputs);
       },
@@ -250,6 +251,9 @@ export class FacetChat {
 
   /** The running turn's charges to its workspace's missions, if it runs under any. */
   private missionCharges: { settled(): Promise<void> } | null = null;
+
+  /** What the newest turn ran on: its answer's phase lines are asked on it, with no turn's context assembled again. */
+  private routing: { readonly prepared: PreparedAgentTurn; readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs } | null = null;
 
   private async charged(): Promise<void> {
     const charges = this.missionCharges;
@@ -606,7 +610,7 @@ export class FacetChat {
    * an answer rewound meanwhile is stamped with nothing. Its room is shown the answer again, unless a turn is live.
    */
   private async amendAnswerSlates({ messageId, ...close }: AnswerSlates): Promise<void> {
-    const { actor, database, workspace } = this.deps;
+    const { actor, workspace } = this.deps;
     const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
     const answer = transcript.read(messageId);
 
@@ -614,8 +618,74 @@ export class FacetChat {
     const metadata = await answerMetadataOf(workspace, close, async () => await transcript.narration(answer.parts));
 
     if (metadata === null) return;
-    await transcript.amendMetadata(messageId, metadata);
+    await this.amendAnswer(messageId, metadata);
+  }
+
+  /** One answer at a time: a chat opened on many asks for each, and the account's limits are its turns' first. */
+  private naming: Promise<void> = Promise.resolve();
+
+  private readonly named = new Set<string>();
+
+  private readonly phaseLinePorts: PhaseLinePorts = {
+    answer: async (messageId) => await this.drawnAnswer(messageId),
+    completer: async () => await this.oneShotOn('phase_line', 'phase-lines', this.routing),
+    amend: async (messageId, patch) => { await this.amendAnswer(messageId, patch); },
+  };
+
+  /**
+   * A tab shows a settled answer whose phases have no line: they are named, once, by the fast tier, after any answer
+   * asked before it. Never part of a turn, so no turn's close waits on it or pays for it. False while no committed answer
+   * has the id: a tab that drew a running turn as settled for a moment asks again once it has committed.
+   */
+  async namePhases(messageId: string): Promise<boolean> {
+    if (this.named.has(messageId)) return true;
+    this.named.add(messageId);
+
+    // A failure is said in the log and ends this answer's naming; the next answer waits on this one, whatever became of it.
+    const naming = Effect.match(writePhaseLines(this.phaseLinePorts, messageId), {
+      onFailure: (error) => {
+        diagnostics.failure('chat.phase_lines_failed', error, { messageId });
+
+        return 'failed';
+      },
+      onSuccess: (outcome) => outcome,
+    });
+
+    const written = this.naming.then(async () => await settle(naming));
+
+    this.naming = written.then(() => undefined);
+    const outcome = await written;
+
+    if (outcome === null) {
+      this.named.delete(messageId);
+
+      return false;
+    }
+
+    diagnostics.event('chat.phase_lines', { messageId, outcome });
+
+    return true;
+  }
+
+  /** What a committed answer learns after it, stamped on it; its room is shown the answer again, unless a turn is live. */
+  private async amendAnswer(messageId: string, metadata: JsonObject): Promise<void> {
+    const { actor, database, workspace } = this.deps;
+
+    await actor.stores.history.transcript(CHAT_SESSION_ID).amendMetadata(messageId, metadata);
     await workspace.answerAmended(await database.seed());
+  }
+
+  /** An answer as its chat draws it, and the words that asked for it; null once it was rewound. */
+  private async drawnAnswer(messageId: string) {
+    const { messages } = await this.deps.database.seed();
+    const at = messages.findIndex((message) => message.id === messageId);
+    const answer = messages[at];
+
+    if (answer === undefined) return null;
+    const opener = messages.slice(0, at).reverse().find((message) => message.role !== 'assistant');
+    const ask = opener?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('\n') ?? '';
+
+    return { parts: answer.parts, metadata: answer.metadata, ask };
   }
 
   /** The stand-in lands first, as every actor's does: the model's name may be refused. The workspace plans the title. */
@@ -629,25 +699,32 @@ export class FacetChat {
 
   /** Down the fast tier's chain on the agent's own models, as every actor's title is named. */
   private async suggestTitle(mission: string): Promise<string | null> {
+    return await suggestWorkspaceTitle(await this.oneShotOn('fast', 'title'), mission);
+  }
+
+  /** One completion at a time down `source`'s tier chain, on the agent's own models; `kept`, the newest turn's, spares
+   *  assembling a turn's context and profile again (a replay after a restart has none, and assembles them). */
+  private async oneShotOn(source: 'fast' | 'phase_line', turnId: string, kept: FacetChat['routing'] = null): Promise<(system: string, prompt: string) => Promise<string>> {
     const { actor, workspace, models, pacer } = this.deps;
     const workMode = actor.session.workMode;
-    const prepared = await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
+    const prepared = kept?.prepared ?? await workspace.prepareChat({ turnId: null, mode: workMode, userText: '', parentDriven: false, awaitsReply: false });
 
-    // The title is no run of this agent's: its provider's words are the workspace's, as every actor's turnless call's are.
+    // No run of this agent's: its provider's words are the workspace's, as every actor's turnless call's are.
     const { sources } = facetTurnSources({
-      actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId: 'title', epoch: null, pacer,
+      actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId, epoch: null, pacer,
       recordsIn: WORKSPACE_RUN_ID,
     });
 
-    const inputs = await sources.profileInputs();
-    const profile = resolveTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
-    const route = resolveModelRoute('fast', profile);
+    const inputs = kept?.inputs ?? await sources.profileInputs();
+    const profile = kept?.profile ?? resolveTurnProfile({ ...inputs, ...ownProfileChoices(sources.config, inputs, sources.ancestors?.()), workMode, availableTools: [], activeSkills: [] });
+    // The listing the profile was resolved on: a source that wants its own effort is asked at it as each model declares.
+    const route = resolveModelRoute(source, profile, inputs.provider.reasoningEfforts);
     const { routed } = sources.models;
 
-    return await suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
+    return (system, prompt) => completeOnRoute(route, {
       llm: (resolution) => routedLlm((serving) => bindRoute(sources.models, serving), resolution, { report: this.spend.report, operations: modelOperations(actor, WORKSPACE_RUN_ID) }, system),
       ...(routed !== undefined && { attemptOf: (spec: string) => routed.attemptFor(spec) }),
-    }, prompt), mission);
+    }, prompt);
   }
 
   /** The workspace's model settings changed: the next request is measured on them, and a refusal they fix may answer. */

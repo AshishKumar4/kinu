@@ -1,12 +1,15 @@
 // The one table routing every SpendSource to a model; `satisfies` makes a missing row a compile error.
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../providers/effort';
+import { declaredReasoningEffort } from '../providers/reasoning-effort';
+import { specWithoutAccount } from '../providers/types';
 import type { TierId } from './catalog';
 import type { ResolvedTurnProfile, TierFallback, TierRoute } from './resolve';
 
 export type ModelRoutePolicy =
   | { readonly kind: 'invocation' }
-  | { readonly kind: 'fixed'; readonly tier: TierId }
+  /** `effort`: the level the call wants, which each model of the tier's chain is asked at as near as it declares. */
+  | { readonly kind: 'fixed'; readonly tier: TierId; readonly effort?: ReasoningEffort }
   | { readonly kind: 'platform' };
 
 export const MODEL_ROUTE_POLICY = {
@@ -21,6 +24,8 @@ export const MODEL_ROUTE_POLICY = {
   // Every compactor summarizes on the turn's own model (compaction/src/actor.ts, and the CLI's and workspace's).
   compaction: { kind: 'invocation' },
   fast: { kind: 'fixed', tier: 'fast' },
+  // The few words naming each finished phase of a turn's tool calls; its own label, so its spend reads apart.
+  phase_line: { kind: 'fixed', tier: 'fast', effort: 'low' },
   reflection: { kind: 'fixed', tier: 'fast' },
   platform: { kind: 'platform' },
   // The account's `webSearch` chain, not a tier (web/search-chain.ts).
@@ -56,6 +61,16 @@ export interface ModelRouteResolution {
   readonly retries: number;
 }
 
+/** The levels each listed model declares, as the provider listing a profile was resolved on holds them. */
+export type DeclaredEfforts = Readonly<Record<string, readonly ReasoningEffort[]>>;
+
+/** The tier's chain asked at `wanted`, each model at the level it declares nearest; a model declaring none is asked at none. */
+function atEffort(slot: TierRoute, wanted: ReasoningEffort, declared: DeclaredEfforts): TierRoute {
+  const at = (spec: string) => declaredReasoningEffort(wanted, declared[specWithoutAccount(spec)]);
+
+  return { model: slot.model, reasoningEffort: at(slot.model), fallbacks: slot.fallbacks.map((fallback) => ({ ...fallback, reasoningEffort: at(fallback.model) })) };
+}
+
 function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
   const assignment = profile.tiers[tier];
 
@@ -67,17 +82,21 @@ function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
 }
 
 /** Null only for `platform` producers, which build their binding-bound client directly. */
+/** `declared`: the listing's levels, for a source whose policy wants an effort of its own; without it, the slot's. */
 export function resolveModelRoute(
   source: ProfileRoutedSource,
   profile: ResolvedTurnProfile,
+  declared?: DeclaredEfforts,
 ): ModelRouteResolution;
 export function resolveModelRoute(
   source: SpendSource,
   profile: ResolvedTurnProfile,
+  declared?: DeclaredEfforts,
 ): ModelRouteResolution | null;
 export function resolveModelRoute(
   source: SpendSource,
   profile: ResolvedTurnProfile,
+  declared?: DeclaredEfforts,
 ): ModelRouteResolution | null {
   if (!isProfileRouted(source)) return null;
   const policy = MODEL_ROUTE_POLICY[source];
@@ -94,12 +113,10 @@ export function resolveModelRoute(
     });
   }
 
-  return Object.freeze({
-    source,
-    tier: policy.tier,
-    ...tierResolution(profile, policy.tier),
-    retries: profile.retries,
-  });
+  const slot = tierResolution(profile, policy.tier);
+  const { model, reasoningEffort, fallbacks } = 'effort' in policy && declared !== undefined ? atEffort(slot, policy.effort, declared) : slot;
+
+  return Object.freeze({ source, tier: policy.tier, model, reasoningEffort, fallbacks, retries: profile.retries });
 }
 
 export { SPEND_SOURCES };

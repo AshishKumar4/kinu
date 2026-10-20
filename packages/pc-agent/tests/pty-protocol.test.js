@@ -406,27 +406,35 @@ describe("a workspace's named sessions", () => {
     const owner = path.join(SHELL_HOME, '.owner_history');
     const rc = path.join(SHELL_HOME, '.bashrc');
 
-    fs.writeFileSync(rc, `HISTFILE=${owner}\n`);
+    // An owner's rc naming its own history file, and a prompt command of its own, which still runs.
+    fs.writeFileSync(rc, `HISTFILE=${owner}\nPROMPT_COMMAND='echo owner-prompt-$((3 * 3))'\n`);
     const { ctx, sessions } = context();
     const ws = fakeWs();
     const [first] = await call(ws, ctx, { id: 'rpc-hist-list', method: 'ptyList', workspace: WORKSPACE, params: [] });
 
     await call(ws, ctx, { id: 'rpc-hist-open1', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, params: [80, 24, first.id] });
-    handle({ type: PTY_INPUT_FRAME, session: first.id, data: Buffer.from('echo kept-$((40 + 2))\r').toString('base64') }, ws, ctx);
-    await ws.until(() => ws.output().includes('kept-42'));
+    // The second command is read at the prompt the first one's end drew, so its output says that prompt came.
+    handle({ type: PTY_INPUT_FRAME, session: first.id, data: Buffer.from('echo kept-$((40 + 2))\recho next-$((1 + 2))\r').toString('base64') }, ws, ctx);
+    await ws.until(() => ws.output().includes('next-3'));
+    // Killed, as the daemon's close kills it right after the hangup and a crash would: no exit, so nothing it saves at
+    // its exit. A shell's history saved only then was lost to that race (FinalSlug's tiers, 2026-10-20).
+    process.kill(-sessions.pidOf(first.id), 'SIGKILL');
     await endAll(sessions);
 
     const again = fakeWs();
 
     await call(again, ctx, { id: 'rpc-hist-open2', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, params: [80, 24, first.id] });
-    handle({ type: PTY_INPUT_FRAME, session: first.id, data: Buffer.from('fc -ln -1; echo listed-$((1 + 1))\r').toString('base64') }, again, ctx);
+    handle({ type: PTY_INPUT_FRAME, session: first.id, data: Buffer.from('history; echo listed-$((1 + 1))\r').toString('base64') }, again, ctx);
     await again.until(() => again.output().includes('listed-2'));
 
-    const answer = { recalled: again.output().includes('echo kept-$((40 + 2))'), owner: fs.existsSync(owner), ownerDefault: fs.existsSync(path.join(SHELL_HOME, '.bash_history')) };
+    const answer = {
+      recalled: again.output().includes('echo kept-$((40 + 2))'), ownerPrompt: ws.output().includes('owner-prompt-9'),
+      owner: fs.existsSync(owner), ownerDefault: fs.existsSync(path.join(SHELL_HOME, '.bash_history')),
+    };
 
     // The rest of the file runs with no rc of the owner's.
     fs.rmSync(rc);
-    expect(answer).toEqual({ recalled: true, owner: false, ownerDefault: false });
+    expect(answer).toEqual({ recalled: true, ownerPrompt: true, owner: false, ownerDefault: false });
   });
 
   test('a daemon restart brings a session back under its name, in its folder, with a fresh shell', async () => {

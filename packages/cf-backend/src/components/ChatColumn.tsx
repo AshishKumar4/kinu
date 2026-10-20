@@ -1,6 +1,7 @@
 /** The chat column, the workspace's and each agent's alike: its transcript, its live tail and its composer. */
 import { Effect } from "effect";
 import { Fragment, useCallback, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { PhaseLinesAsk, phaseLinesAsker } from "@/components/ChatDisclosure";
 import { ArrowsClockwiseIcon, PaperclipIcon } from "@phosphor-icons/react";
 import type { UIMessage } from "ai";
 import { isPlaceholderMission, liveTailRow, threadLiveTail, turnFailure, turnFailureFacts, type WorkspaceNotice } from "@kinu.run/core";
@@ -197,6 +198,11 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   const live = state.liveness.kind === "live";
   const { thread } = chat;
   const as = state.actorSnapshot;
+
+  // A pane's agent is asked for by its id, so none is asked until its id is known.
+  const askLines = useMemo(() => (state.isSubordinate && state.paneActorId === null ? null : phaseLinesAsker(state.rpc, state.paneActorId)),
+    [state.isSubordinate, state.paneActorId, state.rpc]);
+
   // The answer whose failure notice was dismissed: its line in the thread keeps the Retry.
   const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -233,7 +239,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={pane} {...drop?.handlers}>
       {drop?.dragOver === true && <DropOverlay />}
       <ErrorBoundary label={label}>
-        <AskedQuestionsContext.Provider value={asked}>
+        <AskedQuestionsContext.Provider value={asked}><PhaseLinesAsk.Provider value={askLines}>
           <TranscriptViewport chat={chat} live={live} startFirst={layout.startFirst} padClass={layout.padClass}
             scroll={{ initialScroll: ui.savedScroll, onScrollPosition: ui.rememberScroll, settled: state.transcriptSeeded }}
             pending={<ConversationSkeleton />}
@@ -253,7 +259,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
             <ModelFallbackRows notices={state.modelFallbacks} />
             {extras.trailing}
           </TranscriptViewport>
-        </AskedQuestionsContext.Provider>
+        </PhaseLinesAsk.Provider></AskedQuestionsContext.Provider>
       </ErrorBoundary>
 
       {!input && <ViewOnlyBar running={live} onStop={stop} />}

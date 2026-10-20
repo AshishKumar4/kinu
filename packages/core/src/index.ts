@@ -1359,7 +1359,7 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  buildModelCallEvent, pricedModelCallEvent,
+  pricedModelCallEvent,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -2281,7 +2281,7 @@ export {
   releaseArtifact, releaseArtifactHead,
 } from './http/release-artifact';
 
-export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, verifyRelease } from './http/release-message';
+export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, artifactRefusal, releasePublicKey, verifyRelease } from './http/release-message';
 
 export {
   SignedReleaseSchema, signRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
@@ -2413,8 +2413,11 @@ export { callRetries } from './providers/middleware/retry';
 export {
   type AnyToolPart,
   type RunStep,
+  type PartBlock,
   type ToolRunSummary,
   groupMessageParts,
+  phaseCalls,
+  rollUpTurn,
   toolRunSummary,
   parseProvisionError,
   partOutput,
@@ -2422,6 +2425,12 @@ export {
   partEffect,
   callFailed,
 } from './read-models/tool-call-grouping';
+
+export {
+  PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY, phaseTitle, writtenTitles,
+} from './read-models/tool-phase-title';
+
+export { writePhaseLines, type PhaseLinePorts } from './orchestrator/phase-lines';
 
 export {
   type PlanPageRef,

@@ -107,7 +107,7 @@ import { ActorSession, type ActorTurnLease,
   resolveModelRoute, completeOnRoute,
   resolveRoutingProfile, currentOperationProfile, captureOperationProfile, ancestorPins,
   type PinnedProfile,
-  buildModelCallEvent,
+  pricedModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   type WorkspaceTitleState,
   type PromptIdentity,
@@ -319,13 +319,10 @@ export class LocalAgentSession {
   private readonly eventRecorder: RunEventRecorder;
   /** Label-scoped spend governor; public for the `agent.*` namespace. */
   readonly budget: MissionGovernor;
-  /** Cost sink for every non-turn model call (judge, fast tier, reflection, merge synthesis),
-   *  which `step_finish` never sees. */
+  /** Cost sink for every non-turn model call (judge, fast tier, reflection, merge synthesis), which `step_finish` never
+   *  sees: priced at the rate of the model it called, as cloud prices one (`pricedModelCallEvent`). */
   private readonly modelCallSink: ModelCallSink = (report) => {
-    const event = buildModelCallEvent(report, {
-      effectiveSpec: this.effectiveModelSpec(),
-      pricing: this.modelCatalog.pricing(),
-    });
+    const event = pricedModelCallEvent(report, this.modelCatalog);
 
     // Calls between runs are filed under the reserved workspace run rather than dropped.
     this.recordRunEvent(event, currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID);
@@ -2686,10 +2683,7 @@ export class LocalAgentSession {
     const operations = recordModelOperations(actor.stores.eventRecorder, () => currentOperationProfile(actor.handle)?.runId ?? runId);
 
     const report: ModelCallSink = (call) => {
-      const spec = normalize(actor.session.profile?.tier.model ?? actor.stores.config.getModel());
-
-      actor.stores.eventRecorder.emit(currentOperationProfile(actor.handle)?.runId ?? runId,
-        buildModelCallEvent(call, { effectiveSpec: spec, pricing: catalog.pricing(spec) }));
+      actor.stores.eventRecorder.emit(currentOperationProfile(actor.handle)?.runId ?? runId, pricedModelCallEvent(call, catalog));
     };
 
     const compaction = hostedActorCompaction(actor, {
