@@ -44,7 +44,7 @@ export interface InstallChoice {
 /** Installs a workspace blueprint as a new workspace of yours; the Personal assistant may also become your Home. */
 export function installBlueprint(id: string, choice: InstallChoice): Promise<string> {
   return settle(Effect.map(request(InstalledSchema, `/api/user/blueprints/${encodeURIComponent(id)}/install`, {
-    method: "POST", json: { ...choice, utcOffsetMinutes: -new Date().getTimezoneOffset() },
+    method: "POST", json: { ...choice, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
   }), (installed) => installed.workspace));
 }
 

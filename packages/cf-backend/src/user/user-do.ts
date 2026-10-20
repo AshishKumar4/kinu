@@ -239,6 +239,10 @@ export class UserDO extends Agent<Env> {
     return this.profile.setConfig(caller, key, value);
   }
 
+  claimConfig(caller: UserCaller, key: string, proposed: string): Promise<string> {
+    return this.profile.claimConfig(caller, key, proposed);
+  }
+
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     return this.profile.getProfileCatalog(caller);
   }
@@ -731,6 +735,10 @@ export class UserDO extends Agent<Env> {
 
   userMcp_warmConnections(caller: UserCaller): ReturnType<UserMcpServers['userMcp_warmConnections']> {
     return this.mcpServers.userMcp_warmConnections(caller);
+  }
+
+  userMcp_connectedPresets(caller: UserCaller): Promise<string[]> {
+    return this.mcpServers.userMcp_connectedPresets(caller);
   }
 
   userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {

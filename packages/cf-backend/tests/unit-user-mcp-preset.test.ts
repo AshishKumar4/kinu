@@ -103,6 +103,26 @@ describe('an MCP preset add', () => {
     h.close();
   });
 
+  // The rc27 review: the assistant's GitHub and Gmail checks ran every 15 minutes whether or not either was connected.
+  test("connecting and removing a connection tells the owner's assistant which it now holds, and no other workspace", async () => {
+    const h = harness();
+    const owner = await testOwner();
+
+    const added = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+
+    // No assistant yet: nothing to tell.
+    expect(h.connectionsChanged).toEqual([]);
+    expect(await h.userDO.userMcp_connectedPresets(owner)).toEqual(['github']);
+    await h.userDO.userMcp_remove(owner, added.id);
+    await h.userDO.claimConfig(owner, 'assistant', 'kinu-home');
+
+    const again = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+
+    await h.userDO.userMcp_remove(owner, again.id);
+    expect(h.connectionsChanged).toEqual(['kinu-home:github', 'kinu-home:']);
+    h.close();
+  });
+
   test('the catalog is the authority: a presetId add cannot smuggle its own endpoint', async () => {
     const h = harness({ mcpAppCredentials: ['google'] });
 

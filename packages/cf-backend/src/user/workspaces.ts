@@ -6,7 +6,7 @@ import {
 import { diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
-import { rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterQuery } from './roster';
+import { ASSISTANT_CONFIG_KEY, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterQuery } from './roster';
 import { deletePictures, picturePrefix } from '../slates/pictures';
 import { notInRegistry } from './workspace-ownership';
 
@@ -504,6 +504,8 @@ export class UserWorkspaces {
     await this.host.shareCards.reconcile(name, []);
     // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
     this.deleteWorkspaceRows(name, 'before-destroy');
+    // An assistant removed is no longer the owner's: the next install makes a new one (`blueprint-install.ts`).
+    this.host.sqlx(`DELETE FROM user_config WHERE key = ? AND value = ?`, ASSISTANT_CONFIG_KEY, name);
 
     try {
       await stub.destroyAgent(ownerUserId);

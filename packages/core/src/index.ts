@@ -2040,6 +2040,8 @@ export {
 
 export { OwnerWaitSchema, type OwnerWait } from './types/owner-waits';
 
+export { type BlueprintSchedule } from './types/blueprint-schedule';
+
 export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
 
 export {

@@ -41,7 +41,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { censusOf, requireOps, WorkspaceLayoutSchema, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
+import { censusOf, requireOps, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -6482,7 +6482,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Not @callable: a new workspace's install (user/workspace-create.ts), before its baseline and its first turn, so the
-   * genesis turn already runs as the blueprint says. Its schedules are the owner's own: an agent may not cancel them.
+   * genesis turn already runs as the blueprint says. Its schedules are the owner's own: an agent may not cancel them. One
+   * that watches a connection is kept, and armed only while the owner holds that connection (`connectionsChanged`).
    */
   async seedBlueprint(seed: WorkspaceSeed): Promise<void> {
     const { config } = this.actorHandle();
@@ -6490,10 +6491,39 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     config.setBlueprint(seed.blueprint);
     config.setLayout(seed.layout);
     config.setChatTitle(seed.agent);
+    config.setBlueprintWatchers(seed.schedules.filter((schedule) => schedule.connection !== undefined));
 
-    for (const schedule of seed.schedules) {
-      await this.createTimerTrigger({ cron: schedule.cron, label: schedule.label, payload: { prompt: schedule.prompt }, trust: 'owner' });
+    for (const schedule of seed.schedules.filter(({ connection }) => connection === undefined || seed.connected.includes(connection))) {
+      await this.armSchedule(schedule);
     }
+  }
+
+  /**
+   * Not @callable: the owner's account, when a connection of theirs is made or removed (`user/mcp-servers.ts`). Arms each
+   * kept watcher of a connection the owner now holds, and cancels each of one they no longer hold, by its label.
+   */
+  async connectionsChanged(connected: readonly string[]): Promise<void> {
+    const armed = new Map(listTriggers(this.triggerRegistry).triggers.flatMap((trigger) => {
+      const labelled = v.safeParse(v.object({ label: v.string() }), trigger.spec);
+      const owners = trigger.kind === 'timer_cron' && trigger.state === 'active' && trigger.creator_trust === 'owner';
+
+      return owners && labelled.success ? [[labelled.output.label, trigger.id] as const] : [];
+    }));
+
+    for (const watcher of this.actorHandle().config.getBlueprintWatchers()) {
+      const held = watcher.connection !== undefined && connected.includes(watcher.connection);
+      const id = armed.get(watcher.label);
+
+      if (held && id === undefined) await this.armSchedule(watcher);
+
+      if (!held && id !== undefined) await this.cancelTrigger(id, 'owner');
+    }
+  }
+
+  private async armSchedule(schedule: BlueprintSchedule): Promise<void> {
+    await this.createTimerTrigger({
+      cron: schedule.cron, ...(schedule.timeZone !== undefined && { timeZone: schedule.timeZone }), label: schedule.label, payload: { prompt: schedule.prompt }, trust: 'owner',
+    });
   }
 
   @callable() async dismissSubordinate(name: string, keepHistory = true): Promise<{

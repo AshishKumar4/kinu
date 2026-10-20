@@ -124,6 +124,8 @@ test('answers each call a workspace\'s creation makes on it', async () => {
     setRole: () => stub.setRole(),
     beginGenesisTurn: () => stub.beginGenesisTurn(),
     seedBlueprint: () => stub.seedBlueprint(),
+    // And what the account calls on its assistant when the owner's connections change.
+    connectionsChanged: () => stub.connectionsChanged(),
   };
 
   for (const [name, call] of Object.entries(birth)) expect([name, (await answerTo(call)).includes(refusal(name))]).toEqual([name, false]);

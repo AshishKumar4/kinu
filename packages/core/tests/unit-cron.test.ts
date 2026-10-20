@@ -91,3 +91,32 @@ describe('nextAlarmTime', () => {
     expect(nextAlarmTime(NOW, [], 0)).toBe(NOW);
   });
 });
+
+// The rc27 review: a brief seeded as a UTC cron from the offset on the day of install moved an hour at the next
+// daylight-saving change. A schedule in a zone keeps its wall clock.
+describe('nextCronFire in a time zone', () => {
+  const iso = (at: number | null) => new Date(present(at, 'a fire')).toISOString();
+
+  test("an 08:00 brief in New York stays at 08:00 New York across the November change", () => {
+    // 12:00 UTC on 31 Oct 2026 is 08:00 EDT; on 2 Nov, after the change, 08:00 EST is 13:00 UTC.
+    expect(iso(nextCronFire('0 8 * * *', Date.UTC(2026, 9, 30, 13), 'America/New_York'))).toBe('2026-10-31T12:00:00.000Z');
+    expect(iso(nextCronFire('0 8 * * *', Date.UTC(2026, 10, 1, 13), 'America/New_York'))).toBe('2026-11-02T13:00:00.000Z');
+  });
+
+  test('a half-hour zone, an old alias a browser reports, and UTC read alike', () => {
+    expect(iso(nextCronFire('30 9 * * *', Date.UTC(2026, 0, 1), 'Asia/Kolkata'))).toBe('2026-01-01T04:00:00.000Z');
+    expect(iso(nextCronFire('30 9 * * *', Date.UTC(2026, 0, 1), 'Asia/Calcutta'))).toBe('2026-01-01T04:00:00.000Z');
+    expect(iso(nextCronFire('0 8 * * *', Date.UTC(2026, 0, 1), 'UTC'))).toBe('2026-01-01T08:00:00.000Z');
+    expect(nextCronFire('0 8 * * *', Date.UTC(2026, 0, 1), 'Mars/Olympus_Mons')).toBeNull();
+  });
+
+  test('a minute the clocks repeat fires once, and a minute they skip waits for the next day', () => {
+    // 1 Nov 2026 in New York: 01:30 EDT (05:30 UTC), then 01:30 EST (06:30 UTC). The next after the first is a day on.
+    const first = nextCronFire('30 1 * * *', Date.UTC(2026, 10, 1, 4), 'America/New_York');
+
+    expect(iso(first)).toBe('2026-11-01T05:30:00.000Z');
+    expect(iso(nextCronFire('30 1 * * *', present(first, 'the first pass'), 'America/New_York'))).toBe('2026-11-02T06:30:00.000Z');
+    // 8 Mar 2026: 02:30 does not happen in New York; the next 02:30 is on the 9th (06:30 UTC, EDT).
+    expect(iso(nextCronFire('30 2 * * *', Date.UTC(2026, 2, 8, 5), 'America/New_York'))).toBe('2026-03-09T06:30:00.000Z');
+  });
+});
