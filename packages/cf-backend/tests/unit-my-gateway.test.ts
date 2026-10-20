@@ -294,8 +294,8 @@ describe('my-gateway model discovery', () => {
     expect(await present(reg.registry.get('my-gateway'), 'the my-gateway provider').listModels(reg.deps)).toEqual([]);
   });
 
-  test('a 5xx keeps the last catalog the account was shown, and caches nothing', async () => {
-    // A non-ok answer must not be cached as "this gateway serves no providers".
+  test('a 5xx keeps the last catalog the account was shown, reported as unread, and caches nothing', async () => {
+    // A non-ok answer must not be cached as "this gateway serves no providers", nor kept silently as if it were read.
     const token = `t-${Math.random()}`;
     let upstream: 'ok' | 'down' = 'ok';
 
@@ -323,19 +323,28 @@ describe('my-gateway model discovery', () => {
       }),
     });
 
-    const provider = present(reg.registry.get('my-gateway'), 'the my-gateway provider');
+    const gateway = async () => {
+      const menu = await reg.registry.listAllModels(reg.deps);
 
-    expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
+      return {
+        models: menu.models.filter((model) => model.provider === 'my-gateway').map((model) => model.id),
+        unread: menu.failures.some((failure) => failure.provider === 'my-gateway'),
+      };
+    };
+
+    const shown = ['openai/gpt-4.1', 'openai/gpt-6.1-sol'];
+
+    expect(await gateway()).toEqual({ models: shown, unread: false });
 
     // Past the catalog TTL, so the cache is consulted rather than short-circuited.
     try {
       upstream = 'down';
       setSystemTime(new Date(Date.now() + 61_000));
-      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
+      expect(await gateway()).toEqual({ models: shown, unread: true });
 
       upstream = 'ok';
       setSystemTime(new Date(Date.now() + 61_000));
-      expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1', 'openai/gpt-6.1-sol']);
+      expect(await gateway()).toEqual({ models: shown, unread: false });
     } finally {
       setSystemTime();
     }

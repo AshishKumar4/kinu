@@ -4,13 +4,13 @@
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV4 } from '@ai-sdk/provider';
 import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
-import { authCacheKey, cloneModelInfos, settleModelList, StaleModelList } from './util';
+import { settleModelList, type StaleModelList } from './util';
+import { credentialCatalog } from './credential-catalog';
 import { listModelsDevProviderModels } from './models-dev';
 import { createWireModel, gatewayWire } from './wire-model';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
 import { Effect } from 'effect';
-import { settle, toKinuError } from "../obs/index";
 import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
@@ -39,7 +39,8 @@ const CreditBalanceSchema = v.object({
 
 const CATALOG_TTL_MS = 60_000;
 
-const catalogCache = new Map<string, { at: number; models: ModelInfo[] }>();
+// Module-wide: a registry is built per listing request, and discovery is several account API reads.
+const catalog = credentialCatalog('Your AI Gateway', CATALOG_TTL_MS);
 
 export function createMyGatewayProvider(): ModelProvider {
   return {
@@ -54,29 +55,16 @@ export function createMyGatewayProvider(): ModelProvider {
       'Connect Cloudflare and select an AI Gateway in User settings to use your own gateway (BYOK provider keys or Unified Billing credits).',
 
     async listModels(deps): Promise<ModelInfo[]> {
-      return settle(Effect.gen(function* () {
-        const auth = yield* Effect.promise(() => deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY));
+      const auth = await deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY);
+      const baseURL = auth?.baseURL;
 
-        const baseURL = auth?.baseURL;
+      if (auth === null || !baseURL) return [];
 
-        if (auth === null || !baseURL) return [];
-        const cacheKey = authCacheKey(auth);
-        const cached = catalogCache.get(cacheKey);
+      return catalog(auth, (held) => Effect.gen(function* () {
+        const discovered = yield* Effect.promise(() => servableAuthors(baseURL, held.headers, deps));
 
-        if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cloneModelInfos(cached.models);
-
-        const discovered = yield* Effect.promise(() => servableAuthors(baseURL, auth.headers, deps));
-
-        if (!discovered.authoritative) {
-          // A 429/5xx said nothing about which providers are served: keep the last catalog, else fail loudly.
-          if (cached) return cloneModelInfos(cached.models);
-
-          return yield* Effect.fail(toKinuError({
-            doing: `reading your AI Gateway's servable providers (${discovered.reason})`,
-            cause: new Error(discovered.reason),
-            otherwise: 'unavailable',
-          }));
-        }
+        // A 429/5xx said nothing about which providers are served.
+        if (!discovered.authoritative) return yield* Effect.fail({ reason: `its servable providers could not be read (${discovered.reason})` });
 
         const { billed, keyed } = discovered;
         const models = new Map<string, ModelInfo>();
@@ -96,10 +84,9 @@ export function createMyGatewayProvider(): ModelProvider {
 
         const [first] = stale;
 
-        if (first !== undefined) return yield* Effect.fail(new StaleModelList([...models.values()], { reason: first.reason, cause: first.cause }));
-        catalogCache.set(cacheKey, { at: Date.now(), models: [...models.values()] });
+        if (first !== undefined) return yield* Effect.fail({ reason: first.reason, cause: first.cause, models: [...models.values()] });
 
-        return cloneModelInfos([...models.values()]);
+        return [...models.values()];
       }));
     },
 
