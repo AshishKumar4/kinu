@@ -161,4 +161,28 @@ describe('Explore', () => {
       expect(drawn).not.toContain('workbench');
     });
   });
+
+  test('with the assistant as Home, New workspace still makes one: the pencil opens the mission and its words become the workspace', async () => {
+    await withGallery(async (gallery) => {
+      for (const viewport of ['desktop', 'mobile'] as const) {
+        const page = await freshPage(gallery, 'explore&assistant=1', 'light', viewport);
+
+        // The sidebar's pencil on a desktop, the header's on a phone: whichever New workspace is on screen.
+        const pencil = 'a[aria-label="New workspace"]';
+
+        await page.waitForFunction((selector) => [...document.querySelectorAll(selector)].some((link) => link instanceof HTMLElement && link.offsetParent !== null), SOON, pencil);
+        await page.$$eval(pencil, (links) => {
+          const shown = links.find((link) => link instanceof HTMLElement && link.offsetParent !== null);
+
+          if (shown instanceof HTMLElement) shown.click();
+        });
+        await page.waitForSelector('#workspace-mission', SOON);
+        await page.type('#workspace-mission', 'Keep the api Worker deployed and healthy.');
+        await page.click('form:has(#workspace-mission) button[type="submit"]');
+        await page.waitForSelector('[data-gallery-blank]', SOON);
+        expect(JSON.parse(await page.$eval('html', (root) => root.dataset.exploreCreated ?? 'null'))).toMatchObject({ purpose: 'Keep the api Worker deployed and healthy.' });
+        await page.close();
+      }
+    });
+  });
 });
