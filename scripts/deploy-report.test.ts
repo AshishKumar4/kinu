@@ -192,6 +192,17 @@ finish
     expect(refused.summary.workerStartupMs).toBeNull();
   });
 
+  // rc28, 2026-10-20: a version cannot bind a class its deploy has not provisioned, so the one validated before a reset
+  // leaves the build's new classes out; the report says which, and that the script read is the one deployed.
+  test('a validated version that left classes out names them', () => {
+    const { text } = renderReport({
+      dir: '/reports/this', meta: META, entries: [{ kind: 'startup', at: 'validated', reading: 412, withheld: ['MailNameDO', 'MailboxDO'] }],
+    });
+
+    expect(text).toContain('- the version uploaded before the reset: 412 ms, without the bindings of MailNameDO, MailboxDO: new to this target, '
+      + 'a version cannot bind them before the deploy provisions them; the script it read is the one deployed');
+  });
+
   // A rehearsal ran no tier, so a red it lacks says nothing about this deploy: it is never the differential's base,
   // and neither is this deploy's own entry.
   test('the previous report is the last real deploy of the environment, never a gates-only one or this one', () => {

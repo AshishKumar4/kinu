@@ -68,6 +68,12 @@ export const EMBEDDER_SOURCE = 'packages/cf-backend/src/runtime.ts';
 
 /* ── The binding manifest ─────────────────────────────────────────────── */
 
+/** One `exports` entry: a class the build declares, or the tombstone that deletes its namespace. */
+export const ExportEntrySchema = v.union([
+  v.object({ type: v.literal('durable-object'), state: v.optional(v.literal('created')), storage: v.literal('sqlite') }),
+  v.object({ type: v.literal('durable-object'), state: v.literal('deleted') }),
+]);
+
 /** Only the keys the inventory is built from. `v.object` ignores the rest, and a
  *  key present but wrongly shaped fails the parse rather than being read as
  *  absent — a config this cannot read is not a config it may certify. */
@@ -103,10 +109,7 @@ const WorkerSchema = v.object({
       images: v.optional(v.record(v.string(), v.object({ image: v.string() }))),
     }),
   ]))),
-  exports: v.optional(v.record(v.string(), v.union([
-    v.object({ type: v.literal('durable-object'), state: v.optional(v.literal('created')), storage: v.literal('sqlite') }),
-    v.object({ type: v.literal('durable-object'), state: v.literal('deleted') }),
-  ]))),
+  exports: v.optional(v.record(v.string(), ExportEntrySchema)),
   triggers: v.optional(v.object({ crons: v.array(v.string()) })),
   vars: v.optional(v.record(v.string(), v.string())),
   send_email: v.optional(v.array(v.object({ name: v.string() }))),

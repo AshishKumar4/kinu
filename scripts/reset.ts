@@ -45,7 +45,7 @@ import {
   r2Text, requireCloudflareAccountId, why, wrangler,
 } from './infra-cloudflare';
 import {
-  type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, bucketOf, deployedConfig, liveClasses,
+  type DeployedConfig, ExportEntrySchema, INFRA_ENVIRONMENTS, type InfraEnvironment, type Resource, bucketOf, deployedConfig, liveClasses,
 } from './infra-manifest';
 import { servedHealth } from './served-health';
 import { readGenesisLockText } from './schema-drift';
@@ -133,6 +133,45 @@ export function servingOf(versionId: string, bindings: readonly DeployedBinding[
     bound: new Map(bindings.flatMap((binding) => (binding.type === 'durable_object_namespace' && binding.target !== undefined
       && binding.namespace !== undefined ? [[binding.target, binding.namespace] as const] : []))),
   };
+}
+
+/** A built config (dist/kinu/wrangler.json) as far as it names Durable Object classes; every other field is kept. */
+export const BuiltClassesSchema = v.looseObject({
+  durable_objects: v.optional(v.looseObject({ bindings: v.array(v.looseObject({ class_name: v.string(), script_name: v.optional(v.string()) })) })),
+  exports: v.optional(v.record(v.string(), ExportEntrySchema)),
+  containers: v.optional(v.array(v.looseObject({ class_name: v.string() }))),
+});
+
+/**
+ * The build as a version can be uploaded before the reset (deploy.sh step 2a), and the classes left out of it: each
+ * Durable Object class the target does not bind yet, with every binding, export and container that names it. Wrangler
+ * provisions a declared class when a version is deployed, and refuses an upload that binds one before ("the namespace
+ * must exist before a binding can reference it", rc28's MailNameDO and MailboxDO, 2026-10-20). What the upload reads is
+ * the script's startup, the same bytes either way; the deploy after the reset binds them all.
+ */
+export function validationBuild(built: BuiltClasses, serving: Serving): ValidationBuild {
+  const bindings = built.durable_objects?.bindings ?? [];
+  const declared = [...bindings.filter((binding) => binding.script_name === undefined).map((binding) => binding.class_name), ...liveClasses(built.exports)];
+  const withheld = [...new Set(declared)].filter((name) => !serving.bound.has(name));
+  const kept = (name: string) => !withheld.includes(name);
+
+  // A field the build has no value for stays absent: an undefined one is not written.
+  const config = {
+    ...built,
+    durable_objects: built.durable_objects === undefined ? undefined : { ...built.durable_objects, bindings: bindings.filter((binding) => kept(binding.class_name)) },
+    exports: built.exports === undefined ? undefined : Object.fromEntries(Object.entries(built.exports).filter(([name]) => kept(name))),
+    containers: built.containers?.filter((container) => kept(container.class_name)),
+  } satisfies BuiltClasses;
+
+  return { config, withheld };
+}
+
+export type BuiltClasses = v.InferOutput<typeof BuiltClassesSchema>;
+
+/** The build the validation uploads, and the classes it leaves out. */
+export interface ValidationBuild {
+  readonly config: BuiltClasses;
+  readonly withheld: readonly string[];
 }
 
 /**
@@ -709,6 +748,23 @@ function tablesRecordPut(config: DeployedConfig): ResetTarget['putRecord'] {
   return (key, file) => { run(['r2', 'object', 'put', `${releases}/${key}`, '--file', file, '--content-type', 'application/json', '--remote']); };
 }
 
+/** The build's version for deploy.sh's pre-reset validation, written to `out`, and the classes it leaves out, said. */
+function validationCommand(environment: InfraEnvironment, [built, out, ...extra]: readonly string[], scratch: string): number {
+  if (built === undefined || out === undefined || extra.length > 0) {
+    console.error('usage: bun scripts/reset.ts validation <environment> <built-config> <out>');
+
+    return 2;
+  }
+
+  const { config } = plan(environment);
+  const validated = validationBuild(v.parse(BuiltClassesSchema, JSON.parse(readFileSync(built, 'utf8'))), cloudflareTarget(environment, config, scratch).serving());
+
+  writeFileSync(out, JSON.stringify(validated.config));
+  console.log(validated.withheld.join(' '));
+
+  return 0;
+}
+
 async function main(argv: readonly string[], scratch: string): Promise<number> {
   const [command, environment, recordFile] = argv;
   const known = v.is(v.picklist(INFRA_ENVIRONMENTS), environment);
@@ -755,11 +811,14 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
+  if (known && command === 'validation') return validationCommand(environment, argv.slice(2), scratch);
+
   const tables = TABLES_COMMANDS.find((name) => name === command);
 
   if (known && tables !== undefined) return await tablesCommand(tables, environment, argv.slice(2));
 
   console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment> <record> '
+    + '| validation <environment> <built-config> <out> '
     + '| served <environment> | stamps <environment> | census <environment> <out> | tables-plan <environment> <record> [--from <sha>] '
     + '| tables-record <environment> <record> | tables <environment> <record>');
 
