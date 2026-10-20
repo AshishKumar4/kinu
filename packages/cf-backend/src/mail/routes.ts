@@ -13,7 +13,7 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, isMailLabel, json, MAIL_VIEWS, MAIL_WAKES, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
+  err, isMailLabel, json, MAIL_MESSAGE_FIELDS, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
   type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
@@ -40,14 +40,10 @@ export interface MailRoutesEnv extends OwnerCapabilityEnv {
 
 type MailContext = Context<FamilyEnv<MailRoutesEnv>>;
 
-const Address = v.pipe(v.string(), v.trim(), v.toLowerCase(), v.email(), v.maxLength(254));
-
 const Outgoing = v.object({
   path: v.pipe(v.string(), v.maxLength(41)),
-  to: v.pipe(v.array(Address), v.minLength(1), v.maxLength(50)),
-  cc: v.optional(v.pipe(v.array(Address), v.maxLength(50))),
-  subject: v.pipe(v.string(), v.maxLength(998)),
-  text: v.pipe(v.string(), v.maxLength(1_000_000)),
+  ...MAIL_MESSAGE_FIELDS,
+  text: mailText('person'),
   inReplyTo: v.optional(v.nullable(v.string())),
   threadId: v.optional(v.string()),
 });
@@ -61,7 +57,7 @@ const Handed = v.object({ thread: v.pipe(v.string(), v.nonEmpty(), v.maxLength(6
 const Wake = v.object({
   path: v.pipe(v.string(), v.maxLength(41)),
   wake: v.picklist(MAIL_WAKES),
-  allow: v.optional(v.pipe(v.array(Address), v.maxLength(200))),
+  allow: v.optional(v.pipe(v.array(MailAddress), v.maxLength(200))),
 });
 
 /** Whether the signed-in person may hold an address on this deployment (docs/MAIL.md §1). */

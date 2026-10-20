@@ -115,6 +115,8 @@ export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/han
 
 export { mailInContext } from './mail/in-context';
 
+export { MAIL_MESSAGE_FIELDS, MailAddress, mailText } from './mail/message';
+
 export { MailTriageLane, triageMail, type MailTriageDeps } from './mail/triage';
 
 export { createEmailThreadDispatcher, mailboxEmail, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';

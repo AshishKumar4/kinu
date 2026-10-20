@@ -7,9 +7,7 @@
 import * as v from 'valibot';
 import { defineOperation, described } from './operation';
 import { mailThreadText } from '../mail/words';
-
-// Written as given: the Mailbox files an address lowercased.
-const Address = v.pipe(v.string(), v.email(), v.maxLength(254));
+import { MAIL_MESSAGE_FIELDS, mailText } from '../mail/message';
 
 const Party = v.strictObject({ name: v.nullable(v.string()), address: v.string() });
 
@@ -19,10 +17,10 @@ const ThreadId = v.pipe(v.string(), v.nonEmpty());
 const BoxPath = described(v.pipe(v.string(), v.maxLength(41)), 'A box you read, by its path; default your own.');
 
 const Message = {
-  to: described(v.pipe(v.array(Address), v.minLength(1), v.maxLength(50)), 'Recipients.'),
-  cc: v.optional(v.pipe(v.array(Address), v.maxLength(50))),
-  subject: v.pipe(v.string(), v.maxLength(998)),
-  text: described(v.pipe(v.string(), v.maxLength(50_000)), 'The message, plain text.'),
+  to: described(MAIL_MESSAGE_FIELDS.to, 'Recipients.'),
+  cc: MAIL_MESSAGE_FIELDS.cc,
+  subject: MAIL_MESSAGE_FIELDS.subject,
+  text: described(mailText('agent'), 'The message, plain text.'),
   replyTo: v.optional(described(v.string(), 'The thread id this answers.')),
   box: v.optional(BoxPath),
 };

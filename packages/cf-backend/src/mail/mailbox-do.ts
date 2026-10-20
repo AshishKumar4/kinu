@@ -164,7 +164,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   send(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    return settle(this.sendOut(async () => ({ ...await this.store.queue(outgoing), outgoing })));
+    return settle(this.sendOut(() => this.store.queue(outgoing)));
   }
 
   /** Files it (`file`) and hands it to the outbox, within the account's daily cap (none for operators). */

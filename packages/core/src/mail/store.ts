@@ -9,6 +9,7 @@ import { KinuError, settle, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import { replySubject } from './words';
+import { filedRecipients, mailAddress } from './message';
 import { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_WAKES, MAIL_WOKE } from './mailbox-api';
 import type {
   MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
@@ -129,7 +130,7 @@ export class MailStore {
   open(account: { userId: string; email: string; username: string; assistant: { workspace: string; actorId: string } | null }): MailBox {
     const now = this.deps.now();
 
-    this.deps.sql.exec('INSERT OR IGNORE INTO mail_box (id, user_id, email, username, created_at) VALUES (1, ?, ?, ?, ?)', account.userId, account.email.toLowerCase(), account.username, now);
+    this.deps.sql.exec('INSERT OR IGNORE INTO mail_box (id, user_id, email, username, created_at) VALUES (1, ?, ?, ?, ?)', account.userId, mailAddress(account.email), account.username, now);
     this.deps.sql.exec("INSERT OR IGNORE INTO mail_addresses (path, kind, workspace, actor_id, created_at) VALUES ('', 'person', ?, ?, ?)",
       account.assistant?.workspace ?? null, account.assistant?.actorId ?? null, now);
 
@@ -272,7 +273,7 @@ export class MailStore {
 
     if (outgoing instanceof KinuError) return settle(Effect.fail(outgoing));
 
-    return { ...await this.queue(outgoing), outgoing };
+    return this.queue(outgoing);
   }
 
   updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): MailThreadSummary {
@@ -334,7 +335,7 @@ export class MailStore {
     if (allow !== undefined) {
       this.deps.sql.exec('DELETE FROM mail_allow WHERE path = ?', path);
 
-      for (const sender of new Set(allow.map((each) => each.trim().toLowerCase()).filter(Boolean))) {
+      for (const sender of new Set(allow.map(mailAddress).filter(Boolean))) {
         this.deps.sql.exec('INSERT INTO mail_allow (path, sender, added_at) VALUES (?, ?, ?)', path, sender, this.deps.now());
       }
     }
@@ -612,7 +613,7 @@ export class MailStore {
 
     const id = this.deps.id();
     const headerId = `${id}@${this.deps.domain}`;
-    const party = (address: string): MailParty => ({ name: null, address: address.trim().toLowerCase() });
+    const party = (address: string): MailParty => ({ name: null, address: mailAddress(address) });
 
     this.deps.sql.exec(
       `INSERT INTO mail_messages (id, thread_id, direction, header_id, in_reply_to, from_addr, to_json, cc_json, subject, at, verdict, snippet,
@@ -636,7 +637,7 @@ export class MailStore {
   }
 
   async draft(asked: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    const outgoing = this.answering(asked);
+    const outgoing = this.answering(filedRecipients(asked));
     const box = this.box(outgoing.path);
 
     if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
@@ -668,8 +669,9 @@ export class MailStore {
   }
 
   /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
-  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; from: string; inReplyTo: string | null }> {
-    const outgoing = this.answering(asked);
+  /** Files a message to send; `outgoing` is the message as filed, which is what the outbox sends. */
+  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }> {
+    const outgoing = this.answering(filedRecipients(asked));
     const box = this.box(outgoing.path);
 
     if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
@@ -681,7 +683,7 @@ export class MailStore {
 
     if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
 
-    return { view, from: view.from.address, inReplyTo: outgoing.inReplyTo ?? null };
+    return { view, from: view.from.address, inReplyTo: outgoing.inReplyTo ?? null, outgoing };
   }
 
   /** A message's state as shown: a draft is the row's; a sent message's is the outbox's, while it holds the send. */

@@ -5,6 +5,7 @@
  * is a query.
  */
 import type { MailRecipient } from './address';
+import type { MailMessageFields } from './message';
 
 // Each list is the one every schema, route and page reads; the Mailbox's DDL spells its CHECKs once more, as deployed storage.
 export const MAIL_BOX_KINDS = ['person', 'workspace', 'agent'] as const;
@@ -142,12 +143,8 @@ export interface MailDelivery {
   readonly instruction: string | null;
 }
 
-export interface MailOutgoing {
+export interface MailOutgoing extends MailMessageFields {
   readonly path: string;
-  readonly to: readonly string[];
-  readonly cc?: readonly string[];
-  readonly subject: string;
-  readonly text: string;
   readonly inReplyTo?: string | null;
   /** The agent that wrote it; absent when the person writes it in the app. */
   readonly writtenBy?: string;
@@ -167,12 +164,8 @@ export interface MailCaller {
 }
 
 /** A message an agent writes, from one of the boxes it reads (its own by default). */
-export interface MailAgentMessage {
+export interface MailAgentMessage extends MailMessageFields {
   readonly box?: string;
-  readonly to: readonly string[];
-  readonly cc?: readonly string[];
-  readonly subject: string;
-  readonly text: string;
   /** The thread it answers. */
   readonly thread?: string;
 }

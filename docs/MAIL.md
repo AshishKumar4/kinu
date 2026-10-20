@@ -264,6 +264,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 - **Plan limits:** the Workers Free plan can receive mail but can send only to verified addresses. The step says so.
 
 
+**A message's fields (built).** The person's sends and drafts and an agent's `mail.send` and `mail.draft` read one definition (`core/src/mail/message.ts`): the address, To (1 to 50), Cc (up to 50) and the subject (998 characters, RFC 5322's line). The text's limit is the one difference, by name (`mailText`): the person's is 1,000,000 characters, an agent's 50,000, what one approval card shows whole. Recipients are lowercased once, where the Mailbox files them (`filedRecipients`); an agent's card shows them that way, so what is approved is what leaves.
+
 **Sending (built).** The Mailbox hands the Email Sending binding `mailboxEmail(...)`: From, To, Cc, the subject, the text and, for a reply, In-Reply-To and References. It sets no Message-ID: the service writes one and refuses one set by the sender (refused in production on 2026-10-05). The Message-ID the binding answers is kept as the message's own (`EmailOutbox` `sentAs`, `MailStore.sentAs`), so a reply that names it joins the thread. The outbox is the only record of a send: a message's shown state is read from it (pending is queued, sent, dead-lettered is failed), and the row keeps only whether it is a draft.
 ## 6. Cost and limits, for the record
 

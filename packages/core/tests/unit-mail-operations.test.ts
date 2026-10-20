@@ -151,6 +151,11 @@ describe('a message leaves only on the owner\'s approval of that exact message',
     expect(sent).toHaveLength(1);
   });
 
+  test('an address is read as the person\'s own sends read it: trimmed and lowercased, so the card shows what leaves', async () => {
+    expect(await call(SCOUT, 'send', { ...reply, to: [' Dana@Northwind.IO '], cc: ['Priya@Raman.dev'] })).toMatchObject({ status: 'asked' });
+    expect(parked).toMatchObject([{ to: ['dana@northwind.io'], cc: ['priya@raman.dev'] }]);
+  });
+
   test('approving one message admits no other: a changed word asks anew', async () => {
     const asked = v.parse(Asked, await call(SCOUT, 'send', reply));
 
