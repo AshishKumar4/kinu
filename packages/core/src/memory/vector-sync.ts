@@ -18,8 +18,8 @@ const mirrorLanes = new WeakMap<MemoryStore, ReturnType<typeof serialQueue>>();
 /** Ids one Vectorize delete takes. */
 const VECTOR_DELETE_BATCH = 1000;
 
-/** One owned mirror lane acknowledges durable index revisions, never a user configuration update. */
-async function flushPendingVectors(store: MemoryStore, vectors: VectorStore, cap = Number.MAX_SAFE_INTEGER): Promise<void> {
+/** The one lane every write to `store`'s projection runs in, in order. */
+function laneOf(store: MemoryStore): ReturnType<typeof serialQueue> {
   let serial = mirrorLanes.get(store);
 
   if (serial === undefined) {
@@ -27,7 +27,12 @@ async function flushPendingVectors(store: MemoryStore, vectors: VectorStore, cap
     mirrorLanes.set(store, serial);
   }
 
-  await serial(async () => {
+  return serial;
+}
+
+/** One owned mirror lane acknowledges durable index revisions, never a user configuration update. */
+async function flushPendingVectors(store: MemoryStore, vectors: VectorStore, cap = Number.MAX_SAFE_INTEGER): Promise<void> {
+  await laneOf(store)(async () => {
     const pending = store.pendingProjection(cap);
     const upsert = pending.filter((operation) => operation.kind === 'upsert').map((operation) => operation.id);
 
@@ -183,11 +188,14 @@ export async function backfillMemoryVectors(store: MemoryStore, vectorStore: Vec
 
 /**
  * The memory's semantic projection deleted, every chunk's, as its workspace is: nothing derived from its notes outlives
- * them. In batches a delete call takes; one that fails throws, so the workspace's deletion is tried again. Not a member
- * of `Memory`, which every agent holds: only the workspace's own teardown reaches it.
+ * them. In the projection's own lane, after every write already in it (a backfill the runtime started among them), so
+ * none lands after; in batches a delete call takes; one that fails throws, so the workspace's deletion is tried again.
+ * Not a member of `Memory`, which every agent holds: only the workspace's own teardown reaches it.
  */
 export async function forgetMemoryVectors(store: MemoryStore, vectors: MemoryVectors): Promise<void> {
-  const ids = store.projectedIds();
+  await laneOf(store)(async () => {
+    const ids = store.projectedIds();
 
-  for (let at = 0; at < ids.length; at += VECTOR_DELETE_BATCH) await vectors.store.deleteChunks(ids.slice(at, at + VECTOR_DELETE_BATCH));
+    for (let at = 0; at < ids.length; at += VECTOR_DELETE_BATCH) await vectors.store.deleteChunks(ids.slice(at, at + VECTOR_DELETE_BATCH));
+  });
 }

@@ -64,6 +64,8 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
   /** A deleted account's memberships, in every share here, by its id or its email (lower-cased). */
   forgetUser(person: { readonly userId: string; readonly email: string }): void {
     this.db.exec(`DELETE FROM ${this.table.users} WHERE user_id = ? OR lower(email) = ?`, person.userId, person.email);
+    // What reads the shares rebuilds from these tables, so no cached overview names them again.
+    markStoreChanged(this.db);
   }
 
   list(): Rec[] {

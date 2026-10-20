@@ -1367,9 +1367,7 @@ export class UserDO extends Agent<Env> {
     // Each grant revoked at its provider where it can be; a provider that refuses is logged, and the grant goes here.
     for (const { key } of this.sqlx<{ key: string }>(`SELECT key FROM user_credentials`)) await this.credentials.disconnectCredential(key, true);
 
-    const { labels } = await objectNamed(this.env.MAILBOX, ownerUserId).deleteBox(ownerUserId);
-
-    for (const label of labels) await objectNamed(this.env.MAILNAME, label).retire(ownerUserId);
+    await objectNamed(this.env.MAILBOX, ownerUserId).deleteBox(ownerUserId);
     await destroyDriveTenant(this.env, ownerUserId);
 
     const { ControlPlaneDO } = this.env;

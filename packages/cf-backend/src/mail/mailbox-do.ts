@@ -7,6 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
+  objectNamed,
   durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
@@ -91,16 +92,41 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
   /** A call's answer from the store, or the refusal every call answers first. */
   private served<Answer>(work: () => Answer | Promise<Answer>): Effect.Effect<Answer, KinuError> {
-    return this.refusal === undefined ? Effect.promise(async () => await work()) : Effect.fail(this.refusal);
+    return this.refusal === undefined ? this.fenced(Effect.promise(async () => await work())) : Effect.fail(this.refusal);
+  }
+
+  /** Work under way, which a deletion waits out before it sweeps: a delivery writes its bytes across awaits. */
+  private readonly working = new Set<Promise<void>>();
+
+  /** Set while the box is deleted: no new work starts. */
+  private deleting = false;
+
+  /** `work`, refused once the box is being deleted, and waited out by a deletion that began while it ran. */
+  private fenced<Answer>(work: Effect.Effect<Answer, KinuError>): Effect.Effect<Answer, KinuError> {
+    return Effect.suspend(() => {
+      if (this.deleting) return Effect.fail(new KinuError('unavailable', 'This mailbox is being deleted.'));
+      const done = Promise.withResolvers<void>();
+
+      this.working.add(done.promise);
+
+      return Effect.ensuring(work, Effect.sync(() => {
+        this.working.delete(done.promise);
+        done.resolve();
+      }));
+    });
   }
 
   /**
-   * The account's mail deleted, as the account is (docs/MAIL.md §11): every object under its R2 prefix, its rows, its
-   * outbox and its alarm. Answers the labels it held, for the caller to retire. Again, it finds nothing.
+   * The account's mail deleted, as the account is (docs/MAIL.md §11): its names retired first, while the box still
+   * records them, so a retry finds them again; then, once the work under way has ended, every object under its R2
+   * prefix, its rows, its outbox and its alarm. Again, it finds nothing.
    */
-  async deleteBox(userId: string): Promise<{ readonly labels: readonly string[] }> {
+  async deleteBox(userId: string): Promise<void> {
+    this.deleting = true;
     const [box] = this.ctx.storage.sql.exec('SELECT username FROM mail_box WHERE id = 1').toArray();
-    const labels = box === undefined ? [] : [v.parse(v.object({ username: v.string() }), box).username];
+
+    if (box !== undefined) await objectNamed(this.env.MAILNAME, v.parse(v.object({ username: v.string() }), box).username).retire(userId);
+    await Promise.all(this.working);
     const bucket = this.bucket ?? undefined;
 
     // The prefix, not the rows' keys: bytes an interrupted delivery left unreferenced are the account's too.
@@ -110,11 +136,10 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
     await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
-    // As made: a call that comes after meets an empty box, not missing tables.
+    // As made: a call that comes after meets an empty box, not missing tables, and may open one anew.
     initMailboxTables(this.ctx.storage.sql);
     writeStamp(durableStamps(this.ctx.storage.kv), 'mailbox');
-
-    return { labels };
+    this.deleting = false;
   }
 
   /** The alarm serves both clocks: the outbox's next retry and the Trash's next emptying. */
@@ -129,12 +154,17 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   override async alarm(): Promise<void> {
     if (this.refusal !== undefined) return settleSync(Effect.fail(this.refusal));
 
-    if (this.env.EMAIL !== undefined) await this.outbox.reconcile(this.env.EMAIL, Date.now());
+    // A box being deleted has no retry or emptying left to do.
+    if (this.deleting) return;
 
-    const emptied = await this.store.purge();
+    await settle(this.fenced(Effect.promise(async () => {
+      if (this.env.EMAIL !== undefined) await this.outbox.reconcile(this.env.EMAIL, Date.now());
 
-    if (emptied > 0) diagnostics.event('mail.trash_emptied', { threads: emptied });
-    await this.arm();
+      const emptied = await this.store.purge();
+
+      if (emptied > 0) diagnostics.event('mail.trash_emptied', { threads: emptied });
+      await this.arm();
+    })));
   }
 
   open(account: { userId: string; email: string; username: string; assistant: { workspace: string; actorId: string } | null }): Promise<MailBox> {
@@ -196,7 +226,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     const sender = this.identity()?.email ?? '';
     const arm = async (): Promise<void> => this.arm();
 
-    return Effect.gen(function* () {
+    return this.fenced(Effect.gen(function* () {
       if (refusal !== undefined) return yield* Effect.fail(refusal);
 
       if (!isListedOperator(env, sender) && store.sentToday() >= DAILY_SEND_CAP) {
@@ -217,7 +247,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
       if (sent.status === 'failed') yield* Effect.promise(arm);
 
       return (yield* Effect.promise(async () => store.messageView(view.threadId, view.id))) ?? view;
-    });
+    }));
   }
 
   /* ——— An agent's calls (docs/MAIL.md §3): only the boxes it reads ——— */

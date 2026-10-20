@@ -213,9 +213,13 @@ export function sandboxPreviewExposures(
   };
 }
 
-/** A KV namespace that lists its keys, as Cloudflare's does. */
+/** A KV namespace that lists its keys, as Cloudflare's does: a page may be empty with more to come. */
 export interface ListedKv extends KvStore {
-  list(options: { readonly prefix: string }): Promise<{ readonly keys: readonly { readonly name: string }[] }>;
+  list(options: { readonly prefix: string; readonly cursor?: string }): Promise<{
+    readonly keys: readonly { readonly name: string }[];
+    readonly list_complete: boolean;
+    readonly cursor?: string;
+  }>;
 }
 
 /**
@@ -224,8 +228,13 @@ export interface ListedKv extends KvStore {
  */
 export async function forgetSandboxPreviews(kv: ListedKv, sandboxId: string): Promise<void> {
   for (const prefix of (['exposure', 'public', 'withdrawal'] as const).map((family) => portPrefix(family, sandboxId))) {
-    for (let page = await kv.list({ prefix }); page.keys.length > 0; page = await kv.list({ prefix })) {
+    // Every page, to the one that says it is the last: an empty page is not the end (Workers KV, list-keys).
+    for (let cursor: string | undefined, more = true; more;) {
+      const page = await kv.list({ prefix, ...(cursor !== undefined && { cursor }) });
+
       for (const { name } of page.keys) await kv.delete(name);
+      cursor = page.cursor;
+      more = !page.list_complete && cursor !== undefined;
     }
   }
 }

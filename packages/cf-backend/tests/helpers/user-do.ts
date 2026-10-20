@@ -10,7 +10,6 @@ import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import type { IndexFeedSink } from '../../src/control-plane/index-feed';
 import type { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
 import type { MailboxDO } from '../../src/mail/mailbox-do';
-import type { MailNameDO } from '../../src/mail/mailname-do';
 import { BUILTIN_ACCOUNTS_OBJECT } from '@kinu.run/core/identity';
 import type { WorkspaceRegistration } from '../../src/user/workspaces';
 import {
@@ -311,7 +310,6 @@ interface TestUserEnvironment {
   UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient | Pick<UserDOInstance, 'builtinRemoveAccount'> };
   ControlPlaneDO?: { idFromName(name: string): string; get(id: string): IndexFeedSink & Pick<ControlPlaneDO, 'forgetUser'> };
   MAILBOX: { idFromName(name: string): string; get(id: string): Pick<MailboxDO, 'deleteBox'> };
-  MAILNAME: { idFromName(name: string): string; get(id: string): Pick<MailNameDO, 'retire'> };
   CREDENTIAL_ENCRYPTION_KEY: string;
   DEV_USER_EMAIL?: string;
   SLATE_PICTURES?: PictureBucket;
@@ -651,12 +649,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       get: (name: string) => ({
         deleteBox: async () => {
           accountDeleted.push(`mailbox:${name}`);
-
-          return { labels: [] };
         },
       }),
     },
-    MAILNAME: { idFromName: (name: string) => name, get: (label: string) => ({ retire: async () => { accountDeleted.push(`mail-name:${label}`); } }) },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({

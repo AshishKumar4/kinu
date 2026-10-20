@@ -103,6 +103,43 @@ describe("a workspace's deletion takes its memory's vectors", () => {
       expect(chunks.size).toBe(0);
     } finally { db.close(); }
   });
+
+  // Review of the account deletion, 2026-10-20: the runtime's backfill at its construction could upsert a chunk after
+  // the deletion had run, and the workspace's wipe then took the index that would have retried it.
+  test('a backfill under way when the deletion starts lands before it, not after', async () => {
+    const { rt, db, workspace } = createTestRuntime();
+    const chunks = new Map<string, IndexedChunk>();
+    const embedding = Promise.withResolvers<void>();
+    let available = false;
+
+    const vectors: VectorStore = {
+      get available() { return available; },
+      upsertChunks: async (fresh) => {
+        await embedding.promise;
+
+        for (const chunk of fresh) chunks.set(chunk.id, chunk);
+      },
+      deleteChunks: async (ids) => { for (const id of ids) chunks.delete(id); },
+      search: async () => [],
+    };
+
+    const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
+    indexed.ensureSchema();
+
+    try {
+      // Indexed while the backend was away: its vector is owed.
+      await adaptMemory(indexed, workspace.vfs, { store: vectors }).write('memory/northwind.md', 'Dana rotates the webhook secret on Fridays.');
+      await adaptMemory(indexed, workspace.vfs, { store: vectors }).index('memory/northwind.md');
+      available = true;
+      const backfill = backfillMemoryVectors(indexed, vectors);
+      const forget = forgetMemoryVectors(indexed, { store: vectors });
+
+      embedding.resolve();
+      await Promise.all([backfill, forget]);
+
+      expect(chunks.size).toBe(0);
+    } finally { db.close(); }
+  });
 });
 
 /** The note's path is a real, indexed memory file, asked of the writer's filesystem. */
