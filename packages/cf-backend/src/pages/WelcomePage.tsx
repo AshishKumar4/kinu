@@ -99,7 +99,6 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   // `?step=` names the step to open on: a sign-in that left this page returns to the step it left from.
   const [search] = useSearchParams();
   const opened = steps.findIndex((candidate) => candidate.id === search.get("step"));
-  const [mailSkipped, setMailSkipped] = useState(false);
 
   // `null` until touched, so a slow profile load never overwrites an edit.
   const [step, setStep] = useState(() => (opened >= 0 ? opened : Math.min(Math.max(0, initialStep), LAST_STEP)));
@@ -184,8 +183,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       account.reload();
     }
 
-    // Next is the address: made with its mailbox at once, unless the person said not now.
-    if (onMail && !mailSkipped) {
+    // Next is the address, made with its mailbox at once; the footer's Not now passes it by.
+    if (onMail) {
       setBusy(true);
 
       const failure = yield* Effect.matchCause(Effect.promise(() => createMailAddress(address.username)), {
@@ -203,7 +202,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     }
 
     setStep((s) => Math.min(s + 1, LAST_STEP));
-  })), [step, name, profile, account, onMail, mailSkipped, address.username, LAST_STEP]);
+  })), [step, name, profile, account, onMail, address.username, LAST_STEP]);
 
   return (
     <div className="fixed inset-0 p-bg overflow-y-auto">
@@ -254,13 +253,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 )}
 
                 {s.id === 'mail' && (
-                  <div className="space-y-3">
-                    <MailAddressField domain={mailBoxes?.domain ?? ''} username={address.username} state={address.state} onChange={address.setUsername} disabled={busy || mailSkipped} />
-                    <button type="button" data-mail-not-now aria-pressed={mailSkipped} onClick={() => setMailSkipped((skipped) => !skipped)}
-                      className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
-                      {mailSkipped ? "Create it after all" : "Not now"}
-                    </button>
-                  </div>
+                  <MailAddressField domain={mailBoxes?.domain ?? ''} username={address.username} state={address.state} onChange={address.setUsername} disabled={busy} />
                 )}
 
                 {s.id === 'providers' && (
@@ -303,7 +296,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
                   Skip setup
                 </button>
-                <FilledButton disabled={busy || (onMail && !mailSkipped && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
+                {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => setStep((s) => Math.min(s + 1, LAST_STEP))}>Not now</Button>}
+                <FilledButton disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
                 </FilledButton>
               </div>
