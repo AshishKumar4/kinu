@@ -526,7 +526,7 @@ describe('retimeDailyTrigger', () => {
     const { registry, alarm } = setup();
     const made = await createTimerTrigger(registry, { cron: '0 8 * * *', timeZone: 'Europe/Lisbon', label: 'Daily brief', trust: 'owner' }, NOW);
     const moved = await retimeDailyTrigger({ registry, trigger_id: made.id, at: '07:30', now: NOW });
-    const row = present(registry.get(made.id));
+    const row = present(registry.get(made.id), 'the moved schedule');
 
     expect({ cron: row.spec.cron, zone: row.spec.time_zone, label: row.spec.label, at: typeof row.spec.cron === 'string' ? dailyTimeOf(row.spec.cron) : null })
       .toEqual({ cron: '30 7 * * *', zone: 'Europe/Lisbon', label: 'Daily brief', at: '07:30' });
@@ -544,6 +544,6 @@ describe('retimeDailyTrigger', () => {
     await expect(retimeDailyTrigger({ registry, trigger_id: hourly.id, at: '07:30', now: NOW })).rejects.toThrow('No daily schedule');
     registry.revoke(daily.id, NOW);
     await expect(retimeDailyTrigger({ registry, trigger_id: daily.id, at: '07:30', now: NOW })).rejects.toThrow('No daily schedule');
-    expect(present(registry.get(daily.id)).spec.cron).toBe('0 8 * * *');
+    expect(present(registry.get(daily.id), 'the refused schedule').spec.cron).toBe('0 8 * * *');
   });
 });
