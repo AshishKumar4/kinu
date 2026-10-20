@@ -6431,6 +6431,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.computerBox()?.closeTerminalSession(id);
   }
 
+  /** The workspace's named sessions on its PC `device` (1014-t), as the computer's read: the same rows, the same strip. */
+  @callable() async listDeviceSessions(device: string): Promise<readonly TerminalSession[]> {
+    return await this.requireOwnerUserDO().listDeviceSessions(await this.userCaller(), this.workspaceName(), device);
+  }
+
+  @callable() async openDeviceSession(device: string, name?: string): Promise<SessionRecord> {
+    return await this.requireOwnerUserDO().openDeviceSession(await this.userCaller(), this.workspaceName(), device, name);
+  }
+
+  @callable() async renameDeviceSession(device: string, id: string, name: string): Promise<SessionRecord> {
+    return await this.requireOwnerUserDO().renameDeviceSession(await this.userCaller(), this.workspaceName(), device, { id, name });
+  }
+
+  @callable() async closeDeviceSession(device: string, id: string): Promise<void> {
+    await this.requireOwnerUserDO().closeDeviceSession(await this.userCaller(), this.workspaceName(), device, id);
+  }
+
   /** The workspace's computer, where this deployment binds one. */
   private computerBox(): SandboxBox | undefined {
     return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
@@ -6829,7 +6846,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     recordOutput: (executorId, command, output) => { this.recordExecutorOutput(executorId, command, output); },
     broadcast: (frame) => { this.broadcast(frame); },
     ownerUserId: () => this.getOwnerUserId(),
-    openOwnerTerminal: async (window, device) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, device),
+    openOwnerTerminal: async (window, target) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, target),
     openOwnerScreen: async (device) => await this.requireOwnerUserDO().openDeviceScreen(await this.userCaller(), this.workspaceName(), device),
   });
 
@@ -6883,8 +6900,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Opens via this object because only it holds the workspace capability token the hub needs.
    * `device`: the PC the pane names, when the account has several connected; the one connected without it.
    */
-  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
-    return this.executors.openDeviceTerminal(window, device);
+  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+    return this.executors.openDeviceTerminal(window, target);
   }
 
   /** As {@link openDeviceTerminal}, for the screen of the PC `device` (1014-t). */

@@ -26,6 +26,11 @@ export const EVAL_ACCOUNTS = ['devices', 'scripted', 'settings', 'keyless', 'gat
 
 export const EVAL_TRIAL_ACCOUNTS = 512;
 
+/** The header naming the Worker version that answered: every published host's response carries it (cf-backend's
+ *  server.ts). A deploy and a secret change each make a new version, and every Durable Object restarts on it, so the
+ *  tooling reads it to tell a build's change from a version's (evals/src/target.ts). */
+export const WORKER_VERSION_HEADER = 'x-kinu-version';
+
 export type EvalAccount = (typeof EVAL_ACCOUNTS)[number] | `trial-${number}`;
 
 export function parseEvalAccount(name: string): EvalAccount | null {

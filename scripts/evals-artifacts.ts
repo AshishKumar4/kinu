@@ -9,6 +9,8 @@ export const TrialItemSchema = v.object({
   models: v.array(v.string()), arms: v.array(v.string()), pass: v.boolean(),
   /** The first account of the block the run leased (scripts/evals-lease.ts). */
   firstSlot: v.number(),
+  /** The trial is one task of a sequence, in its model's one account (EvalMatrix.sequence). */
+  sequence: v.boolean(),
 });
 
 export type TrialItem = v.InferOutput<typeof TrialItemSchema>;

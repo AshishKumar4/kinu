@@ -12,11 +12,12 @@ import * as v from 'valibot';
 import { connections, type Connections } from '@nimbus-sh/fabric/connections.js';
 import { z } from 'zod/v4';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
+import { WS_OPEN } from './device-tunnel';
 import { DEVICE_PTY_MAX_AXIS, DEVICE_FRAMES } from './device-protocol';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
 
-/** Covers one round trip; an unattached session is closed rather than left running. */
+/** Covers one round trip; a token no pane spends in it is dropped, and its session keeps running, detached. */
 const TERMINAL_ATTACH_WINDOW_MS = 30_000;
 
 /** What a shell may draw before its pane attaches: its prompt, or why it ended, many times over. Past it the oldest go,
@@ -41,8 +42,8 @@ const PaneControlSchema = v.object({
   rows: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(DEVICE_PTY_MAX_AXIS)),
 });
 
-function terminalTag(session: string): string {
-  return `${TERMINAL_WS_TAG_PREFIX}${session}`;
+function terminalTag(device: string, session: string): string {
+  return `${TERMINAL_WS_TAG_PREFIX}${device}:${session}`;
 }
 
 /** Null when the socket is a device's or the agents SDK's. */
@@ -59,11 +60,13 @@ export function terminalFromSocket(ws: DeviceSocket): { session: string; device:
 }
 
 export interface TerminalHolder {
+  /** The workspace's named session on the device (1014-t): the daemon's name for it, stable across panes. */
+  session: string;
   device: string;
   workspace: string;
 }
 
-interface PendingSession extends TerminalHolder {
+interface PendingAttach extends TerminalHolder {
   openedAt: number;
   /** What the shell drew before its pane attached, and its end if it already ended: the pane gets both first. */
   held: Uint8Array[];
@@ -72,12 +75,13 @@ interface PendingSession extends TerminalHolder {
 }
 
 export class DeviceTerminalHub {
-  private readonly unattached = new Map<string, PendingSession>();
+  /** By attach token: the unguessable, single-use authority a pane's upgrade carries. */
+  private readonly unattached = new Map<string, PendingAttach>();
 
-  private readonly sockets: Connections<z.infer<typeof TerminalAttachmentSchema>, DeviceSocket>;
+  private readonly sockets: Connections<z.infer<typeof TerminalAttachmentSchema>>;
 
   constructor(
-    ctx: DeviceSocketCtx,
+    private readonly ctx: DeviceSocketCtx,
     private readonly devices: DeviceSocketHub,
     private readonly now: () => number = Date.now,
   ) {
@@ -85,63 +89,71 @@ export class DeviceTerminalHub {
   }
 
   /**
-   * Holding the unguessable name is the authority to attach; the first attach spends it. Registered before the machine
-   * is asked to open it: the shell draws its prompt at once, and on f9c17ac7b those bytes, and an exit, reached this
-   * hub before the session was known and were dropped, so the pane sat blank or closed without a word.
+   * Holding the unguessable token is the authority to attach to `holder.session`; the first attach spends it.
+   * Registered before the machine is asked to open the session: the shell draws its prompt at once, or a resumed one
+   * its kept output, and on f9c17ac7b those bytes, and an exit, reached this hub before the session was known and were
+   * dropped, so the pane sat blank or closed without a word.
    */
-  register(session: string, device: string, workspace: string): void {
-    this.unattached.set(session, { device, workspace, openedAt: this.now(), held: [], heldBytes: 0, exitCode: null });
+  register(token: string, holder: TerminalHolder): void {
+    this.unattached.set(token, { ...holder, openedAt: this.now(), held: [], heldBytes: 0, exitCode: null });
   }
 
-  /** A session the machine refused to open: nothing will attach to it. */
-  forget(session: string): void {
-    this.unattached.delete(session);
+  /** An open the machine refused: nothing will attach with this token. */
+  forget(token: string): void {
+    this.unattached.delete(token);
   }
 
-  expired(): { session: string; device: string }[] {
-    const stale: { session: string; device: string }[] = [];
+  /** Tokens no pane spent in time, each with the session the machine keeps running for the next pane. */
+  expired(): TerminalHolder[] {
+    const stale: TerminalHolder[] = [];
 
-    for (const [session, pending] of this.unattached) {
+    for (const [token, pending] of this.unattached) {
       if (this.now() - pending.openedAt <= TERMINAL_ATTACH_WINDOW_MS) continue;
-      stale.push({ session, device: pending.device });
-      this.unattached.delete(session);
+      stale.push({ session: pending.session, device: pending.device, workspace: pending.workspace });
+      this.unattached.delete(token);
     }
 
     return stale;
   }
 
-  /** Refuses an unknown name and a second attach: two panes would race for one program's input. */
-  attach(session: string, server: DeviceSocket): TerminalHolder {
+  /** Refuses an unknown token and a second pane on one session: two panes would race for one program's input. */
+  attach(token: string, server: DeviceSocket): TerminalHolder {
     return settleSync(Effect.gen({ self: this }, function* () {
-      const pending = this.unattached.get(session);
+      const pending = this.unattached.get(token);
 
       if (!pending) return yield* new KinuError('missing', TERMINAL_SESSION_UNKNOWN);
 
-      if (this.paneSocket(session)) return yield* new KinuError('denied', TERMINAL_ALREADY_ATTACHED);
-      this.unattached.delete(session);
-      this.sockets.accept(server, {
-        key: terminalTag(session), attachment: { terminal: session, device: pending.device, workspace: pending.workspace },
-      });
+      if (this.paneSocket(pending.device, pending.session)) return yield* new KinuError('denied', TERMINAL_ALREADY_ATTACHED);
+      this.unattached.delete(token);
+      const { session, device, workspace } = pending;
+
+      this.sockets.accept(server, { key: terminalTag(device, session), attachment: { terminal: session, device, workspace } });
       server.send(JSON.stringify({ type: 'ready' }));
 
       for (const bytes of pending.held) server.send(bytes);
 
-      if (pending.exitCode !== null) this.paneExit(session, pending.exitCode);
+      if (pending.exitCode !== null) this.paneExit(device, session, pending.exitCode);
 
-      return { device: pending.device, workspace: pending.workspace };
+      return { session, device, workspace };
     }));
   }
 
-  paneSocket(session: string): DeviceSocket | null {
-    return this.sockets.get(terminalTag(session));
+  paneSocket(device: string, session: string): DeviceSocket | null {
+    // Nimbus ask (connections socket type): get() erases the socket's send surface.
+    for (const ws of this.ctx.getWebSockets(terminalTag(device, session))) {
+      if (ws.readyState === WS_OPEN) return ws;
+    }
+
+    return null;
   }
 
   /** Bytes pass through; an unrecognised control frame is dropped and recorded as a defect. */
-  fromPane(session: string, device: string, message: string | ArrayBuffer | ArrayBufferView): void {
+  fromPane(holder: TerminalHolder, message: string | ArrayBuffer | ArrayBufferView): void {
+    const { session, device } = holder;
     const tunnel = this.devices.tunnel(device);
 
     if (!tunnel) {
-      this.endPane(session, TERMINAL_SESSION_UNKNOWN);
+      this.endPane(device, session, TERMINAL_SESSION_UNKNOWN);
 
       return;
     }
@@ -163,7 +175,7 @@ export class DeviceTerminalHub {
     const control = v.safeParse(PaneControlSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
 
     if (!control.success) {
-      diagnostics.event('device.terminal_control_unreadable', { workspace: session });
+      diagnostics.event('device.terminal_control_unreadable', { workspace: holder.workspace });
 
       return;
     }
@@ -173,71 +185,79 @@ export class DeviceTerminalHub {
     });
   }
 
-  toPane(session: string, bytes: Uint8Array): void {
-    const pane = this.paneSocket(session);
-    const pending = pane ? undefined : this.unattached.get(session);
+  /** The device's bytes for its own session: a pane of another device's session with the same name never gets them. */
+  toPane(device: string, session: string, bytes: Uint8Array): void {
+    const pane = this.paneSocket(device, session);
 
-    if (pending) {
-      pending.held.push(bytes);
-      pending.heldBytes += bytes.byteLength;
-
-      while (pending.heldBytes > TERMINAL_HELD_BYTES && pending.held.length > 1) pending.heldBytes -= pending.held.shift()?.byteLength ?? 0;
+    if (pane) {
+      pane.send(bytes);
 
       return;
     }
 
-    if (!pane) {
-      diagnostics.event('device.terminal_output_unclaimed', { reason: 'terminal_pane_missing', workspace: session });
+    const pending = this.pendingFor(device, session);
+
+    if (pending.length === 0) {
+      diagnostics.event('device.terminal_output_unclaimed', { reason: 'terminal_pane_missing', device });
 
       return;
     }
 
-    pane.send(bytes);
+    for (const held of pending) {
+      held.held.push(bytes);
+      held.heldBytes += bytes.byteLength;
+
+      while (held.heldBytes > TERMINAL_HELD_BYTES && held.held.length > 1) held.heldBytes -= held.held.shift()?.byteLength ?? 0;
+    }
   }
 
-  paneExit(session: string, exitCode: number): void {
-    const pane = this.paneSocket(session);
-    const pending = pane ? undefined : this.unattached.get(session);
+  paneExit(device: string, session: string, exitCode: number): void {
+    const pane = this.paneSocket(device, session);
 
-    if (pending) pending.exitCode = exitCode;
+    for (const pending of this.pendingFor(device, session)) pending.exitCode = exitCode;
 
     if (!pane) return;
     pane.send(JSON.stringify({ type: 'exit', exitCode }));
     pane.close(1000, 'the shell ended');
   }
 
-  endPane(session: string, error: string): void {
-    const pane = this.paneSocket(session);
+  endPane(device: string, session: string, error: string): void {
+    const pane = this.paneSocket(device, session);
 
     if (!pane) return;
     pane.send(JSON.stringify({ type: 'error', error }));
     pane.close(1000, error);
   }
 
-  /** The pane's socket closed, so the shell is closed too. */
-  async paneClosed(session: string, device: string): Promise<void> {
-    const tunnel = this.devices.tunnel(device);
+  /** A pane other than `closing` shows the session, or a token minted for it waits for one: a second open would steal
+   *  the first's output. */
+  claimed(device: string, session: string, closing?: DeviceSocket): boolean {
+    const showing = this.ctx.getWebSockets(terminalTag(device, session)).some((ws) => ws !== closing && ws.readyState === WS_OPEN);
 
-    if (!tunnel) return;
-    await tunnel.cancel(session);
+    return showing || this.pendingFor(device, session).length > 0;
   }
 
-  panesForDevice(device: string): string[] {
-    const sessions: string[] = [];
+  /** The pane's socket closed: the session keeps running on the machine, detached, for the next pane (1014-t). A late
+   *  close from a pane another has since replaced, or one opening now, leaves the session attached to that one. */
+  paneClosed(device: string, session: string, closing?: DeviceSocket): void {
+    if (this.claimed(device, session, closing)) return;
+    this.devices.tunnel(device)?.notify({ type: DEVICE_FRAMES.ptyDetach, session });
+  }
 
+  /** The device's socket dropped: its panes end with why, and tokens not yet spent with them. */
+  endDevice(device: string, error: string): void {
     for (const ws of this.sockets.list()) {
       const held = this.sockets.read(ws);
 
-      if (held && held.device === device) sessions.push(held.terminal);
+      if (held && held.device === device) this.endPane(device, held.terminal, error);
     }
 
-    for (const [session, pending] of this.unattached) {
-      if (pending.device === device) {
-        sessions.push(session);
-        this.unattached.delete(session);
-      }
+    for (const [token, pending] of this.unattached) {
+      if (pending.device === device) this.unattached.delete(token);
     }
+  }
 
-    return sessions;
+  private pendingFor(device: string, session: string): PendingAttach[] {
+    return [...this.unattached.values()].filter((pending) => pending.device === device && pending.session === session);
   }
 }

@@ -70,6 +70,8 @@ export function serverBox(clock: HandClock, killed: string[] = []) {
     restoreStatus: async () => ({ restoring: false, refused: undefined }),
     getExposedPorts: async () => (stamps.size === 0 ? [] : [{ port: SERVED_PORT, name: undefined, url: `https://${String(SERVED_PORT)}-box-token.preview.test` }]),
     portListeners: async () => [...stamps.values()].map((stamp) => ({ port: SERVED_PORT, pid: 1, stamp, command: 'node server.js' })),
+    // The box's processes outlive the workspace's activations: a restart of the workspace leaves them running.
+    stampedProcesses: async (_stamp: string, value: string) => [...stamps.values()].flatMap((stamp, at) => (stamp === value ? [at + 1] : [])),
     // Whole, as the runtime answers a call that streams nothing.
     exec: (_command: string, exec: BoxExec) => new Promise((resolve) => {
       serve(exec, (exitCode) => { resolve({ stdout: SERVING, stderr: '', exitCode }); });

@@ -77,6 +77,7 @@ export async function defineTaskEval(task: EvalTask): Promise<void> {
   const harness = createKinuHarness(task, target, {
     taskVersion: taskVersion(task), evalCommit: evalCommit(process.env),
     slotOf: (input) => trialSlot({ taskFiles, task: `${task.id}.eval.ts`, matrix, ...input }),
+    sequence: matrix.sequence,
   }, evidence);
 
   describeEval(task.id, { harness }, (it) => {

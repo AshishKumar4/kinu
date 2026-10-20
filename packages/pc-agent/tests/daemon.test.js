@@ -2520,6 +2520,14 @@ describe('daemon process under Bun against a local hub', () => {
   // with its own named wait inside.
   });
 
+  /** What a terminal session drew, as the fake hub received it. */
+  function terminalOutput(hub, session) {
+    return hub.frames
+      .filter((f) => f.type === 'PTY_OUT' && f.session === session)
+      .map((f) => Buffer.from(f.data, 'base64').toString('utf-8'))
+      .join('');
+  }
+
   // A signal never reaches the socket's close handler, which is where the
   // terminals were hung up. When the daemon's pty master closes, the kernel
   // hangs up the shell, and the shell passes the hangup on to the jobs it
@@ -2543,20 +2551,19 @@ describe('daemon process under Bun against a local hub', () => {
         try {
           const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
           expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
-          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', sandbox: RAW, params: [80, 24] }));
+          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', workspace: 'ws-signal', sandbox: RAW, params: [80, 24] }));
           const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptysignal0-1'));
 
           if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);
           expect(opened.result.pid).toBeGreaterThan(0);
+          // The workspace's first session, named by the daemon.
+          const session = opened.result.session;
 
-          const output = () => hub.frames
-            .filter((f) => f.type === 'PTY_OUT' && f.session === 'rpc-ptysignal0-1')
-            .map((f) => Buffer.from(f.data, 'base64').toString('utf-8'))
-            .join('');
+          const output = () => terminalOutput(hub, session);
 
           hub.socket().send(JSON.stringify({
             type: 'PTY_IN',
-            session: 'rpc-ptysignal0-1',
+            session,
             data: Buffer.from('sleep 600 & job=$!; disown $job; echo started $job\r').toString('base64'),
           }));
           const started = await untilHub(() => /started (\d+)/.exec(output()));
@@ -2568,7 +2575,61 @@ describe('daemon process under Bun against a local hub', () => {
           child.kill('SIGTERM');
           await child.exited;
           expect(await until(() => !isRunning(job), 10_000)).toBe(true);
-          expect(daemonLog()).toContain('device.terminals_closed_with_daemon rpc-ptysignal0-1');
+          expect(daemonLog()).toContain(`device.terminals_closed_with_daemon ${session}`);
+        } finally {
+          child.kill('SIGTERM');
+          await child.exited;
+        }
+      } finally {
+        await hub.close();
+      }
+    } finally {
+      if (job > 0) tolerate(() => process.kill(job, 'SIGKILL'), 'esrch');
+    }
+  // One daemon spawn, one terminal, and the shell's own prompt inside it,
+  // each with its own named wait.
+  });
+
+  // 1014-t: a terminal outlives its socket, detached, so a socket the hub
+  // closed for good (the owner revoked the machine) is the one close that must
+  // still end every shell: nothing may reach them again, and a live shell keeps
+  // the rejected daemon running.
+  test('a machine whose credential is rejected hangs up every job in its terminals', async () => {
+    if (process.platform !== 'linux') return;
+    const root = scratchDir('daemon-rejected-terminal');
+    let job = 0;
+
+    try {
+      const hub = startFakeHub();
+
+      try {
+        makeConfig(root, hub.origin);
+        const { child, logPath } = spawnDaemon(root);
+
+        try {
+          const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+          expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
+          hub.socket().send(JSON.stringify({ id: 'rpc-ptyreject0-1', method: 'ptyOpen', workspace: 'ws-rejected', sandbox: RAW, params: [80, 24] }));
+          const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptyreject0-1'));
+
+          if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);
+          const session = opened.result.session;
+
+          const output = () => terminalOutput(hub, session);
+
+          hub.socket().send(JSON.stringify({
+            type: 'PTY_IN',
+            session,
+            data: Buffer.from('sleep 600 & job=$!; disown $job; echo started $job\r').toString('base64'),
+          }));
+          const started = await untilHub(() => /started (\d+)/.exec(output()));
+
+          if (!started) throw new Error(`the shell never started the job: log says ${daemonLog()}`);
+          job = Number(started[1]);
+          hub.socket().close(4401, 'device credentials were rejected');
+
+          expect(await until(() => !isRunning(job), 10_000)).toBe(true);
+          expect(daemonLog()).toContain(`device.terminals_closed_with_credential ${session}`);
         } finally {
           child.kill('SIGTERM');
           await child.exited;

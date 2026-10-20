@@ -34,7 +34,8 @@ import { openSocketAs } from '../tests/first-run/public-socket';
 import { r2ObjectText, r2PutJson } from './cloudflare-rest';
 import { requireCloudflareAccountId } from './infra-cloudflare';
 import { bucketOf, deployedConfig, deploymentOf } from './infra-manifest';
-import { UPGRADE_ANCHOR_KEY } from './reset';
+import { LATEST_RESET_KEY, ResetSchema, UPGRADE_ANCHOR_KEY } from './reset';
+import { rowNotice } from './row-verdicts';
 
 /** The fixture account, and the armada secret its password is held in. */
 const FIXTURE = { email: 'upgrade-fixture@kinu.run', workspace: 'upgrade-fixture' } as const;
@@ -121,8 +122,8 @@ async function until(read: () => Promise<boolean>): Promise<boolean> {
   return false;
 }
 
-/** A builtin account signed in with its password, as the login page signs in. */
-async function signedIn(origin: string, email: string, secret: string): Promise<Account> {
+/** A builtin account signed in with its password, as the login page signs in; or the deployment's refusal, said whole. */
+async function signedIn(origin: string, email: string, secret: string): Promise<Account | { readonly refused: string }> {
   const password = process.env[secret] ?? '';
 
   if (password === '') throw new Error(`${secret} is not set, so ${email} cannot sign in: armada secret set ${secret}`);
@@ -134,8 +135,8 @@ async function signedIn(origin: string, email: string, secret: string): Promise<
   const cookie = answer.headers.get('set-cookie')?.split(';')[0];
 
   if (answer.status !== 200 || cookie === undefined) {
-    throw new Error(`${email} answered ${String(answer.status)} at sign-in: ${(await answer.text()).slice(0, 300)}. It is made once, by an invite of `
-      + `the deployment's owner, with the password ${secret} holds`);
+    return { refused: `${email} answered ${String(answer.status)} at sign-in: ${(await answer.text()).slice(0, 300)}. It is made once, by an invite of `
+      + `the deployment's owner, with the password ${secret} holds` };
   }
 
   return { origin, email, headers: { cookie, origin } };
@@ -352,10 +353,15 @@ async function sweep(accounts: { fixture: Account; sender: Account; evals: EvalA
   }
 
   await removeMachinesBut(fixture, kept?.device);
+  await sweepFresh(evals, kept?.fresh);
+}
+
+/** The eval identity's fresh-start workspaces but `kept`. */
+async function sweepFresh(evals: EvalAccounts, kept: string | undefined): Promise<void> {
   const { origin } = evals.account;
 
   for (const row of await listWorkspaces(origin, evals.identity)) {
-    if (row.name.startsWith(FRESH_PREFIX) && row.name !== kept?.fresh) await deleteWorkspace(origin, evals.identity, row.name);
+    if (row.name.startsWith(FRESH_PREFIX) && row.name !== kept) await deleteWorkspace(origin, evals.identity, row.name);
   }
 }
 
@@ -375,6 +381,11 @@ interface Seeded {
 export interface FixtureRun {
   /** What the last completed seed left, read from the releases bucket; null where none is. */
   readonly anchor: () => Promise<Manifest | null>;
+  /** When staging was last reset (`resets/latest.json`), or null where it never was: a full reset deletes the anchor and
+   *  every builtin account with it. */
+  readonly resetAt: () => Promise<string | null>;
+  /** Why the two builtin accounts cannot sign in, or null when both can. */
+  readonly accountsMissing: () => Promise<string | null>;
   readonly continuity: (expected: Manifest) => Promise<Verdict[]>;
   readonly freshStart: () => Promise<{ workspace: string; verdicts: Verdict[] }>;
   readonly seed: (made: { fresh: string; previous: Manifest | null }) => Promise<Seeded>;
@@ -382,6 +393,8 @@ export interface FixtureRun {
   /** Everything a run of this row made that `kept` (the anchor, when there is one) does not name, removed by name: the
    *  baseline an anchor replaced, a seed that did not hold, and what any run that stopped part way left. */
   readonly sweep: (kept: Manifest | null) => Promise<void>;
+  /** The eval identity's fresh-start workspaces but `kept`: the eval side of the sweep, which needs no builtin account. */
+  readonly sweepFresh: (kept: string) => Promise<void>;
 }
 
 /**
@@ -389,10 +402,36 @@ export interface FixtureRun {
  * seed, which becomes the anchor only once every part of it held; then everything the anchor does not name is swept.
  * A seed that did not hold is swept, and the anchor stays as it was.
  */
-export async function runFixtures(run: FixtureRun, report: (title: string, verdicts: readonly Verdict[]) => boolean = printed): Promise<boolean> {
+export async function runFixtures(
+  run: FixtureRun,
+  report: (title: string, verdicts: readonly Verdict[]) => boolean = printed,
+  notice: (said: string) => void = rowNotice,
+): Promise<boolean> {
   const previous = await run.anchor();
 
-  if (previous === null) report('continuity: no anchor, so this deploy seeds the first', []);
+  if (previous === null) {
+    const missing = await run.accountsMissing();
+    const reset = missing === null ? null : await run.resetAt();
+
+    // A reset deletes the anchor and the accounts together, and leaves no older build's data: nothing to upgrade, and
+    // nothing to seed with until the owner, who alone can invite, makes the accounts again. The fresh start is on the eval
+    // identity, which a reset does not take away, and this build is still held to it.
+    if (missing !== null && reset === null) throw new Error(missing);
+
+    if (reset !== null) {
+      notice(`staging was reset at ${reset}: no older build's data is left to upgrade, and the reset deleted ${FIXTURE.email} and `
+        + `${SENDER.email} (${String(missing)}), so continuity and the seed are skipped. They resume on the deploy after the `
+        + `deployment's owner invites both again, with the passwords ${FIXTURE_PASSWORD_ENV} and ${SENDER_PASSWORD_ENV} hold.`);
+      const fresh = await run.freshStart();
+      const started = report('a fresh start on the eval account', fresh.verdicts);
+
+      await run.sweepFresh(fresh.workspace);
+
+      return started;
+    }
+
+    report('continuity: no anchor, so this deploy seeds the first', []);
+  }
   else if (!report(`continuity of the seed of ${previous.seededAt}`, await run.continuity(previous))) return false;
   const fresh = await run.freshStart();
   const started = report('a fresh start on the eval account', fresh.verdicts);
@@ -413,8 +452,20 @@ export async function runFixtures(run: FixtureRun, report: (title: string, verdi
 /** The deployment's run: two builtin accounts, the eval identity's, and the releases bucket's anchor. */
 async function deploymentRun(origin: string): Promise<FixtureRun> {
   const stamp = new Date().toISOString().replace(/[-:]|\.\d+/gu, '').toLowerCase();
-  const fixture = await signedIn(origin, FIXTURE.email, FIXTURE_PASSWORD_ENV);
-  const sender = await signedIn(origin, SENDER.email, SENDER_PASSWORD_ENV);
+  // Signed in once, when first needed: after a reset the accounts are gone, and the run says so rather than failing here.
+  let signing: Promise<readonly (Account | { readonly refused: string })[]> | undefined;
+  const signIns = () => (signing ??= Promise.all([signedIn(origin, FIXTURE.email, FIXTURE_PASSWORD_ENV), signedIn(origin, SENDER.email, SENDER_PASSWORD_ENV)]));
+
+  const accounts = async (): Promise<{ fixture: Account; sender: Account }> => {
+    const [fixture, sender] = await signIns();
+
+    if (fixture === undefined || 'refused' in fixture) throw new Error(fixture?.refused ?? 'the fixture account was never signed in');
+
+    if (sender === undefined || 'refused' in sender) throw new Error(sender?.refused ?? 'the sender account was never signed in');
+
+    return { fixture, sender };
+  };
+
   const evals = evalAccounts(origin);
   const bucket = bucketOf(deployedConfig('staging'), 'RELEASES_BUCKET');
 
@@ -427,11 +478,22 @@ async function deploymentRun(origin: string): Promise<FixtureRun> {
 
       return text === undefined ? null : v.parse(ManifestSchema, JSON.parse(text));
     },
-    continuity: (expected) => continuity(fixture, expected),
+    resetAt: async () => {
+      const text = await r2ObjectText({ ...anchored, key: LATEST_RESET_KEY });
+
+      return text === undefined ? null : v.parse(ResetSchema, JSON.parse(text)).at;
+    },
+    accountsMissing: async () => (await signIns()).flatMap((each) => ('refused' in each ? [each.refused] : [])).join('; ') || null,
+    continuity: async (expected) => continuity((await accounts()).fixture, expected),
     freshStart: () => freshStart(evals, stamp),
-    seed: (made) => seed(fixture, sender, { stamp, ...made }),
+    seed: async (made) => {
+      const { fixture, sender } = await accounts();
+
+      return seed(fixture, sender, { stamp, ...made });
+    },
     writeAnchor: (manifest) => r2PutJson({ ...anchored, value: manifest }),
-    sweep: (kept) => sweep({ fixture, sender, evals }, kept),
+    sweep: async (kept) => { await sweep({ ...await accounts(), evals }, kept); },
+    sweepFresh: async (kept) => { await sweepFresh(evals, kept); },
   };
 }
 

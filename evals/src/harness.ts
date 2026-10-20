@@ -9,7 +9,7 @@ import { gatherEvidence, writeEvidence, type EvidenceReads, type WorkspaceEviden
 import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
 import { prepareTrialAccount } from './slot';
-import { ARMS, deployedBuild, openWorkspace, type EvalArm } from './target';
+import { ARMS, buildChanged, deployedBuild, openWorkspace, type EvalArm, type Served } from './target';
 import { type EvalTarget } from './workspace-roster';
 import {
   graded, taskTurns, type EvalCheck, type EvalRunInput, type EvalRunOutput, type EvalTask, type EvalTurn, type EvalTurnOutcome, type EvalTurnResult,
@@ -75,6 +75,8 @@ export type TrialIdentity = {
   readonly taskVersion: string;
   readonly evalCommit: string;
   readonly slotOf: (input: EvalRunInput) => EvalAccount;
+  /** The run's trials are sequences, one account each (EvalMatrix.sequence). */
+  readonly sequence: boolean;
 };
 
 /** How an isolate memory reset reads when it surfaces (platform catalog `do.isolate.oom_reported`). */
@@ -342,7 +344,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const turns: EvalTurnResult[] = [];
       const errors: HarnessError[] = [];
       let session: KinuPublicSession | undefined;
-      let productSha = 'unknown';
+      // The build and Worker version the trial opened on, read again at its end (buildChanged).
+      let served: Served = { sha: 'unknown', version: null };
       const account = identity.slotOf(input);
       let attempted: string | undefined;
       let turnStartedAt = Date.now();
@@ -357,8 +360,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
             // The trial's workspace is named for it, so a retry of it knows its own earlier attempt's (prepareTrialAccount).
             const subject = `${task.id}-${String(input.trial)}`;
 
-            await timeline.span('account', () => prepareTrialAccount(own, Date.now(), subject));
-            productSha = (await timeline.span('build', () => deployedBuild(own))).sha;
+            await timeline.span('account', () => prepareTrialAccount(own, Date.now(), { subject, sequence: identity.sequence }));
+            served = await timeline.span('build', () => deployedBuild(own));
 
             const created = await timeline.span('open', () => openWorkspace(own, { subject, mission: task.mission, model: input.model }));
 
@@ -432,11 +435,10 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         }, errors, timeline);
 
       try {
-        const after = (await timeline.span('build', () => deployedBuild(target))).sha;
+        const after = await timeline.span('build', () => deployedBuild(target));
+        const changed = buildChanged(served, after);
 
-        if (after !== productSha) {
-          errors.push({ name: 'EvalBuildChanged', message: `the deployment served ${productSha.slice(0, 12)} then ${after.slice(0, 12)} during the trial` });
-        }
+        if (changed !== null) errors.push({ name: 'EvalBuildChanged', message: changed });
       } catch (error) {
         errors.push({ name: 'InfraError', message: renderThrownChain({ cause: error }) });
       }
@@ -483,7 +485,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         },
         errors: scrubbed,
         metadata: {
-          taskId: task.id, taskVersion: identity.taskVersion, evalCommit: identity.evalCommit, productSha,
+          taskId: task.id, taskVersion: identity.taskVersion, evalCommit: identity.evalCommit, productSha: served.sha,
           arm: input.arm, trial: input.trial, origin: target.origin, account, workspace: session?.workspace ?? null,
           evidence: join(evidenceRoot, evalNameSlug(input.model), input.arm, `${task.id}-trial-${String(input.trial)}`),
         },

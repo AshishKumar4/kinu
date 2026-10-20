@@ -5,7 +5,7 @@ import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do'
 import {
   DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH,
   DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES, TUNNEL_DISCONNECTED, DEVICE_FEATURES, DEVICE_PROTOCOL_VERSION,
-  connectedDevices, type JsonValue, DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD,
+  connectedDevices, type JsonValue, JsonValueSchema, DEVICE_ERRORS, DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -311,7 +311,7 @@ describe('DeviceTerminalHub socket ownership', () => {
 
     const daemon = socketPeer((data) => {
       const input = v.parse(v.object({ type: v.literal(DEVICE_FRAMES.ptyInput), session: v.string(), data: v.string() }), JSON.parse(v.parse(v.string(), data)));
-      serving.toPane(input.session, Buffer.from(input.data, 'base64'));
+      serving.toPane('dev-a', input.session, Buffer.from(input.data, 'base64'));
     });
 
     const first = socketPeer();
@@ -319,30 +319,111 @@ describe('DeviceTerminalHub socket ownership', () => {
     hub.accept('dev-a', daemon.socket);
     hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
 
-    terminals.register('session-a', 'dev-a', 'workspace-a');
-    terminals.register('session-b', 'dev-a', 'workspace-b');
-    terminals.attach('session-a', first.socket);
-    terminals.attach('session-b', second.socket);
+    terminals.register('token-a', { session: 'pty-a', device: 'dev-a', workspace: 'workspace-a' });
+    terminals.register('token-b', { session: 'pty-b', device: 'dev-a', workspace: 'workspace-b' });
+    terminals.attach('token-a', first.socket);
+    terminals.attach('token-b', second.socket);
     expect([await first.receive(), await second.receive()].map((frame) => JSON.parse(v.parse(v.string(), frame)))).toMatchObject([{ type: 'ready' }, { type: 'ready' }]);
 
     serving = new DeviceTerminalHub(ctx, hub);
-    await expect(Promise.resolve().then(() => serving.attach('session-a', socketPeer().socket))).rejects.toMatchObject({ code: 'missing' });
+    await expect(Promise.resolve().then(() => serving.attach('token-a', socketPeer().socket))).rejects.toMatchObject({ code: 'missing' });
     const firstBytes = new Uint8Array([0, 255, 13]);
     const secondBytes = new Uint8Array([27, 91, 65]);
-    serving.fromPane('session-a', 'dev-a', firstBytes);
-    serving.fromPane('session-b', 'dev-a', secondBytes);
+    serving.fromPane({ session: 'pty-a', device: 'dev-a', workspace: 'workspace-a' }, firstBytes);
+    serving.fromPane({ session: 'pty-b', device: 'dev-a', workspace: 'workspace-b' }, secondBytes);
     expect(new Uint8Array(v.parse(v.instance(Uint8Array), await first.receive()))).toEqual(firstBytes);
     expect(new Uint8Array(v.parse(v.instance(Uint8Array), await second.receive()))).toEqual(secondBytes);
 
-    serving.paneExit('session-a', 17);
+    serving.paneExit('dev-a', 'pty-a', 17);
     expect(JSON.parse(v.parse(v.string(), await first.receive()))).toMatchObject({ type: 'exit', exitCode: 17 });
     expect(await first.closed).toBe(1000);
-    serving.fromPane('session-b', 'dev-a', secondBytes);
+    serving.fromPane({ session: 'pty-b', device: 'dev-a', workspace: 'workspace-b' }, secondBytes);
     expect(new Uint8Array(v.parse(v.instance(Uint8Array), await second.receive()))).toEqual(secondBytes);
 
-    serving.endPane('session-b', 'device revoked');
+    serving.endPane('dev-a', 'pty-b', 'device revoked');
     expect(JSON.parse(v.parse(v.string(), await second.receive()))).toMatchObject({ type: 'error' });
     expect(await second.closed).toBe(1000);
+  });
+});
+
+/** A daemon's socket that records each frame the hub tells it. */
+function toldDaemon() {
+  const told: JsonValue[] = [];
+
+  return { told, socket: socketPeer((data) => { told.push(v.parse(JsonValueSchema, JSON.parse(v.parse(v.string(), data)))); }).socket };
+}
+
+// 1014-t: a PC's terminal is a named session that outlives its pane. Its pane closing detaches it on the machine; a new
+// token attaches the next pane to it; and its bytes reach only the device's own pane of that name.
+describe('a named session on a device', () => {
+  test('a pane closing detaches its session, and the next token attaches a new pane to it; one pane at a time', async () => {
+    const ctx = peerContext();
+    const hub = new DeviceSocketHub(ctx);
+    const terminals = new DeviceTerminalHub(ctx, hub);
+    const { told, socket } = toldDaemon();
+    const shell = { session: 'pty-shell', device: 'dev-a', workspace: 'workspace-a' };
+
+    hub.accept('dev-a', socket);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    const firstPane = socketPeer();
+
+    terminals.register('token-1', shell);
+    terminals.attach('token-1', firstPane.socket);
+    terminals.register('token-2', shell);
+    expect(() => terminals.attach('token-2', socketPeer().socket)).toThrow('that terminal is already open in another tab');
+    // The account object refuses such an open before it mints a token (unit-device-sessions); here the token goes.
+    terminals.forget('token-2');
+
+    terminals.paneClosed('dev-a', 'pty-shell', firstPane.socket);
+    expect(told).toEqual([{ type: DEVICE_FRAMES.ptyDetach, session: 'pty-shell' }]);
+
+    const next = socketPeer();
+
+    // The first pane's socket is gone; the next token is minted, and the resumed session's kept output waits for it.
+    ctx.getWebSockets(`terminal:dev-a:pty-shell`)[0]?.close(1000, 'gone');
+    terminals.register('token-3', shell);
+    terminals.toPane('dev-a', 'pty-shell', new Uint8Array(Buffer.from('kept output')));
+    terminals.attach('token-3', next.socket);
+    expect(JSON.parse(v.parse(v.string(), await next.receive()))).toMatchObject({ type: 'ready' });
+    expect(Buffer.from(v.parse(v.instance(Uint8Array), await next.receive())).toString()).toBe('kept output');
+  });
+
+  test("a late close from a pane another has replaced leaves the session attached to the new one", async () => {
+    const ctx = peerContext();
+    const hub = new DeviceSocketHub(ctx);
+    const terminals = new DeviceTerminalHub(ctx, hub);
+    const { told, socket } = toldDaemon();
+    const shell = { session: 'pty-shell', device: 'dev-a', workspace: 'workspace-a' };
+
+    hub.accept('dev-a', socket);
+    hub.hello('dev-a', DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES);
+    terminals.register('token-old', shell);
+    terminals.attach('token-old', socketPeer().socket);
+    ctx.getWebSockets('terminal:dev-a:pty-shell')[0]?.close(1000, 'reconnected');
+    terminals.register('token-new', shell);
+    terminals.attach('token-new', socketPeer().socket);
+
+    // The old pane's close callback runs only now.
+    terminals.paneClosed('dev-a', 'pty-shell');
+    expect(told).toEqual([]);
+  });
+
+  test("a device's bytes for its session never reach another device's pane of the same name", async () => {
+    const ctx = peerContext();
+    const terminals = new DeviceTerminalHub(ctx, new DeviceSocketHub(ctx));
+    const mine = socketPeer();
+    const seen: string[] = [];
+    const other = socketPeer((data) => { seen.push(typeof data === 'string' ? data : Buffer.from(v.parse(v.instance(Uint8Array), data)).toString()); });
+
+    terminals.register('token-a', { session: 'pty-shell', device: 'dev-a', workspace: 'workspace-a' });
+    terminals.register('token-b', { session: 'pty-shell', device: 'dev-b', workspace: 'workspace-a' });
+    terminals.attach('token-a', mine.socket);
+    terminals.attach('token-b', other.socket);
+    terminals.toPane('dev-a', 'pty-shell', new Uint8Array(Buffer.from('for dev-a')));
+
+    expect(JSON.parse(v.parse(v.string(), await mine.receive()))).toMatchObject({ type: 'ready' });
+    expect(Buffer.from(v.parse(v.instance(Uint8Array), await mine.receive())).toString()).toBe('for dev-a');
+    expect(seen.filter((frame) => !frame.includes('ready'))).toEqual([]);
   });
 });
 
@@ -363,16 +444,16 @@ describe('a device terminal before its pane attaches', () => {
     const ended = pane();
     const drawn = pane();
 
-    terminals.register('session-ended', 'dev-a', 'workspace-a');
-    terminals.toPane('session-ended', new Uint8Array(Buffer.from('bwrap: it could not start')));
-    terminals.paneExit('session-ended', 1);
-    terminals.attach('session-ended', ended.socket);
+    terminals.register('token-ended', { session: 'session-ended', device: 'dev-a', workspace: 'workspace-a' });
+    terminals.toPane('dev-a', 'session-ended', new Uint8Array(Buffer.from('bwrap: it could not start')));
+    terminals.paneExit('dev-a', 'session-ended', 1);
+    terminals.attach('token-ended', ended.socket);
     expect(ended.seen).toEqual(['ready', 'bwrap: it could not start', 'exit']);
     expect(await ended.closed).toBe(1000);
 
-    terminals.register('session-drawn', 'dev-a', 'workspace-a');
-    terminals.toPane('session-drawn', new Uint8Array(Buffer.from('user@machine:~$ ')));
-    terminals.attach('session-drawn', drawn.socket);
+    terminals.register('token-drawn', { session: 'session-drawn', device: 'dev-a', workspace: 'workspace-a' });
+    terminals.toPane('dev-a', 'session-drawn', new Uint8Array(Buffer.from('user@machine:~$ ')));
+    terminals.attach('token-drawn', drawn.socket);
     expect(drawn.seen).toEqual(['ready', 'user@machine:~$ ']);
   });
 });
@@ -756,7 +837,7 @@ describe('the daemon keepalive, answered by the hub', () => {
     harness.grantDevice(WORKSPACE, deviceId);
 
     // The open frame is answered by hand: this socket pair has no far end.
-    const opening = harness.userDO.openDeviceTerminal({ workspaceToken: workspace }, WORKSPACE, { cols: 80, rows: 24 });
+    const opening = harness.userDO.openDeviceTerminal({ workspaceToken: workspace }, WORKSPACE, { cols: 80, rows: 24 }, { session: 'pty-shell' });
 
     for (let turn = 0; turn < 100; turn += 1) {
       await new Promise<void>((resolve) => { setImmediate(resolve); });
@@ -797,7 +878,7 @@ describe('the daemon keepalive, answered by the hub', () => {
       JSON.parse(raw),
     ));
 
-    expect(typed).toEqual([{ type: DEVICE_FRAMES.ptyInput, session, data: 'cGluZw==' }]);
+    expect({ token: session.startsWith('pty-') && session !== 'pty-shell', typed }).toEqual({ token: true, typed: [{ type: DEVICE_FRAMES.ptyInput, session: 'pty-shell', data: 'cGluZw==' }] });
 
     await harness.joinFibers();
     harness.close();

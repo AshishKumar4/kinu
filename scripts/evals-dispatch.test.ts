@@ -18,6 +18,9 @@ const ORIGINS = [{ leg: 'candidate', origin: 'https://staging.kinu.run' }, { leg
 
 const ITEMS = evalItems(['evals/tasks/chess.eval.ts', 'evals/tasks/swarm.eval.ts'], MATRIX, ORIGINS, false);
 
+/** The tracked tasks, gathered once: a task file registers on its first import, so a second gathering finds none. */
+const TASKS = collectEvalTasks();
+
 function caseReport(item: TrialItem, status = 'passed') {
   return {
     name: `/repo/evals/tasks/${item.task}.eval.ts`, startTime: 100, endTime: 200,
@@ -55,8 +58,27 @@ describe('parallel armada evaluations', () => {
     }
   });
 
+  // 2026-10-19: a run on the owner's own plans keeps to a few calls at once; it names its own ceiling, under Muse's.
+  test('a run under a lower ceiling gives armada that budget, and refuses a task whose peak is past it', async () => {
+    const tasks = await TASKS;
+    const one = evalMatrix({ KINU_EVAL_TRIALS: '1' }, ['product']);
+    const items = evalItems(tasks.map((task) => `evals/tasks/${task.id}.eval.ts`), one, ORIGINS.slice(0, 1), false);
+    const widest = Math.max(...tasks.map((task) => task.modelCallPeak?.calls ?? 0));
+
+    expect(evalQueue(items, tasks, widest).every((trial) => trial.cost <= widest)).toBe(true);
+    expect(() => evalQueue(items, tasks, widest - 1)).toThrow(`from 1 to ${String(widest - 1)}`);
+
+    const argv = evalMapArgv({ sha: 'abcdef123456', out: '/tmp/evals', identities: ['KINU_EVAL_STAGING_WEB_IDENTITY'], trials: 24, budget: widest,
+      claim: { first: 1, last: 24, hosts: ['staging.kinu.run'] } });
+
+    expect([argv.includes(`--budget=${String(widest)}`), argv.includes(`--pool=${String(widest)}`)]).toEqual([true, true]);
+    // A sequence's tasks share one account and run one at a time, in the queue's order.
+    expect(evalMapArgv({ sha: 'abcdef123456', out: '/tmp/evals', identities: ['KINU_EVAL_STAGING_WEB_IDENTITY'], trials: 8, budget: widest, sequence: true,
+      claim: { first: 1, last: 1, hosts: ['staging.kinu.run'] } })).toContain('--pool=1');
+  });
+
   test('the full matrix is one queue: each trial spends its task\'s recorded peak, a cell\'s legs side by side and alike', async () => {
-    const tasks = await collectEvalTasks();
+    const tasks = await TASKS;
     const full = evalMatrix({ KINU_EVAL_TRIALS: '5' }, ['product']);
     const files = tasks.map((task) => `evals/tasks/${task.id}.eval.ts`);
     const items = evalItems(files, full, ORIGINS, false);

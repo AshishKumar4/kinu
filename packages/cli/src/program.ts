@@ -385,7 +385,7 @@ export function buildProgram(): Command {
   program
     .command('desktop [action]')
     .helpGroup(THIS_PC)
-    .description('Connect this PC, or show its connection status and daemon logs')
+    .description('Connect this PC, show its status and daemon logs, or share its screen (share, unshare)')
     .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
     .action(desktopCommand);
 

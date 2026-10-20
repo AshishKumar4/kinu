@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
-import { claimLabel, type SlotClaim } from '../evals/src/slot';
+import { claimLabel, trialAccounts, trialInheritedRows, type SlotClaim } from '../evals/src/slot';
 import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalTask } from '../evals/src/task';
 import { ARMS, deployedBuild } from '../evals/src/target';
@@ -30,7 +30,7 @@ export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, orig
 
     return models.flatMap((model) => arms.flatMap((arm) =>
       Array.from({ length: matrix.trials }, (_, index) => origins.map(({ leg, origin }) => ({
-        leg, origin, task, model, arm, trial: index + 1, trials: matrix.trials, models, arms, pass, firstSlot: matrix.firstSlot,
+        leg, origin, task, model, arm, trial: index + 1, trials: matrix.trials, models, arms, pass, firstSlot: matrix.firstSlot, sequence: matrix.sequence,
       }))).flat()));
   });
 }
@@ -42,17 +42,17 @@ export function evalItems(taskFiles: readonly string[], matrix: EvalMatrix, orig
 export type QueuedTrial = TrialItem & { readonly cost: number; readonly weight: number };
 
 /** Every trial in one work-conserving queue under one ceiling, both legs together: a trial starts whenever its cost
- *  fits what the running trials leave of `MUSE_CALLS_AT_ONCE` (armada's `budget`), so no share of it waits idle on a
- *  queue that drained. Replayed on the 51 trials 66938aa25 finished: 4,854 s against 10,268 s for the four fixed
- *  width pools it replaces. */
-export function evalQueue(items: readonly TrialItem[], tasks: readonly EvalTask[]): QueuedTrial[] {
+ *  fits what the running trials leave of `budget` (armada's; `MUSE_CALLS_AT_ONCE` unless a run names a lower one), so
+ *  no share of it waits idle on a queue that drained. Replayed on the 51 trials 66938aa25 finished: 4,854 s against
+ *  10,268 s for the four fixed width pools it replaces. */
+export function evalQueue(items: readonly TrialItem[], tasks: readonly EvalTask[], budget = MUSE_CALLS_AT_ONCE): QueuedTrial[] {
   const peaks = new Map(tasks.map((task) => [task.id, task.modelCallPeak]));
 
   return items.map((item) => {
     const peak = peaks.get(item.task);
 
-    if (peak === undefined || peak.source.trim() === '' || !Number.isSafeInteger(peak.calls) || peak.calls < 1 || peak.calls > MUSE_CALLS_AT_ONCE) {
-      throw new Error(`${item.task} names no measured model-call peak from 1 to ${String(MUSE_CALLS_AT_ONCE)} with a source`);
+    if (peak === undefined || peak.source.trim() === '' || !Number.isSafeInteger(peak.calls) || peak.calls < 1 || peak.calls > budget) {
+      throw new Error(`${item.task} names no measured model-call peak from 1 to ${String(budget)} with a source`);
     }
 
     return { ...item, cost: peak.calls, weight: peak.calls };
@@ -62,12 +62,16 @@ export function evalQueue(items: readonly TrialItem[], tasks: readonly EvalTask[
 /** Only armada's supported CLI: one map of `trials` items under the shared budget, as many containers as the budget
  *  can run trials at once, no elapsed limit on the job or a trial (each ends on its own; the job ends once this
  *  command stops following it), the commit's checkout and per-task artifact extraction. */
-export function evalMapArgv({ sha, out, identities, trials, claim }: {
+export function evalMapArgv({ sha, out, identities, trials, claim, budget = MUSE_CALLS_AT_ONCE, sequence = false }: {
   readonly sha: string; readonly out: string; readonly identities: readonly string[]; readonly trials: number; readonly claim: SlotClaim;
+  /** The model calls the run's trials make at once, at most; `MUSE_CALLS_AT_ONCE` unless the run names fewer. */
+  readonly budget?: number;
+  /** One trial at a time: a sequence's tasks share one account and run in the queue's order. */
+  readonly sequence?: boolean;
 }): string[] {
   return [join(ROOT, 'node_modules', '.bin', 'armada'), 'map',
     `--connection=${KINU_ARMADA}`, `--commit=${sha}`,
-    '--items=-', `--pool=${String(Math.min(trials, MUSE_CALLS_AT_ONCE))}`, `--budget=${String(MUSE_CALLS_AT_ONCE)}`,
+    '--items=-', `--pool=${String(sequence ? 1 : Math.min(trials, budget))}`, `--budget=${String(budget)}`,
     '--deadline=none', '--timeout=none',
     `--artifacts=${join(out, 'trials')}`, `--secrets=${identities.join(',')}`, '--json',
     `--label=${claimLabel(sha, claim)}`, '--', 'bun', 'evals/scripts/trial.ts'];
@@ -189,7 +193,23 @@ async function legsOf(pass: boolean, stagingOnly: boolean, asked: string | undef
 type MapPlan = {
   readonly sha: string; readonly out: string; readonly origins: readonly { leg: 'candidate' | 'baseline'; origin: string }[];
   readonly matrix: EvalMatrix; readonly taskFiles: readonly string[]; readonly slots: number; readonly pass: boolean;
+  /** The model calls at once, at most (`--calls-at-once`). */
+  readonly budget: number;
 };
+
+/** Before a sequence's first task: each of its accounts holds nothing another run left, its provisioning just reset. */
+async function sequencesIsolated(plan: MapPlan, matrix: EvalMatrix): Promise<void> {
+  for (const { origin } of plan.origins) {
+    const secret = process.env[evalWebIdentityEnv(origin)] ?? '';
+
+    for (const account of trialAccounts(plan.taskFiles.map((file) => file.slice('evals/tasks/'.length)), matrix)) {
+      const read = await trialInheritedRows({ origin, identity: { kind: 'secret', secret, account } });
+      const held = 'why' in read ? read.why : Object.entries(read.inherited).map(([table, rows]) => `${table} ${String(rows)}`).join(', ');
+
+      if (held !== '') throw new Error(`${account} at ${origin} cannot open a sequence: ${held}`);
+    }
+  }
+}
 
 /**
  * The run's trials on a block of trial accounts no open run holds (scripts/evals-lease.ts), each origin's keys stored on
@@ -198,7 +218,8 @@ type MapPlan = {
 async function leasedMap(plan: MapPlan, started: (job: string) => void) {
   const armada = kinuArmada();
   const hosts = plan.origins.map(({ origin }) => new URL(origin).host);
-  const size = plan.slots * plan.matrix.models.length * plan.matrix.arms.length * plan.matrix.trials;
+  // A trial's account counts every task file, run or not; a sequence's counts none, its tasks sharing one.
+  const size = (plan.matrix.sequence ? 1 : plan.slots) * plan.matrix.models.length * plan.matrix.arms.length * plan.matrix.trials;
   const tasks = await collectEvalTasks();
 
   await keysWindows(console.log);
@@ -207,7 +228,7 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
     const first = await leaseBlock(armada, { size, pass: plan.pass, hosts }, console.log);
     const claim = { first, last: first - 1 + size, hosts };
     const matrix = { ...plan.matrix, firstSlot: first };
-    const items = evalQueue(evalItems(plan.taskFiles, matrix, plan.origins, plan.pass), tasks);
+    const items = evalQueue(evalItems(plan.taskFiles, matrix, plan.origins, plan.pass), tasks, plan.budget);
 
     // Standalone runs need the same actual credentials/catalog as deploy --evals, on exactly the block leased. Only the
     // operator's provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
@@ -220,12 +241,15 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
       if (await provision.exited !== 0) throw new Error(`actual eval keys/catalog were not provisioned at ${origin}; no trials started`);
     }
 
+    // A sequence's tasks open on what its earlier tasks left (prepareTrialAccount), so each account is checked once, here.
+    if (matrix.sequence) await sequencesIsolated(plan, matrix);
+
     const identities = [...new Set(plan.origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
-    const argv = evalMapArgv({ sha: plan.sha, out: plan.out, identities, trials: items.length, claim });
+    const argv = evalMapArgv({ sha: plan.sha, out: plan.out, identities, trials: items.length, claim, budget: plan.budget, sequence: matrix.sequence });
     let lost = false;
     let checked: Promise<void> = Promise.resolve();
 
-    console.log(`evals: ${String(items.length)} trials on trial-${String(first)} to trial-${String(claim.last)}, in one queue under ${String(MUSE_CALLS_AT_ONCE)} calls at once, each spending its task's peak`);
+    console.log(`evals: ${String(items.length)} trials on trial-${String(first)} to trial-${String(claim.last)}, in one queue under ${String(plan.budget)} calls at once, each spending its task's peak`);
 
     const mapped = await mapTrials(argv, items, (named) => {
       started(named);
@@ -248,7 +272,16 @@ async function main(): Promise<number> {
     tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
     pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
     'staging-only': { type: 'boolean', default: false },
+    'calls-at-once': { type: 'string' },
+    sequence: { type: 'boolean', default: false },
   } });
+
+  // A run on someone's own plan keeps to fewer calls at once than the eval key's ceiling, never more.
+  const budget = values['calls-at-once'] === undefined ? MUSE_CALLS_AT_ONCE : Number(values['calls-at-once']);
+
+  if (!Number.isSafeInteger(budget) || budget < 1 || budget > MUSE_CALLS_AT_ONCE) {
+    throw new Error(`--calls-at-once is a whole number from 1 to ${String(MUSE_CALLS_AT_ONCE)}`);
+  }
 
   // Staging alone measures the models a run names against each other on one build: no production leg, so no verdict.
   if (values['staging-only'] && (values.pass || values.record || values.post !== undefined)) {
@@ -260,7 +293,10 @@ async function main(): Promise<number> {
   if (gitIn(ROOT, 'status', '--porcelain') !== '') throw new Error('armada measures a committed checkout: commit the tree first');
   const { origins, candidateBuild, baselineBuild } = await legsOf(values.pass, values['staging-only'], positionals[0]);
 
-  const matrix = evalMatrix({ ...process.env, KINU_EVAL_TRIALS: values.pass ? '1' : values.trials ?? process.env['KINU_EVAL_TRIALS'] }, ARMS.map((arm) => arm.id));
+  const matrix = evalMatrix({
+    ...process.env, KINU_EVAL_TRIALS: values.pass ? '1' : values.trials ?? process.env['KINU_EVAL_TRIALS'], KINU_EVAL_SEQUENCE: values.sequence ? '1' : '0',
+  }, ARMS.map((arm) => arm.id));
+
   const allTasks = trackedFiles().filter(isEvalTask).sort();
 
   const taskFiles = evalTaskFiles(allTasks, values.tasks);
@@ -272,11 +308,11 @@ async function main(): Promise<number> {
 
   const run: EvalRun = {
     definitions: sha, candidateBuild, baselineBuild, taskFiles, models: [...matrix.models], arms: [...matrix.arms],
-    trials: matrix.trials, startedAt, jobs: [], budget: MUSE_CALLS_AT_ONCE, pass: values.pass,
+    trials: matrix.trials, startedAt, jobs: [], budget, pass: values.pass,
   };
 
   // Kept as soon as armada names the job, so a run cut short still says which job holds its trials.
-  const { items, job, outcomes } = await leasedMap({ sha, out, origins, matrix, taskFiles, slots: allTasks.length, pass: values.pass }, (named) => {
+  const { items, job, outcomes } = await leasedMap({ sha, out, origins, matrix, taskFiles, slots: allTasks.length, pass: values.pass, budget }, (named) => {
     run.jobs = [named];
     writeFileSync(join(out, 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
   });
