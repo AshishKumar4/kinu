@@ -95,8 +95,17 @@ function context() {
 
 const live = [];
 
-afterEach(() => {
-  while (live.length > 0) live.pop().closeAll();
+/**
+ * Ends every shell `sessions` holds and awaits each one's exit. A kill alone is not an exit: the shell stays this
+ * process's child until it is reaped, and the preload's check at the file's end found one still there on 2 of 7
+ * tiers (`left 1 process(es) ... bash -i`, kinu-20261020035607-956688e7).
+ */
+async function endAll(sessions) {
+  await Promise.all(sessions.detachAll().map((name) => sessions.close(name).ended));
+}
+
+afterEach(async () => {
+  while (live.length > 0) await endAll(live.pop());
 });
 
 describe('opening a terminal is a call, and the rest is a stream', () => {
@@ -376,7 +385,8 @@ describe("a workspace's named sessions", () => {
     const ws = fakeWs();
     const opened = await call(ws, { sessions: firstLife, terminals: before, checkpoints: null }, { id: 'rpc-named-life1', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, cwd: folder, params: [80, 24, shell.id] });
 
-    firstLife.closeAll();
+    // The daemon ends, and its shells with it.
+    await endAll(firstLife);
     // The next daemon reads the same file and holds no shell.
     const after = createTerminalRecords({ file: records });
     const secondLife = createSessions({ log: () => {} });
