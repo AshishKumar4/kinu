@@ -175,7 +175,8 @@ refuses a URL assembled by hand. If you lose it, `kinu triggers <workspace>`
 prints the current URL of every webhook. Cancel the trigger and the URL stops
 working.
 
-Once the mail domain is set up and you have claimed your address, each
+Once the mail domain is set up and you have your address (setup offers it,
+and so does Mail until you have one), each
 workspace also gets one under it, `<workspace>.<you>@kinu.run`, and each of its
 agents one under that (see [docs/MAIL.md](MAIL.md)). Your own mail, verified,
 starts a turn that plans: anything it would send, create or change waits for you
