@@ -31,10 +31,6 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
   return {
     prompts,
     get callCount() { return i; },
-    async *stream(opts: { messages?: Array<{ content: string }>; system?: string }) {
-      const prompt = (opts.messages ?? []).map(m => m.content).join('\n');
-      yield nextResponse(prompt);
-    },
     async complete(prompt: string): Promise<string> {
       return nextResponse(prompt);
     },
@@ -62,7 +58,6 @@ export function createJSONLLM(payload: JsonValue): RoutedLLM {
   const json = stringPayload.success ? stringPayload.output : JSON.stringify(payload);
 
   return {
-    async *stream() { yield json; },
     async complete() { return json; },
     async object(_prompt, schema) { return answeredAs(schema, json); },
   };

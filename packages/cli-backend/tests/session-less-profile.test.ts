@@ -7,9 +7,8 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LLMProviderConfig, ModelRouteResolution, ReasoningEffort, RoutedLLM } from '@kinu.run/core';
-import { captureOperationProfile, runOperationProfile, operationProfileStream, currentOperationProfile,
-  WORKSPACE_RUN_ID, profileCatalogDigest } from '@kinu.run/core';
+import type { LLMProviderConfig, ModelRouteResolution, RoutedLLM } from '@kinu.run/core';
+import { captureOperationProfile, runOperationProfile, operationProfileStream } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
 import { createCLIRuntime, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { staticModelPlane } from '../src/profile-authority';
@@ -17,20 +16,6 @@ import { staticModelPlane } from '../src/profile-authority';
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
-
-/** Every route a lane resolved, with the operation that issued each stream. */
-function recordRoutes(rt: CLIRuntime) {
-  const seen: ModelRouteResolution[] = [];
-  const issuer: Array<string | null> = [];
-
-  rt.setModelForRoute?.(resolution => ({
-    async *stream() { issuer.push(currentOperationProfile(rt.actor)?.turnId ?? null); seen.push(resolution); yield 'streamed'; },
-    complete: async () => 'stub answer',
-    object: async () => { throw new Error('no schema is asked of this lane'); },
-  }));
-
-  return { seen, issuer };
-}
 
 /** A workspace on disk as `kinu evolve` finds one; no session is ever built. */
 async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: string }> {
@@ -50,7 +35,6 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
 function stubModels(rt: CLIRuntime): ModelRouteResolution[] {
   const seen: ModelRouteResolution[] = [];
   rt.setModelForRoute?.((resolution): RoutedLLM => ({
-    async *stream() { yield ''; },
     object: async () => { throw new Error('no schema is asked of this lane'); },
     complete: async () => {
       seen.push(resolution);
@@ -142,68 +126,6 @@ describe('a local runtime opened without a session', () => {
     expect(seen.map(route => route.model)).toEqual(['local/static', 'openai-compat/fake-model']);
   });
 
-  test('a lane stream issued under one operation retains its route when another operation consumes it', async () => {
-    const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
-    let tierModel = 'openai-compat/fake-model';
-    let effort: ReasoningEffort = 'high';
-    rt.profiles?.refine({ envelope: () => {
-      const catalog = { roles: {}, tiers: { default: { model: tierModel }, fast: { model: tierModel, reasoningEffort: effort } } };
-
-      return { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog };
-    } });
-    const profileA = await rt.ensureProfile?.();
-
-    if (!profileA) throw new Error('runtime profile resolution is required');
-    const operationA = captureOperationProfile({ actor: rt.actor, profile: profileA, inputs: null, runId: 'turn-A', turnId: 'turn-A' });
-
-    rt.profiles?.refine({ plane: staticModelPlane() });
-    tierModel = 'local/static';
-    effort = 'low';
-    const profileB = await rt.ensureProfile?.();
-
-    if (!profileB) throw new Error('runtime profile resolution is required');
-    const operationB = captureOperationProfile({ actor: rt.actor, profile: profileB, inputs: null, runId: 'turn-B', turnId: 'turn-B' });
-
-    const { seen, issuer } = recordRoutes(rt);
-
-    const stream = runOperationProfile(operationA, () =>
-      rt.llm.stream({ system: 's', messages: [{ role: 'user', content: 'issued under A' }] }));
-
-    const drained: string[] = [];
-    await runOperationProfile(operationB, async () => {
-      for await (const delta of stream) drained.push(delta);
-    });
-
-    expect(drained).toEqual(['streamed']);
-    expect(seen.map(route => route.model)).toEqual(['openai-compat/fake-model']);
-    expect(seen[0]?.reasoningEffort).toBe('high');
-    expect(issuer).toEqual(['turn-A']);
-  });
-
-  test('a lane stream issued with no operation resolves fresh authority under the workspace identity', async () => {
-    const { db, dbPath } = await workspace();
-    const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
-    const profileA = await rt.ensureProfile?.();
-
-    if (!profileA) throw new Error('runtime profile resolution is required');
-    const operationA = captureOperationProfile({ actor: rt.actor, profile: profileA, inputs: null, runId: 'turn-A', turnId: 'turn-A' });
-
-    rt.profiles?.refine({ plane: staticModelPlane() });
-
-    const { seen, issuer } = recordRoutes(rt);
-
-    // No ambient operation at issue time, so the stream must not pick up whoever consumes it.
-    const stream = rt.llm.stream({ system: 's', messages: [{ role: 'user', content: 'unowned' }] });
-
-    await runOperationProfile(operationA, async () => {
-      for await (const _ of stream) void _;
-    });
-
-    expect(seen.map(route => route.model)).toEqual(['local/static']);
-    expect(issuer).toEqual([WORKSPACE_RUN_ID]);
-  });
-
   test('a delayed generator retains its issuing profile for every continuation and cleanup', async () => {
     const { db, dbPath } = await workspace();
     const { rt } = await openWorkspaceCLI(db, dbPath, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
@@ -239,7 +161,6 @@ describe('a local runtime opened without a session', () => {
     const started = Promise.withResolvers<void>();
     const held = Promise.withResolvers<void>();
     rt.setModelForRoute?.(route => ({
-      async *stream() { yield ''; },
       object: async () => { throw new Error('no schema is asked of this lane'); },
       complete: async () => {
         started.resolve();

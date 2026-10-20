@@ -23,7 +23,6 @@ const NO_FUNDS = JSON.stringify({ error: { message: 'Upstream request failed: In
 /** Each model answers from `answers` once `answering` settles; a missing entry answers 200. */
 function gateway(answers: ReadonlyMap<string, number>, calls: string[], answering: Promise<void> = Promise.resolve()) {
   return (resolution: ModelRouteResolution): RoutedLLM => ({
-    async *stream() { yield ''; },
     async object() { throw new Error('no schema is asked of this lane'); },
     async complete(prompt) {
       calls.push(resolution.model);
@@ -150,7 +149,7 @@ test('a spent plan on the tier is said once, where a busy one says nothing', asy
 
   const lane = {
     llm: (): RoutedLLM => ({
-      async *stream() { yield ''; }, complete: async (prompt) => (await generateText({ model: spent, prompt, maxRetries: 0 })).text,
+      complete: async (prompt) => (await generateText({ model: spent, prompt, maxRetries: 0 })).text,
       async object() { throw new Error('no schema is asked of this lane'); },
     }),
     refusals,

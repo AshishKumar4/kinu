@@ -309,7 +309,7 @@ export function createCFRuntime(
     throw new Error('reflection model lane has no active profile');
   };
 
-  const llm: RoutedLLM = profileLane('reflection') ?? { async *stream() { yield ""; }, complete: noProfile, object: noProfile };
+  const llm: RoutedLLM = profileLane('reflection') ?? { complete: noProfile, object: noProfile };
 
   const schedule = createRealSchedule(access, sql, actor.actor);
   const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);

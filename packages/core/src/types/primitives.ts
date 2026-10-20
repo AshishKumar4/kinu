@@ -4,8 +4,7 @@ import type { SqlExecutor } from '@kinu.run/agent-utils';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
-import type { ToolSet as AiToolSet } from 'ai';
-import type { JsonObject, JsonValue } from '../utils/json';
+import type { JsonValue } from '../utils/json';
 
 /** SQL primitives are defined in agent-utils (bottom of the DAG). DDL goes through execRaw. */
 export type { SqlValue, SqlExecutor, SqlExec, SqlExecRow } from '@kinu.run/agent-utils';
@@ -105,26 +104,7 @@ export interface Executor {
   ): Promise<ExecuteResult>;
 }
 
-export interface ModelMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-export interface StepResult {
-  toolCalls?: Array<{ toolName: string; args: JsonObject }>;
-  text?: string;
-}
-
-export type ToolSet = AiToolSet;
-
 export interface LLM {
-  stream(opts: {
-    system: string;
-    messages: ModelMessage[];
-    tools?: ToolSet;
-    maxSteps?: number;
-    onStepFinish?: (s: StepResult) => void;
-  }): AsyncIterable<string>;
   complete(prompt: string): Promise<string>;
 }
 

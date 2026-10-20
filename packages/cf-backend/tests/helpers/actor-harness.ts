@@ -730,7 +730,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const text = raw.success ? raw.output : JSON.stringify(answer);
 
     const fast: RoutedLLM = {
-      stream: async function* () { yield ''; },
       complete: async (prompt) => {
         prompts.push(prompt);
 

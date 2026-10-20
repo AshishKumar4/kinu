@@ -23,7 +23,6 @@ function countingJudge(json: string): LLM & { prompts: string[] } {
 
   return {
     prompts,
-    async *stream() { yield json; },
     async complete(prompt: string) {
       prompts.push(prompt);
 
@@ -228,7 +227,6 @@ describe('judge ensemble — median, parse-failure-robust', () => {
     let calls = 0;
 
     const judge: LLM = {
-      async *stream() { yield ''; },
       async complete() {
         calls++;
 
@@ -480,7 +478,6 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
 
     return {
       prompts,
-      async *stream() { yield replies[0] ?? ''; },
       async complete(prompt: string) {
         prompts.push(prompt);
 
@@ -702,7 +699,6 @@ describe('a judge call carries no elapsed deadline — the evaluator joins it', 
     let calls = 0;
 
     return {
-      async *stream() { yield ''; },
       async complete() {
         calls++;
         await gate;
@@ -773,7 +769,6 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
       prompt.includes('verification harness') ? suite : JSON.stringify({ score });
 
     return {
-      async *stream() { yield ''; },
       async complete(prompt: string) { return reply(prompt); },
     };
   }

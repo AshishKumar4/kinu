@@ -2,7 +2,7 @@
 
 import { unobservedSpend } from '@kinu.run/test-utils';
 import { createChatModel } from '../../src/llm';
-import { generateReported, streamTextReported } from '../../src/providers/model-invocation';
+import { generateReported } from '../../src/providers/model-invocation';
 import { withModelStack } from '../../src/providers/wire-model';
 import type { ModelCallSpend } from '../../src/events/model-call';
 import type { LLM } from '../../src/types/primitives';
@@ -46,7 +46,6 @@ function gatewayLLM(
     { provider: gateway.name, modelId: gateway.modelId, lane: gateway.name });
 
   return {
-    stream: (opts) => streamTextReported({ model, instructions: opts.system, messages: opts.messages }, { spend }),
     complete: async (prompt) => (await generateReported({ model, prompt }, { spend })).text.trim(),
   };
 }

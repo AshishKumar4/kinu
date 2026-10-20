@@ -38,7 +38,6 @@ function engine(first: Answer) {
   let answer = first;
 
   rt.fastLlm = {
-    stream: (opts) => rt.llm.stream(opts),
     complete: async (prompt) => {
       prompts.push(prompt);
 

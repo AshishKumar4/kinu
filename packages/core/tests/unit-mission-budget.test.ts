@@ -31,8 +31,6 @@ const SONNET: ModelPricing = { input: 3, output: 15, cacheRead: 0.3, cacheWrite:
 /** Fixed-length completions keep the char estimate deterministic. */
 function scriptedLLM(reply: string, calls: string[] = []): LLM {
   return {
-    // eslint-disable-next-line require-yield
-    async *stream() { throw new Error('not used'); },
     async complete(prompt: string) {
       calls.push(prompt);
 

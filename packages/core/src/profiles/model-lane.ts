@@ -15,7 +15,7 @@ import { describeProviderError, OWNER_FIXABLE_REFUSALS, providerRefusalCode, toP
 import type { RoutedLLM } from '../types/primitives';
 import type { ResolvedTurnProfile } from './resolve';
 import { resolveModelRoute, type ModelRouteResolution, type ProfileRoutedSource } from './model-route';
-import { currentOperationProfile, operationProfileStream, resolveOperationProfile, runOperationProfile } from './operation';
+import { resolveOperationProfile, runOperationProfile } from './operation';
 import type { TierRefusal, TierRefusals } from '../types/refusals';
 
 /** What a route walk reads besides the route: which credential pays a spec, and where owner-fixable refusals are said. */
@@ -94,7 +94,6 @@ export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, s
   };
 
   return {
-    async *stream() { yield ''; },
     async complete(prompt) {
       const { request, call } = sent(prompt);
 
@@ -187,15 +186,5 @@ export function createRoutedModelLane(actor: ActorReference, source: ProfileRout
   return {
     complete: (prompt) => onProfileRoute(actor, source, binding, (route) => completeOnRoute(route, binding, prompt)),
     object: (prompt, schema) => onProfileRoute(actor, source, binding, (route) => objectOnRoute(route, binding, prompt, schema)),
-    stream(options) {
-      // Capture the caller's scope now; a generator body first runs in the consumer's next().
-      const issued = currentOperationProfile(actor);
-
-      return operationProfileStream((async function* () {
-        const context = await resolveOperationProfile({ actor, resolve: () => binding.resolveProfile() });
-        const events = runOperationProfile(context, () => binding.llm(resolveModelRoute(source, context.profile)).stream(options));
-        yield* operationProfileStream(events, context);
-      })(), issued);
-    },
   };
 }

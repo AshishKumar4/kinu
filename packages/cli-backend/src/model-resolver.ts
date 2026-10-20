@@ -13,7 +13,6 @@ import {
   generateObjectReported,
   generateReported,
   mapModelList,
-  streamTextReported,
   parseModelSpec,
   workersAiSpec,
   sessionAffinityOf,
@@ -43,7 +42,6 @@ import {
   type ModelCallSpend,
   type ModelRouteResolution,
   type GenerateRequest,
-  type StreamRequest,
   countRequestInputTokens,
   type CountableRequest,
   type InputTokenCount,
@@ -157,22 +155,6 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   const callOptions = (resolved: string) => (route === undefined ? undefined : routedCallOptions(route, resolved));
 
   return {
-    stream(input) {
-      const resolved = spec();
-
-      const streamed: StreamRequest = {
-        model: model(resolved),
-        instructions: input.system,
-        messages: input.messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-        ...callOptions(resolved),
-      };
-
-      // Usage exists only once the stream drains; an abandoned stream files no row.
-      return streamTextReported(streamed, { spend, spec: resolved });
-    },
     async complete(prompt) {
       const resolved = spec();
 

@@ -82,7 +82,6 @@ export function unobservedSearchSeams(): Pick<AgentsSwarmDeps, 'reportModelCall'
 
 function unscriptedLLM(): LLM {
   return {
-    stream: () => refuse('a model call (stream)', 'opts.llm'),
     complete: async () => refuse('a model call (complete)', 'opts.llm'),
   };
 }

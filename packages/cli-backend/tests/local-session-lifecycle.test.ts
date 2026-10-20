@@ -241,7 +241,6 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     tierModel = 'local/b';
     const seen: string[] = [];
     rt.setModelForRoute?.(route => ({
-      async *stream() { yield ''; },
       object: async () => { throw new Error('no schema is asked of this lane'); },
       complete: async () => {
         seen.push(route.model);
@@ -1493,7 +1492,6 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     const completions: string[] = [];
 
     const reviewLlm = {
-      stream: rt.llm.stream.bind(rt.llm),
       complete: async (prompt: string) => {
         completions.push(prompt);
 
