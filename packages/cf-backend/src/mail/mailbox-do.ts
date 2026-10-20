@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import {
   durableStamps, EmailOutbox, initMailboxTables, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
-  type MailRecipient, type MailThreadSummary, type MailThreadView, type MailWake,
+  type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
   MailStore, type MailBlobs,
 } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -137,8 +137,12 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.readBy(reader)));
   }
 
-  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailThreadView[]> {
+  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailTriageItem[]> {
     return settle(this.served(() => this.store.untriagedFor(caller, limit, skip)));
+  }
+
+  triagedFor(caller: MailCaller, thread: string, version: number, pick: MailTriagePick): Promise<MailTriaged> {
+    return settle(this.served(() => this.store.triagedFor(caller, thread, version, pick)));
   }
 
   boxes(): Promise<readonly MailBox[]> {

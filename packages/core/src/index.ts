@@ -107,7 +107,7 @@ export { MAIL } from './operations/mail';
 
 export { mailHostRedirect } from './mail/host';
 
-export { inboundBody, isAutoReplyEmail, mailThreadText, stripQuotedReply } from './mail/words';
+export { inboundBody, isAutoReplyEmail, mailThreadText, replySubject, stripQuotedReply } from './mail/words';
 
 export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/handed';
 

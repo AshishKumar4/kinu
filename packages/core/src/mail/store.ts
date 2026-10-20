@@ -8,8 +8,10 @@ import { Effect } from 'effect';
 import { KinuError, settle, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
+import { replySubject } from './words';
 import type {
-  MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView, MailWake, MailWoke,
+  MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
+  MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
 } from './mailbox-api';
 import type { SqlExec } from '../types/primitives';
 
@@ -189,18 +191,57 @@ export class MailStore {
   }
 
   /** The person's threads the assistant has not triaged since their newest mail, newest first; none unless it reads the box. */
-  async untriagedFor(caller: MailCaller, limit: number, skip: readonly string[] = []): Promise<MailThreadView[]> {
+  async untriagedFor(caller: MailCaller, limit: number, skip: readonly string[] = []): Promise<MailTriageItem[]> {
     if (this.readablePath(caller, '') === null) return [];
 
+    // Each version is read before its thread: mail that lands while the thread is read makes the read stale, never lost.
     // `skip` is a pass's own failures, so it is as long as they are; json_each keeps it one bound parameter.
-    const ids = rows(v.object({ id: v.string() }), this.deps.sql.exec(
-      `SELECT t.id FROM mail_untriaged u JOIN mail_threads t ON t.id = u.thread_id
+    const waiting = rows(v.object({ id: v.string(), since: v.number() }), this.deps.sql.exec(
+      `SELECT t.id, u.since FROM mail_untriaged u JOIN mail_threads t ON t.id = u.thread_id
        WHERE t.trashed_at IS NULL AND t.id NOT IN (SELECT value FROM json_each(?)) ORDER BY u.since DESC, t.id LIMIT ?`, JSON.stringify(skip), limit,
     ));
 
-    const views = await Promise.all(ids.map(async (row) => this.thread(row.id)));
+    const items = await Promise.all(waiting.map(async (row) => {
+      const view = await this.thread(row.id);
 
-    return views.filter((view): view is MailThreadView => view !== null);
+      return view === null ? null : { view, version: row.since };
+    }));
+
+    return items.filter((item): item is MailTriageItem => item !== null);
+  }
+
+  /**
+   * One synchronous step, so no arrival lands inside it: refused unless the thread still waits at `version`. The draft goes
+   * to the newest inbound sender, under the thread's subject, and only where neither the person nor anyone drafted yet
+   * and that sender is not the person.
+   */
+  triagedFor(caller: MailCaller, thread: string, version: number, pick: MailTriagePick): MailTriaged {
+    if (this.readablePath(caller, '') === null || this.pathOf(thread) !== '') return settleSync(Effect.fail(new KinuError('missing', `No thread "${thread}" in a box you read.`)));
+
+    const waits = this.deps.sql.exec('SELECT 1 FROM mail_untriaged WHERE thread_id = ? AND since = ?', thread, version).toArray().length > 0;
+
+    if (!waits) return { settled: false, drafted: false };
+
+    const drafted = pick.reply !== null && pick.reply.trim() !== '' && this.draftReply(caller, thread, pick.reply.trim());
+
+    this.deps.sql.exec('UPDATE mail_threads SET important = ? WHERE id = ?', pick.important === null ? null : pick.important.slice(0, 280), thread);
+    this.deps.sql.exec('DELETE FROM mail_untriaged WHERE thread_id = ?', thread);
+
+    return { settled: true, drafted };
+  }
+
+  /** The assistant's reply on the person's thread, if one may be left: synchronous, inside `triagedFor`'s step. */
+  private draftReply(caller: MailCaller, thread: string, text: string): boolean {
+    const box = this.box('');
+    const owner = this.identity()?.email ?? '';
+    const messages = this.messages(thread);
+    const newest = messages.filter((message) => message.direction === 'in' && message.send_state !== 'draft').at(-1);
+    const subject = rows(v.object({ subject: v.string() }), this.deps.sql.exec('SELECT subject FROM mail_threads WHERE id = ?', thread))[0]?.subject ?? '';
+
+    if (box === null || newest === undefined || messages.some((message) => message.send_state === 'draft') || newest.from_addr.toLowerCase() === owner.toLowerCase()) return false;
+    this.writeOut(box, this.answering({ path: '', threadId: thread, to: [newest.from_addr], subject: replySubject(subject), text, writtenBy: caller.name }), 'draft');
+
+    return true;
   }
 
   async readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null> {
@@ -387,7 +428,10 @@ export class MailStore {
    */
   private awaitTriage(box: MailBox, woke: MailWoke | null, threadId: string, at: number): MailDelivery['triage'] {
     if (box.path !== '' || woke === 'owner') return null;
-    this.deps.sql.exec('INSERT INTO mail_untriaged (thread_id, since) VALUES (?, ?) ON CONFLICT (thread_id) DO UPDATE SET since = excluded.since', threadId, at);
+    // `since` is also the thread's version: it moves forward at every arrival, even two in one millisecond.
+    this.deps.sql.exec(
+      'INSERT INTO mail_untriaged (thread_id, since) VALUES (?, ?) ON CONFLICT (thread_id) DO UPDATE SET since = MAX(excluded.since, mail_untriaged.since + 1)', threadId, at,
+    );
 
     return box.workspace === null || box.actorId === null ? null : { workspace: box.workspace, actorId: box.actorId };
   }
@@ -527,7 +571,6 @@ export class MailStore {
       // The assistant picks from the box it reads: the person's own. A pick, either way, is its triage of the thread.
       if (thread.path !== '') return settleSync(Effect.fail(new KinuError('denied', 'Only mail to the person\'s own address can be marked Important.')));
       this.deps.sql.exec('UPDATE mail_threads SET important = ? WHERE id = ?', change.important === null ? null : change.important.slice(0, 280), id);
-      this.deps.sql.exec('DELETE FROM mail_untriaged WHERE thread_id = ?', id);
     }
 
     const summary = this.summary(id);

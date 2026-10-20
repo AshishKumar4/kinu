@@ -166,13 +166,36 @@ export interface MailAgentMessage {
   readonly thread?: string;
 }
 
+/** A thread waiting for triage, as read: `version` changes whenever mail reaches it, so a pick on an older read is refused. */
+export interface MailTriageItem {
+  readonly view: MailThreadView;
+  readonly version: number;
+}
+
+/** What the assistant decided on a thread: Important's reason or null, and the reply the person may send, if one is due. */
+export interface MailTriagePick {
+  readonly important: string | null;
+  readonly reply: string | null;
+}
+
+/** Whether a pick was applied (`settled`), and whether its reply was left as a draft. */
+export interface MailTriaged {
+  readonly settled: boolean;
+  readonly drafted: boolean;
+}
+
 /** The Mailbox's calls for an agent (docs/MAIL.md §3): only the boxes it reads, its own first. */
 export interface MailboxAgentCalls {
   readableBy(caller: MailCaller): Promise<readonly MailBox[]>;
   findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { readonly box?: string; readonly unread?: boolean }): Promise<MailListing>;
   readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null>;
   /** The person's threads waiting for the assistant's triage, newest first, but `skip`; none for an agent that does not read their box. */
-  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailThreadView[]>;
+  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailTriageItem[]>;
+  /**
+   * The assistant's pick on a thread it read at `version`, and its reply as a draft, applied together, and only if no mail
+   * reached the thread since: otherwise nothing is written and the thread stays waiting (`settled: false`).
+   */
+  triagedFor(caller: MailCaller, thread: string, version: number, pick: MailTriagePick): Promise<MailTriaged>;
   draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
   /** Sends it now: the workspace calls this only with the owner's approval of these exact bytes in hand. */
   sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;

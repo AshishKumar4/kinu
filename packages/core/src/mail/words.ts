@@ -73,6 +73,11 @@ export function inboundBody(text: string | undefined, html: string | undefined):
   return '';
 }
 
+/** A reply's subject: the thread's, once prefixed `Re: `, however its sender spelled or spaced theirs. */
+export function replySubject(subject: string): string {
+  return /^\s*re:/iu.test(subject) ? subject : `Re: ${subject}`;
+}
+
 const MAIL_TAG = 'mail';
 
 /**

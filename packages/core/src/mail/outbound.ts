@@ -9,6 +9,7 @@ import type { EmailOutbox, EmailSender, OutboundEmailMessage } from '../events/e
 import { Cause, Effect } from 'effect';
 import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
 import * as v from 'valibot';
+import { replySubject } from './words';
 
 const EmailThreadAddrSchema = v.object({
   to: v.string(),
@@ -31,10 +32,6 @@ export interface EmailSendContext {
   agentDisplayName: string;
   /** Write-ahead + idempotency for the send (SPEC §7.4). */
   outbox: EmailOutbox;
-}
-
-function replySubject(subject: string): string {
-  return /^\s*re:/i.test(subject) ? subject : `Re: ${subject}`;
 }
 
 /** RFC 5322 §3.6.4 threading; `boundedReferences` keeps the chain under the 998-octet line limit
