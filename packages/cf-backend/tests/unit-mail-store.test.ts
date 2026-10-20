@@ -110,6 +110,18 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
     expect(store.readableBy({ ...caller, workspace: 'personal-assistant', mainActorId: 'actor-kinu', actorId: 'actor-kinu' }).map((box) => box.path)).not.toContain('');
   });
 
+  test('a redelivery is filed once but woken as the first was, so a handoff that failed after filing is made again', async () => {
+    open('probe@ashishkumarsingh.com');
+    const first = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'bounce@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
+    const again = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'bounce@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
+
+    expect(again).toMatchObject({
+      duplicate: true, messageId: first.messageId, threadId: first.threadId, headerId: first.headerId, woke: 'owner',
+      wake: first.wake, instruction: first.instruction, references: first.references, attachments: first.attachments,
+    });
+    expect((await store.thread(first.threadId))?.messages).toHaveLength(1);
+  });
+
   test('another verified sender on the same domain is not the owner: by default a box wakes for its owner only', async () => {
     open('probe@ashishkumarsingh.com');
     const delivery = await delivered({ raw: raw('second-local-part-pass'), envelopeFrom: 'x@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
@@ -146,15 +158,6 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
 
     expect(delivery).toMatchObject({ verified: false, woke: null, wake: null });
     expect((await store.thread(delivery.threadId))?.messages[0]).toMatchObject({ verified: false, text: 'Since Tuesday every delivery gets a 500.' });
-  });
-
-  test('a redelivered Message-ID is filed and woken once', async () => {
-    open('probe@ashishkumarsingh.com');
-    const first = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
-    const again = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
-
-    expect(again).toMatchObject({ duplicate: true, messageId: first.messageId, woke: null });
-    expect(store.list({ view: 'all' }).threads).toHaveLength(1);
   });
 
   test('a +tag reaches the same box and is kept as the address it was delivered to', async () => {

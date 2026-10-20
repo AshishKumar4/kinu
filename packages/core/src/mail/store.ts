@@ -379,16 +379,16 @@ export class MailStore {
     const from: MailParty = { name: parsed.from?.name ?? null, address: verdict.from ?? parsed.from?.address ?? input.envelopeFrom.toLowerCase() };
     const headerId = parsed.messageId === null ? null : bare(parsed.messageId);
 
-    const [seen] = headerId === null ? [] : rows(v.object({ id: v.string(), thread_id: v.string(), verdict: v.string() }), this.deps.sql.exec(
-      'SELECT m.id, m.thread_id, m.verdict FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', headerId, box.path,
+    const [seen] = headerId === null ? [] : rows(v.pick(MessageRow, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
+      'SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', headerId, box.path,
     ));
 
-    // The edge redelivers a message it is unsure arrived: it is filed and woken once.
+    // The edge redelivers a message it is unsure arrived: it is filed once, but handed on as the first was, since the
+    // handoff may be what failed. The workspace admits it once: its event log dedupes on the Message-ID.
     if (seen !== undefined) {
-      return {
-        box: box.path, messageId: seen.id, threadId: seen.thread_id, headerId, references: null, attachments: [], duplicate: true,
-        verified: seen.verdict === 'verified', from, subject: parsed.subject, woke: null, wake: null, triage: null, instruction: null,
-      };
+      return this.arrival(box, parsed, {
+        messageId: seen.id, threadId: seen.thread_id, headerId, from, verified: seen.verdict === 'verified', woke: seen.woke, duplicate: true, triage: null,
+      });
     }
 
     const at = this.deps.now();
@@ -414,12 +414,18 @@ export class MailStore {
     this.deps.sql.exec('UPDATE mail_threads SET trashed_at = NULL WHERE id = ?', threadId);
     const triage = this.awaitTriage(box, woke, threadId, at);
 
+    return this.arrival(box, parsed, { messageId, threadId, headerId, from, verified: verdict.verified, woke, duplicate: false, triage });
+  }
+
+  /** What a filed message comes to for the router: whom it wakes, on whose word, and with what words. */
+  private arrival(box: MailBox, parsed: ParsedMail, filed: Pick<MailDelivery, 'messageId' | 'threadId' | 'headerId' | 'from' | 'verified' | 'woke' | 'duplicate' | 'triage'>): MailDelivery {
+    const { woke } = filed;
+
     return {
-      box: box.path, messageId, threadId, headerId, duplicate: false, verified: verdict.verified, from, subject: parsed.subject, woke,
+      ...filed, box: box.path, subject: parsed.subject,
       references: parsed.references.length === 0 ? null : parsed.references.join(' '),
       attachments: parsed.attachments.map((file) => ({ filename: file.filename, content_type: file.contentType, size: file.content.byteLength })),
       wake: woke === null || box.workspace === null || box.actorId === null ? null : { workspace: box.workspace, actorId: box.actorId, main: box.kind !== 'agent' },
-      triage,
       instruction: woke === 'owner' ? parsed.ownWords : null,
     };
   }

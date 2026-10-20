@@ -244,6 +244,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 - **Delivery status:** a Queues subscription feeds bounced, complained and rejected events into each message's status.
 - **Automatic pause:** an account whose complaint rate passes 0.1% stops sending until the owner looks.
 
+
+**Redelivery (built).** Email Routing delivers a message again when it is unsure the first delivery took. The Mailbox files a Message-ID once, but answers a redelivery as it answered the first: the same wake, the same words. The router therefore hands it to the workspace again, because the handoff may be what failed after filing. The workspace admits it once, since its event log dedupes on the Message-ID (`email-round-trip.test.ts`: no second receipt, no second turn).
 ## 5. Deliverability and DNS
 
 **For kinu.run** (these are the owner's actions in the Cloudflare dashboard, or through the API with their token):
