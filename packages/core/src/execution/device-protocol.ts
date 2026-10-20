@@ -12,10 +12,6 @@ export const DEVICE_PTY_MAX_AXIS = protocol.ptyMaxAxis;
 
 export const DEVICE_FRAMES = protocol.frames;
 
-/** A screen's bytes on the device socket (1014-t): binary messages, each `kind`, the stream as a big-endian u32, then at
- *  most `maxBytes` of RFB; `headerBytes` is the first two. */
-export const DEVICE_SCREEN_DATA = protocol.screenData;
-
 export const DEVICE_ERRORS = protocol.errors;
 
 export const DEVICE_UPDATE_REQUIRED = protocol.updateRequired;

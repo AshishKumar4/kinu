@@ -12,7 +12,8 @@ const zlib = require('node:zlib');
 
 const protocol = require('../device-protocol.json');
 
-const SCREEN_DATA = protocol.screenData;
+// The hub's own codec, bundled into the daemon (packages/cli/src/daemon-build.ts).
+const { readScreenData, screenDataFrames } = require('../../../core/src/execution/device-screen-data.ts');
 
 const SCREEN_CLOSE_FRAME = protocol.frames.screenClose;
 
@@ -69,32 +70,6 @@ const NO_SCREEN = 'this PC shares no screen';
 const OPENED_ELSEWHERE = 'the screen opened in another tab';
 
 const NO_VIEWER = 'no viewer attached to the screen';
-
-/** The binary messages carrying `bytes` on `stream`. */
-function screenFrames(stream, bytes) {
-  const frames = [];
-
-  for (let at = 0; at < bytes.byteLength; at += SCREEN_DATA.maxBytes) {
-    const part = bytes.subarray(at, at + SCREEN_DATA.maxBytes);
-    const frame = Buffer.alloc(SCREEN_DATA.headerBytes + part.byteLength);
-
-    frame.writeUInt8(SCREEN_DATA.kind, 0);
-    frame.writeUInt32BE(stream, 1);
-    frame.set(part, SCREEN_DATA.headerBytes);
-    frames.push(frame);
-  }
-
-  return frames;
-}
-
-/** A binary message from the hub as screen data; null when it is not. */
-function readScreenData(data) {
-  const bytes = Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data);
-
-  if (bytes.byteLength < SCREEN_DATA.headerBytes || bytes[0] !== SCREEN_DATA.kind) return null;
-
-  return { stream: bytes.readUInt32BE(1), bytes: bytes.subarray(SCREEN_DATA.headerBytes) };
-}
 
 function pixelFormatBytes(format) {
   const bytes = Buffer.alloc(16);
@@ -549,7 +524,7 @@ function createScreens({ source, log, after = afterTimer }) {
         send(bytes) {
           if (ended) return;
 
-          for (const frame of screenFrames(stream, bytes)) {
+          for (const frame of screenDataFrames(stream, bytes)) {
             try {
               ws.send(frame);
             } catch (err) {
@@ -607,4 +582,4 @@ function createScreens({ source, log, after = afterTimer }) {
   };
 }
 
-module.exports = { createScreens, readScreenData, screenFrames, SCREEN_CLOSE_FRAME };
+module.exports = { createScreens, readScreenData, SCREEN_CLOSE_FRAME };

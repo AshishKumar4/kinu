@@ -277,6 +277,18 @@ function daemonRuntimeProbe(origin: string): string {
   `;
 }
 
+// The release builds the daemon in one directory and a source-tree `kinu connect` in another: a bundled module named by
+// its path from the building directory made the two differ (a protocol JSON and valibot's .mjs, CI 2026-10-20).
+test('the daemon builds byte for byte the same from any directory', async () => {
+  const helper = resolve(import.meta.dir, 'helpers', 'daemon-files.ts');
+
+  const elsewhere = await runToExit([process.execPath, '-e', `process.stdout.write((await import(${JSON.stringify(helper)})).DAEMON_SOURCE)`], {
+    cwd: resolve(import.meta.dir, '..', '..', 'pc-agent'), env: { ...process.env },
+  });
+
+  expect({ exitCode: elsewhere.exitCode, same: elsewhere.stdout === DAEMON_SOURCE }).toEqual({ exitCode: 0, same: true });
+});
+
 describe('device-connect prompt policy', () => {
   test('offers once per invocation with a cached device-list answer', async () => {
     const stub = startStubCloud({ devices: () => [] });

@@ -22,8 +22,9 @@ export interface DaemonFiles {
  *  resolves to one. */
 const SIBLING = /^\.\.?\/[^/]+\.(?:js|json)$/u;
 
-/** The line Bun writes above each bundled module: its path from the building process's directory. */
-const MODULE_LINE = /^\/\/ (\S+\.(?:js|ts))$/gmu;
+/** The line Bun writes above each bundled module: its path from the building process's directory. A bundled module may
+ *  be a dependency's `.mjs` or a JSON file a core module imports. */
+const MODULE_LINE = /^\/\/ (\S+\.(?:js|mjs|cjs|ts|json))$/gmu;
 
 /** `text` with each module line naming its path from the repository, so a build reads alike from any directory. */
 function fromRepository(text: string, source: string): string {

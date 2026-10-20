@@ -1123,8 +1123,10 @@ export {
 } from './execution/device-terminal';
 
 export {
-  DeviceScreenHub, screenFromSocket, readScreenData,
+  DeviceScreenHub, screenFromSocket,
 } from './execution/device-screen';
+
+export { readScreenData, screenDataFrames } from './execution/device-screen-data';
 
 export {
   nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,

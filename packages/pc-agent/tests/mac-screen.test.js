@@ -15,7 +15,7 @@ const { describe, expect, test } = require('bun:test');
 
 const { scratchDir } = require('@kinu.run/test-utils');
 
-const { createMacSource, macKeyCode } = require('../src/daemon/mac-screen.js');
+const { createMacSource } = require('../src/daemon/mac-screen.js');
 
 const FAKE = path.join(__dirname, 'fixtures', 'fake-screen-helper.js');
 
@@ -155,7 +155,7 @@ describe("a Mac's screen source", () => {
     });
   });
 
-  test("a served Mac's screen takes the viewer's keys as macOS key codes, and drops a key it has no code for", async () => {
+  test("a served Mac's screen takes the viewer's keys as macOS key codes on the ANSI layout, and drops a key it has no code for", async () => {
     const home = scratchDir('mac-screen-serve');
     const log = path.join(home, 'helper.log');
     const { made, file, helpers } = mac({ told: { accepts: 'permission', next: 'permission', width: 4, height: 2, frames: [], log } });
@@ -163,20 +163,14 @@ describe("a Mac's screen source", () => {
     fs.writeFileSync(file, JSON.stringify({ token: 'permission', width: 4, height: 2 }));
     const screen = await made.open({ onFrame: () => {}, onEnd: () => {} });
 
-    screen.key(true, 0xffeb);
-    screen.key(true, 0x43);
-    screen.key(true, 0x20ac);
+    // Command, then letters either case, shifted symbols as their key, the special keys, and the euro, which has none.
+    for (const keysym of [0xffeb, ...['a', 'A', 'z', '!', '?', '~'].map((key) => key.codePointAt(0)), 0xff0d, 0xff08, 0xff51, 0xffe1, 0xffe9, 0xffbe, 0x20ac]) screen.key(true, keysym);
     screen.key(false, 0xffeb);
     screen.close();
     // Its stdin closed, the helper writes `closed` and exits; every line it wrote is in the log once it has.
     await helpers.at(-1)?.exited;
     const told = fs.readFileSync(log, 'utf8').trim().split('\n');
 
-    expect(told).toEqual(['permission', '{"type":"key","code":55,"down":true}', '{"type":"key","code":8,"down":true}', '{"type":"key","code":55,"down":false}', 'closed']);
-  });
-
-  test('keysyms map to the ANSI layout: letters either case, shifted symbols to their key, and the special keys', () => {
-    expect(['a', 'A', 'z', '!', '?', '~'].map((key) => macKeyCode(key.codePointAt(0))).concat([0xff0d, 0xff08, 0xff51, 0xffe1, 0xffe9, 0xffbe, 0x20ac].map(macKeyCode)))
-      .toEqual([0, 0, 6, 18, 44, 50, 36, 51, 123, 56, 58, 122, null]);
+    expect(told).toEqual(['permission', ...[55, 0, 0, 6, 18, 44, 50, 36, 51, 123, 56, 58, 122].map((code) => `{"type":"key","code":${String(code)},"down":true}`), '{"type":"key","code":55,"down":false}', 'closed']);
   });
 });
