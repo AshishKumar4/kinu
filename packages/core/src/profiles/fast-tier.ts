@@ -4,7 +4,7 @@
 import type { ModelMenu } from '../providers/registry';
 import { specProvider, specWithoutAccount, type ModelPricing } from '../providers/types';
 import type { TierAssignment } from '../types/profile';
-import { COMPACTION_TRIGGER_PERCENT } from '../providers/server-compaction';
+import { triggerTokens } from '../providers/server-compaction';
 
 /** A model the fast tier can run on; its window, as every listed model's, is the listing's (`contextWindowsOf`). */
 export interface FastCandidate {
@@ -67,8 +67,7 @@ export function fastCandidatesOf(menu: Pick<ModelMenu, 'models'>): FastCandidate
  * when nothing qualifies, and the tier runs on the main model as before.
  */
 export function fastAssignment(candidates: readonly FastCandidate[], main: TierAssignment, windows: Readonly<Record<string, number>>): TierAssignment | null {
-  const mainWindow = windows[specWithoutAccount(main.model)];
-  const floor = mainWindow === undefined ? 0 : Math.floor(mainWindow * COMPACTION_TRIGGER_PERCENT / 100);
+  const floor = triggerTokens(windows[specWithoutAccount(main.model)]);
   const able = candidates.filter((candidate) => (windows[candidate.model] ?? 0) >= floor);
   const [pick, ...rest] = able;
 
