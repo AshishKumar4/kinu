@@ -101,12 +101,20 @@ function installFixture(): void {
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : null;
     calls.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
     document.documentElement.dataset.mailCalls = JSON.stringify(calls);
+
+    const fail = params.get("fail");
+
+    if (fail === "thread" && url.pathname.startsWith("/api/user/mail/threads/") || fail === "send" && url.pathname.endsWith("/send")) {
+      return Promise.resolve(Response.json({ error: "The mail server refused this request." }, { status: 503 }));
+    }
+
     const answer = (value: MailBoxes | MailListing | MailThreadView | MailThreadSummary | MailMessageView | Important | { address: string }): Promise<Response> => Promise.resolve(Response.json(value));
 
     if (url.pathname.endsWith("/boxes")) return answer({ address, canClaim: address === null && params.get("account") === "claim", boxes: address === null ? [] : boxes });
 
     if (url.pathname.endsWith("/claim")) {
       address = `${v.parse(v.object({ username: v.string() }), body).username}@kinu.run`;
+      boxes[0] = { ...boxes[0], address };
 
       return answer({ address });
     }

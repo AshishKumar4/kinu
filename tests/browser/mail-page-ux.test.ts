@@ -190,12 +190,45 @@ describe('Mail', () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&view=all', 390);
       expect(await page.$('[data-mail-reader]')).toBeNull();
+      await pick(page, 'Address', 'scout · api-worker');
+      await page.waitForFunction(() => document.querySelectorAll('[data-mail-list] [data-mail-thread]').length === 1);
       await page.click('[data-mail-thread="t-dana"]');
       await reader(page, 't-dana');
       expect(await page.$eval('[data-mail-list]', (list) => list instanceof HTMLElement && list.offsetParent === null)).toBe(true);
       await page.click('[data-mail-back]');
       await page.waitForFunction(() => document.querySelector('[data-mail-reader]') === null);
       expect(await page.$eval('[data-mail-list]', (list) => list instanceof HTMLElement && list.offsetParent !== null)).toBe(true);
+      expect(await rows(page)).toEqual(['t-dana']);
+      await page.close();
+    });
+  });
+
+  test('a refused reader still offers Back to the list on a phone', async () => {
+    await withGallery(async (gallery) => {
+      const page = await open(gallery, '&view=all&thread=t-dana&fail=thread', 390);
+      await page.waitForSelector('[data-failure]');
+      expect(await page.$('[data-mail-back]')).not.toBeNull();
+      await page.click('[data-mail-back]');
+      await page.waitForSelector('[data-mail-list]');
+      expect(await rows(page)).toContain('t-dana');
+      await page.close();
+    });
+  });
+
+  test('a refused send keeps the reply and reports the reason; it can still be saved as a draft', async () => {
+    await withGallery(async (gallery) => {
+      const page = await open(gallery, '&view=all&thread=t-dana&fail=send');
+      await reader(page, 't-dana');
+      await page.click('[data-mail-reply]');
+      await page.type('[aria-label="Reply"]', 'Keep this reply.');
+      await page.click('[data-mail-send]');
+      await page.waitForSelector('[data-mail-reply-box] [role="alert"]');
+      expect(await page.$eval('[data-mail-reply-box] [role="alert"]', (alert) => alert.textContent)).toContain('The mail server refused this request.');
+      expect(await page.$eval('[aria-label="Reply"]', (input) => input instanceof HTMLTextAreaElement ? input.value : '')).toBe('Keep this reply.');
+      expect((await calls(page)).filter((call) => call.path === '/api/user/mail/send')).toHaveLength(1);
+      await action(page, 'Save draft');
+      await page.waitForFunction(() => document.querySelector('[data-mail-reply-box]') === null);
+      expect((await calls(page)).find((call) => call.path === '/api/user/mail/drafts')?.body).toMatchObject({ path: 'scout.api-worker', text: 'Keep this reply.', threadId: 't-dana' });
       await page.close();
     });
   });
