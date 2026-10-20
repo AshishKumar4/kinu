@@ -113,6 +113,8 @@ export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/han
 
 export { mailInContext, type MailInContext } from './mail/in-context';
 
+export { MailTriageLane, triageMail, type MailTriageDeps, type MailTriageRun } from './mail/triage';
+
 export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
 
 export { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorDeps, type MonitorRunResult } from './monitor/incidents';

@@ -177,7 +177,7 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
-  type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn,
+  type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn, MailTriageLane, triageMail,
   PeerHub, type PeerMessage, type ReceiveResult,
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
@@ -7332,6 +7332,34 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return;
     await objectNamed(this.env.MAILBOX, owner).readBy({ workspace: this.name, actorId: this.actorHandle().actorId });
+    // What reached the box before it read it is triaged now.
+    await this.triageOwnerMail();
+  }
+
+  private _mailTriage: MailTriageLane | null = null;
+
+  /**
+   * New mail waits in the owner's own box for this workspace, their Personal assistant, to triage (docs/MAIL.md §8). Worker-only:
+   * the mail router and the hand-over call it. Answers at once; the pass runs on the fast tier, outside any turn.
+   */
+  async triageOwnerMail(): Promise<void> {
+    this._mailTriage ??= new MailTriageLane(async () => this.triageOwnerMailPass());
+    const pass = this._mailTriage.nudge();
+
+    this.detachOwned(logged('mail.triage_failed', { doing: 'triaging the owner\'s mail', otherwise: 'unavailable' }, async () => {
+      await this.keepAliveWhile(() => pass);
+    }, { workspace: this.name }));
+  }
+
+  private async triageOwnerMailPass(): Promise<void> {
+    const main = this.actorHandle();
+    const mail = this.mailFor(main.actorId, main.config.getChatTitle() ?? 'Kinu');
+    const owner = await this.email.ownerEmail();
+
+    if (mail === null || owner === null) return;
+    const run = await triageMail({ mailbox: mail.mailbox(), caller: mail.caller(), about: this.getSoulText(), owner, complete: await this.oneShotOn('fast') });
+
+    diagnostics.event('mail.triaged', { workspace: this.name, ...run });
   }
 
   /**
