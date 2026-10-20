@@ -289,6 +289,8 @@ describe("a blueprint's watchers", () => {
     expect(c.getBlueprintWatchers()).toEqual([watcher]);
     c.set(AGENT_CONFIG_KEYS.blueprintWatchers, '[{"label":1}]');
     expect(c.getBlueprintWatchers()).toEqual([]);
+    c.set(AGENT_CONFIG_KEYS.blueprintWatchers, 'not json');
+    expect(c.getBlueprintWatchers()).toEqual([]);
   });
 });
 

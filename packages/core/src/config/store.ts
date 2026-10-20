@@ -459,7 +459,9 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getBlueprintWatchers() {
       const stored = get(AGENT_CONFIG_KEYS.blueprintWatchers);
 
-      return stored === null ? [] : tolerate(() => v.parse(v.array(BlueprintScheduleSchema), JSON.parse(stored)), 'malformed-input') ?? [];
+      const parsed = v.safeParse(v.array(BlueprintScheduleSchema), stored === null ? [] : tolerate(() => JSON.parse(stored), 'malformed-input'));
+
+      return parsed.success ? parsed.output : [];
     },
     setBlueprintWatchers(watchers) {
       set(AGENT_CONFIG_KEYS.blueprintWatchers, JSON.stringify(watchers));
