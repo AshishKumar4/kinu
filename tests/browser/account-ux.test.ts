@@ -740,7 +740,6 @@ describe('account panels', () => {
       try {
         await skipped.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
         await skipped.click('[data-mail-not-now]');
-        await clickByText(skipped, 'button', 'Next');
         await skipped.waitForFunction(() => document.querySelector('[data-welcome-step="providers"]')?.getAttribute('aria-hidden') !== 'true');
         expect(await skipped.evaluate(() => document.documentElement.dataset.galleryMailCreated ?? null)).toBeNull();
       } finally {
