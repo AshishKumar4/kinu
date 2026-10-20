@@ -374,9 +374,9 @@ call's usage through the `ModelCallSink` the call was handed.
   `scaffold`, `judge` and `advisor` use `deep`; `compaction`, `reflection` and
   `fast` use `fast`; `platform` and `warming` resolve no profile.
   `resolveModelRoute` is the only read path.
-- The CLI resolves the immutable profile and builds the lane with
-  `createLocalProviderLLM` (`cli-backend/src/model-resolver.ts`) under the
-  route's source. It writes `model_call` through
+- The CLI resolves the immutable profile and builds the lane with core's
+  `routedLlm` over the local registry (`cli-backend/src/runtime.ts`) under
+  the route's source. It writes `model_call` through
   `LocalAgentSession.modelCallSink`.
 - Cloud uses `createProfileLaneLLM` (`cf-backend/src/runtime.ts`; the
   `judgeModel` and `fastLlm` lanes), which files the row through

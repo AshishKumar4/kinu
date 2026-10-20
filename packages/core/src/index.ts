@@ -1805,7 +1805,7 @@ export { activeOperationProfile, captureOperationProfile, currentOperationProfil
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
 export {
-  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type ModelLaneComponents, type RouteModelBinder,
+  bindRoute, completeOnRoute, createRoutedModelLane, routedLlm, type ModelLaneComponents, type RouteModelBinder,
   type RouteModelBinding,
 } from './profiles/model-lane';
 
