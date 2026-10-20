@@ -122,17 +122,42 @@ describe('UserDO Codex credential of a named account', () => {
     }
   });
 
-  test('a subscription login without a refresh token is refused, whatever its issuer or account', async () => {
-    const harness = createTestUserDO();
-    const owner = await testOwner();
+  // Claude Code's `setup-token` issues a long-lived subscription token with no refresh token; Kinu refused it.
+  test('a subscription login with no refresh token is used as it is until it expires, and never renewed', async () => {
+    const originalFetch = globalThis.fetch;
+    const renewals: string[] = [];
 
-    for (const key of ['codex.oauth@work', 'claude.oauth', 'claude.oauth@work']) {
-      await expect(harness.userDO.setCredential(owner, key, { kind: 'oauth', accessToken: 'no-refresh' }))
-        .rejects.toMatchObject({ code: 'bad_input' });
+    globalThis.fetch = asFetchFunction(async (input) => {
+      renewals.push(requestUrl(input));
+
+      return new Response('', { status: 500 });
+    });
+
+    try {
+      const harness = createTestUserDO();
+      const owner = await testOwner();
+      const expiresAt = Date.now() + 3_600_000;
+
+      await harness.userDO.setCredential(owner, 'claude.oauth', { kind: 'oauth', accessToken: 'setup-token', expiresAt });
+      await harness.userDO.setCredential(owner, 'codex.oauth@work', { kind: 'oauth', accessToken: 'ended', expiresAt: Date.now() - 1_000 });
+
+      const used = {
+        held: (await harness.userDO.getAuthHeaders(owner, 'claude.oauth'))?.Authorization ?? null,
+        // Refused, or past its expiry, it is no login: nothing can renew it.
+        refused: await harness.userDO.getAuthHeaders(owner, 'claude.oauth', { rejected: refusedWith('claude.oauth', 'setup-token') }),
+        expired: await harness.userDO.getAuthHeaders(owner, 'codex.oauth@work'),
+      };
+
+      expect({ used, renewals, listed: await harness.userDO.listCredentials(owner) }).toEqual({
+        used: { held: 'Bearer setup-token', refused: null, expired: null },
+        renewals: [],
+        // Settings reads when it stops working.
+        listed: [{ key: 'claude.oauth', kind: 'oauth', expiresAt }, { key: 'codex.oauth@work', kind: 'oauth', expiresAt: expect.any(Number) }],
+      });
+      harness.close();
+    } finally {
+      globalThis.fetch = originalFetch;
     }
-
-    expect(await harness.userDO.listCredentials(owner)).toEqual([]);
-    harness.close();
   });
 });
 

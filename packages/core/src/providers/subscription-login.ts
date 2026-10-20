@@ -62,15 +62,32 @@ export async function rotateLogin(key: string, doing: string, rotate: () => Prom
   return { failed };
 }
 
-/** A subscription login renews, so it is a login at all, only with a refresh token: both backends refuse one without. */
+/** A subscription login that renews: one with a refresh token. */
 export function renewableLogin(login: { readonly refreshToken?: string | undefined } | null | undefined): boolean {
   return Boolean(login?.refreshToken);
 }
 
+/** Past its stated expiry; a login that states none is not. */
+function expiredLogin(login: { readonly expiresAt?: number | undefined }): boolean {
+  return login.expiresAt !== undefined && Date.now() >= login.expiresAt;
+}
+
 /**
- * The one policy for a stored subscription login at a call, both backends. Without a refresh token it is no login. Due
- * or refused, it renews once through the store; a retired login answers null, and an unreachable issuer leaves the
- * held login, whose call may still succeed and whose 401 otherwise says to sign in again.
+ * A login a call can use now: its access token, and either a refresh token or an expiry not yet reached. A login with
+ * no refresh token (Claude Code's `setup-token`, a token handed in) is held as it is until it expires.
+ */
+export function heldLogin(login: { readonly accessToken?: string; readonly refreshToken?: string; readonly expiresAt?: number } | null | undefined): boolean {
+  if (!login?.accessToken) return false;
+
+  return renewableLogin(login) || !expiredLogin(login);
+}
+
+/**
+ * The one policy for a stored subscription login at a call, both backends. A login with no refresh token is used as it
+ * is until it expires: Kinu never renews it, and expired or refused it is no login, the call answered in the
+ * provider's own words. A renewable one, due or refused, renews once through the store; a retired login answers null,
+ * and an unreachable issuer leaves the held login, whose call may still succeed and whose 401 otherwise says to sign
+ * in again.
  */
 export async function usableLogin(input: {
   readonly issuer: SubscriptionIssuer;
@@ -80,7 +97,7 @@ export async function usableLogin(input: {
 }): Promise<OAuthCredential | null> {
   const { credential } = input;
 
-  if (!renewableLogin(credential)) return null;
+  if (!renewableLogin(credential)) return input.refused || expiredLogin(credential) ? null : credential;
 
   if (!input.refused && !input.issuer.expiring(credential)) return credential;
   const renewed = await input.renew();

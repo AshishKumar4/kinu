@@ -4,8 +4,8 @@ import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
-import { healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
-import { sessionGate } from '../auth/session';
+import { CLIENT_ERROR_ENDPOINT, healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
+import { crossSiteRejection, requestIdentity, sessionGate } from '../auth/session';
 import { authApiRoutes } from '../auth/routes';
 import { builtinAccountRoutes, builtinAuthRoutes } from '../auth/builtin';
 import { CONTROL_PLANE_API_ROUTE } from '../control-plane/access-gate';
@@ -76,6 +76,20 @@ app.all('/api/auth/*', beneath<FamilyEnv<Env>>('/api/auth', async (c) => serveAp
 
 mount(webhookDeliveryRoutes(workspaceAgent));
 
+// Ahead of the session gate: a crash on a page anyone may open is reported too. A live session behind a report is read
+// here as the gate reads it, the cross-site rule with it; no session is no refusal.
+app.use(CLIENT_ERROR_ENDPOINT, async (c, next) => {
+  const crossSite = crossSiteRejection(c.req.raw);
+
+  if (crossSite !== null) return crossSite;
+  const identity = await requestIdentity(c.req.raw, c.env);
+
+  if (identity !== null) c.set('identity', identity);
+  await next();
+});
+
+mount(clientErrorRoutes);
+
 app.use('/api/*', (c, next) => settle(Effect.gen(function* () {
   const identity = yield* sessionGate(c.req.raw, c.env);
 
@@ -87,8 +101,6 @@ app.use('/api/*', (c, next) => settle(Effect.gen(function* () {
 })));
 
 mount(feedbackRoutes);
-
-mount(clientErrorRoutes);
 
 mount(controlRoutes);
 

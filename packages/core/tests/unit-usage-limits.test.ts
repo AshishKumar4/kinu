@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction, LimitCache, limitLines, type LimitSource } from '../src/index';
+import { workerdFetch } from '@kinu.run/test-utils';
 
 const NOW = Date.parse('2026-09-25T10:00:00Z');
 
@@ -43,6 +44,17 @@ function providers(overrides: Readonly<Record<string, () => Response>> = {}) {
 const source = (key: string): LimitSource => ({ key, headers: async () => ({ Authorization: `Bearer ${key}` }) });
 
 describe('what each provider account has left', () => {
+  // Production walkthrough, rc28: Settings › Usage showed "Illegal invocation" for the OpenCode Go quota.
+  test("a deployment's own fetch reads every quota, given as the cache's or as a source's", async () => {
+    const { fetch } = providers();
+    const keys = ['claude.oauth', 'opencode-go.bearer'];
+    const viaCache = await new LimitCache(() => NOW).read(keys.map(source), { fetch: workerdFetch(fetch) });
+    const viaSource = await new LimitCache(() => NOW).read(keys.map((key) => ({ ...source(key), fetch: workerdFetch(fetch) })));
+
+    expect([viaCache, viaSource].map(({ limits, limitsUnread }) => ({ read: limits.map((report) => report.provider), unread: limitsUnread })))
+      .toEqual([{ read: ['claude', 'opencode-go'], unread: [] }, { read: ['claude', 'opencode-go'], unread: [] }]);
+  });
+
   test('each reader turns its provider\'s answer into named windows, used and left', async () => {
     const { fetch } = providers();
     const cache = new LimitCache(() => NOW);

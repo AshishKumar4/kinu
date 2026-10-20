@@ -1200,10 +1200,6 @@
     "UNIQUE (actor_id, id)",
     "CHECK(run_end_json IS NULL OR run_end_path IS NULL)"
   ],
-  "refinement_lane_holds@packages/core/src/evolution/refinement.ts": [
-    "actor_id TEXT PRIMARY KEY",
-    "answered INTEGER NOT NULL"
-  ],
   "refinement_requests@packages/core/src/evolution/refinement.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

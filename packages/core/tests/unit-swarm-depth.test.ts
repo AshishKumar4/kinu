@@ -28,7 +28,7 @@ import { resolveVerifier } from '../src/strategy/verifier-registry';
 import type { Floor, Objective, ObjectiveIdentity, VectorObjective } from '../src/strategy/objective';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
-import type { LLM, SqlExecutor } from '../src/types/primitives';
+import type { RoutedLLM, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActors, present, unobservedSpend, unpricedLedger, type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -1765,7 +1765,8 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
     });
 
     // Answers per candidate, bounded by the prompt's section header, since siblings' text is in the prompt too.
-    const judgeModel: LLM = {
+    const judgeModel: RoutedLLM = {
+      object: async () => { throw new Error('an ensemble asks for no schema'); },
       async complete(prompt: string): Promise<string> {
         const candidate = prompt.split('Candidate approach:\n')[1]?.split('\nSibling approaches')[0] ?? '';
         const branch = MEDIANS.findIndex((_unused, index) => candidate.includes(`${MARK}${String(index)}`));

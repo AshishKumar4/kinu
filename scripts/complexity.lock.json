@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-20",
-  "files": 3594,
-  "functions": 94911,
+  "files": 3614,
+  "functions": 95149,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -407,10 +407,6 @@
     },
     {
       "key": "packages/core/src/chat.ts#runChat>callModelOnce",
-      "complexity": 25
-    },
-    {
-      "key": "packages/core/src/evolution/refinement-lane.ts#plan>gen",
       "complexity": 25
     },
     {

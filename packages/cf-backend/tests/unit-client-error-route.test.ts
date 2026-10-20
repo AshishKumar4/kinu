@@ -128,18 +128,43 @@ describe('routing', () => {
   });
 });
 
+// Production walkthrough, 2026-10-20: the landing's crashes never arrived, as the route refused every report without a
+// session, and the public pages have none.
 describe('who may write to the log sink', () => {
-  test('an unauthenticated report is refused by the route itself', async () => {
-    // Guarded here too, not only by the app's session gate: a caller-only guard is one refactor from absent.
-    const response = await send(JSON.stringify(report()), null);
-    expect(response.status).toBe(401);
+  test('a report from a page anyone may open lands, labelled as no session stood behind it', async () => {
+    const logs = createRecordingLogger();
+
+    setDiagnosticsSink(logs);
+    const response = await send(JSON.stringify(report({ route: APP_ROUTES.home })), null);
+
+    expect({ status: response.status, lines: logs.emitted.filter((line) => line.event === CLIENT_RENDER_FAILED).map((line) => [line.fields.reporter, line.fields.route]) })
+      .toEqual({ status: 202, lines: [['anonymous', APP_ROUTES.home]] });
   });
 
-  test('nothing is written when the caller is refused', async () => {
-    const logs = createRecordingLogger();
-    setDiagnosticsSink(logs);
-    await send(JSON.stringify(report()), null);
-    expect(logs.emitted).toEqual([]);
+  test("a signed-in report says a session stood behind it", async () => {
+    const { lines } = await recorded(JSON.stringify(report()));
+
+    expect(lines.filter((line) => line.event === CLIENT_RENDER_FAILED).map((line) => line.fields.reporter)).toEqual(['signed-in']);
+  });
+
+  test('an anonymous reporter is budgeted by its address, as a session is by its session', async () => {
+    const env = { ...envWithStamp(STAMP), AUTH_KV: makeKv() };
+    const serve = serveFamily(clientErrorRoutes, {});
+    const from = (address: string) => serve(post(JSON.stringify(report()), { headers: { 'cf-connecting-ip': address } }), env);
+    const looping: number[] = [];
+
+    for (let sent = 0; sent < 30; sent += 1) looping.push((await from('203.0.113.7'))?.status ?? 0);
+
+    expect({ refused: looping.includes(429), another: (await from('198.51.100.2'))?.status }).toEqual({ refused: true, another: 202 });
+  });
+
+  test("a frame's query and fragment are never stored, nor its page's", async () => {
+    // A V8 frame and a JSC one, which carries no indent.
+    const leaky = '    at Setup (https://kinu.example.com/setup?token=s3cret#once-7Hq2:1:2)\nBoard@https://kinu.example.com/assets/board.js?v=2:3:4';
+    const { lines } = await recorded(JSON.stringify(report({ stack: leaky })));
+    const stored = lines.find((line) => line.event === CLIENT_RENDER_FAILED)?.fields.stack;
+
+    expect(stored).toBe('    at Setup (https://kinu.example.com/setup:1:2)\nBoard@https://kinu.example.com/assets/board.js:3:4');
   });
 });
 
@@ -288,7 +313,7 @@ describe('what one accepted report writes', () => {
     const { lines } = await recorded(JSON.stringify(report()));
     expect(Object.keys(lines[0]?.fields ?? {}).sort()).toEqual([
       'builtAt', 'componentStack', 'errorName', 'release', 'releaseMatch',
-      'reportedRelease', 'route', 'stack', 'version',
+      'reportedRelease', 'reporter', 'route', 'stack', 'version',
     ]);
   });
 

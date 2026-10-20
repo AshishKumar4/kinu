@@ -14,8 +14,6 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { sqlCheckList } from '../identity/schema';
 import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
-import type { TemporaryAgentPort } from '../subordinates/temporary';
-import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
 import type { ScaffoldControl } from './control';
 import { JsonValueSchema, parseJsonValue } from '../utils/json';
 import { ArtifactEvidenceSchema } from './artifacts';
@@ -161,8 +159,6 @@ export interface RefinementDeps {
   readonly control: ScaffoldControl;
   /** The one memory authority: explicit user preferences are written here only. */
   readonly facts: FactsStore;
-  /** null: no roster substrate; requests stay `requested` for a host that can run them. */
-  readonly refiner?: TemporaryAgentPort | null;
   /** Absent means no trust authority; a skill edit is refused and says so. */
   readonly approvals?: InstructionApprovalStore;
   /** The plane the turn's skills index reads, where a dream's skill lands and stages. */
@@ -313,53 +309,6 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
            ON refinement_requests(actor_id, debt_key) WHERE debt_key IS NOT NULL`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_refinement_stage
            ON refinement_requests(actor_id, stage, created_at)`);
-  execRaw(`CREATE TABLE IF NOT EXISTS refinement_lane_holds (
-    actor_id  TEXT PRIMARY KEY,
-    -- Answered helpers when it failed: one more is new input.
-    answered  INTEGER NOT NULL
-  )`);
-}
-
-export function holdRefinementLane(sql: SqlExecutor, actorId: string): void {
-  void sql`INSERT INTO refinement_lane_holds (actor_id, answered)
-    VALUES (${actorId}, (SELECT COUNT(*) FROM evolution_helpers WHERE actor_id = ${actorId} AND answer_status IS NOT NULL))
-    ON CONFLICT(actor_id) DO UPDATE SET answered = excluded.answered`;
-}
-
-/** A dream's helpers answer under its id: the dreamer on the id itself, its reviewer and reviser beneath it. */
-export function dreamLane(requestId: string, helper?: 'review' | 'revise', round = 0): EvolutionLaneRequest {
-  return { requestId: helper === undefined ? requestId : `${requestId}:${helper}:${String(round)}` };
-}
-
-export function refinementAnswerStored(sql: SqlExecutor, actorId: string, requestId: string): boolean {
-  return sql<{ one: number }>`SELECT 1 AS one FROM evolution_helpers
-    WHERE actor_id = ${actorId} AND answer_status IS NOT NULL
-      AND (lane_request_id = ${requestId} OR substr(lane_request_id, 1, ${requestId.length + 1}) = ${`${requestId}:`})
-    LIMIT 1`.length > 0;
-}
-
-export function releaseRefinementLane(sql: SqlExecutor, actorId: string): void {
-  void sql`DELETE FROM refinement_lane_holds WHERE actor_id = ${actorId}`;
-}
-
-const EvolutionAnswerAtSchema = v.object({ at: v.nullable(v.number()) });
-
-export function nextEvolutionAnswerAt(sql: SqlExecutor, actorId: string): number | null {
-  // A live pass finishes its own planning row.
-  const live = JSON.stringify([...liveClaims]);
-
-  const [row] = sql<{ at: number | null }>`SELECT MIN(h.created_at) AS at FROM (
-      SELECT id FROM refinement_requests WHERE actor_id = ${actorId}
-        AND (stage = 'requested' OR (stage = 'planning' AND (claim IS NULL OR claim NOT IN (SELECT value FROM json_each(${live})))))
-      ORDER BY created_at ASC, id ASC LIMIT 1
-    ) r
-    JOIN evolution_helpers h ON h.actor_id = ${actorId}
-      AND (h.lane_request_id = r.id OR substr(h.lane_request_id, 1, length(r.id) + 1) = r.id || ':')
-    WHERE h.answer_status IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM refinement_lane_holds hd WHERE hd.actor_id = ${actorId}
-        AND hd.answered >= (SELECT COUNT(*) FROM evolution_helpers e WHERE e.actor_id = ${actorId} AND e.answer_status IS NOT NULL))`;
-
-  return v.parse(EvolutionAnswerAtSchema, row ?? { at: null }).at;
 }
 
 interface OpenRefinementInput {

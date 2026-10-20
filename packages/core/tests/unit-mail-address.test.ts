@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mailAddressOf, mailLabelOf, parseMailRecipient } from '../src/mail/address';
+import { mailAddressOf, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername } from '../src/mail/address';
 
 const DOMAIN = 'kinu.run';
 
@@ -44,5 +44,25 @@ describe('a recipient names one box: the person, a workspace or an agent, under 
     expect(mailLabelOf('Router firmware in Ghidra -')).toBe('router-firmware-in-g');
     expect(mailLabelOf('---')).toBeNull();
     expect(mailLabelOf('ab-------------------cd')).toBe('ab-cd');
+  });
+});
+
+describe('the username a person is offered, and the ones they may not have', () => {
+  test('is their first name, lowercased, as it reads in an address; else their email\'s local part', () => {
+    expect(suggestedMailUsername({ displayName: 'Ashish Kumar Singh', email: 'me@ashishkumarsingh.com' })).toBe('ashish');
+    expect(suggestedMailUsername({ displayName: 'José Ramírez', email: 'jr@example.com' })).toBe('jose');
+    expect(suggestedMailUsername({ displayName: '  Priya ', email: 'priya.raman@raman.dev' })).toBe('priya');
+    expect(suggestedMailUsername({ displayName: null, email: 'priya.raman@raman.dev' })).toBe('priya-raman');
+    expect(suggestedMailUsername({ displayName: '李', email: 'dana_w@northwind.io' })).toBe('dana-w');
+    expect(suggestedMailUsername({ displayName: 'Admin', email: 'postmaster@example.com' })).toBeNull();
+  });
+
+  test('a username is a label no one else may need: the mail systems\' names are reserved', () => {
+    expect(mailUsernameRefusal('ashish')).toBeNull();
+    expect(mailUsernameRefusal('')).toBe('invalid');
+    expect(mailUsernameRefusal('Ashish')).toBe('invalid');
+    expect(mailUsernameRefusal('-ashish')).toBe('invalid');
+    expect(mailUsernameRefusal('a'.repeat(21))).toBe('invalid');
+    expect(['postmaster', 'abuse', 'noreply', 'dmarc', 'admin'].map(mailUsernameRefusal)).toEqual(['reserved', 'reserved', 'reserved', 'reserved', 'reserved']);
   });
 });
