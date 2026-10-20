@@ -18,7 +18,7 @@ import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/co
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { stampSchemaGenesis } from '@kinu.run/core';
-import { createMemoryVfs, workspaceDatabase } from '@kinu.run/test-utils';
+import { createMemoryVfs, runToExit, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { sqlStorageOver } from '@kinu.run/core/identity';
 
@@ -81,24 +81,10 @@ function seedWorkspace(path: string): void {
   db.close();
 }
 
+/** Run to its exit with both pipes drained as it runs: a child that fills one never waits on this test. The CLI records
+ *  its cwd as the agent file plane, so a run never sits in the developer repo. */
 function runCli(home: string, args: string[], env: Record<string, string> = {}, cwd = scratch('kinu-test-project-')) {
-  return Bun.spawn([process.execPath, cliBin, ...args], {
-    // The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo.
-    cwd,
-    env: { ...process.env, KINU_HOME: home, NO_COLOR: '1', ...env },
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-}
-
-async function result(proc: ReturnType<typeof runCli>) {
-  const exitCode = await proc.exited;
-
-  return {
-    exitCode,
-    stdout: await new Response(proc.stdout).text(),
-    stderr: await new Response(proc.stderr).text(),
-  };
+  return runToExit([process.execPath, cliBin, ...args], { cwd, env: { ...process.env, KINU_HOME: home, NO_COLOR: '1', ...env } });
 }
 
 function restoredDb(home: string, name: string): Database {
@@ -136,7 +122,7 @@ describe('kinu export / import', () => {
     mkdirSync(join(home, 'scout', 'slates', 'board'), { recursive: true });
     writeFileSync(join(home, 'scout', 'slates', 'board', 'index.ts'), 'export const board = 1;\n');
     const archive = join(project, 'backup.kinu.jsonl');
-    const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
+    const exported = await runCli(home, ['export', 'scout', '-o', archive]);
     expect(exported.exitCode).toBe(0);
     const records = readFileSync(archive, 'utf8').trim().split('\n').map(parseJsonObject);
 
@@ -147,7 +133,7 @@ describe('kinu export / import', () => {
     expect(pages.flatMap((page) => page.rows.map((row) => row.path)).filter((path) => /agent\.db|backup\.kinu/.test(path))).toEqual([]);
 
     const folder = scratch('kinu-import-folder-');
-    const imported = await result(runCli(home, ['import', archive, '--name', 'restored-files'], {}, folder));
+    const imported = await runCli(home, ['import', archive, '--name', 'restored-files'], {}, folder);
     expect(imported.stderr).toBe('');
     expect(imported.exitCode).toBe(0);
     expect(readFileSync(join(folder, 'docs', 'note.txt'), 'utf8')).toBe('project bytes outside SQLite');
@@ -162,12 +148,12 @@ describe('kinu export / import', () => {
     writeFileSync(join(project, 'same.txt'), 'same');
     writeFileSync(join(project, 'changed.txt'), 'archived');
     const archive = join(scratch('kinu-import-clash-out-'), 'scout.kinu.jsonl');
-    expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
+    expect((await runCli(home, ['export', 'scout', '-o', archive])).exitCode).toBe(0);
 
     const folder = scratch('kinu-import-clash-');
     writeFileSync(join(folder, 'same.txt'), 'same');
     writeFileSync(join(folder, 'changed.txt'), 'newer work');
-    const imported = await result(runCli(home, ['import', archive, '--name', 'clash'], {}, folder));
+    const imported = await runCli(home, ['import', archive, '--name', 'clash'], {}, folder);
 
     expect(imported.exitCode).toBe(1);
     expect(imported.stderr).toContain('already holds changed.txt with other contents');
@@ -184,12 +170,12 @@ describe('kinu export / import', () => {
     writeFileSync(join(project, 'run.sh'), 'echo ran\n', { mode: 0o750 });
     utimesSync(join(project, 'run.sh'), 1_000, 2_000);
     const archive = join(scratch('kinu-export-link-out-'), 'scout.kinu.jsonl');
-    const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
+    const exported = await runCli(home, ['export', 'scout', '-o', archive]);
     expect(exported.exitCode).toBe(0);
     expect(readFileSync(archive, 'utf8')).not.toContain(Buffer.from('not part of this workspace').toString('base64'));
 
     const folder = scratch('kinu-import-link-');
-    const imported = await result(runCli(home, ['import', archive, '--name', 'linked'], {}, folder));
+    const imported = await runCli(home, ['import', archive, '--name', 'linked'], {}, folder);
     expect(imported.exitCode).toBe(0);
     const script = lstatSync(join(folder, 'run.sh'));
     expect({ link: readlinkSync(join(folder, 'link')), mode: script.mode & 0o7777, mtime: Math.round(script.mtimeMs) })
@@ -201,12 +187,12 @@ describe('kinu export / import', () => {
     const out = scratch('kinu-export-out-');
 
     const archive = join(out, 'scout.kinu.jsonl');
-    const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
+    const exported = await runCli(home, ['export', 'scout', '-o', archive]);
     expect(exported.stderr).toBe('');
     expect(exported.exitCode).toBe(0);
     expect(exported.stdout).toContain('Exported scout (local)');
 
-    const imported = await result(runCli(home, ['import', archive, '--name', 'scout-restored']));
+    const imported = await runCli(home, ['import', archive, '--name', 'scout-restored']);
     expect(imported.stderr).toBe('');
     expect(imported.exitCode).toBe(0);
     expect(imported.stdout).toContain('Imported workspace scout-restored');
@@ -270,9 +256,9 @@ describe('kinu export / import', () => {
     try {
       const archive = join(out, 'skywriter.kinu.jsonl');
 
-      const exported = await result(runCli(home, ['export', 'skywriter', '-o', archive], {
+      const exported = await runCli(home, ['export', 'skywriter', '-o', archive], {
         KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
-      }));
+      });
 
       expect(exported.stderr).toBe('');
       expect(exported.exitCode).toBe(0);
@@ -282,7 +268,7 @@ describe('kinu export / import', () => {
       expect(calls[0].cursor).toBeNull();
 
       // The cloud ref holds the name here, so the local copy takes its own.
-      const imported = await result(runCli(home, ['import', archive, '--name', 'skywriter-local']));
+      const imported = await runCli(home, ['import', archive, '--name', 'skywriter-local']);
       expect(imported.stderr).toBe('');
       expect(imported.exitCode).toBe(0);
       expect(imported.stdout).toContain('Imported workspace skywriter-local');
@@ -347,11 +333,11 @@ describe('kinu export / import', () => {
     }));
 
     try {
-      const exported = await result(runCli(home, ['export', 'skywriter', '-o', archive]));
+      const exported = await runCli(home, ['export', 'skywriter', '-o', archive]);
 
       expect(exported.exitCode).toBe(0);
       expect({ restarted, starts }).toEqual({ restarted: true, starts: 2 });
-      const imported = await result(runCli(home, ['import', archive, '--name', 'after-restart']));
+      const imported = await runCli(home, ['import', archive, '--name', 'after-restart']);
 
       expect(imported.exitCode).toBe(0);
 
@@ -373,13 +359,13 @@ describe('kinu export / import', () => {
   test('an import under a name a cloud workspace holds is refused, and no workspace is written', async () => {
     const { home: source } = placedWorkspace();
     const archive = join(scratch('kinu-export-claimed-out-'), 'oldbot.kinu.jsonl');
-    expect((await result(runCli(source, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
+    expect((await runCli(source, ['export', 'scout', '-o', archive])).exitCode).toBe(0);
     const home = scratch('kinu-export-claimed-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {
       oldbot: { name: 'oldbot', mode: 'cloud', cloudName: 'oldbot', displayName: 'Oldbot', createdAt: '', updatedAt: '' },
     } }));
 
-    const imported = await result(runCli(home, ['import', archive, '--name', 'oldbot']));
+    const imported = await runCli(home, ['import', archive, '--name', 'oldbot']);
     expect(imported.exitCode).not.toBe(0);
     expect(imported.stderr).toContain('"oldbot" already names a cloud workspace');
     expect(existsSync(join(home, 'oldbot', 'agent.db'))).toBe(false);
@@ -393,9 +379,9 @@ describe('kinu export / import', () => {
     writeFileSync(join(notes, 'MEMORY.md'), 'the wrangler deploy goes to staging\n');
     const archive = join(scratch('kinu-export-notes-'), 'scout.kinu.jsonl');
 
-    expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
-    expect((await result(runCli(home, ['import', archive, '--name', 'restored-notes']))).exitCode).toBe(0);
-    const found = await result(runCli(home, ['memory', 'restored-notes', 'wrangler', '--json']));
+    expect((await runCli(home, ['export', 'scout', '-o', archive])).exitCode).toBe(0);
+    expect((await runCli(home, ['import', archive, '--name', 'restored-notes'])).exitCode).toBe(0);
+    const found = await runCli(home, ['memory', 'restored-notes', 'wrangler', '--json']);
 
     expect(found.stderr).toBe('');
     expect(found.exitCode).toBe(0);
@@ -408,7 +394,7 @@ describe('kinu export / import', () => {
     const current = join(home, 'scout', 'agent.db');
 
     const archive = join(out, 'scout.kinu.jsonl');
-    expect((await result(runCli(home, ['export', 'scout', '-o', archive]))).exitCode).toBe(0);
+    expect((await runCli(home, ['export', 'scout', '-o', archive])).exitCode).toBe(0);
     const [header, ...records] = readFileSync(archive, 'utf8').split('\n');
     const unstamped = { ...parseJsonObject(header ?? '') };
     Reflect.deleteProperty(unstamped, 'schema_stamp');
@@ -424,7 +410,7 @@ describe('kinu export / import', () => {
     ];
 
     for (const args of commands) {
-      const refused = await result(runCli(home, args));
+      const refused = await runCli(home, args);
 
       expect(refused.exitCode).toBe(1);
       // The workspace by the name the user gave it, and the one command that starts fresh.
@@ -445,11 +431,11 @@ describe('kinu export / import', () => {
     const out = scratch('kinu-export-damaged-out-');
 
     const archive = join(out, 'scout.kinu.jsonl');
-    await result(runCli(home, ['export', 'scout', '-o', archive]));
+    await runCli(home, ['export', 'scout', '-o', archive]);
     const lines = readFileSync(archive, 'utf8').split('\n').filter(Boolean);
     writeFileSync(archive, `${lines.slice(0, lines.length - 1).join('\n')}\n`);
 
-    const imported = await result(runCli(home, ['import', archive, '--name', 'half']));
+    const imported = await runCli(home, ['import', archive, '--name', 'half']);
     expect(imported.exitCode).toBe(1);
     expect(imported.stderr).toContain('incomplete');
     expect(() => restoredDb(home, 'half')).toThrow('unable to open database file');

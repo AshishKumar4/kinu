@@ -9,7 +9,7 @@ import { MEMORY_PATH } from '@kinu.run/core';
 import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
-import { getLocalAgentState, inspectLocalSubordinate, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
+import { getLocalAgentState, inspectLocalSubordinate, listLocalExecutors, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
 import { present } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { claimFences } from '@kinu.run/core';
@@ -109,6 +109,18 @@ describe('local inspection of memory', () => {
     db.close();
 
     expect(await readLocalMemory(MEMORY_NAME)).toBe('# Memory\n\nedited in place\n');
+  });
+
+  // Inspection once listed `fs`, `memory` and `craft`, names no executor declares, and missed `fs_shared` and the
+  // languages the agent's row carries.
+  test("lists the workspace executor's capabilities as the agent's own row declares them", () => {
+    const db = workspaceDatabase(agentDbPath(MEMORY_NAME));
+    const rt = createCLIRuntime(db, { llm: { name: 'offline', baseURL: 'http://localhost:0', headers: {}, model: 'offline-model' }, cwd: scratchDir('inspection-folder') });
+    const declared = present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor').capabilities;
+
+    db.close();
+
+    expect(new Set(listLocalExecutors()[0]?.capabilities)).toEqual(new Set(declared));
   });
 
   // The agent's own search ranks every term wherever it falls; inspection asks the same index the same way.
