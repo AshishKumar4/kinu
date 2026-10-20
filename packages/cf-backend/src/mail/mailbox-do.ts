@@ -94,6 +94,29 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return this.refusal === undefined ? Effect.promise(async () => await work()) : Effect.fail(this.refusal);
   }
 
+  /**
+   * The account's mail deleted, as the account is (docs/MAIL.md §11): every object under its R2 prefix, its rows, its
+   * outbox and its alarm. Answers the labels it held, for the caller to retire. Again, it finds nothing.
+   */
+  async deleteBox(userId: string): Promise<{ readonly labels: readonly string[] }> {
+    const [box] = this.ctx.storage.sql.exec('SELECT username FROM mail_box WHERE id = 1').toArray();
+    const labels = box === undefined ? [] : [v.parse(v.object({ username: v.string() }), box).username];
+    const bucket = this.bucket ?? undefined;
+
+    // The prefix, not the rows' keys: bytes an interrupted delivery left unreferenced are the account's too.
+    for (let page = await bucket?.list({ prefix: `mail/${userId}/` }); page !== undefined && page.objects.length > 0; page = await bucket?.list({ prefix: `mail/${userId}/` })) {
+      await bucket?.delete(page.objects.map((object) => object.key));
+    }
+
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    // As made: a call that comes after meets an empty box, not missing tables.
+    initMailboxTables(this.ctx.storage.sql);
+    writeStamp(durableStamps(this.ctx.storage.kv), 'mailbox');
+
+    return { labels };
+  }
+
   /** The alarm serves both clocks: the outbox's next retry and the Trash's next emptying. */
   private async arm(at: number | null = null): Promise<void> {
     const due = [at, this.outbox.nextRetryAt(), this.store.nextPurgeAt()].filter((each): each is number => each !== null);

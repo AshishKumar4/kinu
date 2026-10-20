@@ -624,6 +624,16 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * Every live share of `slate` ended, or of every slate here: before a slate's source is removed, or its workspace is
    * deleted, so nothing removed is still shared or found in the Gallery. Whether any was.
    */
+  /**
+   * A deleted account forgotten here: no share of this workspace admits it, by its id or by an email that later signs up
+   * again, and the traces it left name no one (`SlateLiveShareStore.forgetPerson`). The overview goes out again.
+   */
+  async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<void> {
+    new SlateShareStore(this.ports.sql).forgetUser(person);
+    await this.live.forgetPerson(person, viewerKey);
+    await this.ports.sharesChanged?.();
+  }
+
   async endLiveShares(slate?: string): Promise<boolean> {
     const live = this.live.list().filter((row) => row.revokedAt === null && (slate === undefined || row.slate === slate));
 

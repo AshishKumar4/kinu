@@ -2261,7 +2261,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposure, sandboxPreviewExposures,
+  sandboxPreviewExposure, sandboxPreviewExposures, forgetSandboxPreviews, type ListedKv,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 

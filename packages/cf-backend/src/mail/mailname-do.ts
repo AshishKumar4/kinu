@@ -59,4 +59,16 @@ export class MailNameDO extends DurableObject<Env> {
 
     return { label, user_id: userId, kind, target_path: kind === 'alias' ? targetPath : null, state: 'active' };
   }
+
+  /**
+   * The label retired for good, as its account is deleted (docs/MAIL.md §11): nothing routes to it and it is never
+   * reissued, and nothing in it names who held it. A label `userId` does not hold is not its to retire.
+   */
+  async retire(userId: string): Promise<void> {
+    const held = await this.lookup();
+
+    if (held === null || held.user_id !== userId) return;
+    this.ctx.storage.sql.exec(`UPDATE mail_name SET state = 'retired', user_id = '', target_path = CASE WHEN kind = 'alias' THEN '' ELSE NULL END,
+      ended_at = ? WHERE label = ?`, Date.now(), held.label);
+  }
 }

@@ -65,6 +65,14 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
 /** The key of every open by someone signed out: one bucket, which never counts as a viewer. */
 export const SIGNED_OUT_VIEWER = '';
 
+/** What a signed-in viewer's requests are recorded under (`slate_viewer_requests.viewer`). */
+export function accountViewer(userId: string): string {
+  return `user:${userId}`;
+}
+
+/** What a deleted account's requests and edits are recorded under once it is forgotten: no one. */
+export const FORGOTTEN_PERSON = 'a deleted account';
+
 const EditMarkRow = v.object({ editor: v.string(), revision_before: v.nullable(v.string()) });
 
 export interface SlateEditMark {
@@ -202,6 +210,23 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     const mark = v.parse(EditMarkRow, row);
 
     return { editor: mark.editor, revisionBefore: mark.revision_before };
+  }
+
+  /**
+   * A deleted account in this workspace's live shares: its memberships go, and what it left keeps its count without
+   * naming it: its requests and edit marks name no one, and its views, keyed per share by `viewerKey`, are deleted.
+   */
+  async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<void> {
+    this.forgetUser(person);
+    this.db.exec('UPDATE slate_viewer_requests SET viewer = ? WHERE viewer = ?', FORGOTTEN_PERSON, accountViewer(person.userId));
+    this.db.exec('UPDATE slate_edit_marks SET editor = ? WHERE lower(editor) = ?', FORGOTTEN_PERSON, person.email);
+
+    // A deployment with no key for views counted no account apart from the signed out: nothing of it is there.
+    for (const { id } of this.list()) {
+      const key = await viewerKey(id);
+
+      if (key !== null) this.db.exec('DELETE FROM slate_share_views WHERE share = ? AND viewer = ?', id, key);
+    }
   }
 
   markEdit(slate: string, editor: string, revisionBefore: string | null): void {

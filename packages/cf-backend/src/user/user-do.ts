@@ -27,7 +27,12 @@ import {
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
-import { tenantDrive } from '../drive/tenant';
+import { destroyDriveTenant, tenantDrive } from '../drive/tenant';
+import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
+import { internalCaller } from '@kinu.run/core/control-plane';
+import { builtinSignInOn } from '@kinu.run/core/identity';
+import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
+import { builtinAccounts } from '../auth/builtin';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
 import type { McpPresetAvailability, McpServerSummary, ProviderListing } from '@kinu.run/core';
@@ -396,6 +401,22 @@ export class UserDO extends Agent<Env> {
     return this.profile.sharesSeen(caller, at);
   }
 
+  /**
+   * An account this one shared with is deleted; its delete names the workspaces of this account that shared with it.
+   * Each forgets it (`OrchestratorAgent.forgetPerson`), then no card goes to it again and nothing here names it.
+   */
+  async shareRecipient_forget(caller: UserCaller, person: { readonly userId: string; readonly email: string }, workspaces: readonly string[]): Promise<void> {
+    await this.requireTier(caller, 'shares');
+    const mine = new Set(this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`).map((row) => row.name));
+
+    for (const workspace of new Set(workspaces)) {
+      if (mine.has(workspace)) await objectNamed(this.env.OrchestratorAgent, workspace).forgetPerson(this.name, person);
+    }
+
+    await this.shareCards.forgetRecipient(person.userId);
+    this.workspaces.forgetShareUser(person.email);
+  }
+
   sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
     return this.profile.sharesReceived_forget(caller, ownerUserId);
   }
@@ -627,6 +648,10 @@ export class UserDO extends Agent<Env> {
 
   builtinListAccounts(caller: UserCaller): Promise<ListedAccount[]> {
     return this.sessions.builtinListAccounts(caller);
+  }
+
+  builtinRemoveAccount(caller: UserCaller, person: { readonly userId: string; readonly email: string }): Promise<void> {
+    return this.sessions.builtinRemoveAccount(caller, person);
   }
 
   builtinClearAttempts(caller: UserCaller, keys: readonly string[]): Promise<void> {
@@ -1303,10 +1328,24 @@ export class UserDO extends Agent<Env> {
    * Delete everything under this account, then the object itself; the step order is the contract.
    * Each step leaves no rows, so a failed sweep resumes on retry; errors propagate to the owner.
    */
+  /**
+   * Everything the account is, deleted, each store through its own delete path (the privacy policy's promise): the
+   * shares it gave and took, its workspaces, devices and MCP servers, its credentials (revoked at their providers), its
+   * mail and mail names, its Drive, its place in the fleet's index and Gallery, its built-in sign-in, then this object.
+   * A step that fails stops it before this object goes, so a retry still has every index here; each step is idempotent.
+   */
   async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
     await this.requireTier(caller, 'account');
 
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    const person = { userId: ownerUserId, email: (this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '').trim().toLowerCase() };
+
+    // Every account it sent a card forgets it; its own card jobs are withdrawn first, so none lands after. Every account
+    // that sent it one forgets it too, where it shared.
+    await forgetSharesGiven(this.env, ownerUserId, caller, await this.shareCards_withdraw(caller));
+    const cards = this.sqlx<{ owner_user_id: string; workspace: string }>(`SELECT owner_user_id, workspace FROM user_share_cards`);
+
+    await forgetSharesReceived(this.env, person, caller, cards.map((card) => ({ ownerUserId: card.owner_user_id, workspace: card.workspace })));
 
     const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
 
@@ -1325,6 +1364,22 @@ export class UserDO extends Agent<Env> {
     for (const { id } of servers) {
       await this.mcpServers.userMcp_remove(caller, id);
     }
+
+    // Each grant revoked at its provider where it can be; a provider that refuses is logged, and the grant goes here.
+    for (const { key } of this.sqlx<{ key: string }>(`SELECT key FROM user_credentials`)) await this.credentials.disconnectCredential(key, true);
+
+    const { labels } = await objectNamed(this.env.MAILBOX, ownerUserId).deleteBox(ownerUserId);
+
+    for (const label of labels) await objectNamed(this.env.MAILNAME, label).retire(ownerUserId);
+    await destroyDriveTenant(this.env, ownerUserId);
+
+    const { ControlPlaneDO } = this.env;
+
+    if (ControlPlaneDO !== undefined && hasControlPlane({ ControlPlaneDO })) {
+      await controlPlaneStub({ ControlPlaneDO }).forgetUser(await internalCaller(this.env), person);
+    }
+
+    if (builtinSignInOn(this.env)) await builtinAccounts(this.env).builtinRemoveAccount(await ownerCaller(this.env), person);
 
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made

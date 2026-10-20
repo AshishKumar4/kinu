@@ -61,6 +61,11 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
     }));
   }
 
+  /** A deleted account's memberships, in every share here, by its id or its email (lower-cased). */
+  forgetUser(person: { readonly userId: string; readonly email: string }): void {
+    this.db.exec(`DELETE FROM ${this.table.users} WHERE user_id = ? OR lower(email) = ?`, person.userId, person.email);
+  }
+
   list(): Rec[] {
     const rows = this.db.exec(`SELECT * FROM ${this.table.shares} ORDER BY created_at DESC, id`).toArray()
       .map((row) => v.parse(this.table.row, row));

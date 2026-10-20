@@ -78,13 +78,13 @@ import { controlPlaneStub, hasControlPlane } from './control-plane/stub';
 import { serialQueue } from '@kinu.run/agent-utils';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
-import { PREVIEW_SELF } from "./viewer-pass";
+import { PREVIEW_SELF, shareViewerKey } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import type { UserDO } from "./user/user-do";
 import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
-import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
+import { closeWorkspaceBrowserSessions, initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
@@ -269,7 +269,7 @@ import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/de
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
-import { sandboxPreviewExposures } from "@kinu.run/core";
+import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure, CompletedTurnSchema,
@@ -5409,6 +5409,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
+  /**
+   * A deleted account forgotten in this workspace's shares (account deletion): asked by the owner's account, which the
+   * deleted one told this workspace shared with it. Not @callable: as `destroyAgent`, it checks the owner it names.
+   */
+  forgetPerson(expectedOwnerUserId: string, person: { readonly userId: string; readonly email: string }): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      // Never claimed, or storage from before a reset: no share of it admits anyone.
+      if (this.storageRefusal !== undefined || this.getOwnerUserId() === null) return;
+
+      if (this.getOwnerUserId() !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to forget a person.');
+      const { controller } = yield* Effect.promise(async () => this.slates());
+      yield* Effect.promise(async () => controller.forgetPerson(person, (share) => shareViewerKey(this.env, share, person.userId)));
+    }));
+  }
+
   private async releaseOutsideState(): Promise<void> {
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
@@ -5416,7 +5431,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await sandboxPreviewExposures(
         this.env.AUTH_KV, sandboxIdForWorkspace(this.name),
       ).revokeAll();
+      // Then its records go: no port of it is published again, so none needs keeping.
+      await forgetSandboxPreviews(this.env.AUTH_KV, sandboxIdForWorkspace(this.name));
     }
+
+    // Its agents' browsers on Browser Run hold their pages until they sit idle out: closed now.
+    await closeWorkspaceBrowserSessions(this.ctx.storage.sql, this.env.BROWSER);
 
     const sb = this.computerBox();
 

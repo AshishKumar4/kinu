@@ -130,6 +130,18 @@ export class ShareCardJobs extends LifecycleCapability {
     return [...new Set([...sent, ...owed])];
   }
 
+  /**
+   * A deleted recipient: no delivery to it is still owed or lands after this, and no sent row names it. Its account is
+   * gone, so it is told nothing; its workspaces forgot it first (`OrchestratorAgent.forgetPerson`).
+   */
+  async forgetRecipient(userId: string): Promise<void> {
+    const jobs = this.lifecycle.jobs.list().filter((job) => job.fn === SHARE_CARD_JOB && v.parse(ShareCardWriteSchema, job.payload).recipient === userId);
+
+    await Promise.all(jobs.map((job) => this.lifecycle.jobs.cancel(job.id)));
+    await Promise.allSettled(this.#sending);
+    this.#deps.sql.exec('DELETE FROM share_cards_sent WHERE recipient_user_id = ?', userId);
+  }
+
   /** One job per recipient and share: a newer write replaces an older one not yet delivered, since only the last counts. */
   private async queue(write: ShareCardWrite): Promise<void> {
     await this.lifecycle.jobs.push({

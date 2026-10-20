@@ -305,6 +305,39 @@ export function forgetWorkspace(
 }
 
 
+/** What forgetting an account deleted that the caller has more to do for: its feedback's screenshots. */
+export interface ForgottenUser {
+  readonly feedback: number;
+}
+
+/**
+ * A deleted account, as the index knew it: its user and workspace rows and its feedback are deleted. The operators'
+ * audit keeps its rows, with the account's id, email and workspaces' names replaced by `pseudonym` wherever they
+ * stand, as the actor, in a target or in the detail. Answers how many feedback rows went; their screenshots are the
+ * caller's to delete (R2, `feedback/<userId>/`).
+ */
+export function forgetUser(sql: ControlPlaneSql, person: { readonly userId: string; readonly email: string }, pseudonym: string): ForgottenUser {
+  const { userId, email } = person;
+  const workspaces = select(sql, v.object({ name: v.string() }), 'SELECT name FROM cp_workspaces WHERE user_id = ? ORDER BY length(name) DESC, name', userId);
+  const feedback = select(sql, v.object({ n: v.number() }), 'SELECT COUNT(*) AS n FROM cp_feedback WHERE user_id = ?', userId)[0]?.n ?? 0;
+
+  const replace = (from: string, to: string): void => {
+    sql.exec(`UPDATE cp_audit SET actor_user = replace(actor_user, ?1, ?2), actor_email = replace(actor_email, ?1, ?2), target = replace(target, ?1, ?2),
+      detail = replace(detail, ?1, ?2) WHERE instr(actor_user, ?1) > 0 OR instr(actor_email, ?1) > 0 OR instr(target, ?1) > 0 OR instr(detail, ?1) > 0`, from, to);
+  };
+
+  // A workspace is named under its owner, `<userId>/<name>`: each becomes one of the pseudonym's own, longest first.
+  for (const [index, { name }] of workspaces.entries()) replace(`${userId}/${name}`, `${pseudonym}/workspace-${String(index + 1)}`);
+  replace(userId, pseudonym);
+
+  if (email !== '') replace(email, pseudonym);
+  sql.exec('DELETE FROM cp_feedback WHERE user_id = ?', userId);
+  sql.exec('DELETE FROM cp_workspaces WHERE user_id = ?', userId);
+  sql.exec('DELETE FROM cp_users WHERE user_id = ?', userId);
+
+  return { feedback };
+}
+
 /** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
 export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
   return select(sql, v.object({ name: v.string() }),

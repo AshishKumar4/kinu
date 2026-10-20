@@ -10,7 +10,7 @@ import { usageTotal, UsageSchema } from '../usage';
 import type { MissionGovernor } from '../mission-budget';
 import type { JsonValue } from '../utils/json';
 import { shareCaller, type SlateCaller } from './caller';
-import type { SlateLiveShareStore } from './live-shares';
+import { accountViewer, type SlateLiveShareStore } from './live-shares';
 import type { ApprovalSpend } from '../safety/approval-gate';
 import type { OwnerEffects, ServerSend } from './shared-server';
 import { slateAddressImpact } from './members';
@@ -77,7 +77,7 @@ export class SlateShareViewers {
     if (entry !== null) return { kind: 'sign-in', entry };
 
     if (share.visibility === 'users' && (input.claim.userId === null || !this.admits(share.id, input.claim.userId))) return { kind: 'missing' };
-    const subject = input.claim.userId === null ? `source:${input.claim.source}` : `user:${input.claim.userId}`;
+    const subject = input.claim.userId === null ? `source:${input.claim.source}` : accountViewer(input.claim.userId);
 
     // S2: a viewer past the bound is refused; the share is never paused.
     if (this.deps.admitted !== undefined && !await this.deps.admitted(`${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) return { kind: 'too-many' };
