@@ -14,7 +14,7 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, json, MAIL_MESSAGE_FIELDS, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
+  err, importantMail, json, MAIL_MESSAGE_FIELDS, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailThreadText, objectNamed, ownerCaller, safeJson,
   type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
@@ -164,17 +164,13 @@ mailRoutes.post('/api/user/mail/address', async (c) => {
 mailRoutes.get('/api/user/mail/important', async (c) => {
   const limit = Math.min(20, Math.max(1, Number(c.req.query('limit') ?? '3') || 3));
 
-  if (!mailOn(c) || await addressOf(c) === null) return json({ body: { enabled: mailOn(c), unread: 0, items: [] } });
+  const boxes = mailOn(c) ? await mailbox(c).boxes() : [];
+
+  if (!boxes.some((box) => box.path === '')) return json({ body: { enabled: mailOn(c), unread: 0, items: [] } });
 
   const listing = await mailbox(c).list({ view: 'important', limit });
 
-  return json({ body: {
-    enabled: true, unread: listing.unread,
-    items: listing.threads.map((thread) => ({
-      thread: thread.id, from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? '', address: thread.from[0]?.address ?? '' },
-      to: mailAddressOf('', thread.path, c.env.EMAIL_DOMAIN ?? ''), subject: thread.subject, reason: thread.important ?? '', at: thread.at, unread: thread.unread,
-    })),
-  } });
+  return json({ body: { enabled: true, unread: listing.unread, items: importantMail(listing.threads, boxes) } });
 });
 
 mailRoutes.get('/api/user/mail/threads', async (c) => {
