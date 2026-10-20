@@ -1348,7 +1348,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get lanes(): EvolutionLanes {
     this._lanes ??= new EvolutionLanes({
       engine: this.engine, budget: this.budget,
-      // Runs on the single off-turn cadence pass, beside the proposer.
+      // Runs on the single off-turn cadence pass, after the session chain.
       refinementLane: async () => { await refinementPass(this.refinementDeps); },
     });
 
@@ -1626,7 +1626,7 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /** On the substrate like `scaffoldControl`: facets accrue evolution debt too. */
+  /** On the substrate like `scaffoldControl`. Only the workspace agent dreams: a facet's engine is built disabled. */
   protected get refinementDeps(): RefinementDeps {
     return {
       control: this.scaffoldControl,
