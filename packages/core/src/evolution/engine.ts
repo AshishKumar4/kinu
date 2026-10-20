@@ -58,6 +58,7 @@ import {
   MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
 } from './session-window';
+import { turnPicks } from './picks';
 import { initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { buildChangelog } from './changelog';
@@ -336,6 +337,7 @@ export class EvolutionEngine {
           followup,
           scaffoldVersion: turn.scaffold?.version ?? null,
           artifacts: turn.artifacts ?? null,
+          picks: turnPicks(turn),
         });
       }
 

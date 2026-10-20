@@ -22,6 +22,7 @@ import { nowMs } from '../utils/date';
 import { ToolOutcomeSchema } from '../tools/outcome';
 import { StruggleSchema } from './struggles';
 import type { CompletedTurn } from './types';
+import { turnPicks, type TurnPicks } from './picks';
 
 /** A completed turn, as stored and read; `CompletedTurn` (`types.ts`) is its type, so the two cannot drift. */
 export const CompletedTurnSchema = v.object({
@@ -223,10 +224,11 @@ interface TurnRow { id: string; turn: string; followup: string | null; created_a
 
 /** Bound to one actor: ids can collide across actors, and window size, queue
  *  depth and stale-claim sweeps are counts. */
-/** What a turn ran with: its promoted text versions, and the scaffold version its program ran. */
+/** What a turn ran with: its promoted text versions, the scaffold version its program ran, and what it picked. */
 export interface RanWith {
   readonly artifacts: readonly string[] | null;
   readonly scaffoldVersion: number | null;
+  readonly picks: TurnPicks | null;
 }
 
 /**
@@ -241,9 +243,9 @@ export function completedTurnRanWith(sql: SqlExecutor, actor: ActorHandle, turnI
 
   const turn = row === undefined ? null : v.safeParse(CompletedTurnSchema, parseJsonValue(row.turn));
 
-  if (turn?.success !== true) return { artifacts: null, scaffoldVersion: null };
+  if (turn?.success !== true) return { artifacts: null, scaffoldVersion: null, picks: null };
 
-  return { artifacts: turn.output.artifacts ?? null, scaffoldVersion: turn.output.scaffold?.version ?? null };
+  return { artifacts: turn.output.artifacts ?? null, scaffoldVersion: turn.output.scaffold?.version ?? null, picks: turnPicks(turn.output) };
 }
 
 export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): CompletedTurnStore {

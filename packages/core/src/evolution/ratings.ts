@@ -10,6 +10,7 @@ import { parseJsonValue } from '../utils/json';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn, ToolCallRecord } from './types';
+import { TurnPicksSchema, type TurnPicks } from './picks';
 import type { DecisionPort, DecisionQuestion } from '../providers/decision-model';
 import { evidenceWindow } from '../utils/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -107,6 +108,8 @@ export interface TurnRating extends RatingVerdict {
   readonly scaffoldVersion: number | null;
   /** The promoted text versions the turn ran with, from whichever of its rows recorded them; null when none did. */
   readonly artifacts: readonly string[] | null;
+  /** The skills it read and the crafted tools it used, from whichever of its rows recorded them; read by dreams. */
+  readonly picks: TurnPicks | null;
   readonly rejects: string | null;
   readonly createdAt: number;
 }
@@ -243,6 +246,7 @@ const TURN_RATINGS_DDL = `(
     followup TEXT,
     scaffold_version INTEGER,
     artifacts_json TEXT,
+    picks_json TEXT,
     rejects TEXT,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, id)
@@ -264,6 +268,8 @@ export interface RecordTurnRatingInput extends RatingVerdict {
   readonly scaffoldVersion?: number | null;
   /** `<artifactId>@<version>` the turn ran with, where the writer knows them (`CompletedTurn.artifacts`). */
   readonly artifacts?: readonly string[] | null;
+  /** What the turn picked, where the writer has the turn (`turnPicks`). */
+  readonly picks?: TurnPicks | null;
   readonly now?: number;
 }
 
@@ -279,13 +285,13 @@ export function recordTurnRating(sql: SqlExecutor, actor: ActorHandle, input: Re
 
   void sql`INSERT INTO turn_ratings
       (actor_id, id, turn_id, score, corrected, wrong, source, request, actions, answer, followup, scaffold_version, artifacts_json,
-       rejects, created_at)
+       picks_json, rejects, created_at)
     VALUES
       (${actor.actorId}, ${id}, ${input.turnId}, ${input.score}, ${input.corrected}, ${input.wrong}, ${input.source},
        ${evidenceWindow(input.request, EVIDENCE_BUDGETS.storedUserMessage)}, ${input.actions ?? ''},
        ${evidenceWindow(input.answer, EVIDENCE_BUDGETS.storedAssistantResponse)}, ${followup},
        ${input.scaffoldVersion ?? null}, ${input.artifacts === undefined || input.artifacts === null ? null : JSON.stringify(input.artifacts)},
-       ${input.rejects ?? null}, ${input.now ?? nowMs()})`;
+       ${input.picks === undefined || input.picks === null ? null : JSON.stringify(input.picks)}, ${input.rejects ?? null}, ${input.now ?? nowMs()})`;
   markStoreChanged(sql);
 
   return id;
@@ -297,6 +303,7 @@ interface RawRatingRow {
   /** `artifacts_json` and `scaffold_version` of the newest of the turn's rows that has each. */
   ran_with: string | null;
   ran_scaffold: number | null;
+  ran_picks: string | null;
   rejects: string | null;
   created_at: number;
 }
@@ -309,6 +316,7 @@ function toRating(row: RawRatingRow): TurnRating {
     source: row.source, request: row.request, actions: row.actions, answer: row.answer, followup: row.followup,
     scaffoldVersion: row.ran_scaffold,
     artifacts: row.ran_with === null ? null : v.parse(RanWithSchema, parseJsonValue(row.ran_with)),
+    picks: row.ran_picks === null ? null : v.parse(TurnPicksSchema, parseJsonValue(row.ran_picks)),
     rejects: row.rejects,
     createdAt: row.created_at,
   };
@@ -350,7 +358,9 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
       SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
           AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with,
         (SELECT a.scaffold_version FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
-          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold FROM turn_ratings r
+          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold,
+        (SELECT a.picks_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.picks_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_picks FROM turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.created_at >= ${query.since ?? 0}
         AND r.score < ${below} AND r.score >= ${from}
         AND NOT EXISTS (SELECT 1 FROM turn_ratings s
@@ -364,7 +374,9 @@ export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: Rat
       SELECT r.*, (SELECT a.artifacts_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
           AND a.artifacts_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_with,
         (SELECT a.scaffold_version FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
-          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold
+          AND a.scaffold_version IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_scaffold,
+        (SELECT a.picks_json FROM turn_ratings a WHERE a.actor_id = r.actor_id AND a.turn_id = r.turn_id
+          AND a.picks_json IS NOT NULL ORDER BY a.created_at DESC LIMIT 1) AS ran_picks
       FROM json_each(${JSON.stringify([...new Set(query.turnIds)])}) AS wanted CROSS JOIN turn_ratings r
       WHERE r.actor_id = ${actor.actorId} AND r.turn_id = wanted.value
         AND r.score < ${below} AND r.score >= ${from}
