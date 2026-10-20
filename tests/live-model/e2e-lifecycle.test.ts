@@ -1,19 +1,14 @@
 /**
- * E2E lifecycle test — real LLM, real SQLite, native AI SDK tool calling.
+ * E2E lifecycle test — real LLM, real SQLite, the product's own session.
  *
- * WHAT THIS CERTIFIES: the CORE TURN LOOP, and only that. `chatTurn` below
- * calls `generateText` with a system prompt, a tool set and a threaded message
- * list — so what is proven here is that soul and memory reach the model, that
- * native tool calling round-trips, that a conversation accumulates, and that
- * evolution runs over the turns it produces. It is an INNER API by
- * construction: it does not go through turn assembly, the reactor, backgrounding
- * wakes or the prompt cache, so a green run here is never a statement that the
- * shipped agent works.
+ * WHAT THIS CERTIFIES: the local session's turn loop, as `kinu` runs it. Each turn goes through
+ * `LocalAgentSession`: its prompt, its tool surface, its history and its evolution are the product's, so what is
+ * proven here is that soul and memory reach the model, that native tool calling round-trips, that a conversation
+ * accumulates, and that evolution runs over the turns it produces.
  *
- * WHAT COVERS THAT GAP: the eval suite (evals/), which drives the DEPLOYED
- * product through the surfaces a person uses and checks what the agent built.
- * Read a failure here as "the loop broke"; read a failure there as "the product
- * broke".
+ * WHAT COVERS THE REST: the eval suite (evals/), which drives the DEPLOYED product through the surfaces a person uses
+ * and checks what the agent built. Read a failure here as "the local loop broke"; read a failure there as "the
+ * deployed product broke".
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -21,29 +16,22 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  generateText, isStepCount,
-  type LanguageModel, type ModelMessage, type ToolSet, type StepResult,
-} from 'ai';
-import {
-  EvolutionEngine, historyTurnPairs,
   type LLMProviderConfig,
   type CompletedTurn,
-  type EvolutionEvent,
 } from '../../packages/core/src/index';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import { buildEvalAgentSurface, collectStepText, createStepToolCallLog, type LiveToolCall } from './harness';
+import { evalSession, type EvalSession, type LiveToolCall } from './harness';
 import { localTargetFolder, provisionLocalTarget, type LocalTarget } from './target-local';
-import { seedTranscriptEntry, EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
-recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, workspaceDatabase,
+import { EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
+recordLiveModelEpisode, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, workspaceDatabase,
 } from '@kinu.run/test-utils';
 
 /**
  * THIS SUITE IS THE IN-PROCESS LOOP, and it reads the target knob to say so.
  *
- * `chatTurn` below calls `generateText` over a `CLIRuntime` and drives
- * `EvolutionEngine` directly, so every assertion here is about the
- * inner API. A deployed workspace hands out no runtime, so this suite cannot
+ * The session below runs over a `CLIRuntime`, so every assertion here is about
+ * the in-process loop. A deployed workspace hands out no runtime, so this suite cannot
  * answer the cloud target's questions at all — and running it under
  * `KINU_EVAL_BACKEND=cloud` would report an in-process measurement inside a
  * cloud arm's banner, with a `-cloud` report filename to match. So the refusal
@@ -80,114 +68,21 @@ const TEST_DIR = join(tmpdir(), 'kinu-e2e-' + Date.now());
 
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
-/** One turn's result, plus the exact message list that turn HANDED THE MODEL. */
-interface ConversationTurn {
-  readonly turn: CompletedTurn;
-  readonly calls: readonly LiveToolCall[];
-  readonly sent: readonly ModelMessage[];
-}
-
-/**
- * One turn of a CONVERSATION: `history` is the running message list, extended
- * in place with this turn's user message and everything the model produced —
- * assistant text and tool traffic — exactly as the AI SDK hands it back.
- *
- * Sending `messages: [user]` instead makes "5-turn conversation" five one-turn
- * conversations wearing that title: turn 5 asks "Summarize what we discussed",
- * the model honestly answers "We haven't actually discussed anything yet", and a
- * suite whose only per-turn assertion is `length > 0` PASSES. The history is the
- * subject of that suite's title, so it is threaded here, once, for every caller.
- *
- * `sent` IS RETURNED BECAUSE CONTENT CANNOT PROVE THREADING. The agent holds a
- * `memory` tool whose conversation-search action queries the same `conversation_entries`
- * table this function writes to (core/src/tools/memory-tool.ts over
- * core/src/memory/conversation-search.ts), so a later turn can RETRIEVE the
- * conversation whether or not it was threaded. Measured 2026-08-20: with
- * `messages: [user]` restored — history built but never handed over — turn 5
- * still answered "Here's a summary of our previous discussion" and reproduced
- * turn 1's code verbatim, while the injected knowledge was 118 characters
- * holding only turn 3's note. Two unthreaded runs scored 6/0 and 5/1: the
- * content assertions are real, but they are not a DETERMINISTIC red for
- * threading, because a second channel can satisfy them. The prompt itself is
- * the only witness that cannot, so the suite asserts on it too.
- */
-/** One turn as the CLI drives it: the model, the runtime it acts on, the tool
- *  surface, and the conversation it extends. */
-interface ChatTurn {
-  readonly model: LanguageModel;
-  readonly rt: CLIRuntime;
-  readonly tools: ToolSet;
-  readonly history: ModelMessage[];
-  readonly userMessage: string;
-}
-
-async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
-  const { history, model, rt, tools, userMessage } = turn;
-  const start = Date.now();
-  const soul = soulIn(rt.space) ?? '';
-  const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
-  const log = createStepToolCallLog();
-
-  history.push({ role: 'user', content: userMessage });
-  // Snapshotted BEFORE the call and returned: `history` keeps growing in place,
-  // so reading it afterwards would report what the NEXT turn will send.
-  const sent: readonly ModelMessage[] = [...history];
-
-  const result = await generateText({
-    model,
-    instructions: `${soul}\n\nKnowledge:\n${knowledge}`,
-    messages: history,
-    tools,
-    stopWhen: isStepCount(500),
-    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
-  });
-
-  recordLiveModelSpend(result.usage);
-  // The turn's own output — assistant text AND tool call/result messages —
-  // exactly as the SDK shaped them, so the next turn's model sees this one.
-  history.push(...result.responseMessages);
-  const responseText = collectStepText(result);
-  const id = crypto.randomUUID();
-  await seedTranscriptEntry(rt.stores.history, 'e2e', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
-  await seedTranscriptEntry(rt.stores.history, 'e2e', {
-    id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
-  });
-
-  return {
-    sent,
-    calls: log.calls,
-    turn: {
-      userMessage, assistantResponse: responseText, toolCalls: log.records(),
-      steps: log.steps, durationMs: Date.now() - start, feedback: null, hadError: false,
-    },
-  };
-}
-
 describe('E2E Lifecycle', () => {
   let db: InstanceType<typeof Database>;
   let rt: CLIRuntime;
-  let tools: ToolSet;
-  let engine: EvolutionEngine;
-  let events: EvolutionEvent[];
   let turns: CompletedTurn[];
   let callsPerTurn: (readonly LiveToolCall[])[];
-  let model: LanguageModel;
   let target: LocalTarget;
+  /** The product's own session over the workspace, as `kinu` runs it: its prompt, its history, its evolution. */
+  let agent: EvalSession | undefined;
 
   beforeAll(async () => {
-    // Nothing is provisioned on the cloud knob: a local workspace opened here
-    // would be an in-process store standing inside a cloud-labelled run, which
-    // is the mislabelling the skip above refuses.
+    // Nothing is provisioned on the cloud knob: a local workspace opened here would be an in-process store standing
+    // inside a cloud-labelled run, which is the mislabelling the skip above refuses.
     if (!IN_PROCESS) return;
-    // PROVISIONED THROUGH THE SEAM. Birth, the whole-schema init, `openWorkspaceCLI`
-    // with no directory bound, the executor-surface and sandbox guards and
-    // `installPreTurnProfile` were spelled out here and identically in three sibling
-    // suites. Each step has a measured failure behind it — a hand-picked schema
-    // subset that omitted `initShadowTables` and killed a sibling mid-run, a default
-    // executor plane rooted at the repo this suite was launched from, and an unwired
-    // runtime whose every routed lane is dead so `reviewTurn` throws before reaching
-    // a model. All three now live in ONE place, which is the point: a step learned
-    // once had to be remembered at every suite.
+    // PROVISIONED THROUGH THE SEAM: birth, the whole-schema init, `openWorkspaceCLI` with no directory bound, the
+    // executor-surface and sandbox guards and the pre-turn profile, in one place for every live suite.
     target = await provisionLocalTarget({
       dir: TEST_DIR,
       workspace: 'e2e-test',
@@ -196,27 +91,14 @@ describe('E2E Lifecycle', () => {
     });
     rt = target.runtime;
     db = target.db;
-    events = [];
-    engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history), { enabled: true });
-    engine.onEvent(e => events.push(e));
     turns = [];
     callsPerTurn = [];
-
-    // Model first: the production actor root builds `agents` from deps carrying
-    // the model a search expands with, so a surface built before it would be the
-    // product's minus its delegation tool.
-    model = liveChatModel(LLM_CONFIG);
-    tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
   });
 
   afterAll(async () => {
-    // NOT recorded here, and the reason is measured rather than stylistic. This
-    // suite already records its episode inside the arm that drives one, at the
-    // moment that call returns. Recording again in teardown double-counted every
-    // live figure — and on a CREDENTIAL-FREE run, where the target is provisioned
-    // but no arm ever drives it, it reported `1 episode(s) UNMEASURED`: a suite
-    // announcing it drove work whose cost it could not account for, when it had
-    // driven none. An honest meter must not fire on a run that spent nothing.
+    await agent?.end();
+    // NOT recorded here: the arm that drives the episode records it when it returns. Recording again in teardown
+    // double-counted every live figure, and on a credential-free run reported an unmeasured episode that never ran.
     reportLiveModelSpend('E2E Lifecycle');
     // Teardown owns the store and the directory.
     target?.teardown();
@@ -236,11 +118,11 @@ describe('E2E Lifecycle', () => {
     // MECHANISM assertions read the prompt each turn handed the model: they are
     // the deterministic red for threading. The BEHAVIOUR assertions read the
     // replies: they prove the model USED its context, but they are not proof of
-    // threading, because the `memory` tool searches the same `conversation_entries` table
-    // this suite writes and can fetch the conversation back (measured — see
-    // chatTurn's header). Both are kept: a suite that only checked the
-    // mechanism would pass on a model that ignored what it was handed.
-    const history: ModelMessage[] = [];
+    // threading, because the `memory` tool searches the conversation the session
+    // records and can fetch it back (measured 2026-08-20: an unthreaded turn 5
+    // still summarised turn 1 through it). Both are kept: a suite that only checked
+    // the mechanism would pass on a model that ignored what it was handed.
+    agent = evalSession({ rt, db, model: liveChatModel(LLM_CONFIG) });
 
     const messages = [
       // Named so turn 2's judgement is mechanical: turn 2's own prompt never
@@ -252,44 +134,36 @@ describe('E2E Lifecycle', () => {
       'Summarize what we discussed.',
     ];
 
-    const sentPerTurn: (readonly ModelMessage[])[] = [];
+    // The prompt each turn's first request carried, as the provider received it.
+    const sentPerTurn: string[] = [];
 
     for (const [i, message] of messages.entries()) {
       console.log(`  Turn ${i + 1}: ${message.slice(0, 50)}...`);
-      const { turn, calls, sent } = await chatTurn({ model, rt, tools, history, userMessage: message });
-      sentPerTurn.push(sent);
+      const asked = agent.requests.prompts().length;
+      const { turn, calls } = await agent.turn(message);
+      sentPerTurn.push(agent.requests.prompts().slice(asked).find((prompt) => prompt.includes(message)) ?? '');
       turns.push(turn);
       callsPerTurn.push(calls);
-      await engine.reviewTurn(turn, null);
       expect(turn.assistantResponse.length).toBeGreaterThan(0);
       console.log(`    Response: ${turn.assistantResponse.slice(0, 80)}...`);
 
       if (turn.toolCalls.length > 0) console.log(`    Tools: ${turn.toolCalls.map(t => t.name).join(', ')}`);
     }
 
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
+
     // ── The MECHANISM: the conversation was actually HANDED OVER ────────────
-    // This is the assertion that makes the suite's title true, and the only one
-    // that is a deterministic red when the history is not threaded. It reads
-    // the prompt each turn SENT, never the store and never the reply, because
-    // the agent's `memory` tool searches the same `conversation_entries` table this suite
-    // writes — so a later turn can retrieve the conversation without ever
-    // having been given it (see chatTurn's header for the measurement).
+    // The deterministic red for threading reads the prompt each turn SENT, never the store and never the reply: the
+    // agent's `memory` tool searches the same conversation the session records, so a later turn could retrieve it
+    // without ever having been given it.
     for (const [i, sent] of sentPerTurn.entries()) {
-      expect(sent.length,
-        `turn ${String(i + 1)} was handed ${String(sent.length)} message(s) but should carry every `
-        + 'earlier exchange plus its own prompt — a turn sent only its own prompt is a one-turn '
-        + 'conversation, which is the defect this suite exists to catch')
-        .toBeGreaterThan(i);
+      for (const earlier of messages.slice(0, i)) {
+        expect(sent.includes(JSON.stringify(earlier).slice(1, -1)),
+          `turn ${String(i + 1)} was not handed "${earlier.slice(0, 40)}": a turn sent only its own prompt is a one-turn `
+          + 'conversation, which is the defect this suite exists to catch')
+          .toBe(true);
+      }
     }
-
-    const lastSent = sentPerTurn[4];
-
-    if (!lastSent) throw new Error('turn 5 recorded no prompt');
-    expect(JSON.stringify(lastSent),
-      'turn 5 was handed no message carrying turn 1 — "Summarize what we discussed" reached the '
-      + 'model with nothing to summarize, so these were five one-turn conversations wearing the '
-      + 'title of one')
-      .toContain('sortNumbers');
 
     // ── The BEHAVIOUR: the model used what it was handed ────────────────────
     // Turn 2 continues turn 1's work; its own prompt never says "sortNumbers".
@@ -349,21 +223,27 @@ describe('E2E Lifecycle', () => {
   }, 1_800_000);
 
   liveTest('evolution events fired', () => {
+    // The session's own evolution, on as the product runs it, says what it did as `evolution` events.
+    const events = (agent?.events ?? []).flatMap((event) => (event.type === 'evolution' ? [event] : []));
     console.log(`  Events: ${events.length}`);
 
-    for (const e of events) console.log(`    [${e.type}] ${e.message.slice(0, 70)}`);
+    for (const e of events) console.log(`    [${e.event}] ${e.message.slice(0, 70)}`);
     expect(events.length).toBeGreaterThan(0);
   });
 
   liveTest('memory has content', async () => {
+    // Turn 3's note is written through the memory tool; nothing else writes MEMORY.md.
     const mem = await rt.memory.read('memory/MEMORY.md');
 
-    if (!mem) throw new Error('evolution did not write memory content');
+    if (!mem) throw new Error('the memory note turn 3 asked for was never written');
     console.log(`  Memory: ${mem.length} chars`);
   });
 
   liveTest('persistence', async () => {
     const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
+    // The session ends as `kinu` ends one, before its store closes.
+    await agent?.end();
+    agent = undefined;
     db.close();
     const db2 = workspaceDatabase(DB_PATH);
     const msgsAfter = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;

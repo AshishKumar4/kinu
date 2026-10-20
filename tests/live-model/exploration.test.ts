@@ -7,20 +7,14 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
 
 import {
   type LLMProviderConfig,
 } from '../../packages/core/src/index';
-import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import {
-  buildEvalAgentSurface, recordRequestSurface,
-  type EvalAgentSurface,
-} from './harness';
+import { evalSession, scriptedEvalModel, type EvalSession } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelSpend,
+  liveChatModel, liveModelTarget, recordLiveModelEpisode,
   reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
@@ -47,129 +41,83 @@ const EXPLORATION_TASK =
   + 'cost differently. Compare the competing approaches and recommend one.';
 
 describe('Exploration evals — the agent reaches for exploration', () => {
-  let rt: CLIRuntime;
   let target: LocalTarget;
-  let model: LanguageModel;
 
-  /** The eval agent's surface from the PRODUCTION actor root. Assembling
-   *  `buildActorTools` here with a hand-rolled `agents.fork` — the same shape,
-   *  minus every dep production passes — makes the surface a near-miss of the
-   *  product's and leaves this file one drift away from scoring its own
-   *  construction. */
-  let surface: EvalAgentSurface;
+  /** The product's own session over the workspace, as `kinu` runs it: its prompt, its tool surface and its turn gates.
+   *  A surface assembled here would leave this file one drift away from scoring its own construction. */
+  let agent: EvalSession;
 
   beforeAll(async () => {
-    // Provisioned through the seam: birth, the whole schema, open, the
-    // executor-surface and sandbox guards and the pre-turn profile — the same
-    // sequence every live suite drives, once. The runtime `createWorkspace`
-    // returns is what open.ts:49-50 calls "degraded inline
-    // VFS/Memory/Executor", and its `spawnBranch` is a HARDCODED MOCK whose
-    // every branch resolves to the literal string 'exploration result'
-    // (workspace-birth.ts:57-68). A search suite driving that stub is scoring
-    // the stub, not exploration. `initWorkspaceSchema` is also what makes
-    // `head_journal` exist at all, which this suite's settle-visibility
-    // assertion requires of both halves. Binding no directory keeps every
-    // executor off the repo this suite launched from, asserted rather than trusted
-    // because this suite spends real money to find out.
+    // Provisioned through the seam: birth, the whole schema, open, the executor-surface and sandbox guards and the
+    // pre-turn profile, the same sequence every live suite drives, once. Binding no directory keeps every executor off
+    // the repo this suite launched from, asserted rather than trusted.
     target = await provisionLocalTarget({
       dir: TEST_DIR,
       workspace: 'exploration-eval',
       purpose: 'An architecture advisor that compares competing designs before recommending one.',
       llm: LLM_CONFIG,
     });
-    rt = target.runtime;
-    // The model first, then the surface through the shared production
-    // construction (`buildEvalAgentSurface`, harness.ts): same factory, same
-    // crafted-tool source, same codemode providers, same fork-deps shape.
-    model = liveChatModel(LLM_CONFIG);
-    surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
   });
 
   afterAll(async () => {
+    await agent?.end();
     reportLiveModelSpend('Exploration Evals');
     // Teardown owns the store and the directory.
     target?.teardown();
   });
 
-  test('the agent is actually offered the delegation tool', async () => {
-    // Credential-free, and the precondition every eval below rests on. Without
-    // it "the model did not fork" would be indistinguishable from "the model
-    // could not fork", and the delegation rate would be measuring the harness.
-    expect(Object.keys(surface.tools)).toContain('agents');
-    // And the prompt names it: a tool the model is never told about is not
-    // offered in any sense that matters (PRD §9.5 — production prompt AND tool
-    // projection). The tool index is the one prompt text about delegation.
-    const { system } = await surface.request([{ role: 'user', content: EXPLORATION_TASK }]);
-    expect(system).toContain('- **agents**:');
-  });
+  test('the agent is offered the delegation tool, named in its prompt, and its request carries the runtime facts', async () => {
+    // Credential-free, and the precondition every eval below rests on: without it "the model did not fork" would be
+    // indistinguishable from "the model could not fork". A scripted model answers, in a workspace of its own so its
+    // calls are no part of the live run's spend; the recorder reads what it was sent.
+    const own = await provisionLocalTarget({
+      dir: `${TEST_DIR}-scripted`, workspace: 'exploration-scripted', purpose: 'An architecture advisor.', llm: LLM_CONFIG,
+    });
 
-  test('the issued request carries the runtime facts the system prompt no longer states', async () => {
-    // Credential-free: a scripted model stands in for the provider, and the recorder reads what it was sent.
-    const recorder = recordRequestSurface(new MockLanguageModelV3({ doGenerate: async () => ({
-      content: [{ type: 'text', text: 'ok' }], finishReason: { unified: 'stop', raw: undefined }, warnings: [],
-      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
-    }) }));
+    const scripted = evalSession({ rt: own.runtime, db: own.db, model: scriptedEvalModel([{ text: 'ok' }]) });
 
-    const { system, messages } = await surface.request([{ role: 'user', content: EXPLORATION_TASK }]);
-    await generateText({ model: recorder.model, instructions: system, messages, tools: surface.tools });
+    try {
+      await scripted.turn(EXPLORATION_TASK);
+      const evidence = scripted.requests.evidence();
 
-    expect(recorder.evidence().runtimeFacts).toBe(true);
-    expect(JSON.stringify(messages)).toContain(`- Model: ${LLM_CONFIG.model}`);
+      // Offered, and named in the prompt's tool index: a tool the model is never told about is not offered in any sense
+      // that matters (PRD §9.5). The system prompt no longer states the runtime facts; the request's dynamic block does.
+      expect({ offered: evidence.agentsOffered, indexed: evidence.agentsIndexed, runtimeFacts: evidence.runtimeFacts })
+        .toEqual({ offered: true, indexed: true, runtimeFacts: true });
+    } finally {
+      await scripted.end();
+      own.teardown();
+    }
   });
 
   liveTest('AUTONOMOUS: the model reaches for exploration on a task that warrants it', async () => {
-    const calls: string[] = [];
-    // PRD §9.5: the turn runs the PRODUCTION projection and the PRODUCTION tool
-    // surface. `system: soul` — the workspace SOUL file alone, which never
-    // mentions delegation — over a ToolSet that cannot hold `agents` measures
-    // something, but not the product's conversion behaviour: it scores the model
-    // on reaching for a capability it was neither offered nor told about.
-    const recorder = recordRequestSurface(model);
-    const { system, messages } = await surface.request([{ role: 'user', content: EXPLORATION_TASK }]);
+    // PRD §9.5: the turn runs the product's own projection and tool surface, through its session.
+    agent = evalSession({ rt: target.runtime, db: target.db, model: liveChatModel(LLM_CONFIG) });
+    const { calls } = await agent.turn(EXPLORATION_TASK);
 
-    const result = await generateText({
-      model: recorder.model,
-      instructions: system,
-      messages,
-      tools: surface.tools,
-      stopWhen: isStepCount(12),
-      onStepEnd: (step: StepResult<ToolSet>) => {
-        for (const call of step.toolCalls ?? []) calls.push(call.toolName);
-      },
-    });
+    recordLiveModelEpisode(target.runtime.storage.sql, target.runtime.actor);
 
-    recordLiveModelSpend(result.usage);
-
-    const reached = calls.filter((name) => name === 'agents').length;
-    console.log(`    tools called: ${calls.join(', ') || '(none)'}`);
+    const reached = calls.filter((call) => call.name === 'agents').length;
+    console.log(`    tools called: ${calls.map((call) => call.name).join(', ') || '(none)'}`);
     console.log(`    delegation-tool reaches: ${String(reached)} of ${String(calls.length)} calls`);
 
-    // REQUEST EVIDENCE, per §9.5. A zero below now arrives with the proof of
-    // what the provider was actually asked with, so "the model declined" and
-    // "the harness never asked" can never again be the same observation. The
-    // evidence itself is asserted because it is harness fact, not model
-    // behaviour: if this fails the wiring is broken and no conversion number in
-    // the run means anything.
-    const evidence = recorder.evidence();
+    // REQUEST EVIDENCE, per §9.5. A zero above arrives with the proof of what the provider was actually asked with, so
+    // "the model declined" and "the harness never asked" are never the same observation. The evidence is asserted
+    // because it is harness fact, not model behaviour: if it fails the wiring is broken and no conversion number means
+    // anything.
+    const evidence = agent.requests.evidence();
     console.log(`    request evidence: ${String(evidence.calls)} call(s), tools offered `
       + `${evidence.toolsOffered.join(', ')}, agents=${String(evidence.agentsOffered)}, `
       + `agents indexed=${String(evidence.agentsIndexed)}, `
       + `system ${String(evidence.systemChars)} chars`);
     expect(evidence.calls).toBeGreaterThan(0);
-    expect(evidence.toolsOffered).toEqual(Object.keys(surface.tools).sort());
     expect(evidence.agentsOffered).toBe(true);
     expect(evidence.agentsIndexed).toBe(true);
     expect(evidence.runtimeFacts).toBe(true);
 
-    // The denominator is one eligible turn, stated. This is a SAMPLE of a rate,
-    // not the rate: a single turn cannot measure a conversion percentage, and
-    // the aggregate lives in the delegation eval over run_events.
-    //
-    // What is asserted is the part that is not model-dependent: the turn
-    // completed and produced observable tool traffic, so a zero above is the
-    // model declining rather than the harness failing to ask. A run where the
-    // model called nothing at all cannot distinguish those two — but with the
-    // request evidence above, at least the offer itself is proven.
+    // The denominator is one eligible turn, stated: a SAMPLE of a rate, not the rate; the aggregate lives in the
+    // delegation eval over run_events. What is asserted is the part that is not model-dependent: the turn completed and
+    // produced observable tool traffic, so a zero above is the model declining rather than the harness failing to ask.
     expect(calls.length).toBeGreaterThan(0);
   }, 0);
 });

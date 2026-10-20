@@ -1,295 +1,34 @@
 /**
- * What the live suites share: the agent surface built by the production roots,
- * the step and session recorders their turns write through, the request-surface
- * probe, and the refusals that stop a runtime which cannot execute, or can
- * execute on the developer's own machine, before any model is driven.
+ * What the live suites share: the product's own session as their agent, the request-surface probe on its model, a
+ * credential-free scripted model, and the refusals that stop a runtime which cannot execute, or can execute on the
+ * developer's own machine, before any model is driven.
  */
-import type { LanguageModel, ModelMessage, StepResult, ToolSet } from 'ai';
+import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 
 import type {
-  AgentRuntime, AgentsOp, AgentsSwarmDeps, AgentsToolDeps, BuiltinToolName,
-  LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope, RuntimeFacts,
-  ProviderCatalogSnapshot, ToolCallRecord, JsonObject, JsonValue, ToolOutcome,
+  AgentRuntime, LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
+  ProviderCatalogSnapshot, JsonObject, JsonValue, ToolOutcome, CompletedTurn, SessionEvent, TurnEndEvent,
 } from '../../packages/core/src/index';
-import { compactToolCall } from '../../packages/core/src/evolution/tool-call-record';
 import {
-  artifactOverrides, currentArtifacts, agentsActionsFor, buildActorTools,
-  buildSystemPromptSync, createFactsStore,
-  actorNamespaces, SURFACE_POLICY, type ServedStores, type SurfaceActor,
-  isBuiltinToolName, JsonObjectSchema, collectDynamicContext, currentDateForPrompt, DynamicContextLedger, readMemoryTail,
-  projectJsonValue, failedToolOutcome,
-  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile, webSearchChainOf,
-  WORKSPACE_RUN_ID, BackgroundJobRunner, BACKGROUNDABLE_TOOLS, narrowToolSurface,
+  JsonObjectSchema, JsonValueSchema, ToolOutcomeSchema,
+  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
 } from '../../packages/core/src/index';
-import { renderThrownChain } from '../../packages/core/src/obs/index';
-import { synthesizeToolFallback } from '../../packages/core/src/utils/evidence-window';
-import {
-  createDefaultWebSearchProvider, chainWebSearch, restBrowserRunAccess,
-} from '../../packages/core/src/web/index';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
-import { hostedCodemodeTool } from '../../packages/cli-backend/src/head-runtime';
-import { liveModelCallSink } from '@kinu.run/test-utils';
+import { LocalAgentSession, type LocalSessionDb } from '../../packages/cli-backend/src/local-session';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { REPO_ROOT } from '../../scripts/repo-root';
 
 /** The repository this suite runs from: an episode's folder is never it, nor a folder above it. */
 
-/**
- * THE EVAL AGENT'S SURFACE, BUILT BY THE PRODUCTION ROOTS.
- *
- * Two suites drive `generateText` directly rather than through
- * `LocalAgentSession` — the evolution proof, which needs a turn boundary it
- * controls so it can fire `reviewTurn` per challenge, and the exploration eval,
- * which measures whether the model REACHES for delegation. Both therefore build
- * the surface themselves, and a surface assembled by hand diverges from the
- * product in three ways that each corrupt a score silently:
- *
- *   - `buildBuiltinTools` by construction cannot hold `agents`
- *     (delegation/actor-tools.ts: the delegation tool's implementation IS the search
- *     engine, so the factory that emits a node's own surface cannot register
- *     it). The product's actor root is `buildActorTools`. Ask "did the model
- *     delegate?" of a model that has no delegation tool and the zero is
- *     unreadable: model declined, or nothing to decline?
- *   - a hand-assembled `buildSystemPromptSync` option set that passes no
- *     `agentsActions` and leaves `agents` off `availableTools` makes
- *     `renderAgentStateSection` (prompt.ts:236) skip the whole delegation
- *     ladder. The model is then not shown the surface it is being scored on
- *     reaching for.
- *   - without the codemode namespaces production builds with `actorNamespaces`
- *     (`agents.*`, `web.*`, `memory.*`, `tasks.*`), `eval` code the
- *     prompt teaches throws `not a function` inside the eval only.
- *
- * This builds BOTH from the roots `rebuildModelBoundState`
- * (cli-backend/src/local-session.ts:2822) and the turn assembly
- * (local-session.ts:1785) use, with the same deps, so a capability cannot be on
- * one and off the other. Crafted tools reach the program through the surface's
- * `craftedTools()`, which reads the store per program; when a seam skipped
- * them, `workspace.createTool` succeeded, the store grew a row, and
- * `tools.doubleIt(21)` failed with "is not a function". A craft score then
- * recorded a reuse that never executed.
- *
- * DECLARED DIFFERENCES FROM A LIVE SESSION, each named rather than left to be
- * discovered. All are documented non-degrading absences on their own
- * declarations, and none changes the surface the model is SHOWN:
- *   - `costModel` is a `ModelCatalogSession` a session owns; absent, a swarm's
- *     pre-run spend gate blends and says it blended (AgentsSwarmDeps:267-270).
- *   - `heads` strategy options are not wired, because a local head runs over a
- *     FORK of the session's own CLIRuntime. `defaultOptions` has no consumer in
- *     the shipped tree anyway: declared at agents-tool.ts:299, produced by
- *     fork-deps.ts:145, read nowhere.
- *   - `temporaryAsk` is `false`, because the eval session wires no team deps —
- *     the same structural absence a session with no child substrate has, so the
- *     prompt never advertises a rung the action would refuse.
- * `report` stays unwired: the conformance manifest declares it absent on the
- * `cli` root, so wiring it here would make the eval surface WIDER than the
- * product's.
- */
-export interface EvalAgentSurfaceDeps {
-  /** The runtime `openWorkspaceCLI` returned — the real one, not birth's
-   *  degraded inline VFS/Memory/Executor. */
-  readonly rt: CLIRuntime;
-  /** The model this surface's turns will run on. Held because `agents` needs a
-   *  model to expand a search with; the same value the caller drives. */
-  readonly model: LanguageModel;
-  /** The workspace's provider config, for the prompt's runtime-context model
-   *  line — the one production renders from its effective spec. */
-  readonly llm: LLMProviderConfig;
-}
-
-export interface EvalAgentSurface {
-  /** What `generateText` is handed. */
-  readonly tools: ToolSet;
-  /** The builtin names on it, which is also what the prompt is rendered from. */
-  readonly builtinTools: readonly BuiltinToolName[];
-  /** The `agents` actions this surface's deps actually wire, from the same
-   *  `agentsActionsFor` the tool's own input enum is built from. */
-  readonly agentsActions: readonly AgentsOp[];
-  /**
-   * One turn's first request as production frames it: the system prompt, and the history with the dynamic block
-   * (backend, model, directory, date, live state) woven before the turn's input by the ledger the step pipeline
-   * uses. Per call, because the promoted artifacts and the memory tail change between turns, exactly as in
-   * the product.
-   */
-  request(history: readonly ModelMessage[]): Promise<{ readonly system: string; readonly messages: ModelMessage[] }>;
-}
-
-export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurface {
-  const { rt, model, llm } = deps;
-  const sql = rt.storage.sql;
-  const facts = createFactsStore(sql, rt.actor);
-
-  // A machine signed out of any Kinu account: the default chain, with no keys and no deployment to bill.
-  const webSearch = createDefaultWebSearchProvider({
-    fetch: globalThis.fetch.bind(globalThis),
-    search: chainWebSearch({
-      fetch: globalThis.fetch.bind(globalThis), getAuth: async () => null, report: liveModelCallSink(sql, rt.actor),
-      chain: async () => webSearchChainOf(BUILTIN_PROFILE_CATALOG),
-    }),
-    browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch.bind(globalThis) }),
-  });
-
-
-  // This builds a TOOL SURFACE — the tools, the action enum and the system
-  // prompt — for arms that assert their shape. It holds no session, and local
-  // node hosting is session-bound by design (`LocalAgentSession.hostNode`: the
-  // session is a node's client fan-out and turn queue). So the seat REFUSES
-  // rather than returning something. An arm that means to drive the swarm rung
-  // has a target and passes `target.hostNode` (see `swarm.eval.ts`); one that
-  // reaches it through this surface would otherwise run every node on the
-  // caller's own actor, which is the failure this refusal prevents.
-  const swarm: AgentsSwarmDeps = {
-    rt,
-    model: () => model,
-    reportModelCall: liveModelCallSink(sql, rt.actor),
-    // A node's eval as the CLI session builds it.
-    nodeCodemode: (actor) => hostedCodemodeTool(actor, webSearch),
-    webSearch,
-    hostNode: () => Promise.reject(new Error(
-      'this eval surface builds tools without a session, so it cannot seat a swarm node; '
-      + 'drive the rung through a target that implements hostNode',
-    )),
-  };
-
-  // The live rungs measure swarms, which the eval accounts have turned on.
-  const agents: AgentsToolDeps = { mode: 'build', swarm, swarms: true };
-
-  const conversations = rt.stores.conversationSearch;
-
-  // Eval's namespaces as the CLI session builds them (`actorNamespaces`), over the store operations its native tools
-  // run: no browser session in this process.
-  const surface = (stores: ServedStores): SurfaceActor => ({
-    executors: () => rt.executionRouter?.getProviders() ?? [],
-    web: { search: webSearch, files: rt.storage, browser: null },
-    stores,
-    db: rt.stores.appData,
-    agents: () => agents,
-    self: null,
-    ownerWaits: null,
-    mail: null,
-  });
-
-  // No session takes a wake here, so its calls run inline: the raw surface, over a runner nothing detaches into.
-  const { raw: tools } = buildActorTools({
-    rt,
-    conversations,
-    codemode: (codemode) => createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: actorNamespaces(surface(codemode.stores), SURFACE_POLICY.program) })(codemode),
-    agents,
-    // No session stream persists this harness's calls, so none is waited for.
-    effectClaims: { sql, actor: rt.actor, execution: () => ({ turnId: WORKSPACE_RUN_ID, runId: WORKSPACE_RUN_ID }) },
-    facts,
-    webSearch,
-    jobs: {
-      jobRunner: new BackgroundJobRunner({ store: rt.stores.jobs, fiber: rt.schedule.fiber.bind(rt.schedule), inbox: { send: async () => 'undelivered' } }),
-      backgroundable: BACKGROUNDABLE_TOOLS,
-      mode: () => 'build',
-    },
-  });
-
-  const builtinTools = Object.keys(tools).filter(isBuiltinToolName);
-  const agentsActions = agentsActionsFor(agents);
-
-  const backend = 'cli-local';
-
-  return {
-    tools,
-    builtinTools,
-    agentsActions,
-    request: async (history) => {
-      const system = buildSystemPromptSync(rt, {
-        executors: rt.executionRouter?.listExecutors() ?? [],
-        availableTools: builtinTools,
-        agentsActions,
-        // No child substrate here: the prompt must not advertise a rung the
-        // action would refuse.
-        temporaryAsk: false,
-        backend,
-        model: { id: llm.model },
-        sectionOverrides: artifactOverrides(currentArtifacts(sql, rt.actor)).sections,
-      });
-
-      const runtime: RuntimeFacts = { backend, model: { id: llm.model }, cwd: rt.cwd ?? undefined, date: currentDateForPrompt() };
-
-      const dynamic = collectDynamicContext({
-        rt, stores: rt.stores, tools,
-        profile: { workMode: 'build', allowedTools: Object.keys(tools) },
-        runtime,
-        memoryTail: await readMemoryTail(rt.memory),
-        missingCapabilities: [],
-      });
-
-      const messages = [...history];
-      const woven = new DynamicContextLedger().weave(messages, dynamic, { at: Math.max(0, messages.length - 1), firstStep: true });
-
-      return { system, messages: woven ?? messages };
-    },
-  };
-}
-
-/**
- * The tool-traffic half of one `generateText` turn, collected the same way by
- * every suite that drives the inner API.
- *
- * Four suites spelled this `onStepFinish` inline beside their own system prompt
- * and message list, and the block is the part that has to agree: a record whose
- * `args` is not parsed through `JsonObjectSchema`, or whose result is not
- * projected through `projectJsonValue`, is a row the ledger scorers read
- * differently. One closure, so the turn drivers cannot drift from each other or
- * from what the ledger expects a record to carry. The system prompt, the
- * messages and the store writes stay with the caller: those are what differ.
- */
-/** A step's call as the provider carried it, for a suite's own assertions; a turn records {@link compactToolCall}'s part. */
+/** A turn's call as the session said it, with its result, for a suite's own assertions. */
 export interface LiveToolCall {
   readonly toolCallId: string;
   readonly name: string;
   readonly args: JsonObject;
   result: JsonValue;
   outcome?: ToolOutcome;
-}
-
-export interface StepToolCallLog {
-  readonly calls: LiveToolCall[];
-  steps: number;
-  /** The calls as a turn records them. */
-  records(): ToolCallRecord[];
-  onStepFinish(step: Pick<StepResult<ToolSet>, 'toolCalls' | 'content'>): void;
-}
-
-export function createStepToolCallLog(): StepToolCallLog {
-  const log: StepToolCallLog = {
-    calls: [],
-    steps: 0,
-    records: () => log.calls.map((call) => compactToolCall(call)),
-    onStepFinish(step) {
-      log.steps += 1;
-      const byId = new Map<string, LiveToolCall>();
-
-      for (const call of step.toolCalls) {
-        const record: LiveToolCall = { toolCallId: call.toolCallId, name: call.toolName, args: v.parse(JsonObjectSchema, call.input), result: null };
-        log.calls.push(record);
-        byId.set(call.toolCallId, record);
-      }
-
-      for (const part of step.content) {
-        if (part.type !== 'tool-result' && part.type !== 'tool-error') continue;
-        const record = byId.get(part.toolCallId);
-
-        if (!record) continue;
-
-        if (part.type === 'tool-result') {
-          if (part.preliminary) continue;
-          record.result = projectJsonValue({ value: part.output });
-          record.outcome = { success: true };
-        } else {
-          record.result = { error: renderThrownChain({ cause: part.error }) };
-          record.outcome = failedToolOutcome({ cause: part.error });
-        }
-      }
-    },
-  };
-
-  return log;
 }
 
 /**
@@ -308,7 +47,7 @@ export function createStepToolCallLog(): StepToolCallLog {
  * never asked", so the two are not one observation.
  */
 export interface RequestSurfaceEvidence {
-  /** Provider calls observed. Zero means the episode never reached the model,
+  /** Turn requests observed (a lane that offers no tools is none). Zero means the episode never reached the model,
    *  which is an unmeasured episode rather than a model that declined. */
   readonly calls: number;
   /** Union of every tool name offered across those calls, sorted. */
@@ -358,6 +97,8 @@ type ModelV2 = Extract<LanguageModel, { specificationVersion: 'v2' }>;
 
 type ModelV3 = Extract<LanguageModel, { specificationVersion: 'v3' }>;
 
+type ModelV4 = Extract<LanguageModel, { specificationVersion: 'v4' }>;
+
 /**
  * Wrap a model so every request it receives is observed. The wrapper forwards
  * verbatim — it is not a fake and it changes nothing about the call — so the
@@ -371,7 +112,10 @@ type ModelV3 = Extract<LanguageModel, { specificationVersion: 'v3' }>;
  */
 export interface RecordedRequestSurface {
   readonly model: LanguageModel;
-  evidence(): RequestSurfaceEvidence;
+  /** Over the turn requests from the `since`-th on (every one by default), so one turn's evidence is its own. */
+  evidence(since?: number): RequestSurfaceEvidence;
+  /** Each turn request's prompt as the provider received it, serialised, oldest first. */
+  prompts(): readonly string[];
 }
 
 /** The I/O-boundary check for this wrapper's input. `LanguageModel` unions a
@@ -379,10 +123,10 @@ export interface RecordedRequestSurface {
  *  resolved ones carry a spec tag — so a successful parse IS the proof of
  *  resolution, and it doubles as the type guard the branches below need. */
 const RESOLVED_LANGUAGE_MODEL = v.object({
-  specificationVersion: v.picklist(['v2', 'v3']),
+  specificationVersion: v.picklist(['v2', 'v3', 'v4']),
 });
 
-function isResolvedLanguageModel(model: LanguageModel): model is ModelV2 | ModelV3 {
+function isResolvedLanguageModel(model: LanguageModel): model is ModelV2 | ModelV3 | ModelV4 {
   return v.safeParse(RESOLVED_LANGUAGE_MODEL, model).success;
 }
 
@@ -390,6 +134,56 @@ function isResolvedLanguageModel(model: LanguageModel): model is ModelV2 | Model
  *  text. Parsing each prompt message against it is how the ladder probe reads
  *  the system block without reaching into representation. */
 const SYSTEM_MESSAGE = v.object({ role: v.literal('system'), content: v.string() });
+
+/** `model`, forwarding every call unchanged after `observe` reads it; one branch per specification, which the SDK's
+ *  types keep apart though the code is the same. */
+function observedModel(model: ModelV2 | ModelV3 | ModelV4, observe: (options: ObservedRequest) => void): LanguageModel {
+  if (model.specificationVersion === 'v2') {
+    return {
+      ...model,
+      doGenerate: (options) => {
+        observe(options);
+
+        return model.doGenerate(options);
+      },
+      doStream: (options) => {
+        observe(options);
+
+        return model.doStream(options);
+      },
+    } satisfies ModelV2;
+  }
+
+  if (model.specificationVersion === 'v3') {
+    return {
+      ...model,
+      doGenerate: (options) => {
+        observe(options);
+
+        return model.doGenerate(options);
+      },
+      doStream: (options) => {
+        observe(options);
+
+        return model.doStream(options);
+      },
+    } satisfies ModelV3;
+  }
+
+  return {
+    ...model,
+    doGenerate: (options) => {
+      observe(options);
+
+      return model.doGenerate(options);
+    },
+    doStream: (options) => {
+      observe(options);
+
+      return model.doStream(options);
+    },
+  } satisfies ModelV4;
+}
 
 /**
  * Wrap a model so every request it receives is observed. The wrapper forwards
@@ -402,23 +196,20 @@ const SYSTEM_MESSAGE = v.object({ role: v.literal('system'), content: v.string()
  * and the compiler is right to refuse. The branches delegate identically
  * because the observer only reads what both specifications share.
  */
-export function recordRequestSurface(model: LanguageModel): RecordedRequestSurface {
+function recordRequestSurface(model: LanguageModel): RecordedRequestSurface {
   if (!isResolvedLanguageModel(model)) {
     throw new Error(
       'recordRequestSurface needs a resolved LanguageModel, not a model id string: '
       + 'a string is resolved inside the SDK, where the request cannot be observed');
   }
 
-  const offered = new Set<string>();
-  let calls = 0;
-  let systemChars = 0;
-  let agentsIndexed = false;
-  let runtimeFacts = true;
+  // A turn's own requests: one offered no tools is a lane beside the turn (a title, a review), with no surface to read.
+  const turnRequests: { readonly tools: readonly string[]; readonly system: string; readonly prompt: string }[] = [];
 
   const observe = (options: ObservedRequest): void => {
-    calls += 1;
+    const tools = (options.tools ?? []).map((entry) => entry.name);
 
-    for (const entry of options.tools ?? []) offered.add(entry.name);
+    if (tools.length === 0) return;
 
     const system = options.prompt
       .flatMap((message) => {
@@ -428,51 +219,130 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
       })
       .join('\n');
 
-    systemChars = Math.max(systemChars, system.length);
-
-    if (system.includes(AGENTS_INDEX_MARKER)) agentsIndexed = true;
-
-    if (!JSON.stringify(options.prompt).includes(RUNTIME_SECTION_MARKER)) runtimeFacts = false;
+    turnRequests.push({ tools, system, prompt: JSON.stringify(options.prompt) });
   };
 
-  const recording: LanguageModel = model.specificationVersion === 'v2'
-    ? ({
-      ...model,
-      doGenerate: (options) => {
-        observe(options);
-
-        return model.doGenerate(options);
-      },
-      doStream: (options) => {
-        observe(options);
-
-        return model.doStream(options);
-      },
-    } satisfies ModelV2)
-    : ({
-      ...model,
-      doGenerate: (options) => {
-        observe(options);
-
-        return model.doGenerate(options);
-      },
-      doStream: (options) => {
-        observe(options);
-
-        return model.doStream(options);
-      },
-    } satisfies ModelV3);
+  const recording = observedModel(model, observe);
 
   return {
     model: recording,
-    evidence: () => ({
-      calls,
-      toolsOffered: [...offered].sort(),
-      agentsOffered: offered.has('agents'),
-      agentsIndexed,
-      systemChars,
-      runtimeFacts: calls > 0 && runtimeFacts,
-    }),
+    evidence: (since = 0) => {
+      const read = turnRequests.slice(since);
+      const offered = new Set(read.flatMap((request) => request.tools));
+
+      return {
+        calls: read.length,
+        toolsOffered: [...offered].sort(),
+        agentsOffered: offered.has('agents'),
+        agentsIndexed: read.some((request) => request.system.includes(AGENTS_INDEX_MARKER)),
+        systemChars: Math.max(0, ...read.map((request) => request.system.length)),
+        runtimeFacts: read.length > 0 && read.every((request) => request.prompt.includes(RUNTIME_SECTION_MARKER)),
+      };
+    },
+    prompts: () => turnRequests.map((request) => request.prompt),
+  };
+}
+
+/** One step of a scripted turn: a tool call, or the text that ends it. */
+export type ScriptedEvalStep = { readonly call: string; readonly input: JsonObject } | { readonly text: string };
+
+const SCRIPTED_USAGE = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: 1, text: 1, reasoning: undefined },
+};
+
+/**
+ * A credential-free model for a session's turn: the step a request is on is how many tool results it already carries,
+ * and a request offered no tools (a title, a background lane) is answered plain. Past the script, the last step repeats.
+ */
+export function scriptedEvalModel(script: readonly [ScriptedEvalStep, ...ScriptedEvalStep[]]): LanguageModel {
+  return scriptedTurnModel({
+    doGenerate: (options) => {
+      const answered = options.prompt.filter((message) => message.role === 'tool').length;
+      const step = (options.tools ?? []).length === 0 ? { text: 'ok' } : script[Math.min(answered, script.length - 1)] ?? { text: 'ok' };
+
+      const content = 'call' in step
+        ? [{ type: 'tool-call' as const, toolCallId: `scripted-${String(answered)}`, toolName: step.call, input: JSON.stringify(step.input) }]
+        : [{ type: 'text' as const, text: step.text }];
+
+      return { content, finishReason: { unified: 'call' in step ? 'tool-calls' : 'stop', raw: undefined }, usage: SCRIPTED_USAGE, warnings: [] };
+    },
+  });
+}
+
+/** One turn as the product's session ran it: the turn it recorded, each call with its result, and the error it said. */
+export interface EvalTurn {
+  readonly turnId: string;
+  readonly turn: CompletedTurn;
+  readonly calls: readonly LiveToolCall[];
+  readonly error: string | null;
+}
+
+/** What one turn has said so far, as its events arrive. */
+interface TurnObservation {
+  readonly calls: LiveToolCall[];
+  error: string | null;
+  ended: TurnEndEvent | null;
+}
+
+/** A live suite's agent: the product's own session over the suite's runtime, every request it sends observed. */
+export interface EvalSession {
+  readonly session: LocalAgentSession;
+  readonly requests: RecordedRequestSurface;
+  /** Every event the session has said, oldest first: its evolution and background notices among them. */
+  readonly events: readonly SessionEvent[];
+  turn(text: string): Promise<EvalTurn>;
+  end(): Promise<void>;
+}
+
+/**
+ * THE EVAL AGENT IS THE PRODUCT'S. A suite drives `LocalAgentSession` with `model` as `kinu` does: its prompt, its tool
+ * surface, its turn gates and what it records are the product's, so a score cannot be of a surface the suite assembled.
+ */
+export function evalSession(input: { readonly rt: CLIRuntime; readonly db: LocalSessionDb; readonly model: LanguageModel }): EvalSession {
+  const requests = recordRequestSurface(input.model);
+  // What the turn under way has said so far; each turn starts a fresh one.
+  let current: TurnObservation = { calls: [], error: null, ended: null };
+
+  const events: SessionEvent[] = [];
+
+  const observe = (event: SessionEvent): void => {
+    events.push(event);
+
+    if (event.type === 'tool-call') {
+      current.calls.push({ toolCallId: event.toolCallId, name: event.toolName, args: v.parse(JsonObjectSchema, event.args), result: null });
+    } else if (event.type === 'tool-result') {
+      const call = current.calls.find((made) => made.toolCallId === event.toolCallId);
+
+      if (call !== undefined) {
+        const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), JsonValueSchema), event.result);
+
+        call.result = parsed.success ? parsed.output : event.result;
+        call.outcome = v.parse(ToolOutcomeSchema, event);
+      }
+    } else if (event.type === 'turn-end') {
+      current.ended = event;
+    } else if (event.type === 'error') {
+      current.error = event.message;
+    }
+  };
+
+  const session = new LocalAgentSession({ rt: input.rt, db: input.db, model: requests.model, onEvent: observe });
+
+  return {
+    session,
+    requests,
+    events,
+    async turn(text) {
+      current = { calls: [], error: null, ended: null };
+      await session.send(text, { id: crypto.randomUUID() });
+      const finished = current.ended;
+
+      if (finished === null) throw new Error(`the session ended no turn for ${JSON.stringify(text.slice(0, 60))}${current.error === null ? '' : `: ${current.error}`}`);
+
+      return { turnId: finished.turnId, turn: finished.turn, calls: current.calls, error: current.error };
+    },
+    end: () => session.end(),
   };
 }
 
@@ -680,23 +550,4 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
     availableTools: [],
     activeSkills: [],
   })));
-}
-
-/**
- * A `generateText` result's answer as a turn records it. Some models (e.g. Kimi K2.5) end on a tool-call step
- * with no trailing text, and the SDK puts only the final step's text in `result.text`.
- */
-export function collectStepText(result: {
-  text: string;
-  steps: ReadonlyArray<{
-    text: string;
-    toolResults: Parameters<typeof synthesizeToolFallback>[0][number]['toolResults'];
-  }>;
-}): string {
-  if (result.text) return result.text;
-  const textParts = result.steps.flatMap((step) => (step.text ? [step.text] : []));
-
-  if (textParts.length > 0) return textParts.join('\n\n');
-
-  return synthesizeToolFallback(result.steps) || '(no response)';
 }

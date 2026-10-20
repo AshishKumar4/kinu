@@ -18,25 +18,17 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
-import * as v from 'valibot';
 
 import {
   EvolutionEngine, historyTurnPairs,
-  recordTurnRating,
-  thumbsRating,
   type LLMProviderConfig,
-  type CompletedTurn,
   type ToolCallRecord,
 } from '../../packages/core/src/index';
 import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import {
-  buildEvalAgentSurface, collectStepText, createStepToolCallLog, recordRequestSurface,
-  type EvalAgentSurface, type LiveToolCall, type RequestSurfaceEvidence,
-} from './harness';
+import { evalSession, type EvalSession, type LiveToolCall, type RequestSurfaceEvidence } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
-import { seedTranscriptEntry, finalIntegerAnswer, letterKey,
-liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
+import { finalIntegerAnswer, letterKey,
+liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
 UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
@@ -47,41 +39,15 @@ const TARGET = liveModelTarget('Evolution Proof');
 const liveTest = test.skipIf(!TARGET);
 
 
-const ToolListResultSchema = v.object({
-  result: v.array(v.object({
-    name: v.string(),
-    description: v.string(),
-    qualityScore: v.number(),
-  })),
-});
-
-/** How far one direct `tools.<name>()` call got. `unbound` is the adapter not
- *  wired and is a harness fault; `threw` is the model-authored body's own
- *  business and still proves the binding executed. Keeping them apart is what
- *  stops a de-parity reading as a bad artifact. */
-const InvocationReportSchema = v.object({
-  result: v.array(v.object({
-    name: v.string(),
-    phase: v.picklist(['unbound', 'returned', 'threw']),
-  })),
-});
-
-/** EXPOSURE, PRD §9.3's first of three metrics, with its own denominator. Not
- *  folded into reuse: a reuse rate over an unexposed surface is a number about
- *  nothing, and the two failures look identical in one ratio. */
+/** EXPOSURE, PRD §9.3's first of three metrics, with its own denominator, read from what session 2's turn was offered:
+ *  not folded into reuse, since a reuse rate over an unexposed surface is a number about nothing. */
 interface ExposureTally {
   /** Crafted tools session 1 left in the store. */
   readonly inherited: number;
-  /** Of those, how many `workspace.listTools()` projected. */
-  readonly discovered: number;
-  /** Of those, how many a direct `tools.<name>()` call reached the body of. */
-  readonly reachedBody: number;
-  /** Names that did not resolve to a callable at all — the wiring failure. */
-  readonly unbound: readonly string[];
-  /** A harness-crafted tool with a KNOWN signature returned its value, so
-   *  "an invocation succeeded" means a value came back and not only that a body
-   *  ran. */
-  readonly probeReturned: boolean;
+  /** Of those, how many session 2's first turn was offered (`CompletedTurn.craftedOffered`). */
+  readonly offered: number;
+  /** Inherited names that turn was not offered. */
+  readonly missing: readonly string[];
 }
 
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
@@ -91,72 +57,32 @@ const TEST_DIR = join(tmpdir(), 'kinu-evolution-proof-' + Date.now());
 type ReuseMode = 'instructed' | 'autonomous';
 
 interface TurnResult {
-  text: string;
-  toolCalls: ToolCallRecord[];
-  calls: readonly LiveToolCall[];
-  steps: number;
-  durationMs: number;
-  reuseMode: ReuseMode;
-  /** What the PROVIDER was asked with, off the wire-level call options. PRD
-   *  §9.5: a turn that made no delegation call has to carry the evidence that
-   *  says whether it was offered one, or "the model declined" and "the harness
-   *  never asked" stay the same observation. */
-  request: RequestSurfaceEvidence;
+  readonly turnId: string;
+  readonly text: string;
+  readonly toolCalls: readonly ToolCallRecord[];
+  readonly calls: readonly LiveToolCall[];
+  readonly steps: number;
+  readonly durationMs: number;
+  readonly reuseMode: ReuseMode;
+  /** Crafted tools the turn's declarations offered, as the session recorded them. */
+  readonly craftedOffered: readonly string[];
+  /** Crafted tools the model's own programs called, as the session recorded them: binding and invocation, end to end. */
+  readonly craftedUsed: readonly string[];
+  /** What the PROVIDER was asked with, off the wire-level call options. PRD §9.5: a turn that made no delegation call
+   *  has to carry the evidence that says whether it was offered one, or "the model declined" and "the harness never
+   *  asked" stay the same observation. */
+  readonly request: RequestSurfaceEvidence;
 }
 
-/** One turn, as the CLI drives it: the model, the runtime it acts on, the
- *  production tool surface, and which session the turn belongs to. */
-interface ChatTurn {
-  readonly model: LanguageModel;
-  readonly rt: CLIRuntime;
-  readonly surface: EvalAgentSurface;
-  readonly userMessage: string;
-  readonly sessionId: string;
-}
-
-async function chatTurn(turn: ChatTurn): Promise<TurnResult> {
-  const { model, rt, sessionId, surface, userMessage } = turn;
-  const start = Date.now();
-  // The PRODUCTION frame, from the production tool surface: its system prompt, and the dynamic block (runtime facts
-  // and the memory tail) woven before the request by the step pipeline's ledger. A hand-assembled option set gives
-  // the model a prompt the product never sends.
-  const { system, messages } = await surface.request([{ role: 'user', content: userMessage }]);
-  // The wrapper forwards the call unchanged; it only reads the tool list and the
-  // system message the provider actually receives.
-  const recorder = recordRequestSurface(model);
-
-  const reuseMode: ReuseMode =
-    /\b(?:must\s+)?use eval\b/i.test(userMessage) ? 'instructed' : 'autonomous';
-
-  const log = createStepToolCallLog();
-
-  const result = await generateText({
-    model: recorder.model,
-    instructions: system,
-    messages,
-    tools: surface.tools,
-    stopWhen: isStepCount(500),
-    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
-  });
-
-  recordLiveModelSpend(result.usage);
-
-  const responseText = collectStepText(result);
-
-  const id = crypto.randomUUID();
-  await seedTranscriptEntry(rt.stores.history, sessionId, { id, message: { role: 'user', content: userMessage }, origin: 'input' });
-  await seedTranscriptEntry(rt.stores.history, sessionId, {
-    id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
-  });
+/** One challenge as a turn of the product's own session. */
+async function proofTurn(agent: EvalSession, userMessage: string): Promise<TurnResult> {
+  const asked = agent.requests.prompts().length;
+  const { turnId, turn, calls } = await agent.turn(userMessage);
+  const reuseMode: ReuseMode = /\b(?:must\s+)?use eval\b/i.test(userMessage) ? 'instructed' : 'autonomous';
 
   return {
-    text: responseText,
-    toolCalls: log.records(),
-    calls: log.calls,
-    steps: log.steps,
-    durationMs: Date.now() - start,
-    reuseMode,
-    request: recorder.evidence(),
+    turnId, text: turn.assistantResponse, toolCalls: turn.toolCalls, calls, steps: turn.steps, durationMs: turn.durationMs,
+    reuseMode, craftedOffered: turn.craftedOffered ?? [], craftedUsed: turn.craftedToolsUsed ?? [], request: agent.requests.evidence(asked),
   };
 }
 
@@ -391,30 +317,31 @@ const DIJKSTRA_ANSWER_2 = shortestDistance(GRAPH_2);
 const CIPHER_ANSWER = atbash(CIPHER.ciphertext);
 
 /** A turn whose answer the proof checked, rated as the user would: a thumbs-up. */
-function rateAsChecked(rt: CLIRuntime, turnId: string, request: string, answer: string): void {
-  recordTurnRating(rt.storage.sql, rt.actor, { ...thumbsRating('positive'), turnId, source: 'thumbs', request, answer });
-}
-
 describe('Evolution Proof', () => {
   let rt: CLIRuntime;
   let target: LocalTarget;
+  /** Only for the owner's thumb: the session has no entry point for one, and `applyExplicitFeedback` writes the same
+   *  row `setTurnFeedback` does, against the turn's own record. */
   let engine: EvolutionEngine;
-  let model: LanguageModel;
-  /** Built ONCE, in setup, from the production actor root. It was rebuilt per
-   *  turn from `buildLiveLocalTools`, which is how the two sessions could
-   *  disagree about what existed: production rebuilds a toolset only on a model
-   *  change (`rebuildModelBoundState`), and a surface rebuilt per turn is a
-   *  different lifetime from the one the product runs. */
-  let surface: EvalAgentSurface;
+  /** The session the challenges are turns of: session 1's, then a fresh one for session 2, as two `kinu` runs. */
+  let agent: EvalSession | undefined;
+  let drove = false;
+
+  /** The proof checked the turn's answer, so it rates it as the owner would: a thumb, before the next message arrives,
+   *  whose arrival runs the review that reads it. */
+  const rateAsChecked = async (turnId: string): Promise<void> => { await engine.applyExplicitFeedback(turnId, 'positive'); };
+
+  const session = (): EvalSession => {
+    agent ??= evalSession({ rt, db: target.db, model: liveChatModel(LLM_CONFIG) });
+    drove = true;
+
+    return agent;
+  };
 
   beforeAll(async () => {
-    // Provisioned through the seam: birth, the whole schema, open, the
-    // executor-surface and sandbox guards and the pre-turn profile — the same
-    // sequence every live suite drives, once. The hand-picked init calls this
-    // replaced omitted a table, so `engine.onSessionComplete` below died on it
-    // 102s into a paid run; `initWorkspaceSchema` is the one function that declares a
-    // workspace's tables. The real runtime rather than the birth one, so
-    // evolution reaches a genuine branch spawner.
+    // Provisioned through the seam: birth, the whole schema, open, the executor-surface and sandbox guards and the
+    // pre-turn profile, the same sequence every live suite drives, once. The real runtime rather than the birth one,
+    // so evolution reaches a genuine branch spawner.
     target = await provisionLocalTarget({
       dir: TEST_DIR,
       workspace: 'evolution-proof',
@@ -422,16 +349,13 @@ describe('Evolution Proof', () => {
       llm: LLM_CONFIG,
     });
     rt = target.runtime;
-    // The wiring `LocalAgentSession` does for every turn-driving surface. Every
-    // `reviewTurn` in this proof routes a reflection lane, so without it the
-    // whole cross-session comparison dies on the second turn.
-    model = liveChatModel(LLM_CONFIG);
     engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history), { enabled: true });
-    surface = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG });
-    engine.onEvent(e => console.log(`    [evolution] ${e.type}: ${e.message.slice(0, 80)}`));
   });
 
   afterAll(async () => {
+    await agent?.end();
+
+    if (drove) recordLiveModelEpisode(rt.storage.sql, rt.actor);
     reportLiveModelSpend('Evolution Proof');
     // Teardown owns the store and the directory.
     target?.teardown();
@@ -439,24 +363,18 @@ describe('Evolution Proof', () => {
 
   // ── SESSION 1: Solve challenges, build patterns ──────────────
 
-  let session1Results: TurnResult[] = [];
+  const session1Results: TurnResult[] = [];
 
   liveTest('session 1, turn 1: RSA challenge (learn the pattern)', async () => {
-    console.log(`    Tools available: ${Object.keys(surface.tools).join(', ')}`);
-    console.log(`    agents actions: ${surface.agentsActions.join(', ') || '(none)'}`);
-    expect(Object.keys(surface.tools)).toContain('eval');
-
-    const result = await chatTurn({ model, rt, surface, userMessage: RSA_CHALLENGE_1, sessionId: 'session-1' });
-    // The request evidence, per turn, from the wire: what the provider was
-    // offered and whether the delegation ladder was in the system message it
-    // received. Printed on the FIRST turn because that is where a broken
-    // projection would be cheapest to notice.
+    const result = await proofTurn(session(), RSA_CHALLENGE_1);
+    // The request evidence, per turn, from the wire: what the provider was offered and whether the delegation index
+    // was in the system message it received. Printed on the FIRST turn, where a broken projection is cheapest to see.
     console.log(`    request: ${String(result.request.calls)} call(s), tools offered `
       + `${result.request.toolsOffered.join(', ')}, agents=${String(result.request.agentsOffered)}, `
       + `agents indexed=${String(result.request.agentsIndexed)}, `
       + `system ${String(result.request.systemChars)} chars`);
     expect(result.request.calls).toBeGreaterThan(0);
-    expect(result.request.toolsOffered).toEqual(Object.keys(surface.tools).sort());
+    expect(result.request.toolsOffered).toContain('eval');
     expect(result.request.agentsOffered).toBe(true);
     expect(result.request.agentsIndexed).toBe(true);
     expect(result.request.runtimeFacts).toBe(true);
@@ -474,24 +392,11 @@ describe('Evolution Proof', () => {
     const answered = finalIntegerAnswer(result.text);
     console.log(`    Answered ${String(answered)}, expected ${String(RSA_ANSWER_1)}`);
     expect(answered).toBe(RSA_ANSWER_1);
-
-    // Fire evolution — should extract pattern from successful tool usage
-    // The proof checked the answer above, so it rates the turn as the user would: a thumb.
-    rateAsChecked(rt, 'proof-rsa', RSA_CHALLENGE_1, result.text);
-    await engine.reviewTurn({
-      turnId: 'proof-rsa',
-      userMessage: RSA_CHALLENGE_1,
-      assistantResponse: result.text,
-      toolCalls: result.toolCalls,
-      steps: result.steps,
-      durationMs: result.durationMs,
-      feedback: null,
-      hadError: false,
-    }, null);
+    await rateAsChecked(result.turnId);
   }, 0);
 
   liveTest('session 1, turn 2: Dijkstra challenge (learn algorithm pattern)', async () => {
-    const result = await chatTurn({ model, rt, surface, userMessage: DIJKSTRA_CHALLENGE_1, sessionId: 'session-1' });
+    const result = await proofTurn(session(), DIJKSTRA_CHALLENGE_1);
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -503,23 +408,11 @@ describe('Evolution Proof', () => {
     const answered = finalIntegerAnswer(result.text);
     console.log(`    Answered ${String(answered)}, expected ${String(DIJKSTRA_ANSWER_1)}`);
     expect(answered).toBe(DIJKSTRA_ANSWER_1);
-
-    // The proof checked the answer above, so it rates the turn as the user would: a thumb.
-    rateAsChecked(rt, 'proof-dijkstra', DIJKSTRA_CHALLENGE_1, result.text);
-    await engine.reviewTurn({
-      turnId: 'proof-dijkstra',
-      userMessage: DIJKSTRA_CHALLENGE_1,
-      assistantResponse: result.text,
-      toolCalls: result.toolCalls,
-      steps: result.steps,
-      durationMs: result.durationMs,
-      feedback: null,
-      hadError: false,
-    }, null);
+    await rateAsChecked(result.turnId);
   }, 0);
 
-  liveTest('session 1, turn 3: cipher challenge + session reflection', async () => {
-    const result = await chatTurn({ model, rt, surface, userMessage: CIPHER_CHALLENGE, sessionId: 'session-1' });
+  liveTest('session 1, turn 3: cipher challenge', async () => {
+    const result = await proofTurn(session(), CIPHER_CHALLENGE);
     session1Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -534,82 +427,34 @@ describe('Evolution Proof', () => {
     // in this string.
     console.log(`    Expected plaintext ${JSON.stringify(CIPHER_ANSWER)}`);
     expect(letterKey(result.text)).toContain(CIPHER_ANSWER.replaceAll(' ', ''));
+    await rateAsChecked(result.turnId);
 
-    // The proof checked the answer above, so it rates the turn as the user would: a thumb.
-    rateAsChecked(rt, 'proof-cipher', CIPHER_CHALLENGE, result.text);
-    await engine.reviewTurn({
-      turnId: 'proof-cipher',
-      userMessage: CIPHER_CHALLENGE,
-      assistantResponse: result.text,
-      toolCalls: result.toolCalls,
-      steps: result.steps,
-      durationMs: result.durationMs,
-      feedback: null,
-      hadError: false,
-    }, null);
-
-    // End session 1 — triggers session reflection
-    const challenges = [RSA_CHALLENGE_1, DIJKSTRA_CHALLENGE_1, CIPHER_CHALLENGE];
-
-    const turns: CompletedTurn[] = session1Results.map((answered, index) => {
-      const userMessage = challenges[index];
-
-      if (!userMessage) throw new Error(`missing challenge for session result ${index}`);
-
-      return {
-        userMessage,
-        assistantResponse: answered.text,
-        toolCalls: answered.toolCalls,
-        steps: answered.steps,
-        durationMs: answered.durationMs,
-        feedback: 'positive',
-        hadError: false,
-      };
-    });
-
-    await engine.onSessionComplete({
-      sessionId: 'session-1',
-      turns,
-      startedAt: Date.now() - 60000,
-      endedAt: Date.now(),
-    });
+    // A turn is reviewed when the next message arrives; the last challenge's is this closing one, as an owner says it.
+    await session().turn('Thanks, that is all for today.');
+    // Session 1 ends as a `kinu` run ends; session 2 is a fresh one over the same workspace.
+    await agent?.end();
+    agent = undefined;
   }, 0);
 
   // ── Verify evolution happened ────────────────────────────────
 
   liveTest('evolution artifacts exist after session 1', async () => {
-    // THE DENOMINATOR, first, because every claim below is about what the
-    // RATED turns produced. A proof drives challenges and never replies, so it
-    // rates each turn whose answer it checked with a thumb (`rateAsChecked`);
-    // a pattern is extracted only from a turn rated high that ran tools.
-    const ratings = rt.storage.sql<{ score: number; source: string }>`
-      SELECT score, source FROM turn_ratings`;
+    // THE DENOMINATOR, first, because every claim below is about what the RATED turns produced. A proof drives
+    // challenges and never replies, so it rates each turn whose answer it checked with a thumb; a pattern is extracted
+    // only from a turn rated high that ran tools, by the review the next message runs.
+    const thumbs = rt.storage.sql<{ turn_id: string; score: number }>`
+      SELECT turn_id, score FROM turn_ratings WHERE source = 'thumbs'`;
 
     const turnsThatRanTools = session1Results.filter(r => r.toolCalls.length > 0).length;
-    console.log(`    Rated turns: ${ratings.map(r => `${r.score}/${r.source}`).join(', ')}`);
+    console.log(`    Rated turns: ${thumbs.map(r => `${r.turn_id}:${String(r.score)}`).join(', ')}`);
     expect(turnsThatRanTools).toBeGreaterThan(0);
-    expect(ratings).toEqual(session1Results.map(() => ({ score: 5, source: 'thumbs' })));
+    expect(thumbs.map((row) => ({ turnId: row.turn_id, score: row.score })).sort((a, b) => a.turnId.localeCompare(b.turnId)))
+      .toEqual(session1Results.map((r) => ({ turnId: r.turnId, score: 5 })).sort((a, b) => a.turnId.localeCompare(b.turnId)));
 
-    // WHAT THE RUN RECORDED, as content rather than as a size.
-    //
-    // This assertion was `memory.length > 100`, and it could neither fail for
-    // the reason it claimed nor pass for one. MEMORY.md is the CORROBORATED
-    // lesson file: a turn's reflection reaches it only on a negative verdict
-    // from a PERSON (engine.ts:453) and a session reflection only on a window
-    // carrying negative signal at all (engine.ts:606 via
-    // sessionWarrantsReflection, whose doc states that an all-accepted window
-    // returns false). Every turn above is accepted, so nothing reflects and
-    // nothing is appended — and what was being measured was the BIRTH header,
-    // whose length is the workspace name plus 38 characters. A live run
-    // reported 53 with three tools extracted and all three executable; a longer
-    // workspace name would have turned the same empty file green.
-    //
-    // So the artifact is the one evolution produces from an ACCEPTED turn:
-    // extractPattern generalizes the turn's tool calls and upsertCraftedTool
-    // admits the result only after compiling it to a callable
-    // (craft/conflict.ts, upsertCraftedTool). Asserted per tool, because a count
-    // alone is what let a stored "tool" whose body was `await ({ runtime })(…)`
-    // read as an artifact.
+    // WHAT THE RUN RECORDED, as content rather than as a size: the artifact evolution produces from an ACCEPTED turn.
+    // extractPattern generalizes the turn's tool calls and upsertCraftedTool admits the result only after compiling it
+    // to a callable (craft/conflict.ts, upsertCraftedTool). Asserted per tool, because a count alone is what let a
+    // stored "tool" whose body was `await ({ runtime })(…)` read as an artifact.
     const crafted = rt.craftStore.list();
 
     const chosen = new Map(rt.storage.sql<{ name: string; chosen: number }>`
@@ -623,142 +468,59 @@ describe('Evolution Proof', () => {
       console.log(`        code: ${t.code.slice(0, 80)}...`);
       // Named, so a later turn can ask for it by name.
       expect(t.name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
-      // CALLABLE, compiled exactly as the CLI invokes a crafted tool. The
-      // store's own admission gate ran this before the write; running it here
-      // is what makes "3 crafted tools" a claim about artifacts rather than
-      // about rows.
+      // CALLABLE, compiled exactly as the CLI invokes a crafted tool. The store's own admission gate ran this before the
+      // write; running it here is what makes "3 crafted tools" a claim about artifacts rather than about rows.
       expect(new Function(`return (${t.code})`)()).toBeInstanceOf(Function);
-      // Counted on its own row, which consolidation reads to retire a tool
-      // no turn chooses (craft/preference.ts).
+      // Counted on its own row, which consolidation reads to retire a tool no turn chooses (craft/preference.ts).
       expect(chosen.has(t.name)).toBe(true);
     }
 
-    // Memory itself: the birth record survived the reopen.
+    // Memory itself: the birth record is still there. Nothing in these accepted turns writes MEMORY.md; only the
+    // agent's own notes do.
     const memory = await rt.memory.read('memory/MEMORY.md');
 
     if (!memory) throw new Error('the workspace lost memory/MEMORY.md between birth and this read');
     console.log(`    Memory (${memory.length} chars): ${JSON.stringify(memory.slice(0, 120))}`);
     expect(memory).toContain('# evolution-proof');
 
-    // Indexing rides an append, so an all-accepted window indexes nothing —
-    // reported, and the reason is the line above.
-    const chunks = rt.storage.sql<{ path: string }>`SELECT DISTINCT path FROM memory_note_chunks`;
-    console.log(`    Memory chunks: ${chunks.length}`);
-
-    // Both halves of every turn are on the session tree the next session reads.
+    // Both halves of every turn, the closing one included, are on the conversation the next session reads.
     const msgCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM conversation_entries`[0]?.c ?? 0;
     console.log(`    Messages: ${msgCount}`);
-    expect(msgCount).toBe(session1Results.length * 2);
+    expect(msgCount).toBeGreaterThanOrEqual((session1Results.length + 1) * 2);
   });
 
   // ── SESSION 2: Similar challenges — should benefit from evolution ──
 
-  let session2Results: TurnResult[] = [];
+  const session2Results: TurnResult[] = [];
   let inheritedToolNames: string[] = [];
-  /** Filled by the exposure block below, reported beside the two reuse rates in
-   *  the summary. `null` until then, so a summary over a session-2 turn that
-   *  never ran says so instead of printing zeros. */
+  /** Filled by session 2's first turn, reported beside the two reuse rates in the summary. `null` until then, so a
+   *  summary over a session-2 turn that never ran says so instead of printing zeros. */
   let exposure: ExposureTally | null = null;
 
   liveTest('session 2, turn 1: similar RSA challenge with inherited artifacts', async () => {
-    console.log(`    Tools available: ${Object.keys(surface.tools).join(', ')}`);
-
-    // What session 2 inherits, from the store it inherits it in. Crafted tools
-    // are sandbox-only — reached as `tools.<name>` inside `eval`,
-    // never as SDK tools (evolution/engine.ts:433-436) — so subtracting a
-    // hardcoded builtin count from the list above measures nothing: it printed
-    // `Crafted tools loaded: -1` beside a correct `Crafted tools: 3` as soon as
-    // the builtin count moved. The transfer is what this session is for, so it
-    // is asserted rather than counted wrong.
+    // What session 2 inherits, from the store it inherits it in. Crafted tools are sandbox-only, reached as
+    // `tools.<name>` inside `eval` and declared to the model in the turn's dynamic block, so the transfer is asserted
+    // on that declaration rather than counted from the tool list.
     inheritedToolNames = rt.craftStore.list().map(t => t.name);
     console.log(`    Crafted tools inherited from session 1: ${inheritedToolNames.join(', ')}`);
     expect(inheritedToolNames.length).toBeGreaterThan(0);
 
-    const executeEntry = surface.tools.eval;
-
-    if (!executeEntry) throw new Error('session 2 has no eval dispatcher');
-    const execute = toolExecute<{ code: string }, unknown>(executeEntry);
-
-    // ── EXPOSURE, measured before reuse is asked for ────────────────────────
-    //
-    // PRD §9.3 separates EXPOSURE from reuse, and this is why: a reuse rate over
-    // a surface that never exposed the tools is a number about nothing. Three
-    // rows, because there are three independent ways the projection can fail and
-    // a reuse rate sees none of them:
-    //
-    //   discovery — `workspace.listTools()` is what the prompt tells the agent to
-    //     call before building from scratch. Store rows alone do not prove that
-    //     projection.
-    //   binding   — a listed name still has to RESOLVE inside the sandbox.
-    //     Measured with crafted bindings absent: three rows listed, and
-    //     `tools.doubleIt` was `undefined`. The reuse metric read 1/1.
-    //   invocation — a resolved binding still has to reach the tool BODY. This is
-    //     the row that separates a wiring fault from the tool's own contract: an
-    //     unbound name is the harness's failure, and a body that threw on absent
-    //     arguments is the artifact's own business.
-    const listed = v.parse(
-      ToolListResultSchema,
-      await execute({ code: 'return await workspace.listTools();' }),
-    );
-
-    const listedNames = listed.result.map((tool) => tool.name).sort();
-    expect(listedNames).toEqual([...inheritedToolNames].sort());
-
-    // Invoked with no argument on purpose: these bodies are the MODEL's
-    // artifacts, so their signatures are not known here and inventing arguments
-    // would test the model's codegen rather than the adapter. What is asserted is
-    // the part that is the harness's own: every name reaches its body.
-    const invocations = v.parse(InvocationReportSchema, await execute({
-      code: `const report = [];
-for (const name of ${JSON.stringify(inheritedToolNames)}) {
-  if (typeof tools[name] !== 'function') { report.push({ name, phase: 'unbound' }); continue; }
-  try { await tools[name](); report.push({ name, phase: 'returned' }); }
-  catch (err) { report.push({ name, phase: 'threw' }); }
-}
-return report;`,
-    }));
-
-    const unbound = invocations.result.filter((row) => row.phase === 'unbound').map((row) => row.name);
-    const reachedBody = invocations.result.filter((row) => row.phase !== 'unbound');
-
-    for (const row of invocations.result) console.log(`      tools.${row.name}: ${row.phase}`);
-
-    // One invocation with a KNOWN signature, so "an invocation succeeded" is a
-    // returned VALUE and not only a body that ran. Crafted through
-    // `workspace.createTool` — the same production path evolution writes
-    // through — and created AFTER `inheritedToolNames` was captured, so it is
-    // outside every transfer measurement below.
-    await execute({
-      code: 'await workspace.createTool("parityProbe", "returns its input doubled", '
-        + '"async (n) => n * 2"); return "made";',
-    });
-    const probe = await execute({ code: 'return await tools.parityProbe(21);' });
-
-    exposure = {
-      inherited: inheritedToolNames.length,
-      discovered: listedNames.length,
-      reachedBody: reachedBody.length,
-      unbound,
-      probeReturned: JSON.stringify(probe) === JSON.stringify({ result: 42 }),
-    };
-    console.log(`    exposure: ${String(exposure.discovered)}/${String(exposure.inherited)} discoverable, `
-      + `${String(exposure.reachedBody)}/${String(exposure.inherited)} reached their body, `
-      + `unbound ${unbound.join(', ') || '(none)'}, known-signature probe returned `
-      + `${String(exposure.probeReturned)}`);
-
-    // An unbound name is the craft adapter not wired — the exact de-parity this
-    // suite exists to refuse, and never a fact about the model.
-    expect(unbound).toEqual([]);
-    expect(exposure.reachedBody).toBe(inheritedToolNames.length);
-    expect(exposure.probeReturned).toBe(true);
-
-    const result = await chatTurn({ model, rt, surface, userMessage: RSA_CHALLENGE_2, sessionId: 'session-2' });
+    const result = await proofTurn(session(), RSA_CHALLENGE_2);
     session2Results.push(result);
+
+    // ── EXPOSURE, read from what the turn was offered ───────────────────────
+    // PRD §9.3 separates EXPOSURE from reuse: a reuse rate over a surface that never offered the tools is a number
+    // about nothing. Read off the turn's own record, never probed by a program of this suite's: a probe run through
+    // the session would sit in the conversation the measured turns read, naming the tools they are scored on reusing.
+    const missing = inheritedToolNames.filter((name) => !result.craftedOffered.includes(name));
+    exposure = { inherited: inheritedToolNames.length, offered: inheritedToolNames.length - missing.length, missing };
+    console.log(`    exposure: ${String(exposure.offered)}/${String(exposure.inherited)} offered, missing ${missing.join(', ') || '(none)'}`);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
     console.log(`    Steps: ${result.steps}, Tools: ${result.toolCalls.map(t => t.name).join(', ')}`);
     console.log(`    Duration: ${result.durationMs}ms`);
 
+    expect(missing).toEqual([]);
     expect(result.text.length).toBeGreaterThan(0);
 
     // The transfer has to be a transfer of something CORRECT. A session-2 turn
@@ -770,7 +532,7 @@ return report;`,
   }, 0);
 
   liveTest('session 2, turn 2: similar graph challenge with inherited artifacts', async () => {
-    const result = await chatTurn({ model, rt, surface, userMessage: DIJKSTRA_CHALLENGE_2, sessionId: 'session-2' });
+    const result = await proofTurn(session(), DIJKSTRA_CHALLENGE_2);
     session2Results.push(result);
 
     console.log(`    Response: ${result.text.slice(0, 200)}`);
@@ -850,9 +612,7 @@ return report;`,
     // forbids that instruction, measures autonomous transfer. A missing
     // autonomous opportunity is `n/a`, never a zero folded into this rate.
     if (!exposure) throw new Error('the exposure block did not run, so no reuse rate here has a denominator');
-    console.log(`    Exposure: ${String(exposure.discovered)}/${String(exposure.inherited)} discoverable, `
-      + `${String(exposure.reachedBody)}/${String(exposure.inherited)} callable, `
-      + `known-signature probe returned ${String(exposure.probeReturned)}`);
+    console.log(`    Exposure: ${String(exposure.offered)}/${String(exposure.inherited)} offered`);
 
     interface ReuseTally {
       eligible: number;
@@ -873,11 +633,9 @@ return report;`,
       const bucket = reuseByMode[result.reuseMode];
       bucket.eligible += 1;
 
-      const reusedInherited = result.calls.some((call) => {
-        const args = JSON.stringify(call.args);
-
-        return inheritedToolNames.some((name) => args.includes(name));
-      });
+      // Read off the session's record of what the model's own programs called, so a reuse is a binding that resolved and
+      // a body that ran, end to end.
+      const reusedInherited = result.craftedUsed.some((name) => inheritedToolNames.includes(name));
 
       if (reusedInherited) bucket.passed += 1;
     }
@@ -898,10 +656,7 @@ return report;`,
     console.log(`    Delegation surface shown on every turn: ${String(shownEveryTurn)}`);
 
     // EXPOSURE first, because it is the denominator's precondition.
-    expect(exposure.discovered).toBe(exposure.inherited);
-    expect(exposure.reachedBody).toBe(exposure.inherited);
-    expect(exposure.unbound).toEqual([]);
-    expect(exposure.probeReturned).toBe(true);
+    expect(exposure.offered).toBe(exposure.inherited);
     expect(shownEveryTurn).toBe(true);
     expect(reuseByMode.instructed.eligible).toBe(session2Results.length);
     expect(
