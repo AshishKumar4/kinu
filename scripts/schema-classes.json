@@ -118,11 +118,14 @@
     "imported_experience",
     "input_marks",
     "instruction_approvals",
+    "kinu_agent_identity",
+    "kinu_workspace_generation",
     "lessons",
     "mcts_search_runs",
     "memory_note_chunks",
     "memory_note_files",
     "memory_projection_updates",
+    "mission_budget",
     "open_turns",
     "opened_turns",
     "owner_questions",
@@ -153,6 +156,7 @@
     "slate_share_views",
     "slate_shares",
     "slate_state",
+    "slate_usage",
     "slate_versions",
     "slate_viewer_requests",
     "slates",
@@ -210,6 +214,7 @@
     "context_revisions",
     "conversation_entries",
     "conversation_entry_parts",
+    "conversation_fts_state",
     "crafted_tools",
     "deferred_approval_hits",
     "deferred_approvals",
@@ -242,6 +247,7 @@
     "memory_note_chunks",
     "memory_note_files",
     "memory_projection_updates",
+    "mission_budget",
     "open_turns",
     "opened_turns",
     "owner_questions",
@@ -324,6 +330,7 @@
     "context_revisions",
     "conversation_entries",
     "conversation_entry_parts",
+    "conversation_fts_state",
     "crafted_tools",
     "deferred_approval_hits",
     "deferred_approvals",
@@ -356,6 +363,7 @@
     "memory_note_chunks",
     "memory_note_files",
     "memory_projection_updates",
+    "mission_budget",
     "open_turns",
     "opened_turns",
     "owner_questions",
@@ -412,5 +420,12 @@
     "mail_messages",
     "mail_threads",
     "mail_untriaged"
+  ],
+  "monitor": [
+    "monitor_incidents",
+    "monitor_signal_streaks"
+  ],
+  "deploy": [
+    "deploy_step"
   ]
 }

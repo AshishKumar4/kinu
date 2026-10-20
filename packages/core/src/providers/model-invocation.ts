@@ -129,7 +129,9 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Objec
       Effect.catch((cause) => (NoObjectGeneratedError.isInstance(cause) ? Effect.fail(offSchema(cause.text ?? '', noObject(cause))) : Effect.die(cause))),
     );
 
-    const parsed = v.safeParse(schema, output);
+    // Fail-fast: the refusal names the first path it got wrong and nothing more, so an answer of ten thousand wrong
+    // items makes one line, not ten thousand.
+    const parsed = v.safeParse(schema, output, { abortEarly: true });
 
     if (parsed.success) return parsed.output;
     const text = yield* Effect.promise(async () => await result.text);

@@ -3,6 +3,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
 import { Processes, isProcessLive, nameBox, CONTAINER_ENV, END_TREE } from "./processes";
+import { launched } from './exec-launcher';
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
 import { listFiles as readDirectory } from './file-listing';
@@ -2148,13 +2149,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     ));
   }
 
-  /** A command string runs in bash; an argv runs as given, so its words need no quoting (the desktop's, D89). */
+  /**
+   * A command string runs in bash, answering when it exits (`launched`); an argv runs as given, so its words need no
+   * quoting (the desktop's, D89).
+   */
   #spawn(command: string | readonly string[], { cwd, env }: ExecOptions, running: RunningExec): Effect.Effect<ExecProcess, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
       if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
-      const argv = typeof command === 'string' ? ['/bin/bash', '-c', command] : command;
+      const argv = typeof command === 'string' ? launched(command) : command;
       // Its own group, which its kill ends (D69).
       const started = yield* attemptSync('process', () => launch(container, ['setsid', '-w', ...argv], { cwd, env }));
       running.started = started;

@@ -159,12 +159,24 @@ describe('a structured call', () => {
     }
   });
 
-  test('an answer off its schema names each path it got wrong and the type that came, never the value', async () => {
+  // Fail-fast: ten thousand wrong items made a log line larger than the answer (2026-10-20).
+  test('an answer with many wrong items names the first path it got wrong, and no other', async () => {
+    const Tags = v.object({ tags: v.array(v.string()) });
+    const text = JSON.stringify({ tags: Array.from({ length: 10_000 }, (_, at) => at) });
+    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, Tags, { spend: { source: 'fast', report: () => {} } })]);
+    const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
+
+    expect(chain).toContain('tags.0');
+    expect(chain).not.toContain('tags.1');
+  });
+
+  test('an answer off its schema names the path it got wrong and the type that came, never the value', async () => {
     const Count = v.object({ count: v.number(), tags: v.array(v.string()) });
     const [refused] = await Promise.allSettled([generateObjectReported({ model: answering('{"count":"many-fold","tags":[90210]}'), prompt: 'p' }, Count, { spend: { source: 'fast', report: () => {} } })]);
     const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
 
-    for (const named of ['count', 'tags.0', 'string', 'number']) expect(chain).toContain(named);
+    // Fail-fast, the first path it got wrong: `count`, and the type that came.
+    for (const named of ['count', 'number', 'string']) expect(chain).toContain(named);
 
     for (const value of ['many-fold', '90210']) expect(chain).not.toContain(value);
   });

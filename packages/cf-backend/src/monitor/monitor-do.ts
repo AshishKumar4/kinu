@@ -6,8 +6,11 @@
 import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import { EmailOutbox } from '@kinu.run/core';
-import { sampleFleet, settleFleet, type MonitorIncident } from '@kinu.run/core/control-plane';
-import { declaredSignInProviders, ensureMonitorSchema, listIncidents, plainFetch, recordProbeRun, runSyntheticProbes, type MonitorRunResult } from '@kinu.run/core';
+import { initSignalStreaksTable, sampleFleet, settleFleet, type MonitorIncident } from '@kinu.run/core/control-plane';
+import {
+  declaredSignInProviders, durableStamps, ensureMonitorSchema, listIncidents, plainFetch, readStamp, recordProbeRun, repairSchema, runSyntheticProbes,
+  SCHEMA_TABLES, writeStamp, type MonitorRunResult,
+} from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { KinuError, settle } from '@kinu.run/core/obs';
@@ -21,9 +24,20 @@ export class MonitorDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    const stamps = durableStamps(ctx.storage.kv);
+    const unmade = readStamp(stamps, ctx.storage.sql, 'monitor') === 'unmade';
+    const init = (): void => { ensureMonitorSchema(ctx.storage.sql); initSignalStreaksTable(ctx.storage.sql); };
+
+    // Its tables, reset where a release changed them (core state/schema-repair.ts). With no foreign keys among them, a
+    // reset refuses only where its init cannot run, and then the init below refuses every call in SQLite's words.
+    repairSchema(ctx.storage.sql, {
+      schema: 'monitor', tables: SCHEMA_TABLES.monitor, stamps, transactionSync: (write) => ctx.storage.transactionSync(write), init,
+    }, 'monitor');
+    init();
+
+    if (unmade) writeStamp(stamps, 'monitor');
     // No retry timer: the cron tick is the sweep and reconciles the outbox every run.
     this.outbox = new EmailOutbox(ctx.storage.sql);
-    ensureMonitorSchema(ctx.storage.sql);
     // Own isolate, own sink (see `ActorAgent`'s constructor); without it outbox failures reach no dataset.
     installAnalyticsDiagnostics(env);
   }

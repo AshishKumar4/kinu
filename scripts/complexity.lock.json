@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-20",
-  "files": 3614,
-  "functions": 95149,
+  "files": 3642,
+  "functions": 95794,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -443,10 +443,6 @@
     },
     {
       "key": "packages/devbox/tests/snapshot-registry.test.ts#platform>fetcher",
-      "complexity": 25
-    },
-    {
-      "key": "packages/devbox/tests/support/devbox-harness.ts#FakeSandbox.nativeCommand",
       "complexity": 25
     },
     {

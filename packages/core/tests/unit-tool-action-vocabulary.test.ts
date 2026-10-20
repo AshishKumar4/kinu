@@ -48,7 +48,7 @@ const SURFACES: readonly DispatchSurface[] = [
   },
   {
     // Whole-file text is for programs; the native tool reads a bounded window.
-    tool: 'file', field: 'op', vocabulary: Object.keys(FILE).filter((member) => member !== 'text'),
+    tool: 'file', field: 'op', vocabulary: Object.keys(FILE).filter((member) => member !== 'text' && member !== 'machine'),
     build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
 ];

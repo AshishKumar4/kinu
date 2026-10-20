@@ -81,7 +81,7 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
-export { REGENERABLE, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
+export { derivedFrom, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
 
 export { textContains } from './utils/text-match';
 
@@ -543,6 +543,7 @@ export {
   localMissionScope,
   missionGate,
   listMissionSpend,
+  initMissionBudgetTable,
   type MissionBudgetPort,
   type MissionScope,
   type MissionBudgetLimits,
@@ -1192,6 +1193,7 @@ export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots,
+  ensureIdentityTable,
   actorHomeName,
   MAIN_AGENT, SESSION_UID, AGENT_UID_FLOOR,
   type HomeRootVfs, type TmpConfiner,
@@ -1238,7 +1240,7 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, type PathOwner,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps, removeWhole,
   type VfsMount, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
@@ -1299,7 +1301,7 @@ export { memoryBytes } from './memory/note';
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, type MemoryNote } from './memory/note';
 
 export {
-  ConversationSearchStore, invalidateConversationSearchIndex,
+  ConversationSearchStore, ensureIndexTables, invalidateConversationSearchIndex,
   type ConversationRecall, type ConversationSearchHit,
   type ConversationScrollResult, type ConversationSummary,
 } from './memory/conversation-search';
@@ -1688,7 +1690,7 @@ export {
   BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, RESUMED_SURFACE, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
-  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
+  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, BackgroundHandleSchema, backgroundedBy, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema, type AdoptsJobs, type JobAdoption,
   type BackgroundJobRunnerDeps, type JobHolder, initJobHoldersTable, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,

@@ -373,8 +373,8 @@ interface StoreResetProbeRpc extends Rpc.DurableObjectBranded {
   chat(workspace: string): Promise<ChatAnswers>;
   wake(workspace: string): Promise<string>;
   exported(workspace: string): Promise<string>;
-  walked(workspace: string): Promise<{ readonly rebuilt: readonly string[]; readonly refused: string | null; readonly agents: readonly unknown[] }>;
-  rebuilt(): Promise<{ readonly repair: { readonly rebuilt: readonly string[]; readonly refused: string | null } | null; readonly notes: unknown[]; readonly children: unknown[] }>;
+  walked(workspace: string): Promise<{ readonly dropped: readonly string[]; readonly refused: string | null; readonly agents: readonly unknown[] }>;
+  reset(): Promise<{ readonly repair: { readonly dropped: readonly string[]; readonly refused: string | null } | null; readonly rows: unknown[]; readonly keptAlike: boolean }>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {

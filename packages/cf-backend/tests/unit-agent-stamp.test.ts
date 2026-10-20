@@ -1,5 +1,5 @@
-// An agent's database a release left behind is repaired at its first open, before anything reads it: its retired
-// tables dropped and its stale ones rebuilt keeping their rows, then stamped (core state/schema-repair.ts). The
+// An agent's database a release left behind is reset at its first open, before anything reads it: its retired tables
+// dropped and its changed ones dropped and made anew empty, then stamped (core state/schema-repair.ts). The
 // workspace's walk opens it the same way, and reads back what the repair did.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
@@ -31,12 +31,12 @@ function leftBehind(): Database {
   return db;
 }
 
-test('an agent database behind this build is repaired at its first open, and opens', () => {
+test('an agent database behind this build is reset at its first open, and opens', () => {
   const db = leftBehind();
   const { storage } = makeCtx(db, 'stamp-agent');
   const repair = repairAgentDatabase(storage, 'stamp-agent');
 
-  expect({ rebuilt: repair?.rebuilt, retired: repair?.retired, refused: repair?.refused }).toEqual({ rebuilt: ['lessons'], retired: ['device_consent_requests'], refused: null });
+  expect({ dropped: repair?.dropped, retired: repair?.retired, refused: repair?.refused }).toEqual({ dropped: ['lessons'], retired: ['device_consent_requests'], refused: null });
   expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.agent);
   openAgentDatabase(storage, repair, WORKSPACE);
 });

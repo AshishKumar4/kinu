@@ -503,7 +503,7 @@ function askHelper<S extends v.GenericSchema>(
       try: async () => Result.succeed(await llm.object(task, schema)),
       catch: (cause) => toKinuError({ doing: `asking the ${helper.roleLabel}`, cause, otherwise: 'unavailable' }),
     }).pipe(
-      // An answer off the schema names every key it got wrong (`generateObjectReported`), so a refusal says what to fix.
+      // An answer off the schema names the first key it got wrong (`generateObjectReported`), so a refusal says what to fix.
       Effect.catch((failure) => Effect.succeed(Result.fail(`the ${helper.roleLabel} did not answer (${failure.code}): ${renderThrownChain({ cause: failure })}`))),
     )),
   );

@@ -189,7 +189,7 @@ describe('a program reaches another plane\'s files', () => {
       return [provider.name, members.filter((member) => member.startsWith('fs.'))];
     });
 
-    const fileMembers = ['fs.read', 'fs.text', 'fs.edit', 'fs.write', 'fs.list', 'fs.stat', 'fs.search'];
+    const fileMembers = ['fs.read', 'fs.text', 'fs.edit', 'fs.write', 'fs.list', 'fs.stat', 'fs.search', 'fs.machine'];
 
     expect(ownFileMembers).toEqual([['device', fileMembers], ['computer', fileMembers], ['parent', []]]);
   });

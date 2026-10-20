@@ -18,7 +18,7 @@ import {
 import type { GalleryListingSync } from './share-modes';
 
 export function initGalleryTables(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS gallery_listings ( /* regenerable cache, refilled by each listing's sync */
+  execRaw(`CREATE TABLE IF NOT EXISTS gallery_listings ( /* refilled by each listing's sync */
     kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace')),
     workspace TEXT NOT NULL,
     item TEXT NOT NULL, /* an app's slate id; a workspace blueprint's id */
