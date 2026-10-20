@@ -226,7 +226,7 @@ export class DeviceTunnel {
     return settleSync(sendFrame(this.socket, frame));
   }
 
-  /** A binary frame, as a screen's bytes cross (`DEVICE_SCREEN_DATA`). */
+  /** A binary frame, as a screen's bytes cross (`device-screen-data.ts`). */
   sendBytes(frame: Uint8Array): void {
     return settleSync(sendData(this.socket, frame));
   }

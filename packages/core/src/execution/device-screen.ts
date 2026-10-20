@@ -11,7 +11,8 @@ import { diagnostics } from '../obs/log';
 import { KinuError } from '../obs/error';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
 import { WS_OPEN } from './device-tunnel';
-import { DEVICE_FRAMES, DEVICE_SCREEN_DATA } from './device-protocol';
+import { DEVICE_FRAMES } from './device-protocol';
+import { screenDataFrames } from './device-screen-data';
 
 const SCREEN_WS_TAG_PREFIX = 'screen:';
 
@@ -62,36 +63,6 @@ function closeReason(text: string): string {
 
 function randomStream(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0] ?? 0;
-}
-
-/** The binary messages carrying `bytes` on stream `stream`: a kind byte, the stream as a big-endian u32, then at most
- *  `DEVICE_SCREEN_DATA.maxBytes` of the stream. */
-function screenDataFrames(stream: number, bytes: Uint8Array): Uint8Array[] {
-  const frames: Uint8Array[] = [];
-
-  for (let at = 0; at < bytes.byteLength; at += DEVICE_SCREEN_DATA.maxBytes) {
-    const part = bytes.subarray(at, at + DEVICE_SCREEN_DATA.maxBytes);
-    const frame = new Uint8Array(DEVICE_SCREEN_DATA.headerBytes + part.byteLength);
-    const head = new DataView(frame.buffer);
-
-    head.setUint8(0, DEVICE_SCREEN_DATA.kind);
-    head.setUint32(1, stream);
-    frame.set(part, DEVICE_SCREEN_DATA.headerBytes);
-    frames.push(frame);
-  }
-
-  return frames;
-}
-
-/** A binary message from a device as a screen data frame; null when it is not one. Every other frame is JSON text, whose
- *  first byte is never the data kind. */
-export function readScreenData(message: ArrayBuffer | ArrayBufferView): { stream: number; bytes: Uint8Array } | null {
-  const bytes = message instanceof ArrayBuffer ? new Uint8Array(message) : new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
-
-  if (bytes.byteLength < DEVICE_SCREEN_DATA.headerBytes || bytes[0] !== DEVICE_SCREEN_DATA.kind) return null;
-  const head = new DataView(bytes.buffer, bytes.byteOffset, DEVICE_SCREEN_DATA.headerBytes);
-
-  return { stream: head.getUint32(1), bytes: bytes.subarray(DEVICE_SCREEN_DATA.headerBytes) };
 }
 
 /** Null when the socket is a device's, a terminal pane's, or the agents SDK's. */
