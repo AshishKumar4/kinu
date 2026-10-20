@@ -41,10 +41,6 @@ sequenceDiagram
     User->>Agent: Message 1
     Agent->>Turn: reviewTurn(turn, followup)
     Turn->>Turn: Rate it from the reply, a thumb or a pick
-    alt rated 2 or lower
-        Turn->>Turn: Generate reflection → lessons row
-        Turn->>Turn: Append to MEMORY.md only when corroborated
-    end
     alt rated 4 or more AND tool calls > 0
         Turn->>Turn: extractPattern() → upsert CraftStore tool
     end
@@ -53,8 +49,7 @@ sequenceDiagram
     Note over Turn: Repeats for each message
 
     Agent->>Session: Every 5 turns → onSessionComplete(session)
-    Session->>Session: Reflect only if a turn errored or drew negative feedback
-    Note over Session: The cadence lane: the proposer when a trigger holds, its edit staged for the next cold turn
+    Note over Session: The cadence lane: a dream over the new rated turns, its edits staged for the next cold turn
 
     Note over Lifetime: Every 5 closed session windows
     Agent->>Lifetime: onLifetimeEvolution()
@@ -64,7 +59,7 @@ sequenceDiagram
 
 ## Turn-level evolution
 
-One per-agent setting, `learning` (`AgentConfigStore.getLearning`, on by default), decides whether an agent learns at all, on both backends: off, its turns record no ratings, struggles or lessons and the cadence lane proposes nothing. `--no-auto-evolve` and `setEvolutionConfig({ learning: false })` set it; the engine reads it at each turn, so a change applies to the next one. A row a turn already owes is still settled.
+One per-agent setting, `learning` (`AgentConfigStore.getLearning`, on by default), decides whether an agent learns at all, on both backends: off, its turns record no ratings, struggles or lessons and the cadence lane dreams nothing. `--no-auto-evolve` and `setEvolutionConfig({ learning: false })` set it; the engine reads it at each turn, so a change applies to the next one. A row a turn already owes is still settled.
 
 A turn is reviewed when the next user message arrives. `AgentOrchestrator.observeUserTurn` claims the previous turn from the durable window and dispatches `reviewTurn()` (`packages/core/src/evolution/engine.ts`) with the new message as its follow-up, but only when that message continues the conversation. An interactive host or the Durable Object runs the review detached, so it never holds the turn queue. A one-shot host writes a durable row instead (`deferTurnReview`), and the next host that opens the workspace drains it through the same `reviewTurn` path.
 
@@ -78,7 +73,7 @@ No length, duration or tool exit rates a turn. A turn's rating is the user's rep
 
 The decision model is the account's Models setting (`decisionModel` in the profile catalog), default Workers AI Clef. It answers typed questions with a probability for every allowed answer (`providers/decision-model.ts`). The cf backend runs it on the Workers AI binding, or through the owner's Cloudflare login. The CLI runs it at `/ai/run` beside the `/ai/v1` base it routes Workers AI chat to (`workersAiRoute`: `KINU_BASE_URL`, a Cloudflare login, or the worker it is signed in to, whose `/api/user/ai/run` serves the decision models only); with none, or a base that is not `/ai/v1` such as an AI Gateway's, it rates nothing. The binding's answer shape was measured on a throwaway Worker on 2026-10-02, and the first-run row `turn-rated` holds it on the deployment. A turn nobody answered stays unrated. An answered turn's reading is recorded even under a thumb or pick, which win by the ledger's precedence, so a cleared thumb falls back to it. A refusal only the owner can fix (denied, out of budget) is said once in the activity log and leaves the turn unrated; nothing retries it.
 
-Reflection fires on a turn rated 2 or lower. An LLM call writes a lesson and always records it in `lessons`. The lesson reaches the curated memory note only when corroborated, and corroboration needs the user's own negative: a thumbs-down, a pick of an alternate, or a reply the model reads as a correction with probability 0.8 or more. An uncorroborated lesson stays `provisional` until a later negative corroborates it. A turn rated 4 or more with tool calls may promote a reusable procedure.
+A low rating writes no lesson of its own: the dream reads the rated turns and decides what, if anything, to change. A turn rated 4 or more with tool calls may promote a reusable procedure.
 
 ### Struggles teach tool lessons
 
@@ -90,7 +85,7 @@ The Quality panel and `kinu quality <agent>` show satisfaction per day with its 
 
 The cadence lives in `AgentOrchestrator`, not the engine. Every five turns it calls `engine.onSessionComplete()` with the accumulated turns. Five is one constant for both backends, `DEFAULT_SESSION_REFLECTION_INTERVAL` (`core/src/orchestrator/agent-orchestrator.ts`); no host setting changes it.
 
-`onSessionComplete` is selective. It needs at least 3 turns in the window, and `sessionWarrantsReflection()` requires that some turn errored, drew negative feedback, or was rated 2 or lower. A clean session produces no reflection. When it reflects, an LLM call analyzes the window's recent lessons and records a `session_reflection` lesson. That lesson reaches the curated memory note only when a turn in the window carries the user's own negative.
+`onSessionComplete` counts the closed window for the lifetime cadence below and emits the changelog digest. The dream's lane runs after it in the same cadence pass, never while learning is off.
 
 ### Evolvable text
 
@@ -126,7 +121,8 @@ What it cannot see: a name built at runtime (a `join`, char codes, a decoded str
 |---|---|---|
 | `scaffold` | The proposal gate, `modifyScaffold` in `core/src/scaffold/modify.ts` | code |
 | `scaffold` | The promotion decision, re-checked against the on-disk pending file, `core/src/scaffold/versions.ts` | code |
-| `scaffold` | Every artifact edit and its search's candidates, `artifactEditRefusal` in `core/src/evolution/artifacts.ts` | prose |
+| `scaffold` | Every artifact edit a dream drafts, `artifactEditRefusal` in `core/src/evolution/artifacts.ts` | prose |
+| `skill` | A skill a dream drafts, `skillRefusal` in `core/src/evolution/refinement-skill.ts` | prose, without `network-egress` |
 | `craft` | Extracted crafted-tool upsert, `upsertCraftedTool` in `core/src/craft/conflict.ts` | code |
 | `craft_tool` | `workspace.createTool`, `core/src/tools/inline-executor.ts` | code, without `network-egress` |
 | `import` | Experience-library import, `core/src/experience/imports.ts` | code and description or rationale for a tool or scaffold; prose for a lesson or fact |
@@ -210,7 +206,7 @@ Every transition is `WHERE stage = <from>`, so a duplicate delivery writes nothi
 | Edit | Authority | What happens |
 |---|---|---|
 | `fact` | `agent_facts` (`FactsStore.upsert`) | Applied immediately, and only when the refiner quotes the user substantively. A judge of recorded turns cannot weigh a preference, so the user's own words stand in as the evidence. The quote must be at least 20 characters and 4 words (a fragment like "one line" matches almost any conversation), and must appear in a user message or follow-up, never in the agent's own response. The accepted quote rides the route into the changelog. |
-| `prompt_section` | `artifact_versions` (`scoreAuthoredEdit`) | Takes the proposer's pre-live tests: the static checks, then the judge-only comparison over the request's low-rated turns and the regression set. An edit that passes and that the reviewer accepts is staged, with the numbers it was measured at; only a turn whose prompt cache is cold makes it current. With no low-rated turn among the request's, it is refused. |
+| `prompt_section` | `artifact_versions` (`scoreAuthoredEdit`) | Takes the pre-live tests: the static checks, then the judge-only comparison over the request's low-rated turns and the regression set. An edit that passes and that the reviewer accepts is staged, with the numbers it was measured at; only a turn whose prompt cache is cold makes it current. With no low-rated turn among the request's, it is refused. |
 | `tool_description` | `artifact_versions` (`scoreAuthoredEdit`) | A built-in tool's description, or its input fields' descriptions as one JSON object (`part: 'schema'`), measured, reviewed and staged as a section is. Field text must keep exactly the fields it had. The dreamer's brief lists each tool's texts with their sizes, and the reviewer's size budget counts tool texts with the sections. |
 | `skill` | staged under `.kinu/`, trusted at a cold turn by `instruction_approvals` (origin `dream`) | Refused before review when unparsable, named for a built-in, or vetoed by the misevolution gate's `skill` surface. Accepted, the bytes stage at `.kinu/refinement/<requestId>/<name>.md`, which nothing that builds a prompt reads; the next cold turn writes the trust row and then the file. Refuses a non-canonical path, a final path that already exists, and any trust row or revocation for that path. |
 | `subagent_spec` | none | Refused by name. A subordinate's role and spec belong to that agent's own config, which a workspace reads and never writes. The finding is recorded; no mirror store is created. |

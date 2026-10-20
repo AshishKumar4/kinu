@@ -359,9 +359,8 @@ through real `oxlint` in `tools/oxlint/anti-slop/no-swallow.gate.test.ts`.
 
 `EvolutionEngine.reviewTurn` (`evolution/engine.ts`) makes one decision-model
 call, `rateTurn` (`evolution/ratings.ts`), reported under the `rating` spend
-source, and up to two fast-model completions: `generateTurnReflection`, and
-generalization of a repeated pattern into a reusable function. The completions
-go through `reviewLlm`, which returns the fast model (`this.rt.fastLlm ??
+source, and at most one fast-model completion: generalization of a repeated
+pattern into a reusable function. The completion goes through `reviewLlm`, which returns the fast model (`this.rt.fastLlm ??
 this.rt.llm`); the rating goes through `reviewDecide`. The mission governor
 wraps both when the turn carries mission labels.
 
@@ -424,8 +423,7 @@ stand in for that proof.
    (`evolution/engine.ts`) records `{ reason: 'budget' }` and leaves the source
    row queued. It retires unreadable rows. `RefusedTurnReview`
    (`evolution/session-window.ts`) keeps the two counts apart. Count-triggered
-   session reflection, scaffold proposals and dream spend sit outside mission
-   caps.
+   scaffold proposals and dream spend sit outside mission caps.
 
 2. The external bench cannot count review spend. `closeTurnRun`
    (`orchestrator/turn-lifecycle.ts`) seals the in-loop `turn_end.usage` and

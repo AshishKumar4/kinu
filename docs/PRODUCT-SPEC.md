@@ -478,7 +478,7 @@ Kinu improves tools, instructions, working context and loop versions through obs
 5. Which actor/owner authority permitted activation.
 6. Which later outcome supports or contradicts the claimed benefit.
 
-Tool fitness updates, turn lessons, session reflection and craft consolidation are different operations. Having them does not prove they improve task success.
+Tool fitness updates, tool lessons, dreams and craft consolidation are different operations. Having them does not prove they improve task success.
 
 Model agreement is never labelled human ground truth. The recovered approval for ensemble calibration was: a human reference pass, blind model second opinions, measured agreement and confusion, then recurring automation with a human audit. A transcript corpus alone does not replace the human reference.
 

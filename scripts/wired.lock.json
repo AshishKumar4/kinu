@@ -139,7 +139,6 @@
   "packages/core/src/safety/egress-gate.ts#egressHostMatches (unreached-export)",
   "packages/core/src/safety/egress-gate.ts#findEgressPlaceholders (unreached-export)",
   "packages/core/src/scaffold/bootstrap.ts#INITIAL_SCAFFOLD_SOURCE (unreached-export)",
-  "packages/core/src/scaffold/executor.ts#SCAFFOLD_HOST_TYPES (unreached-export)",
   "packages/core/src/steer-branch.ts#BRANCH_RATIONALE (unreached-export)",
   "packages/core/src/strategy/archive.ts#noveltyDistance (unreached-export)",
   "packages/core/src/strategy/merge-back.ts#APPLY_PRECONDITIONS (unreached-export)",

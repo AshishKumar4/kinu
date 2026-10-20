@@ -215,14 +215,14 @@ export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/q
 // Turn ratings: the one signal evolution decides by.
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
-  listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
+  listTurnRatings, ratingOf, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
   retractThumbs, listThumbs, satisfactionInterval, qualitySeries, qualityWindow, renderQualitySeries, isTrivialTurn,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
 
 export {
-  recordLesson, listLessons, corroborateLessonsForTurn, initLessonTables,
+  recordLesson, listLessons, initLessonTables,
 } from './evolution/lessons';
 
 export {

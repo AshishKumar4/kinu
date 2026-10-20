@@ -1552,10 +1552,6 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
 
     if (!firstAssistant) throw new Error('first assistant entry is missing');
     expect(row.turn_id).toBe(firstAssistant.id);
-
-    expect(db.query<{ c: number }, []>(
-      `SELECT count(*) AS c FROM lessons WHERE corroborated_at IS NOT NULL`,
-    ).get()?.c).toBe(1);
   });
 
   test('trivial turns (greetings) skip the rating entirely', async () => {

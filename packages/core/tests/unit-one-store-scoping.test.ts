@@ -15,7 +15,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 
-import { initLessonTables, recordLesson, listLessons, getLesson, corroborateLessonsForTurn } from '../src/evolution/lessons';
+import { initLessonTables, recordLesson, getLesson } from '../src/evolution/lessons';
 import { initTurnRatingTables, listTurnRatings, ratingOf, recordTurnRating } from '../src/evolution/ratings';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initRefinementTables, createRefinementStore } from '../src/evolution/refinement';
@@ -189,11 +189,6 @@ describe('two actors, one database: lessons', () => {
 
     expect(getLesson(w.sql, w.a, idA)?.text).toBe('from-a');
     expect(getLesson(w.sql, w.b, idB)?.text).toBe('from-b');
-
-    corroborateLessonsForTurn(w.sql, w.a, 'turn-1', 99);
-    expect(getLesson(w.sql, w.a, idA)?.status).toBe('corroborated');
-    expect(getLesson(w.sql, w.b, idB)?.status).toBe('provisional');
-    expect(listLessons(w.sql, w.b, { status: 'corroborated' })).toHaveLength(0);
     w.close();
   });
 });

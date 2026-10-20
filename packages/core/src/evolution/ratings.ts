@@ -353,11 +353,6 @@ export function retractThumbs(sql: SqlExecutor, actor: ActorHandle, turnId: stri
   markStoreChanged(sql);
 }
 
-/** Effective, so a thumbs-up over a low model rating clears the turn. */
-export function hasLowRating(sql: SqlExecutor, actor: ActorHandle, turnIds: readonly string[]): boolean {
-  return turnIds.length > 0 && listTurnRatings(sql, actor, { turnIds, low: true }).length > 0;
-}
-
 /** Mean satisfaction on the 1-5 scale with its 95% interval: scores map to [0,1] for the interval. */
 export function satisfactionInterval(scores: readonly number[]): ScoreInterval {
   const unit = scoreInterval(scores.map((score) => (score - 1) / 4));

@@ -20,7 +20,7 @@ function reviewedTurn(): CompletedTurn {
 }
 
 describe('a replayed turn review', () => {
-  test('rates the turn once and writes one lesson', async () => {
+  test('rates the turn once', async () => {
     const { rt, stores } = createTestRuntime();
     let asked = 0;
 
@@ -35,15 +35,14 @@ describe('a replayed turn review', () => {
 
     const counts = () => ({
       ratings: rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM turn_ratings`[0]?.n,
-      lessons: rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM lessons`[0]?.n,
       asked,
     });
 
     await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(reviewedTurn(), FOLLOWUP);
-    expect(counts()).toEqual({ ratings: 1, lessons: 1, asked: 1 });
+    expect(counts()).toEqual({ ratings: 1, asked: 1 });
 
     // A second engine over the same rows: what the next activation replaying the lane is.
     await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(reviewedTurn(), FOLLOWUP);
-    expect(counts()).toEqual({ ratings: 1, lessons: 1, asked: 1 });
+    expect(counts()).toEqual({ ratings: 1, asked: 1 });
   });
 });

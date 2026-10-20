@@ -7,7 +7,6 @@ import {
   buildChangelog, ChangelogEntrySchema, countUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog';
 import { boundedInt } from '../utils/bounds';
-import type { EvolutionEngine } from '../evolution/engine';
 import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer';
 import {
   buildTakeContinuationPrompt, recordTakePick, type TakePickOutcome,
@@ -18,7 +17,7 @@ import type { AgentInbox } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import { Effect } from 'effect';
-import { diagnostics, settle, toKinuError } from '../obs/index';
+import { settle } from '../obs/index';
 
 export interface EvolutionChangelogView {
   entries: ChangelogEntry[];
@@ -68,7 +67,6 @@ export interface TakePickDeps {
   readonly actor: ActorHandle;
   /** Where the ledger row's request and response text is read from. */
   readonly turnPair: TurnPairReader;
-  readonly engine: EvolutionEngine;
   readonly inbox: AgentInbox;
 }
 
@@ -88,13 +86,6 @@ export function pickAlternateTake(
       takeId, nodeId,
       scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
     }));
-
-    yield* Effect.try({
-      try: () => deps.engine.applyTakePick(record.set.turnId, !record.changedAnswer),
-      catch: (cause) => toKinuError({ doing: 'corroborate the lesson behind an alternate take', cause, otherwise: 'unavailable' }),
-    }).pipe(Effect.catch((failure) => Effect.sync(() => {
-      diagnostics.failure('evolution.take_pick_corroboration_failed', failure, { takeId, nodeId });
-    })));
 
     let continuationQueued = false;
 

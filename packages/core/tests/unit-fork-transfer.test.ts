@@ -11,7 +11,7 @@ import {
   FORK_TRANSFER_VERSION, FORK_STREAM_SEED, foldForkStream,
   type ForkFileSink, type ForkFileSource, type ForkFrameReply,
   type ForkSectionCounts, type ForkFrame, type ForkRowSection, type UnsealedForkFrame,
-  corroborateLessonsForTurn, createFactsStore, listLessons, recordLesson,
+  createFactsStore, listLessons, recordLesson,
 } from '../src/index';
 import { perSection } from '../src/identity/fork-sections';
 import { applyStruggleLesson, listToolLessons } from '../src/evolution/struggles';
@@ -1022,8 +1022,8 @@ describe('what a fork carries of what its source learned', () => {
 
     if (cut === undefined) throw new Error('expected the cut entry m2');
     recordLesson(src.sql, actor, { turnIds: ['t-settled'], text: 'Confirmed before the cut.', source: 'turn_reflection', status: 'corroborated', now: cut - 2 });
-    recordLesson(src.sql, actor, { turnIds: ['t-later'], text: 'Taught before the cut, confirmed after.', source: 'turn_reflection', status: 'provisional', now: cut - 1 });
-    corroborateLessonsForTurn(src.sql, actor, 't-later', cut + 1);
+    const later = recordLesson(src.sql, actor, { turnIds: ['t-later'], text: 'Taught before the cut, confirmed after.', source: 'turn_reflection', status: 'provisional', now: cut - 1 });
+    void src.sql`UPDATE lessons SET corroborated_at = ${cut + 1} WHERE actor_id = ${actor.actorId} AND id = ${later}`;
     recordLesson(src.sql, actor, { turnIds: ['t-after'], text: 'Taught after the cut.', source: 'turn_reflection', status: 'provisional', now: cut + 2 });
 
     const { result } = await transfer(src, receiverFor(tgt), { untilMessageId: 'm2' });
