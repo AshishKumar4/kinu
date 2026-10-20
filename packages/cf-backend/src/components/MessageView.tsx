@@ -39,7 +39,7 @@ import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, systemEventTu
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import { StatusDot } from "@/components/ui/Status";
-import { ChatDisclosure, ToolRun, TurnRollup, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
+import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 
 const MessageCreatedAtSchema = v.looseObject({
@@ -641,14 +641,18 @@ export const MessageView = memo(function MessageView({
 
   // A model's lines for this turn's phases, by each phase's first call, and for the whole turn.
   const written = writtenTitles({ metadata: message.metadata });
+  // A settled answer's line without a model's line asks, once it is on screen, that its phases be named.
+  const asksOnSeen = usePhaseLinesOnSeen(message.id, isLive);
 
   const renderBlock = (block: PartBlock, i: number, live: boolean) => {
     if (block.kind === "run") {
       const [first] = phaseCalls(block.steps);
 
+      const line = first === undefined ? undefined : written.phases.get(first.toolCallId);
+
       return (
         <div key={first?.toolCallId ?? i} className={BLOCK_GAP.section}>
-          <ToolRun steps={block.steps} live={live} written={first === undefined ? undefined : written.phases.get(first.toolCallId)}>
+          <ToolRun steps={block.steps} live={live} written={line} onSeen={line === undefined && !live ? asksOnSeen : undefined}>
             {block.steps.map((step, j) => (step.kind === "tool"
               ? <div key={step.part.toolCallId} className={BLOCK_GAP.row}>{renderToolRow(step.part)}</div>
               : <div key={`thought-${String(j)}`} className={BLOCK_GAP.row}>{renderThought(step.parts)}</div>))}
@@ -715,7 +719,7 @@ export const MessageView = memo(function MessageView({
                 return (
                   <div key={`turn-${String(i)}`} className={BLOCK_GAP.section}>
                     <TurnRollup line={phaseTitle(calls)} phases={block.blocks.filter((rolled) => rolled.kind === "run").length}
-                      written={(done ? written.turn : null) ?? newestWritten}>
+                      written={(done ? written.turn : null) ?? newestWritten} onSeen={done && written.turn === null ? asksOnSeen : undefined}>
                       {block.blocks.map((rolled, j) => renderBlock(rolled, j, false))}
                     </TurnRollup>
                   </div>

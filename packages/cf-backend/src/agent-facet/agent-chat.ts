@@ -5,7 +5,7 @@ import {
   PlanReviewActions, assembleActorTurn, authoredTurnMetadata, chatTerminalEffects, chatTurnParts, declareTerminalRoster, inspectWork,
   planHandoffStillOwed, planAwaitingReply, approvedTaskPlan, missionGate, workModeUnderReview, projectJsonValue, declareHandoffRoster, HandedOffTurnSchema, runSettleEffect, SettledRunSchema, terminalEffect, turnTags, turnLane, answerDrawsPages,
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
-  bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, phaseLinesEffect, phaseLinesOwed,
+  bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, writePhaseLines, type PhaseLinePorts,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
   type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts, type ProfileAuthorityInputs, type ResolvedTurnProfile,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
@@ -369,7 +369,7 @@ export class FacetChat {
     const slates = answerSlatesEffect({ turnId, runId, epoch }, input.messageId);
 
     if (this.policy.workspaceAgent) {
-      return [...slates, ...phaseLinesOwed(input.messageId), ...declareHandoffRoster(chatTurnParts(input), {
+      return [...slates, ...declareHandoffRoster(chatTurnParts(input), {
         turnId, runId, epoch, messageId: input.messageId, status: input.status, completed: input.completed,
         workMode: session.workMode, userText: input.userText, assistantText: input.assistantText, event: input.event ?? null,
         turn: projectJsonValue({ value: input.turn }), credited: input.credited, answeredDeliveries: [...input.answeredDeliveries],
@@ -405,7 +405,6 @@ export class FacetChat {
     // Its tools' receipts were kept in the workspace, which drops them once the run settled.
     return [
       ...slates,
-      ...phaseLinesOwed(input.messageId),
       ...declareTerminalRoster(facts, { role: { kind: 'agent', opensConversation: input.opensConversation }, advisor, turn: scoped, reachableTools: input.reachableTools }, { ...chatTurnParts(input), ...turnReport }),
       runSettleEffect(input.messageId, { turnId, runId, epoch }),
     ];
@@ -446,11 +445,6 @@ export class FacetChat {
 
             return { status: 'completed' };
           },
-        }),
-        phase_lines: phaseLinesEffect({
-          answer: async (messageId) => await this.drawnAnswer(messageId),
-          completer: async () => await this.oneShotOn('phase_line', 'phase-lines', this.routing),
-          amend: async (messageId, patch) => { await this.amendAnswer(messageId, patch); },
         }),
         workspace_settle: terminalEffect({
           input: HandedOffTurnSchema,
@@ -625,6 +619,52 @@ export class FacetChat {
 
     if (metadata === null) return;
     await this.amendAnswer(messageId, metadata);
+  }
+
+  /** One answer at a time: a chat opened on many asks for each, and the account's limits are its turns' first. */
+  private naming: Promise<void> = Promise.resolve();
+
+  private readonly named = new Set<string>();
+
+  private readonly phaseLinePorts: PhaseLinePorts = {
+    answer: async (messageId) => await this.drawnAnswer(messageId),
+    completer: async () => await this.oneShotOn('phase_line', 'phase-lines', this.routing),
+    amend: async (messageId, patch) => { await this.amendAnswer(messageId, patch); },
+  };
+
+  /**
+   * A tab shows a settled answer whose phases have no line: they are named, once, by the fast tier, after any answer
+   * asked before it. Never part of a turn, so no turn's close waits on it or pays for it. False while no committed answer
+   * has the id: a tab that drew a running turn as settled for a moment asks again once it has committed.
+   */
+  async namePhases(messageId: string): Promise<boolean> {
+    if (this.named.has(messageId)) return true;
+    this.named.add(messageId);
+
+    // A failure is said in the log and ends this answer's naming; the next answer waits on this one, whatever became of it.
+    const naming = Effect.match(writePhaseLines(this.phaseLinePorts, messageId), {
+      onFailure: (error) => {
+        diagnostics.failure('chat.phase_lines_failed', error, { messageId });
+
+        return 'failed';
+      },
+      onSuccess: (outcome) => outcome,
+    });
+
+    const written = this.naming.then(async () => await settle(naming));
+
+    this.naming = written.then(() => undefined);
+    const outcome = await written;
+
+    if (outcome === null) {
+      this.named.delete(messageId);
+
+      return false;
+    }
+
+    diagnostics.event('chat.phase_lines', { messageId, outcome });
+
+    return true;
   }
 
   /** What a committed answer learns after it, stamped on it; its room is shown the answer again, unless a turn is live. */

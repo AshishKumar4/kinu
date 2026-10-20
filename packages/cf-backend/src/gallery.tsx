@@ -54,7 +54,7 @@ import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import { seedToolRuns } from "@/gallery-tool-runs";
-import { LongTurnNotes, seedLongTurn } from "@/gallery-long-turn-view";
+import { LongTurnNotes, longTurnNamePhases, seedLongTurn } from "@/gallery-long-turn-view";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -2658,6 +2658,7 @@ async function galleryAnnotationSave(args?: unknown[]): Promise<JsonValue> {
 /* The reads the first-visit inspector policy decides on, in the shapes the page consumes (`listSlates` needs an array for `slates.map`). */
 const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   getExecutorFiles: workspaceListing,
+  namePhases: longTurnNamePhases,
   listAlternateTakes: () => (TAKE_COUNT > 0 ? { [galleryTakes.turnId ?? ""]: galleryTakes } : {}),
   pickAlternateTake: galleryPickTake,
   getWorkspaceSnapshot: () => {

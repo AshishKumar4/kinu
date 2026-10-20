@@ -936,6 +936,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     answerTexts: (...args) => settle(through(() => isolate.answerTexts(...args))),
     answer: (...args) => settle(through(() => isolate.answer(...args))),
     newestFirst: (...args) => settle(through(() => isolate.newestFirst(...args))),
+    namePhases: (...args) => settle(through(() => isolate.namePhases(...args))),
     armCompaction: (...args) => settle(through(() => isolate.armCompaction(...args))),
     forkHas: (...args) => settle(through(() => isolate.forkHas(...args))),
     forkPlan: (...args) => settle(through(() => isolate.forkPlan(...args))),

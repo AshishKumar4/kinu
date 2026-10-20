@@ -1,19 +1,18 @@
 /**
  * Each finished phase of an answer's tool calls named in a few words by the account's fast tier (the owner,
- * 2026-10-19), written into the committed answer's metadata once it has committed. Until a line lands, and wherever
- * none does, the chat shows the line the calls make (`read-models/tool-phase-title.ts`). Detached: no turn waits on
- * it, and a call that fails or is refused ends the writing there and is never retried, so the lines never compete
- * with the account's turns for its provider's limits.
+ * 2026-10-19), written into the answer's metadata. Asked once a tab shows a settled answer whose phases have no line, so
+ * it is never part of the turn that answered: no turn waits on it, and an answer nobody opens costs nothing. Until a line
+ * lands, and wherever none does, the chat shows the line the calls make (`read-models/tool-phase-title.ts`). A call that
+ * fails or is refused ends the writing there, so the lines never compete with the account's turns for its limits.
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { diagnostics, settle, toKinuError, tolerate, type KinuError } from '../obs/index';
+import { diagnostics, toKinuError, tolerate, type KinuError } from '../obs/index';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { groupMessageParts, partInput, partOutput, phaseCalls, type AnyToolPart, type PartBlock } from '../read-models/tool-call-grouping';
 import { PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY, writtenTitles } from '../read-models/tool-phase-title';
 import type { JsonObject } from '../utils/json';
-import { terminalEffect, type OwedEffect, type TerminalEffect, type TerminalEffectOutcome } from './terminal-effects';
 
 type Part = UIMessage['parts'][number];
 
@@ -72,17 +71,12 @@ function parseLine(raw: string): string | null {
 
 /** What the writer reads of an answer and writes back, each backend's own. */
 export interface PhaseLinePorts {
-  /** The committed answer as the chat draws it, and the words that asked for it; null once it was rewound. */
+  /** The answer as the chat draws it, and the words that asked for it; null for an id that names no answer. */
   answer(messageId: string): Promise<{ readonly parts: readonly Part[]; readonly metadata: unknown; readonly ask: string } | null>;
   /** Completions on the `phase_line` route, the account's fast tier: resolved once, and only once a line is wanted. */
   completer(): Promise<(system: string, prompt: string) => Promise<string>>;
   /** Merges `patch` into the answer's metadata, and shows its chat the answer again. */
   amend(messageId: string, patch: JsonObject): Promise<void>;
-}
-
-/** Owed by every committed answer: the writer finds whether it holds a phase. */
-export function phaseLinesOwed(messageId: string): OwedEffect[] {
-  return messageId === '' ? [] : [{ name: 'phase_lines', scope: messageId, lane: 'detached', input: { messageId } }];
 }
 
 type Complete = (system: string, prompt: string) => Promise<string>;
@@ -145,24 +139,21 @@ function writeLines(ports: PhaseLinePorts, messageId: string, answer: { readonly
   });
 }
 
-const completed = (detail?: string): TerminalEffectOutcome => (detail === undefined ? { status: 'completed' } : { status: 'completed', detail });
-
-/** Run once, at the edge: the answer read, its lines written, and stamped on it. A phase left unnamed keeps the calls'
- *  line, and a refused or failed call is never asked again. */
-function writtenOnce(ports: PhaseLinePorts, messageId: string): Effect.Effect<TerminalEffectOutcome, KinuError> {
+/** The answer's phases named, those still unnamed, and stamped on it; what it did, in words for the log, or null when
+ *  no committed answer has the id (its turn may still be running). */
+export function writePhaseLines(ports: PhaseLinePorts, messageId: string): Effect.Effect<string | null, KinuError> {
   return Effect.gen(function* () {
     const answer = yield* Effect.tryPromise({
       try: async () => await ports.answer(messageId),
       catch: (cause) => toKinuError({ doing: 'reading the answer its phase lines are for', cause, otherwise: 'unavailable' }),
     });
 
-    if (answer === null) return completed('the answer was rewound');
+    if (answer === null) return null;
     const outcome = yield* writeLines(ports, messageId, answer);
-    const detail = outcome.failed ? 'the fast tier did not answer' : undefined;
 
-    if (!outcome.any) return completed('no phase to name');
+    if (!outcome.any) return 'no phase to name';
 
-    if (!outcome.wrote) return completed(detail ?? 'the fast tier named none');
+    if (!outcome.wrote) return outcome.failed ? 'the fast tier did not answer' : 'nothing left to name';
     const patch: JsonObject = { [PHASE_TITLES_METADATA_KEY]: outcome.phases };
 
     if (outcome.turn !== null) patch[TURN_TITLE_METADATA_KEY] = outcome.turn;
@@ -171,13 +162,6 @@ function writtenOnce(ports: PhaseLinePorts, messageId: string): Effect.Effect<Te
       catch: (cause) => toKinuError({ doing: "stamping an answer's phase lines on it", cause, otherwise: 'unavailable' }),
     });
 
-    return completed(detail);
-  });
-}
-
-export function phaseLinesEffect(ports: PhaseLinePorts): TerminalEffect {
-  return terminalEffect({
-    input: v.object({ messageId: v.string() }),
-    run: ({ messageId }) => settle(writtenOnce(ports, messageId)),
+    return outcome.failed ? 'named some; the fast tier did not answer the rest' : 'named';
   });
 }

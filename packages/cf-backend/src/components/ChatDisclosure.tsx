@@ -4,9 +4,12 @@
  * full on a click. A turn's thinking and a run of its tool calls both draw through it; what the owner reads or answers
  * never does.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { CaretRightIcon } from "@phosphor-icons/react";
 import { toolRunSummary, type RunStep, type ToolRunSummary } from "@kinu.run/core";
+import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { Effect } from "effect";
+import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** The dot and words a piece of work is headed by: pulsing and shimmering while it runs. */
 export function WorkLabel({ live, failed = false, children }: { live: boolean; failed?: boolean; children: ReactNode }) {
@@ -16,6 +19,63 @@ export function WorkLabel({ live, failed = false, children }: { live: boolean; f
       <span className={`min-w-0 truncate p-row-text font-medium${live ? " p-shimmer" : ""}`}>{children}</span>
     </span>
   );
+}
+
+/** Asks that a settled answer's phases be named; absent where nothing names them, as in a transcript or the gallery. */
+export const PhaseLinesAsk = createContext<((messageId: string) => Effect.Effect<void>) | null>(null);
+
+/** Answers this tab has asked for, so each is asked once however often it is drawn. */
+const askedPhases = new Set<string>();
+
+/** Asks through `rpc` for the caller's own chat, or the pane's agent named by `actor`. An answer not yet committed, or an
+ *  ask that failed, is forgotten, so its next sighting asks again. */
+export function phaseLinesAsker(rpc: WorkspaceRpc, actor: string | null): (messageId: string) => Effect.Effect<void> {
+  return (messageId) => Effect.suspend(() => {
+    const key = `${actor ?? ""}:${messageId}`;
+
+    if (askedPhases.has(key)) return Effect.void;
+    askedPhases.add(key);
+
+    return Effect.catchCause(Effect.promise(async () => {
+      if (!await rpc("namePhases", [actor === null ? { messageId } : { messageId, actor }])) askedPhases.delete(key);
+    }), (cause) => Effect.sync(() => {
+      askedPhases.delete(key);
+      diagnostics.failure("chat.phase_lines_ask_failed", toKinuError({ doing: "asking for an answer's phase lines", cause, otherwise: "unavailable" }), { messageId });
+    }));
+  });
+}
+
+/** What a settled answer's lines ask once on screen; undefined while it runs, or where nothing names its phases. */
+export function usePhaseLinesOnSeen(messageId: string, live: boolean): (() => Effect.Effect<void>) | undefined {
+  const ask = useContext(PhaseLinesAsk);
+
+  if (ask === null || live || messageId === "") return undefined;
+
+  return () => ask(messageId);
+}
+
+/** Whether the element has been on screen; watched only while `wanted`. */
+function useFirstSeen(element: RefObject<HTMLElement | null>, wanted: boolean): boolean {
+  const [seen, setSeen] = useState(false);
+
+  useEffect(() => {
+    const box = element.current;
+
+    if (!wanted || seen || box === null) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+
+      observer.disconnect();
+      setSeen(true);
+    });
+
+    observer.observe(box);
+
+    return () => observer.disconnect();
+  }, [element, wanted, seen]);
+
+  return seen;
 }
 
 /** What a closed, settled body shows: its first lines, or nothing. */
@@ -41,7 +101,7 @@ function useOverflows(body: RefObject<HTMLDivElement | null>, folded: Folded, me
   return long;
 }
 
-export function ChatDisclosure({ label, after, live, failed = false, folded, follow, viewport, liveIndicator, bodyClass = "", children, ...data }: {
+export function ChatDisclosure({ label, after, live, failed = false, folded, follow, viewport, liveIndicator, bodyClass = "", onSeen, children, ...data }: {
   /** The header's words, shimmering while live. */
   label: ReactNode;
   /** Said after them and never shimmering: a failure, a duration. */
@@ -56,11 +116,24 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
   /** Names the header as the chat's live state while it is one. */
   liveIndicator?: string;
   bodyClass?: string;
+  /** Run once the line is first on screen. */
+  onSeen?: (() => Effect.Effect<void>) | undefined;
   children: ReactNode;
   [attribute: `data-${string}`]: string | number | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const body = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const seen = useFirstSeen(root, onSeen !== undefined);
+  const whenSeen = useRef(onSeen);
+
+  whenSeen.current = onSeen;
+  useEffect(() => {
+    const run = whenSeen.current;
+
+    if (!seen || run === undefined) return;
+    detach(run());
+  }, [seen]);
   const following = live && !open;
   const long = useOverflows(body, folded, !live && !open, follow);
   const canOpen = live || long;
@@ -79,7 +152,7 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
   else if (!open && folded === "hidden") shown = "hidden";
 
   return (
-    <div className="py-0.5 p-row-text p-text-4" {...data}>
+    <div ref={root} className="py-0.5 p-row-text p-text-4" {...data}>
       {/* The whole line is the control, its chevron turning as it opens: a quiet mark, as a tool row's is. */}
       <button type="button" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}
         className="group/disclosure flex w-full items-center gap-2 text-left enabled:cursor-pointer">
@@ -187,7 +260,7 @@ function PhaseAfter({ now, failed, span }: { now: string | null; failed: number;
  * running now, over a small view of its newest steps; settled, what it did in a few words, its steps a click away. A
  * model's line for it replaces the calls' own once it lands. A failure inside says so on its line.
  */
-export function ToolRun({ steps, live, written, children }: { steps: readonly RunStep[]; live: boolean; written: string | undefined; children: ReactNode }) {
+export function ToolRun({ steps, live, written, onSeen, children }: { steps: readonly RunStep[]; live: boolean; written: string | undefined; onSeen?: (() => Effect.Effect<void>) | undefined; children: ReactNode }) {
   const summary = toolRunSummary(steps);
   const span = useRunSpan(steps.flatMap((step) => (step.kind === "tool" ? [step.part.toolCallId] : [])), live);
   const last = steps.at(-1);
@@ -200,7 +273,7 @@ export function ToolRun({ steps, live, written, children }: { steps: readonly Ru
       label={<span key={words.label} className={fromModel ? "animate-fade-in" : undefined} data-tool-run-now={words.nowLeads ? "" : undefined}>{words.label}</span>}
       after={<PhaseAfter now={words.now} failed={summary.failed} span={span} />}
       data-tool-run={live ? "live" : "settled"} data-tool-run-calls={summary.calls} data-tool-run-span={span ?? undefined}
-      data-phase-title={fromModel ? "model" : "calls"}>
+      data-phase-title={fromModel ? "model" : "calls"} onSeen={onSeen}>
       {children}
     </ChatDisclosure>
   );
@@ -210,12 +283,12 @@ export function ToolRun({ steps, live, written, children }: { steps: readonly Ru
  * A long turn's earlier work under one line: what all its calls did, in the few words a phase's line has, or the model's
  * line for the whole turn once it lands; opening it shows the phases, the thinking and the words among them, as they were.
  */
-export function TurnRollup({ line, phases, written, children }: { line: string; phases: number; written: string | null; children: ReactNode }) {
+export function TurnRollup({ line, phases, written, onSeen, children }: { line: string; phases: number; written: string | null; onSeen?: (() => Effect.Effect<void>) | undefined; children: ReactNode }) {
   return (
     <ChatDisclosure live={false} folded="hidden" follow={String(phases)} viewport="max-h-36"
       label={<span key={written ?? ""} className={written === null ? undefined : "animate-fade-in"}>{written ?? line}</span>}
       after={<span className="shrink-0 p-row-text p-text-3"> · {phases} {phases === 1 ? "phase" : "phases"}</span>}
-      data-turn-rollup={phases} data-phase-title={written === null ? "calls" : "model"}>
+      data-turn-rollup={phases} data-phase-title={written === null ? "calls" : "model"} onSeen={onSeen}>
       {children}
     </ChatDisclosure>
   );

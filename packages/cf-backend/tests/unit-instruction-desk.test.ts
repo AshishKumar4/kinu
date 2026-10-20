@@ -44,11 +44,10 @@ describe('the instruction desk on a Durable Object', () => {
     const reads = [skillViewPath('focused'), skillViewPath('slates')];
 
     const gateway = stubAiBinding((run) => {
-      const { messages, tools } = requestOf(run);
+      const messages = requestOf(run).messages;
       const results = messages.filter((message) => message.role === 'tool');
 
-      // The turn's own requests carry its tools; the answer's phase lines, asked after it on the fast tier, carry none.
-      if (tools.length > 0) toolResults.splice(0, toolResults.length, ...results.map((message) => JSON.stringify(message.content)));
+      toolResults.splice(0, toolResults.length, ...results.map((message) => JSON.stringify(message.content)));
 
       const next = reads[results.length];
 

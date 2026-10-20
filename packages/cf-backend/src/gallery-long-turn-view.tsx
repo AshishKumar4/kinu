@@ -6,6 +6,8 @@
  * then, and without it, the line is the one the calls make. A note in the corner says which, and what each line took.
  */
 import { isToolUIPart, type UIMessage } from "ai";
+import * as v from "valibot";
+import type { JsonValue } from "@kinu.run/core";
 import { groupMessageParts, phaseCalls, PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY } from "@kinu.run/core";
 import { galleryChatWindow, galleryServerPush, seedGalleryChat } from "@/gallery-agent-stub";
 
@@ -190,7 +192,10 @@ interface WrittenLines {
 
 /** The model's lines for `phases`, and for the whole turn once it has `turn`, as the message's metadata holds them. */
 function written(phases: readonly string[], turn: boolean): WrittenLines | undefined {
-  if (!MODEL_LINES) return undefined;
+  return MODEL_LINES ? linesFor(phases, turn) : undefined;
+}
+
+function linesFor(phases: readonly string[], turn: boolean): WrittenLines {
   const lines: WrittenLines = { [PHASE_TITLES_METADATA_KEY]: {} };
 
   for (const first of phases) {
@@ -276,6 +281,27 @@ function play(): void {
   };
 
   window.setInterval(tick, 1100);
+}
+
+/** `&lines=asked`: the lines are written only once the page asks, as the workspace writes them. */
+const ASKED_LINES = params.get("lines") === "asked";
+
+const NamePhasesSchema = v.tuple([v.object({ messageId: v.string(), actor: v.optional(v.string()) })]);
+
+/** As the workspace answers `namePhases`: each ask recorded on the page. A running turn's answer is not committed, so
+ *  none is found; a settled one's, with `&lines=asked`, has its lines stamped a moment later and its room shown it again. */
+export function longTurnNamePhases(args?: unknown[]): JsonValue {
+  const [{ messageId }] = v.parse(NamePhasesSchema, args);
+  const root = document.documentElement;
+  const settled = !params.has("at") && params.get("live") !== "1";
+
+  root.dataset.phaseLinesAsked = `${root.dataset.phaseLinesAsked ?? ""}${messageId};`;
+
+  if (!settled || messageId !== "lt-a1") return false;
+
+  if (ASKED_LINES) window.setTimeout(() => { galleryChatWindow("", [ASK, turnOf(LONG_TURN_PARTS, linesFor([...PHASE_LINES.keys()], true))], null); }, 300);
+
+  return true;
 }
 
 export function seedLongTurn(transcript: string | null): void {

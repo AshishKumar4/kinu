@@ -112,4 +112,24 @@ describe('a long turn, in the real chat', () => {
       await live.close();
     });
   });
+
+  test('a running answer gets no lines; a settled one on screen asks once, and its lines land on it', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const live = await opened(newPage, origin, '&at=37&lines=asked');
+
+      await live.waitForSelector('[data-tool-run="live"]');
+      await live.evaluate(() => new Promise((settle) => { setTimeout(settle, 1500); }));
+      expect(await live.evaluate(() => ({
+        running: document.querySelector('[data-tool-run="live"]') !== null,
+        written: document.querySelector('[data-phase-title="model"]') !== null,
+      }))).toEqual({ running: true, written: false });
+      await live.close();
+
+      const settled = await opened(newPage, origin, '&lines=asked');
+
+      await settled.waitForFunction(() => document.querySelector('[data-turn-rollup]')?.getAttribute('data-phase-title') === 'model');
+      expect(await settled.evaluate(() => document.documentElement.dataset.phaseLinesAsked)).toBe('lt-a1;');
+      await settled.close();
+    });
+  });
 });

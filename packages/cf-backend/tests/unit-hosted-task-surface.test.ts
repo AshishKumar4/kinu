@@ -53,10 +53,9 @@ test('the hosted credential broker recovers a dropped UserDO answer at the names
 
 const NOTE = 'the streaming parser holds no whole file';
 
-/** What each tool call answered, in call order, as the model read it back in the turn's own last request: the answer's
- *  phase lines are asked after it, on the fast tier, with no tools. */
+/** What each tool call answered, in call order, as the model read it back. */
 function toolResults(runs: readonly RecordedGatewayRun[]): string[] {
-  const last = runs.filter((run) => requestOf(run).tools.length > 0).at(-1);
+  const last = runs.at(-1);
 
   if (last === undefined) throw new Error('the delegated turn reached no model');
 

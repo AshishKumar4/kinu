@@ -1,10 +1,11 @@
 /**
- * The fast tier names each finished phase of a committed answer (the owner, 2026-10-19): once, after the answer
- * commits, written into its metadata; a phase it could not name keeps the calls' own line, and nothing is asked again.
+ * The fast tier names each finished phase of an answer (the owner, 2026-10-19) once a tab shows it, written into its
+ * metadata; a phase it could not name keeps the calls' own line, and a failed call ends the writing.
  */
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
-import { phaseLinesEffect, phaseLinesOwed, type PhaseLinePorts } from '../src/orchestrator/phase-lines';
+import { Effect } from 'effect';
+import { writePhaseLines, type PhaseLinePorts } from '../src/orchestrator/phase-lines';
 import { PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY } from '../src/read-models/tool-phase-title';
 import type { JsonObject } from '../src/utils/json';
 
@@ -42,20 +43,14 @@ function portsOver(parts: readonly Part[] | null, answers: (prompt: string, at: 
   return { ports, asked, patches, resolved: () => resolved };
 }
 
-const run = async (ports: PhaseLinePorts) => {
-  const effect = phaseLinesEffect(ports);
-
-  if (effect.synchronous) throw new Error('the writer awaits its calls');
-
-  return await effect.run({ messageId: 'a1' }, 'a1');
-};
+const run = async (ports: PhaseLinePorts) => await Effect.runPromise(writePhaseLines(ports, 'a1'));
 
 describe("an answer's phase lines", () => {
   test('each phase is named in order, and a turn of three phases or more is named whole, in one write', async () => {
     const lines = ['Found the renamed binding', 'Fixed the reader', 'Shipped it', 'Fixed and shipped the Worker'];
     const { ports, asked, patches, resolved } = portsOver(answerOf(3), (_prompt, at) => JSON.stringify({ title: lines[at] }));
 
-    expect(await run(ports)).toEqual({ status: 'completed' });
+    expect(await run(ports)).toBe('named');
     expect(resolved()).toBe(1);
     expect(asked).toHaveLength(4);
     expect(asked[0]).toContain('"path":"p0a.ts"');
@@ -70,7 +65,7 @@ describe("an answer's phase lines", () => {
     const written = { [PHASE_TITLES_METADATA_KEY]: { p0a: 'Found it' } };
     const { ports, asked, patches } = portsOver(answerOf(2), () => '{"title": "Fixed it."}', written);
 
-    expect(await run(ports)).toEqual({ status: 'completed' });
+    expect(await run(ports)).toBe('named');
     expect(asked).toHaveLength(1);
     expect(patches).toEqual([{ [PHASE_TITLES_METADATA_KEY]: { p0a: 'Found it', p1a: 'Fixed it' } }]);
   });
@@ -82,7 +77,7 @@ describe("an answer's phase lines", () => {
       return '{"title": "Found the renamed binding"}';
     });
 
-    expect(await run(ports)).toEqual({ status: 'completed', detail: 'the fast tier did not answer' });
+    expect(await run(ports)).toBe('named some; the fast tier did not answer the rest');
     expect(asked).toHaveLength(2);
     expect(patches).toEqual([{ [PHASE_TITLES_METADATA_KEY]: { p0a: 'Found the renamed binding' } }]);
   });
@@ -91,15 +86,11 @@ describe("an answer's phase lines", () => {
     const gone = portsOver(null, () => '{}');
     const plain = portsOver([read('only'), said('Done.')], () => '{}');
 
-    expect(await run(gone.ports)).toEqual({ status: 'completed', detail: 'the answer was rewound' });
-    expect(await run(plain.ports)).toEqual({ status: 'completed', detail: 'no phase to name' });
+    expect(await run(gone.ports)).toBeNull();
+    expect(await run(plain.ports)).toBe('no phase to name');
     expect([gone.resolved(), plain.resolved(), gone.patches.length + plain.patches.length]).toEqual([0, 0, 0]);
   });
 
-  test('every committed answer owes it once, scoped by its id; an answer with no id owes nothing', () => {
-    expect(phaseLinesOwed('a1')).toEqual([{ name: 'phase_lines', scope: 'a1', lane: 'detached', input: { messageId: 'a1' } }]);
-    expect(phaseLinesOwed('')).toEqual([]);
-  });
 });
 
 describe('a line as the model writes it', () => {
@@ -108,9 +99,9 @@ describe('a line as the model writes it', () => {
     const { ports, patches } = portsOver(answerOf(3), (_prompt, at) => answers[at] ?? '{}');
     const none = portsOver(answerOf(1), () => 'Fixed the reader');
 
-    expect(await run(ports)).toEqual({ status: 'completed' });
+    expect(await run(ports)).toBe('named');
     expect(patches).toEqual([{ [PHASE_TITLES_METADATA_KEY]: { p0a: 'Traced 500 to renamed D1 binding' } }]);
-    expect(await run(none.ports)).toEqual({ status: 'completed', detail: 'the fast tier named none' });
+    expect(await run(none.ports)).toBe('nothing left to name');
     expect(none.patches).toEqual([]);
   });
 });
