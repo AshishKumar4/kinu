@@ -47,6 +47,8 @@ import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
+import { ASSISTANT_ROSTER, assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
+import { exploreFrame } from "./gallery-explore";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
@@ -965,16 +967,19 @@ const GALLERY_LOGO = sanitizeWorkspaceLogoSvg(
   + "6' height='7' rx='3.5' fill='#115e59'/></svg>",
 );
 
-const galleryRoster: RosterEntry[] = [
-  ...GALLERY_ROSTER.entries,
-  ...(EXTRA_WORKSPACE ? [{
-    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
-  }] : []),
-].map((entry) => {
-  const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
+const galleryRoster: RosterEntry[] = new URLSearchParams(location.search).get("roster") === "assistant"
+  // The workspaces the personal assistant runs and watches (gallery-assistant.tsx).
+  ? ASSISTANT_ROSTER.map((entry) => ({ ...entry, logo: entry.name === "api-worker" ? GALLERY_LOGO : entry.logo }))
+  : [
+    ...GALLERY_ROSTER.entries,
+    ...(EXTRA_WORKSPACE ? [{
+      name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
+    }] : []),
+  ].map((entry) => {
+    const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
 
-  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "api-worker" ? GALLERY_LOGO : null };
-});
+    return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "api-worker" ? GALLERY_LOGO : null };
+  });
 
 function galleryRosterCounts(): RosterCounts {
   const counts: RosterCounts = { all: galleryRoster.length, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
@@ -1245,6 +1250,11 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   return memory === null ? null : Promise.resolve(memory);
 }
 
+/** The stub for a read; one with a query (`?limit=3`) is answered as its path is. */
+function stubbed(path: string): JsonValue | undefined {
+  return STUB.get(path) ?? STUB.get(path.split("?")[0] ?? path);
+}
+
 const galleryRequests: string[] = [];
 
 Object.assign(window, { galleryRequests });
@@ -1278,7 +1288,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return rosterRead(roster.searchParams);
   }
 
-  const response = STUB.get(path);
+  const response = stubbed(path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
@@ -2331,10 +2341,6 @@ const SYSTEM_EVENT_ROWS: UIMessage[] = [
   harnessTurn("event-gate", { kinuEvent: COMPLETION_GATE_EVENT }, "[Runtime check — a mechanical gate from Kinu, not written by the user.]\n\nThis run ends after your next reply."),
   harnessTurn("event-consent", { kinuEvent: "device_consent", ids: ["c1", "c2", "c3"], approved: 2, denied: 1 },
     "Your owner answered your device requests: 2 approved, 1 denied. Re-issue the approved commands to run them."),
-  harnessTurn("event-proposal", { kinuEvent: "workspace_proposal", proposal: "p1", decision: "created", name: "Release notes", workspace: "release-notes", url: "/workspace/release-notes" },
-    "Your owner approved the workspace \"Release notes\". It exists now, and its first turn acts on the brief. Its link: /workspace/release-notes"),
-  harnessTurn("event-proposal-declined", { kinuEvent: "workspace_proposal", proposal: "p2", decision: "declined", name: "Weekly digest" },
-    "Your owner declined the workspace you proposed, \"Weekly digest\". Nothing was created."),
   harnessTurn("event-sandbox", { kinuEvent: "sandbox_lifecycle_failure", incidentId: "inc-1", stage: "checkpoint", reason: "The snapshot upload timed out after 3 tries." },
     "The workspace container failed at the checkpoint stage. Work written inside the container since the last good checkpoint is NOT durable.\n\nIncident id: inc-1"),
   harnessTurn("event-plan-approved", { kinuEvent: "plan_approved", planId: "plan-1", revision: 2, decision: "approve", planTitle: "Read the database by its new binding" },
@@ -3082,8 +3088,6 @@ const PLAN_ASKS: PendingAction[] = [{
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/routes/webhooks.ts", detail: null, at: NOW - 150_000, write: { path: "src/routes/webhooks.ts" } },
-  { id: "proposal-pricing", kind: "workspace_proposal", title: "Create workspace “Pricing watch”", detail: "Watch competitor pricing and note each change.", at: NOW - 240_000,
-    proposal: { name: "Pricing watch", brief: "Watch competitor pricing and note each change.", soul: "# Pricing watch\n\nKeep notes short." } },
   ...PLAN_ASKS,
   { id: "plan:binding-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit the binding of every route", detail: "Submitted by binding-auditor", at: NOW - 200_000,
     planRef: { owner: "binding-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("binding-auditor") },
@@ -3115,10 +3119,10 @@ const ASK_SETS = new Map([
   ["effect", EFFECT_ASKS], ["effects", EFFECTS_ASKS], ["effect-mixed", [...EFFECT_ASKS, ...PARKED_ASKS.slice(0, 1)]],
 ]);
 
-/** A proposal made after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
+/** A plan submitted after the page opened, newer than every other: it joins the queue on `gallery:arrive-ask`. */
 const LATE_ASKS: PendingAction[] = [{
-  id: "proposal-late", kind: "workspace_proposal", title: "Create workspace “Release notes”", detail: "Draft each release's notes.", at: NOW,
-  proposal: { name: "Release notes", brief: "Draft each release's notes.", soul: "# Release notes\n\nKeep them short." },
+  id: "plan-late", kind: "plan_review", title: "Review the plan: Write the v2 release notes", detail: null, at: NOW,
+  planRef: { owner: WORKSPACE_PAGE_NAME, id: "pl-late", revision: 1 },
 }];
 
 window.addEventListener("gallery:arrive-ask", () => {
@@ -5495,7 +5499,8 @@ const BRAIN_STATUS = {
   name: "api-worker-health-9935d3", displayName: "API Worker",
   purpose: "The api Worker on Cloudflare: keep it deployed, healthy and fast.", model: "opencode-go/muse-spark-1.3-contributor",
   scaffoldVersion: 7, searchNodeCount: 12, messageCount: 48,
-  soul: "# API Worker", forkLineage: null, createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
+  soul: "# API Worker", forkLineage: null,
+  layout: "workbench", createdAt: NOW - 7 * 864e5, reasoningEffort: "medium",
 } satisfies AgentStatus;
 
 const GALLERY_SLATE_ID = "sandbox-probe";
@@ -7977,6 +7982,14 @@ async function mount() {
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
     ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
+    ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageRpc))],
+    ["explore", () => Promise.resolve(exploreFrame("explore"))],
+    ["explore-workspace", () => Promise.resolve(exploreFrame("explore-workspace"))],
+    ["focus-workspace", () => {
+      seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
+
+      return Promise.resolve(focusWorkspaceFrame(workspacePageRpc, WORKSPACE_PAGE_NAME));
+    }],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);

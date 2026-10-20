@@ -16,7 +16,7 @@ import {
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
-import type { AgentStatus, WorkspaceNotice } from "@kinu.run/core";
+import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -84,6 +84,8 @@ function FieldState<T>({ field, what, onRetry, children }: {
   return <CardSlot resource={field.resource} what={what} onRetry={onRetry}>{children}</CardSlot>;
 }
 
+const LAYOUT_CHOICES: { id: WorkspaceLayout; label: string }[] = [{ id: "workbench", label: "Workbench" }, { id: "focus", label: "Focus" }];
+
 const ADVISOR_SWITCH = [{ id: "off", label: "Off" }, { id: "on", label: "On" }] as const;
 
 function saveLabel(saving: boolean, saved: boolean): string {
@@ -143,6 +145,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   const displayName = useSettingField<string>();
   const soul = useSettingField<string>();
   const approval = useSettingField<ShellApprovalMode>();
+  const layout = useSettingField<WorkspaceLayout>();
   const advisor = useSettingField<AdvisorConfig>();
 
   const [saving, setSaving] = useState(false);
@@ -161,6 +164,13 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
     if (status) hydrateSoul(status.soul || "");
     else if (snapshotError) failSoul({ cause: snapshotError });
   }, [status, snapshotError, hydrateSoul, failSoul]);
+
+  const { hydrate: hydrateLayout, fail: failLayout } = layout;
+
+  useEffect(() => {
+    if (status) hydrateLayout(status.layout);
+    else if (snapshotError) failLayout({ cause: snapshotError });
+  }, [status, snapshotError, hydrateLayout, failLayout]);
 
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
@@ -197,7 +207,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
     loadRpcFields();
   }, [connectionStatus, loadRpcFields]);
 
-  const dirty = displayName.dirty || soul.dirty || approval.dirty || advisor.dirty;
+  const dirty = displayName.dirty || soul.dirty || layout.dirty || approval.dirty || advisor.dirty;
 
   const save = useCallback(() => detach(Effect.gen(function* () {
     // Only edited fields are written; the form has no authority over fields still loading or failed.
@@ -220,6 +230,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
       return titled;
     });
     write(soul, (text) => rpc("setSoul", [text]));
+    write(layout, (chosen) => rpc("setLayout", [chosen]));
     write(approval, (mode) => rpc("setShellApprovalMode", [mode]));
     write(advisor, (config) => rpc("setEvolutionConfig", [config]));
 
@@ -237,7 +248,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
     }), showing(setErr)), Effect.sync(() => {
       setSaving(false);
     }));
-  })), [rpc, rename, agentId, displayName, soul, approval, advisor]);
+  })), [rpc, rename, agentId, displayName, soul, layout, approval, advisor]);
 
   if (connectionStatus !== "connected") {
     return (
@@ -278,6 +289,15 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
             <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
               {(value) => (
                 <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
+              )}
+            </FieldState>
+          </Field>
+          <Field label="Layout" hint="Focus shows the chat alone; its chats, agents and inspector open from the bar.">
+            <FieldState field={layout} what="the layout" onRetry={retryLoad}>
+              {(value) => (
+                <div className="flex">
+                  <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
+                </div>
               )}
             </FieldState>
           </Field>

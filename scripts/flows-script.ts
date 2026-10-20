@@ -27,19 +27,17 @@ export const AGENT_PLAN_ASK = 'Flow agent plan: plan the release checklist.';
 
 export const AGENT_PLAN = '# Release checklist\n\n1. Tag the build.\n2. Write the notes.';
 
-/** The proposed-workspace row's ask in the workspace's own pane, and the workspace its turn proposes. */
-export const WORKSPACE_PROPOSAL_ASK = 'Flow proposal: propose the pricing workspace.';
+/** The agent-workspace row's ask in the workspace's own pane, and the workspace its turn creates. */
+export const AGENT_WORKSPACE_ASK = 'Flow agent workspace: start the release notes workspace.';
 
-export const PROPOSED_WORKSPACE = {
-  name: 'Flow pricing watch',
-  brief: 'Flow proposal brief: watch competitor pricing.',
+export const AGENT_WORKSPACE = {
+  name: 'Flow release notes',
+  brief: 'Flow workspace brief: write the v2 release notes from the merged pull requests.',
   soul: 'You keep notes short.',
 } as const;
 
-/** What the wake says when the owner approves, before the new workspace's link; the turn repeats the link. */
-export const PROPOSAL_APPROVED_WAKE = 'Your owner approved the workspace';
-
-export const PROPOSAL_LINK_REPLY = 'NEW WORKSPACE';
+/** The turn's reply, before the link `agent.createWorkspace` answered. */
+export const AGENT_WORKSPACE_REPLY = 'NEW WORKSPACE';
 
 /** The account-memory row: what the owner says in one workspace, the fact its agent proposes for the account, and the
  *  ask in another workspace whose agent recalls it and repeats the value. */
@@ -468,18 +466,16 @@ function approvalsScript(request: ScriptedRequest, latest: string): ScriptedAnsw
  * the real model wrote none, or wrote a React slate the ask did not name, in 2 of 6 runs (2026-09-25). Each ask gets
  * the calls it names, in order; null for every other request (titles, the mission, a one-word reply).
  */
-/** The proposed-workspace row's turns: the proposal, and the reply to the wake that brings its link. */
-function proposalAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
-  // The workspace's own agent proposes; the owner's approval wakes it with the link, which its reply repeats.
-  const approved = latest.includes(PROPOSAL_APPROVED_WAKE) ? /\bhttps?:\/\/\S+\/workspace\/\S+/u.exec(latest)?.[0] : undefined;
+/** The agent-workspace row's turn: the workspace's own agent creates the workspace, and repeats the link it answered. */
+function agentWorkspaceAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (!latest.includes(AGENT_WORKSPACE_ASK)) return undefined;
+  const [created] = request.turn;
 
-  if (approved !== undefined) return { text: `${PROPOSAL_LINK_REPLY} ${approved}` };
+  if (created === undefined) {
+    return { toolCall: { name: 'eval', arguments: { code: `return await agent.createWorkspace(${[AGENT_WORKSPACE.name, AGENT_WORKSPACE.brief, AGENT_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
+  }
 
-  if (!latest.includes(WORKSPACE_PROPOSAL_ASK)) return undefined;
-
-  return request.turn.length > 0
-    ? { text: 'PROPOSED' }
-    : { toolCall: { name: 'eval', arguments: { code: `return await agent.proposeWorkspace(${[PROPOSED_WORKSPACE.name, PROPOSED_WORKSPACE.brief, PROPOSED_WORKSPACE.soul].map((arg) => JSON.stringify(arg)).join(', ')});` } } };
+  return { text: `${AGENT_WORKSPACE_REPLY} ${/https?:\/\/[^\s"\\]+\/workspace\/[a-z0-9-]+/u.exec(created.result)?.[0] ?? `none: ${created.result.slice(0, 200)}`}` };
 }
 
 /** An account-memory row's turns: propose a fact for the account, and recall it. */
@@ -596,7 +592,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
-  const proposed = proposalAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? ownerAskAnswer(request, latest);
+  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? ownerAskAnswer(request, latest);
 
   if (proposed !== undefined) return proposed;
 

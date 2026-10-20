@@ -7,7 +7,7 @@ import { useCallback, useMemo } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
-  SparkleIcon, CaretRightIcon, ShieldWarningIcon,
+  CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon,
 } from "@phosphor-icons/react";
 import { hasWorkspaceWork, jobPhase, taskTreePhase, timeAgo, type InspectedWork } from "@kinu.run/core";
@@ -24,12 +24,11 @@ import type { WorkspaceWorkRead } from "./use-workspace-work";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 /** Kinds the attention stack decides: their rows open its card. */
-const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action", "workspace_proposal"]);
+const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
 
 /** Where each pending kind is decided; tab names stay out of core. */
 const PENDING_HOME = {
   deferred_action: { surface: null, cta: "answer it in the chat" },
-  workspace_proposal: { surface: null, cta: "answer it in the chat" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent" },
   // The row is the deep link: it opens the plan's own page.
   plan_review: { surface: null, cta: "open the review" },
@@ -37,7 +36,6 @@ const PENDING_HOME = {
 
 const PENDING_ICON = {
   deferred_action: ShieldWarningIcon,
-  workspace_proposal: SparkleIcon,
   scaffold_version: GitBranchIcon,
   plan_review: NotePencilIcon,
 } satisfies Record<PendingActionKind, typeof ClockIcon>;

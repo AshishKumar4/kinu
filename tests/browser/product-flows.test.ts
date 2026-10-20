@@ -16,13 +16,13 @@ import { withBrowser, withDevServer } from '../../scripts/live-app-harness';
 import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } from '../../scripts/scripted-model';
 import { tierModel } from '../../scripts/tier-model';
 import {
-  DRIVE_SLATE, agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentProposesAWorkspace, accountMemoryCrossesWorkspaces,
+  DRIVE_SLATE, agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentCreatesAWorkspace, accountMemoryCrossesWorkspaces,
   accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone,
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
   computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, type AgentPlanVerdict, type AgentReturnVerdict,
-  type ApprovalStackVerdict, type HireApprovalVerdict, type WorkspaceProposalVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
+  type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict,
@@ -31,7 +31,7 @@ import {
 import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
-  INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, PROPOSED_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
+  INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, AGENT_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
   THREAD_REPLY,
 } from '../../scripts/flows-script';
 import {
@@ -209,27 +209,27 @@ describe(productFlowTestName('stack-memory', "an account fact an agent proposes 
   });
 });
 
-describe(productFlowTestName('workspace-proposal', 'a workspace the agent proposes exists only once its owner approves it'), () => {
-  let observed: WorkspaceProposalVerdict | null = null;
+describe(productFlowTestName('agent-workspace', 'a workspace the agent creates exists at once, recorded, with nothing asked'), () => {
+  let observed: AgentWorkspaceVerdict | null = null;
 
   beforeAll(async () => {
-    observed = await flowRow('workspace-proposal', agentProposesAWorkspace);
+    observed = await flowRow('agent-workspace', agentCreatesAWorkspace);
   });
 
-  test('the owner sees its name and the SOUL.md approving writes, and nothing exists before the approval', () => {
-    const flow = verdictOf(observed, 'workspace-proposal');
+  test('it is on the account under the name the agent gave it, and the agent has its link', () => {
+    const flow = verdictOf(observed, 'agent-workspace');
 
-    expect(flow.cardTitle).toContain(PROPOSED_WORKSPACE.name);
-    expect(flow.cardSoul).toContain(PROPOSED_WORKSPACE.brief);
-    expect(flow.cardSoul).toContain(PROPOSED_WORKSPACE.soul);
-    expect(flow.existedBeforeApproval).toBeFalse();
-  });
-
-  test('approved, it is on the account under its proposed name, and the agent that asked has its link', () => {
-    const flow = verdictOf(observed, 'workspace-proposal');
-
-    expect(flow.created?.displayName).toBe(PROPOSED_WORKSPACE.name);
+    expect(flow.existedBefore).toBeFalse();
+    expect(flow.created?.displayName).toBe(AGENT_WORKSPACE.name);
     expect(flow.link).toContain(`/workspace/${flow.created?.name ?? '(none)'}`);
+  });
+
+  test('nothing waits on the owner, and the Changelog records it with a way to open it', () => {
+    const flow = verdictOf(observed, 'agent-workspace');
+
+    expect(flow.needsYou).toBe(0);
+    expect(flow.changelog?.summary).toContain(`Created workspace "${AGENT_WORKSPACE.name}"`);
+    expect(flow.changelog?.opens).toBe(`/workspace/${flow.created?.name ?? '(none)'}`);
   });
 });
 

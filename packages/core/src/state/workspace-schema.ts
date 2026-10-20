@@ -33,7 +33,7 @@ import { initBackgroundJobsTable } from '../jobs/store';
 import { initToolEffectClaimTable } from '../tools/effect-claim';
 import { initDeferredApprovalsTable } from '../safety/deferred-approval';
 import { initDeviceConsentAsksTable } from '../safety/device-consent';
-import { initWorkspaceProposalsTable } from '../safety/workspace-proposals';
+import { initAgentWorkspacesTable } from '../identity/agent-workspaces';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
 import { initOwnerQuestionsTable } from '../plans/owner-questions';
@@ -184,7 +184,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initEffectTombstoneTable(execRaw);
   initDeferredApprovalsTable(execRaw);
   initDeviceConsentAsksTable(execRaw);
-  initWorkspaceProposalsTable(execRaw);
+  initAgentWorkspacesTable(execRaw);
   initPlanReviewTable(execRaw);
   initOwnerQuestionsTable(execRaw);
   initGitHubActivityTable(execRaw);

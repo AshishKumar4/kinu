@@ -71,6 +71,7 @@
     "agent_stops",
     "agent_tasks",
     "agent_turn_reports",
+    "agent_workspaces",
     "alternate_takes",
     "artifact_versions",
     "background_job_serves",
@@ -172,8 +173,7 @@
     "workspace_activations",
     "workspace_actors",
     "workspace_capability",
-    "workspace_identity",
-    "workspace_proposals"
+    "workspace_identity"
   ],
   "agent": [
     "activity_log",
@@ -195,6 +195,7 @@
     "agent_sequence",
     "agent_tasks",
     "agent_turn_reports",
+    "agent_workspaces",
     "alternate_takes",
     "artifact_versions",
     "background_job_serves",
@@ -280,8 +281,7 @@
     "turn_ratings",
     "turn_struggles",
     "workspace_actors",
-    "workspace_identity",
-    "workspace_proposals"
+    "workspace_identity"
   ],
   "local": [
     "activity_log",
@@ -309,6 +309,7 @@
     "agent_stops",
     "agent_tasks",
     "agent_turn_reports",
+    "agent_workspaces",
     "alternate_takes",
     "artifact_versions",
     "background_job_holders",
@@ -390,14 +391,14 @@
     "turn_ratings",
     "turn_struggles",
     "workspace_actors",
-    "workspace_identity",
-    "workspace_proposals"
+    "workspace_identity"
   ],
   "control": [
     "cp_audit",
     "cp_feedback",
     "cp_users",
     "cp_workspaces",
+    "gallery_installs",
     "gallery_listings",
     "gallery_reports",
     "gallery_stars"

@@ -104,3 +104,84 @@ export interface GalleryReport {
   readonly slate: string;
   readonly reason: string;
 }
+
+/** Explore's two kinds: an app opens a listed slate's share; a workspace installs a workspace blueprint. */
+export const EXPLORE_KINDS = ['app', 'workspace'] as const;
+
+export type ExploreKind = (typeof EXPLORE_KINDS)[number];
+
+/** What an install asks of the person: a connection (an MCP preset id) at a level of access, or a secret by name; and
+ *  why (blueprints/workspace.ts `BlueprintNeed`). */
+const ExploreNeedSchema = v.object({
+  connection: v.nullable(v.string()),
+  secret: v.nullable(v.string()),
+  access: v.picklist(['read', 'write']),
+  why: v.string(),
+});
+
+/** A workspace blueprint as Explore lists it. `maker.kinu`: one Kinu keeps. */
+const WorkspaceCardSchema = v.object({
+  id: v.string(),
+  title: v.string(),
+  line: v.string(),
+  category: GalleryCategorySchema,
+  maker: v.object({ name: v.string(), kinu: v.boolean() }),
+  /** Its picture by name, or null for none. */
+  picture: v.nullable(v.string()),
+  installs: v.number(),
+  stars: v.number(),
+  starred: v.boolean(),
+  needs: v.array(ExploreNeedSchema),
+  listedAt: v.number(),
+  featured: v.boolean(),
+});
+
+export type WorkspaceCard = v.InferOutput<typeof WorkspaceCardSchema>;
+
+const ExploreItemSchema = v.variant('kind', [
+  v.object({ kind: v.literal('app'), app: GalleryListingSchema, needs: v.array(ExploreNeedSchema) }),
+  v.object({ kind: v.literal('workspace'), workspace: WorkspaceCardSchema }),
+]);
+
+export type ExploreItem = v.InferOutput<typeof ExploreItemSchema>;
+
+/** One page of Explore, both kinds ranked together and Kinu's own first: `next` is the page after it, null at the end. */
+export const ExplorePageSchema = v.object({ items: v.array(ExploreItemSchema), next: v.nullable(v.number()) });
+
+export type ExplorePage = v.InferOutput<typeof ExplorePageSchema>;
+
+/** `GET`, public: one page of Explore, of one kind when given. */
+export function explorePath(query: { q: string; kind: ExploreKind | null; sort: GallerySort; category: GalleryCategory | null; page: number }): string {
+  const search = new URLSearchParams({ q: query.q, sort: query.sort, page: String(query.page) });
+
+  if (query.kind !== null) search.set('kind', query.kind);
+
+  if (query.category !== null) search.set('category', query.category);
+
+  return `/api/explore?${search.toString()}`;
+}
+
+/** A workspace blueprint's own page: what it does, what is inside, what it asks before acting. */
+export const BlueprintPageSchema = v.object({
+  workspace: WorkspaceCardSchema,
+  about: v.array(v.object({ title: v.string(), body: v.string() })),
+  inside: v.object({
+    agents: v.array(v.object({ name: v.string(), about: v.string() })),
+    /** Its schedules: when each runs and what it does. */
+    automations: v.array(v.object({ label: v.string(), when: v.string(), does: v.string() })),
+    slates: v.array(v.object({ title: v.string(), about: v.string() })),
+    layout: v.picklist(['workbench', 'focus']),
+    soul: v.string(),
+  }),
+  /** What it stops and asks before doing. */
+  asks: v.array(v.string()),
+  version: v.string(),
+  updatedAt: v.number(),
+});
+
+export type BlueprintPage = v.InferOutput<typeof BlueprintPageSchema>;
+
+/** `GET`, public: a workspace blueprint's {@link BlueprintPage}. */
+export function workspaceBlueprintPath(id: string): string {
+  return `/api/explore/workspaces/${encodeURIComponent(id)}`;
+}

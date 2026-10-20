@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { Holds } from '../utils/held-reads';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
+import { WorkspaceLayoutSchema, type WorkspaceLayout } from './workspace-layout';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../types/profile';
@@ -69,6 +70,10 @@ export const AGENT_CONFIG_KEYS = {
   isolateGen: 'isolate_gen',
   /** The root's chat title as the person set it; the workspace keeps its own name. */
   chatTitle: 'chat_title',
+  /** The root's page layout (`WorkspaceLayout`); unset reads as `workbench`. */
+  layout: 'layout',
+  /** The workspace blueprint the workspace was installed from, by id; unset for one made any other way. */
+  blueprint: 'blueprint',
   /** A one-shot wait this agent armed on its owner (`agent.wakeWhenOwnerDone`), JSON `OwnerWaitWatch`: met, it wakes the
    *  agent once and the row goes. Read on each change to what waits on the owner, only while one is armed. */
   ownerWaitsWatch: 'owner_waits_watch',
@@ -151,6 +156,10 @@ export interface AgentConfigStore {
   setEmailNotificationsEnabled(enabled: boolean): void;
   getChatTitle(): string | null;
   setChatTitle(title: string): void;
+  getLayout(): WorkspaceLayout;
+  setLayout(layout: WorkspaceLayout): void;
+  getBlueprint(): string | null;
+  setBlueprint(id: string): void;
   /** Unset, or a row that no longer parses, reads as none. */
   getOwnerWaitsWatch(): OwnerWaitWatch | null;
   /** Null clears it. */
@@ -420,6 +429,20 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     setChatTitle(title) {
       set(AGENT_CONFIG_KEYS.chatTitle, title);
+    },
+    getLayout() {
+      const stored = v.safeParse(WorkspaceLayoutSchema, get(AGENT_CONFIG_KEYS.layout));
+
+      return stored.success ? stored.output : 'workbench';
+    },
+    setLayout(layout) {
+      set(AGENT_CONFIG_KEYS.layout, layout);
+    },
+    getBlueprint() {
+      return get(AGENT_CONFIG_KEYS.blueprint);
+    },
+    setBlueprint(id) {
+      set(AGENT_CONFIG_KEYS.blueprint, id);
     },
     getOwnerWaitsWatch() {
       const stored = get(AGENT_CONFIG_KEYS.ownerWaitsWatch);

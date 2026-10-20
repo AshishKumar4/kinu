@@ -1326,8 +1326,6 @@ const HANDED = new Map([
   ['event-overflow', OVERFLOW_RETRY_TEXT.slice(0, 40)],
   ['event-gate', 'a mechanical gate'],
   ['event-consent', 'Re-issue the approved commands'],
-  ['event-proposal', 'Your owner approved'],
-  ['event-proposal-declined', 'Your owner declined'],
   ['event-sandbox', 'Incident id'],
   ['event-plan-approved', 'approved-plan'],
   ['event-plan-feedback', 'submit_plan'],

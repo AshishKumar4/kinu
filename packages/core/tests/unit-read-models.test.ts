@@ -293,9 +293,9 @@ describe('agent status', () => {
 
     expect(await getAgentStatus({
       sql, soul: () => workspaceSoul(bundle), actor, model: 'anthropic/claude-opus-5', reasoningEffort: 'high', name: 'fallback-name',
-      displayName: 'Jarvis',
+      displayName: 'Jarvis', layout: 'focus',
     })).toMatchObject({
-      name: 'jarvis', displayName: 'Jarvis', createdAt: 42, model: 'anthropic/claude-opus-5',
+      name: 'jarvis', displayName: 'Jarvis', createdAt: 42, model: 'anthropic/claude-opus-5', layout: 'focus',
       messageCount: 1, scaffoldVersion: 0, reasoningEffort: 'high', forkLineage: null,
       soul: '# Mine\n\n## Mission\n\nread the room and update it', purpose: 'read the room and update it',
     });
@@ -304,7 +304,7 @@ describe('agent status', () => {
 
   test('the scaffold version is the one the actor runs: not a pending proposal, not a rolled-back one', async () => {
     const { db, sql, actor } = workspace();
-    const shown = async () => (await getAgentStatus({ sql, soul: async () => null, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis' })).scaffoldVersion;
+    const shown = async () => (await getAgentStatus({ sql, soul: async () => null, actor, model: '', reasoningEffort: null, name: 'jarvis', displayName: 'Jarvis', layout: 'workbench' })).scaffoldVersion;
 
     const version = (n: number, status: string) => {
       void sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (${actor.actorId}, ${n}, ${n}, ${'test'}, ${status})`;
@@ -328,7 +328,7 @@ describe('agent status', () => {
     await expect(getAgentStatus({
       sql, soul: async () => null,
       actor: other.actor, model: '', reasoningEffort: null, name: 'agent-7',
-      displayName: 'ignored',
+      displayName: 'ignored', layout: 'workbench',
     })).rejects.toThrow(/no such table/);
   });
 

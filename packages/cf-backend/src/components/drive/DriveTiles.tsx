@@ -142,16 +142,18 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
   );
 }
 
-export function FolderTile({ href, name, icon, menu, attributes }: {
+/** A folder: a row of a `p-group` (`row`), as My stuff lists its folders, or a card among a grid's tiles. */
+export function FolderTile({ href, name, icon, menu, attributes, row = false }: {
   href: string;
   name: string;
   icon: ReactNode;
   menu: readonly MenuItem[];
   attributes?: DataAttributes;
+  row?: boolean;
 }) {
   return (
     <li className="relative min-w-0" {...attributes}>
-      <Link to={href} className="flex h-12 items-center gap-2.5 rounded-lg border p-border p-surface pl-3.5 pr-10 p-card-lift">
+      <Link to={href} className={`flex h-12 items-center gap-2.5 pl-3.5 pr-10 ${row ? "p-row-hover" : "rounded-lg border p-border p-surface p-card-lift"}`}>
         <span className="flex shrink-0">{icon}</span>
         <span className="truncate p-row-text font-medium p-text" data-drive-tile-name>{name}</span>
       </Link>

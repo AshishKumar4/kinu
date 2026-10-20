@@ -5,9 +5,10 @@ import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
 import {
   GitBranchIcon, BrainIcon,
   ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
-  NotePencilIcon, ArrowsClockwiseIcon,
+  NotePencilIcon, ArrowsClockwiseIcon, SquaresFourIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import type { ChangelogEntry, ChangelogEntryKind } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { showing, detach } from "@kinu.run/core/obs";
@@ -25,6 +26,7 @@ const KIND_ICON = {
   ratings: ChecksIcon,
   artifact: NotePencilIcon,
   refinement: ArrowsClockwiseIcon,
+  workspace: SquaresFourIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
 /** Showing the digest marks it seen, so what is new to the owner is lit once. */
@@ -148,6 +150,28 @@ interface ChangelogEntryCardProps {
   onReverted: () => void;
 }
 
+/** An entry's details, hidden until it is expanded: its facts or its evidence, the workspace it made, its child rows. */
+function EntryDetails({ entry, id, expanded, rpc, onReverted }: {
+  entry: ChangelogEntry; id: string; expanded: boolean; rpc: WorkspaceRpc; onReverted: () => void;
+}) {
+  const evidence = entry.evidence !== '' && entry.kind !== 'fact';
+
+  return (
+    <div id={id} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded} className="mt-2 ml-6 border-t p-border pt-2">
+      {entry.kind === 'fact' && <div className="mb-2"><EntryFacts entry={entry} /></div>}
+      {evidence && <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
+      {entry.workspace !== undefined && (
+        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="mt-1.5 inline-block p-meta p-accent hover:underline" data-changelog-workspace={entry.workspace}>
+          Open the workspace
+        </Link>
+      )}
+      {entry.items && entry.items.length > 0 && (
+        <SubEntryList items={entry.items} className={`${evidence ? "mt-2" : ""} space-y-1.5`} rpc={rpc} onReverted={onReverted} />
+      )}
+    </div>
+  );
+}
+
 export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReverted }: ChangelogEntryCardProps) {
   const [kept, setKept] = useState(false);
   const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
@@ -215,27 +239,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
         <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
       )}
 
-      {hasDetails && (
-        <div id={detailsId} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded}
-          className="mt-2 ml-6 border-t p-border pt-2">
-          {entry.kind === 'fact' && (
-            <div className="mb-2"><EntryFacts entry={entry} /></div>
-          )}
-          {entry.evidence && entry.kind !== 'fact' && (
-            <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">
-              {entry.evidence}
-            </div>
-          )}
-          {entry.items && entry.items.length > 0 && (
-            <SubEntryList
-              items={entry.items}
-              className={`${entry.evidence && entry.kind !== 'fact' ? "mt-2" : ""} space-y-1.5`}
-              rpc={rpc}
-              onReverted={onReverted}
-            />
-          )}
-        </div>
-      )}
+      {hasDetails && <EntryDetails entry={entry} id={detailsId} expanded={expanded} rpc={rpc} onReverted={onReverted} />}
 
       <EntryScaffoldDiff rpc={rpc} version={entry.scaffoldVersion} shown={diffShown} />
     </div>

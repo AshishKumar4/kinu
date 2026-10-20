@@ -1,12 +1,16 @@
 /**
- * `/api/gallery/*`: the Gallery, before the session gate. Anyone may read it; starring and reporting take a signed-in
- * person. A listing's picture is served only while it is listed, and only the digest it lists. Its index is the
- * control plane's (core slates/gallery.ts), asked with the Worker's own capability on each person's behalf.
+ * `/api/gallery/*` and `/api/explore/*`: the Gallery's apps and Explore's apps and workspaces, before the session gate.
+ * Anyone may read them; starring and reporting take a signed-in person. A listing's picture is served only while it is
+ * listed, and only the digest it lists. Their index is the control plane's (core slates/gallery.ts), asked with the
+ * Worker's own capability on each person's behalf.
  */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { err, json, safeJson, GALLERY_CATEGORIES, GALLERY_LAST_PAGE, GALLERY_SORTS, type GallerySlate } from '@kinu.run/core';
+import {
+  blueprintPage, err, json, kinuBlueprint, safeJson, EXPLORE_KINDS, GALLERY_CATEGORIES, GALLERY_LAST_PAGE, GALLERY_SORTS, type GallerySlate,
+} from '@kinu.run/core';
+import { KINU_LISTINGS } from '@kinu.run/core/control-plane';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { crossSiteRejection, requestIdentity } from '../auth/session';
@@ -53,6 +57,34 @@ galleryRoutes.get('/api/gallery', async (c) => {
   const { plane, caller } = await gallery(c.env);
 
   return json({ body: await plane.galleryPage(caller, { q, sort, category: category ?? null, page }, await viewerOf(c)) }, { headers: NO_STORE });
+});
+
+const ExploreQuery = v.object({ ...Query.entries, kind: v.optional(v.picklist(EXPLORE_KINDS)) });
+
+galleryRoutes.get('/api/explore', async (c) => {
+  const query = v.safeParse(ExploreQuery, Object.fromEntries(new URL(c.req.url).searchParams));
+
+  if (!query.success) return err(400, 'Explore is asked by kind, sort, page, category and words');
+  const { q, sort, category, page, kind } = query.output;
+
+  const { plane, caller } = await gallery(c.env);
+
+  return json({ body: await plane.explorePage(caller, { q, sort, category: category ?? null, page, kind: kind ?? null }, await viewerOf(c)) }, { headers: NO_STORE });
+});
+
+/** A workspace blueprint Kinu keeps: its page, its listing's numbers read from the index. */
+galleryRoutes.get('/api/explore/workspaces/:id', async (c) => {
+  const id = decodeURIComponent(rawParam(c, 'id'));
+  const blueprint = kinuBlueprint(id);
+
+  if (blueprint === undefined) return err(404, 'No such workspace blueprint');
+
+  const { plane, caller } = await gallery(c.env);
+  const card = await plane.exploreWorkspace(caller, KINU_LISTINGS, id, await viewerOf(c));
+
+  if (card === null) return err(404, 'No such workspace blueprint');
+
+  return json({ body: blueprintPage(blueprint, card) }, { headers: NO_STORE });
 });
 
 /** A signed-in person's mark on a listing: 204, or 404 when the slate is not listed. */

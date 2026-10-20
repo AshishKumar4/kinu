@@ -1,10 +1,10 @@
 /** A leaf module so tests can read the nav without mounting the sidebar. */
 import {
-  HouseIcon, SquaresFourIcon, HardDrivesIcon, PuzzlePieceIcon, DesktopTowerIcon, CompassIcon,
+  HouseIcon, SquaresFourIcon, HardDrivesIcon, PuzzlePieceIcon, CompassIcon,
 } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 
-/** Account settings is absent on purpose: the sidebar footer gear is the one way in. `also` lights the row on more routes. */
+/** Settings and Devices are the sidebar footer's: the account menu, and the icon beside it. `also` lights the row on more routes. */
 export const PRIMARY_NAV: readonly {
   readonly to: string;
   readonly label: string;
@@ -15,8 +15,7 @@ export const PRIMARY_NAV: readonly {
   { to: APP_ROUTES.home, label: "Home", Icon: HouseIcon, end: true },
   { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
   { to: APP_ROUTES.drive, label: "Drive", Icon: HardDrivesIcon, end: false, also: [APP_ROUTES.slates, APP_ROUTES.shared] },
-  { to: APP_ROUTES.gallery, label: "Gallery", Icon: CompassIcon, end: false },
-  { to: APP_ROUTES.devices, label: "Devices", Icon: DesktopTowerIcon, end: false },
+  { to: APP_ROUTES.explore, label: "Explore", Icon: CompassIcon, end: false, also: [APP_ROUTES.gallery] },
   { to: APP_ROUTES.plugins, label: "Plugins", Icon: PuzzlePieceIcon, end: false },
 ];
 

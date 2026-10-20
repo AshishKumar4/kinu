@@ -4,7 +4,7 @@ import type { ToolOutcome } from '../tools/outcome';
 import { codemodeProgramOf } from '../tools/codemode-reach';
 import { stableStringify } from '../safety/argument-digest';
 import { evidenceWindow, EVIDENCE_BUDGETS } from '../utils/evidence-window';
-import { decodeJsonValue, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
+import { decodeJsonValue, isJsonObject, type JsonObject, type JsonValue, isJsonString } from '../utils/json';
 import { fnv1a64 } from '../utils/fnv1a';
 import { detached } from '../utils/text';
 
@@ -41,8 +41,6 @@ const PROVIDER_SECRET = /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{
 
 const KINU_TOKEN = /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/gu;
 
-const StringSchema = v.string();
-
 function obfuscateString(value: string): string {
   return value
     .replace(PRIVATE_KEY_BLOCK, '[redacted private-key]')
@@ -53,7 +51,7 @@ function obfuscateString(value: string): string {
 }
 
 function obfuscateSecrets(value: JsonValue): JsonValue {
-  if (v.is(StringSchema, value)) return obfuscateString(value);
+  if (isJsonString(value)) return obfuscateString(value);
 
   if (Array.isArray(value)) {
     let changed = false;
@@ -98,9 +96,7 @@ const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
 ];
 
 function stringLeaves(value: JsonValue, into: string[] = []): string[] {
-  const text = v.safeParse(StringSchema, value);
-
-  if (text.success) into.push(text.output);
+  if (isJsonString(value)) into.push(value);
   else if (Array.isArray(value)) for (const item of value) stringLeaves(item, into);
   else if (isJsonObject(value)) {
     for (const item of Object.values(value)) stringLeaves(item, into);
@@ -132,8 +128,13 @@ function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegE
   return found;
 }
 
-function window(value: JsonValue): string {
-  return detached(evidenceWindow(stableStringify(obfuscateSecrets(value)), EVIDENCE_BUDGETS.patternToolCall));
+/** `serialized`: `value`'s stable serialization, where the caller already took it; the window takes it again only for a
+ *  value whose secrets it obfuscated. */
+function window(value: JsonValue, serialized?: string): string {
+  const obfuscated = obfuscateSecrets(value);
+  const text = obfuscated === value && serialized !== undefined ? serialized : stableStringify(obfuscated);
+
+  return detached(evidenceWindow(text, EVIDENCE_BUDGETS.patternToolCall));
 }
 
 /** A call keeps only what its finished-turn readers read. */
@@ -142,20 +143,23 @@ export function compactToolCall(call: ToolCallInput): ToolCallRecord {
   const text = stringLeaves(decoded);
   const written = pathsMatching(text, WRITE_PATTERNS);
   const revisited = pathsMatching(text, REVISIT_PATTERNS);
-  const op = v.is(StringSchema, call.args.op) ? call.args.op : null;
+  const op = call.args.op !== undefined && isJsonString(call.args.op) ? call.args.op : null;
 
-  if (call.name === 'file' && v.is(StringSchema, call.args.path)) {
+  if (call.name === 'file' && call.args.path !== undefined && isJsonString(call.args.path)) {
     if (op === 'write' || op === 'edit') written.add(call.args.path);
 
     if (op === 'read') revisited.add(call.args.path);
   }
 
+  // The arguments' stable serialization, taken once for their digest and their window: `decoded` is their copy.
+  const serialized = stableStringify(decoded);
+
   const record: ToolCallRecord = {
     name: call.name,
-    argsWindow: window(call.args),
+    argsWindow: window(call.args, serialized),
     target: actionTarget(call.args),
     op,
-    argsDigest: Object.keys(call.args).length === 0 ? null : fnv1a64(`${call.name}:${stableStringify(decoded)}`),
+    argsDigest: Object.keys(call.args).length === 0 ? null : fnv1a64(`${call.name}:${serialized}`),
     writtenPaths: [...written].map(detached),
     revisitedPaths: [...revisited].map(detached),
   };

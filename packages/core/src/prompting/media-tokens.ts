@@ -71,13 +71,13 @@ export function messageTokens(spec: string, messages: readonly ModelMessage[]): 
   let media = 0;
 
   for (const message of messages) {
-    for (const part of v.is(v.string(), message.content) ? [message.content] : message.content) {
+    for (const part of isText(message.content) ? [message.content] : message.content) {
       const carried = mediaParts(part);
 
       if (carried.length > 0) {
         for (const each of carried) media += mediaTokens(spec, each) ?? UNPRICED_MEDIA_TOKENS;
       } else {
-        chars += v.is(v.string(), part) ? part.length : JSON.stringify(part).length;
+        chars += isText(part) ? part.length : JSON.stringify(part).length;
       }
     }
   }
@@ -87,8 +87,14 @@ export function messageTokens(spec: string, messages: readonly ModelMessage[]): 
 
 type ContentPart = Exclude<ModelMessage['content'], string>[number];
 
+/** Text content, asked with no schema: a step's tokens are counted over every part of its history, and a refused
+ *  parse formats an issue for each part it refuses. */
+function isText(content: ModelMessage['content'] | ContentPart): content is string {
+  return typeof content === 'string';
+}
+
 function mediaParts(part: string | ContentPart): MediaPart[] {
-  if (v.is(v.string(), part)) return [];
+  if (isText(part)) return [];
 
   if (part.type === 'image') return [{ kind: 'image', mediaType: part.mediaType, data: part.image, source: part }];
 
