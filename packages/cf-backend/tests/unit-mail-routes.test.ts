@@ -1,0 +1,184 @@
+import { beforeEach, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
+import * as v from 'valibot';
+import { initMailboxTables, type JsonValue } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
+import { makeSqlExec } from '../../core/tests/helpers';
+import { MailStore } from '../src/mail/store';
+import { parseMail } from '../src/mail/parse';
+import { Hono } from 'hono';
+import { mailRoutes, type MailRoutesEnv } from '../src/mail/routes';
+import type { FamilyEnv } from '../src/api/context';
+import type { MailNameClaim } from '../src/mail/mailname-do';
+
+// The person's own mail over HTTP: the account is the signed-in identity's, never one the request names. The Mailbox is
+// the real store over SQLite; the claims are a map, as MailName's objects are one per label.
+
+const ORIGIN = 'https://kinu.run';
+
+const ASHISH = { userId: 'u-ashish', email: 'me@ashishkumarsingh.com' };
+
+const PRIYA = { userId: 'u-priya', email: 'priya@raman.dev' };
+
+let claims: Map<string, MailNameClaim>;
+
+let stores: Map<string, MailStore>;
+
+let sent: { userId: string; to: readonly string[]; subject: string }[];
+
+function storeOf(userId: string): MailStore {
+  const held = stores.get(userId);
+
+  if (held !== undefined) return held;
+  const sql = makeSqlExec(new Database(':memory:'));
+
+  initMailboxTables(sql);
+
+  const store = new MailStore({
+    sql, domain: 'kinu.run', now: () => Date.UTC(2026, 9, 20, 9), id: () => crypto.randomUUID(), parse: parseMail,
+    blobs: { put: () => Promise.resolve(), text: () => Promise.resolve(null), delete: () => Promise.resolve() },
+    digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+  });
+
+  stores.set(userId, store);
+
+  return store;
+}
+
+function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
+  return {
+    EMAIL_DOMAIN: 'kinu.run', MAIL_ACCOUNTS: accounts, CONTROL_PLANE_ADMINS: ASHISH.email,
+    MAILNAME: {
+      idFromName: (label: string) => label,
+      get: (label: string) => ({
+        lookup: () => Promise.resolve(claims.get(label) ?? null),
+        claim: (claimed: string, userId: string) => {
+          const held = claims.get(claimed);
+
+          if (held !== undefined && held.user_id !== userId) return Promise.reject(new KinuError('denied', `"${claimed}" is taken.`));
+          const claim: MailNameClaim = { label: claimed, user_id: userId, kind: 'username', target_path: null, state: 'active' };
+
+          claims.set(claimed, claim);
+
+          return Promise.resolve(claim);
+        },
+      }),
+    },
+    MAILBOX: {
+      idFromName: (userId: string) => userId,
+      get: (userId: string) => {
+        const store = storeOf(userId);
+
+        return {
+          open: (account: Parameters<MailStore['open']>[0]) => Promise.resolve(store.open(account)),
+          boxes: () => Promise.resolve(store.boxes()),
+          list: (query: Parameters<MailStore['list']>[0]) => Promise.resolve(store.list(query)),
+          thread: (id: string) => store.thread(id),
+          update: (id: string, change: Parameters<MailStore['update']>[1]) => Promise.resolve(store.update(id, change)),
+          draft: (outgoing: Parameters<MailStore['draft']>[0]) => store.draft(outgoing),
+          send: async (outgoing: Parameters<MailStore['queue']>[0]) => {
+            sent.push({ userId, to: outgoing.to, subject: outgoing.subject });
+
+            return (await store.queue(outgoing)).view;
+          },
+          setWake: (path: string, wake: Parameters<MailStore['setWake']>[1], allow?: readonly string[]) => Promise.resolve(store.setWake(path, wake, allow)),
+        };
+      },
+    },
+  };
+}
+
+/** A request as the signed-in person, through the routes as the API mounts them. */
+async function call(who: { userId: string; email: string }, request: { method: string; path: string; body?: JsonValue; accounts?: 'operators' | 'everyone' }) {
+  const { method, path, body, accounts = 'operators' } = request;
+
+
+  // As the API mounts it: behind the session gate, which names the signed-in identity.
+  const app = new Hono<FamilyEnv<MailRoutesEnv>>()
+    .use('*', async (c, next) => { c.set('identity', { userId: who.userId, email: who.email, sub: who.userId }); await next(); })
+    .route('/', mailRoutes);
+
+  const response = await app.fetch(new Request(`${ORIGIN}${path}`, {
+    method, headers: { 'content-type': 'application/json' }, body: body === undefined ? null : JSON.stringify(body),
+  }), env(accounts));
+
+  return { status: response.status, body: v.parse(v.unknown(), await response.json()) };
+}
+
+beforeEach(() => {
+  claims = new Map();
+  stores = new Map();
+  sent = [];
+});
+
+describe('an address is claimed once, by whom the deployment allows', () => {
+  test('before a claim there is no address, and it says whether one may be claimed', async () => {
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).toEqual({ status: 200, body: { address: null, canClaim: true, boxes: [] } });
+    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/boxes' })).body).toEqual({ address: null, canClaim: false, boxes: [] });
+  });
+
+  test('an operator claims a username, and the person\'s own box is opened at it', async () => {
+    expect(await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } })).toMatchObject({ status: 200, body: { address: 'ashish@kinu.run' } });
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).body).toMatchObject({ address: 'ashish@kinu.run', boxes: [{ path: '', address: 'ashish@kinu.run' }] });
+  });
+
+  test('while addresses are the operators\' only, another account is refused; opened to everyone, it may claim', async () => {
+    expect((await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'priya' } })).status).toBe(403);
+    expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'priya' }, accounts: 'everyone' })).toMatchObject({ status: 200, body: { address: 'priya@kinu.run' } });
+  });
+
+  test('a taken, reserved or malformed username is refused with why', async () => {
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
+    expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' }, accounts: 'everyone' })).toMatchObject({ status: 403, body: { error: '"ashish" is taken.' } });
+    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'Ashish K' } })).status).toBe(400);
+  });
+
+  test('a second claim by the same account keeps its first address', async () => {
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
+    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashishks' } })).body).toMatchObject({ address: 'ashish@kinu.run' });
+  });
+});
+
+describe('the person reads and sends their own mail, and only their own', () => {
+  beforeEach(async () => {
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
+  });
+
+  test('sending from their own address files it in Sent; another account sees none of it', async () => {
+    const sentView = await call(ASHISH, { method: 'POST', path: '/api/user/mail/send', body: { path: '', to: ['priya@raman.dev'], subject: 'DMARC on raman.dev', text: 'Add a _dmarc TXT record at p=none.' } });
+
+    expect(sentView.status).toBe(200);
+    expect(sent).toEqual([{ userId: 'u-ashish', to: ['priya@raman.dev'], subject: 'DMARC on raman.dev' }]);
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/threads?view=sent' })).body).toMatchObject({ threads: [{ subject: 'DMARC on raman.dev', outgoing: true }] });
+    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/threads?view=sent' })).status).toBe(404);
+  });
+
+  test('a draft is saved to Drafts, and Trash takes a thread out of All', async () => {
+    const drafted = await call(ASHISH, { method: 'POST', path: '/api/user/mail/drafts', body: { path: '', to: ['dana@northwind.io'], subject: 'Re: /hooks/v2', text: 'It is ours; the fix is going out.' } });
+    const listed = v.parse(v.object({ threads: v.array(v.object({ id: v.string() })) }), (await call(ASHISH, { method: 'GET', path: '/api/user/mail/threads?view=drafts' })).body);
+    const [thread] = listed.threads;
+
+    expect(drafted.status).toBe(200);
+    expect(thread).toBeDefined();
+    expect((await call(ASHISH, { method: 'PATCH', path: `/api/user/mail/threads/${thread?.id ?? ''}`, body: { trashed: true } })).status).toBe(200);
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/threads?view=trash' })).body).toMatchObject({ threads: [{ id: thread?.id }] });
+  });
+
+  test('Important answers the footer\'s read: its unread count and the newest few', async () => {
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3' })).toEqual({ status: 200, body: { unread: 0, items: [] } });
+  });
+
+  test('the person cannot mark Important themselves: that is the assistant\'s pick', async () => {
+    expect((await call(ASHISH, { method: 'PATCH', path: '/api/user/mail/threads/t-1', body: { important: 'mine' } })).status).toBe(400);
+  });
+
+  test('a box\'s wake policy is the person\'s to set', async () => {
+    expect(await call(ASHISH, { method: 'PUT', path: '/api/user/mail/boxes/wake', body: { path: '', wake: 'allowlist', allow: ['dana@northwind.io'] } })).toMatchObject({ status: 200, body: { wake: 'allowlist' } });
+    expect((await call(ASHISH, { method: 'PUT', path: '/api/user/mail/boxes/wake', body: { path: '', wake: 'everyone' } })).status).toBe(400);
+  });
+
+  test('a view of a thread the account does not have is missing', async () => {
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/threads/t-nope' })).status).toBe(404);
+  });
+});

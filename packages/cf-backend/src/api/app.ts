@@ -17,6 +17,7 @@ import { aiProxyRoutes } from '../user/ai-proxy';
 import { webSearchRoutes } from '../user/web-search-route';
 import { providerProxyRoutes } from '../user/provider-proxy';
 import { accountRoutes } from '../user/account-routes';
+import { mailRoutes } from '../mail/routes';
 import { consentRoutes } from '../slates/consent-routes';
 import { userRoutes } from '../user/routes';
 import { deployRoutes } from '../deploy/routes';
@@ -93,6 +94,9 @@ mount(controlRoutes);
 
 // Ahead of userRoutes: owner_only account methods.
 mount(accountRoutes);
+
+// Ahead of userRoutes' catch-all: the person's own mail, from their account's Mailbox.
+mount(mailRoutes);
 
 mount(consentRoutes);
 
