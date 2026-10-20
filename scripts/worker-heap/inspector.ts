@@ -190,9 +190,35 @@ function allocationSites(head: ProfileNode): Allocations {
   return { total, sites };
 }
 
+/** A snapshot's live bytes, and the part V8 files under the node type `code`: compiled functions, their bytecode, feedback
+ *  and scope data. The rest is what the isolate's programs hold. */
+export interface LiveHeap {
+  readonly live: number;
+  readonly code: number;
+}
+
+function liveOf(snapshot: Snapshot): LiveHeap {
+  const fields = snapshot.snapshot.meta.node_fields;
+  const code = snapshot.snapshot.meta.node_types[0].indexOf('code');
+  const [typeAt, sizeAt] = ['type', 'self_size'].map((field) => fields.indexOf(field));
+  let live = 0;
+  let compiled = 0;
+
+  for (let at = 0; at < snapshot.nodes.length; at += fields.length) {
+    const bytes = snapshot.nodes[at + (sizeAt ?? 0)] ?? 0;
+    live += bytes;
+
+    if (snapshot.nodes[at + (typeAt ?? 0)] === code) compiled += bytes;
+  }
+
+  return { live, code: compiled };
+}
+
 export interface Inspector {
   readonly usedHeap: () => Promise<number>;
   readonly liveHeap: () => Promise<number>;
+  /** {@link liveHeap}, its code apart: one snapshot. */
+  readonly liveSplit: () => Promise<LiveHeap>;
   readonly makeup: () => Promise<HeapMakeup>;
   /** The bytes of the buffer held under the property `marker`, from a snapshot: {@link markedBytes}. */
   readonly markedBytes: (marker: string) => Promise<number>;
@@ -275,16 +301,8 @@ export async function inspect(port: number, isolate: string, picks: (id: string)
     // A snapshot collects first, so its node sizes add up to what is live.
     makeup: async () => heapMakeup(await snapshotNow(SnapshotSchema)),
     markedBytes: async (marker) => markedBytes(await snapshotNow(GraphSchema), marker, isolate),
-    liveHeap: async () => {
-      const snapshot = await snapshotNow(SnapshotSchema);
-      const fields = snapshot.snapshot.meta.node_fields;
-      const size = fields.indexOf('self_size');
-      let live = 0;
-
-      for (let at = size; at < snapshot.nodes.length; at += fields.length) live += snapshot.nodes[at] ?? 0;
-
-      return live;
-    },
+    liveHeap: async () => liveOf(await snapshotNow(SnapshotSchema)).live,
+    liveSplit: async () => liveOf(await snapshotNow(SnapshotSchema)),
     sampleAllocations: async () => {
       await send('HeapProfiler.startSampling', { samplingInterval: 65_536, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
     },
