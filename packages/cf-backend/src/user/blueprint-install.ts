@@ -7,14 +7,12 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
-  blueprintSeed, err, json, kinuBlueprint, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
+  blueprintSeed, err, fallbackWorkspaceIdentity, json, kinuBlueprint, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
+import { ASSISTANT_CONFIG_KEY } from './roster';
 import { createCloudWorkspaceForUser, isCreateConflict, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv } from './workspace-create';
-
-/** user_config: the workspace the owner's Home opens on, while it is theirs. */
-const ASSISTANT_CONFIG_KEY = 'assistant';
 
 const InstallBodySchema = v.strictObject({
   /** The workspace's title; absent, the blueprint's. */
@@ -75,13 +73,17 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
       ...(body.agent !== undefined && { agent: body.agent }), ...(body.brief !== undefined && { brief: body.brief }),
     });
 
+    // Home is named before the workspace is listed, so the roster's first word of it already says Home.
+    const name = fallbackWorkspaceIdentity(blueprint.line, crypto.randomUUID()).name;
+
+    if (assistant && body.home !== false) yield* Effect.promise(async () => userDO.setConfig(owner, ASSISTANT_CONFIG_KEY, name));
+
     const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
-      env, userId, userDO, caller: owner, input: { displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
+      env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
     }));
 
+    // Home reads the owner's own mail (docs/MAIL.md §7), once they have an address; a failed hand-over is said, not the install undone.
     if (assistant && body.home !== false) {
-      yield* Effect.promise(async () => userDO.setConfig(owner, ASSISTANT_CONFIG_KEY, entry.name));
-      // It reads the owner's own mail (docs/MAIL.md §7), once they have an address; a failed hand-over is said, not the install undone.
       yield* attempt({ doing: 'giving the assistant the owner\'s mail', otherwise: 'unavailable' }, async () => objectNamed(env.OrchestratorAgent, entry.name).readOwnerMail()).pipe(
         Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, { workspace: entry.name }); })),
       );

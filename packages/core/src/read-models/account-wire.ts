@@ -35,6 +35,8 @@ const RosterEntrySchema = v.object({
   overview: v.nullable(WorkspaceOverviewSchema),
   decisions: v.number(),
   logo: v.optional(v.nullable(v.string())),
+  /** The owner's assistant: Home, so the sidebar lists it nowhere and its address opens Home. */
+  home: v.optional(v.literal(true)),
 });
 
 export type RosterEntry = v.InferOutput<typeof RosterEntrySchema>;

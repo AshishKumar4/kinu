@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import type { GoldenAnswer } from '../src/golden';
 import { TOOLS_STAMP } from '../src/tools';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
+import { gate } from './support/devbox-harness';
 
 const PARTS = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])];
 
@@ -166,6 +167,45 @@ test('a box with its own snapshot wakes it, asks no golden, and keeps the pinned
 
   expect({ starts: container.startOptions.map(startedFrom), asked: golden.asked, installs: container.sequence.filter(step => step === 'exec:tools-install').length })
     .toEqual({ starts: ['golden-1', 'snapshot-1'], asked: [], installs: 0 });
+});
+
+// Staging 2026-10-20: the cron's build was installing the tools when a box's ask armed the build alarm; the alarm's
+// build destroyed that container to start its own, and the first failed "installing the tools: Network connection
+// lost.", which every waiting box was told. A second build waits for the one running and finds its golden.
+test('a build asked for while one runs waits for it: one container, one install, one golden for both', async () => {
+  const { box, container, objects } = chainBox(GoldenBox);
+  const held = gate();
+
+  for (const [index, part] of PARTS.entries()) objects.set(`devbox-tools/${PIN}.tgz.${String(index)}`, part);
+  container.installGate = held;
+  const first = box.ensureGolden();
+  await held.reached;
+  const second = box.devboxGolden(false);
+  held.release();
+  const [id] = await Promise.all([first, second]);
+
+  expect({ id, bases: container.startOptions.filter((options) => options?.image !== undefined).length, installs: container.sequence.filter((step) => step === 'exec:tools-install').length })
+    .toEqual({ id: expect.any(String), bases: 1, installs: 1 });
+  expect(await box.goldenFor('box-a')).toEqual({ kind: 'ready', id, tools: PIN });
+});
+
+// The refresh restores the previous golden to renew its life: one asked for while another build runs still does.
+test('a refresh asked for while another build runs still renews the previous golden', async () => {
+  const { box, container, objects, storage } = chainBox(GoldenBox);
+  const held = gate();
+  const takenAt = Date.now() - 26 * 24 * 60 * 60 * 1000;
+
+  for (const [index, part] of PARTS.entries()) objects.set(`devbox-tools/${PIN}.tgz.${String(index)}`, part);
+  container.addSnapshot('golden-old', new Map([[TOOLS_STAMP, PIN]]));
+  storage.rows.set('devbox:golden', { current: { id: 'golden-old', tools: PIN, base: 'trixie', takenAt }, waiting: [], retiring: [] });
+  container.installGate = held;
+  const built = box.ensureGolden();
+  await held.reached;
+  const refreshed = box.devboxGolden(true);
+  held.release();
+  await Promise.all([built, refreshed]);
+
+  expect(storage.rows.get('devbox:golden')).toMatchObject({ previous: { id: 'golden-old', renewedAt: expect.any(Number) } });
 });
 
 // Staging 2026-10-08: the account's containers were all in use, and the golden said only "The container has not been started".

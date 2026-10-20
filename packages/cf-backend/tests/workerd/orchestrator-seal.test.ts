@@ -81,7 +81,7 @@ describe('a production OrchestratorAgent stub', () => {
       openDeviceTerminal: () => stub.openDeviceTerminal(),
     };
 
-    for (const [name, call] of Object.entries(routes)) expect([name, await answerTo(call)]).not.toEqual([name, refusal(name)]);
+    for (const [name, call] of Object.entries(routes)) expect([name, (await answerTo(call)).includes(refusal(name))]).toEqual([name, false]);
   });
 
   // Production bc78a94bd, eval-seed-probe-c87o3p, 2026-10-19: each of an agent isolate's deaths of memory its tail heard
@@ -90,6 +90,21 @@ describe('a production OrchestratorAgent stub', () => {
     const stub = env.SEALED_ORCHESTRATOR.get(env.SEALED_ORCHESTRATOR.idFromName('sealed-oom'));
 
     expect(await answerTo(() => stub.isolateOutOfMemory('no-such-agent', Date.now()))).not.toContain(refusal('isolateOutOfMemory'));
+  });
+
+  // Staging, 2026-10-20: each start and stop notice a workspace's computer sent was refused here as an unimplemented
+  // method (computer.starting_notice_failed, 16 of 16), so the workspace never read its computer as restoring.
+  test('answers each notice its computer sends it', async () => {
+    const stub = env.SEALED_ORCHESTRATOR.get(env.SEALED_ORCHESTRATOR.idFromName('sealed-computer'));
+
+    const notices = {
+      sandboxRestore: () => stub.sandboxRestore({ restoring: false, refused: undefined }),
+      sandboxStopped: () => stub.sandboxStopped(),
+      acceptSandboxLifecycleIncident: () => stub.acceptSandboxLifecycleIncident(null),
+      workspaceTitle: () => stub.workspaceTitle(),
+    };
+
+    for (const [name, call] of Object.entries(notices)) expect([name, (await answerTo(call)).includes(refusal(name))]).toEqual([name, false]);
   });
 });
 

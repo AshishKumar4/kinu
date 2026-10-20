@@ -281,6 +281,7 @@ const ORCHESTRATOR_METHODS = [
   'shareBlueprintWith',
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',
+  'sandboxRestore',
   'acceptWebhookDelivery',
   'accountSpend',
   'announceDeviceAvailable',

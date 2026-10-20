@@ -1,6 +1,6 @@
 /** One workspace on the roster, drawn from the tile its entry carries: the card reads nothing of its own. */
 import { Link } from "react-router-dom";
-import { rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type RosterEntry } from "@kinu.run/core";
+import { APP_ROUTES, rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type RosterEntry } from "@kinu.run/core";
 import { WorkspaceLogo } from "@/components/Marks";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import { Status } from "@/components/ui/Status";
@@ -32,11 +32,13 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   const mission = missionOf(overview, title);
   const age = shortAge(workspace.lastVisited);
   const pictured = overview?.slates.find((slate) => slate.picture !== null);
+  // The owner's assistant is Home.
+  const to = workspace.home === true ? APP_ROUTES.home : `/workspace/${workspace.name}`;
 
   if (variant === 'line') {
     return (
       <div className={`flex h-14 items-center gap-3 px-4 transition-colors p-card-hover ${first ? "" : "border-t p-border"}`}>
-        <Link to={`/workspace/${workspace.name}`} className="flex min-w-0 flex-1 items-center gap-3">
+        <Link to={to} className="flex min-w-0 flex-1 items-center gap-3">
           <span className="min-w-0 flex-1">
             <span className="block truncate p-row-text font-medium p-text">{title}</span>
             {mission !== null && <span className="block truncate p-meta p-text-3">{mission}</span>}
@@ -50,7 +52,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
 
   return (
     <Link
-      to={`/workspace/${workspace.name}`}
+      to={to}
       className="p-card flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated"
     >
       {/* Its primary slate's picture; without one, its logo on the same recessed ground as Explore's tiles (`Cover`). */}

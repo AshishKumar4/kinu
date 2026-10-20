@@ -25,7 +25,9 @@ const QUIET: WorkspaceOverview = { activity: 'idle', awaitsSettings: false, deci
 const FrameSchema = v.object({
   type: v.literal('workspace'),
   name: v.string(),
-  entry: v.nullable(v.object({ name: v.string(), overview: v.nullable(v.object({ activity: v.string(), decisionsWaiting: v.number() })) })),
+  entry: v.nullable(v.object({
+    name: v.string(), overview: v.nullable(v.object({ activity: v.string(), decisionsWaiting: v.number() })), home: v.optional(v.boolean()),
+  })),
   counts: v.object({ all: v.number(), needs: v.number(), working: v.number(), idle: v.number(), decisions: v.number() }),
 });
 
@@ -385,6 +387,21 @@ describe("an open page's socket", () => {
     await harness.userDO.removeWorkspace(owner, 'ledger', USER_ID);
 
     expect(frames().at(-1)).toMatchObject({ name: 'ledger', entry: null, counts: { all: 0 } });
+    harness.close();
+  });
+
+  test('hears the workspace Home opens on marked Home in the frame that first lists it, and its page says so; no other is', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    await workspace(harness, 'ledger');
+    const frames = await openPage(harness);
+
+    await harness.userDO.setConfig(owner, 'assistant', 'kinu');
+    await harness.userDO.registerWorkspace(owner, 'kinu');
+
+    expect(frames().at(-1)).toMatchObject({ name: 'kinu', entry: { name: 'kinu', home: true } });
+    const listed = (await harness.userDO.listWorkspaces(owner)).entries;
+    expect(Object.fromEntries(listed.map(({ name, home }) => [name, home ?? false]))).toEqual({ kinu: true, ledger: false });
     harness.close();
   });
 });
