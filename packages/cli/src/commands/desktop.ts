@@ -14,12 +14,16 @@ import {
   WHOLE_MACHINE_LINKED,
   describeConnectScope,
   deviceRoot,
+  DESKTOP_SHARE_PATH,
+  signalScreenShare,
 } from '../device-connect';
 import { readDaemonLogTail } from '../daemon-log';
 import { ACCENT, DIM, ERR, OK } from '../display';
 import { ask, canPrompt, confirm } from '../prompt';
 import { authCommand } from './auth';
-import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, tolerate, type KinuError } from '@kinu.run/core/obs';
+import { readFileSync } from 'node:fs';
+import * as v from 'valibot';
 import { DEVICE_CONNECT_DISCLOSURE, deviceJoinTicketUser } from '@kinu.run/core';
 
 function daemonLogTail(lines: number): string {
@@ -88,8 +92,64 @@ export function desktopCommand(action: string | undefined, opts: ConnectCommandO
       return;
     }
 
-    return yield* Effect.die(new Error('Usage: kinu desktop [connect|status|logs]'));
+    if (sub === 'share' || sub === 'unshare') return yield* shareScreen(sub === 'share');
+
+    return yield* Effect.die(new Error('Usage: kinu desktop [connect|status|logs|share|unshare]'));
   }));
+}
+
+/** A person has this long to answer the portal's prompt; the daemon gives up at 180 s. */
+const SHARE_WAIT_MS = 190_000;
+
+const DesktopShareSchema = v.object({
+  token: v.optional(v.string()), width: v.optional(v.number()), height: v.optional(v.number()),
+  sharedAt: v.optional(v.number()), failed: v.optional(v.string()), at: v.optional(v.number()),
+});
+
+/** `kinu desktop share`: the daemon asks, in the desktop portal's own prompt, and this waits for the answer there. */
+function shareScreen(on: boolean): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    if (process.platform !== 'linux') {
+      console.error(`${ERR('✗')} Sharing this PC's screen comes to ${process.platform === 'darwin' ? 'macOS' : 'this system'} later; Linux shares it today.`);
+      process.exit(1);
+    }
+
+    const at = Date.now();
+    const pid = yield* signalScreenShare(on, at);
+
+    if (pid === null) {
+      console.error(`${ERR('✗')} No Kinu daemon runs on this PC. Connect it first: ${ACCENT('kinu connect')}`);
+      process.exit(1);
+    }
+
+    if (!on) {
+      console.log(`${OK('✓')} This PC's screen is no longer shared.`);
+
+      return;
+    }
+
+    console.log(`Allow sharing in the prompt on this PC's screen${DIM(' (choose the screen, then Share)')}`);
+
+    for (const deadline = Date.now() + SHARE_WAIT_MS; Date.now() < deadline;) {
+      yield* Effect.promise(() => Bun.sleep(500));
+      const read = v.safeParse(DesktopShareSchema, tolerate(() => JSON.parse(readFileSync(DESKTOP_SHARE_PATH, 'utf8')), 'enoent'));
+      const shared = read.success ? read.output : null;
+
+      if (shared?.token !== undefined && (shared.sharedAt ?? 0) >= at) {
+        console.log(`${OK('✓')} This PC's screen is shared (${String(shared.width)}×${String(shared.height)}). Open it from the Desktop tab of a workspace that holds this PC.`);
+
+        return;
+      }
+
+      if (shared?.failed !== undefined && (shared.at ?? 0) >= at) {
+        console.error(`${ERR('✗')} ${shared.failed}`);
+        process.exit(1);
+      }
+    }
+
+    console.error(`${ERR('✗')} No answer from this PC's daemon in ${String(SHARE_WAIT_MS / 1000)} s. Its log: ${DIM(DAEMON_LOG_PATH)}`);
+    process.exit(1);
+  });
 }
 
 /** Runs a link behind its waiting dots; a failure ends the command in its own words. */

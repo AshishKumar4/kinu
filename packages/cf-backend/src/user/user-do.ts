@@ -1214,11 +1214,15 @@ export class UserDO extends Agent<Env> {
       return;
     }
 
-    // Terminal frames have no request id; the RPC correlator would silently drop them.
-    if (this.terminals.handleTerminalFrame(deviceId, data)) return;
-
-    if (this.screens.handleScreenFrame(deviceId, data)) return;
+    // A terminal's, a screen's and the screen state's frames have no request id; the RPC correlator would silently drop
+    // them.
+    if (this.unrequestedFrame(deviceId, data)) return;
     this.devices._devices.handleMessage(deviceId, data);
+  }
+
+  private unrequestedFrame(deviceId: string, data: string): boolean {
+    return this.terminals.handleTerminalFrame(deviceId, data) || this.screens.handleScreenFrame(deviceId, data)
+      || this.devices.handleDesktopFrame(deviceId, data);
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {

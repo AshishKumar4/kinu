@@ -13,7 +13,7 @@ import {
   containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
   parseEgressParams, parseEgressPrincipal, type EgressParams, type KinuEgressParams,
 } from './egress/outbound';
-import { objectNamed, APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH } from "@kinu.run/core";
+import { objectNamed, APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH, WORKER_VERSION_HEADER } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -243,9 +243,6 @@ function httpsUpgrade(url: URL, env: Env): Response | null {
 
 const HSTS = 'max-age=31536000; includeSubDomains';
 
-/** The header naming the version of this Worker that answered a request. */
-const VERSION_HEADER = 'x-kinu-version';
-
 /** What every response a published host serves carries: HSTS, and the version that answered. `includeSubDomains`
  *  deliberately covers preview hosts (the zone cert has the wildcard); no `preload`. A new version reaches the edge
  *  over seconds, so the version a deploy's smoke test reads is the one that answered it, not the one it just uploaded
@@ -259,7 +256,7 @@ function published(response: Response, url: URL, env: Env): Response {
   const headers = new Headers(response.headers);
   headers.set('strict-transport-security', HSTS);
 
-  if (env.CF_VERSION_METADATA !== undefined) headers.set(VERSION_HEADER, env.CF_VERSION_METADATA.id);
+  if (env.CF_VERSION_METADATA !== undefined) headers.set(WORKER_VERSION_HEADER, env.CF_VERSION_METADATA.id);
 
   return new Response(response.body, {
     status: response.status,

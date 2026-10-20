@@ -1504,7 +1504,7 @@ describe('desktop command reuses device-connect', () => {
     expect(seen.printed).toContain('daemon line two');
   });
 
-  test('an unknown desktop subcommand names the three it has', async () => {
+  test('an unknown desktop subcommand names the five it has', async () => {
     const home = makeHome({ cloudOrigin: 'http://localhost:1', token: 'tok' });
 
     const failure = await scriptFailure(home, `
@@ -1512,6 +1512,6 @@ describe('desktop command reuses device-connect', () => {
       await desktopCommand('reinstall-everything', {});
     `);
 
-    expect(failure).toContain('Usage: kinu desktop [connect|status|logs]');
+    expect(failure).toContain('Usage: kinu desktop [connect|status|logs|share|unshare]');
   });
 });

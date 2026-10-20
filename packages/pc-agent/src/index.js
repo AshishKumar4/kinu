@@ -113,6 +113,8 @@ const chatgpt = require('./chatgpt.js');
 
 const screen = require('./daemon/screen.js');
 
+const { createLinuxSource } = require('./daemon/linux-screen.js');
+
 const { createTerminalRecords } = require('./daemon/terminals.js');
 
 const { runToExit } = update;
@@ -1563,6 +1565,11 @@ function handle(msg, ws, ctx) {
   }
 }
 
+/** @param {unknown} error */
+function reportScreenFailure(error) {
+  log('device.screen_source_failed', error instanceof Error ? error.message : String(error));
+}
+
 /** Screen data from the hub, handed to its stream; false when the message is not screen data. */
 function screenDataReceived(data, ctx) {
   const received = screen.readScreenData(data);
@@ -2042,9 +2049,58 @@ async function main() {
   // is something a person is watching, so one whose socket is gone has
   // nobody to draw for.
   const sessions = pty.createSessions({ log });
-  // This machine's screen, served only on a stream the hub opens. No system's
-  // screen source ships yet, so every HELLO reports none (1014-t).
-  const screens = screen.createScreens({ source: null, log });
+  // This machine's screen, served only on a stream the hub opens (1014-t):
+  // Linux's comes from the desktop portal once `kinu desktop share` was
+  // allowed; macOS has none yet. Each change to what it reports goes to the
+  // hub as a DESKTOP frame on the live socket: a second HELLO would read as a
+  // new connection, and end the panes this one carries.
+  const screenSource = os.platform() === 'linux' ? createLinuxSource({ home: DEVICE_HOME, log, onChange: () => sendDesktop() }) : null;
+  const screens = screen.createScreens({ source: screenSource, log });
+  let liveSocket = null;
+
+  /** What this daemon tells the hub it is, once on each socket. */
+  function helloFrame() {
+    return {
+      type: FRAMES.hello, protocolVersion: protocol.version, features: Object.keys(protocol.methods),
+      user: USER, os: os.platform(), arch: os.arch(), hostname: os.hostname(), pid: process.pid,
+      root: cfg.root,
+      home: os.homedir(),
+      // The build this daemon IS: the stamp beside it when this process
+      // started, read once — the daemon is the build it loaded, not the
+      // file beside it now (an update that landed and whose successor
+      // died would otherwise report the new stamp from old code, and the
+      // hub would never push that version again). Absent when no stamp
+      // existed at start: the hub then pushes nothing, as it does for
+      // every daemon before this field.
+      version: RUNNING_VERSION ?? undefined,
+      updateCheck: !update.updateOptedOut(DEVICE_HOME),
+      // A build this daemon refused is not pushed again while it runs here.
+      runtime: runtimeName(),
+      // What this machine PROVED at startup, in the hub's words: the hub
+      // decides the tier and needs one term for what the machine can
+      // honour, so a machine that cannot sandbox is never silently given a
+      // raw shell. GPU nodes are enumerated per HELLO, because a driver
+      // loaded after this daemon started is still this machine's GPU.
+      sandbox: {
+        platform: os.platform(),
+        ...sandbox.helloCapability(SANDBOX_CAPABILITY),
+        gpu: sandbox.gpuNodes(),
+      },
+      agentRoot: AGENT_ROOT,
+      desktop: ctx.screens.desktop(),
+    };
+  }
+
+  /** The screen's state, as the HELLO reports it, to the socket the hub holds. */
+  function sendDesktop() {
+    if (liveSocket === null || liveSocket.readyState !== 1) return;
+
+    try {
+      liveSocket.send(JSON.stringify({ type: FRAMES.desktop, desktop: screens.desktop() }));
+    } catch (err) {
+      log('device.desktop_unsent', err instanceof Error ? err.message : String(err));
+    }
+  }
 
   // A signalled daemon terminates without running exit hooks, so the machine
   // would stay claimed by a dead pid until the next daemon reaped it. The
@@ -2053,12 +2109,22 @@ async function main() {
   // jobs it still owns, not a job it disowned into a group of its own. The
   // commands stay: a supervisor outlives this daemon by design and the next
   // one reconciles it.
+  // `kinu desktop share` and `kinu desktop unshare` write desktop.json and
+  // signal this daemon: it shares, asking in the portal's prompt, or stops.
+  process.on('SIGUSR1', () => {
+    if (screenSource === null) return log('device.screen_unavailable', 'this system has no screen source');
+    screens.closeAll();
+    screenSource.reread().catch(reportScreenFailure);
+  });
+
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     process.on(signal, () => {
       const ended = sessions.closeAll();
 
       if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
       screens.closeAll();
+      // Its helpers too, a share waiting on the portal's prompt included: none outlives the daemon.
+      screenSource?.dispose();
       exitWhenQuiet(0);
     });
   }
@@ -2116,6 +2182,10 @@ async function main() {
 
   await supervision.ready;
 
+  // Whether this machine can share its screen at all, learned once; the
+  // HELLO says so again when the answer lands.
+  if (screenSource !== null) screenSource.probe().catch(reportScreenFailure);
+
   const loop = startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
     // A dead credential is not a transient failure, so the process exits
@@ -2164,6 +2234,7 @@ async function main() {
       if (detached.length > 0) log('device.terminals_detached_with_socket', detached.join(' '));
       // A screen is drawn for whoever is watching, and the socket was the only way to them.
       ctx.screens.closeAll();
+      liveSocket = null;
     },
     dial(ticket) {
       const wsUrl = `${WS_ORIGIN}/pc/connect?user=${encodeURIComponent(USER)}&ticket=${encodeURIComponent(ticket)}`;
@@ -2185,35 +2256,8 @@ async function main() {
         // default the hub computed. `home` is what the file view opens at
         // under the full tier, sent so the hub never runs a command on this
         // machine to learn a path.
-        ws.send(JSON.stringify({
-          type: FRAMES.hello, protocolVersion: protocol.version, features: Object.keys(protocol.methods),
-          user: USER, os: os.platform(), arch: os.arch(), hostname: os.hostname(), pid: process.pid,
-          root: cfg.root,
-          home: os.homedir(),
-          // The build this daemon IS: the stamp beside it when this process
-          // started, read once — the daemon is the build it loaded, not the
-          // file beside it now (an update that landed and whose successor
-          // died would otherwise report the new stamp from old code, and the
-          // hub would never push that version again). Absent when no stamp
-          // existed at start: the hub then pushes nothing, as it does for
-          // every daemon before this field.
-          version: RUNNING_VERSION ?? undefined,
-          updateCheck: !update.updateOptedOut(DEVICE_HOME),
-          // A build this daemon refused is not pushed again while it runs here.
-          runtime: runtimeName(),
-          // What this machine PROVED at startup, in the hub's words: the hub
-          // decides the tier and needs one term for what the machine can
-          // honour, so a machine that cannot sandbox is never silently given a
-          // raw shell. GPU nodes are enumerated per HELLO, because a driver
-          // loaded after this daemon started is still this machine's GPU.
-          sandbox: {
-            platform: os.platform(),
-            ...sandbox.helloCapability(SANDBOX_CAPABILITY),
-            gpu: sandbox.gpuNodes(),
-          },
-          agentRoot: AGENT_ROOT,
-          desktop: ctx.screens.desktop(),
-        }));
+        liveSocket = ws;
+        ws.send(JSON.stringify(helloFrame()));
       });
       ws.addEventListener('message', (ev) => {
         // A screen's bytes are the one binary frame the hub sends; every other frame is JSON text.
