@@ -1,6 +1,6 @@
 /**
  * Prompt-section templating: prose is data, control flow stays in TypeScript.
- * A section defined as one template string is addressable by GEPA and
+ * A section defined as one template string is addressable by a dream's edit and
  * replaceable at runtime. `{{#if flag}}` declares a typed boolean slot like
  * `{{slot}}` declares a string; there is no `{{#each}}` (iteration needs an
  * expression language). A missing slot throws: a silently empty section is

@@ -14,7 +14,7 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
-const { AwaitedList, awaitExit, runToExit } = require('@kinu.run/test-utils');
+const { AwaitedList, awaitExit, runToExit, scratchDir } = require('@kinu.run/test-utils');
 
 const { shellQuote } = require('@kinu.run/core');
 
@@ -66,6 +66,10 @@ function harness(options = {}) {
 }
 
 
+/** The shells' home: a scratch one, never the developer's. An interactive shell reads its rc files from HOME and
+ *  saves the commands typed into it there, so a real HOME took every run's commands into ~/.bash_history. */
+const SHELL_HOME = scratchDir('pty-home');
+
 /** A shell on a terminal, as the daemon starts one for a device with no
  *  sandbox: the plan's own argv, and the terminal named in the environment. */
 function shellArgv() {
@@ -75,7 +79,7 @@ function shellArgv() {
 function shellEnv() {
   return {
     PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    HOME: SHELL_HOME,
     TERM: TERMINAL_NAME,
   };
 }
@@ -83,8 +87,8 @@ function shellEnv() {
 /**
  * Wait until the shell is reading commands.
  *
- * The prompt cannot be the signal: this is the developer's own machine and
- * their `.bashrc` owns `PS1`. So the shell is asked to COMPUTE something — the
+ * The prompt cannot be the signal: the machine's own bash.bashrc owns `PS1`.
+ * So the shell is asked to COMPUTE something — the
  * echo of the typed line contains the sum, and the shell's answer contains
  * only the total, which is a string the request itself never carries.
  */
@@ -168,9 +172,14 @@ describe('a device terminal is a real one', () => {
     h.sessions.write('pane-size', Buffer.from('stty size\r').toString('base64'));
     await h.until(() => /\b24 80\b/.test(h.output()));
 
+    // Resized while a program holds the terminal, not the shell's line editor: readline writes back the size it read
+    // each time it prepares a prompt (rltty.c `set_winsize`, a TIOCGWINSZ then a TIOCSWINSZ), so a resize landing
+    // between the two is put back. The computed marker says `read` holds the terminal; the size is read after.
+    h.sessions.write('pane-size', Buffer.from('echo HELD_$((6 * 7)); read _; stty size\r').toString('base64'));
+    await h.until(() => /HELD_42\b/.test(h.output()));
     const resized = h.sessions.resize('pane-size', 133, 44);
     expect(resized).toEqual({ cols: 133, rows: 44 });
-    h.sessions.write('pane-size', Buffer.from('stty size\r').toString('base64'));
+    h.sessions.write('pane-size', Buffer.from('\r').toString('base64'));
     await h.until(() => /\b44 133\b/.test(h.output()));
   });
 

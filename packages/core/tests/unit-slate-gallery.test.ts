@@ -1,9 +1,10 @@
-// The Gallery's index: listings only a workspace's share sync writes, found by words and category, sorted three ways,
+// Explore's index: app listings only a workspace's share sync writes, found by words and category, sorted three ways,
 // starred once per person, and gone with their stars when their share goes off. The listings are a cache the shares
 // refill: a row lost to a repair comes back at the share's next sync, its stars waiting for it.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { GalleryIndex, initGalleryTables, KINU_LISTINGS, type KinuListing } from '../src/slates/gallery';
+import type { GalleryCategory, GallerySort } from '../src/slates/gallery-api';
 import type { GalleryCard, GalleryListingSync } from '../src/slates/share-modes';
 import { makeExecRaw, makeSqlExec } from './helpers';
 
@@ -34,6 +35,13 @@ function listed(slate: string, card: Partial<GalleryCard> = {}, share = `share-$
   };
 }
 
+/** Explore's apps alone, as the slate page's More like it and the apps filter ask for them. */
+function apps(index: GalleryIndex, query: { q: string; sort: GallerySort; category: GalleryCategory | null; page: number }, viewer: string | null) {
+  const page = index.explore({ ...query, kind: 'app' }, viewer, NOW);
+
+  return { listings: page.items.flatMap((item) => (item.kind === 'app' ? [item.app] : [])), next: page.next };
+}
+
 function unlisted(slate: string, share = `share-${slate}`): GalleryListingSync {
   return { share, workspace: 'sam', slate, handle: `handle-${slate}`, listed: false };
 }
@@ -44,9 +52,9 @@ test('a listing is found by its words and its category, and opens its share', ()
   index.sync(listed('board'), NOW);
   index.sync(listed('budget', { category: 'money', line: 'Monthly spend' }), NOW + 1);
 
-  expect(index.page({ q: 'spend', sort: 'new', category: null, page: 0 }, null, NOW).listings.map((each) => each.slate)).toEqual(['budget']);
-  expect(index.page({ q: '', sort: 'new', category: 'work', page: 0 }, null, NOW).listings.map((each) => each.slate)).toEqual(['board']);
-  expect(index.page({ q: '100%', sort: 'new', category: null, page: 0 }, null, NOW).listings).toEqual([]);
+  expect(apps(index, { q: 'spend', sort: 'new', category: null, page: 0 }, null).listings.map((each) => each.slate)).toEqual(['budget']);
+  expect(apps(index, { q: '', sort: 'new', category: 'work', page: 0 }, null).listings.map((each) => each.slate)).toEqual(['board']);
+  expect(apps(index, { q: '100%', sort: 'new', category: null, page: 0 }, null).listings).toEqual([]);
   expect(index.slate('sam', 'board', null, NOW)?.listing).toMatchObject({ share: 'share-board', url: 'https://board.slates.test/', starred: false });
 });
 
@@ -59,8 +67,8 @@ test('stars count once per person, sort by all time or by this week, and the wee
   index.star({ email: 'c@x.dev', workspace: 'sam', slate: 'new', on: true }, NOW - DAY);
   index.star({ email: 'c@x.dev', workspace: 'sam', slate: 'new', on: true }, NOW - DAY);
 
-  const stars = index.page({ q: '', sort: 'stars', category: null, page: 0 }, 'c@x.dev', NOW).listings;
-  const trending = index.page({ q: '', sort: 'trending', category: null, page: 0 }, null, NOW).listings;
+  const stars = apps(index, { q: '', sort: 'stars', category: null, page: 0 }, 'c@x.dev').listings;
+  const trending = apps(index, { q: '', sort: 'trending', category: null, page: 0 }, null).listings;
 
   expect(stars.map((each) => [each.slate, each.stars, each.starred])).toEqual([['old', 2, false], ['new', 1, true], ['quiet', 0, false]]);
   expect(trending[0]).toMatchObject({ slate: 'new', featured: true });
@@ -141,8 +149,8 @@ test('a page holds 24 listings and names the next one', () => {
   const { index } = newIndex();
 
   for (let n = 0; n < 30; n++) index.sync(listed(`s${String(n).padStart(2, '0')}`), NOW + n);
-  const first = index.page({ q: '', sort: 'new', category: null, page: 0 }, null, NOW);
-  const second = index.page({ q: '', sort: 'new', category: null, page: 1 }, null, NOW);
+  const first = apps(index, { q: '', sort: 'new', category: null, page: 0 }, null);
+  const second = apps(index, { q: '', sort: 'new', category: null, page: 1 }, null);
 
   expect([first.listings.length, first.next, second.listings.length, second.next]).toEqual([24, 1, 6, null]);
   expect(first.listings[0]?.slate).toBe('s29');
@@ -181,9 +189,9 @@ test("Kinu's blueprints list first beside apps, count each installer once, and l
   expect(index.workspaceCard(KINU_LISTINGS, 'personal-assistant', 'a@x.dev', NOW)).toMatchObject({ stars: 1, starred: true });
   expect(index.workspaceCard(KINU_LISTINGS, 'personal-assistant', 'b@x.dev', NOW)).toMatchObject({ stars: 1, starred: false });
 
-  // Only one kind, by words; the Gallery's own page is apps alone.
+  // Only one kind, by words; the apps filter is apps alone.
   expect(index.explore({ q: 'release', kind: 'workspace', sort: 'new', category: null, page: 0 }, null, NOW).items.map((item) => item.kind)).toEqual(['workspace']);
-  expect(index.page({ q: '', sort: 'new', category: null, page: 0 }, null, NOW).listings.map((each) => each.slate)).toEqual(['board']);
+  expect(apps(index, { q: '', sort: 'new', category: null, page: 0 }, null).listings.map((each) => each.slate)).toEqual(['board']);
 
   // The next build keeps one: the other leaves, its listing time and installs kept on the one that stays.
   index.syncKinu([{ ...ASSISTANT, line: 'Your mail, GitHub and Google, briefed daily.' }], NOW);

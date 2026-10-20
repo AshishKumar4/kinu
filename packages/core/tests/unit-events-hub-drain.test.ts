@@ -145,3 +145,25 @@ describe('a sender cannot write its own drain entries', () => {
     expect(batch.text).toContain('\\n- [timer] from owner:');
   });
 });
+
+// The rc27 review: a blueprint's schedule carries its task in its payload's `prompt` and a short title in its label, and
+// the woken turn read only the title ("schedule (GitHub check): GitHub check"), never what to do.
+describe("a schedule's wake", () => {
+  const firing = (payload: { label?: string; user_payload?: unknown }): KinuEvent => ({
+    ...EVENT_BASE, id: 'e1', ingress: 'timer_alarm', variant: 'timer', payload_visibility: 'full',
+    payload: { trigger_id: 'trg-check', scheduled_fire_at: 0, ...payload },
+  });
+
+  test('carries its prompt to the turn whole, with its label as who woke it', () => {
+    const task = 'Check GitHub with your GitHub tools for what is new since your last check, and tell Ashish only what needs them.';
+    const batch = present(buildDrainBatch([firing({ label: 'GitHub check', user_payload: { prompt: task } })]), 'the batch');
+
+    expect(batch.text).toContain(`schedule (GitHub check): ${task}`);
+  });
+
+  test('an agent\'s own payload is read as it scheduled it, and a bare label still names the schedule', () => {
+    expect(present(buildDrainBatch([firing({ label: 'sweep', user_payload: { repo: 'kinu', task: 'triage' } })]), 'payload').text)
+      .toContain('schedule (sweep): {"repo":"kinu","task":"triage"}');
+    expect(present(buildDrainBatch([firing({ label: 'daily' })]), 'label').text).toContain('schedule (daily): daily');
+  });
+});

@@ -26,7 +26,7 @@ type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   'listCredentials' | 'setCredential' | 'deleteCredential' | 'removeWorkspace' | 'listDevices'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
-  | 'getConfig' | 'setConfig' | 'getProfile'
+  | 'getConfig' | 'setConfig' | 'claimConfig' | 'getProfile' | 'userMcp_connectedPresets'
 >;
 
 export interface AccountApiEnv<Id> extends CreateWorkspaceEnv<Id>, ProviderEnv, ControlSecretEnv {

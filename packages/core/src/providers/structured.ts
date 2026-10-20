@@ -16,11 +16,6 @@ export function markdownFencedBlocks(text: string): MarkdownFencedBlock[] {
   }));
 }
 
-/** Return the first fenced payload, or the trimmed response when there is no fence. */
-export function stripMarkdownFences(raw: string): string {
-  return markdownFencedBlocks(raw)[0]?.code ?? raw.trim();
-}
-
 export function jsonObjectOnlyInstruction(): string {
   return 'Return a single minified JSON object, with no markdown fences or prose.';
 }

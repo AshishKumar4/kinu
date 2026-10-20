@@ -135,12 +135,13 @@ export function bundledArtifact(artifactId: string): string | null {
 
 /** What an artifact id names, as the owner reads it. */
 export function artifactLabel(artifactId: string): string {
-  const tool = /^tool:([a-z_]+)\.(description|schema)$/u.exec(artifactId);
+  const parsed = parseArtifactId(artifactId);
 
-  if (tool?.[1] !== undefined) return `the ${tool[1]} tool's ${tool[2] === 'schema' ? 'field descriptions' : 'description'}`;
-  const section = /^section:(.+)$/u.exec(artifactId)?.[1];
+  if (parsed === null) return artifactId;
 
-  return section === undefined ? artifactId : `the ${section} prompt section`;
+  return parsed.kind === 'section'
+    ? `the ${parsed.id} prompt section`
+    : `the ${parsed.id} tool's ${parsed.part === 'schema' ? 'field descriptions' : 'description'}`;
 }
 
 /** One artifact's promoted version. */
@@ -279,8 +280,6 @@ export function artifactEditRefusal(sql: SqlExecutor, actor: ActorHandle, input:
   readonly artifactId: string;
   readonly before: string;
   readonly after: string;
-  /** False inside a search, where a refused mutation is no event; the edit that ships is checked again with it. */
-  readonly record: boolean;
 }): string | null {
   const parsed = parseArtifactId(input.artifactId);
 
@@ -298,7 +297,7 @@ export function artifactEditRefusal(sql: SqlExecutor, actor: ActorHandle, input:
 
   if (misevolution.ok) return null;
 
-  if (input.record) recordMisevolutionVeto(sql, actor, { surface: 'scaffold', violation: misevolution, detail: input.artifactId });
+  recordMisevolutionVeto(sql, actor, { surface: 'scaffold', violation: misevolution, detail: input.artifactId });
 
   return `misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
 }

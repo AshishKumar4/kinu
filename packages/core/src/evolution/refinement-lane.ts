@@ -390,7 +390,7 @@ function review(
       if (latest.verdicts === null) {
         const judged = yield* attempt({ doing: 'asking the dream\'s reviewer', otherwise: 'unavailable' },
           () => askHelper(deps, {
-            lane: dreamLane(request.id, 'review', round), role: 'dream_reviewer', roleLabel: 'dream reviewer',
+            lane: dreamLane(request.id, 'review', round), role: 'dream-reviewer', roleLabel: 'dream reviewer',
             brief: async () => renderReviewerBrief(deps, request, { proposal, evidence: latest.evidence, reviewed }),
           }, parseVerdicts));
 

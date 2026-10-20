@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-10-19",
-  "files": 3491,
-  "functions": 91770,
+  "measuredAt": "2026-10-20",
+  "files": 3591,
+  "functions": 94843,
   "ceiling": 87,
-  "line": 26,
+  "line": 25,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -84,10 +84,6 @@
     {
       "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
       "complexity": 32
-    },
-    {
-      "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
-      "complexity": 29
     },
     {
       "key": "scripts/coverage-lcov.ts#parseLcov",
@@ -211,6 +207,10 @@
     },
     {
       "key": "packages/core/src/chat.ts#ProviderCall.consume",
+      "complexity": 27
+    },
+    {
+      "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
       "complexity": 27
     },
     {
@@ -368,6 +368,150 @@
     {
       "key": "tools/oxlint/anti-slop/rules/no-elapsed-work-deadline.ts#hasNoTimerAlternative",
       "complexity": 26
+    },
+    {
+      "key": "packages/cf-backend/src/components/Composer.tsx#Notice",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#assign",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cf-backend/src/pages/MailPage.tsx#MailInbox",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#OpenWorkspace",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#30",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#33",
+      "complexity": 25
+    },
+    {
+      "key": "packages/cli/src/tui/clipboard-paste.ts#ClipboardPaste.receive",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/evolution/refinement-lane.ts#plan>gen",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/orchestrator/session-stream.ts#SessionStream.sealStep",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/orchestrator/turn-recovery.ts#decideInterruptedTurn>gen",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/providers/middleware/retry.ts#retrying>gen",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/read-models/timeline.ts#runEventToSpan",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/src/web/hero-art.ts#SearchTree.stepLayer",
+      "complexity": 25
+    },
+    {
+      "key": "packages/core/tests/unit-deploy-flow.test.ts#FakeCloudflare.answer",
+      "complexity": 25
+    },
+    {
+      "key": "packages/devbox/src/supervised-processes.ts#SupervisedProcesses.start>gen",
+      "complexity": 25
+    },
+    {
+      "key": "packages/devbox/tests/snapshot-registry.test.ts#platform>fetcher",
+      "complexity": 25
+    },
+    {
+      "key": "packages/devbox/tests/support/devbox-harness.ts#FakeSandbox.nativeCommand",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/devbox-container-tier.ts#main",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/durability-canary-telemetry.ts#activationDisruptions",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/ladder.ts#runPending",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/reset.ts#tablesCommand",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/syntax.ts#importUses>bindVariable",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/test-census.ts#joinedSegments",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/wired.ts#measureFields>walk",
+      "complexity": 25
+    },
+    {
+      "key": "tests/first-run/background-wake.first-run.ts#describe>liveTest>run",
+      "complexity": 25
+    },
+    {
+      "key": "tests/first-run/command-refusal.first-run.ts#describe>fn>run",
+      "complexity": 25
+    },
+    {
+      "key": "tests/first-run/machine-consent.first-run.ts#describe>liveTest>run",
+      "complexity": 25
+    },
+    {
+      "key": "tests/first-run/multi-account.first-run.ts#describe>liveTest>run",
+      "complexity": 25
+    },
+    {
+      "key": "tests/first-run/users-share.first-run.ts#enteredAsNamed",
+      "complexity": 25
+    },
+    {
+      "key": "tools/oxlint/anti-slop/rules/no-ambient-bun-in-tests.ts#importedSpawner",
+      "complexity": 25
+    },
+    {
+      "key": "tools/oxlint/anti-slop/shared/dictionary-types.ts#dictionaryValueTypes",
+      "complexity": 25
+    },
+    {
+      "key": "tools/oxlint/anti-slop/shared/dictionary-types.ts#unsafeDirectValue",
+      "complexity": 25
     }
   ]
 }

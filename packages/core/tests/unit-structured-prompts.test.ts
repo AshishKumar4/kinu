@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  extractJsonArray, extractJsonObject, stripMarkdownFences,
+  extractJsonArray, extractJsonObject,
 } from '../src/index';
 
 describe('structured prompt helpers', () => {
@@ -25,18 +25,5 @@ describe('structured prompt helpers', () => {
   test('throws clear errors for missing JSON', () => {
     expect(() => extractJsonObject('no json')).toThrow(SyntaxError);
     expect(() => extractJsonArray('no json')).toThrow(SyntaxError);
-  });
-});
-
-describe('stripMarkdownFences', () => {
-  test('unwraps the first fenced block regardless of its tag or surrounding prose', () => {
-    expect(stripMarkdownFences('before\n```typescript\nconst value = 1;\n```\nafter'))
-      .toBe('const value = 1;');
-    expect(stripMarkdownFences('```python\nprint(1)\n```')).toBe('print(1)');
-    expect(stripMarkdownFences('```\nplain\n```')).toBe('plain');
-  });
-
-  test('leaves an unfenced response intact', () => {
-    expect(stripMarkdownFences('plain text')).toBe('plain text');
   });
 });

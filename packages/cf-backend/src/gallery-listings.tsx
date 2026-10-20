@@ -1,8 +1,8 @@
 /**
- * Gallery frames (`gallery-list`, `gallery-slate&slate=<slate>`; `&signed=out` for a visitor, `&fork=1` back from
- * signing in to fork) on a fixed set of listings: `/api/gallery` answers as the Gallery's contract says (room-api.ts),
- * sorted, filtered and searched here, six to a page; a star and a report are taken. Each listing but Team lunch poll has
- * a picture; a test or a shot answers its reads.
+ * A listed slate's page (`gallery-slate&slate=<slate>`; `&signed=out` for a visitor, `&fork=1` back from signing in to
+ * fork) on a fixed set of listings: `/api/gallery` answers as the Gallery's contract says (room-api.ts), Explore's apps
+ * of its category are its More like it, and a star and a report are taken. Each listing but Team lunch poll has a
+ * picture; a test or a shot answers its reads.
  */
 import { lazy, Suspense, type ReactNode } from "react";
 import { Route, Routes } from "react-router-dom";
@@ -10,8 +10,6 @@ import * as v from "valibot";
 import { Loader } from "@cloudflare/kumo";
 import { APP_ROUTES, type GalleryListing, type GallerySlate } from "@kinu.run/core";
 import GalleryShell from "@/components/gallery/GalleryShell";
-
-const GalleryPage = lazy(() => import("@/pages/GalleryPage"));
 
 const GallerySlatePage = lazy(() => import("@/pages/GallerySlatePage"));
 
@@ -69,36 +67,17 @@ const PAGES = {
 
 const pageOf = (slate: string): Omit<GallerySlate, "listing"> => (slate === "pr-board" || slate === "digest" ? PAGES[slate] : {});
 
-const PAGE_SIZE = 6;
-
-const ORDER = {
-  trending: () => 0,
-  new: (a: GalleryListing, b: GalleryListing) => b.listedAt - a.listedAt,
-  stars: (a: GalleryListing, b: GalleryListing) => b.stars - a.stars,
-} as const;
-
-const SortSchema = v.picklist(["trending", "new", "stars"] as const);
-
 const StarSchema = v.object({ workspace: v.string(), slate: v.string(), on: v.boolean() });
 
-function page(listings: readonly GalleryListing[], search: URLSearchParams): Response {
-  const q = (search.get("q") ?? "").toLowerCase();
+/** Explore's apps of `category`, as the slate page's More like it asks for them. */
+function apps(listings: readonly GalleryListing[], search: URLSearchParams): Response {
   const category = search.get("category");
-  const sort = v.parse(SortSchema, search.get("sort") ?? "trending");
-  const at = Number(search.get("page") ?? "0");
 
-  const found = listings
-    .filter((each) => category === null || each.category === category)
-    .filter((each) => q === "" || [each.title, each.line, each.owner.name].some((text) => text.toLowerCase().includes(q)))
-    .sort(ORDER[sort]);
-
-  const listed = found.slice(at * PAGE_SIZE, (at + 1) * PAGE_SIZE);
-
-  return Response.json({ listings: listed, next: found.length > (at + 1) * PAGE_SIZE ? at + 1 : null });
+  return Response.json({ items: listings.filter((each) => category === null || each.category === category).map((app) => ({ kind: "app", app, needs: [] })), next: null });
 }
 
 export function installGalleryFixture(frame: string): void {
-  if (frame !== "gallery-list" && frame !== "gallery-slate") return;
+  if (frame !== "gallery-slate") return;
 
   const next = window.fetch.bind(window);
   // Stars as this person leaves them.
@@ -121,13 +100,13 @@ export function installGalleryFixture(frame: string): void {
 
     const found = listings.find((each) => each.workspace === workspace && each.slate === slate);
 
+    if (url.pathname === "/api/explore") return apps(listings, url.searchParams);
+
     if (api !== "api" || area !== "gallery") return next(input, init);
 
     asked.push({ path: url.pathname, search: url.search, body: request.method === "POST" ? await request.clone().text() : null });
     document.documentElement.setAttribute("data-gallery-asked", JSON.stringify(asked));
     document.documentElement.setAttribute("data-gallery-asked-paths", asked.map((each) => each.path).join("\n"));
-
-    if (url.pathname === "/api/gallery") return page(listings, url.searchParams);
 
     if (url.pathname === "/api/gallery/star" && request.method === "POST") {
       const star = v.parse(StarSchema, await request.json());
@@ -149,13 +128,11 @@ export function installGalleryFixture(frame: string): void {
   }, { preconnect: next.preconnect });
 }
 
-/** The page a gallery frame opens on: the Gallery, or `&slate=`'s own page. */
-export function galleryEntry(frame: string, search: URLSearchParams): string {
+/** The page the frame opens on: `&slate=`'s own, the first listing's by default. */
+export function galleryEntry(search: URLSearchParams): string {
   const asked = LISTINGS.find((each) => each.slate === search.get("slate")) ?? LISTINGS[0];
 
-  if (frame !== "gallery-slate" || asked === undefined) return APP_ROUTES.gallery;
-
-  return `/gallery/${asked.workspace}/${asked.slate}${search.has("fork") ? "?fork=1" : ""}`;
+  return asked === undefined ? "/" : `/gallery/${asked.workspace}/${asked.slate}${search.has("fork") ? "?fork=1" : ""}`;
 }
 
 const loading = (shown: ReactNode) => <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{shown}</Suspense>;
@@ -164,7 +141,6 @@ export function GalleryAppFrame() {
   return (
     <Routes>
       <Route element={<GalleryShell />}>
-        <Route path={APP_ROUTES.gallery} element={loading(<GalleryPage />)} />
         <Route path={APP_ROUTES.gallerySlate} element={loading(<GallerySlatePage />)} />
       </Route>
     </Routes>

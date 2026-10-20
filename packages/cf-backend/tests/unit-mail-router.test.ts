@@ -46,7 +46,7 @@ function delivery(woke: MailDelivery['woke'], extra: Partial<MailDelivery> = {})
   return {
     box: 'scout.api-worker', messageId: 'm-1', threadId: 't-1', headerId: 'hooks-v2-500@northwind.io', references: null, attachments: [], duplicate: false, verified: woke !== null, from: { name: 'Dana Whitfield', address: 'dana@northwind.io' },
     subject: 'Webhook deliveries to /hooks/v2 failing with 500', woke, instruction: woke === 'owner' ? 'Ship the fix.' : null,
-    wake: woke === null ? null : { workspace: 'api-worker', actorId: 'actor-scout', main: false }, ...extra,
+    wake: woke === null ? null : { workspace: 'api-worker', actorId: 'actor-scout', main: false }, triage: null, ...extra,
   };
 }
 
@@ -57,6 +57,8 @@ class Deps implements MailRouterDeps {
   readonly delivered: { userId: string; recipient: MailRecipient }[] = [];
 
   readonly woken: MailDelivery[] = [];
+
+  readonly triaging: string[] = [];
 
   constructor(private readonly answer: MailDelivery | null) {}
 
@@ -76,6 +78,12 @@ class Deps implements MailRouterDeps {
 
   wake(arrived: MailDelivery): Promise<void> {
     this.woken.push(arrived);
+
+    return Promise.resolve();
+  }
+
+  triage(reader: { workspace: string }): Promise<void> {
+    this.triaging.push(reader.workspace);
 
     return Promise.resolve();
   }
@@ -145,5 +153,24 @@ describe('a filed message wakes only as the Mailbox decided, and never for a mac
     await routeInboundMail(inbound('ashish@kinu.run', { 'List-Id': '<kinu.kinu-run.github.com>' }), machine);
     expect([quiet.woken, again.woken, machine.woken]).toEqual([[], [], []]);
     expect(machine.delivered).toHaveLength(2);
+  });
+});
+
+describe('new mail in the person\'s box goes to their assistant to triage', () => {
+  test('the assistant the Mailbox names is told, whether or not anything wakes, auto-replies too', async () => {
+    const triage = { workspace: 'personal-assistant-7f3a', actorId: 'actor-kinu' };
+    const quiet = deps(delivery(null, { box: '', triage }));
+
+    await routeInboundMail(inbound('ashish@kinu.run'), quiet);
+    await routeInboundMail(inbound('ashish@kinu.run', { 'Auto-Submitted': 'auto-replied' }), quiet);
+    expect(quiet.triaging).toEqual(['personal-assistant-7f3a', 'personal-assistant-7f3a']);
+    expect(quiet.woken).toEqual([]);
+  });
+
+  test('mail the Mailbox gives no one to triage tells no one', async () => {
+    const agent = deps(delivery('input'));
+
+    await routeInboundMail(inbound('scout.api-worker.ashish@kinu.run'), agent);
+    expect(agent.triaging).toEqual([]);
   });
 });

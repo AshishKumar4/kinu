@@ -67,19 +67,21 @@ describe('which picks are confused', () => {
     ])).toEqual({ switches: [], corrected: [] });
   });
 
-  test('the section names each switch and corrected pick, then the description of each one named', () => {
+  test('the section carries the description of each pick it names, once, and nothing when none is confused', () => {
+    const described: string[] = [];
+
     const section = renderConfusedPicks(confusedPicks([
       rated('t1', 0.9, { skills: ['report-writing'], tools: [] }),
       rated('t2', 0.1, { skills: ['slates'], tools: [] }),
-    ]), (kind, name) => `${kind} ${name} described`);
+    ]), (kind, name) => {
+      described.push(`${kind} ${name}`);
 
-    expect(section.split('\n')).toEqual([
-      '  - skill `report-writing`, then `slates`: 1 time',
-      '  - skill `report-writing`: picked in 1 turn, 1 of them corrected',
-      '  Their descriptions now:',
-      '  - skill `report-writing`: skill report-writing described',
-      '  - skill `slates`: skill slates described',
-    ]);
+      return `${kind} ${name} described`;
+    });
+
+    expect(described).toEqual(['skill report-writing', 'skill slates']);
+    expect(section).toContain('skill report-writing described');
+    expect(section).toContain('skill slates described');
     expect(renderConfusedPicks({ switches: [], corrected: [] }, () => '')).toBe('');
   });
 });

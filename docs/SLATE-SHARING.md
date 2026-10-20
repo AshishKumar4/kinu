@@ -32,15 +32,15 @@ theirs shares that one process.
 
 - The workspace capability token: the workspace object identity at the owner
   user object. The matrix in `packages/core/src/safety/workspace-capability.ts`
-  states what it reaches. `mcp.tools`, `credentials.model` and
-  `egress_secrets.inject` sit at the `workspace` floor.
+  states what it reaches. `mcp.tools` and `credentials.model` sit at the
+  `workspace` floor; `secrets.inject` is `owner_only`.
 - Provider credentials in `user_credentials`, MCP servers in `user_mcp_servers`
   with their auth headers (`packages/core/src/state/user-schema.ts`).
-- The egress vault: host-bound secrets that enter a request only at the
-  container outbound hop as a placeholder substitution
-  (`packages/core/src/safety/egress-vault.ts`). A resident slate's own `fetch`
-  is judged by destination and gets nothing injected
-  (`packages/cf-backend/src/codemode-egress.ts`).
+- The egress vault: host-bound secrets that enter a request as a placeholder
+  substitution (`packages/core/src/safety/egress-vault.ts`) at the one door
+  every program's request leaves by, the container's, a Nimbus workspace's, an
+  eval program's and a resident slate's alike
+  (`packages/cf-backend/src/egress/send-out.ts`).
 - The executors the surface names: `workspace`, `computer`, and `device`, which
   is the owner's own machine.
 

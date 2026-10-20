@@ -7,7 +7,7 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
-  APP_ROUTES, galleryPath, GalleryPageSchema, GallerySlateSchema, gallerySlatePath, LIVE_SHARE_LISTING_PATH, LiveShareCreatedSchema, OwnedLiveShareSchema,
+  APP_ROUTES, explorePath, ExplorePageSchema, GallerySlateSchema, gallerySlatePath, LIVE_SHARE_LISTING_PATH, LiveShareCreatedSchema, OwnedLiveShareSchema,
   type GalleryListing, type OwnedLiveShare, type RoomService,
 } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
@@ -41,12 +41,13 @@ const Exec = v.object({ stdout: v.optional(v.string()), exitCode: v.optional(v.n
 
 const SLATE = 'gallerylisted';
 
-/** The public index's listing whose line is `line`, if it holds one: the owner's listing and revoke each answer once the
- *  Gallery has been told, so one read says. */
+/** Explore's app whose line is `line`, if the public index holds one: the owner's listing and revoke each answer once
+ *  the index has been told, so one read says. */
 async function indexed(origin: string, line: string): Promise<GalleryListing | null> {
-  const page = await fetch(`${origin}${galleryPath({ q: line, sort: 'new', category: null, page: 0 })}`);
+  const page = await fetch(`${origin}${explorePath({ q: line, kind: 'app', sort: 'new', category: null, page: 0 })}`);
+  const apps = page.ok ? v.parse(ExplorePageSchema, await page.json()).items.flatMap((item) => (item.kind === 'app' ? [item.app] : [])) : [];
 
-  return page.ok ? v.parse(GalleryPageSchema, await page.json()).listings.find((each) => each.line === line) ?? null : null;
+  return apps.find((each) => each.line === line) ?? null;
 }
 
 /** Its owner lists `share` in the Gallery with `line`, as their share sheet does: the share as it answers after. */

@@ -10,7 +10,7 @@ import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
   censusOf, durableStamps, readStamp, repairSchema, requireOps, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   kinuListings,
-  type ExploreKind, type ExplorePage, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate, type GallerySort,
+  type ExploreKind, type ExplorePage, type GalleryCategory, type GalleryListing, type GallerySlate, type GallerySort,
   type OpsCaller, type WorkspaceCard, type Page, type PageRequest, type Repair, type TablesAnswer,
 } from '@kinu.run/core';
 import type { FeedbackRecord } from '@kinu.run/core';
@@ -43,14 +43,10 @@ export type GalleryMark =
   | { readonly kind: 'star'; readonly workspace: string; readonly slate: string; readonly on: boolean; readonly listing?: ExploreKind }
   | { readonly kind: 'report'; readonly workspace: string; readonly slate: string; readonly reason: string };
 
-/** One page of Explore, as its route asks it: a page of the Gallery, of either kind. */
-export interface ExploreQuery extends GalleryQuery {
-  readonly kind: ExploreKind | null;
-}
-
-/** One page of the Gallery, as its routes ask it. */
-export interface GalleryQuery {
+/** One page of Explore, as its route asks it: of one kind when given. */
+export interface ExploreQuery {
   readonly q: string;
+  readonly kind: ExploreKind | null;
   readonly sort: GallerySort;
   readonly category: GalleryCategory | null;
   readonly page: number;
@@ -149,12 +145,6 @@ export class ControlPlaneDO extends DurableObject<Env> {
   async gallerySync(caller: PresentedCaller, sync: GalleryListingSync): Promise<void> {
     await this.gate(caller, 'gallery.list');
     this.gallery.sync(v.parse(GalleryListingSyncSchema, sync), Date.now());
-  }
-
-  async galleryPage(caller: PresentedCaller, query: GalleryQuery, viewer: string | null): Promise<GalleryPage> {
-    await this.gate(caller, 'gallery.read');
-
-    return this.gallery.page(query, viewer, Date.now());
   }
 
   async gallerySlate(caller: PresentedCaller, workspace: string, slate: string, viewer: string | null): Promise<GallerySlate | null> {

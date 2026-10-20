@@ -15,6 +15,7 @@ import {
 } from '../providers/types';
 import { formatApprovalGrant, parseApprovalGrant, type ApprovalGrant } from '../safety/approval-gate';
 import { OwnerWaitWatchSchema, type OwnerWaitWatch } from '../types/owner-waits';
+import { BlueprintScheduleSchema, type BlueprintSchedule } from '../types/blueprint-schedule';
 import {
   DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity, type AdvisorSeverity,
 } from '../types/advisor';
@@ -45,14 +46,13 @@ export const AGENT_CONFIG_KEYS = {
   /** Comma-separated `<rule>@<executor>` grants; read live at exec time like the mode. */
   shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
-  /** 'true' runs waiting edits as live trials on the main agent; off by default (docs/EVOLUTION-REDESIGN.md §5). */
   /** 'true' once an agent hosted in its own isolate has submitted a plan there: Work asks only those isolates (D9). */
   holdsPlans: 'holds_plans',
   /** 'true' once the workspace's own agent ran a turn in its isolate: only then does that isolate hold runs or spend (D9). */
   holdsTurns: 'holds_turns',
   /** 'true' once an agent hosted in its own isolate has been offered `ask_owner` there: the stack asks only those isolates. */
   holdsQuestions: 'holds_questions',
-  /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons, proposals or trials. On by default. */
+  /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons or dreams. On by default. */
   learning: 'learning',
   /** 'false' withholds crafted tools: none is offered, made, or extracted from a turn. On by default. */
   crafting: 'crafting',
@@ -78,6 +78,8 @@ export const AGENT_CONFIG_KEYS = {
   layout: 'layout',
   /** The workspace blueprint the workspace was installed from, by id; unset for one made any other way. */
   blueprint: 'blueprint',
+  /** Its schedules that watch a connection, JSON `BlueprintSchedule[]`: armed while the owner holds the connection. */
+  blueprintWatchers: 'blueprint_watchers',
   /** A one-shot wait this agent armed on its owner (`agent.wakeWhenOwnerDone`), JSON `OwnerWaitWatch`: met, it wakes the
    *  agent once and the row goes. Read on each change to what waits on the owner, only while one is armed. */
   ownerWaitsWatch: 'owner_waits_watch',
@@ -168,6 +170,9 @@ export interface AgentConfigStore {
   setLayout(layout: WorkspaceLayout): void;
   getBlueprint(): string | null;
   setBlueprint(id: string): void;
+  /** Unset, or a row that no longer parses, reads as none. */
+  getBlueprintWatchers(): BlueprintSchedule[];
+  setBlueprintWatchers(watchers: readonly BlueprintSchedule[]): void;
   /** Unset, or a row that no longer parses, reads as none. */
   getOwnerWaitsWatch(): OwnerWaitWatch | null;
   /** Null clears it. */
@@ -458,6 +463,16 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     setBlueprint(id) {
       set(AGENT_CONFIG_KEYS.blueprint, id);
+    },
+    getBlueprintWatchers() {
+      const stored = get(AGENT_CONFIG_KEYS.blueprintWatchers);
+
+      const parsed = v.safeParse(v.array(BlueprintScheduleSchema), stored === null ? [] : tolerate(() => JSON.parse(stored), 'malformed-input'));
+
+      return parsed.success ? parsed.output : [];
+    },
+    setBlueprintWatchers(watchers) {
+      set(AGENT_CONFIG_KEYS.blueprintWatchers, JSON.stringify(watchers));
     },
     getOwnerWaitsWatch() {
       const stored = get(AGENT_CONFIG_KEYS.ownerWaitsWatch);

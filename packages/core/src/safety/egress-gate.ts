@@ -11,6 +11,11 @@ import { settleSync } from '../obs/effect';
 /** Marks a placeholder, so a scan finds one inside any URL or header value and never mistakes a secret for one. */
 export const EGRESS_PLACEHOLDER_PREFIX = 'pxs1_';
 
+/** A secret's name: a variable name in every shell and a property in every program, at most 128 characters. */
+export function isSecretName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name);
+}
+
 /** Exported for the vault's mint, whose output length the scanner below is the contract over. */
 export const PLACEHOLDER_BODY_LENGTH = 43;
 

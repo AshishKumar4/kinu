@@ -109,6 +109,8 @@ export interface TestUserDO {
   revokedSocketPushes: string[];
   /** Browser-session revocations, as `workspace:tokenHash`: a logout must reach a listening-only socket. */
   revokedSessionPushes: string[];
+  /** Each `connectionsChanged` the account sent a workspace: `<workspace>:<presets, comma-joined>`. */
+  connectionsChanged: string[];
   /** Workspaces the owner's object asked for their first tile, in order. */
   overviewNudges: string[];
   /** Workspaces told their secrets moved, in order. */
@@ -388,6 +390,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const aborted = aborts.items;
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
+  const connectionsChanged: string[] = [];
   const overviewNudges: string[] = [];
   const secretsMoved: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
@@ -657,6 +660,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
           return { closed: 0 };
         },
+        async connectionsChanged(connected: readonly string[]) {
+          connectionsChanged.push(`${name}:${connected.join(',')}`);
+        },
         async requestOverviewPush() {
           overviewNudges.push(name);
           await options.overviewNudge?.(name);
@@ -705,7 +711,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
-    revokedSessionPushes, overviewNudges, secretsMoved,
+    revokedSessionPushes, connectionsChanged, overviewNudges, secretsMoved,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: async (workspace, consentId, answer) => ({ ok: await registryFor(workspace).resolve(consentId, answer) }),
     consentWakes,
