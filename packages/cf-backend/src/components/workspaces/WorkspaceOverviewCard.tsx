@@ -53,13 +53,15 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       to={`/workspace/${workspace.name}`}
       className="p-card flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated"
     >
-      {/* Its primary slate's picture when it has one; without one, the card is a plain row led by the logo. */}
-      <SlatePicture workspace={workspace.name} slate={pictured} className="block aspect-[16/10] w-full border-b p-border object-cover object-top" fallback={null} />
+      {/* Its primary slate's picture; without one, its logo on the same recessed ground as Explore's tiles (`Cover`). */}
+      <SlatePicture workspace={workspace.name} slate={pictured} className="block aspect-[16/10] w-full border-b p-border object-cover object-top"
+        fallback={(
+          <span className="flex aspect-[16/10] w-full items-center justify-center border-b p-border p-recessed">
+            <WorkspaceLogo title={title} logo={workspace.logo} size={36} />
+          </span>
+        )} />
       <span className="flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2.5">
-        <span className="flex min-w-0 items-center gap-2.5">
-          {pictured === undefined && <WorkspaceLogo title={title} logo={workspace.logo} size={24} />}
-          <span className="truncate p-row-text font-medium p-text">{title}</span>
-        </span>
+        <span className="truncate p-row-text font-medium p-text">{title}</span>
         <span className="mt-1"><StatusChip workspace={workspace} /></span>
         {mission !== null && <span className="mt-1.5 line-clamp-2 p-meta p-text-3">{mission}</span>}
         {age !== null && <span className="mt-auto self-end pt-2 p-meta p-text-4 tabular-nums">{age}</span>}
