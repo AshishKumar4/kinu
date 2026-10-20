@@ -108,6 +108,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerUserId?(): string | null;
+  /** A signed-in viewer's key on `share`, the deployment's keyed hash of them (`shareViewerKey`); null without a key. */
+  viewerKey?(share: string, userId: string): Promise<string | null>;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
   /** A live share of `slate` started or stopped: its server's authority changed, so its running app ends. */
@@ -178,6 +180,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       ...(ports.admitted !== undefined && { admitted: ports.admitted.bind(ports) }),
       ...(ports.budget !== undefined && { budget: ports.budget.bind(ports) }),
       ...(ports.ownerUserId !== undefined && { ownerUserId: ports.ownerUserId.bind(ports) }),
+      ...(ports.viewerKey !== undefined && { viewerKey: ports.viewerKey.bind(ports) }),
       ...(ports.ownerEffects !== undefined && { ownerEffects: ports.ownerEffects }),
     });
     this.servers = new SharedServers({

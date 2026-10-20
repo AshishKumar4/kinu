@@ -5914,6 +5914,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       budget: () => this.budget,
       ownerTitle: async () => this.safeDisplayName(),
       ownerUserId: () => this.getOwnerUserId(),
+      viewerKey: (share, userId) => shareViewerKey(this.env, share, userId),
       // `owner` shares' effects wait on the owner in the workspace's one queue, as every parked action does.
       ownerEffects: {
         ask: (id, effect) => this.deferrals.slateEffect(id, effect),

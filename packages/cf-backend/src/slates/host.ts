@@ -72,6 +72,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** Each viewer's own account, where their personal parts' calls run (`part-runs.ts`); absent, no part runs. */
   readonly partConnections?: PartConnections;
   ownerUserId?(): string | null;
+  /** A signed-in viewer's key on a share (`SlateShareViewersDeps.viewerKey`). */
+  viewerKey?(share: string, userId: string): Promise<string | null>;
   /** The owner's secrets granted to the workspace, as an owner's slate server holds them: placeholders, since a slate's
    *  server is started again without asking (`CommandEnvironment` `keep`). */
   secrets?(): Promise<Readonly<Record<string, string>>>;
@@ -169,6 +171,7 @@ export class SlateHost {
       ...(kv !== undefined && { admitted: async (key: string, perMinute: number) => ingressAdmitted(kv, 'slate-share', key, perMinute) }),
       ...(deps.budget !== undefined && { budget: deps.budget.bind(deps) }),
       ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
+      ...(deps.viewerKey !== undefined && { viewerKey: deps.viewerKey.bind(deps) }),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
       ...(deps.ownerTitle !== undefined && { ownerTitle: deps.ownerTitle.bind(deps) }),
