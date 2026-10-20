@@ -38,11 +38,12 @@ export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
 
   return (
     <div className={`flex items-center gap-0.5 ${vertical ? "flex-col" : ""}`}>
-      <Link to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} data-footer-mail className={cls(at(MAIL_ROUTE))}>
+      <Link to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} aria-current={at(MAIL_ROUTE) ? "page" : undefined} data-footer-mail className={cls(at(MAIL_ROUTE))}>
         <EnvelopeSimpleIcon size={17} />
         <CountBadge count={unread} label={`${String(unread)} important unread`} />
       </Link>
-      <Link to={APP_ROUTES.devices} aria-label="Devices" title="Devices" data-footer-devices className={cls(at(APP_ROUTES.devices))}>
+      <Link to={APP_ROUTES.devices} aria-label="Devices" title="Devices" aria-current={at(APP_ROUTES.devices) ? "page" : undefined} data-footer-devices
+        className={cls(at(APP_ROUTES.devices))}>
         <DesktopTowerIcon size={17} />
       </Link>
     </div>

@@ -980,7 +980,11 @@ describe('account panels', () => {
               expect(body.toLowerCase()).toContain(text.toLowerCase());
             }
 
-            if (viewport === 'desktop') expect(await activeNavRow(devices)).toBe('Devices');
+            // Devices is the footer's icon, not a nav row: the icon is the open page, and no nav row is.
+            if (viewport === 'desktop') {
+              expect(await devices.$('[data-footer-devices][aria-current="page"]')).not.toBeNull();
+              expect(await devices.$$('nav[aria-label="Primary"] a[aria-current="page"]')).toHaveLength(0);
+            }
             
           } finally {
             await devices.close();
