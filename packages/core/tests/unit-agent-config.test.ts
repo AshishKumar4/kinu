@@ -254,6 +254,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setChatTitle('Coupon fix'),
     (c) => c.setLayout('focus'),
     (c) => c.setBlueprint('personal-assistant'),
+    (c) => c.setBlueprintWatchers([{ label: 'GitHub check', cron: '*/15 * * * *', connection: 'github', prompt: 'Check GitHub.' }]),
     (c) => c.setOwnerWaitsWatch({ id: 'w1', key: null, what: null, armedAt: 1 }),
   ];
 
@@ -275,6 +276,19 @@ describe('AgentConfigStore — every key has a write path', () => {
     const written = new Set(Object.keys(c.all()));
     expect(Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k)))
       .toEqual([AGENT_CONFIG_KEYS.model]);
+  });
+});
+
+describe("a blueprint's watchers", () => {
+  test('read back as written, and a row that no longer parses reads as none', () => {
+    const c = setup();
+    const watcher = { label: 'Gmail check', cron: '*/15 * * * *', connection: 'google', prompt: 'Check Gmail.' };
+
+    expect(c.getBlueprintWatchers()).toEqual([]);
+    c.setBlueprintWatchers([watcher]);
+    expect(c.getBlueprintWatchers()).toEqual([watcher]);
+    c.set(AGENT_CONFIG_KEYS.blueprintWatchers, '[{"label":1}]');
+    expect(c.getBlueprintWatchers()).toEqual([]);
   });
 });
 
