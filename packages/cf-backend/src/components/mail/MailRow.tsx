@@ -15,8 +15,9 @@ export function mailBoxLabel(box: MailBox): string {
 export function MailRow({ thread, open, box, drafts, owner, onOpen }: {
   thread: MailThreadSummary; open: boolean; box: MailBox | undefined; drafts: boolean; owner: string; onOpen: () => void;
 }) {
-  const who = thread.from.map((party) => party.address.toLowerCase() === owner.toLowerCase() && thread.verified ? "You" : party.name ?? party.address).join(", ");
-  const name = thread.from[0]?.name ?? thread.from[0]?.address ?? "";
+  const participants = thread.from.map((party) => party.address.toLowerCase() === owner.toLowerCase() && thread.verified ? "You" : party.name ?? party.address).join(", ");
+  const who = participants === "" ? "Draft" : participants;
+  const name = thread.from[0]?.name ?? thread.from[0]?.address ?? "Draft";
 
   return (
     <button type="button" onClick={onOpen} data-mail-thread={thread.id} aria-current={open ? "true" : undefined} className={mailRowCls(open)}>
