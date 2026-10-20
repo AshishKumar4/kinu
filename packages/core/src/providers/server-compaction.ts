@@ -88,6 +88,14 @@ function triggerTokens(contextWindow: number | null | undefined): number {
 
 const CompactionMark = v.looseObject({ type: v.literal('compaction') });
 
+/** Each vendor's mark, built once: most metadata carries none, and is answered before any parse. */
+const MARKS = { anthropic: v.object({ anthropic: CompactionMark }), openai: v.object({ openai: CompactionMark }) } as const;
+
+/** Whether `metadata` has a member for `vendor`, the one a compaction mark sits under. */
+function namesVendor(metadata: ProviderMetadata | JsonValue | undefined, vendor: ServerCompactor): metadata is ProviderMetadata {
+  return metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata) && vendor in metadata;
+}
+
 /** The latest OpenAI compaction item: its assistant message, that message's parts, and its own part. */
 export interface LatestCompaction {
   readonly at: number;
@@ -122,5 +130,5 @@ export function sinceLatestCompaction(messages: readonly ModelMessage[]): ModelM
 /** A part, chunk or stored part carrying a provider's summary (`by` that one only), by the mark its SDK adapter gives
  *  it: Anthropic's on a text part, OpenAI's on a `custom` one. */
 export function isServerCompaction(metadata: ProviderMetadata | JsonValue | undefined, by?: ServerCompactor): boolean {
-  return (['anthropic', 'openai'] as const).some((vendor) => (by ?? vendor) === vendor && v.is(v.object({ [vendor]: CompactionMark }), metadata));
+  return (['anthropic', 'openai'] as const).some((vendor) => (by ?? vendor) === vendor && namesVendor(metadata, vendor) && v.is(MARKS[vendor], metadata));
 }

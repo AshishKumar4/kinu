@@ -20,14 +20,16 @@ const AGENT_BUNDLE_OUTPUT = resolve(import.meta.dirname, 'public/_agent');
 
 /**
  * The bundle as the module map a Worker Loader takes, `agent.js` its main module, and each module's source map. A
- * dynamic import is its own chunk, so code an agent's turn never imports is never compiled in its isolate.
+ * dynamic import is its own chunk, so code an agent's turn never imports is never compiled in its isolate. Function
+ * names are not kept: esbuild's keepNames names every function as it is created, and nothing here reads a function's
+ * name; a step's closures paid for it, 3.2 MB of a 150-step turn's allocation (205.7 against 208.9 MB, 6 runs each).
  */
 export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY) {
   const result = buildSync({
     entryPoints: { agent: entry }, outdir: '/', splitting: true, chunkNames: 'chunk-[hash]', sourcemap: 'external',
     bundle: true, write: false, format: 'esm', platform: 'neutral', target: 'es2022',
     mainFields: ['module', 'main'], conditions: ['workerd', 'worker', 'browser'],
-    minify: true, keepNames: true, charset: 'ascii', legalComments: 'none',
+    minify: true, charset: 'ascii', legalComments: 'none',
     alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, `node:${name}`])),
     external: ['cloudflare:*', 'node:*'],
   });
