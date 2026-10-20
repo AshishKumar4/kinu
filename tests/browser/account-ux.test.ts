@@ -702,8 +702,12 @@ describe('account panels', () => {
 
           if (id === 'tools') await page.waitForSelector('[data-welcome-step="tools"] [data-plugin-source]');
 
-          // Web search opens on the default already chosen, so Next passes it with nothing to pick.
-          if (id === 'search') await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"] input:checked');
+          // Web search opens on the default already chosen, so Next passes it with nothing to pick; a choice no provider
+          // can serve yet (a key of the owner's) is not offered at all.
+          if (id === 'search') {
+            await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"] input:checked');
+            expect(await page.$('[data-welcome-step="search"] [data-web-search-tile="key"]')).toBeNull();
+          }
 
           if (id !== 'showcase') await clickByText(page, 'button', 'Next');
         }
@@ -1013,6 +1017,28 @@ describe('account panels', () => {
       }
 
       
+    });
+  });
+});
+
+// Production walkthrough, rc28: the MCP servers page kept an old centered shell, its content edge off every other page's.
+describe('the MCP servers page', () => {
+  test('starts on the same left edge as every page, under the shared header', async () => {
+    await withGallery(async (gallery) => {
+      const edges: Record<string, number> = {};
+
+      for (const frame of ['devices', 'usermcp']) {
+        const page = await freshPage(gallery, frame, 'dark', 'desktop');
+
+        try {
+          await page.waitForSelector('header h1');
+          edges[frame] = await page.$eval('header h1', (heading) => Math.round(heading.getBoundingClientRect().left));
+        } finally {
+          await page.close();
+        }
+      }
+
+      expect(edges.usermcp).toBe(edges.devices);
     });
   });
 });
