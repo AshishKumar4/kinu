@@ -42,10 +42,6 @@ const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
 /** `revision` at the start: a write or disconnect since spends the sign-in. */
 const ClaudeSignInSchema = v.object({ url: v.string(), state: v.string(), verifier: v.string(), revision: v.number() });
 
-function unrenewable(key: string, cred: Credential): string | null {
-  return subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !renewableLogin(cred) ? `${key} requires an OAuth refresh token.` : null;
-}
-
 export interface CodexStatus {
   connected: boolean;
   accountId: string | null;
@@ -91,11 +87,19 @@ export class UserCredentials {
   constructor(private readonly host: UserCredentialsHost) {}
 
   async listCredentials(caller: UserCaller): Promise<CredentialSummary[]> {
-    return this.credentialSummaries(await this.host.requireTier(caller, 'credentials.model'));
+    return await this.credentialSummaries(await this.host.requireTier(caller, 'credentials.model'));
   }
 
-  private credentialSummaries(_resolved: ResolvedCaller): CredentialSummary[] {
-    return this.host.sqlx<{ key: string; kind: CredentialSummary['kind'] }>(`SELECT key, kind FROM user_credentials ORDER BY key`);
+  /** Each credential's key and kind; a subscription login that never renews says when it stops working. */
+  private async credentialSummaries(_resolved: ResolvedCaller): Promise<CredentialSummary[]> {
+    const rows = this.host.sqlx<{ key: string; kind: CredentialSummary['kind'] }>(`SELECT key, kind FROM user_credentials ORDER BY key`);
+
+    return await Promise.all(rows.map(async (row): Promise<CredentialSummary> => {
+      if (row.kind !== 'oauth' || subscriptionIssuer(row.key) === null) return row;
+      const login = await this.readCredential(row.key);
+
+      return login?.kind === 'oauth' && !renewableLogin(login) && login.expiresAt !== undefined ? { ...row, expiresAt: login.expiresAt } : row;
+    }));
   }
 
   /** Model-inference credentials survive tainting (headers attach in trusted DO code, never in LLM
@@ -113,10 +117,6 @@ export class UserCredentials {
     }
 
     const cred = validateCredential({ key, value: credentialJson });
-
-    const refusal = unrenewable(key, cred);
-
-    if (refusal !== null) throw new KinuError('bad_input', refusal);
 
     await this.writeCredential(key, cred);
 
@@ -676,9 +676,6 @@ export class UserCredentials {
 
       if ('error' in exchanged) return { connected: false, error: exchanged.error };
       const { credential } = exchanged;
-      const refusal = unrenewable(CLAUDE_CRED_KEY, credential);
-
-      if (refusal !== null) return { connected: false, error: `Claude signed you in without a refresh token, so Kinu cannot keep the login: ${refusal}` };
       const sealed = yield* attempt({ doing: 'sealing the Claude credential', otherwise: 'io' }, () => this.sealCredential(CLAUDE_CRED_KEY, credential));
       const current = v.safeParse(ClaudeSignInSchema, this.host.ctx.storage.kv.get(CLAUDE_SIGN_IN_KEY));
 

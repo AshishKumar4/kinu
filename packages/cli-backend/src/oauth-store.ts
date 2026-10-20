@@ -12,7 +12,7 @@ import {
   credentialToHeaders,
   refusedLogin,
   rotateLogin,
-  renewableLogin,
+  heldLogin,
   usableLogin,
   type LoginRenewal,
   type AuthRequest,
@@ -73,11 +73,6 @@ export interface LocalOAuthStore {
   save(key: string, credential: OAuthCredential): Promise<void>;
 }
 
-/** A login a call can use: one with its access token, and renewable (`renewableLogin`), as a hosted account stores one. */
-function renewable(login: { readonly accessToken?: string; readonly refreshToken?: string } | null | undefined): boolean {
-  return Boolean(login?.accessToken) && renewableLogin(login);
-}
-
 export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof fetch } = {}): LocalOAuthStore {
   return {
     keys(): string[] {
@@ -85,14 +80,14 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
 
       return [...ISSUERS].flatMap(([base, issuer]) => {
         const stored = providers?.[issuer.section];
-        const named = Object.keys(stored?.accounts ?? {}).filter((name) => renewable(stored?.accounts?.[name])).sort();
+        const named = Object.keys(stored?.accounts ?? {}).filter((name) => heldLogin(stored?.accounts?.[name])).sort();
 
-        return [...(renewable(stored) ? [MAIN_ACCOUNT] : []), ...named].map((account) => accountCredentialKey(base, account));
+        return [...(heldLogin(stored) ? [MAIN_ACCOUNT] : []), ...named].map((account) => accountCredentialKey(base, account));
       });
     },
 
     has(key: string): boolean {
-      return renewable(credentialIn(readConfigFile(configPath), key));
+      return heldLogin(credentialIn(readConfigFile(configPath), key));
     },
 
     async getAuth(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
