@@ -211,6 +211,24 @@ describe('pc-agent exec RPC', () => {
     expect(running).toBe(true);
   });
 
+  // Owner report, 2026-10-20 (`setsid -f chromium <url>`): the supervisor answered at the command's exit, then closed
+  // the pipes a background process still held, which ends such a process at its next write.
+  test('what the command left running writes on after the answer, into pipes still read', async () => {
+    const cwd = scratchDir('pc-agent-detached');
+    const verdict = join(cwd, 'verdict');
+    await runOk(['mkfifo', verdict]);
+
+    // Waits for `go` (600 looks at most), then writes to both streams with SIGPIPE ignored, and says whether they landed.
+    const reply = await exec(`cd ${cwd} && { sh -c 'trap "" PIPE; n=0; until [ -e go ] || [ $n -ge 600 ]; do n=$((n+1)); sleep 0.05; done; `
+      + `{ echo late && echo late >&2; } && v=wrote || v=refused; echo $v > verdict' & } ; echo started`);
+
+    const uncaptured = '\n[background output after command exit is not captured]\n';
+
+    expect(reply.result).toEqual({ stdout: `started\n${uncaptured}`, stderr: uncaptured, exitCode: 0 });
+    writeFileSync(join(cwd, 'go'), '');
+    expect((await readFile(verdict, 'utf8')).trim()).toBe('wrote');
+  });
+
   test('output the command wrote is complete, not cut short by the early answer', async () => {
     const reply = await exec('seq 1 20000');
 
@@ -540,12 +558,13 @@ describe('pc-agent command cancellation', () => {
       .toEqual({ requestId: runId, acknowledged: true });
     expect(await settled(() => (!existsSync(requestDir) ? true : undefined), 'supervisor cleanup')).toBe(true);
     expect(pcAgent.supervision.size()).toBe(sizeBefore);
-    // The command's group leader has exited; the ACK must still reach the supervisor, which then ends.
-    expect(await gone(supervisor)).toBe(true);
-
+    // The command's group leader has exited; the ACK reached the supervisor, which removed the directory. It stays only
+    // as the reader of the pipes the server still holds, and ends with it.
     const server = Number(readFileSync(pidFile, 'utf8').trim());
 
-    if (isRunning(server)) process.kill(server, 'SIGKILL');
+    expect(isRunning(supervisor)).toBe(true);
+    process.kill(server, 'SIGKILL');
+    expect(await gone(supervisor)).toBe(true);
   });
 
   test('completed, duplicate and unknown cancellation targets answer honestly', async () => {

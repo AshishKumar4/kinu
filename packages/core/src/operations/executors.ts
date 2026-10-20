@@ -12,6 +12,10 @@ import { FILE } from './file';
 
 const Command = v.pipe(v.string(), v.nonEmpty());
 
+/** When a command answers, on every machine: said by its `exec` and by the `shell` tool. */
+export const EXEC_ANSWERS_AT_EXIT = 'It answers when the command itself exits: a process it starts in the background keeps running, '
+  + 'and what that process writes afterwards is not returned.';
+
 const Text = v.string();
 
 /** An executor's member; Plan keeps only what observes. */
@@ -40,7 +44,7 @@ function machineMembers<const O extends v.ObjectEntries>(op: MachineOp, option: 
       exec: op({
         name: 'exec', impact: 'execute', output: v.union([Text, v.strictObject({ stdout: v.string(), stderr: v.string(), exitCode: v.number() })]),
         help: 'Run a shell command on this machine. Each call starts fresh in `cwd` (default its home) unless it names a shell, '
-          + 'which keeps its directory and exported variables.',
+          + `which keeps its directory and exported variables. ${EXEC_ANSWERS_AT_EXIT}`,
         input: input({
           command: Command,
           cwd: v.optional(described(v.string(), 'Where the command starts.')),

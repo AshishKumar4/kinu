@@ -2,6 +2,7 @@ import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
 import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
 import { namespaceDeclaration } from './operation-surfaces';
+import { EXEC_ANSWERS_AT_EXIT } from '../operations/executors';
 
 /** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts and UI. */
 
@@ -277,6 +278,7 @@ export const BUILTIN_TOOL_SPECS = {
         + 'concurrent calls run side by side. A `name` keeps its directory and exported variables from call to call, '
         + 'and runs one call at a time.',
       'Output starts with the directory the command started in, holds both streams, labelled when both wrote, and gives the exit code when it is not zero.',
+      EXEC_ANSWERS_AT_EXIT,
       'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads.',
       'In a container, `nproc` and `free` report the host: size parallelism from the cpus and memory the execution status lists.',
     ],
