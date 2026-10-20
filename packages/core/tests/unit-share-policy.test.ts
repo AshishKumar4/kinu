@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { JsonValue } from '../src/utils/json';
-import { containedTool, EffectApprovals, partCallRoot, partCallVerdict, plainData, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
+import { EffectApprovals, partCallRoot, partCallVerdict, plainData, resolvePartCall, serverAuthority, type EffectCall, type LiveShareAuthority } from '../src/slates/share-policy';
 import type { ShareGrant } from '../src/slates/sharing';
 import type { SlateConsent } from '../src/slates/share-modes';
 
@@ -66,11 +66,29 @@ describe("a personal part's call with its viewer's connection", () => {
   });
 });
 
+/** Whether a call to a tool with these marks is resolved as contained. */
+const contained = (marks: { readonly readOnly?: true; readonly closedWorld?: true }): boolean | null => {
+  const resolved = resolvePartCall([{ serverName: 'GitHub', name: 'issue_read', ...marks }], { server: 'mcp.GitHub', tool: 'issue_read', args: [{}] });
+
+  return resolved.kind === 'resolved' ? resolved.call.contained : null;
+};
+
 describe('a contained tool', () => {
   test('is read-only and closed-world by its own marks; either missing discloses', () => {
-    expect(containedTool({ readOnly: true, closedWorld: true })).toBe(true);
-    expect(containedTool({ readOnly: true })).toBe(false);
-    expect(containedTool({ closedWorld: true })).toBe(false);
+    expect([contained({ readOnly: true, closedWorld: true }), contained({ readOnly: true }), contained({ closedWorld: true })]).toEqual([true, false, false]);
+  });
+});
+
+describe('a part call resolves on the viewer\'s connections', () => {
+  const tools = [{ serverName: 'GitHub', name: 'issue_read', presetId: 'github', readOnly: true, closedWorld: true }] as const;
+
+  test('by its server and tool, to one JSON object, with the root its preset reads', () => {
+    expect(resolvePartCall(tools, { server: 'mcp.GitHub', tool: 'issue_read', args: [{ owner: 'viewer', repo: 'kinu', method: 'get_comments' }] })).toMatchObject({
+      kind: 'resolved', call: { server: 'mcp.GitHub', tool: 'issue_read', root: { owner: 'viewer', repo: 'kinu' }, contained: true },
+    });
+    expect(resolvePartCall(tools, { server: 'GitHub', tool: 'issue_read', args: [{}] })).toEqual({ kind: 'missing' });
+    expect(resolvePartCall(tools, { server: 'mcp.GitHub', tool: 'add_issue_comment', args: [{}] })).toEqual({ kind: 'missing' });
+    expect([[], [{}, {}], ['text'], [null]].map((args) => resolvePartCall(tools, { server: 'mcp.GitHub', tool: 'issue_read', args }).kind)).toEqual(['malformed', 'malformed', 'malformed', 'malformed']);
   });
 });
 

@@ -55,11 +55,11 @@ import { UserWorkspaces, type WorkspaceRegistration, type WorkspaceRegistrationS
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
 import {
-  EffectApprovals, SlateConsentSchema, SlateConsentStore, containedTool, partCallRoot, partCallVerdict,
+  EffectApprovals, SlateConsentSchema, SlateConsentStore, partAiCall, partCallVerdict, resolvePartCall,
   type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
 } from '@kinu.run/core/slates';
 import { McpToolSurfaceSchema } from '@kinu.run/core';
-import { isJsonObject, parseJsonValue } from '../../../core/src/utils/json';
+import { parseJsonValue } from '../../../core/src/utils/json';
 import { Effect } from 'effect';
 import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
@@ -299,19 +299,15 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'mcp.tools');
 
     return settle(Effect.gen({ self: this }, function* () {
-      const { workspace, slate, revision, server, tool, args } = request;
+      const { workspace, slate, revision, server, tool } = request;
       const surface = v.parse(McpToolSurfaceSchema, yield* Effect.promise(() => this.userMcp_toolDescriptors(caller)));
-      const descriptor = server.startsWith('mcp.') ? surface.descriptors.find((item) => item.serverName === server.slice(4) && item.name === tool) : undefined;
+      const resolved = resolvePartCall(surface.descriptors, request);
 
-      if (descriptor === undefined) return { kind: 'missing' as const, message: `Your connections do not offer ${server}.${tool}.` };
-      const payload = args.length === 1 ? args[0] : args;
+      if (resolved.kind === 'missing') return { kind: 'missing' as const, message: `Your connections do not offer ${server}.${tool}.` };
 
-      if (args.length !== 1 || payload === undefined || !isJsonObject(payload)) {
-        return yield* new KinuError('bad_input', `${server}.${tool} takes one JSON object argument.`);
-      }
-
-      const root = partCallRoot({ preset: descriptor.presetId ?? null, tool }, payload);
-      const verdict = partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, false);
+      if (resolved.kind === 'malformed') return yield* new KinuError('bad_input', `${server}.${tool} takes one JSON object argument.`);
+      const { descriptor, payload, call: { root } } = resolved;
+      const verdict = partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), resolved.call, revision, false);
       // What its asks call the connection and the tool: the catalog's own name for a preset server, else the person's.
       const titles = { serverTitle: mcpPresetById(descriptor.presetId ?? '')?.title ?? descriptor.serverName, toolTitle: descriptor.title ?? descriptor.name };
 
@@ -341,21 +337,20 @@ export class UserDO extends Agent<Env> {
     const mcp = calls.some((call) => call.server !== 'ai')
       ? v.parse(McpToolSurfaceSchema, await this.userMcp_toolDescriptors(caller)).descriptors : [];
 
-    return calls.map(({ workspace, slate, revision, server, tool, args }) => {
-      if (server === 'ai') return partCallVerdict(this.slateConsentStore.find(workspace, slate, 'ai', {}), { server, root: {}, tool, contained: true }, revision, true).kind === 'run';
-      const descriptor = mcp.find((item) => `mcp.${item.serverName}` === server && item.name === tool);
-      const root = partCallRoot(descriptor === undefined ? null : { preset: descriptor.presetId ?? null, tool }, args.length === 1 ? args[0] ?? null : args);
+    return calls.map((call) => {
+      const { workspace, slate, revision, server, tool } = call;
 
-      return descriptor !== undefined
-        && partCallVerdict(this.slateConsentStore.find(workspace, slate, server, root), { server, root, tool, contained: containedTool(descriptor) }, revision, true).kind === 'run';
+      if (server === 'ai') return (tool === 'run' || tool === 'stream') && partCallVerdict(this.slateConsentStore.find(workspace, slate, 'ai', {}), partAiCall(tool), revision, true).kind === 'run';
+      const resolved = resolvePartCall(mcp, call);
+
+      return resolved.kind === 'resolved' && partCallVerdict(this.slateConsentStore.find(workspace, slate, server, resolved.call.root), resolved.call, revision, true).kind === 'run';
     });
   }
 
   /** Same `credentials.model` floor as slateAi; consent adds the viewer's revision-bound permission, not a new credential path. */
   async slatePartAi(caller: UserCaller, request: { readonly workspace: string; readonly slate: string; readonly revision: string; readonly route: SlateAiRoute }): Promise<PartAiAnswer> {
     await this.requireTier(caller, 'credentials.model');
-    const tool = request.route.stream === true ? 'stream' : 'run';
-    const verdict = partCallVerdict(this.slateConsentStore.find(request.workspace, request.slate, 'ai', {}), { server: 'ai', root: {}, tool, contained: true }, request.revision, false);
+    const verdict = partCallVerdict(this.slateConsentStore.find(request.workspace, request.slate, 'ai', {}), partAiCall(request.route.stream === true ? 'stream' : 'run'), request.revision, false);
 
     if (verdict.kind === 'needs-consent') return verdict;
 

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { sha256Hex } from '../src/safety/argument-digest';
-import { containedTool, EffectApprovals, partCallVerdict, serverAuthority } from '../src/slates/share-policy';
+import { EffectApprovals, partCallVerdict, resolvePartCall, serverAuthority } from '../src/slates/share-policy';
 import { ShareGrantSchema } from '../src/slates/sharing';
 import { SlateConsentSchema } from '../src/slates/share-modes';
 import { JsonValueSchema } from '../src/utils/json';
@@ -90,7 +90,10 @@ describe('share-policy refines the SharingNimbus decisions', () => {
 
   test.each(cases.map((c, i) => [i, c] as const))('Lean case %d', (_i, c) => {
     if (c.kind === 'contained') {
-      expect(containedTool(c.descriptor)).toBe(c.expected);
+      // Contained is what a call to a tool with these marks resolves to (`resolvePartCall`).
+      const resolved = resolvePartCall([{ serverName: 'lean', name: 'tool', ...c.descriptor }], { server: 'mcp.lean', tool: 'tool', args: [{}] });
+
+      expect(resolved.kind === 'resolved' && resolved.call.contained).toBe(c.expected);
 
       return;
     }
