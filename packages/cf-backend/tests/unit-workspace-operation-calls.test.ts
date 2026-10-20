@@ -6,7 +6,8 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { KinuError, refusalOf } from '@kinu.run/core/obs';
+import { hostedExplorationHarness, orchestratorHarness } from './helpers/actor-harness';
 
 /** The workspace's own actor: the one with no parent. */
 function workspaceActorId(db: Database): string {
@@ -54,3 +55,27 @@ test('a call its caller cancels stops, and its answer is the cancellation', asyn
 
   await expect(answered).rejects.toMatchObject({ code: 'cancelled' });
 });
+
+// The SelfishJaguar audit: a hosted actor's operation and slate calls built its stores apart from its turn's, with no slate
+// build check, so its write into a slate answered no verdict. The verdict needs workerd's loader; under bun the
+// workspace's own build answer stands in for it.
+test("a hosted actor's write into a slate answers whether the slate still builds, as its turn's write does", async () => {
+  const workspace = orchestratorHarness();
+  const { actor } = await hostedExplorationHarness(workspace, 'drafter', { kind: 'head' });
+  const built: string[] = [];
+
+  workspace.agent.slateBuildAs = async (caller, slate) => {
+    built.push(`${caller.path.map((step) => step.name).join('/')}:${slate}`);
+
+    return { ok: false, ...refusalOf(new KinuError('bad_input', 'client.tsx:1:30 Unexpected closing tag')) };
+  };
+
+  const hosted = { actorId: actor.handle.actorId, turnId: null, mode: 'build' as const };
+  const answered = await workspace.agent.callOperation(hosted, 'file.write', { path: '/slates/drawn/client.tsx', content: 'export default () => <div><b></div>' }, call());
+
+  expect({ answered: answered.value, built }).toMatchObject({
+    answered: { build: { slate: 'drawn', builds: false, error: expect.stringContaining('client.tsx:1:30') } },
+    built: [`${actor.record.name}:drawn`],
+  });
+});
+
