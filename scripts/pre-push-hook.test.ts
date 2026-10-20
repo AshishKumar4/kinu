@@ -100,6 +100,29 @@ describe('the pre-push hook proves only the commit it pushes', () => {
     expect(stdout).toContain(TIER_RAN);
   });
 
+  // An up-to-date push hands the hook no ref: it once read as "no integration push" and ran the whole local tier.
+  test('a push that hands the hook no ref proves nothing and runs nothing', async () => {
+    const { repo } = await repoWithTwoCommits();
+
+    const { exitCode, stdout } = await runToExit(['bash', join(repo, '.githooks', 'pre-push'), 'origin', 'git@example.invalid:r.git'], {
+      cwd: repo, env: gitEnv(), stdin: '',
+    });
+
+    expect({ status: exitCode, tier: stdout.includes(TIER_RAN) }).toEqual({ status: 0, tier: false });
+  });
+
+  // The tier's anti-slop suite runs under Node's type stripping; a Node without it failed that row as a parse error.
+  test('a Node that cannot strip types refuses the local tier before it runs, naming what it needs', async () => {
+    const { repo, head } = await repoWithTwoCommits();
+
+    writeFileSync(join(repo, 'node_modules', '.bin', 'node'), '#!/bin/sh\necho "node: bad option: --experimental-strip-types" >&2\nexit 9\n', { mode: 0o755 });
+
+    const { status, stdout, stderr } = await runHook(repo, head);
+
+    expect({ status, tier: stdout.includes(TIER_RAN), said: stderr.includes('needs a Node that runs TypeScript with --experimental-strip-types') })
+      .toEqual({ status: 1, tier: false, said: true });
+  });
+
   test.each([
     ['a modified tracked file', 'a.txt', 'three\n'],
     ['an untracked file, which the gates read', 'new.ts', 'export const x = 1;\n'],

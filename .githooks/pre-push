@@ -2,7 +2,8 @@
 #
 # A push to main or next-rc (the integration branch) is proved by CI's whole tier on armada for the pushed commit (L25): the verdict
 # armada stored for that exact commit if it has one, else `armada run`, and it is refused unless every row is green.
-# A stored red is not run again. Any other push runs the static `local` tier on the pushed tree, a few minutes.
+# A stored red is not run again. A push of any other ref runs the static `local` tier on the pushed tree, a few
+# minutes; a push that hands the hook no ref (an up-to-date push) proves nothing, so it runs nothing.
 #
 # NEVER --no-verify.
 set -uo pipefail
@@ -30,7 +31,6 @@ while read -r _ local_sha remote_ref _; do
     exit 1
   fi
 done
-[ "${#proved[@]}" -gt 0 ] || local_tier=1
 
 for sha in $(printf '%s\n' "${proved[@]}" | sort -u); do
   if [ ! -x "$armada" ]; then
@@ -66,6 +66,13 @@ done
 # Untracked files count: the gates' corpus includes untracked, non-ignored files (scripts/sources.ts).
 if [ -n "$(git status --porcelain=v1)" ]; then
   printf 'pre-push: the working tree has uncommitted or untracked changes, so the tier would not prove the pushed commit.\n' >&2
+  exit 1
+fi
+
+# The tier's anti-slop suite runs its TypeScript under Node's own type stripping, so a Node without it fails that row
+# with a parse error that reads as the code's. The repository pins no Node: the capability is asked of the one here.
+if ! node --no-warnings --experimental-strip-types --input-type=module-typescript -e 'const typed: number = 1; void typed;' > /dev/null 2>&1; then
+  printf 'pre-push: the local tier needs a Node that runs TypeScript with --experimental-strip-types (22.7 or later); %s does not.\n' "$(command -v node || echo 'this PATH has no node, which')" >&2
   exit 1
 fi
 
