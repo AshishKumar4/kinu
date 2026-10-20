@@ -662,6 +662,18 @@ describe('an account that never set its fast tier', () => {
       .toBe('opencode/glm-5.3-flash-free');
   });
 
+  // The rc27 review: the default main model, Muse, is a contributor row, so it is no candidate, and its window was read
+  // from the candidates alone: no floor, and a model holding a fraction of what Muse keeps was picked.
+  test('holds to the main model\'s window when the main model is no candidate itself', () => {
+    const muse = row('opencode-go', 'muse-spark-1.3-contributor', 1_048_576, { input: 0.01, output: 0.02 });
+    const small = row('openai', 'gpt-5-nano', 128_000, { input: 0.05, output: 0.4 });
+    const tiers = { default: { model: 'opencode-go/muse-spark-1.3-contributor' } };
+
+    expect(profileOver([muse, small, ...WORKERS], tiers).tiers.fast.model).toBe('workers-ai/@cf/zai-org/glm-5.3-flash');
+    // Nothing holds what Muse keeps: the fast tier runs on Muse itself.
+    expect(profileOver([muse, small], tiers).tiers.fast.model).toBe('opencode-go/muse-spark-1.3-contributor');
+  });
+
   test("prices a plan's model as the same model's API row, and an unpriced one after every priced", () => {
     const plan = [{ provider: 'chatgpt', id: 'gpt-6-luna', capabilities: ['tools' as const], contextWindow: 1_050_000 }];
 
