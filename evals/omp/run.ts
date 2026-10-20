@@ -1,20 +1,24 @@
 /**
- * One arm of the OMP measurement (variant 1, replay as evidence), on this machine behind the inert boundary:
+ * One arm of the OMP measurement (variant 1, replay as evidence), on this machine behind the inert boundary, in two
+ * phases:
  *
- *   CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… bun evals/omp/run.ts --data /mnt/local/kinu/datasets/omp/proteus \
- *     --snapshot /mnt/local/kinu/wt/omp-f2fa713f7 --arm dreaming --out /mnt/local/kinu/datasets/omp/proteus/runs/pilot
+ *   bun evals/omp/run.ts --phase prepare --data <dataset> --snapshot <worktree> --arm dreaming|off --spec <model> --out <dir>
+ *   bun evals/omp/run.ts --phase answer --copy 0 --of 4 …the same…
  *
- * `dreaming` rates the last `--train-last` training turns from the person's real next messages and dreams over them as
- * the lane would; `off` learns nothing. Then each arm answers the frozen held-out requests (`--held-out`, drawn once,
- * shared by every arm), each in a cleared conversation. Every call Plan would refuse is kept and recorded; a kept shell
- * command is answered from the held-out turn's own record where it ran the same one. The only way out is the model's
- * host. Writes `<out>/<arm>/answers.jsonl` and `<out>/<arm>/run.json`.
+ * `prepare` opens the arm's workspace under `<out>/<model>/<arm>/base`: `dreaming` rates the last `--train-last`
+ * training turns from the person's real next messages and dreams over them as the lane would; `off` learns nothing.
+ * `answer` copies that workspace (`copy-<i>`) and answers every `--of`-th frozen held-out request from `--copy`, each in a
+ * cleared conversation; answering rates nothing, so copies learn nothing from each other. Every call Plan would refuse
+ * is kept and recorded, and a kept shell command is answered from the held-out turn's own record where it ran the same
+ * one. The only way out is the model's host. No request is cut short: it ends on completion or failure, and where its
+ * time went (model calls, rate-limit waits, tool calls) is written beside its answer.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JsonValue, type LLMProviderConfig } from '../../packages/core/src/index';
+import { createConsoleLogger, setDiagnosticsSink, type Logger } from '../../packages/core/src/obs/index';
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { createRefinementStore } from '../../packages/core/src/evolution/refinement';
 import { createLocalModelResolver, LocalAgentHost, openWorkspaceCLI, workspaceHome } from '../../packages/cli-backend/src/index';
@@ -41,7 +45,41 @@ const MODEL_HOST = 'api.cloudflare.com:443';
 const KEPT = 'Not run: this session is measured, so shell commands and programs do not run. Read the folder with the file tool '
   + '(op read, list or search); the call is kept as what you meant to do.';
 
+/** How long a provider said to wait, from its `waiting 1m` or `waiting 30s`. */
+const WAITED = /waiting (\d+)(m|s)\b/u;
+
 interface Kept { readonly name: string; readonly input: JsonValue; readonly refused: readonly string[]; readonly answered: boolean }
+
+/** Where a request's time went, from the diagnostics its calls wrote. */
+interface Spent { modelCalls: number; modelOpenMs: number; rateLimits: number; rateLimitWaitMs: number }
+
+const spentNothing = (): Spent => ({ modelCalls: 0, modelOpenMs: 0, rateLimits: 0, rateLimitWaitMs: 0 });
+
+/** The console's logger, tallying into `spent()` the model calls and rate-limit waits it sees. */
+function tallying(spent: () => Spent): Logger {
+  const console = createConsoleLogger();
+
+  return {
+    event: (name, fields) => {
+      if (name === 'provider.stream_opened') {
+        spent().modelCalls += 1;
+        const opened = v.safeParse(v.object({ ms: v.number() }), fields);
+        spent().modelOpenMs += opened.success ? opened.output.ms : 0;
+      }
+
+      console.event(name, fields);
+    },
+    failure: (name, error, fields) => {
+      if (name === 'provider.rate_limited') {
+        const waited = WAITED.exec(error.message);
+        spent().rateLimits += 1;
+        spent().rateLimitWaitMs += waited === null ? 0 : Number(waited[1]) * (waited[2] === 'm' ? 60_000 : 1_000);
+      }
+
+      console.failure(name, error, fields);
+    },
+  };
+}
 
 function workersAi(account: string, token: string, model: string): LLMProviderConfig {
   return { name: 'workers-ai', baseURL: `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1`, headers: { Authorization: `Bearer ${token}` }, model };
@@ -69,46 +107,32 @@ async function dream(run: { readonly lane: () => Promise<void>; readonly tick: (
   return DREAM_PASSES;
 }
 
-if (import.meta.main) {
-  const { values } = parseArgs({ options: {
-    data: { type: 'string' }, snapshot: { type: 'string' }, arm: { type: 'string' }, out: { type: 'string' },
-    spec: { type: 'string', default: 'workers-ai/@cf/zai-org/glm-5.3' }, 'held-out': { type: 'string', default: '40' },
-    'train-last': { type: 'string', default: '250' }, seed: { type: 'string', default: '1' },
-    /** Only the first this many frozen requests: a smoke run, never a measurement. */
-    first: { type: 'string' },
-  } });
+interface Arm {
+  readonly arm: 'dreaming' | 'off';
+  readonly spec: string;
+  readonly llm: LLMProviderConfig;
+  readonly snapshot: string;
+  /** This arm's workspace folder: its database and its files. */
+  readonly space: string;
+}
 
-  const { data, snapshot, arm, out, spec } = values;
-  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-  const token = process.env.CLOUDFLARE_API_TOKEN;
+/** The arm's agent over the workspace in `space`, behind the boundary; `record` takes what the run must keep. */
+function armHost(arm: Arm, boundary: { intended: (call: { readonly name: string; readonly input: JsonValue; readonly refused: readonly string[] }) => void; recorded: (name: string, input: JsonValue) => string }): LocalAgentHost {
+  return new LocalAgentHost({
+    roster: () => [{ name: 'root', cwd: arm.snapshot, workspaceId: `omp-${arm.arm}` }],
+    dbPath: () => join(arm.space, 'agent.db'),
+    open: async (_ref, db, path) => {
+      const openConfig = { llm: arm.llm, defaultSpec: arm.spec, cwd: arm.snapshot, boundary };
+      const { rt } = await openWorkspaceCLI(db, path, openConfig);
+      rt.actor.config.setLearning(arm.arm === 'dreaming');
 
-  if (data === undefined || snapshot === undefined || out === undefined || (arm !== 'dreaming' && arm !== 'off')) {
-    throw new Error('--data, --snapshot, --out and --arm dreaming|off are required');
-  }
-
-  if (account === undefined || token === undefined) throw new Error('set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN');
-  const train = ownerTurnsFrom(readFileSync(join(data, 'train.jsonl'), 'utf8'));
-  const heldOut = ownerTurnsFrom(readFileSync(join(data, 'held-out.jsonl'), 'utf8'));
-  const frozen = frozenSet(data, heldOut, Number(values['held-out']), Number(values.seed));
-  const space = join(out, arm);
-  mkdirSync(space, { recursive: true });
-  const egress = limitEgress([MODEL_HOST]);
-  const started = Date.now();
-
-  // The kept calls of the request being answered, and what its own record answers a kept shell command with.
-  let kept: Kept[] = [];
-  let fromRecord: (name: string, input: JsonValue) => string | null = () => null;
-
-  const boundary = {
-    intended: (call: { readonly name: string; readonly input: JsonValue; readonly refused: readonly string[] }) => {
-      kept.push({ ...call, answered: fromRecord(call.name, call.input) !== null });
+      return { rt, openConfig, modelResolver: createLocalModelResolver({ llm: arm.llm, defaultSpec: arm.spec }) };
     },
-    recorded: (name: string, input: JsonValue) => fromRecord(name, input) ?? KEPT,
-  };
+  });
+}
 
-  const llm = workersAi(account, token, spec.replace(/^workers-ai\//u, ''));
-  const dbPath = join(space, 'agent.db');
-  const seedDb = workspaceDatabase(dbPath);
+async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Promise<void> {
+  const seedDb = workspaceDatabase(join(arm.space, 'agent.db'));
 
   try {
     await createWorkspace(seedDb, { name: 'root', purpose: 'Answer the requests of the measured sessions.', home: workspaceHome(seedDb) });
@@ -116,29 +140,15 @@ if (import.meta.main) {
     seedDb.close();
   }
 
-  const host = new LocalAgentHost({
-    roster: () => [{ name: 'root', cwd: snapshot, workspaceId: `omp-${arm}` }],
-    dbPath: () => dbPath,
-    open: async (_ref, db, path) => {
-      const openConfig = { llm, defaultSpec: spec, cwd: snapshot, boundary };
-      const { rt } = await openWorkspaceCLI(db, path, openConfig);
-      rt.actor.config.setLearning(arm === 'dreaming');
-
-      return { rt, openConfig, modelResolver: createLocalModelResolver({ llm, defaultSpec: spec }) };
-    },
-  });
-
-  // The turns each held-out request ran, as their ends report them.
-  const ended: CompletedTurn[] = [];
-
-  const unsubscribe = host.subscribe((key, event) => {
-    if (key === 'root' && event.type === 'turn-end') ended.push(event.turn);
-  });
+  const spent = spentNothing();
+  const restore = setDiagnosticsSink(tallying(() => spent));
+  const host = armHost(arm, { intended: () => {}, recorded: () => KEPT });
+  const started = Date.now();
 
   try {
     const session = await host.acquire('root');
     const rt = await host.runtime('root');
-    const trained = arm === 'dreaming' ? train.filter((turn) => turn.followup !== null).slice(-Number(values['train-last'])) : [];
+    const trained = arm.arm === 'dreaming' ? train.filter((turn) => turn.followup !== null).slice(-last) : [];
     const engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history));
     let dreamPasses = 0;
 
@@ -148,35 +158,105 @@ if (import.meta.main) {
       if ((at + 1) % DREAM_CADENCE === 0) dreamPasses += await dream({ lane: () => session.runRefinementLane(), tick: async () => { await host.tick('root'); }, rt });
     }
 
-    const trainedAt = Date.now();
+    const evolution = armEvolution({ refinements: session.listRefinements(200), changelog: session.getEvolutionChangelog(200).entries });
+    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, trained: trained.length, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
+  } finally {
+    await host.close();
+    restore();
+  }
+}
 
-    for (const id of frozen.turnIds.slice(0, values.first === undefined ? undefined : Number(values.first))) {
-      const turn = heldOut.find((candidate) => candidate.turn.turnId === id);
+async function answer(arm: Arm, requests: readonly OwnerTurn[], answers: string): Promise<void> {
+  // The kept calls of the request being answered, what its own record answers a kept shell command with, and where its
+  // time went.
+  let kept: Kept[] = [];
+  let fromRecord: (name: string, input: JsonValue) => string | null = () => null;
+  let spent = spentNothing();
+  const restore = setDiagnosticsSink(tallying(() => spent));
 
-      if (turn === undefined) throw new Error(`held-out turn ${id} is not in held-out.jsonl`);
+  const host = armHost(arm, {
+    intended: (call) => { kept.push({ ...call, answered: fromRecord(call.name, call.input) !== null }); },
+    recorded: (name, input) => fromRecord(name, input) ?? KEPT,
+  });
+
+  // The turns each request ran, as their ends report them.
+  const ended: CompletedTurn[] = [];
+
+  const unsubscribe = host.subscribe((key, event) => {
+    if (key === 'root' && event.type === 'turn-end') ended.push(event.turn);
+  });
+
+  try {
+    const session = await host.acquire('root');
+
+    for (const turn of requests) {
       kept = [];
+      spent = spentNothing();
       ended.length = 0;
       fromRecord = shellFromRecord(recordedShell(turn));
       const askedAt = Date.now();
       await session.send(turn.turn.userMessage, { id: crypto.randomUUID() });
       const ran = ended.at(-1);
 
-      appendFileSync(join(space, 'answers.jsonl'), `${JSON.stringify({
-        turnId: id, request: turn.turn.userMessage, answer: ran?.assistantResponse ?? null, calls: ran?.toolCalls.map((call) => call.name) ?? [],
-        kept, ms: Date.now() - askedAt,
+      appendFileSync(answers, `${JSON.stringify({
+        turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: ran?.assistantResponse ?? null, calls: ran?.toolCalls.map((call) => call.name) ?? [],
+        kept, spent, ms: Date.now() - askedAt,
       })}\n`);
       await session.clearConversation();
     }
-
-    const evolution = armEvolution({ refinements: session.listRefinements(200), changelog: session.getEvolutionChangelog(200).entries });
-
-    writeFileSync(join(space, 'run.json'), `${JSON.stringify({
-      arm, spec, snapshot, heldOut: { count: frozen.turnIds.length, digest: frozen.digest }, trained: trained.length, dreamPasses, evolution,
-      egressRefused: egress.refused, trainMs: trainedAt - started, heldOutMs: Date.now() - trainedAt,
-    }, null, 2)}\n`);
   } finally {
     unsubscribe();
     await host.close();
+    restore();
+  }
+}
+
+if (import.meta.main) {
+  const { values } = parseArgs({ options: {
+    phase: { type: 'string' }, data: { type: 'string' }, snapshot: { type: 'string' }, arm: { type: 'string' }, out: { type: 'string' },
+    spec: { type: 'string', default: 'workers-ai/@cf/zai-org/glm-5.3' }, 'held-out': { type: 'string', default: '40' },
+    'train-last': { type: 'string', default: '250' }, seed: { type: 'string', default: '1' },
+    copy: { type: 'string', default: '0' }, of: { type: 'string', default: '1' },
+  } });
+
+  const { phase, data, snapshot, arm, out, spec } = values;
+  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+
+  if ((phase !== 'prepare' && phase !== 'answer') || data === undefined || snapshot === undefined || out === undefined || (arm !== 'dreaming' && arm !== 'off')) {
+    throw new Error('--phase prepare|answer, --data, --snapshot, --out and --arm dreaming|off are required');
+  }
+
+  if (account === undefined || token === undefined) throw new Error('set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN');
+  const model = spec.replace(/^workers-ai\//u, '');
+  const base = join(out, model.replaceAll('/', '_'), arm);
+  const egress = limitEgress([MODEL_HOST]);
+
+  try {
+    if (phase === 'prepare') {
+      mkdirSync(join(base, 'base'), { recursive: true });
+      await prepare({ arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, 'base') }, ownerTurnsFrom(readFileSync(join(data, 'train.jsonl'), 'utf8')), Number(values['train-last']));
+    } else {
+      const heldOut = ownerTurnsFrom(readFileSync(join(data, 'held-out.jsonl'), 'utf8'));
+      const frozen = frozenSet(data, heldOut, Number(values['held-out']), Number(values.seed));
+      const [copy, of] = [Number(values.copy), Number(values.of)];
+      const space = join(base, `copy-${String(copy)}`);
+
+      if (!existsSync(space)) cpSync(join(base, 'base'), space, { recursive: true });
+
+      const requests = frozen.turnIds.filter((_, at) => at % of === copy).map((id) => {
+        const turn = heldOut.find((candidate) => candidate.turn.turnId === id);
+
+        if (turn === undefined) throw new Error(`held-out turn ${id} is not in held-out.jsonl`);
+
+        return turn;
+      });
+
+      await answer({ arm, spec, snapshot, llm: workersAi(account, token, model), space }, requests, join(base, `answers-${String(copy)}.jsonl`));
+    }
+
+    if (egress.refused.length > 0) writeFileSync(join(base, `egress-refused-${phase}-${values.copy}.json`), `${JSON.stringify(egress.refused)}\n`);
+  } finally {
     egress.stop();
   }
 }
