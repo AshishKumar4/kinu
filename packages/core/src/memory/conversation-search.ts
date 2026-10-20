@@ -19,39 +19,30 @@ const MAX_MESSAGE_CHARS = 700;
 
 const SNIPPET_TOKENS = 24;
 
-/** Finite integers >= 50 pass through; anything else takes the default. */
-const MaxCharsSchema = v.optional(v.pipe(v.number(), v.finite(), v.integer(), v.minValue(50)));
+/** The recall contract, once: the memory tool's operations describe these schemas, and the store returns their types. */
 
-export interface ConversationSearchHit {
-  conversationId: string;
-  messageId: string;
-  role: string;
-  createdAt: number;
-  snippet: string;
-}
+/** Characters per message a reader may ask for; the window it asks for is the window it gets. */
+export const ConversationMaxCharsSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
 
-interface ConversationScrollMessage {
-  id: string;
-  role: string;
-  content: string;
-  createdAt: number;
-  anchor?: true;
-}
+export const ConversationSearchHitSchema = v.strictObject({ conversationId: v.string(), messageId: v.string(), role: v.string(), createdAt: v.number(), snippet: v.string() });
 
-export interface ConversationScrollResult {
-  conversationId: string;
-  messages: ConversationScrollMessage[];
-  messagesBefore: number;
-  messagesAfter: number;
-}
+const ConversationScrollMessageSchema = v.strictObject({
+  id: v.string(), role: v.string(), content: v.string(), createdAt: v.number(), anchor: v.optional(v.literal(true)),
+});
 
-export interface ConversationSummary {
-  conversationId: string;
-  messageCount: number;
-  startedAt: number;
-  lastActiveAt: number;
-  preview: string;
-}
+export const ConversationScrollResultSchema = v.strictObject({
+  conversationId: v.string(), messages: v.array(ConversationScrollMessageSchema), messagesBefore: v.number(), messagesAfter: v.number(),
+});
+
+export const ConversationSummarySchema = v.strictObject({ conversationId: v.string(), messageCount: v.number(), startedAt: v.number(), lastActiveAt: v.number(), preview: v.string() });
+
+export type ConversationSearchHit = v.InferOutput<typeof ConversationSearchHitSchema>;
+
+type ConversationScrollMessage = v.InferOutput<typeof ConversationScrollMessageSchema>;
+
+export type ConversationScrollResult = v.InferOutput<typeof ConversationScrollResultSchema>;
+
+export type ConversationSummary = v.InferOutput<typeof ConversationSummarySchema>;
 
 function truncate(text: string, maxChars = MAX_MESSAGE_CHARS): string {
   return text.length > maxChars
@@ -161,11 +152,8 @@ export class ConversationSearchStore implements ConversationRecall {
       SELECT COUNT(*) AS c FROM conversation_entries
       WHERE actor_id = ${this.actorId} AND session_id = ${anchor.session_id} AND rowid > ${anchor.rid}`[0]?.c ?? 0;
 
-    const parsedMaxChars = v.safeParse(MaxCharsSchema, maxChars);
-
-    const perMessage = parsedMaxChars.success && parsedMaxChars.output !== undefined
-      ? parsedMaxChars.output
-      : MAX_MESSAGE_CHARS;
+    // Validated where it is asked for (the memory tool's `ConversationMaxCharsSchema`); absent is the default.
+    const perMessage = maxChars ?? MAX_MESSAGE_CHARS;
 
     // An entry deleted mid-projection quotes as empty; the next sync drops it.
     const quote = async (row: EntryRow): Promise<ConversationScrollMessage> => ({
