@@ -441,7 +441,7 @@ export function facetTurnSources(turn: {
     models: { normalize: (spec) => registry.normalizeSpecSync(spec || prepared.sources.model), resolve: (spec) => registry.resolveModel(spec, affinity) },
     report: (_actor, report) => spend.report(report),
     operations,
-    turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic },
+    turn: { profile: () => actor.session.profile, ledger: actor.session.dynamic, reads: actor.session.orchestrator.acc.ledgers.files },
   });
 
   const sources = turnSourcesFromBundle(prepared.sources, {

@@ -81,7 +81,7 @@ export const LOCKED_BASELINE: Baseline = {
   'subordinate-runtime/inherited-context-digest': 'ba86199c3b33a663',
   'subordinate-runtime/role-narrowing': 'eace2134ab6dd091',
   'tool-contract/description-shape': 'b6bee2de421e6a8d',
-  'tool-contract/every-builtin-renders': '4ea6bfb436fc116a',
+  'tool-contract/every-builtin-renders': '843b810a36d510c8',
   'volatile-context/empty-state-is-null': 'dafa798cf7a7139c',
   'volatile-context/facts-budget': '1a82fb876f4ea3d9',
   'volatile-context/frozen-blocks-hold-their-position': '6d1bd321d278900d',
