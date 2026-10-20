@@ -40,7 +40,7 @@ function workspaceNamed(env: ProbeEnv, name: string): Promise<DurableObjectStub<
   return getAgentByName<ProbeEnv, ProductionOrchestrator>(env.OrchestratorAgent, name);
 }
 
-const ACCOUNT_METHODS = ['accountsOf', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'driveCensus', 'previewCensus'];
+const ACCOUNT_METHODS = ['accountsOf', 'runDueWork', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'driveCensus', 'previewCensus'];
 
 /** The tables an account holds, by the prefixes `account-reset-probe.ts` counts, and its sent cards. */
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_', 'share_cards_'];
@@ -56,6 +56,11 @@ export class CensusAccountDO extends UserDO {
   /** The accounts `emails` are on this deployment, by the rule every sign-in mints by. */
   async accountsOf(emails: readonly string[]): Promise<string[]> {
     return await Promise.all(emails.map((email) => accountIdFor(this.env, email)));
+  }
+
+  /** Its alarm, run now: the jobs due, a card it sends among them. */
+  async runDueWork(): Promise<void> {
+    await this.alarm();
   }
 
   /** Priya's account as she used it: her workspace with a preview, a device, a credential and a file in her Drive. */

@@ -2,7 +2,6 @@
  * @vitest-environment node
  */
 import { env } from 'cloudflare:workers';
-import { runDurableObjectAlarm } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { parseMailRecipient } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -45,8 +44,11 @@ describe("deleting an account on real workerd, every store's census", () => {
     await control().seedPerson(priya);
     await account('kinu:builtin-accounts').seedSignIn(priya);
 
-    // Dana's card reaches Priya's account on its own job, run by Dana's account's alarm.
-    while (await runDurableObjectAlarm(account(dana)));
+    // Dana's card reaches Priya's account on its own job, which Dana's account's alarm runs.
+    for (let runs = 0; (await account(priya.userId).accountCensus()).user_share_cards === 0; runs += 1) {
+      if (runs === 5) throw new Error("Dana's card never reached Priya");
+      await account(dana).runDueWork();
+    }
 
     // Read from Dana's account where a read would make Priya's again.
     const census = async () => ({
