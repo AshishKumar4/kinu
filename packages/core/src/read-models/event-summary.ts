@@ -6,7 +6,7 @@
 
 import * as v from 'valibot';
 import { CHAT_REWOUND_EVENT } from '../orchestrator/rewind-notice';
-import { MAIL_HANDED_EVENT } from '../events/ingress/email';
+import { MAIL_HANDED_EVENT } from '../mail/handed';
 
 export interface EventSummary {
   /** What happened, short: "Task reminder". */

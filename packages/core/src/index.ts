@@ -109,6 +109,8 @@ export { mailHostRedirect } from './mail/host';
 
 export { inboundBody, isAutoReplyEmail, mailThreadText, stripQuotedReply } from './mail/words';
 
+export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/handed';
+
 export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
 
 export { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorDeps, type MonitorRunResult } from './monitor/incidents';
