@@ -10,7 +10,8 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
-import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
+import { ChatMascot, WorkspaceLogo } from "./Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { AgentStatusMark } from "./AgentStatus";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
@@ -291,6 +292,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
 /** A chat's row, with the tab's own rename and delete beside its name: on hover with a pointer, always at a touch. */
 function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: WorkspaceAgentsPanel; onRename: () => void }) {
   const { remove, clears = false } = panel.actions(chat);
+  const look = useMascotOf(panel.workspace)(chat.key, chat.colour);
   const reveal = "opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover/chat:opacity-70 lg:group-focus-within/chat:opacity-70";
 
   return (
@@ -298,7 +300,7 @@ function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: Workspace
       <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
         aria-current={panel.shown === chat.key ? "page" : undefined}
         className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 text-left transition-colors ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-7 lg:pr-3 lg:group-hover/chat:pr-7 lg:group-focus-within/chat:pr-7"} ${navRowCls(panel.shown === chat.key)}`}>
-        <ChatMascot seed={mascotSeed(panel.workspace, chat.key)} colour={mascotColour(panel.workspace, chat.colour)} activity={chat.activity} />
+        <ChatMascot seed={look.seed} colour={look.colour} activity={chat.activity} />
         <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
       </button>
       <button type="button" onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`}

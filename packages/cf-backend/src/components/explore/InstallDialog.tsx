@@ -18,13 +18,16 @@ import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { installBlueprint, type BlueprintPage } from "@/lib/explore-api";
-import { BRIEF_TIMES, DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
+import { DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
+
+/** The brief times Install offers; the blueprint's own is 08:00. */
+const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
 
 export function InstallDialog({ page, connected, onClose }: { page: BlueprintPage; connected: (preset: string | null) => boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const assistant = page.workspace.id === PERSONAL_ASSISTANT_ID;
   const [name, setName] = useState(assistant ? DEFAULT_ASSISTANT.name : page.workspace.title);
-  const [brief, setBrief] = useState(DEFAULT_ASSISTANT.brief);
+  const [brief, setBrief] = useState<string>("08:00");
   const [home, setHome] = useState(true);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);

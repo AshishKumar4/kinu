@@ -16,6 +16,22 @@ function hashOf(seed: string): number {
 
 export const mascotSeed = (workspace: string, chat: string): string => `${workspace}/${chat}`;
 
+/** A mascot's seed and hue. */
+export interface MascotLook {
+  readonly seed: string;
+  readonly colour: number;
+}
+
+/**
+ * The look of a person's own assistant, from the person's name: its hue and what it wears are the name's, the same on
+ * every page it appears on, and never Main's crown (a workspace's main chat), which means nothing to them.
+ */
+export function personMascot(name: string): MascotLook {
+  const seed = `person:${name.trim().toLowerCase()}`;
+
+  return { seed, colour: hashOf(seed) % 360 };
+}
+
 /**
  * The hue an agent's tile is drawn in: a workspace's agents step round the wheel in birth order (`PanelAgent.colour`)
  * from a point its name picks (`rankHue`), so no two of them ever share one and an agent's never changes.

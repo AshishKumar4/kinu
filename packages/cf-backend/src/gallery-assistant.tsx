@@ -49,6 +49,8 @@ const entry = (name: string, displayName: string, visited: number, o: WorkspaceO
 
 /** The owner's workspaces as the assistant sees them on a Monday morning: two it runs, one waiting on a deploy. */
 export const ASSISTANT_ROSTER: RosterEntry[] = [
+  // Home's own workspace, as the roster lists it once installed: the rail leaves it out, and it wears the owner's face.
+  { ...entry(ASSISTANT_WORKSPACE, "Personal assistant", 0, null), home: true },
   // Started by the assistant a few minutes ago, when Ashish asked for it in Home's chat.
   ...(MOMENT === "firstrun" ? [] : [entry("api-worker-v2", "API Worker v2 release", 2 * MIN, overview({
     activity: "working", latestRun: { status: "running", task: "Cut release/v2 from main and write the notes", run: null },

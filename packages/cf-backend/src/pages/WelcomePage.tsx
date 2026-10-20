@@ -18,6 +18,7 @@ import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
+import { personName } from "@/hooks/use-chat-mascot";
 import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { installBlueprint } from "@/lib/explore-api";
@@ -147,7 +148,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       // The assistant first: Home is its chat the moment setup ends.
-      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { agent: assistant.name, brief: assistant.brief, home: true }));
+      // Its brief keeps the blueprint's 08:00 in the person's own time zone; the time is changed in its settings.
+      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { agent: assistant.name, home: true }));
       const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 
@@ -275,7 +277,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   </div>
                 )}
 
-                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} />}
+                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} person={personName(profile === null ? null : { displayName, email: profile.email })} />}
 
                 {s.id === 'showcase' && <ShowcaseStep revealed={revealed} />}
               </div>

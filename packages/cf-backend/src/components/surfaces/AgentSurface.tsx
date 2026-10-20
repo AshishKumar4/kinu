@@ -18,7 +18,8 @@ import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { QualityView } from "./evolution-panels";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
-import { ChatMascot, mascotSeed } from "@/components/Marks";
+import { ChatMascot } from "@/components/Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
 import { Link } from "react-router-dom";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -85,6 +86,7 @@ function Quiet({ children }: { children: React.ReactNode }) {
 }
 
 function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | undefined; address: string | null }) {
+  const look = useMascotOf(workspace ?? as.name)("main", 0);
   const title = workspaceDisplayTitle({ name: as.name, displayName: as.displayName });
   const since = new Date(as.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 
@@ -93,7 +95,7 @@ function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | 
       <div className="space-y-3">
         <div className="flex items-center gap-3.5">
           <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl border p-border p-fill">
-            <ChatMascot seed={mascotSeed(workspace ?? as.name, "main")} colour={0} activity="idle" size={30} />
+            <ChatMascot seed={look.seed} colour={look.colour} activity="idle" size={30} />
           </span>
           <div className="min-w-0">
             <div className="p-title truncate p-text" title={title}>{title}</div>

@@ -9,7 +9,7 @@ import {
   type AlarmScheduler, type RegisterSpec, type TriggerKind,
 } from '../src/events/hub/index';
 import {
-  EventLog, JsonObjectSchema, cancelTrigger, createTimerTrigger, fireDueTriggers, listTriggers,
+  EventLog, JsonObjectSchema, cancelTrigger, createTimerTrigger, dailyTimeOf, fireDueTriggers, listTriggers, retimeDailyTrigger,
   type KinuEvent, type TimerPayload,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
@@ -517,5 +517,33 @@ describe('timer ingress', () => {
     expect(cancelTrigger({ registry: t.registry, trigger_id: timer.id, now: NOW, caller: 'owner' })).toEqual({ ok: true, changed: true });
     expect(cancelTrigger({ registry: t.registry, trigger_id: timer.id, now: NOW, caller: 'owner' })).toEqual({ ok: true, changed: false });
     expect(await t.fire(present(timer.nextFireAt, 'the cancelled trigger\'s fire time'))).toEqual({ fired: 0 });
+  });
+});
+
+// The assistant's daily brief is set up at 08:00; its owner moves it from the workspace's Settings, not from setup.
+describe('retimeDailyTrigger', () => {
+  test('moves a daily schedule to the time asked, in the zone it keeps, and arms its next firing', async () => {
+    const { registry, alarm } = setup();
+    const made = await createTimerTrigger(registry, { cron: '0 8 * * *', timeZone: 'Europe/Lisbon', label: 'Daily brief', trust: 'owner' }, NOW);
+    const moved = await retimeDailyTrigger({ registry, trigger_id: made.id, at: '07:30', now: NOW });
+    const row = present(registry.get(made.id));
+
+    expect({ cron: row.spec.cron, zone: row.spec.time_zone, label: row.spec.label, at: typeof row.spec.cron === 'string' ? dailyTimeOf(row.spec.cron) : null })
+      .toEqual({ cron: '30 7 * * *', zone: 'Europe/Lisbon', label: 'Daily brief', at: '07:30' });
+    expect(row.next_fire_at).toBe(moved.nextFireAt);
+    expect(alarm.requested.at(-1)).toBe(moved.nextFireAt);
+    expect(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Lisbon', hour: '2-digit', minute: '2-digit' }).format(moved.nextFireAt)).toBe('07:30');
+  });
+
+  test('refuses a time that is not HH:MM, a schedule that is not daily, and one revoked', async () => {
+    const { registry } = setup();
+    const daily = await createTimerTrigger(registry, { cron: '0 8 * * *', trust: 'owner' }, NOW);
+    const hourly = await createTimerTrigger(registry, { cron: '0 * * * *', trust: 'owner' }, NOW);
+
+    await expect(retimeDailyTrigger({ registry, trigger_id: daily.id, at: '25:00', now: NOW })).rejects.toThrow('HH:MM');
+    await expect(retimeDailyTrigger({ registry, trigger_id: hourly.id, at: '07:30', now: NOW })).rejects.toThrow('No daily schedule');
+    registry.revoke(daily.id, NOW);
+    await expect(retimeDailyTrigger({ registry, trigger_id: daily.id, at: '07:30', now: NOW })).rejects.toThrow('No daily schedule');
+    expect(present(registry.get(daily.id)).spec.cron).toBe('0 8 * * *');
   });
 });

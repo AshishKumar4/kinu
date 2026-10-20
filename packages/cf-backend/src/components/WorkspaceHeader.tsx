@@ -7,7 +7,8 @@ import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { composing } from "@/components/ui/form";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
-import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
+import { ChatMascot, WorkspaceLogo } from "./Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import type { ChatActions } from "@/hooks/use-agents-nav";
 import { InspectorToggle, type InspectorControl } from "@/components/WorkbenchPanels";
 
@@ -46,10 +47,12 @@ interface WorkspaceHeaderProps {
 }
 
 export function WorkspaceHeader({ workspace, chats, active, newChat, leading, trailing }: WorkspaceHeaderProps) {
+  const mascotOf = useMascotOf(workspace.name);
+
   const items: BarItem[] = [
     { key: "overview", label: workspace.title, logo: workspace.logo ?? null, to: workspace.to, title: true, rename: { value: workspace.editValue, save: workspace.rename }, remove: workspace.remove },
     ...chats.map(({ agent, to, rename, remove, clears }) => ({
-      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: { seed: mascotSeed(workspace.name, agent.key), colour: mascotColour(workspace.name, agent.colour) }, rename: { value: agent.label, save: rename },
+      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: mascotOf(agent.key, agent.colour), rename: { value: agent.label, save: rename },
       ...(remove && { remove }), ...(clears === true && { clears }),
       tab: agent.open.kind === "chat" ? agent.open.path ?? "main" : agent.key,
     })),
