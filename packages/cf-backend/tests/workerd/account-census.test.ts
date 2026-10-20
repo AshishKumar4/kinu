@@ -53,10 +53,10 @@ describe("deleting an account on real workerd, every store's census", () => {
     // What a Drive tenant physically keeps: its user object's rows and keys, and every base shard's.
     const drive = async (tenant: string) => {
       const names = await account(dana).driveNames(tenant);
-      const held = async (namespace: typeof env.CENSUS_DRIVE_USER, object: string) => namespace.get(namespace.idFromName(object)).storageRows();
-      const shards = await Promise.all(names.shards.map(async (shard) => held(env.CENSUS_DRIVE_SHARD, shard)));
+      const shards = await Promise.all(names.shards.map(async (shard) => env.CENSUS_DRIVE_SHARD.get(env.CENSUS_DRIVE_SHARD.idFromName(shard)).storageRows()));
+      const user = await env.CENSUS_DRIVE_USER.get(env.CENSUS_DRIVE_USER.idFromName(names.user)).storageRows();
 
-      return { user: await held(env.CENSUS_DRIVE_USER, names.user), shards: shards.reduce((sum, rows) => sum + rows, 0) };
+      return { user, shards: shards.reduce((sum, rows) => sum + rows, 0) };
     };
 
     // A tenant that never wrote, as an emptied one must read: its objects' own schema, and nothing of anyone's.
