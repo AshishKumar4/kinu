@@ -12,7 +12,7 @@ import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
 import { listScaffoldArchive } from '../scaffold/archive';
 import {
-  getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
+  getPendingScaffold, scaffoldSource, type PendingScaffold, type ScaffoldDecisionEvents,
 } from '../scaffold/versions';
 import { listArtifactVersions, type ArtifactVersion } from './artifacts';
 import { nanoid } from '../utils/nanoid';
@@ -83,7 +83,7 @@ export async function runScaffoldOnce(
   opts?: { useShadowOverride?: boolean },
 ): Promise<ScaffoldRunResult> {
   const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql, control.rt.actor) : null;
-  const codeOverride = pending ? await readScaffoldVersion(control.rt, pending.version) : null;
+  const codeOverride = pending ? await scaffoldSource(control.rt, pending.version) : null;
 
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride ?? undefined,
@@ -98,7 +98,7 @@ export function previewScaffoldLive(
   task: string,
 ): Promise<ScaffoldRunResult> {
   return settle(Effect.gen(function* () {
-    const codeOverride = yield* Effect.promise(() => readScaffoldVersion(control.rt, version));
+    const codeOverride = yield* Effect.promise(() => scaffoldSource(control.rt, version));
 
     if (codeOverride == null) {
       return yield* Effect.die(new Error(`previewScaffoldLive: no scaffold code found for v${version}`));

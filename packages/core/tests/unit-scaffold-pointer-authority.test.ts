@@ -1,5 +1,5 @@
 import { Result } from 'effect';
-import { exists, writeText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * S4: scaffold promotion is pointer-first. The `.vN` file is canonical and the `current` row the single
  * pointer; each fault leaves one current pointer whose file a cold reopen executes.
@@ -14,7 +14,7 @@ import {
   getCurrentScaffoldVersion,
   applyPromotionDecision,
   rollbackScaffold,
-  readScaffoldVersion,
+  scaffoldSource,
   createScaffoldSurface,
 } from '../src/index';
 import { createTestRuntime } from './helpers';
@@ -22,8 +22,6 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import { RunEventRecorder } from '../src/events/recorder';
 import { WORKSPACE_RUN_ID } from '../src/events/model-call';
 import { createMemoryVfs, present } from '@kinu.run/test-utils';
-
-const V0 = 'async function* run(rt, task) { yield "v0"; }';
 
 const V1 = 'async function* run(rt, task) { yield "v1"; }';
 
@@ -55,7 +53,7 @@ async function currentCount(rt: AgentRuntime): Promise<number> {
 
 /** Seed v0 canonically through the real bootstrap, then propose V1. */
 async function seedAndPropose(rt: AgentRuntime): Promise<number> {
-  await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
+  await rt.storage.vfs.unlink(scaffoldVfsPath(rt, '.v0'));
   await bootstrapScaffold(rt);
 
   const mod = await modifyScaffold(
@@ -70,16 +68,15 @@ async function seedAndPropose(rt: AgentRuntime): Promise<number> {
 }
 
 describe('bootstrap seeds the canonical source', () => {
-  test('a fresh workspace writes .v0 before its row and the view last', async () => {
+  test('a fresh workspace writes .v0, then its row', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
+    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, '.v0'));
 
     await bootstrapScaffold(rt);
 
     expect(await exists(rt.storage.vfs, scaffoldVfsPath(rt, '.v0'))).toBe(true);
-    expect(await readScaffoldVersion(rt, 0)).toBe(INITIAL_SCAFFOLD_SOURCE);
+    expect(await scaffoldSource(rt, 0)).toBe(INITIAL_SCAFFOLD_SOURCE);
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
-    // The live view materialises from the same canonical source.
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
   });
 
@@ -104,48 +101,15 @@ describe('bootstrap seeds the canonical source', () => {
 
     await bootstrapScaffold(rt);
 
-    expect({ v0: await readScaffoldVersion(rt, 0), live: await rt.identity.scaffold.read() })
+    expect({ v0: await scaffoldSource(rt, 0), live: await rt.identity.scaffold.read() })
       .toEqual({ v0: INITIAL_SCAFFOLD_SOURCE, live: INITIAL_SCAFFOLD_SOURCE });
-  });
-
-  test('a preserved workspace gets its exact one-shot .v0 seed from the live source', async () => {
-    const { rt } = createTestRuntime();
-    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
-    // Preserved shape: a live file and no archive at all.
-    await writeText(rt.storage.vfs, scaffoldVfsPath(rt, ''), V0);
-
-    await bootstrapScaffold(rt);
-
-    expect(await exists(rt.storage.vfs, scaffoldVfsPath(rt, '.v0'))).toBe(true);
-    expect(await readScaffoldVersion(rt, 0)).toBe(V0);
-    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
-    // One-shot: re-running changes nothing.
-    await bootstrapScaffold(rt);
-    expect(await readScaffoldVersion(rt, 0)).toBe(V0);
-  });
-
-  test('activation refreshes a stale view onto the current pointer', async () => {
-    const { rt } = createTestRuntime();
-    const pendingVersion = await seedAndPropose(rt);
-    void rt.storage.sql`
-      UPDATE scaffold_versions SET status = 'historical'
-      WHERE actor_id = ${rt.actor.actorId} AND version = 0`;
-    void rt.storage.sql`
-      UPDATE scaffold_versions SET status = 'current'
-      WHERE actor_id = ${rt.actor.actorId} AND version = ${pendingVersion}`;
-    // The view was never rewritten (the crash window) — it still holds v0's seed.
-
-    await bootstrapScaffold(rt);
-
-    expect(await rt.identity.scaffold.read()).toBe(V1);
-    expect(await (reopen(rt)).identity.scaffold.read()).toBe(V1);
   });
 });
 
 describe('proposal boundary — source lands before the pending row', () => {
   test('a failed candidate-file write leaves no pending row behind', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
+    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, '.v0'));
     await bootstrapScaffold(rt);
 
     const vfs = rt.agentStateVfs;
@@ -181,37 +145,22 @@ describe('proposal boundary — source lands before the pending row', () => {
     );
 
     expect(retry.ok).toBe(true);
-    expect(await readScaffoldVersion(rt, present(retry.version, 'the retried proposal version'))).toBe(V1);
+    expect(await scaffoldSource(rt, present(retry.version, 'the retried proposal version'))).toBe(V1);
   });
 });
 
 describe('promotion boundary — one current pointer, executed source follows it', () => {
-  test('promote commits the pointer even when the view write dies', async () => {
+  test('promote moves the one current pointer, and the executed source is that version\'s file', async () => {
     const { rt } = createTestRuntime();
     const pendingVersion = await seedAndPropose(rt);
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
-    const realWrite = rt.identity.scaffold.write.bind(rt.identity.scaffold);
-    rt.identity.scaffold.write = async () => {
-      throw new Error('injected view-write failure');
-    };
-
-    await expect(applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor)))
-      .rejects.toThrow('injected view-write failure');
+    await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     // Exactly one current pointer, and it names the promoted version.
     expect(currentCount(rt)).resolves.toBe(1);
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(pendingVersion);
-
-    // Cold reopen executes the pointer's version file, not the stale view.
     expect(await reopen(rt).identity.scaffold.read()).toBe(V1);
-    // A failed promotion leaves the injected writer installed.
-    await expect(rt.identity.scaffold.write(V1)).rejects.toThrow('injected view-write failure');
-
-    // Activation heals the rebuildable view.
-    rt.identity.scaffold.write = realWrite;
-    await bootstrapScaffold(rt);
-    expect(await rt.identity.scaffold.read()).toBe(V1);
   });
 
   test('rollback decision retires the pending without touching the pointer', async () => {
@@ -219,12 +168,7 @@ describe('promotion boundary — one current pointer, executed source follows it
     await seedAndPropose(rt);
     const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
-    rt.identity.scaffold.write = async () => {
-      throw new Error('injected view-write failure');
-    };
-
-    await expect(applyPromotionDecision(rt, pending, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor)))
-      .rejects.toThrow('injected view-write failure');
+    await applyPromotionDecision(rt, pending, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     expect((rt.storage.sql<{ status: string }>`
       SELECT status FROM scaffold_versions
@@ -255,7 +199,7 @@ describe('promotion boundary — one current pointer, executed source follows it
 
   test('repeated promote/rollback cycles keep exactly one current pointer', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
+    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, '.v0'));
     await bootstrapScaffold(rt);
 
     for (let i = 1; i <= 3; i++) {
@@ -281,7 +225,7 @@ describe('promotion boundary — one current pointer, executed source follows it
   // core-rest review P1-3: a promotion named `pending - 1` as its predecessor, so after a rollback the journal said v2.
   test('a promotion after a rolled-back proposal names the version it replaced', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
+    await rt.storage.vfs.unlink(scaffoldVfsPath(rt, '.v0'));
     await bootstrapScaffold(rt);
     const events = new RunEventRecorder(rt.storage.sql, rt.actor);
 

@@ -128,7 +128,6 @@ function noScaffold(): Identity['scaffold'] {
     exists: async () => false,
     version: async () => 0,
     read: async () => refuse('a scaffold read', 'a runtime with a scaffold surface'),
-    write: async () => refuse('a scaffold write', 'a runtime with a scaffold surface'),
   };
 }
 

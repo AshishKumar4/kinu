@@ -23,6 +23,7 @@ import { compactedScreenshots, screenshot } from '../../compaction/tests/helpers
 import { RELEASE_SIGNING_PUBLIC_KEY_ENV } from '@kinu.run/core';
 import { DAEMON_PREDECESSOR_ENV, PROVIDER_KEY_ENV, SESSION_CREDENTIAL_ENV } from '../../core/src/cli/command-env';
 import { fileNamespaceFor } from '../../core/tests/helpers';
+import { writeScaffoldVersion } from '@kinu.run/core';
 
 /** Every name Kinu reads a credential or its own setting from, as the declaring modules name them. */
 const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
@@ -118,8 +119,8 @@ describe('peers over one directory', () => {
     const first = agentRuntime(state, 'first', project);
     const second = agentRuntime(state, 'second', project);
 
-    await first.identity.scaffold.write('// first\n');
-    await second.identity.scaffold.write('// second\n');
+    await writeScaffoldVersion(first, 0, '// first\n');
+    await writeScaffoldVersion(second, 0, '// second\n');
     await first.memory.write('memory/notes.md', 'what first learned');
 
     expect(await first.identity.scaffold.read()).toBe('// first\n');
@@ -190,7 +191,7 @@ describe('a fork over the bound directory', () => {
 
     if (!parentShell) throw new Error('a bound workspace runs the host shell');
     expect((await parentShell.exec('echo "$HOME"')).stdout.trim()).toBe(process.env.HOME ?? '');
-    await head.identity.scaffold.write('// head\n');
+    await writeScaffoldVersion(head, 0, '// head\n');
     expect(await head.identity.scaffold.read()).toBe('// head\n');
     expect(await parent.identity.scaffold.exists()).toBe(false);
     expect(existsSync(join(project, 'scaffold'))).toBe(false);
@@ -594,18 +595,18 @@ describe('what an opened workspace puts where', () => {
     expect(info.memorySize).toBeGreaterThan(0);
 
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
-    await rt.identity.scaffold.write('// evolved\n');
+    await writeScaffoldVersion(rt, 0, '// evolved\n');
     await writeText(rt.storage.vfs, 'README.md', '# the project\n');
 
     expect(readdirSync(project)).toEqual(['README.md']);
     expect(await exists(rt.storage.vfs, 'SOUL.md')).toBe(false);
     expect(await exists(rt.storage.vfs, 'memory/MEMORY.md')).toBe(false);
-    expect(await exists(rt.storage.vfs, 'scaffold/agent.js')).toBe(false);
+    expect(await exists(rt.storage.vfs, 'scaffold/agent.js.v0')).toBe(false);
 
     const home = join(state, 'jarvis', 'home', 'main');
 
     expect(readFileSync(join(home, 'memory/MEMORY.md'), 'utf8')).toContain('learned something');
-    expect(readFileSync(join(home, 'scaffold/agent.js'), 'utf8')).toBe('// evolved\n');
+    expect(readFileSync(join(home, 'scaffold/agent.js.v0'), 'utf8')).toBe('// evolved\n');
     expect(readFileSync(join(home, 'SOUL.md'), 'utf8')).toBe(info.soul);
   });
 });
@@ -616,14 +617,14 @@ describe('the agent\'s own state in a placed workspace', () => {
     const { state, project } = roots('cwd-plane-agent-state');
     const { rt } = await openedWorkspace(state, 'jarvis', project);
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
-    await rt.identity.scaffold.write('// evolved\n');
+    await writeScaffoldVersion(rt, 0, '// evolved\n');
     const home = join(state, 'jarvis', 'home', 'main');
 
     expect(await readText(rt, join(home, 'memory/MEMORY.md'))).toContain('learned something');
-    expect(await nimbusReadText(rt.toolFiles, 'vfs://home/main/scaffold/agent.js')).toBe('// evolved\n');
+    expect(await nimbusReadText(rt.toolFiles, 'vfs://home/main/scaffold/agent.js.v0')).toBe('// evolved\n');
 
     expect(await refusalOf(() => writeText(rt.toolFiles, 'vfs://home/main/memory/MEMORY.md', 'forged'))).toBe('EROFS');
-    expect(await refusalOf(() => rt.storage.vfs.unlink(join(home, 'scaffold/agent.js')))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink(join(home, 'scaffold/agent.js.v0')))).toBe('EROFS');
     expect(await refusalOf(() => rt.storage.vfs.mkdir(join(home, 'memory/more'), { recursive: true }))).toBe('EROFS');
     expect(readFileSync(join(home, 'memory/MEMORY.md'), 'utf8')).toContain('learned something');
     expect(readdirSync(project)).toEqual([]);
@@ -737,7 +738,7 @@ describe('main\'s state keeps its writer, whatever path reaches it', () => {
     expect(await refusalOf(() => plane.removeRecursive?.(home))).toBe('EBUSY');
     expect(await refusalOf(() => plane.rename?.(join(home, 'memory'), join(project, 'stolen')))).toBe('EBUSY');
     expect(existsSync(join(home, 'memory/MEMORY.md'))).toBe(true);
-    expect(existsSync(join(home, 'scaffold/agent.js'))).toBe(true);
+    expect(existsSync(join(home, 'scaffold/agent.js.v0'))).toBe(true);
   });
 
   test('a link that points at itself is read and removed as the link, never followed', async () => {

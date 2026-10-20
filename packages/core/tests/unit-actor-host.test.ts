@@ -1,4 +1,4 @@
-import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // ActorHost: N logical actors over one physical database, without sharing state.
 // Two real issued actors over one `SqlExecutor` with colliding keys each read back
 // only their own rows, through the production binder and directory.
@@ -32,6 +32,7 @@ import { wrapDatabase } from '../src/identity/inline-primitives';
 import { decideInterruptedTurn } from '../src/orchestrator/turn-recovery';
 import type { ModelMessage } from 'ai';
 import { Effect } from 'effect';
+import { createScaffoldSurface } from '../src/scaffold/surface';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
 
@@ -56,14 +57,7 @@ function scaffoldIdentity(record: WorkspaceActor, vfs: VFS, sql: SqlExecutor, ac
   return {
     id: `actor-${record.name}`,
     name: record.name,
-    scaffold: {
-      path,
-      exists: () => exists(vfs, path),
-      read: () => readText(vfs, path),
-      write: (source: string) => writeText(vfs, path, source),
-      version: async () => sql<{ version: number | null }>`
-        SELECT MAX(version) AS version FROM scaffold_versions WHERE actor_id = ${actorId}`[0]?.version ?? 0,
-    },
+    scaffold: createScaffoldSurface({ vfs, sql, actor: { actorId, assertCurrent: () => {} }, path }),
   };
 }
 

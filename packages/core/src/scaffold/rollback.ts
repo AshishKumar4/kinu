@@ -1,13 +1,13 @@
 import { Result } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
- * Scaffold rollback: repoint current to the target in one statement, then refresh the live view.
+ * Scaffold rollback: repoint current to the target in one statement.
  *
  * Formal spec: Evolution/Scaffold.lean — rollback_nonexistent_is_none
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import { readScaffoldVersion } from './versions';
+import { scaffoldSource } from './versions';
 
 export async function rollbackScaffold(
   rt: AgentRuntime,
@@ -23,7 +23,7 @@ export async function rollbackScaffold(
 
   if (!row) return Result.fail(`Version ${version} not found in scaffold history`);
 
-  const target = await readScaffoldVersion(rt, version);
+  const target = await scaffoldSource(rt, version);
 
   if (target == null) return Result.fail(`Version ${version} not found in scaffold history`);
 
@@ -33,7 +33,6 @@ export async function rollbackScaffold(
         AND (version = ${version}
              OR (status = 'current' AND version != ${version}))`;
   markStoreChanged(sql);
-  await rt.identity.scaffold.write(target);
 
   return Result.void;
 }

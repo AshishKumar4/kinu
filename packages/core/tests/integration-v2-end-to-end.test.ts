@@ -8,13 +8,14 @@ import {
   HeadController, HeadJournal, initHeadsTables,
   type HeadInput, type HeadReport, type HeadRuntime, type SpawnedHead,
   type SerializedMessage, type SplitRequest, type MergeOutput,
-  getPendingScaffold, applyPromotionDecision, readScaffoldVersion,
+  getPendingScaffold, applyPromotionDecision, scaffoldSource,
   initScaffoldTables, modifyScaffold,
   initRunEventTables, RunEventRecorder,
   reviewCommand, gateExec, wordsOnly,
 } from '../src/index';
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, createTestRuntime, createTestActor, fileNamespaceFor } from './helpers';
+import { writeScaffoldVersion } from '../src/scaffold/versions';
 
 interface HeadReportIndex {
   [headId: string]: HeadReport;
@@ -155,7 +156,7 @@ describe('v2 e2e: scaffold proposal and promotion', () => {
   test('modifyScaffold writes new version with status=pending', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
-    await rt.identity.scaffold.write('async function* run(rt, task) { yield task; }');
+    await writeScaffoldVersion(rt, 0, 'async function* run(rt, task) { yield task; }');
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
 
@@ -197,7 +198,7 @@ describe('v2 e2e: scaffold proposal and promotion', () => {
     // promotion copies v0 over itself and the status assertions still pass.
     const V0 = 'async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }';
     const V1 = 'async function* run(rt, task) { yield { type: "chunk", data: "v1-retry" }; }';
-    await rt.identity.scaffold.write(V0);
+    await writeScaffoldVersion(rt, 0, V0);
     await writeText(rt.storage.vfs, `${rt.identity.scaffold.path}.v0`, V0);
     await writeText(rt.storage.vfs, `${rt.identity.scaffold.path}.v1`, V1);
 
@@ -218,7 +219,7 @@ describe('v2 e2e: scaffold proposal and promotion', () => {
     // Flipping statuses without swapping the source would leave the agent running v0 labelled v1.
     expect(await rt.identity.scaffold.read()).toBe(V1);
     expect(await rt.identity.scaffold.version()).toBe(1);
-    expect(await readScaffoldVersion(rt, 0)).toBe(V0);
+    expect(await scaffoldSource(rt, 0)).toBe(V0);
   });
 });
 

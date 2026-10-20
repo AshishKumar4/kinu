@@ -21,7 +21,7 @@ import {
   listPublishable,
   listScaffoldArchive,
   modifyScaffold,
-  readScaffoldVersion,
+  scaffoldSource,
   recordLesson, listLessons,
   recordTurnRating,
   type ExperienceEntry,
@@ -35,6 +35,7 @@ import { setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 import { createRecordingLogger } from '@kinu.run/test-utils';
+import { writeScaffoldVersion } from '../src/scaffold/versions';
 
 function sqlExec(db: Database): SqlExec {
   return makeSqlExec(db);
@@ -123,7 +124,7 @@ function publishSources(ws: Workspace): PublishSources {
     actor: ws.rt.actor,
     craftStore: ws.rt.craftStore,
     facts: ws.facts,
-    readScaffoldVersion: (version: number) => readScaffoldVersion(ws.rt, version),
+    readScaffoldVersion: (version: number) => scaffoldSource(ws.rt, version),
   };
 }
 
@@ -135,7 +136,7 @@ function scaffoldSrc(tag: string): string {
 }
 
 async function seedLiveScaffold(ws: Workspace): Promise<void> {
-  await ws.rt.identity.scaffold.write(scaffoldSrc('v0'));
+  await writeScaffoldVersion(ws.rt, 0, scaffoldSrc('v0'));
   void ws.rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${ws.rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
 }
@@ -686,7 +687,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     // The marker lets a re-promotion after an interrupted settlement recognise its own pending candidate.
     expect(pending?.rationale).toMatch(/\[import:imp-[a-z0-9]+\]/);
     expect(pending?.rationale).toContain(SCAFFOLD_RATIONALE);
-    expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('v1'));
+    expect(await scaffoldSource(beta.rt, 1)).toBe(scaffoldSrc('v1'));
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v0'));
     expect(getCurrentScaffoldVersion(beta.rt.storage.sql, beta.rt.actor)).toBe(0);
   });
@@ -719,7 +720,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
 
     await gradeTurn(beta, 'turn-1', 'positive');
 
-    expect(await readScaffoldVersion(beta.rt, 1)).toBe(scaffoldSrc('local'));
+    expect(await scaffoldSource(beta.rt, 1)).toBe(scaffoldSrc('local'));
     expect(await importedRows(beta)).toEqual([]);
     expect(listScaffoldArchive(beta.rt.storage.sql, beta.rt.actor).map((e) => e.version)).toEqual([1, 0]);
   });
@@ -799,7 +800,7 @@ describe('the library answers from an untouched workspace', () => {
       actor: rt.actor,
       craftStore: rt.craftStore,
       facts: createFactsStore(rt.storage.sql, rt.actor),
-      readScaffoldVersion: (version: number) => readScaffoldVersion(rt, version),
+      readScaffoldVersion: (version: number) => scaffoldSource(rt, version),
     })).toEqual([]);
   });
 });

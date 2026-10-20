@@ -22,7 +22,7 @@ describe('createTestRuntime refuses work it does not perform', () => {
     }],
     ['a delayed callback', () => rt.schedule.after(10, async () => {})],
     ['a durable fiber', async () => { await rt.schedule.fiber('work', async () => 'done'); }],
-    ['a scaffold write', () => rt.identity.scaffold.write('export default {}')],
+    ['a scaffold read', async () => { await rt.identity.scaffold.read(); }],
   ];
 
   for (const [capability, ask] of unsupported) {

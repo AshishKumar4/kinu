@@ -257,10 +257,11 @@ export function createTestRuntime(opts?: {
   // One workspace, so the shell and the VFS are two views of the same bytes.
   const workspace = createWorkspaceBundle(db);
 
-  // `afterSeed` runs the scaffold seed on the first VFS call and orders later calls behind it.
+  // `afterSeed` runs the scaffold seed on the first VFS call and orders later calls behind it: v0's source, which a turn
+  // runs before any pointer row names it.
   const seededFiles = afterSeed(workspace, () =>
     Promise.resolve(workspace.vfs.mkdir('scaffold', { recursive: true }))
-      .then(() => writeText(workspace.vfs, 'scaffold/agent.js', 'initial')));
+      .then(() => writeText(workspace.vfs, 'scaffold/agent.js.v0', 'initial')));
 
   const vfs: VFS = { ...seededFiles };
   delete vfs.readRange;

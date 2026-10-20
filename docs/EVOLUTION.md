@@ -102,7 +102,7 @@ Each drafted edit takes the judge-only comparison of docs/EVOLUTION-REDESIGN.md 
 1. Structural gate. The rationale must reach `minRationaleLength` (50 characters). The code must parse as JavaScript, declare `async function* run(rt, task)` at its top level, and reference none of `require`, `import`, `globalThis`, `eval` or `Function` (`scaffoldRefusal` in `core/src/scaffold/safety-patterns.ts`, judged on the acorn syntax tree, so a comment naming them is not a finding). Then the misevolution veto below runs.
 2. Parse gate. The code is compiled through `rt.executor` as a syntax check.
 3. Version checkpoint. A single-pending invariant refuses a second `pending` version. The base is taken from `status = 'current'` rather than `MAX(version)`, and `newVersion = MAX(version) + 1`. The DGM base must exist in the archive. The current version is backed up in this step.
-4. Write gate. The proposal is written to a versioned file beside the live scaffold, never over it, so the owner's promotion swaps in exactly the reviewed code. Both names come from `scaffoldPath()`.
+4. Write gate. The proposal is written to its own versioned file (`writeScaffoldVersion`), so a promotion runs exactly the reviewed code. The `.vN` files and the current row are the loop: nothing else holds a copy of the current program. The path comes from `scaffoldPath()`.
 
 ### Misevolution gate
 

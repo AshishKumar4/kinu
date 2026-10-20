@@ -1,10 +1,9 @@
 import { Result } from 'effect';
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Scaffold evolution with a real LLM. Needs AI_GATEWAY_BASE_URL and AI_GATEWAY_AUTH; skips otherwise. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import * as v from 'valibot';
 import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm';
 import { modifyScaffold } from '../../src/scaffold/modify';
 import { rollbackScaffold } from '../../src/scaffold/rollback';
@@ -18,6 +17,7 @@ import {
 } from '../helpers';
 import { WORKSPACE_ROOT } from '../../src/vfs/workspace-path';
 import { cloudPlanes } from '../../src/vfs/resolve';
+import { createScaffoldSurface } from '../../src/scaffold/surface';
 
 function createScaffoldTestRuntime(llm: LLM) {
   const db = new Database(':memory:');
@@ -38,14 +38,7 @@ function createScaffoldTestRuntime(llm: LLM) {
     llm, schedule: createMemorySchedule(db, actor),
     identity: {
       id: 'scaffold-test', name: 'scaffold-test',
-      scaffold: {
-        path: 'scaffold/agent.js',
-        exists: () => exists(vfs, 'scaffold/agent.js'),
-        read: async () => v.parse(v.string(), await readText(vfs, 'scaffold/agent.js')),
-        write: (code) => writeText(vfs, 'scaffold/agent.js', code),
-        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
-          FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
-      },
+      scaffold: createScaffoldSurface({ vfs, sql, actor, path: 'scaffold/agent.js' }),
     },
     craftStore: createMemoryCraftStore(db),
   };

@@ -1,4 +1,3 @@
-import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Scaffold modification — 4-gate validation pipeline.
@@ -13,7 +12,7 @@ import { nowMs, isoDate } from '../utils/date';
 import { scaffoldRefusal } from './safety-patterns';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
-import { getCurrentScaffoldVersion, getPendingScaffold, readScaffoldVersion } from './versions';
+import { getCurrentScaffoldVersion, getPendingScaffold, writeScaffoldVersion } from './versions';
 import type { ModifyResult } from '../types/scaffold';
 
 export type { ModifyResult } from '../types/scaffold';
@@ -92,18 +91,8 @@ export async function modifyScaffold(
     }
   }
 
-  // The archive file is canonical: seed it only when missing.
-  const scaffoldVfs = rt.agentStateVfs;
-  const currentPath = `${rt.identity.scaffold.path}.v${currentVersion}`;
-
-  if (!(await exists(scaffoldVfs, currentPath))) {
-    const current = await readScaffoldVersion(rt, currentVersion);
-
-    if (current !== null) await writeText(scaffoldVfs, currentPath, current);
-  }
-
   // Source files land before the pending row, so a crash never leaves a row without source.
-  await writeText(scaffoldVfs, `${rt.identity.scaffold.path}.v${newVersion}`, code);
+  await writeScaffoldVersion(rt, newVersion, code);
   void rt.storage.sql`
     INSERT INTO scaffold_versions
       (actor_id, version, written_at, rationale, status, parent_version, pathology)

@@ -9,7 +9,7 @@ import {
 } from './types';
 import { findPublishable, listPublishable } from './publishable';
 import { stageImport } from './imports';
-import { readScaffoldVersion } from '../scaffold/versions';
+import { scaffoldSource } from '../scaffold/versions';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { renderThrownChain } from '../obs/index';
@@ -89,7 +89,7 @@ export async function runExperienceAction(
     craftStore: deps.rt.craftStore,
     facts: deps.facts,
     actor: deps.rt.actor,
-    readScaffoldVersion: (version: number) => readScaffoldVersion(deps.rt, version),
+    readScaffoldVersion: (version: number) => scaffoldSource(deps.rt, version),
   };
 
   try {
