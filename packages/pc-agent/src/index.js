@@ -950,9 +950,12 @@ function listPage(listed, offset, limit, show) {
  * What a session's shell reads in place of ~/.bashrc: that rc, then the session's own history file. A session's
  * commands are its own (the owner's call, 2026-10-20): with the owner's HOME they went to ~/.bash_history, and an rc
  * naming its own HISTFILE took them there just the same, so the file is set after the rc, and bash reads it after its
- * startup files. Sandboxed, `~` is the agent's home.
+ * startup files. Each command is appended as the next prompt is drawn (`history -a`, before any PROMPT_COMMAND the rc
+ * set): a shell saves its history only as it exits, and the daemon's close kills it right after the hangup. Sandboxed,
+ * `~` is the agent's home.
  */
-const SESSION_RC = '[ -f ~/.bashrc ] && . ~/.bashrc\nHISTFILE=$KINU_SESSION_HISTORY\nunset KINU_SESSION_HISTORY\nshopt -s histappend\n';
+const SESSION_RC = '[ -f ~/.bashrc ] && . ~/.bashrc\nHISTFILE=$KINU_SESSION_HISTORY\nunset KINU_SESSION_HISTORY\nshopt -s histappend\n'
+  + 'PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"\n';
 
 /** Where a session's history and the rc that names it are kept: Kinu's directory, or under a sandbox the agent's home
  *  (`agentHome`), where Kinu's own directory is masked. */
