@@ -115,7 +115,7 @@ export { mailInContext, type MailInContext } from './mail/in-context';
 
 export { MailTriageLane, triageMail, type MailTriageDeps, type MailTriageRun } from './mail/triage';
 
-export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
+export { createEmailThreadDispatcher, mailboxEmail, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
 
 export { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorDeps, type MonitorRunResult } from './monitor/incidents';
 

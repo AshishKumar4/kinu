@@ -7,7 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
-  durableStamps, EmailOutbox, initMailboxTables, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
+  durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
   MailStore, type MailBlobs,
@@ -17,14 +17,11 @@ import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { parseMail } from './parse';
 
+/** A message's send in the outbox: this prefix and the message's id. */
+const MAIL_SEND_KEY = 'mail:';
+
 /** Sends a day for an account that is not one of the deployment's operators (the owner, 2026-10-19). */
 const DAILY_SEND_CAP = 100;
-
-async function sha256(value: Uint8Array | string): Promise<string> {
-  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value);
-
-  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
 
 /** Whether `email` is one of the deployment's operators, who have no send cap and may always claim an address. */
 function isMailOperator(env: Pick<Env, 'CONTROL_PLANE_ADMINS'>, email: string): boolean {
@@ -32,13 +29,6 @@ function isMailOperator(env: Pick<Env, 'CONTROL_PLANE_ADMINS'>, email: string): 
 }
 
 const IdentityRow = v.object({ user_id: v.string(), email: v.string() });
-
-/** A message's own id, and for a reply what it answers. */
-function replyHeaders(headerId: string, inReplyTo: string | null): Record<string, string> {
-  const own = { 'Message-ID': `<${headerId}>` };
-
-  return inReplyTo === null ? own : { ...own, 'In-Reply-To': inReplyTo, References: inReplyTo };
-}
 
 export class MailboxDO extends DurableObject<Env> implements MailboxCalls, MailboxAgentCalls {
   private readonly store: MailStore;
@@ -71,10 +61,13 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
     // A deployment with no bucket for mail's bytes answers no call; its rows wait for one.
     if (this.bucket === null) this.refusal ??= new KinuError('unavailable', 'This deployment has no MAIL_BUCKET.');
-    this.outbox = new EmailOutbox(ctx.storage.sql, (at) => this.arm(at));
+    // A message the service sent keeps the Message-ID it wrote, which replies name; its send state is the outbox's alone.
+    this.outbox = new EmailOutbox(ctx.storage.sql, (at) => this.arm(at), (key, messageId) => {
+      if (key.startsWith(MAIL_SEND_KEY)) this.store.sentAs(key.slice(MAIL_SEND_KEY.length), messageId);
+    });
     this.store = new MailStore({
       sql: ctx.storage.sql, blobs: this.blobs(), domain: env.EMAIL_DOMAIN ?? '', now: () => Date.now(), id: () => crypto.randomUUID(),
-      parse: parseMail, digest: sha256,
+      parse: parseMail, digest: async (bytes) => sha256Hex(bytes), sendState: (messageId) => this.outbox.stateOf(`${MAIL_SEND_KEY}${messageId}`),
     });
     installAnalyticsDiagnostics(env);
   }
@@ -179,7 +172,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   /** Files it (`file`) and hands it to the outbox, within the account's daily cap (none for operators). */
-  private sendOut(file: () => Promise<{ view: MailMessageView; headerId: string; from: string; inReplyTo: string | null; outgoing: MailOutgoing }>): Effect.Effect<MailMessageView, KinuError> {
+  private sendOut(file: () => Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }>): Effect.Effect<MailMessageView, KinuError> {
     const { env, store, outbox, refusal } = this;
     const sender = this.identity()?.email ?? '';
     const arm = async (): Promise<void> => this.arm();
@@ -195,17 +188,16 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
       if (binding === undefined) return yield* Effect.fail(new KinuError('unavailable', 'This deployment cannot send mail yet: it has no Email Sending binding.'));
 
-      const { view, headerId, from, inReplyTo, outgoing } = yield* Effect.promise(file);
+      const { view, from, inReplyTo, outgoing } = yield* Effect.promise(file);
 
-      const sent = yield* Effect.promise(async () => outbox.send(binding, `mail:${view.id}`, {
-        from, to: [...outgoing.to], subject: outgoing.subject, text: outgoing.text, headers: replyHeaders(headerId, inReplyTo),
-      }, Date.now()));
+      const sent = yield* Effect.promise(async () => outbox.send(binding, `${MAIL_SEND_KEY}${view.id}`, mailboxEmail({
+        from, to: outgoing.to, cc: outgoing.cc ?? [], subject: outgoing.subject, text: outgoing.text, inReplyTo,
+      }), Date.now()));
 
-      // Not yet sent is still queued: the outbox retries on this object's alarm.
-      if (sent.status !== 'failed') store.markSent(view.id, 'sent');
-      else yield* Effect.promise(arm);
+      // Not yet sent is still queued: the outbox retries on this object's alarm, and the view reads its state from it.
+      if (sent.status === 'failed') yield* Effect.promise(arm);
 
-      return { ...view, sendState: sent.status === 'failed' ? 'queued' : 'sent' };
+      return (yield* Effect.promise(async () => store.messageView(view.threadId, view.id))) ?? view;
     });
   }
 

@@ -34,7 +34,7 @@ import { Choice, inputCls } from "@/components/ui/form";
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
-import { MailSendBody, type MailSend } from "@/components/mail/MailSendBody";
+import { MailSendBody } from "@/components/mail/MailSendBody";
 import { mailExcerpt as firstLine, quotedMail as quoted, MailBody as Body, SealedMailHtml as SealedHtml } from "@/components/mail/MailMessage";
 import type { ImportantMail } from "@/lib/mail-api";
 
@@ -146,10 +146,11 @@ const SCOUT_EARLIER = "Hi Dana,\n\nNothing changes on your side: /hooks/v2 check
 const DANA_NOW = `Hi again,\n\nSince Tuesday afternoon every delivery to /hooks/v2 gets a 500 back. Our retries have given up on about 2,300 events (order.created and order.refunded). The response body is just "Internal Server Error".\n\nIs something down on your side? We can replay from our dashboard once it's fixed.\n\nDana\n\nOn ${quotedDay(NOW - 4 * DAY)}, scout <scout.api-worker.ashish@kinu.run> wrote:\n${SCOUT_EARLIER.split("\n").map((line) => `> ${line}`).join("\n")}`;
 
 /** The reply scout drafted for Dana: what the approval card holds. */
-const SCOUT_REPLY: MailSend & { readonly text: string } = {
-  agent: "scout",
+const SCOUT_REPLY = {
+  by: "scout",
   from: "scout.api-worker.ashish@kinu.run",
   to: ["dana@northwind.io"],
+  cc: [],
   subject: "Re: Webhook deliveries to /hooks/v2 failing with 500 since Tuesday",
   text: "Hi Dana,\n\nYou're right, and it's ours. Tuesday's release renamed the database binding the webhook route reads, so every delivery to /hooks/v2 failed before it was stored. Nothing you sent was processed twice.\n\nThe fix is on staging now and goes to production within the hour. Please replay the failed deliveries from your dashboard after 16:00 UTC. I'll check that they land and write back.\n\nscout, for Ashish Kumar Singh",
 };

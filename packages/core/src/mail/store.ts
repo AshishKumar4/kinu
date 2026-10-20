@@ -11,7 +11,7 @@ import { mailVerdict } from './verdict';
 import { replySubject } from './words';
 import type {
   MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
-  MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
+  MailSendState, MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
 } from './mailbox-api';
 import type { SqlExec } from '../types/primitives';
 
@@ -55,6 +55,8 @@ export interface MailStoreDeps {
   readonly id: () => string;
   readonly parse: (raw: Uint8Array) => Promise<ParsedMail>;
   readonly digest: (bytes: Uint8Array | string) => Promise<string>;
+  /** Where a sent message's send stands, by its id: the outbox's word, the only one; null where it holds none. */
+  readonly sendState?: (messageId: string) => 'pending' | 'sent' | 'dlq' | null;
 }
 
 const BoxRow = v.object({
@@ -257,7 +259,7 @@ export class MailStore {
   }
 
   /** Files an agent's message to send: the Mailbox calls this only with the owner's approval of it in hand. */
-  async queueFor(caller: MailCaller, message: MailAgentMessage): Promise<{ view: MailMessageView; headerId: string; from: string; inReplyTo: string | null; outgoing: MailOutgoing }> {
+  async queueFor(caller: MailCaller, message: MailAgentMessage): Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }> {
     const outgoing = this.outgoingFor(caller, message);
 
     if (outgoing instanceof KinuError) return settle(Effect.fail(outgoing));
@@ -552,7 +554,7 @@ export class MailStore {
       html: message.html_key === null ? null : await this.deps.blobs.text(message.html_key),
       attachments: attachments.filter((file) => file.message_id === message.id)
         .map((file) => ({ id: file.id, filename: file.filename, contentType: file.content_type, size: file.size })),
-      writtenBy: message.written_by, sendState: message.send_state, read: message.read === 1,
+      writtenBy: message.written_by, sendState: this.sendStateOf(message), read: message.read === 1,
     })));
 
     return { thread, messages };
@@ -652,7 +654,7 @@ export class MailStore {
   }
 
   /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
-  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; headerId: string; from: string; inReplyTo: string | null }> {
+  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; from: string; inReplyTo: string | null }> {
     const outgoing = this.answering(asked);
     const box = this.box(outgoing.path);
 
@@ -660,19 +662,31 @@ export class MailStore {
 
     if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
 
-    const { id, headerId, threadId } = this.writeOut(box, outgoing, 'queued');
+    const { id, threadId } = this.writeOut(box, outgoing, 'queued');
     const view = await this.messageView(threadId, id);
 
     if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
 
-    return { view, headerId, from: view.from.address, inReplyTo: outgoing.inReplyTo ?? null };
+    return { view, from: view.from.address, inReplyTo: outgoing.inReplyTo ?? null };
   }
 
-  markSent(messageId: string, state: 'sent' | 'failed'): void {
-    this.deps.sql.exec('UPDATE mail_messages SET send_state = ? WHERE id = ?', state, messageId);
+  /** A message's state as shown: a draft is the row's; a sent message's is the outbox's, while it holds the send. */
+  private sendStateOf(message: v.InferOutput<typeof MessageRow>): MailSendState | null {
+    if (message.direction === 'in' || message.send_state === 'draft') return message.send_state;
+
+    const outbox = this.deps.sendState?.(message.id) ?? null;
+
+    if (outbox === null) return message.send_state;
+
+    return ({ pending: 'queued', sent: 'sent', dlq: 'failed' } as const)[outbox];
   }
 
-  private async messageView(threadId: string, id: string): Promise<MailMessageView | null> {
+  /** The Message-ID the sending service wrote for a message, which replies to it name: the thread's identity for them. */
+  sentAs(messageId: string, headerId: string): void {
+    this.deps.sql.exec('UPDATE mail_messages SET header_id = ? WHERE id = ?', bare(headerId), messageId);
+  }
+
+  async messageView(threadId: string, id: string): Promise<MailMessageView | null> {
     return (await this.thread(threadId))?.messages.find((each) => each.id === id) ?? null;
   }
 

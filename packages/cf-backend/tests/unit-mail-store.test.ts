@@ -285,3 +285,40 @@ describe('Trash', () => {
     expect(store.list({ view: 'all', query: 'probe' }).threads).toEqual([]);
   });
 });
+
+describe('what a sent message shows, and what replies to it reach', () => {
+  test('its state is the outbox\'s, however its send went; the reply that names the service\'s Message-ID joins its thread', async () => {
+    const outbox = new Map<string, 'pending' | 'sent' | 'dlq'>();
+
+    store = new MailStore({
+      sql: db, blobs, domain: 'kinu.run', now: () => clock, id: () => { next += 1;
+
+ return `id-${String(next)}`; }, parse: parseMail,
+      digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')), sendState: (messageId) => outbox.get(messageId) ?? null,
+    });
+    open('ashish@kinu.run');
+
+    const { view } = await store.queue({ path: '', to: ['dana@northwind.io'], subject: 'Webhook signing', text: 'We moved to the Northwind-Signature header.' });
+    const shown = async () => (await store.messageView(view.threadId, view.id))?.sendState;
+
+    expect(await shown()).toBe('queued');
+    outbox.set(view.id, 'pending');
+    expect(await shown()).toBe('queued');
+    outbox.set(view.id, 'sent');
+    expect(await shown()).toBe('sent');
+    outbox.set(view.id, 'dlq');
+    expect(await shown()).toBe('failed');
+
+    store.sentAs(view.id, '<0100019a2b3c.4d5e@email.cloudflare.net>');
+
+    const reply = await delivered({
+      raw: new TextEncoder().encode([
+        'From: Dana Whitfield <dana@northwind.io>', 'To: ashish@kinu.run', 'Subject: Re: Webhook signing', 'Message-ID: <signing-ack@northwind.io>',
+        'In-Reply-To: <0100019a2b3c.4d5e@email.cloudflare.net>', 'Content-Type: text/plain; charset=utf-8', '', 'Thanks, deploying the change now.',
+      ].join('\r\n')),
+      envelopeFrom: 'dana@northwind.io', recipient: toPerson,
+    });
+
+    expect(reply.threadId).toBe(view.threadId);
+  });
+});

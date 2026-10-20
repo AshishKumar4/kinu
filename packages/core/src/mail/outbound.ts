@@ -47,6 +47,22 @@ function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references
   };
 }
 
+/**
+ * A message a person or an approved agent sends from their Mailbox, as the Email Sending binding takes it. The service
+ * writes the Message-ID and refuses one set here; the Mailbox keeps the one the binding answers (`EmailOutbox`'s `sentAs`).
+ */
+export function mailboxEmail(message: {
+  readonly from: string; readonly to: readonly string[]; readonly cc: readonly string[]; readonly subject: string; readonly text: string;
+  readonly inReplyTo: string | null;
+}): OutboundEmailMessage {
+  const headers = threadingHeaders({ message_id: message.inReplyTo, references: null });
+
+  return {
+    from: message.from, to: [...message.to], ...(message.cc.length > 0 && { cc: [...message.cc] }), subject: message.subject, text: message.text,
+    ...(Object.keys(headers).length > 0 && { headers: { ...headers } }),
+  };
+}
+
 /** Shared by turn answers and receipts. RFC 3834 `Auto-Submitted: auto-replied` stops responders
  *  bouncing this into an endless thread. */
 function threadReply(
