@@ -5,7 +5,7 @@ import {
   type Icon,
 } from "@phosphor-icons/react";
 import {
-  ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIN_AGENT, parseDrainedEvents,
+  ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIL_HANDED_EVENT, MAIN_AGENT, parseDrainedEvents,
   type AdvisorSeverity, type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
 } from "@kinu.run/core";
 
@@ -235,7 +235,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
 
     return (
       <EventRow
-        icon={GearSixIcon}
+        icon={turn.event === MAIL_HANDED_EVENT ? EnvelopeSimpleIcon : GearSixIcon}
         tone="p-accent"
         label={label}
         source={about}

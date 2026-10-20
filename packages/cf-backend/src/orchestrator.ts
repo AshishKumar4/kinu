@@ -181,7 +181,7 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
-  type MailAdmission, type MailArrival,
+  type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent,
   PeerHub, type PeerMessage, type ReceiveResult,
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
@@ -7382,6 +7382,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   async mailArrived(arrival: MailArrival, actorId?: string): Promise<MailAdmission> {
     return await this.email.accept(arrival, actorId ?? this.actorHandle().actorId);
+  }
+
+  /**
+   * A thread the owner sent this workspace from Mail (docs/MAIL.md §8): a turn of its own for the main agent. Worker-only:
+   * the route proved the owner holds both the thread and this workspace.
+   */
+  async mailHanded(handed: HandedMail): Promise<{ status: 'queued' | 'skipped' }> {
+    const spilled = await spillEventContent(this.rt.storage.vfs, handed.text);
+    const outcome = await this.workspaceAgentDeliveries().signals.send(handedMailSignal(handed, spilled));
+
+    return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
   }
 
   /**

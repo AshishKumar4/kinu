@@ -17,7 +17,7 @@ import { aiProxyRoutes } from '../user/ai-proxy';
 import { webSearchRoutes } from '../user/web-search-route';
 import { providerProxyRoutes } from '../user/provider-proxy';
 import { accountRoutes } from '../user/account-routes';
-import { mailRoutes } from '../mail/routes';
+import { mailHandRoutes, mailRoutes } from '../mail/routes';
 import { consentRoutes } from '../slates/consent-routes';
 import { userRoutes } from '../user/routes';
 import { deployRoutes } from '../deploy/routes';
@@ -119,6 +119,8 @@ mount(runEventsRoutes(REAL_CLOCK, workspaceAgent));
 mount(evalAbortRoutes);
 
 mount(activationRoutes);
+
+mount(mailHandRoutes);
 
 mount(hubRoutes(workspaceAgent));
 
