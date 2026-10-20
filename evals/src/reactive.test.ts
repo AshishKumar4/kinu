@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { LAST_SEGMENTS, learningVerdict, reactivePlan, reactiveReply, seedInterval, type ArmRun, type SegmentResult } from './reactive';
+import { armEvolution, LAST_SEGMENTS, learningVerdict, reactivePlan, reactiveReply, seedInterval, type ArmRun, type SegmentResult } from './reactive';
 
 const FAMILIES = ['budget-board', 'chess', 'launch-prep', 'memory-recall'];
 
@@ -50,5 +50,36 @@ describe('learning on must beat learning off', () => {
   test('the interval is the two-sided 95% t interval over seeds', () => {
     expect(seedInterval([1, 2, 3])).toEqual({ mean: 2, lo: expect.closeTo(2 - 4.303 / Math.sqrt(3), 6), hi: expect.closeTo(2 + 4.303 / Math.sqrt(3), 6) });
     expect(seedInterval([1])).toEqual({ mean: 1, lo: Number.NEGATIVE_INFINITY, hi: Number.POSITIVE_INFINITY });
+  });
+});
+
+describe('what an arm\'s dreams did', () => {
+  test('dreams by stage, edits by kind and disposition, and the changes a turn ran with', () => {
+    const route = (kind: 'skill' | 'prompt_section' | 'fact', disposition: 'staged' | 'applied' | 'refused') => ({ kind, owner: '', target: 't', disposition });
+
+    const request = (stage: 'applied' | 'evaluating' | 'refused', routes: ReturnType<typeof route>[]) => ({
+      id: stage, trigger: 'cadence' as const, scope: 'workspace' as const, stage, turnIds: [], routes, detail: '', createdAt: 0,
+    });
+
+    const entry = (id: string) => ({ id, kind: 'artifact' as const, at: 0, summary: '', evidence: '' });
+
+    expect(armEvolution({
+      refinements: {
+        requests: [
+          request('applied', [route('skill', 'staged'), route('fact', 'applied')]),
+          request('evaluating', [route('skill', 'staged'), route('prompt_section', 'staged')]),
+          request('refused', [route('prompt_section', 'refused')]),
+        ],
+        debt: { turnIds: [], owed: false, key: '', summary: '' },
+      },
+      changelog: [
+        entry('artifact:section/guidance@1:historical'), entry('artifact:section/guidance@2:current'), entry('artifact:tool/file@1:staged'),
+        entry('scaffold:v0:current'), entry('scaffold:v1:rolled_back'),
+      ],
+    })).toEqual({
+      dreams: { applied: 1, evaluating: 1, refused: 1 },
+      edits: { 'skill staged': 2, 'fact applied': 1, 'prompt_section staged': 1, 'prompt_section refused': 1 },
+      activations: 3,
+    });
   });
 });
