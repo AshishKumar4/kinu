@@ -148,7 +148,7 @@ function desk(defect?: Defect) {
     },
     craftedTools: () => Promise.resolve([{ name: 'report_totals', description: 'Count assertions in a report', usageCount: uses }]),
     runEvents: () => Promise.resolve([{ type: 'craft_cycle', eventIndex: 1, runId: 'this-turn', timestamp: new Date(110).toISOString(),
-      crafted: [], invoked: defect === 'agent-used-once' ? [] : ['report_totals'], reused: [], returned: 1, raised: 0, dropped: [] }]),
+      crafted: [], invoked: defect === 'agent-used-once' ? [] : ['report_totals'], reused: [], returned: 1, raised: 0, broke: [] }]),
     memoryContent: () => Promise.resolve(defect === 'memory-note' ? 'Rhea coordinates TM-COLL-905; TM-COLL-724 is cancelled.' : ''),
     memoryFacts: () => Promise.resolve(defect === 'empty-memory' || defect === 'memory-note' ? []
       : [{ key: 'handoff.private', value: { code: 'TM-COLL-905', coordinator: 'Rhea' } }]),
