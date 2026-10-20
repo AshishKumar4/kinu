@@ -755,7 +755,7 @@ describe('cloud agent ownership safety', () => {
       const { owner } = await cold.agent.claimOwner('first-claim-user');
 
       expect(owner).toBe('first-claim-user');
-      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT }))).not.toBeNull();
+      expect(await workspaceFiles(cold.agent).stat(`${actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT })}.v0`)).not.toBeNull();
     });
   });
 
