@@ -253,11 +253,9 @@ describe('what one deployed version did, as a deploy reports it', () => {
 // Staging 2026-10-08: an 08:19:16Z row was absent from a read at 10:25Z and present at 10:50Z.
 describe('a read that issues a verdict', () => {
   /** Answers each count in turn, its last forever; `refused` is a read the API answered 500, `rejected` one it answered
-   *  400, a query it will never take. */
-  /** Answers each count in turn, its last forever; `refused` is a read the API answered 500, `rejected` one it answered
    *  400, a query it will never take. The window ends at `windowEnd`, the first read starts at `startAt`, and each read
-   *  takes `readMs`. */
-  const reader = (counts: readonly (number | 'refused' | 'rejected')[], { windowEnd = 0, startAt = 0, readMs = 0 } = {}) => {
+   *  takes `readMs`; reads settle a `holdMs` past it. */
+  const reader = (counts: readonly (number | 'refused' | 'rejected')[], { windowEnd = 0, startAt = 0, readMs = 0, holdMs = 10 } = {}) => {
     let clock = startAt;
     let at = 0;
     const startedAt: number[] = [];
@@ -280,7 +278,7 @@ describe('a read that issues a verdict', () => {
 
         return Promise.resolve();
       },
-      windowEnd, pollMs: 2, holdMs: 10, capMs: 60,
+      windowEnd, pollMs: 2, holdMs, capMs: 60,
     };
   };
 
@@ -290,6 +288,15 @@ describe('a read that issues a verdict', () => {
 
     expect(await settledRead(late)).toEqual({ settled: true, value: 7, reads: 5, lateRows: 2 });
     expect(late.startedAt).toEqual([3, 4, 6, 8, 10]);
+  });
+
+  // Staging rc28, 2026-10-20: a hold of 3 min on a 2 min grid read at 4 min, the hold's first tick, so a deploy's verdict
+  // waited a minute past the instant its telemetry was settled.
+  test('reads at the hold itself when it falls between two of the grid\'s reads', async () => {
+    const off = reader([5, 5, 5, 5], { holdMs: 3 });
+
+    expect(await settledRead(off)).toEqual({ settled: true, value: 5, reads: 3, lateRows: 0 });
+    expect(off.startedAt).toEqual([0, 1, 3]);
   });
 
   test('waits on a change that lands after the hold, and not on one before it', async () => {

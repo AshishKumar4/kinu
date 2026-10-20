@@ -1345,7 +1345,7 @@ export const SETTLE_HOLD_MS = 3 * MINUTE_MS;
  *  within which every row but the two stragglers landed, 9.5 min, which `SETTLE_HOLD_MS` would leave unread. */
 export const LANDED_HOLD_MS = 10 * MINUTE_MS;
 
-/** The grid settling reads are taken on, from the window's end, so a read's own time never delays the next. */
+/** The grid settling reads are taken on, through the hold's instant, so a read's own time never delays the next. */
 export const SETTLE_POLL_MS = 2 * MINUTE_MS;
 
 /**
@@ -1366,8 +1366,9 @@ export type SettledRead<T> =
 /**
  * Reads a window whose events end at `windowEnd` until it is settled: a read started `holdMs` or more after the
  * window's end, when every row of its events has landed (`SETTLE_HOLD_MS`), whose `fingerprint` agrees with the read
- * before it. Reads are taken at once and then on a `pollMs` grid from the window's end; past `capMs` from the first, the
- * answer is "unsettled". `rows` counts what the window held at each read, so the answer names how many rows landed
+ * before it. Reads are taken at once and then on a `pollMs` grid through the hold's instant, so the first read that may
+ * settle is taken at it: a grid from the window's end read a 3 min hold first at 4 min, a minute on every deploy's
+ * verdict (staging rc28, 2026-10-20). Past `capMs` from the first, the answer is "unsettled". `rows` counts what the window held at each read, so the answer names how many rows landed
  * after the first read. A read the API refuses as `unavailable` says nothing of the window, so the next tick reads
  * again: the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no answer at all
  * fails on it; any other failure, a refused token, a query the API rejects or an answer that does not parse, fails at
@@ -1382,9 +1383,11 @@ export async function settledRead<T>(at: {
   const capped = (): boolean => at.now() - started + at.pollMs > at.capMs;
   let readAt = started;
 
-  // The next tick of the grid after the last read began.
+  // The next tick of the grid after the last read began: the grid passes through the hold's instant.
+  const anchor = at.windowEnd + at.holdMs;
+
   const tick = async (): Promise<void> => {
-    const next = at.windowEnd + (Math.floor((readAt - at.windowEnd) / at.pollMs) + 1) * at.pollMs;
+    const next = anchor + (Math.floor((readAt - anchor) / at.pollMs) + 1) * at.pollMs;
 
     await at.sleep(Math.max(0, next - at.now()));
     readAt = at.now();
