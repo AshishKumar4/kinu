@@ -294,8 +294,7 @@ export function ProfileCatalogSettings() {
 
   return (
     <>
-      <Card title="Models" icon={BrainIcon}
-        description="The models your agents think with, in every workspace you own. A change applies from the next turn.">
+      <Card title="Tiers" icon={BrainIcon}>
         {!draft || !envelope ? (
           <div className="flex items-center gap-2 p-row-text p-text-3">
             <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>

@@ -135,13 +135,16 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
           <Tile billing="cloudflare" opened={opened} onPick={pick} disabled={saving}
             title="Cloudflare" badge="Default"
             about="Paid through your Cloudflare account." />
-          <Tile billing="key" opened={opened} onPick={pick} disabled={saving || KEYED_PROVIDERS.length === 0}
-            title="Your own key"
-            about={KEYED_PROVIDERS.length === 0 ? "No provider takes a key yet." : "Paid to the provider, with your API key."} />
+          {/* Offered once a provider that takes a key is admitted; until then there is no such choice to show. */}
+          {KEYED_PROVIDERS.length > 0 && (
+            <Tile billing="key" opened={opened} onPick={pick} disabled={saving}
+              title="Your own key"
+              about="Paid to the provider, with your API key." />
+          )}
         </div>
       </Field>
 
-      {opened === "cloudflare" ? (
+      {opened === "cloudflare" || KEYED_PROVIDERS.length === 0 ? (
         <div className="space-y-3" data-web-search-cloudflare>
           <Field label="Provider" inline>
             <Segmented label="Search provider"

@@ -307,6 +307,16 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
   return { model, parked: parked.promise, aborted: aborted.promise };
 }
 
+/** A turn's stream that holds until the turn is aborted. */
+function parkedStream(signal: AbortSignal | undefined): ReadableStream<LanguageModelV2StreamPart> {
+  return new ReadableStream<LanguageModelV2StreamPart>({
+    start(controller) {
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      signal?.addEventListener('abort', () => { controller.error(signal.reason); }, { once: true });
+    },
+  });
+}
+
 /** A root's brief that hires a child, whose mission hires the grandchild; `NESTED.work` is the grandchild's own. */
 const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one helper for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
 
@@ -341,14 +351,7 @@ function nestedHireModel(park: boolean) {
       if (prompt.includes(NESTED.work) && park) {
         parked.resolve();
 
-        return {
-          stream: new ReadableStream<LanguageModelV2StreamPart>({
-            start(controller) {
-              controller.enqueue({ type: 'stream-start', warnings: [] });
-              options.abortSignal?.addEventListener('abort', () => { controller.error(options.abortSignal?.reason); }, { once: true });
-            },
-          }),
-        };
+        return { stream: parkedStream(options.abortSignal) };
       }
 
       if (!answered && prompt.includes(NESTED.child) && !prompt.includes(NESTED.work) && !hired.has('child')) {
@@ -2092,6 +2095,41 @@ describe('LocalAgentHost', () => {
     }
   });
 
+  // One lifecycle (core hireLifecycle): the first work a hire is given titles it as it is admitted, before its turn runs, on
+  // this machine as in the cloud; a later message never does.
+  test('the first brief a hire is given titles it as it is admitted, before its turn runs', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    const parked = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async () => textAnswer('acknowledged', usage),
+      // Every turn holds until it is aborted, so only the admission can have titled the hire.
+      doStream: async (options) => ({ stream: parkedStream(options.abortSignal) }),
+    });
+
+    const { host } = makeHost(state, parked, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    try {
+      const team = await host.team('root');
+
+      await team.create({ name: 'helper' });
+
+      const before = childConfigValue(dbPath, 'helper', 'display_name');
+
+      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+      expect(before).not.toBe('Audit the coupon checkout');
+
+      await team.message({ name: 'helper', content: 'Rename yourself to something else', mode: 'build' });
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+    } finally {
+      await host.close();
+    }
+  });
+
   /** Once the task agent settles its row is released: its one failure is the only message, and it takes no further work. */
   // Review P1 (integration/0963): with the in-call waiter gone, a Stop on the root reached nothing it had hired.
   test('a Stop on the root interrupts the task agent it hired, and the stopped agent wakes no one', async () => {
@@ -2203,67 +2241,6 @@ describe('LocalAgentHost', () => {
     view.close();
     expect(reports).toBe(1);
     expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
-  });
-
-  test('a refiner answer with no waiter runs the lane at once, without waiting for a turn', async () => {
-    const { state, project } = makeRoots();
-    const dbPath = await seedAgent(state, 'root');
-    const child = reportingChildModel('Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}');
-    const { host } = makeHost(state, child.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
-    const team = await host.team('root');
-    await team.spawn({ name: 'ask-refiner-x1', role: 'researcher', mission: 'Propose refinements.', mode: 'build' });
-
-    const seed = workspaceDatabase(dbPath);
-    const actorId = present(seed.query<{ actor_id: string }, []>('SELECT actor_id FROM actor_subordinates LIMIT 1').get(), 'the root').actor_id;
-    const now = Date.now();
-    seed.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
-    seed.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
-    seed.close();
-
-    const stage = () => {
-      const view = new Database(dbPath, { readonly: true });
-      const row = view.query<{ stage: string }, []>("SELECT stage FROM refinement_requests WHERE id = 'refine-1'").get();
-      view.close();
-
-      return row?.stage ?? null;
-    };
-
-    // The answer's pass is held until close() has begun: close() must join it before ending the session.
-    const root = await host.acquire('root');
-    const runEvolutionAnswer = root.runEvolutionAnswer.bind(root);
-    const end = root.end.bind(root);
-    const held = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const order: string[] = [];
-
-    root.runEvolutionAnswer = async (at) => {
-      held.resolve();
-      await release.promise;
-      await runEvolutionAnswer(at);
-      order.push('answer routed');
-    };
-
-    root.end = async () => {
-      order.push('session ended');
-      await end();
-    };
-
-    await team.assign({ name: 'ask-refiner-x1', task: 'Review the recent turns.', mode: 'build' });
-    // The helper the lane hires is task-lived, and durable verbs refuse one: so it becomes one after the handoff.
-    const helper = workspaceDatabase(dbPath);
-    helper.run(`UPDATE workspace_actors SET origin = 'evolution', lifetime = 'task' WHERE name = 'ask-refiner-x1'`);
-    helper.close();
-    await held.promise;
-    const closing = host.close();
-    release.resolve();
-    await closing;
-
-    expect(order).toEqual(['answer routed', 'session ended']);
-
-    expect(stage()).not.toBe('requested');
   });
 
   // 2026-10-01: the TUI's agents hub read its helpers once, when it opened, and went stale: the CLI host told its clients

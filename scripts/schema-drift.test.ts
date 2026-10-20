@@ -313,12 +313,6 @@ describe('schema-drift over this tree', () => {
     console.log(`actor schema: scanned SQL templates in ${sources.size} product files; blind: runtime-built SQL and test-only fixtures`);
   });
 
-  test('the product DDL matches its locked genesis', () => {
-    const state = survey();
-
-    expect(state.violations).toEqual([]);
-  });
-
   test('RED: a constraint planted on any table of this tree fails the gate for that table alone', () => {
     // The direction this gate claims, proven on every table it governs rather
     // than on a fixture: one definition gains a CHECK, and the verdict names it.

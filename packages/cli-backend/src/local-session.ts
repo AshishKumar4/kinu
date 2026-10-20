@@ -59,7 +59,7 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
-  assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  toolsBehindBoundary, type ToolBoundary, assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
   terminalEffect,
@@ -88,7 +88,7 @@ import { ActorSession, type ActorTurnLease,
   type ScaffoldControl,
   createScaffoldCandidateSurface,
   type EvolutionStatus,
-  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
   type RefinementLaneStep,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
@@ -258,6 +258,8 @@ export interface LocalAgentSessionOpts {
   clock?: Clock;
   /** The actor as the root's {@link LocalAgentHost} bound it; absent when this session owns it. */
   hosted?: LocalHostedSession;
+  /** A measured session's calls meet this instead of the world (`toolsBehindBoundary`); only a measurement sets it. */
+  boundary?: ToolBoundary;
 }
 
 /** A job fiber's checkpoint names its job. */
@@ -287,6 +289,7 @@ export class LocalAgentSession {
   private readonly actorHost: ActorHost;
   /** Loop origin each created actor was named with, read by `loopFor` before the first claim. */
   private readonly loopOrigins = new Map<string, LoopOrigin>();
+  private readonly boundary: ToolBoundary | undefined;
 
   /** The origin recorded for an actor about to be seated. Public: the daemon's host resolves the loop,
    *  but only the seating session knows what was named. */
@@ -576,6 +579,7 @@ export class LocalAgentSession {
     this.rt.setModelOperations?.(this.modelOperations);
     // One queue per workspace (core safety/deferred-approval.ts): a hire parks on its root's, as itself.
     this.hostedHere = opts.hosted;
+    this.boundary = opts.boundary;
     this.deferrals = this.workspaceQueue(opts.hosted);
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channelFor(this.rt.actor.actorId));
@@ -818,11 +822,11 @@ export class LocalAgentSession {
       const log = new EventLog(makeSqlExec(this.db), this.actorHost.bindStores(actorReferenceOf(record)).handle);
       const from = this.rt.actor.name;
 
-      this.db.transaction(() => {
+      writeTransaction(this.db, () => {
         const admitted = admitSubordinateTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
 
         if (admitted.admitted) new AgentDeliveries(this.rt.storage.sql).add(actorId, assignmentDelivery(log, { id: admitted.id, body: signal.text.trim(), mode: 'build', from }));
-      })();
+      });
     });
   }
 
@@ -2186,7 +2190,6 @@ export class LocalAgentSession {
       control: this.scaffoldControl,
       facts: this.factsStore,
       approvals: this.instructionApprovals,
-      refiner: this.teamDeps?.temporary ?? null,
       skillsVfs: this.rt.ownFiles,
       recordedTurns: () => this.recordedTurns(),
     };
@@ -2194,14 +2197,6 @@ export class LocalAgentSession {
 
   async runRefinementLane(): Promise<void> {
     this.announceRefinement(await refinementPass(this.refinementDeps));
-  }
-
-  async runEvolutionAnswer(now: number): Promise<void> {
-    const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
-      diagnostics.failure('refinement.answer_wake_failed', failure);
-    });
-
-    if (step) this.announceRefinement(step);
   }
 
   private announceRefinement(step: RefinementLaneStep): void {
@@ -2797,9 +2792,10 @@ export class LocalAgentSession {
     for (const mode of ['build', 'plan'] as const) {
       // A closure: this toolset is rebuilt only on model change, but the turn changes every turn.
       const built = buildActorTools({ ...this.actorToolsetDeps(mode, () => this.turnExecution()), ...(served !== undefined && { served }) });
+      const { boundary } = this;
 
       served = built.stores;
-      this.toolSets[mode] = built;
+      this.toolSets[mode] = boundary === undefined ? built : { ...built, turn: toolsBehindBoundary(built.turn, boundary), raw: toolsBehindBoundary(built.raw, boundary) };
     }
 
     this.activateToolMode(this.actorSession.workMode);
@@ -2844,17 +2840,10 @@ export class LocalAgentSession {
       escalations: this.actorSession.orchestrator.acc.ledgers.escalations,
       craft: this.actorSession.orchestrator.acc.ledgers.craft,
       ...(this.actorReach.kind === 'workspace' && { external: () => this.turnExternalTools }),
-      codemode: (surface) => {
-        // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
-        const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
-        const native: ToolSet = {};
-
-        for (const [name, entry] of Object.entries(surface.native)) {
-          if (narrowing.allowsTool(name)) native[name] = entry;
-        }
-
-        return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode, surface.stores), reach: narrowing })({ ...surface, native });
-      },
+      // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
+      codemode: (surface) => createNodeCodemodeToolFactory({
+        namespaces: this.codemodeProviders(mode, surface.stores), reach: narrowToolSurface(this.actorSession.profile?.allowedTools),
+      })(surface),
       agents: this.agentsToolDeps(mode),
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },

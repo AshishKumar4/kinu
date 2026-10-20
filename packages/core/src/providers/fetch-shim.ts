@@ -8,6 +8,14 @@ export function asFetchFunction(
   return Object.assign(fn, { preconnect: () => {} });
 }
 
+/**
+ * A held `fetch` as a plain call. workerd's own `fetch` throws "Illegal invocation" when called as a method of the
+ * object holding it (`deps.fetch(...)`), so every fetch a caller hands in is called through this.
+ */
+export function plainFetch(fetchFn: typeof fetch): typeof fetch {
+  return asFetchFunction((input, init) => fetchFn(input, init));
+}
+
 function isHeaderIterable(value: HeadersInit): value is HeadersInit & Iterable<Iterable<string>> {
   return Symbol.iterator in Object(value);
 }

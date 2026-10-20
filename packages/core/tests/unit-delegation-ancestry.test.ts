@@ -1,0 +1,67 @@
+/**
+ * A hire whose recorded line of hirers cannot be walked to the root is refused, and says why (BD-011): a hirer the
+ * directory does not describe, or a line that returns to itself, leaves its depth unknown, where the walk once granted
+ * the room left below the depth it had counted, or never ended. Rows written outside the directory (an import, a
+ * corruption) are the only way there, so the test writes them directly.
+ */
+import { describe, expect, test } from 'bun:test';
+import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActor } from './helpers';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import { actorReferenceOf } from '../src/identity/actor-handle';
+import { hireLifecycle } from '../src/subordinates/hire-lifecycle';
+import { KinuError } from '../src/obs/error';
+
+const unused = async (): Promise<never> => { throw new KinuError('unsupported', 'A refused hire asks nothing else.'); };
+
+/** A workspace with `helper` hired by main, its ancestry then rewritten by `corrupt` as an import might leave it. */
+function hirerWith(corrupt: (sql: ReturnType<typeof createTestSql>, ids: { readonly helper: string; readonly second: string }) => void) {
+  const database = createTestSql();
+
+  createTestActor(database.sql, database.execRaw, 'workspace', 'main');
+
+  const before = new WorkspaceActorDirectory(database.sql, { workspaceId: 'workspace', ownerUserId: '' });
+  const main = before.main();
+  const helper = before.apply(main, [], { action: 'register', name: 'helper', creationId: 'c-helper', origin: 'agent', lifetime: 'durable' }).reference;
+  const second = before.apply(helper, before.storagePath(helper), { action: 'register', name: 'second', creationId: 'c-second', origin: 'agent', lifetime: 'durable' }).reference;
+
+  database.execRaw('PRAGMA foreign_keys = OFF');
+  corrupt(database, { helper: helper.actorId, second: second.actorId });
+
+  // Read fresh, as the next process reads what the import left.
+  const directory = new WorkspaceActorDirectory(database.sql, { workspaceId: 'workspace', ownerUserId: '' });
+  const record = directory.retained(second.actorId);
+
+  if (record === null) throw new Error('the hirer under test is gone');
+
+  const lifecycle = hireLifecycle({
+    parent: () => ({ reference: actorReferenceOf(record), record }),
+    directory,
+    describe: (actorId) => directory.retained(actorId),
+    born: unused, asHire: unused, deliver: unused, hirerName: () => 'second', announce: () => {}, retireJobs: unused, roster: () => { throw new Error('no roster is read'); }, retire: unused,
+  });
+
+  return { directory, lifecycle };
+}
+
+const seed = { name: 'third', displayName: 'Third', nameOrigin: 'auto', role: 'general', mission: 'Go one deeper.', lifetime: 'durable', origin: 'agent', creationId: 'c-third' } as const;
+
+describe('a hirer whose line of hirers cannot be walked', () => {
+  test('one hired by an agent the workspace no longer records is refused, saying its depth is unknown', async () => {
+    const { directory, lifecycle } = hirerWith((database, { helper }) => {
+      void database.sql`UPDATE workspace_actors SET parent_actor_id = 'actor-gone' WHERE actor_id = ${helper}`;
+    });
+
+    expect(lifecycle.spawn(seed)).rejects.toThrow(/no longer recorded.*unknown/u);
+    expect(directory.list().some((actor) => actor.name === 'third')).toBe(false);
+  });
+
+  test('one whose recorded hirers lead back to one another is refused, and the walk ends', async () => {
+    const { directory, lifecycle } = hirerWith((database, { helper, second }) => {
+      void database.sql`UPDATE workspace_actors SET parent_actor_id = ${second} WHERE actor_id = ${helper}`;
+    });
+
+    expect(lifecycle.spawn(seed)).rejects.toThrow(/lead back to one another.*unknown/u);
+    expect(directory.list().some((actor) => actor.name === 'third')).toBe(false);
+  });
+});

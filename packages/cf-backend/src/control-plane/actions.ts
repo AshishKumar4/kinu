@@ -12,7 +12,7 @@ import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
 import { ownerCaller } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import { unindexWorkspace, type IndexFeedSink } from './index-feed';
+import type { IndexFeedSink } from './index-feed';
 import type { ControlPlaneEnv } from './stub';
 import type { ObjectNamespace } from '@kinu.run/core';
 
@@ -196,9 +196,8 @@ async function controlAction<Id>(env: ActionEnv<Id>, action: ControlAction): Pro
     // claiming would run a broken workspace's scaffold bootstrap.
     const owner = await ownerCaller(env);
     const user = objectNamed(env.UserDO, action.userId);
+    // The registry's teardown forgets it in the index once it is gone; a failed one leaves no tombstone.
     await user.removeWorkspace(owner, action.workspace, action.userId);
-    // Only after the registry says it is gone; a failed teardown must not leave a tombstone.
-    await unindexWorkspace(env, { userId: action.userId, name: action.workspace });
 
     return {
       outcome: 'ok', detail: `removed ${action.workspace}`, reason: 'ok', affected: 1,

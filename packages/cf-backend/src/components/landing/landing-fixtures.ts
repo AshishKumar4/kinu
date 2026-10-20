@@ -1,31 +1,15 @@
 /** Fixture state for the landing page's frames, which mount the product's own components.
  *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
-import * as v from 'valibot';
-import { JsonValueSchema, mainPanelAgent, SubordinateInspectionRequestSchema, type JsonValue, type PanelAgent, type PendingAction, type PlanReview, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
-import type { UserProfile } from '@/lib/user-api';
-import { workspaceRpc, type SocketCall, type WorkspaceRpc } from '@/lib/workspace-rpc';
+import { mainPanelAgent, satisfactionInterval, wilsonInterval, type ActivitySnapshot, type DirEntry, type PanelAgent, type PendingAction, type PlanReview, type QualityWindow, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
+import type { Important } from '@/lib/mail-api';
+import type { AccountMemoryState, DeviceConsent, UserDevice, UserProfile } from '@/lib/user-api';
+import { answeringRpc, type WorkspaceAnswer, type WorkspaceAnswers, type WorkspaceRpc } from '@/lib/workspace-rpc';
 import type { BackgroundJob } from '@kinu.run/core/protocol';
 
 const NOW = Date.now();
 
-/** A declared interface never satisfies `JsonValue`'s index signature, so product types are named. */
-type FixtureReply =
-  | JsonValue
-  | undefined
-  | BackgroundJob
-  | PlanReview
-  | readonly FixtureReply[]
-  | { readonly [field: string]: FixtureReply };
-
-/** Round-trips through JSON as a real RPC would. */
-function answer<T>(value: FixtureReply): Promise<T> {
-  return new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
-}
-
-const JobIdArgsSchema = v.tuple([v.string()]);
-
-const DecideArgsSchema = v.tuple([v.string(), v.number(), v.picklist(['request_changes', 'approve']), v.optional(v.string())]);
+type WorkspaceWorkTasks = WorkspaceAnswer<'listWorkspaceWork'>['tasks'][number]['tasks'];
 
 export const LANDING_MODEL = 'opencode-go/muse-spark-1.3-contributor';
 
@@ -48,10 +32,10 @@ export const LANDING_CHATS: readonly PanelAgent[] = [
   { colour: 2, key: 'actor-logs', label: 'Read last night\'s error logs', category: 'user', activity: 'working', parent: 'main', open: { kind: 'chat', path: 'error-logs' }, tab: true, input: true, figures: NO_FIGURES },
 ];
 
-/** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
+/** The frame's workspace is first so the rail marks it open. */
 const QUIET = { activity: 'idle', awaitsSettings: false, decisionsWaiting: 0, hasUpdates: false, latestRun: null } as const;
 
-export const LANDING_ROSTER = {
+const LANDING_ROSTER = {
   entries: [
     { name: 'api-worker', displayName: 'API Worker', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3 },
     { name: 'perf-audit', displayName: 'Dew', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5 },
@@ -63,7 +47,7 @@ export const LANDING_ROSTER = {
 } satisfies RosterPage;
 
 /** workspaceCount must equal the roster's total: the gate reads both. */
-export const LANDING_PROFILE: UserProfile = {
+const LANDING_PROFILE: UserProfile = {
   email: 'ashish@example.com',
   displayName: 'Ashish',
   createdAt: NOW - 90 * 864e5,
@@ -72,6 +56,20 @@ export const LANDING_PROFILE: UserProfile = {
   workspaceCount: LANDING_ROSTER.total,
   controlPlane: false,
 };
+
+/**
+ * Every account read the landing's real components make, by path, each typed as its reader parses it. The `landing.tsx`
+ * shim answers these and the settings under `/api/user/config/`, and refuses any other `/api/` request: a static page
+ * has no session for a server to read.
+ */
+export const LANDING_ACCOUNT_READS: ReadonlyMap<string, object> = new Map<string, object>([
+  ['/api/user/profile', LANDING_PROFILE],
+  ['/api/user/workspaces', LANDING_ROSTER],
+  ['/api/user/devices', [] satisfies UserDevice[]],
+  ['/api/user/devices/consents', [] satisfies DeviceConsent[]],
+  ['/api/user/memory', { facts: [], notes: [], pending: [] } satisfies AccountMemoryState],
+  ['/api/user/mail/important', { enabled: false, unread: 0, items: [] } satisfies Important],
+]);
 
 export const WORK_FRAME_CAPTION = 'Sample workspace';
 
@@ -99,7 +97,7 @@ export const WORKER_MESSAGES: UIMessage[] = [
   },
 ];
 
-const WORKER_TASKS = [
+const WORKER_TASKS: WorkspaceWorkTasks = [
   { id: 't1', parentId: null, title: 'Reproduce the 500 on /api/health', status: 'done', updatedAt: NOW - 44e5, note: null, subtasks: [] },
   {
     id: 't2', parentId: null, title: 'Read the sessions database by its new binding', status: 'active', updatedAt: NOW - 8e5, note: null,
@@ -114,12 +112,19 @@ const WORKER_TASKS = [
 
 export const LANDING_OWNER = { actorId: 'actor-main', name: 'main', title: 'main', retired: false, path: [] };
 
-const WORKER_CHANGELOG = {
+const WORKER_CHANGELOG: WorkspaceAnswer<'getEvolutionChangelog'> = {
   seenAt: NOW - 30e5,
   unseenCount: 0,
   entries: [
-    { id: 'cl_1', kind: 'fact', at: NOW - 26e5, scaffoldVersion: null, revert: true, summary: 'Remembered: staging still binds the sessions database as DB', evidence: null },
-    { id: 'cl_2', kind: 'fact', at: NOW - 50e5, scaffoldVersion: null, revert: true, summary: "Remembered: the api Worker's sessions database is bound as SESSIONS_DB since the Sept 22 deploy", evidence: null },
+    // As core's factEntries writes a remembered fact: its key and value as the evidence, forgetting it as the revert.
+    {
+      id: 'fact:staging.sessions_binding', kind: 'fact', at: NOW - 26e5, summary: 'Remembered: staging still binds the sessions database as DB',
+      evidence: 'staging.sessions_binding = DB · confidence 90%', revert: { type: 'fact_forget', target: 'staging.sessions_binding' },
+    },
+    {
+      id: 'fact:api.sessions_binding', kind: 'fact', at: NOW - 50e5, summary: "Remembered: the api Worker's sessions database is bound as SESSIONS_DB since the Sept 22 deploy",
+      evidence: 'api.sessions_binding = SESSIONS_DB · confidence 95%', revert: { type: 'fact_forget', target: 'api.sessions_binding' },
+    },
   ],
 };
 
@@ -135,6 +140,88 @@ const WORKER_PENDING: PendingAction[] = [
   { id: 'defer-sessions-migration', kind: 'deferred_action', at: NOW - 3e5, title: 'Approve: a command the agent wants to run on device', detail: 'bunx wrangler d1 migrations apply SESSIONS_DB --remote' },
 ];
 
+/** The api Worker's checkout, as the Files tab lists it: a folder at a time, by its path. */
+const WORKER_TREE: ReadonlyMap<string, readonly DirEntry[]> = new Map([
+  ['/', [
+    { name: 'workers', type: 'dir' },
+    { name: 'package.json', type: 'file', size: 642, mtimeMs: NOW - 9e6 },
+    { name: 'README.md', type: 'file', size: 2214, mtimeMs: NOW - 4e7 },
+  ]],
+  ['/workers', [{ name: 'api', type: 'dir' }]],
+  ['/workers/api', [
+    { name: 'migrations', type: 'dir' },
+    { name: 'src', type: 'dir' },
+    { name: 'test', type: 'dir' },
+    { name: 'wrangler.jsonc', type: 'file', size: 1186, mtimeMs: NOW - 26e5 },
+  ]],
+  ['/workers/api/src', [
+    { name: 'routes', type: 'dir' },
+    { name: 'db.ts', type: 'file', size: 904, mtimeMs: NOW - 18e5 },
+    { name: 'index.ts', type: 'file', size: 1530, mtimeMs: NOW - 5e7 },
+  ]],
+  ['/workers/api/migrations', [{ name: '0006_sessions.sql', type: 'file', size: 388, mtimeMs: NOW - 9e8 }]],
+  ['/workers/api/test', [{ name: 'sessions-binding.test.ts', type: 'file', size: 611, mtimeMs: NOW - 12e5 }]],
+]);
+
+/** The week's ratings, as an account no one has rated answers them (core `qualityWindow`). */
+const UNRATED_WEEK: QualityWindow = {
+  from: new Date(NOW - 6 * 864e5).toISOString().slice(0, 10),
+  to: new Date(NOW).toISOString().slice(0, 10),
+  satisfaction: satisfactionInterval([]),
+  corrected: wilsonInterval(0, 0),
+  rated: 0,
+  thumbs: 0,
+  turns: 0,
+};
+
+/** No metered step yet: what a workspace's Activity reads before its agent has run one. */
+const QUIET_ACTIVITY: ActivitySnapshot = {
+  latest: null,
+  contextWindow: null,
+  fill: null,
+  telemetry: {
+    steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0, stepsWithoutUsage: 0,
+    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, p99: null, emaAlpha: 0.2, warms: 0 },
+  },
+  spend: {
+    producers: [],
+    total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 },
+    coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
+    offTurnShare: null,
+    missions: [],
+    accounts: [],
+  },
+  log: [],
+};
+
+/**
+ * Every read a frame's tabs make, each typed as the product answers it (`answeringRpc`): one source for all three
+ * frames, which differ only in the plan under review, the tasks, and the changelog.
+ */
+function frameAnswers({ plan, tasks, changelog }: {
+  readonly plan: PlanReview | null;
+  readonly tasks: WorkspaceWorkTasks;
+  readonly changelog: WorkspaceAnswer<'getEvolutionChangelog'>;
+}): WorkspaceAnswers {
+  return {
+    agentMail: () => null,
+    getFacts: () => [],
+    getActivitySnapshot: () => QUIET_ACTIVITY,
+    getQuality: () => [],
+    getQualityWindow: () => UNRATED_WEEK,
+    getExecutorFiles: (_executor, path) => ({ path, entries: [...(WORKER_TREE.get(path) ?? [])] }),
+    listMounts: () => [],
+    getExecutorDiff: () => ({ files: [], mode: 'vfs-baseline' }),
+    getExposedPorts: () => ({ ports: [] }),
+    getEvolutionChangelog: () => changelog,
+    listBackgroundJobs: () => [],
+    listWorkspaceWork: () => ({
+      plans: plan === null ? [] : [{ owner: LANDING_OWNER, plan, tasks: [] }],
+      tasks: tasks.length === 0 ? [] : [{ owner: LANDING_OWNER, plan: null, tasks }],
+    }),
+  };
+}
+
 export interface WorkFixture {
   readonly rpc: WorkspaceRpc;
   readonly jobs: () => BackgroundJob[];
@@ -145,52 +232,40 @@ export function workerWorkFixture(onChange: () => void): WorkFixture {
   let jobs = WORKER_JOBS;
   let pending = WORKER_PENDING;
 
-  const rpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
+  // Retrying a job shows its retry running; dismissing one, or the deferred action it stood for, takes it away.
+  const settleJob = (retry: boolean) => (id: string) => {
+    const retryId = `bgjob-${id.slice(-8)}r`;
 
-    if (method === 'inspectSubordinate') {
-      const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
-
-      return answer({ view: request.view, path: request.path, page: { status: 'end', items: [] } });
-    }
-
-    if (method === 'listWorkspaceWork') return answer({ plans: [], tasks: [{ owner: LANDING_OWNER, plan: null, tasks: WORKER_TASKS }] });
-
-    if (method === 'getEvolutionChangelog') return answer(WORKER_CHANGELOG);
-
-    if (method === 'listBackgroundJobs') return answer(jobs);
-
-    if (method === 'retryBackgroundJob' || method === 'dismissBackgroundJob') {
-      const named = v.safeParse(JobIdArgsSchema, args);
-
-      if (!named.success) return answer({ ok: false, error: 'no job named' });
-      const [id] = named.output;
-      const retryId = `bgjob-${id.slice(-8)}r`;
-      jobs = method === 'retryBackgroundJob'
-        ? [
-          ...jobs.map((job) => (job.id === id ? { ...job, retriedBy: retryId } : job)),
-          {
-            id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null,
-            createdAt: Date.now(), attemptStartedAt: Date.now(), settledAt: null, ...FIRST_DRIVE,
-          },
-        ]
-        : jobs.filter((job) => job.id !== id);
-      pending = pending.filter((action) => action.id !== id);
-      onChange();
-
-      return answer({ ok: true });
-    }
-
-    if (method === 'getExposedPorts') return answer({ ports: [] });
-
-    if (method.startsWith('list') || method.startsWith('get')) return answer([]);
-
-    return answer({ ok: true });
+    jobs = retry
+      ? [
+        ...jobs.map((job) => (job.id === id ? { ...job, retriedBy: retryId } : job)),
+        {
+          id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null,
+          createdAt: Date.now(), attemptStartedAt: Date.now(), settledAt: null, ...FIRST_DRIVE,
+        },
+      ]
+      : jobs.filter((job) => job.id !== id);
+    pending = pending.filter((action) => action.id !== id);
+    onChange();
   };
 
-  return { rpc: workspaceRpc(rpc), jobs: () => jobs, pending: () => pending };
-}
+  const rpc = answeringRpc({
+    ...frameAnswers({ plan: null, tasks: WORKER_TASKS, changelog: WORKER_CHANGELOG }),
+    listBackgroundJobs: () => jobs,
+    retryBackgroundJob: (id) => {
+      settleJob(true)(id);
 
+      return { ok: true };
+    },
+    dismissBackgroundJob: (id) => {
+      settleJob(false)(id);
+
+      return { ok: true };
+    },
+  });
+
+  return { rpc, jobs: () => jobs, pending: () => pending };
+}
 
 const PLAN_MARKDOWN = `# Read the sessions database as \`SESSIONS_DB\`
 
@@ -239,64 +314,29 @@ export const PLAN_FIXTURE: PlanReview = {
 /** `base` null means no plan submitted yet: the Plans read answers empty and annotations or
  *  decisions refuse rather than report a success. */
 export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview | null = PLAN_FIXTURE): WorkspaceRpc {
-  return workspaceRpc(async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
+  const refused = { ok: false, error: 'no plan under review', plan: null } as const;
 
-    if (method === 'inspectSubordinate') {
-      const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+  const decided = (plan: PlanReview) => {
+    onDecide(plan);
 
-      if (request.view === 'planTasks') return answer({ view: 'planTasks', path: request.path, tasks: [] });
+    return plan;
+  };
 
-      return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' && base !== null ? [base] : [] } });
-    }
+  return answeringRpc({
+    ...frameAnswers({ plan: base, tasks: [], changelog: { seenAt: NOW, unseenCount: 0, entries: [] } }),
+    savePlanReviewAnnotations: () => (base === null ? refused : { ok: true, plan: base }),
+    decidePlanReview: (_id, _revision, decision, feedback) => {
+      if (base === null) return refused;
 
-    // Same plan as the pane, so the two cannot disagree about whether a plan exists.
-    if (method === 'listWorkspaceWork') {
-      return answer({
-        plans: base === null ? [] : [{ owner: LANDING_OWNER, plan: base, tasks: [] }],
-        tasks: [],
-      });
-    }
-
-    if (method === 'getEvolutionChangelog') return answer({ seenAt: NOW, unseenCount: 0, entries: [] });
-
-    if (method === 'savePlanReviewAnnotations') {
-      if (base === null) return answer({ ok: false, error: 'no plan under review', plan: null });
-
-      return answer({ ok: true, plan: base });
-    }
-
-    if (method === 'decidePlanReview') {
-      const [, , decision, feedback] = v.parse(DecideArgsSchema, args);
-
-      if (base === null) return answer({ ok: false, error: 'no plan under review', plan: null });
-
-      const decided: PlanReview = {
-        ...base,
-        status: decision === 'approve' ? 'approved' : 'changes_requested',
-        feedback: feedback ?? null,
-        handoffAccepted: true,
-        updatedAt: Date.now(),
+      return {
+        ok: true,
+        queued: true,
+        plan: decided({
+          ...base, status: decision === 'approve' ? 'approved' : 'changes_requested', feedback: feedback ?? null, handoffAccepted: true, updatedAt: Date.now(),
+        }),
       };
-
-      onDecide(decided);
-
-      return answer({ ok: true, plan: decided, queued: true });
-    }
-
-    if (method === 'dismissPlanReview') {
-      if (base === null) return answer({ ok: false, error: 'no plan under review', plan: null });
-      const dismissed: PlanReview = { ...base, status: 'dismissed', updatedAt: Date.now() };
-      onDecide(dismissed);
-
-      return answer({ ok: true, plan: dismissed });
-    }
-
-    if (method === 'getExposedPorts') return answer({ ports: [] });
-
-    if (method.startsWith('list') || method.startsWith('get')) return answer([]);
-
-    return answer({ ok: true });
+    },
+    dismissPlanReview: () => (base === null ? refused : { ok: true, plan: decided({ ...base, status: 'dismissed', updatedAt: Date.now() }) }),
   });
 }
 

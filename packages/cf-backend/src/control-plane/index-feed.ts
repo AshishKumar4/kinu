@@ -100,15 +100,16 @@ async function retained(key: string, hasWorkspace: boolean, write: () => Promise
   }
 }
 
-/** Awaited, not retained: a create that returns before its index row exists looks like a failed create to an operator. */
-export async function indexNewWorkspace<Id>(
+/** A workspace created or renamed: its index row, with its title. Awaited, not retained: a create that returns before
+ *  its index row exists looks like a failed create to an operator. */
+export async function indexWorkspace<Id>(
   env: IndexFeedEnv<Id>,
   target: { userId: string; name: string; displayName: string; createdAt: number },
 ): Promise<void> {
   // No destination is not a lost write — see `hasControlPlane`.
   if (!hasControlPlane(env)) return;
 
-  await settleLogged('control_plane.index_workspace_failed', { doing: 'indexing a newly created workspace in the control plane', otherwise: 'unavailable' }, async () => {
+  await settleLogged('control_plane.index_workspace_failed', { doing: 'indexing a workspace and its title in the control plane', otherwise: 'unavailable' }, async () => {
     const caller = await internalCaller(env);
     await controlPlaneStub(env).observeWorkspace(caller, {
       userId: target.userId,
@@ -120,7 +121,8 @@ export async function indexNewWorkspace<Id>(
   }, { workspace: target.name });
 }
 
-/** Only after registry removal succeeds: a failed teardown keeps the registry row. */
+/** Only after registry removal succeeds: a failed teardown keeps the registry row. The registry calls it for each of its
+ *  removals (`UserWorkspaces`), whichever entrance asked for one. */
 export async function unindexWorkspace<Id>(
   env: IndexFeedEnv<Id>,
   target: { userId: string; name: string },

@@ -7,8 +7,12 @@ import type { WorkMode } from '../types/turn';
 import { KinuError, refusalOf, type Refusal } from '../obs/error';
 
 import type { CodemodeProvider } from '../types/codemode';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
 
 const invocationMode = new AsyncLocalStorage<WorkMode>();
+
+/** The operations Plan refused inside one call behind a boundary (`toolsBehindBoundary`). */
+const boundaryRefusals = new AsyncLocalStorage<string[]>();
 
 const PlanPermission = v.object({ planAllowed: v.literal(true) });
 
@@ -46,6 +50,8 @@ export function permitInPlan<Operation extends ToolSet[string]>(operation: Opera
 
 export function workModeRefusal(mode: WorkMode, planAllowed: boolean, operation: string): Refusal | null {
   if ((mode === 'plan' || currentWorkMode() === 'plan') && !planAllowed) {
+    boundaryRefusals.getStore()?.push(operation);
+
     return refusalOf(new KinuError('denied', operation + ' has no Plan-safe execution capability'));
   }
 
@@ -95,6 +101,59 @@ export function toolsInWorkMode(mode: WorkMode, tools: ToolSet): ToolSet {
   }
 
   return narrowed;
+}
+
+/** What a measured turn's calls meet instead of the world (docs/TOOLS.md, "The inert boundary"). */
+export interface ToolBoundary {
+  /** A call kept from running: its tool, its input as the model wrote it, and each operation Plan refused in it. */
+  readonly intended: (call: { readonly name: string; readonly input: JsonValue; readonly refused: readonly string[] }) => void;
+  /** A kept call's answer from a record of the same call, where one exists; null where none does. */
+  readonly recorded?: (name: string, input: JsonValue) => string | null;
+}
+
+/** What a kept call answers when no record of it exists. */
+const NOT_RUN = 'Not run: this turn is measured, and the call is kept as what you meant to do.';
+
+/**
+ * Each tool runs as Plan would run it, inside a turn that stays Build: what Plan permits (reads, research, the agent's
+ * own memory) runs, and any call in which Plan refused an operation is kept from running, recorded as intended, and
+ * answered from its record or with `NOT_RUN`. Plan's own classification decides, so no second list of safe calls exists.
+ */
+export function toolsBehindBoundary(tools: ToolSet, boundary: ToolBoundary): ToolSet {
+  // Plan's own narrowing: each call checked against its tool's permission, inside a Plan invocation.
+  const planned = toolsInWorkMode('plan', tools);
+  const kept: ToolSet = {};
+
+  for (const [name, entry] of Object.entries(tools)) {
+    const execute = planned[name]?.execute;
+
+    // A tool with no executor runs nothing: it stays as declared.
+    if (execute === undefined) {
+      kept[name] = entry;
+      continue;
+    }
+
+    kept[name] = {
+      ...entry,
+      execute: async (input, options) => {
+        const refused: string[] = [];
+
+        // A refusal Plan threw is the boundary's to answer; anything else is the call's own failure.
+        const ran = await boundaryRefusals.run(refused, () => settle(Effect.tryPromise({
+          try: async () => ({ result: await execute(input, options) }),
+          catch: (cause) => ({ cause }),
+        }).pipe(Effect.catch((failed) => (refused.length > 0 ? Effect.succeed(null) : Effect.die(failed.cause))))));
+
+        if (refused.length === 0 && ran !== null) return ran.result;
+        const written = v.safeParse(JsonValueSchema, input);
+        boundary.intended({ name, input: written.success ? written.output : null, refused });
+
+        return boundary.recorded?.(name, written.success ? written.output : null) ?? NOT_RUN;
+      },
+    };
+  }
+
+  return kept;
 }
 
 /** Every introduced host operation is checked; unclassified producers stay closed in Plan. */

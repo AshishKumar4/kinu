@@ -132,8 +132,7 @@ export function ComputerSizeSettings() {
   };
 
   return (
-    <Card title="Computer size" icon={DesktopIcon}
-      description="Each workspace's computer starts at this size unless the workspace chooses its own in its Environment tab. It applies the next time one starts.">
+    <Card title="Size" icon={DesktopIcon} description="A change applies the next time a computer starts.">
       <CardSlot resource={resource} what="the computer size" onRetry={reload}>
         {(account) => (
           <Field label="Default size" hint={failure ?? (saving ? "Saving…" : undefined)}>

@@ -14,6 +14,7 @@ import {
   ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
+  delegationExhausted,
   admitSubordinateReport,
   admitSubordinateTask,
   agentNamer,
@@ -137,12 +138,15 @@ describe('the delegation depth cap', () => {
     expect(refusal.error).toContain('swarm');
   });
 
-  test('an actor\'s depth is walked off its directory row, and a missing parent ends the walk as a floor', () => {
+  test('an actor\'s depth is walked off its directory row; a missing hirer or a cycle grants no room, and says why', () => {
     const rows = new Map<string, { parentActorId: string | null }>([
       ['root', { parentActorId: null }],
       ['d1', { parentActorId: 'root' }],
       ['d2', { parentActorId: 'd1' }],
       ['orphan', { parentActorId: 'gone' }],
+      // A line of hirers that returns to itself: the walk ends, refusing.
+      ['loop-a', { parentActorId: 'loop-b' }],
+      ['loop-b', { parentActorId: 'loop-a' }],
     ]);
 
     const row = (actorId: string) => {
@@ -157,7 +161,15 @@ describe('the delegation depth cap', () => {
     expect(delegationBudgetOf(describeActor, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
     expect(delegationBudgetOf(describeActor, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });
     expect(delegationBudgetOf(describeActor, row('d2'))).toEqual({ depth: 2, maxDepth: 2 });
-    expect(delegationBudgetOf(describeActor, row('orphan'))).toEqual({ depth: 1, maxDepth: 3 });
+    expect(delegationBudgetOf(describeActor, row('orphan'))).toEqual({ depth: 0, maxDepth: 0, ancestry: 'missing' });
+    expect(delegationBudgetOf(describeActor, row('loop-a'))).toEqual({ depth: 2, maxDepth: 0, ancestry: 'cycle' });
+
+    for (const unknown of ['orphan', 'loop-a']) {
+      const budget = delegationBudgetOf(describeActor, row(unknown));
+
+      expect(delegationExhausted(budget)).toBe(true);
+      expect(delegationDepthRefusal(budget).error).toContain('unknown');
+    }
   });
 });
 

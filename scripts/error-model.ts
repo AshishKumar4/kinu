@@ -258,6 +258,8 @@ export const DECLARED = byFile([
       'the Agents SDK\'s `{ success: false }` RPC denial sent over the socket'],
     ['packages/cf-backend/src/components/landing/landing-fixtures.ts', ['rpc', 'planRpc'],
       'landing-page fixtures that mirror workspace RPC answers'],
+    ['packages/cf-backend/src/landing.tsx', ['answerSetting'],
+      'the static landing page answering a setting write as the account route does'],
     ['packages/cf-backend/src/components/surfaces/ChangesSurface.tsx', ['Restored'],
       '`Restored`, the restoreWorkspaceBaseline RPC answer the surface reads'],
     ['packages/cf-backend/src/components/surfaces/FilesSurface.tsx', ['WriteResult'],

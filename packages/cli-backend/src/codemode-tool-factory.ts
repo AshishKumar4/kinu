@@ -12,7 +12,7 @@ import type {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
-  decodeJsonValue, explainSandboxError, toolsNamespace,
+  decodeJsonValue, explainSandboxError, programProviders,
   renderCodemodeDescription, programDeclarations, describeProgramSource, codemodeInputSchema,
   withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
   codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, createToolArguments, nestedMembers,
@@ -89,18 +89,18 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           const toolBindings: Record<string, CodemodeExecute> = {};
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
+          // `requireBuild` above refused Plan, so the program reaches what Build does.
+          const reached = programProviders({ surface, namespaces: deps.namespaces ?? [], reach: deps.reach, mode: 'build', signal });
+          const tools = reached.find((p) => p.name === CRAFTED_TOOL_NAMESPACE)?.tools ?? {};
 
-          // `requireBuild` above refused Plan, so nothing here runs in it.
-          // A native name shadows an external one, and a crafted name both, as in the CF prelude.
-          const tools = toolsNamespace({ ...surface.external(), ...surface.native }, signal);
-
-          for (const [name, entry] of Object.entries({ ...tools.tools, ...craftedFailureFunctions(crafted) })) {
+          // A crafted name shadows the rest, as in the CF prelude.
+          for (const [name, entry] of Object.entries({ ...tools, ...craftedFailureFunctions(crafted) })) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
           const providerBindings: Record<string, Record<string, CodemodeExecute | Record<string, CodemodeExecute>>> = {};
 
-          for (const p of providers) {
+          for (const p of reached.filter((reachedProvider) => reachedProvider.name !== CRAFTED_TOOL_NAMESPACE)) {
             const nsp: Record<string, CodemodeExecute> = {};
 
             for (const [toolName, t] of Object.entries(p.tools)) {

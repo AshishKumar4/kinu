@@ -1,6 +1,7 @@
 /** Durable memory: keyed facts, prose notes, and recall of the agent's past conversations. */
 import * as v from 'valibot';
 import { JsonValueSchema } from '../utils/json';
+import { ConversationMaxCharsSchema, ConversationScrollResultSchema, ConversationSearchHitSchema, ConversationSummarySchema } from '../memory/conversation-search';
 import { described, namespace } from './operation';
 
 const count = (text: string, max: number) => v.optional(described(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(max)), text));
@@ -8,14 +9,6 @@ const count = (text: string, max: number) => v.optional(described(v.pipe(v.numbe
 const Key = described(v.pipe(v.string(), v.nonEmpty()), 'A stable name such as "deploy.target".');
 
 const Query = v.pipe(v.string(), v.nonEmpty());
-
-const ConversationHit = v.strictObject({ conversationId: v.string(), messageId: v.string(), role: v.string(), createdAt: v.number(), snippet: v.string() });
-
-const ConversationMessage = v.strictObject({
-  id: v.string(), role: v.string(), content: v.string(), createdAt: v.number(), anchor: v.optional(v.literal(true)),
-});
-
-const ConversationSummary = v.strictObject({ conversationId: v.string(), messageCount: v.number(), startedAt: v.number(), lastActiveAt: v.number(), preview: v.string() });
 
 /** A memory operation; a write is planning too, so Plan turns keep it. */
 const memoryOp = namespace('memory', { slate: true, plan: true });
@@ -65,7 +58,7 @@ export const MEMORY = {
     help: 'Messages from your past conversations where every query term matches; read around one with readConversation.',
     impact: 'observe',
     input: v.strictObject({ query: Query, limit: count('Default 5.', 10) }),
-    output: v.strictObject({ hits: v.array(ConversationHit) }),
+    output: v.strictObject({ hits: v.array(ConversationSearchHitSchema) }),
   }),
   readConversation: memoryOp({
     name: 'readConversation',
@@ -74,16 +67,16 @@ export const MEMORY = {
     input: v.strictObject({
       messageId: v.pipe(v.string(), v.nonEmpty()),
       window: count('Messages each side; default 5.', 20),
-      maxChars: v.optional(described(v.pipe(v.number(), v.integer(), v.minValue(1)), 'Characters per message; default 700.')),
+      maxChars: v.optional(described(ConversationMaxCharsSchema, 'Characters per message; default 700.')),
     }),
-    output: v.strictObject({ conversationId: v.string(), messages: v.array(ConversationMessage), messagesBefore: v.number(), messagesAfter: v.number() }),
+    output: ConversationScrollResultSchema,
   }),
   listConversations: memoryOp({
     name: 'listConversations',
     help: 'Your archived conversations, newest first.',
     impact: 'observe',
     input: v.strictObject({ limit: count('Default 10.', 20) }),
-    output: v.strictObject({ conversations: v.array(ConversationSummary) }),
+    output: v.strictObject({ conversations: v.array(ConversationSummarySchema) }),
   }),
 } as const;
 

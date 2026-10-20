@@ -213,7 +213,7 @@ function Answered({ options, runId, onStarted }: {
               {answers.mailZoneId !== "" && (
                 <label className="flex items-center gap-2 text-sm p-text-2">
                   <input type="checkbox" checked={answers.mailEveryone} onChange={(event) => setAnswers({ ...answers, mailEveryone: event.target.checked })} />
-                  Every account may claim an address, not only yours
+                  Every account may have an address, not only yours
                 </label>
               )}
             </div>

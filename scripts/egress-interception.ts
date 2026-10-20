@@ -298,8 +298,9 @@ function vaultPolicyReasons({ base, kinu, routes, vault }: VaultClasses, sources
 
   if (!bindsVault || !usesHostPolicy || !configured) reasons.push('Kinu does not bind the vault as its default egress route');
 
-  if (!callsIn(vault.node).some(call => callName(call) === 'handleContainerEgress')) reasons.push('the native vault entry does not enter credential injection');
-  const implementation = importedImplementation(sources, vault.file, 'handleContainerEgress');
+  // The one forwarding policy every egress applies for its principal (`egress/policy.ts`, audit SelfishJaguar #6).
+  if (!callsIn(vault.node).some(call => callName(call) === 'forwardEgress')) reasons.push('the native vault entry does not enter credential injection');
+  const implementation = importedImplementation(sources, vault.file, 'forwardEgress');
   // One hop on: the door every program's request leaves by (`sendOut`), which the container's egress sends through.
   const sendsOut = implementation !== undefined && callsIn(implementation.root).some(call => callName(call) === 'sendOut');
   const sender = sendsOut ? importedImplementation(sources, implementation.path, 'sendOut') : undefined;

@@ -1,9 +1,10 @@
 import { Effect } from 'effect';
-import { settle, tolerateAsync } from '../obs/effect';
-import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { settle } from '../obs/effect';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 
-import { KinuError } from '../obs/error';
+import { KinuError, toKinuError } from '../obs/error';
+import { publishContent } from '../utils/vfs-helpers';
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -193,17 +194,16 @@ export class SessionPayloads extends SessionPayloadReader {
   }
 
 
+  /** A payload's bytes at their path, read back before the reference to them is: other bytes there are a fault. */
   private publish(path: string, bytes: Uint8Array, directory: string): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const digest = sha256Hex(bytes);
       const { vfs } = yield* Effect.promise(() => this.files());
 
-      if (!(yield* Effect.promise(() => exists(vfs, path)))) {
-        yield* Effect.promise(() => tolerateAsync(async () => vfs.mkdir(directory, { recursive: true }), 'eexist'));
-        yield* Effect.promise(async () => vfs.writeFile(path, bytes));
-      }
-
-      yield* this.readBytes(path, digest);
+      yield* Effect.tryPromise({
+        try: () => publishContent(vfs, { directory, path, bytes, otherBytes: 'refuse' }),
+        catch: (cause) => toKinuError({ doing: 'publishing a session payload', cause, otherwise: 'io' }),
+      });
+      yield* this.readBytes(path, sha256Hex(bytes));
     });
   }
 

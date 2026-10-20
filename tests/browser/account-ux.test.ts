@@ -692,6 +692,72 @@ describe('account panels', () => {
     });
   });
 
+  test('setup offers an address from the name just given, checked as typed, and Next creates it with its mailbox', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'welcome', 'light', 'desktop');
+      const field = '[data-welcome-step="mail"] [aria-label="Username"]';
+      const shown = (id: string) => page.waitForFunction((want) => document.querySelector(`[data-welcome-step="${want}"]`)?.getAttribute('aria-hidden') !== 'true', {}, id);
+      const nextDisabled = () => page.$$eval('button', (nodes) => nodes.some((node) => node.textContent?.trim() === 'Next' && node instanceof HTMLButtonElement && node.disabled));
+
+      // Typed over what is there, as a person selects all and types.
+      const retype = async (selector: string, text: string) => {
+        await page.click(selector);
+        await page.keyboard.down('Control');
+        await page.keyboard.press('KeyA');
+        await page.keyboard.up('Control');
+        await page.keyboard.press('Backspace');
+        await page.type(selector, text);
+      };
+
+      try {
+        await page.waitForSelector('[data-welcome-step="profile"] input');
+        await retype('[data-welcome-step="profile"] input', 'Lucía Ferreira');
+        await clickByText(page, 'button', 'Next');
+        await shown('mail');
+        await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
+        expect(await page.$eval(field, (input) => input instanceof HTMLInputElement ? input.value : '')).toBe('lucia');
+
+        await retype(field, 'dana');
+        await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="taken"]');
+        expect(await nextDisabled()).toBe(true);
+
+        await retype(field, 'lucia');
+        await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
+        await clickByText(page, 'button', 'Next');
+        await shown('providers');
+        expect(await page.evaluate(() => document.documentElement.dataset.galleryMailCreated)).toBe('lucia@kinu.run');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('the address step can be passed by unmade, and a deployment with no mail never offers it', async () => {
+    await withGallery(async (gallery) => {
+      // One page at a time: a page behind another runs no animation frames, which its waits poll on.
+      const skipped = await freshPage(gallery, `welcome&step=${String(ONBOARDING_STEP_IDS.indexOf('mail'))}`, 'dark', 'mobile');
+
+      try {
+        await skipped.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
+        await skipped.click('[data-mail-not-now]');
+        await skipped.waitForFunction(() => document.querySelector('[data-welcome-step="providers"]')?.getAttribute('aria-hidden') !== 'true');
+        expect(await skipped.evaluate(() => document.documentElement.dataset.galleryMailCreated ?? null)).toBeNull();
+      } finally {
+        await skipped.close();
+      }
+
+      const off = await freshPage(gallery, 'welcome&mail=off', 'dark', 'mobile');
+
+      try {
+        await off.waitForSelector('[data-welcome-step="profile"]');
+        await off.waitForFunction((count) => document.querySelectorAll('[aria-label="Setup steps"] li').length === count, {}, ONBOARDING_STEP_IDS.length - 1);
+        expect(await off.$('[data-welcome-step="mail"]')).toBeNull();
+      } finally {
+        await off.close();
+      }
+    });
+  });
+
   test('setup offers tools to connect, and every step can be passed by', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'welcome&step=1', 'light', 'mobile');
@@ -701,6 +767,9 @@ describe('account panels', () => {
           await page.waitForFunction((want) => document.querySelector(`[data-welcome-step="${want}"]`)?.getAttribute('aria-hidden') !== 'true', {}, id);
 
           if (id === 'tools') await page.waitForSelector('[data-welcome-step="tools"] [data-plugin-source]');
+
+          // The address it offers is checked first: Next creates it once it reads available.
+          if (id === 'mail') await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
 
           // Web search opens on the default already chosen, so Next passes it with nothing to pick.
           if (id === 'search') await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"] input:checked');
@@ -1074,6 +1143,41 @@ describe('what the Devices page says about a machine\'s history', () => {
 });
 
 const MEMORY_SHOTS = evidenceDir('account-memory');
+
+// rc28 walkthrough: Models was headed Models twice, its card under the section's own heading.
+describe('Settings sections', () => {
+  test("each is named once: no panel under a section's heading carries that heading again", async () => {
+    await withGallery(async (gallery) => {
+      const rail = await freshPage(gallery, 'usersettingsstate', 'dark', 'desktop');
+      const sections = await rail.$$eval('[data-settings-section]', (links) => links.map((link) => link.getAttribute('data-settings-section') ?? ''));
+
+      await rail.close();
+      expect(sections.length).toBeGreaterThan(1);
+
+      const repeated: string[] = [];
+
+      for (const section of sections) {
+        const page = await freshPage(gallery, `usersettingsstate&section=${section}`, 'dark', 'desktop');
+
+        try {
+          await page.waitForSelector(`[data-settings-section="${section}"][aria-current="true"]`);
+          await page.waitForSelector('[data-settings-head] h2');
+          await settleAccountFixture(page);
+          repeated.push(...await page.evaluate((name) => {
+            const heading = document.querySelector('[data-settings-head] h2')?.textContent?.trim() ?? '';
+            const panels = [...document.querySelectorAll('h2, h3')].filter((title) => title.closest('[data-settings-head]') === null);
+
+            return panels.filter((title) => title.textContent?.trim() === heading).map(() => `${name}: ${heading}`);
+          }, section));
+        } finally {
+          await page.close();
+        }
+      }
+
+      expect(repeated).toEqual([]);
+    });
+  });
+});
 
 describe('Settings → Memory', () => {
   test('lists what waits on the owner, each kept fact with who said it, its revisions, and the notes, at both widths', async () => {

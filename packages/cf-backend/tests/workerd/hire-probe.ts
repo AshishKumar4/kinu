@@ -10,7 +10,8 @@ import * as v from 'valibot';
 import { actorReferenceOf, isSubordinateOrigin, ownerCaller, WORKSPACE_ROOT, type ArchiveCursor, type Clock } from '@kinu.run/core';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
-import { diagnostics } from '@kinu.run/core/obs';
+import { createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { createRecordingLogger } from '@kinu.run/test-utils/recording';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -33,6 +34,9 @@ const ArchiveLineSchema = v.looseObject({
   t: v.string(), agents: v.optional(v.array(v.string())), actor: v.optional(v.string()), rows: v.optional(v.number()),
 });
 
+/** What the isolate's objects tell from `watchRelays` on: the relays a room lost among it. */
+const relayLog = createRecordingLogger();
+
 const ChatTextSchema = v.object({
   role: v.string(),
   parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
@@ -47,7 +51,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
@@ -69,6 +73,34 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** The armed window fires: the call it bounds outruns it. */
   async outrunJobWindow(): Promise<void> {
     this.probeClock.tick();
+  }
+
+  /** From here on the isolate's diagnostics are kept too; `relayLost` reads them. After the objects started: each
+   *  object's first start installs the isolate's sink. */
+  async watchRelays(): Promise<void> {
+    setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), relayLog]));
+  }
+
+  /** Settles with the cause the room told once it lost a turn's live relay. */
+  async relayLost(): Promise<string> {
+    const lost = (line: { readonly event: string }) => line.event === 'chat.stream_observe_failed';
+
+    await relayLog.until((emitted) => emitted.some(lost));
+
+    return relayLog.emitted.find(lost)?.cause ?? '';
+  }
+
+  /** How each of `name`'s runs ended, as its runs view reads them. */
+  async runStatuses(name: string): Promise<(string | null)[]> {
+    const statuses: (string | null)[] = [];
+
+    for (const { actor_id: actorId } of this.probeState.storage.sql.exec<{ actor_id: string }>('SELECT actor_id FROM workspace_actors WHERE name = ?', name).toArray()) {
+      const seen = await (await this.agentFacetOf(actorId)).inspect(this.agentSnapshot(actorId), { path: [], view: 'runs', page: { limit: 100 } });
+
+      if (seen.view === 'runs') statuses.push(...seen.page.items.map((run) => run.status));
+    }
+
+    return statuses;
   }
 
   /** The job's command ends: the file it waits on now exists in the workspace's home. */
@@ -317,7 +349,8 @@ const WireLogSchema = v.looseObject({
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
-    | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'jobWatchState' | 'jobRows' | 'pendingAlarm'>;
+    | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'jobWatchState' | 'jobRows' | 'pendingAlarm'
+    | 'watchRelays' | 'relayLost' | 'runStatuses'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -473,6 +506,18 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   async jobRows(workspace: string): Promise<JobRow[]> {
     return await (await this.target(workspace)).jobRows();
+  }
+
+  async watchRelays(workspace: string): Promise<void> {
+    await (await this.target(workspace)).watchRelays();
+  }
+
+  async relayLost(workspace: string): Promise<string> {
+    return await (await this.target(workspace)).relayLost();
+  }
+
+  async runStatuses(workspace: string, name: string): Promise<(string | null)[]> {
+    return await (await this.target(workspace)).runStatuses(name);
   }
 
   async observe(workspace: string): Promise<HireObservation> {

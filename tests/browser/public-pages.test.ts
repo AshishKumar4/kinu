@@ -248,6 +248,8 @@ interface Facts {
   lateChunk?: { decisionsOnReturn: boolean };
   publicOverflow: Record<string, number>;
   landingTargets?: number[];
+  /** Every tab of every workspace frame, pressed in turn: each `frame/tab`, and what any of them showed failing. */
+  landingTabs?: { readonly visited: readonly string[]; readonly failures: readonly string[]; readonly asked: readonly string[]; readonly samplesOpened: readonly string[] };
   publicTargets?: number[];
   wideColumns: Record<string, number>;
   contrast: Contrast[];
@@ -263,6 +265,81 @@ const facts: Facts = {
   wideColumns: {},
   contrast: [],
 };
+
+/** Until a frame has no read pending across two painted frames: its fixture is its only async source, so it has then
+ *  rendered every answer its tabs asked for (`data-reads-pending`). */
+async function readsSettled(page: Page, frame: string): Promise<void> {
+  const root = `[data-landing-frame="${frame}"]`;
+
+  for (;;) {
+    await page.waitForFunction((selector) => document.querySelector(selector)?.getAttribute('data-reads-pending') === '0', { polling: 'raf' }, root);
+
+    const still = await page.evaluate((selector) => new Promise<boolean>((done) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => { done(document.querySelector(selector)?.getAttribute('data-reads-pending') === '0'); });
+      });
+    }), root);
+
+    if (still) return;
+  }
+}
+
+/** A sample's preview has an address and nothing at it: a link there opens a refusal. */
+function linksToSamples(page: Page, frame: string): Promise<string[]> {
+  return page.$eval(`[data-landing-frame="${frame}"]`, (root) => {
+    const addresses = new Set([...root.querySelectorAll('[data-preview-address]')].map((address) => address.textContent ?? ''));
+
+    return [...root.querySelectorAll('a[href]')].map((link) => link.getAttribute('href') ?? '').filter((href) => addresses.has(href));
+  });
+}
+
+/**
+ * Each frame mounts the product's own surfaces over a fixture; one answering a read with a shape it was not asked for
+ * crashed three tabs of every frame on kinu.run (rc28), and account reads sent on to the server came back refused, a
+ * page with no session (rc28). Every tab is pressed, and its reads awaited.
+ */
+async function visitLandingTabs(): Promise<NonNullable<Facts['landingTabs']>> {
+  const page = await openLanding(DESKTOP);
+  const visited: string[] = [];
+  const failures: string[] = [];
+  const asked: string[] = [];
+  const samplesOpened: string[] = [];
+
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+
+    if (url.pathname.startsWith('/api/')) asked.push(`${request.method()} ${url.pathname}`);
+  });
+
+  for (const frame of ['work', 'plan', 'slate'] as const) {
+    const tabs = `[data-landing-frame="${frame}"] nav[aria-label="Workspace"] button`;
+
+    await page.waitForSelector(tabs);
+    await readsSettled(page, frame);
+    samplesOpened.push(...await linksToSamples(page, frame));
+
+    for (let at = 0; at < (await page.$$(tabs)).length; at++) {
+      const label = await page.$$eval(tabs, (buttons, index) => {
+        const button = buttons[index];
+
+        if (button instanceof HTMLElement) button.click();
+
+        return button?.getAttribute('aria-label') ?? button?.textContent ?? '';
+      }, at);
+
+      await readsSettled(page, frame);
+      visited.push(`${frame}/${label}`);
+      failures.push(...await page.$$eval(`[data-landing-frame="${frame}"] [data-failure]`, (shown, where) => (
+        shown.map((failure) => `${where}: ${failure.textContent ?? ''}`)
+      ), `${frame}/${label}`));
+      samplesOpened.push(...await linksToSamples(page, frame));
+    }
+  }
+
+  await page.close();
+
+  return { visited, failures, asked, samplesOpened };
+}
 
 function required<T>(value: T | undefined, label: string): T {
   if (value === undefined) throw new Error(`${label} was not measured`);
@@ -947,6 +1024,8 @@ beforeAll(async () => {
         }
       }
     }
+
+    facts.landingTabs = await visitLandingTabs();
   });
 });
 
@@ -1136,6 +1215,24 @@ describe('the landing demonstration leads with its result', () => {
     // The tree is hidden from assistive technology, so the sentence beside it is all a screen reader gets.
     const hero = required(facts.heroTreeText, 'hero tree text');
     expect(hero).toEqual({ treeHidden: true, text: expect.stringMatching(/\S+\s+\S+/u) });
+  });
+});
+
+describe('every landing frame tab renders', () => {
+  test('each tab of each workspace frame renders its answers, none failing', () => {
+    const { visited, failures } = required(facts.landingTabs, 'the landing tabs');
+
+    // Work, Files, Agent, Environment and Activity, in each of the three frames.
+    expect(visited.length).toBeGreaterThanOrEqual(15);
+    expect(failures).toEqual([]);
+  });
+
+  test('every account read is answered in the page, none sent to the server', () => {
+    expect(required(facts.landingTabs, 'the landing tabs').asked).toEqual([]);
+  });
+
+  test('a sample preview names its address and offers no link to it', () => {
+    expect(required(facts.landingTabs, 'the landing tabs').samplesOpened).toEqual([]);
   });
 });
 

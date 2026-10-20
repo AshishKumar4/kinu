@@ -5,7 +5,8 @@ import { MAIL_VIEWS, type MailBox, type MailListing, type MailMessageView, type 
 import Layout from "@/components/layout";
 import MailPage from "@/pages/MailPage";
 import { ADDRESSES, OWNER, THREADS } from "@/gallery-mail";
-import type { Important, MailBoxes } from "@/lib/mail-api";
+import type { Important, MailBoxes, MailUsername } from "@/lib/mail-api";
+import { galleryUsername } from "@/gallery-mail-address";
 
 const OutgoingSchema = v.object({
   path: v.string(), to: v.array(v.string()), cc: v.optional(v.array(v.string())), subject: v.string(), text: v.string(),
@@ -18,7 +19,8 @@ function installFixture(): void {
   const params = new URLSearchParams(location.search);
   const next = window.fetch.bind(window);
   const assistant = params.get("assistant") !== "none";
-  const email = params.get("account") === "claim" ? OWNER.address.toUpperCase() : OWNER.address;
+  // `&account=new`: a person with no address yet, who may create one; `&account=operators`: one who may not.
+  const email = OWNER.address;
   let address: string | null = params.has("account") ? null : "ashish@kinu.run";
 
   const boxes: MailBox[] = ADDRESSES.map((box) => {
@@ -92,7 +94,7 @@ function installFixture(): void {
     return { threads: shown.slice(0, 50), unread: shown.filter((thread) => thread.unread).length };
   };
 
-  const answer = (value: MailBoxes | MailListing | MailThreadView | MailThreadSummary | MailMessageView | Important | { address: string } | { status: "queued" | "skipped" }): Promise<Response> => Promise.resolve(Response.json(value));
+  const answer = (value: MailBoxes | MailListing | MailThreadView | MailThreadSummary | MailMessageView | Important | MailUsername | { address: string } | { status: "queued" | "skipped" }): Promise<Response> => Promise.resolve(Response.json(value));
 
   const write = (outgoing: Outgoing, draft: boolean): Promise<Response> => {
     const id = `written-${String(++written)}`;
@@ -125,18 +127,27 @@ function installFixture(): void {
 
   /** The person's account and boxes, as /boxes answers them. */
   const accountAnswer = () => (enabled
-    ? { enabled, address, canClaim: address === null && params.get("account") === "claim", boxes: address === null ? [] : boxes }
-    : { enabled, address: null, canClaim: false, boxes: [] });
+    ? { enabled, domain: "kinu.run", address, canCreate: address === null && params.get("account") === "new", boxes: address === null ? [] : boxes }
+    : { enabled, domain: null, address: null, canCreate: false, boxes: [] });
 
   /** The newest few Important threads, as the footer and Home read them. */
   const importantAnswer = (limit: number) => {
-    if (!enabled) return { enabled, unread: 0, items: [] };
+    // As the route answers: nothing before the person has an address.
+    if (!enabled || address === null) return { enabled, unread: 0, items: [] };
     const listing = list(new URL("/api/user/mail/threads?view=important", location.href));
 
     return { enabled, unread: listing.unread, items: listing.threads.slice(0, limit).map((thread) => ({
       thread: thread.id, from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? "", address: thread.from[0]?.address ?? "" }, to: boxes.find((box) => box.path === thread.path)?.address ?? "", subject: thread.subject,
       reason: thread.important ?? "", at: thread.at, unread: thread.unread,
     })) };
+  };
+
+  /** The person's address, created with its box. */
+  const addressMade = (username: string): Promise<Response> => {
+    address = `${username}@kinu.run`;
+    boxes[0] = { ...boxes[0], address };
+
+    return answer({ address });
   };
 
   /** A call to Mail's API, or to "Send to a workspace…", recorded and answered as the server would. */
@@ -156,12 +167,7 @@ function installFixture(): void {
 
     if (url.pathname.endsWith("/boxes")) return answer(accountAnswer());
 
-    if (url.pathname.endsWith("/claim")) {
-      address = `${v.parse(v.object({ username: v.string() }), body).username}@kinu.run`;
-      boxes[0] = { ...boxes[0], address };
-
-      return answer({ address });
-    }
+    if (url.pathname.endsWith("/address")) return request.method === "GET" ? answer(galleryUsername(url.searchParams.get("username") ?? "")) : addressMade(v.parse(v.object({ username: v.string() }), body).username);
 
     if (url.pathname.endsWith("/threads")) return answer(list(url));
 

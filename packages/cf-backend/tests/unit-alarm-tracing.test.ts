@@ -29,7 +29,6 @@ import { type RecordingTracer, createRecordingTracer } from '@kinu.run/test-util
 const PHASES = [
   'alarm.due_triggers',
   'alarm.event_drain',
-  'alarm.evolution_answer',
   'alarm.peer_dispatch',
   'alarm.email_reconcile',
   'alarm.cache_warm',

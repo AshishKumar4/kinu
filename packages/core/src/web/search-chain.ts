@@ -29,6 +29,7 @@ import { attemptInItsWords, KinuError, settle } from '../obs/index';
 import { isSafeUrl } from './url-safety';
 import { stripBase64Images } from './markdown';
 import type { WebSearchResponse, WebSearchResult } from './provider';
+import { plainFetch } from '../providers/fetch-shim';
 
 /** One search, as the `web` tool asks it. */
 export type WebSearch = (input: { readonly query: string; readonly limit: number; readonly signal?: AbortSignal }) => Promise<WebSearchResponse>;
@@ -91,8 +92,7 @@ function refused(said: string, input: { readonly status?: number; readonly retry
 
 export function chainWebSearch(deps: WebSearchDeps): WebSearch {
   const pacer = deps.pacer ?? providerPacer;
-  // Detached: workerd's fetch throws "Illegal invocation" when called as `deps.fetch`.
-  const fetchImpl = deps.fetch;
+  const fetchImpl = plainFetch(deps.fetch);
 
   /** Who pays for `route`, or why nobody can: an entry with nobody to pay for it is passed over, never parked. */
   const payerOf = (route: WebSearchRoute, query: string, limit: number): Effect.Effect<Payer | Refused, KinuError> => Effect.gen(function* () {

@@ -5,7 +5,7 @@
  * or serves the shell where a door should answer.
  */
 import { describe, expect, test } from 'bun:test';
-import { CLI_VERSION_PATH, DEV_IDENTITY_HEADER, type UserCaller } from '@kinu.run/core';
+import { CLI_VERSION_PATH, DEV_IDENTITY_HEADER, VISITOR_PAGE_ATTRIBUTE, type UserCaller } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { workerContext, workerEnv } from './helpers/bindings';
 import { makeKv } from './helpers/kv';
@@ -31,6 +31,8 @@ interface Answer {
   /** Paths the app shell (`ASSETS`) was asked for. */
   readonly assets: readonly string[];
   readonly location: string | null;
+  /** Whether the page's root marks it a visitor's (`VISITOR_PAGE_ATTRIBUTE`). */
+  readonly visitor: boolean;
 }
 
 function env(assets: string[]): Env {
@@ -48,7 +50,7 @@ function env(assets: string[]): Env {
       fetch: async (input: RequestInfo | URL) => {
         assets.push(new URL(input instanceof Request ? input.url : String(input)).pathname);
 
-        return new Response('shell', { headers: { 'content-type': 'text/html' } });
+        return new Response('<!doctype html><html><head></head><body>shell</body></html>', { headers: { 'content-type': 'text/html' } });
       },
       connect: () => { throw new Error('ASSETS.connect: not reachable in this test'); },
     },
@@ -86,8 +88,11 @@ async function send(caller: Caller, method: string, path: string): Promise<Answe
   if (caller === 'signed-in') headers[DEV_IDENTITY_HEADER] = DEV_SECRET;
   const origin = caller === 'localhost' ? 'http://localhost:8787' : `https://${APP_HOST}`;
   const response = await worker.fetch(new Request(`${origin}${path}`, { method, headers }), env(assets), workerContext());
+  let visitor = false;
 
-  return { status: response.status, assets, location: response.headers.get('location') };
+  await new HTMLRewriter().on('html', { element(element) { visitor = element.hasAttribute(VISITOR_PAGE_ATTRIBUTE); } }).transform(response).text();
+
+  return { status: response.status, assets, location: response.headers.get('location'), visitor };
 }
 
 /** The shell serves the page asked for, and names in it the build that serves it, read off the build's stamp. */
@@ -145,13 +150,17 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   // A live share's entry is its link and its Gallery Open: its shell is public, and its open route decides who it admits.
   ['page', 'GET', '/shared/live/acme/share-1', shell('/shared/live/acme/share-1')],
   ['anon', 'GET', '/shared/live/acme/share-1', shell('/shared/live/acme/share-1')],
-  // The Gallery's list is Explore's apps: its address lands there, behind sign-in as Explore is; a listed slate's page
-  // stays public.
+  // The Gallery's list is Explore's apps: its address lands there. Explore, a blueprint's page and a listed slate's page
+  // are public; what they do for an account asks it to sign in first.
   ['anon', 'GET', '/gallery', { status: 302, assets: [], location: '/explore?kind=app' }],
   ['signed-in', 'GET', '/gallery', { status: 302, assets: [], location: '/explore?kind=app' }],
-  ['page', 'GET', '/explore?kind=app', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fexplore%3Fkind%3Dapp` }],
-  ['signed-in', 'GET', '/explore?kind=app', shell('/explore')],
-  ['anon', 'GET', '/gallery/ravi/pr-board', shell('/gallery/ravi/pr-board')],
+  ['page', 'GET', '/explore?kind=app', { ...shell('/explore'), visitor: true }],
+  ['signed-in', 'GET', '/explore?kind=app', { ...shell('/explore'), visitor: false }],
+  ['page', 'GET', '/explore/workspaces/personal-assistant', { ...shell('/explore/workspaces/personal-assistant'), visitor: true }],
+  ['signed-in', 'GET', '/explore/workspaces/personal-assistant', { ...shell('/explore/workspaces/personal-assistant'), visitor: false }],
+  ['anon', 'POST', '/explore', door(401)],
+  ['page', 'GET', '/explorer', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fexplorer` }],
+  ['anon', 'GET', '/gallery/ravi/pr-board', { ...shell('/gallery/ravi/pr-board'), visitor: false }],
   // The Drive's Shared tab is the account's own.
   ['page', 'GET', '/shared', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fshared` }],
   ['anon', 'GET', '/shared/live', door(401)],

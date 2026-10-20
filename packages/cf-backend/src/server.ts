@@ -6,13 +6,14 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { Cause, Effect, Result } from "effect";
 import { routeAgentRequest } from "agents";
-import { tracing, WorkerEntrypoint } from 'cloudflare:workers';
-import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
+import { exports, tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import type { EgressStreams, EgressTlsTarget } from '@nimbus-sh/core/_shared/workspace-network.js';
+import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
 import {
-  containerEventResolver, GitHubEgressRecorder, handleContainerEgress, handleContainerEvent, handleEgressConnect, handleEgressTls,
-  parseEgressParams, parseEgressPrincipal, type EgressParams, type KinuEgressParams,
+  containerEventResolver, handleContainerEvent, handleEgressConnect, handleEgressTls, parseEgressParams, parseEgressPrincipal,
+  type EgressParams, type KinuEgressParams,
 } from './egress/outbound';
+import { forwardEgress, githubRecorder } from './egress/policy';
 import { objectNamed, APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH, WORKER_VERSION_HEADER } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -36,10 +37,10 @@ import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
 import {
-  crossSiteRejection, sessionGate,
+  crossSiteRejection, requestIdentity, sessionGate,
   type AuthIdentity,
 } from "./auth/session";
-import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
+import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH, VISITOR_SHELL } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
@@ -75,10 +76,7 @@ export { DevboxGateway } from '@kinu.run/devbox';
 /** The sandbox container's outbound HTTP, and a Nimbus workspace's egress (`NimbusWorkspaceOptions.egress`). */
 export class KinuEgress extends WorkerEntrypoint<Env, EgressParams> {
   override fetch(request: Request): Promise<Response> {
-    const params = parseEgressPrincipal(this.ctx);
-
-    // A viewer's requests are not the owner's GitHub activity.
-    return handleContainerEgress(request, this.env, params, params === undefined || 'principal' in params ? undefined : new GitHubEgressRecorder(this.env, this.ctx, params));
+    return forwardEgress(request, this.env, parseEgressPrincipal(this.ctx), { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'container' });
   }
 
   /** A Nimbus workspace program's plain socket (`handleEgressConnect`); a container's raw sockets go straight out (D82). */
@@ -387,6 +385,16 @@ worker.get('/gallery', (c) => c.redirect(`${APP_ROUTES.explore}?kind=app`));
 for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);
 
 for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '/gallery', '/s']) worker.all(`${prefix}/*`, beneath<WorkerEnv>(prefix, appShell));
+
+/**
+ * Explore is public. Signed out, its page is marked a visitor's, which the app draws under the public bar, reading nothing
+ * of an account; signed in, it goes on through the gate to the account's own page, rail and theme. A session that could
+ * not be read fails the request, which `routeError` records and answers by its class.
+ */
+const exploreShell: MiddlewareHandler<WorkerEnv> = async (c, next) =>
+  (await requestIdentity(c.req.raw, c.env) === null ? serveApp(c.req.raw, c.env, VISITOR_SHELL) : next());
+
+for (const path of [APP_ROUTES.explore, `${APP_ROUTES.explore}/*`]) worker.get(path, exploreShell);
 
 worker.use('*', (c, next) => settle(Effect.gen(function* () {
   const request = c.req.raw;

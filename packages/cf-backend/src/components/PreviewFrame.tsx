@@ -1,5 +1,5 @@
 /** Fills its parent: render inside a sized container. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Switch } from "@/components/ui/Switch";
@@ -27,11 +27,20 @@ export function useComputerPreviewLink(port: PinnedPreviewPort | undefined, rpc:
 
 export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: PublicLink | undefined }) {
   return (
-    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
-      <code className="p-annotation p-text-3 truncate flex-1">{url}</code>
+    <PreviewAddress url={url}>
       {publicLink !== undefined && <PublicLinkSwitch key={url} link={publicLink} />}
       <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
       <a href={url} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-text p-1 shrink-0" title="Open in new tab"><ArrowSquareOutIcon size={11} /></a>
+    </PreviewAddress>
+  );
+}
+
+/** The bar alone, naming where a preview is: the landing's sample, whose address serves nothing to open or copy. */
+export function PreviewAddress({ url, children }: { url: string; children?: ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
+      <code data-preview-address className="p-annotation p-text-3 truncate flex-1">{url}</code>
+      {children}
     </div>
   );
 }

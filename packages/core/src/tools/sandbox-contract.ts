@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { asSchema, type ToolSet } from 'ai';
 import { JsonObjectSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
-import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
+import { hasPlanPermission, providersInWorkMode, toolsInWorkMode, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
@@ -231,6 +231,25 @@ export function toolsNamespace(tools: ToolSet, signal: AbortSignal | undefined):
       },
     }])),
   };
+}
+
+/**
+ * What a program reaches, the same on every backend: `tools.*` (the turn's external tools in this mode, then its native
+ * tools over them), then each namespace, every one held to the role's reach and the mode. A backend only runs it.
+ */
+export function programProviders(input: {
+  readonly surface: { readonly native: ToolSet; readonly external: () => ToolSet };
+  readonly namespaces: readonly CodemodeProvider[];
+  readonly reach: ToolSurfaceNarrowing;
+  readonly mode: WorkMode;
+  readonly signal: AbortSignal | undefined;
+}): CodemodeProvider[] {
+  const { reach, mode } = input;
+  const reached = (tools: ToolSet): ToolSet => Object.fromEntries(Object.entries(tools).filter(([name]) => reach.allowsTool(name)));
+  // A native name shadows an external one.
+  const tools = toolsNamespace({ ...toolsInWorkMode(mode, reached(input.surface.external())), ...reached(input.surface.native) }, input.signal);
+
+  return [...reach.narrowProviders([tools]), ...providersInWorkMode(mode, reach.narrowProviders(input.namespaces))];
 }
 
 /** `tools.*` members, as `toolsNamespace` builds them. */

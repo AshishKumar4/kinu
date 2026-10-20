@@ -4,7 +4,7 @@
  */
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
-import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
@@ -48,6 +48,7 @@ import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
 import { ASSISTANT_ROSTER, assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
+import { galleryUsername } from "./gallery-mail-address";
 import { exploreFrame } from "./gallery-explore";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
@@ -83,7 +84,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutomations";
 import { AddServerCard } from "@/components/account/McpServersPanel";
-import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { DevicesFrame, PluginsFrame, SetupModalFrame, UserMcpFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
@@ -237,7 +238,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty", "secretpaste"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "usermcp", "devices", "devices-empty", "secretpaste"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -852,6 +853,32 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
+/** `&mail=off`: setup on a deployment with no mail domain, which offers no address. */
+const WELCOME_MAIL_OFF = new URLSearchParams(location.search).get("mail") === "off";
+
+/** The address setup's Mail step creates; none until it does. */
+let welcomeAddress: string | null = null;
+
+/** Setup's Mail step: the account has no address and may create one, checked and created through the address route. */
+function welcomeMailFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (frame !== "welcome" || !path.startsWith("/api/user/mail/")) return null;
+
+  if (path === "/api/user/mail/boxes") {
+    return fixtureJson({ enabled: !WELCOME_MAIL_OFF, domain: WELCOME_MAIL_OFF ? null : "kinu.run", address: welcomeAddress, canCreate: !WELCOME_MAIL_OFF && welcomeAddress === null, boxes: [] });
+  }
+
+  if (path.startsWith("/api/user/mail/address?")) return fixtureJson(galleryUsername(new URLSearchParams(path.split("?")[1]).get("username") ?? ""));
+
+  if (path === "/api/user/mail/address" && method === "POST") {
+    welcomeAddress = `${v.parse(v.object({ username: v.string() }), JSON.parse(v.parse(v.string(), body))).username}@kinu.run`;
+    document.documentElement.dataset.galleryMailCreated = welcomeAddress;
+
+    return fixtureJson({ address: welcomeAddress });
+  }
+
+  return null;
+}
+
 /** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */
 function builtinAuthFixture(path: string): Response | null {
   return path === "/api/user/builtin-auth" ? fixtureJson({ enabled: false, owner: false }) : null;
@@ -861,6 +888,7 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   secretsFixture,
   galleryWebSearchTest,
   builtinAuthFixture,
+  welcomeMailFixture,
   accountMemoryFixture,
   accountProfileFixture,
   settingsSectionsFixture,
@@ -8004,6 +8032,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["usermcp", { node: <UserMcpFrame />, entries: ["/user/settings/mcp"] }],
     ["characters", { node: <CharactersFrame />, entries: ["/"] }],
     ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
   ]);
@@ -8125,15 +8154,24 @@ async function mount() {
   if (root === null) throw new Error("gallery root is missing");
 
   createRoot(root).render(
-    // Every frame mounts under the shell's three stores; a frame mounting `Layout` gets its nearer store, as the app does.
     <StrictMode>
       <ErrorBoundary label="gallery">
         <MemoryRouter initialEntries={entries}>
-          <AccountProvider><WorkspaceRosterProvider><AgentsNavProvider>{node}</AgentsNavProvider></WorkspaceRosterProvider></AccountProvider>
+          <FrameStores>{node}</FrameStores>
         </MemoryRouter>
       </ErrorBoundary>
     </StrictMode>,
   );
+}
+
+/**
+ * Every frame mounts under the shell's three stores; a frame mounting `Layout` gets its nearer store, as the app does. A
+ * visitor's frame (`&signed=out`) mounts none: the app's visitor routes have no account to read.
+ */
+function FrameStores({ children }: { children: ReactNode }) {
+  if (new URLSearchParams(location.search).get("signed") === "out") return children;
+
+  return <AccountProvider><WorkspaceRosterProvider><AgentsNavProvider>{children}</AgentsNavProvider></WorkspaceRosterProvider></AccountProvider>;
 }
 
 try {

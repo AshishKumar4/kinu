@@ -333,7 +333,7 @@ describe('the eval sandbox under workerd', () => {
     expect(String(offline.result)).toContain('threw: ');
 
     // The loopback stub `enable_ctx_exports` mints for the exported class.
-    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false, ownerUserId: null } }, async () => ({})));
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { principal: { as: 'viewer', workspace: 'codemode-probe', actorId: null } } }, async () => ({})));
     const result = await online.execute(program, [toolsProvider([]), dbProvider, workspace]);
     // `.invalid` resolves for nobody: the network's own failure comes back via the marked 502, not a sandbox refusal.
     expect(String(offline.result)).toContain('not permitted to access the internet');
@@ -354,7 +354,7 @@ describe('the eval sandbox under workerd', () => {
 
   test('a program cannot reach cloud metadata, and is told why', async () => {
     // Refused by the shared classifier before any DNS lookup or socket, as shell and `web.fetch` refuse it.
-    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false, ownerUserId: null } }, async () => ({})));
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { principal: { as: 'viewer', workspace: 'codemode-probe', actorId: null } } }, async () => ({})));
     const program = "// probe the metadata service\ntry { await fetch('http://169.254.169.254/latest/meta-data/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";
 
     const result = await online.execute(program, [toolsProvider([]), dbProvider, workspace]);
@@ -371,7 +371,7 @@ describe('the eval sandbox under workerd', () => {
 
     const web = createWebCodemodeProvider({ provider, files: null, sessions: { open: unused, list: unused, close: unused }, prelude: { source: BROWSER_PRELUDE } });
     const fns = Object.fromEntries(Object.entries(web.tools).map(([name, entry]) => [name, (...args: unknown[]) => entry.execute(...args)]));
-    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null, asOwner: false, ownerUserId: null } }, async () => ({})));
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { principal: { as: 'viewer', workspace: 'codemode-probe', actorId: null } } }, async () => ({})));
 
     const ran = await withCodemodeProgram(() => online.execute(
       "// reach a browser this agent did not open, then list tools on something that is no page\n"

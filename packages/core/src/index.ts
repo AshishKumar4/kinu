@@ -95,7 +95,7 @@ export { initMailNameTables, initMailboxTables } from './state/mail-schema';
 
 export { mailVerdict } from './mail/verdict';
 
-export { MAIL_LABEL_PATTERN, isMailLabel, mailAddressOf, mailLabelOf, parseMailRecipient, type MailRecipient } from './mail/address';
+export { mailAddressOf, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername, type MailRecipient } from './mail/address';
 
 export type * from './mail/mailbox-api';
 
@@ -578,7 +578,7 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
-  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
+  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programProviders, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   shownConsoleValue, createToolArguments, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
@@ -612,6 +612,8 @@ export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } f
 
 export { subordinateForkContext, subordinateTurnContext } from './subordinates/support';
 
+export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePorts, type SeatedHire } from './subordinates/hire-lifecycle';
+
 export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun } from './heads/delivered-run';
@@ -621,7 +623,7 @@ export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendant
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
 export {
-  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
 } from './state/local-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.
@@ -1174,7 +1176,7 @@ export { explainSandboxError } from './tools/sandbox-errors';
 
 export { stoppedProgram } from './execution/program-stop';
 
-export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { callableToolNames, currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, workModeRefusal, toolsInWorkMode, toolsForInvocation, providersInWorkMode, toolsBehindBoundary, type ToolBoundary } from './execution/work-mode';
 
 export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 
@@ -1546,6 +1548,8 @@ export {
   type ScrubReplacement,
 } from './safety/egress-gate';
 
+export { egressAuthority, type EgressAuthority, type EgressPrincipal } from './safety/egress-principal';
+
 export {
   DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
@@ -1578,7 +1582,7 @@ export {
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome,
   DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentAnswer, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
   type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
@@ -1679,7 +1683,7 @@ export {
   backgroundJobNotice,
   SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs, execContext,
-  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, RESUMED_SURFACE, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
@@ -1889,7 +1893,7 @@ export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 // Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
   REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
-  createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementRequestView,
+  createRefinementStore, evolutionDebt, initRefinementTables, refinementRequestView,
   refinementStagingPath, RefinementRequestViewSchema,
   type EvolutionDebt, type RefinementDeps,
   type RefinementDisposition, type RefinementEdit,
@@ -1902,7 +1906,7 @@ export {
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
 export {
-  listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+  listRefinements, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
 export { activateDreamSkills, dreamSkillsHidden } from './evolution/refinement-skill';
@@ -2270,7 +2274,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { desktopClientUrl } from './http/desktop-client';
 
-export { serveApp } from './http/app-shell';
+export { serveApp, VISITOR_SHELL } from './http/app-shell';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
 
@@ -2393,6 +2397,8 @@ export {
 } from './utils/session-recovery';
 
 export { pageDeployedBuildSha } from './web/page-build';
+
+export { pageIsVisitors, VISITOR_PAGE_ATTRIBUTE } from './web/visitor-page';
 
 export { loadRouteChunk } from './utils/chunk-recovery';
 

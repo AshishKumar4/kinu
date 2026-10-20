@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { assessAdmissibility, outcomeRow, projectRunEventProvenance, runOk, runToExit, scratchDir, spawnTest, subgoalOutcome, TASK_OUTCOME, type EvalObservation } from '@kinu.run/test-utils';
-import { EXECUTOR_READERS, FLEET_MODULE, fleetCases, TUI_HARNESS } from '../../vitest.first-run.config';
+import { FLEET_MODULE, fleetCases, TUI_HARNESS } from '../../vitest.first-run.config';
 import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
 import { CAPABILITY_ROWS, ENTRY_ROWS, PAGE_ROWS, STRIP_ROWS } from './surfaces';
 import { resolvePublicSessionPlan } from '../../evals/src/session';
@@ -103,12 +103,23 @@ describe('the first-run corpus is the set this tier runs', () => {
       ['tests/first-run/indirect.first-run.ts', "import { attachMachine } from './helper';"],
       ['tests/first-run/tui.first-run.ts', "import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';"],
       ['tests/first-run/alone.first-run.ts', "import { firstRunCasePlan } from './first-run';"],
-    ]), ['reader']);
+    ]));
 
-    expect(fleet).toEqual([
-      'tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts',
-      'tests/first-run/reader.first-run.ts', 'tests/first-run/tui.first-run.ts',
-    ]);
+    expect(fleet).toEqual(['tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts', 'tests/first-run/tui.first-run.ts']);
+  });
+
+  // A case whose verdict reads an executor runs with the cases, concurrently, only because their account holds no
+  // machine: the fleet's attach to an account of its own (3fae7659e). The split is what keeps a live machine from being
+  // the executor such a case's agent picks.
+  test("the fleet attaches its machines to an account the other cases never act as", () => {
+    const tier = readFileSync(join(import.meta.dirname, '../../scripts/first-run-tier.sh'), 'utf8');
+    const account = (name: string) => new RegExp(`^${name}=(\\S+)$`, 'mu').exec(tier)?.[1];
+
+    expect({ fleet: account('FLEET_ACCOUNT'), cases: account('CASES_ACCOUNT') }).toEqual({ fleet: 'devices', cases: 'scripted' });
+  });
+
+  test("a case that only reads an executor runs with the cases, not one at a time in the fleet", () => {
+    expect(fleetCases().filter((file) => /\/(background-settle|every-tool|slate|workspace-panes)\.first-run\.ts$/u.test(file))).toEqual([]);
   });
 
   test('every case loads under the tier\'s own runner', async () => {
@@ -138,12 +149,12 @@ describe('a case gets a fresh workspace, and gives it back', () => {
 const caseIds = (): string[] => trackedFiles().filter(isFirstRunSuite).map((file) => file.slice(file.lastIndexOf('/') + 1, -'.first-run.ts'.length));
 
 describe('every case a list names is a case file', () => {
-  test('each surface row and each executor reader names a tracked case', () => {
+  test('each surface row names a tracked case', () => {
     const cases = new Set(caseIds());
     const rows = [PAGE_ROWS, STRIP_ROWS, ENTRY_ROWS, CAPABILITY_ROWS].flatMap((map) => Object.values(map).flatMap((row) => Array.isArray(row) ? row : []));
 
     expect(cases.size).toBeGreaterThan(40);
-    expect([...rows, ...Object.keys(EXECUTOR_READERS)].filter((id) => !cases.has(id))).toEqual([]);
+    expect(rows.filter((id) => !cases.has(id))).toEqual([]);
   });
 });
 

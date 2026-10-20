@@ -162,7 +162,7 @@ function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor,
 
 /** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
 export function workspaceMemory(db: Database): Memory {
-  return notesMemory(workspaceHome(db), makeSql(db), write => db.transaction(write)()).memory;
+  return notesMemory(workspaceHome(db), makeSql(db), (write) => writeTransaction(db, write)).memory;
 }
 
 /** Session payload reads for inspection, over the workspace's folder and own space. */
@@ -380,7 +380,7 @@ function buildCLIRuntime(
 
   const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet, views);
 
-  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql, write => db.transaction(write)());
+  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql, (write) => writeTransaction(db, write));
 
   const craftStore = new CraftStore(sql);
   craftStore.ensureSchema();
