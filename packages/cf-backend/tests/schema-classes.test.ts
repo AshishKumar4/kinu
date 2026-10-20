@@ -8,11 +8,19 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createWebhookSecretStore, initMailboxTables, initMailNameTables } from '@kinu.run/core';
+import {
+  createWebhookSecretStore, ensureIdentityTable, ensureIndexTables, ensureMonitorSchema, initMailboxTables, initMailNameTables, initMissionBudgetTable,
+} from '@kinu.run/core';
+import { initSignalStreaksTable } from '@kinu.run/core/control-plane';
 import { initControlPlaneSchema } from '@kinu.run/core/control-plane/store';
+import { initSlateUsageTable } from '@kinu.run/core/slates';
+import { initWorkspaceGenerationTable } from '@kinu.run/core/workspace';
 import { initBuiltinAccounts } from '@kinu.run/core/identity';
 import { Database as SqliteDatabase } from 'bun:sqlite';
-import { makeSqlExec } from '../../core/tests/helpers';
+import { makeExecRaw, makeSql, makeSqlExec } from '../../core/tests/helpers';
+import { DeployRunDO } from '../src/deploy/deploy-do';
+import { workerEnv } from './helpers/bindings';
+import { makeCtx } from './helpers/platform-context';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { agentDatabase } from './helpers/agent-facets';
 import { createTestUserDO } from './helpers/user-do';
@@ -38,17 +46,34 @@ test('each Durable Object class makes the tables scripts/schema-classes.json nam
   // builtin sign-in directory's, an account's, and the webhook secrets, a workspace's.
   initBuiltinAccounts(<T,>(query: TemplateStringsArray, ...values: (string | number | null)[]) => account.db.query<T, (string | number | null)[]>(query.join('?')).all(...values));
   createWebhookSecretStore(makeSqlExec(workspace.db));
+  // A workspace's on first use (each its repair's `later` makes): the boot's agent identities, the hosted workspace's
+  // generation, a ledger, the slates; an agent's: its conversation index and a ledger.
+  const root = { exec: (query: string) => workspace.db.query<Record<string, string | number | null>, []>(query).all() };
+
+  ensureIdentityTable(root);
+  initWorkspaceGenerationTable(root);
+  initMissionBudgetTable(makeExecRaw(workspace.db));
+  initSlateUsageTable(makeExecRaw(workspace.db));
+  const agent = agentDatabase(workspace.db, 'schema-classes');
+
+  ensureIndexTables(makeSql(agent));
+  initMissionBudgetTable(makeExecRaw(agent));
   const control = new SqliteDatabase(':memory:');
   const mailname = new SqliteDatabase(':memory:');
   const mailbox = new SqliteDatabase(':memory:');
+  const monitor = new SqliteDatabase(':memory:');
+  const deploy = new SqliteDatabase(':memory:');
 
   initControlPlaneSchema(makeSqlExec(control));
   initMailNameTables(makeSqlExec(mailname));
   initMailboxTables(makeSqlExec(mailbox));
+  ensureMonitorSchema(makeSqlExec(monitor));
+  initSignalStreaksTable(makeSqlExec(monitor));
+  new DeployRunDO(makeCtx(deploy, 'run'), workerEnv({}));
 
   const measured = {
-    account: madeTables(account.db), workspace: madeTables(workspace.db), agent: madeTables(agentDatabase(workspace.db, 'schema-classes')),
-    control: madeTables(control), mailname: madeTables(mailname), mailbox: madeTables(mailbox),
+    account: madeTables(account.db), workspace: madeTables(workspace.db), agent: madeTables(agent),
+    control: madeTables(control), mailname: madeTables(mailname), mailbox: madeTables(mailbox), monitor: madeTables(monitor), deploy: madeTables(deploy),
   };
 
   const held = v.parse(v.record(v.string(), v.array(v.string())), JSON.parse(readFileSync(CLASSES, 'utf8')));
@@ -58,5 +83,6 @@ test('each Durable Object class makes the tables scripts/schema-classes.json nam
   if (process.env.KINU_SCHEMA_CLASSES === 'write') writeFileSync(CLASSES, `${JSON.stringify({ ...held, ...measured }, null, 2)}\n`);
   expect({
     account: held.account, workspace: held.workspace, agent: held.agent, control: held.control, mailname: held.mailname, mailbox: held.mailbox,
+    monitor: held.monitor, deploy: held.deploy,
   }).toEqual(measured);
 });

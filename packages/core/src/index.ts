@@ -81,7 +81,7 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
-export { REGENERABLE, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
+export { derivedFrom, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
 
 export { textContains } from './utils/text-match';
 
@@ -543,6 +543,7 @@ export {
   localMissionScope,
   missionGate,
   listMissionSpend,
+  initMissionBudgetTable,
   type MissionBudgetPort,
   type MissionScope,
   type MissionBudgetLimits,
@@ -1190,6 +1191,7 @@ export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots,
+  ensureIdentityTable,
   actorHomeName,
   MAIN_AGENT, SESSION_UID, AGENT_UID_FLOOR,
   type HomeRootVfs, type TmpConfiner,
@@ -1297,7 +1299,7 @@ export { memoryBytes } from './memory/note';
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, type MemoryNote } from './memory/note';
 
 export {
-  ConversationSearchStore, invalidateConversationSearchIndex,
+  ConversationSearchStore, ensureIndexTables, invalidateConversationSearchIndex,
   type ConversationRecall, type ConversationSearchHit,
   type ConversationScrollResult, type ConversationSummary,
 } from './memory/conversation-search';

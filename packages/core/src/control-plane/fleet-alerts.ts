@@ -195,6 +195,11 @@ CREATE TABLE IF NOT EXISTS monitor_signal_streaks (
   clean   INTEGER NOT NULL
 )`;
 
+/** Made on the monitor's first fleet check, and by its init. */
+export function initSignalStreaksTable(sql: SqlExec): void {
+  sql.exec(STREAKS_DDL);
+}
+
 const StreakRow = v.object({ signal: v.picklist([...ALERT_SIGNALS, SOURCES]), crossed: v.number(), clean: v.number() });
 
 function observedOf(verdict: SignalVerdict): string | undefined {
@@ -206,7 +211,7 @@ export function settleFleet(
   read: { readonly sample: FleetSample; readonly unavailable: readonly Unavailable[] },
   open: ReadonlyMap<string, string>,
 ): ProbeOutcome[] {
-  sql.exec(STREAKS_DDL);
+  initSignalStreaksTable(sql);
 
   const streaks = new Map<string, SignalStreak>(
     v.parse(v.array(StreakRow), sql.exec('SELECT signal, crossed, clean FROM monitor_signal_streaks').toArray())

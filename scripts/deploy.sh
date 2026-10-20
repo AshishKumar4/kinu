@@ -100,12 +100,13 @@
 # before anything runs. A reset whose build never uploaded is finished by the next deploy with `--reset`,
 # whose pre-upload infrastructure phase defers exactly the rows that reset's record deleted.
 #
-# `--reset-tables` is how a release that reshapes tables ships: every object keeps its storage and repairs its own
-# tables the first time the new build opens it (core state/schema-repair.ts). Before the upload it prints the plan,
-# what each repair does to each table this release changed against the build the deployment serves, and stops on
-# anything that would refuse; on production it asks for a typed confirmation naming the tables whose rows go. After
-# the upload, once this deploy's version answers, it opens every object once, so each repairs itself before a user
-# waits on it, and prints what each did (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
+# `--reset-tables` is how a release that reshapes tables ships: every object keeps its storage and drops exactly the
+# tables this release changed (with the tables that refer to them), made anew empty, the first time the new build
+# opens it (core state/schema-repair.ts). Before the upload it prints the plan, every table each class drops against
+# the build the deployment serves, and stops on anything that would refuse; on production it asks for a typed
+# confirmation naming every table it drops. After the upload, once this deploy's version answers, it opens every object
+# once, so each resets itself before a user waits on it, prints what each did and writes each database's census
+# (`scripts/reset.ts tables-plan` and `tables`, scripts/tables-reset.ts).
 # Chosen per release, never automatic. Its record goes where a reset's does, and a rerun of the walk is harmless.
 #
 # Idempotent: safe to re-run.
@@ -295,7 +296,7 @@ elif [ "$KINU_RESET" != "1" ] && [ "$KINU_ROLLBACK" != "1" ] && [ "$KINU_GATES_O
   case $? in
     0) ;;
     3)
-      echo -e "${RED}This build moves the stamp of: $KINU_STAMPS_MOVED. Every such database repairs its tables when the new build first opens it: deploy with --reset-tables, which prints what each repair does first.${NC}"
+      echo -e "${RED}This build moves the stamp of: $KINU_STAMPS_MOVED. Every such database drops the tables this release changed when the new build first opens it: deploy with --reset-tables, which prints them first.${NC}"
       exit 1
       ;;
     *) exit 1 ;;

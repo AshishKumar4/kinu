@@ -45,7 +45,7 @@ export interface SlateBuildFailure {
 }
 
 export function initSlateBuildTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_images (
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_images ( /* derived from slate_build_inputs: what invalidates an image */
     slate      TEXT NOT NULL,
     authority  TEXT NOT NULL,
     good_key   TEXT,
