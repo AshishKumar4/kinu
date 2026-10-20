@@ -5399,7 +5399,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       if (this.wipe === undefined) {
         // Quieted already when its owner's teardown asked first; a deletion resumed after a restart quiets here.
         yield* this.quietAgents();
-        yield* Effect.promise(async () => this.releaseOutsideState());
+        yield* Effect.promise(async () => this.releaseOutsideState(ownerUserId !== null));
       }
 
       const wipe = this.wipe ??= { ownerUserId, done: this.wipeStorage() };
@@ -5424,7 +5424,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }));
   }
 
-  private async releaseOutsideState(): Promise<void> {
+  /** `claimed`: it had an owner, so it may have had agents and their memory; one that never did has neither. */
+  private async releaseOutsideState(claimed: boolean): Promise<void> {
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
@@ -5438,7 +5439,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Its agents' browsers on Browser Run hold their pages until they sit idle out: closed now. Its memory's vectors live
     // in a shared index, outside its storage: deleted now, while its chunks still name them.
     await closeWorkspaceBrowserSessions(this.ctx.storage.sql, this.env.BROWSER);
-    await this.rt.forgetMemoryVectors();
+
+    if (claimed) await this.rt.forgetMemoryVectors();
 
     const sb = this.computerBox();
 
