@@ -515,6 +515,51 @@ describe('refinement request — durable, and behaviourally inert', () => {
 });
 
 describe('the refiner — bounded references, prior history, strict typed answer', () => {
+  test('the brief and the review name the picks the turns switched from or corrected, with their descriptions now', async () => {
+    const fx = fixture();
+    fx.rt.craftStore.create({ name: 'csv_sum', description: 'Sums one column of a CSV file', code: 'async () => 0' });
+    fx.rt.craftStore.create({ name: 'csv_total', description: 'Totals every column of a CSV file', code: 'async () => 0' });
+    // Nobody trusted it: the agent's index withholds its description, and so does the dream.
+    await writeText(fx.rt.agentStateVfs, `${WORKSPACE_SKILLS_DIR}/report-writing/SKILL.md`, '---\nname: report-writing\ndescription: Write a weekly report\n---\nUse headings.');
+
+    const turn = (turnId: string, corrected: number, picks: { skills: string[]; tools: string[] }) => {
+      recordTurnRating(fx.rt.storage.sql, fx.rt.actor, {
+        turnId, score: corrected >= 0.5 ? 1.5 : 4.5, corrected, wrong: null, source: 'model',
+        request: `task ${turnId}`, answer: 'done', followup: corrected >= 0.5 ? 'no, the other one' : 'thanks', picks,
+        now: SEED_EPOCH + (seeded += 1),
+      });
+    };
+
+    turn('pick-1', 1, { skills: ['report-writing'], tools: ['csv_sum'] });
+    turn('pick-2', 0, { skills: ['slates'], tools: ['csv_total'] });
+
+    const edit = { kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'the corrected turn picked the weekly report skill for a slate' } as const;
+    const { port, requests } = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'describe when each applies', edits: [edit] }));
+    const reviews: string[] = [];
+
+    const deps = fx.deps(port, undefined, undefined, (review, edits) => {
+      reviews.push(review);
+
+      return acceptEvery(review, edits);
+    });
+
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+
+    const [brief, review] = [requests[0]?.task ?? '', reviews[0] ?? ''];
+
+    for (const text of [brief, review]) {
+      expect(text).toContain('## Skills and tools picked, then switched from or corrected');
+      expect(text).toContain('  - skill `report-writing`, then `slates`: 1 time');
+      expect(text).toContain('  - tool `csv_sum`, then `csv_total`: 1 time');
+      expect(text).toContain('  - skill `report-writing`: (not trusted, so its description is withheld)');
+      expect(text).toContain('  - skill `slates`: Build any interface the user asks for');
+      expect(text).toContain('  - tool `csv_total`: Totals every column of a CSV file');
+    }
+
+    expect(brief).toContain('says when it applies, and when a similar one fits instead');
+  });
+
   test('the brief carries the trajectory, the artifact inventory and prior outcomes', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);

@@ -113,7 +113,7 @@ export function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComp
 }
 
 /** `schema`'s answer on the route; an answer off it ends the walk (`generateObjectReported`), as a wrong answer does. */
-function objectOnRoute<S extends v.GenericSchema>(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string, schema: S): Promise<v.InferOutput<S>> {
+export function objectOnRoute<S extends v.GenericSchema>(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string, schema: S): Promise<v.InferOutput<S>> {
   return onRoute(route, lane, (serving) => lane.llm(serving).object(prompt, schema));
 }
 
@@ -176,18 +176,17 @@ export async function onRoute<T>(route: ModelRouteResolution, lane: RouteWalk, i
   return await settle(call(cooled ?? { spec: route.model, reasoningEffort: route.reasoningEffort }));
 }
 
+/** `invoke` on `source`'s route as the profile resolves now, in that profile's operation scope. */
+export async function onProfileRoute<T>(actor: ActorReference, source: ProfileRoutedSource, binding: ModelLaneComponents, invoke: (route: ModelRouteResolution) => Promise<T>): Promise<T> {
+  const context = await resolveOperationProfile({ actor, resolve: () => binding.resolveProfile() });
+
+  return runOperationProfile(context, () => invoke(resolveModelRoute(source, context.profile)));
+}
+
 export function createRoutedModelLane(actor: ActorReference, source: ProfileRoutedSource, binding: ModelLaneComponents): RoutedLLM {
   return {
-    async complete(prompt) {
-      const context = await resolveOperationProfile({ actor, resolve: () => binding.resolveProfile() });
-
-      return runOperationProfile(context, () => completeOnRoute(resolveModelRoute(source, context.profile), binding, prompt));
-    },
-    async object(prompt, schema) {
-      const context = await resolveOperationProfile({ actor, resolve: () => binding.resolveProfile() });
-
-      return runOperationProfile(context, () => objectOnRoute(resolveModelRoute(source, context.profile), binding, prompt, schema));
-    },
+    complete: (prompt) => onProfileRoute(actor, source, binding, (route) => completeOnRoute(route, binding, prompt)),
+    object: (prompt, schema) => onProfileRoute(actor, source, binding, (route) => objectOnRoute(route, binding, prompt, schema)),
     stream(options) {
       // Capture the caller's scope now; a generator body first runs in the consumer's next().
       const issued = currentOperationProfile(actor);

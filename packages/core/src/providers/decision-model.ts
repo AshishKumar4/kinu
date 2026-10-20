@@ -120,6 +120,25 @@ export function createDecisionPort(opts: {
 }
 
 
+/** A decision answered by the fast tier's trusted models (`evolution/structured-decision.ts`); undefined where none it
+ *  walks is trusted for every question asked. */
+export type StructuredDecider = (request: DecisionRequest) => Promise<DecisionResult | null | undefined>;
+
+/**
+ * The one decision port a host serves: Clef, and where Clef refused for its owner to fix (no Workers AI, a spent
+ * allowance), already saying so, the fast tier's chat model answering categories, for the questions its measured
+ * agreement with Clef trusts it with. Any other request answers Clef's null.
+ */
+export function decisionPortOf(clef: DecisionPort, structured: StructuredDecider): DecisionPort {
+  return async (request) => {
+    const answered = await clef(request);
+
+    if (answered !== null) return answered;
+
+    return (await structured(request)) ?? null;
+  };
+}
+
 /**
  * Through the deployment's Workers AI binding, which answers a decision as a whole object. `Ai.run` rereads its options
  * from the shared binding after awaiting, so a raw-response call made meanwhile (binding-completions.ts) hands this

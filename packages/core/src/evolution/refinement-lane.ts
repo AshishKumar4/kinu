@@ -13,6 +13,9 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 // user's own sentence in the reviewed turns.
 
 import { renderWatch } from './watch';
+import { confusedPicks, renderConfusedPicks } from './picks';
+import { discoverSkills } from '../skills/discover';
+import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
@@ -107,7 +110,7 @@ export async function requestRefinement(
 }
 
 /** The cheapest step of a dream, before any draft: one decision-model question over the batch. */
-const TRIAGE = {
+export const TRIAGE = {
   worth: {
     type: 'noul',
     instructions: 'Does any of these turns show something the agent should change about how it works: a correction or a '
@@ -590,6 +593,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
 
   const reviewed = reviewedTrajectory(sql, actor, request);
   const trajectory = reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n');
+  const picks = await picksSection(deps, reviewed);
 
   const sections = PROMPT_SECTIONS
     .map((section) => `  - ${section.id} (${String(Buffer.byteLength(section.source, 'utf8'))} bytes)`)
@@ -632,7 +636,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     'Built-in tool texts (`tool_description`): what the agent reads about each tool on every turn, its',
     'description or its input fields\' descriptions (`schema`, one JSON object). Change one where the turns show',
-    'the agent misusing that tool; it costs every turn its bytes too:',
+    'the agent misusing that tool, or picking it where another fits; it costs every turn its bytes too:',
     tools,
     '',
     'Recorded fact keys (`fact`): the durable world model. Propose one ONLY for a preference the',
@@ -642,6 +646,8 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     'Skill files (`skill`): a procedure the agent follows when its description matches the work. An accepted',
     'skill becomes trusted at the next turn whose prompt cache is cold, and the owner can revert it.',
+    '',
+    'Every description you write, for a skill or a tool, says when it applies, and when a similar one fits instead.',
     '',
     'Subordinate specs (`subagent_spec`): a subordinate\'s role and spec belong to that agent\'s',
     'own config and there is no writable proposal authority for them. Propose one only to record',
@@ -654,6 +660,10 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '## What changed since, and how the turns went',
     '',
     renderWatch(sql, actor) || '  (no earlier dream changed anything)',
+    '',
+    PICKS_HEADING,
+    '',
+    picks || NO_CONFUSED_PICKS,
     '',
     `## Files you may read yourself: ${contextRefs.length === 0 ? '(none in this workspace)' : contextRefs.join(', ')}`,
     '',
@@ -726,11 +736,11 @@ function evolvableTexts(): string[] {
  * The reviewer's brief: the turns, earlier dreams, every drafted edit with its measured evidence, the size budget, and
  * the answer shape. Its answer decides which edits are routed.
  */
-function renderReviewerBrief(
+async function renderReviewerBrief(
   deps: RefinementDeps,
   request: RefinementRequest,
   input: { readonly proposal: RefinementProposal; readonly evidence: readonly EditEvidence[]; readonly reviewed: readonly TurnRating[] },
-): HelperBrief {
+): Promise<HelperBrief> {
   const { sql, rt } = deps.control;
   const bytes = (text: string | null): number => Buffer.byteLength(text ?? '', 'utf8');
   const bundled = evolvableTexts().reduce((total, artifactId) => total + bytes(bundledArtifact(artifactId)), 0);
@@ -754,6 +764,10 @@ function renderReviewerBrief(
       '## What changed since, and how the turns went',
       '',
       renderWatch(sql, rt.actor) || '  (no earlier dream changed anything)',
+      '',
+      PICKS_HEADING,
+      '',
+      await picksSection(deps, input.reviewed) || NO_CONFUSED_PICKS,
       '',
       '## The drafted edits',
       '',
@@ -801,6 +815,33 @@ async function renderReviseBrief(
       'asked you to revise, and drop those it rejected. This is your one revision.',
     ].join('\n'),
   };
+}
+
+const PICKS_HEADING = '## Skills and tools picked, then switched from or corrected';
+
+const NO_CONFUSED_PICKS = '  (no turn here switched picks, or was corrected after one)';
+
+/** Discovery reads no skill file larger than this; a larger one is named as no skill. */
+const PICKED_SKILL_TOKENS = 64_000;
+
+/** The turns' confused picks, each named with its description now: a skill's only where it is built in or trusted. */
+async function picksSection(deps: RefinementDeps, reviewed: readonly TurnRating[]): Promise<string> {
+  const confused = confusedPicks(reviewed);
+
+  if (confused.switches.length === 0 && confused.corrected.length === 0) return '';
+  const { approvals } = deps;
+  const trust: InstructionTrustResolver = approvals === undefined ? () => 'unverified' : (path, content) => approvals.trustOf(path, content);
+  const discovery = await discoverSkills(deps.skillsVfs, { admissionTokens: PICKED_SKILL_TOKENS, trust });
+  const skills = new Map(discovery.skills.map((skill) => [skill.name, skill] as const));
+
+  return renderConfusedPicks(confused, (kind, name) => {
+    if (kind === 'tool') return deps.control.rt.craftStore.get(name)?.description ?? '(no crafted tool has this name now)';
+    const skill = skills.get(name);
+
+    if (skill === undefined) return '(no skill has this name now)';
+
+    return skill.bodyRef.kind === 'builtin' || skill.trusted === true ? skill.description : '(not trusted, so its description is withheld)';
+  });
 }
 
 function renderReviewedTurn(row: TurnRating, index: number): string {
