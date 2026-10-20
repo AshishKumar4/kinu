@@ -6,6 +6,7 @@ import { isWorkMode, type WorkMode } from '../types/turn';
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/index';
 import type { ActorReference } from '../identity/actor-handle';
+import { SUBORDINATE_ORIGINS } from '../identity/workspace-actors';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
 import { SubordinateInheritedContextSchema, subordinateBirthContext } from '../types/subordinates';
@@ -20,7 +21,7 @@ const SubordinateSeedSchema = v.strictObject({
   mission: v.pipe(v.string(), v.nonEmpty()),
   lifetime: v.picklist(['durable', 'task']),
   /** Who asked for it: the owner, an agent, or an evolution lane. */
-  origin: v.picklist(['user', 'agent', 'evolution']),
+  origin: v.picklist(SUBORDINATE_ORIGINS),
 });
 
 export type SubordinateSeed = v.InferOutput<typeof SubordinateSeedSchema>;
