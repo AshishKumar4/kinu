@@ -12,6 +12,15 @@ export const RELEASE_SIGNING_PUBLIC_KEY = '232098b9f5cc9b300b903bb9f3347ecb2b621
 /** A machine's own operator may pin another key through the environment (the test harness signs with its own); never a wire input. */
 export const RELEASE_SIGNING_PUBLIC_KEY_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';
 
+/** The key a release is verified against: the operator's pin when the environment names one, else the built-in one. An
+ *  empty value names none, as the installer reads it (`\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-…}`), so every updater
+ *  decides alike. */
+export function releasePublicKey(env: Readonly<Record<string, string | undefined>>): string {
+  const pinned = env[RELEASE_SIGNING_PUBLIC_KEY_ENV]?.trim() ?? '';
+
+  return pinned === '' ? RELEASE_SIGNING_PUBLIC_KEY : pinned;
+}
+
 const MESSAGE_PREFIX = 'kinu-release-v1';
 
 /** The canonical bytes a signature covers: prefix, version, then each artifact and its checksum by path, one per line. */
@@ -28,6 +37,17 @@ export function releaseMessage(version: string, checksums: Readonly<Record<strin
 const PUBLIC_KEY_HEX = /^[0-9a-f]{64}$/iu;
 
 const SIGNATURE_BASE64 = /^[A-Za-z0-9+/]{86}==$/u;
+
+/** Why `bytes` are not the artifact a signed release names at `path`; null when they are. The signed map is the one
+ *  authority: no checksum fetched beside it decides. */
+export async function artifactRefusal(checksums: Readonly<Record<string, string>>, path: string, bytes: Uint8Array<ArrayBuffer>): Promise<string | null> {
+  const signed = checksums[path];
+
+  if (signed === undefined) return `the signed release names no ${path}`;
+  const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+
+  return digest === signed.toLowerCase() ? null : `checksum mismatch for ${path}`;
+}
 
 /** Whether `release` is signed by the key `publicKeyHex` names. A key or a signature that is not well formed is false,
  *  never a throw; WebCrypto's own refusal propagates. */
