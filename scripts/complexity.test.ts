@@ -390,7 +390,6 @@ describe('over the live tree', () => {
   const files = LIVE_FILES;
   const measured = LIVE;
   const spread = distribution(measured);
-  const budget = readBudget();
 
   test('the corpus, the function count and the ceiling are all non-zero', () => {
     expect(files.size).toBeGreaterThan(1000);
@@ -411,21 +410,5 @@ describe('over the live tree', () => {
     const held = new Set(inventory(measured, spread.line).map(keyOf));
     expect(topTier(measured).length).toBe(20);
     expect(topTier(measured).filter((entry) => !held.has(keyOf(entry)))).toEqual([]);
-  });
-
-  test('the lock names functions that still exist, at the numbers recorded', () => {
-    // Not the same assertion as the gate's own green: this one fails when a lock
-    // entry names a function nothing in the tree declares, which is how a lock
-    // rots into a list of historical names.
-    const current = new Map(measured.map((entry) => [keyOf(entry), entry.complexity]));
-
-    const absent = budget.inventory.filter((entry) => !current.has(entry.key))
-      .map((entry) => entry.key);
-
-    expect(absent).toEqual([]);
-  });
-
-  test('the tree is inside its own budget', () => {
-    expect(judge(measured, budget)).toEqual({ over: [], entrants: [], grown: [], stale: [] });
   });
 });

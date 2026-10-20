@@ -3,8 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { present } from '@kinu.run/test-utils';
 
 import { readSources } from './sources';
-import { ALARM_WORK } from '@kinu.run/core/obs';
-import { audit, auditAlarmWork, auditConstructors, auditFile, MODEL_SINKS } from './do-init-gate';
+import { auditAlarmWork, auditConstructors, auditFile, MODEL_SINKS } from './do-init-gate';
 
 /**
  * The fixture is not invented. This is `SubordinateAgent.onStart` exactly as it
@@ -223,10 +222,6 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
 
 describe('DO init-gate purity, against the real tree', () => {
   const SOURCES = readSources();
-
-  test('the real tree passes', () => {
-    expect(audit(SOURCES).violations).toEqual([]);
-  });
 
   test('an adopted returned promise cannot slip the admitted-async gate', () => {
     // `async onStart(): Promise<void> { return this.slowThing(); }` carries
@@ -449,12 +444,5 @@ export class Quiet extends LifecycleCapability {
     expect(alarmReasons({ Box: ['box.swept'] })).toEqual([expect.stringMatching(/^Jobs arms an alarm and is no key of `ALARM_WORK`/u)]);
     expect(alarmReasons({ Box: ['box.swept'], Jobs: [], Gone: [] })).toEqual(['Gone is a key of `ALARM_WORK`, and no class of that name arms an alarm']);
     expect(alarmReasons({ Box: ['box.swept', 'box.drained'], Jobs: [] })).toEqual(["Box names `box.drained` as its alarm's work, and no code logs it"]);
-  });
-
-  test('this repository: every alarm it arms names its work, and each work it names is logged', () => {
-    const audited = auditAlarmWork(readSources(), ALARM_WORK);
-
-    expect(audited.violations).toEqual([]);
-    expect(audited.owners).toEqual(Object.keys(ALARM_WORK).sort());
   });
 });

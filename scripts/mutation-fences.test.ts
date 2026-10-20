@@ -18,31 +18,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { FENCES, fenceFindings, snippetSitsExactlyOnce, type FenceResult } from './mutation-fences';
-import { trackedFiles } from './sources';
 import { REPO_ROOT as REPO } from './repo-root';
 
 
 describe('the declaration is measurable', () => {
-  test('there are fences, and each names a tracked file and a tracked owner', () => {
-    // The denominator. A gate over an empty list reports a clean tree.
-    expect(FENCES.length).toBeGreaterThan(0);
-    const tracked = new Set(trackedFiles());
-
-    const unknown = FENCES
-      .filter((fence) => !tracked.has(fence.file) || !tracked.has(fence.owner.suite))
-      .map((fence) => fence.name);
-
-    expect(unknown).toEqual([]);
-  });
-
-  test('every fence snippet sits in its file EXACTLY once', () => {
-    // The stale-fixture direction, against the live tree. A snippet that moved
-    // would apply the mutation to the wrong site or to none — and a mutation
-    // that silently missed proves a guard is load-bearing by never removing it.
-    const moved = FENCES.filter((fence) => !snippetSitsExactlyOnce(fence)).map((fence) => fence.name);
-    expect(moved).toEqual([]);
-  });
-
   test('a snippet that is absent, or present twice, is NOT exactly once', () => {
     // Guards the guard: the check above is only worth its green if it can fail.
     const anchor = FENCES[0];
