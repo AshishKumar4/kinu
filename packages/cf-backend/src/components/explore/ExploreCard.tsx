@@ -20,8 +20,8 @@ export const exploreWorkspaceHref = (id: string) => `/explore/workspaces/${encod
 const appHref = (workspace: string, slate: string) => `/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
 
 /** Where a workspace blueprint's picture is read. */
-/** A picture of one of Kinu's own blueprints at work, which the app serves with its assets. */
-export const kinuBlueprintPicture = (picture: string) => `/assets/explore/${encodeURIComponent(picture)}.webp`;
+/** A picture of one of Kinu's own blueprints at work, which the app serves with its assets, under its base. */
+export const kinuBlueprintPicture = (picture: string) => `${import.meta.env.BASE_URL}assets/explore/${encodeURIComponent(picture)}.webp`;
 
 /** A picture of a whole page, cropped to its top left at a size its words can be read at in a card. */
 const ZOOMED = "absolute left-0 top-0 h-auto w-[165%] max-w-none";

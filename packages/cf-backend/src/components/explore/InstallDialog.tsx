@@ -53,7 +53,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
         </Field>
         {assistant && (
           <>
-            <Field label="Its brief" hint="Each weekday, in its chat." inline>
+            <Field label="Its brief" hint="Each day, in its chat." inline>
               <Choice label="Brief time" size="sm" className="w-28" value={brief} options={BRIEF_TIMES.map((time) => ({ value: time, label: time }))} onChange={setBrief} />
             </Field>
             <Field label="Make it your Home" hint="Home opens on its chat." inline>

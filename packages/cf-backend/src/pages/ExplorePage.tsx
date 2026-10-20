@@ -79,7 +79,7 @@ function AlsoFromKinu({ workspaces }: { workspaces: readonly WorkspaceCard[] }) 
 const HERO_HIGHLIGHTS = new Map([
   ["personal-assistant", [
     "Reads your mail and GitHub, and marks what matters",
-    "A brief every weekday morning, on Home",
+    "A brief every morning, on Home",
     "Starts workspaces for bigger work, and checks on them",
   ]],
 ]);

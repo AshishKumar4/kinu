@@ -95,7 +95,7 @@ const PAGES = new Map<string, Omit<BlueprintPage, "workspace">>([
     inside: {
       agents: [{ name: "Kinu", about: "One chat, yours: Home opens on it. Rename it as you like." }],
       automations: [
-        { label: "Morning brief", when: "weekdays at the time you choose", does: "Writes the brief from your mail, GitHub, Cloudflare and workspaces." },
+        { label: "Morning brief", when: "each day at the time you choose", does: "Writes the brief from your mail, GitHub, Cloudflare and workspaces." },
         { label: "GitHub", when: "every 15 minutes", does: "Reads new reviews and mentions; tells you when one waits on you." },
         { label: "Mail", when: "as it arrives", does: "Marks the Important, drafts the replies, leaves the rest." },
         { label: "Cloudflare", when: "every 10 minutes", does: "Reads your Workers' error rates and deploys." },

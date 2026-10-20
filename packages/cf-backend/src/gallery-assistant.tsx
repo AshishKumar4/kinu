@@ -108,7 +108,7 @@ function whenNext(when: number, now: number): string {
 
 const WATCHING: readonly Watch[] = [
   {
-    id: "w-brief", label: "Morning brief", what: "weekdays", icon: <SunHorizonIcon size={13} />,
+    id: "w-brief", label: "Morning brief", what: "each morning", icon: <SunHorizonIcon size={13} />,
     found: MOMENT === "firstrun" ? null : "Sent at 8:00: 2 waiting on you, 3 important.", last: MOMENT === "firstrun" ? null : at(8, 0), next: at(8, 0) + 864e5,
   },
   {
@@ -174,7 +174,7 @@ const GENESIS = workspaceGenesisSignal("Be Ashish's personal assistant: read his
 const FIRST_RUN_THREAD: Message[] = [
   { id: "genesis", role: "user", createdAt: NOW - 2 * MIN, metadata: { kinuEvent: GENESIS?.kind ?? "", signalId: "sig-genesis" }, parts: said(GENESIS?.text ?? "") },
   {
-    id: "a-hello", role: "assistant", createdAt: NOW - MIN, parts: said(`Hi Ashish, I'm Kinu. I'll keep your days moving: I read your mail, GitHub and Cloudflare, brief you each weekday at 8:00, and run anything bigger in a workspace of its own that I check on for you.
+    id: "a-hello", role: "assistant", createdAt: NOW - MIN, parts: said(`Hi Ashish, I'm Kinu. I'll keep your days moving: I read your mail, GitHub and Cloudflare, brief you each morning at 8:00, and run anything bigger in a workspace of its own that I check on for you.
 
 **What I can reach**
 - **Mail**: ashish@kinu.run comes to me, and I read the Gmail you connected. I draft; you send.
