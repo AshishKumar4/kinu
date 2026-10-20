@@ -5,7 +5,7 @@
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
-import { initWorkspaceSchema, modifyScaffold, replayScaffold, type RecordedTurn } from '@kinu.run/core';
+import { initWorkspaceSchema, modifyScaffold, recordTurnRating, replayScaffold, type RecordedTurn } from '@kinu.run/core';
 import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
@@ -181,5 +181,81 @@ describe('a proposed scaffold is replayed off turn, and a pass becomes current a
     expect(versions).toEqual([{ version: 0, status: 'current' }, { version: 1, status: 'rolled_back' }]);
     expect(decisions).toMatchObject([{ type: 'scaffold_rollback', fromVersion: 1, toVersion: 0 }]);
     expect(v.parse(v.object({ reason: v.string() }), decisions[0]).reason).toStartWith(`its replay failed on turn ${turns[0]?.turnId ?? ''}: it threw: `);
+  });
+});
+
+describe('a promoted scaffold is watched until ten of its turns are rated', () => {
+  /** Recorded turns, then `source` proposed, replayed and made current by a cold turn; the clock stays past that turn. */
+  async function promoted(source: string) {
+    const { rt, session } = await recorded();
+    rt.actor.config.setLearning(true);
+    expect(await modifyScaffold(rt, 'a loop of my own that runs the default turn unless the task asks it to break', source)).toMatchObject({ ok: true });
+    await session.runRefinementLane();
+    setSystemTime(new Date(Date.now() + 3 * 60 * 60_000));
+    await session.send('Say hello.', { id: crypto.randomUUID() });
+    expect(scaffoldState(rt).versions.at(-1)).toEqual({ version: 1, status: 'current' });
+
+    return { rt, session };
+  }
+
+  const BREAKS = `async function* run(rt, task) { if (task.includes('break')) throw new Error('the loop broke'); await host.defaultInference(); }`;
+
+  test('a turn it throws on sends it back to the version it replaced, with the turn and the throw', async () => {
+    try {
+      const { rt, session } = await promoted(BREAKS);
+      await session.send('Now break.', { id: crypto.randomUUID() });
+      await session.runRefinementLane();
+
+      expect(scaffoldState(rt).versions).toEqual([{ version: 0, status: 'current' }, { version: 1, status: 'rolled_back' }]);
+      const back = scaffoldState(rt).decisions.at(-1);
+      expect(back).toMatchObject({ type: 'scaffold_rollback', fromVersion: 1, toVersion: 0 });
+      expect(v.parse(v.object({ reason: v.string() }), back).reason).toMatch(/^it threw on turn [\w-]+: .*the loop broke/u);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('rated turns low beyond chance against the replaced version send it back; a share like the old one holds', async () => {
+    try {
+      const { rt, session } = await promoted(BREAKS);
+      const at = Date.now();
+
+      const rate = (turnId: string, score: number, scaffoldVersion: number, now: number) => recordTurnRating(rt.storage.sql, rt.actor, {
+        turnId, score, corrected: 0, wrong: null, source: 'model', request: 'r', answer: 'a', scaffoldVersion, now,
+      });
+
+      // v0's last 30 rated turns: one low.
+      for (let i = 0; i < 30; i += 1) rate(`v0-${String(i)}`, i === 0 ? 1 : 5, 0, at - 60_000 - i);
+
+      rate('v1-a', 5, 1, at + 1);
+      rate('v1-b', 1, 1, at + 2);
+      await session.runRefinementLane();
+      expect(scaffoldState(rt).versions.at(-1)).toEqual({ version: 1, status: 'current' });
+
+      rate('v1-c', 1, 1, at + 3);
+      rate('v1-d', 2, 1, at + 4);
+      await session.runRefinementLane();
+      expect(scaffoldState(rt).versions).toEqual([{ version: 0, status: 'current' }, { version: 1, status: 'rolled_back' }]);
+      expect(scaffoldState(rt).decisions.at(-1)).toMatchObject({ reason: '3 of its 4 rated turns were low, against 1 of 30 under v0' });
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('the owner\'s revert of a current version goes back to the one it replaced, not a lower one that never ran', async () => {
+    try {
+      const { rt, session } = await recorded();
+      expect(await modifyScaffold(rt, 'a loop of my own that will break on its first turn, which its replay must catch', "async function* run(rt, task) { throw new Error('no'); }")).toMatchObject({ ok: true, version: 1 });
+      await session.runRefinementLane();
+      expect(await modifyScaffold(rt, 'a loop of my own that runs the default turn, which its replay will pass', 'async function* run(rt, task) { await host.defaultInference(); }')).toMatchObject({ ok: true, version: 2 });
+      await session.runRefinementLane();
+      setSystemTime(new Date(Date.now() + 3 * 60 * 60_000));
+      await session.send('Say hello.', { id: crypto.randomUUID() });
+
+      expect(await session.revertChangelogEntry('scaffold:v2:current')).toEqual({ ok: true, detail: 'rolled back to v0' });
+      expect(scaffoldState(rt).versions.find((row) => row.version === 0)?.status).toBe('current');
+    } finally {
+      setSystemTime();
+    }
   });
 });

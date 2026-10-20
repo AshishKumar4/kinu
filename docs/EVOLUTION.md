@@ -143,6 +143,13 @@ Each turn runs the pending source in a scripted host. Its model calls (`host.llm
 
 The dream lane's pass replays the pending version first, once per version (`replayPendingScaffold`, `core/src/scaffold/replay-gate.ts`). A pass is recorded as `scaffold_replayed` with the number of turns, and the version stays pending until a cold turn promotes it. A failure rolls it back at once, through the same decision, with the reason on its `scaffold_rollback` event: `its replay failed on turn <id>: <why>`.
 
+A version made current is then watched until 10 of its turns are rated (`watchScaffold`, `core/src/scaffold/watch.ts`), on each pass of the dream lane before its replay. It goes back to the version it replaced, as its promotion event records (never the highest lower number, which may be a version that never ran), when:
+
+- one of its turns threw, as the turn's record says (`CompletedTurn.scaffold.threw`): `it threw on turn <id>: <throw>`;
+- its rated turns are low beyond chance against the replaced version's last 30. The bound is one-sided binomial at 0.5% a look (5% across the watch's ten looks), against the replaced version's low share smoothed as (low + 1)/(rated + 2): `<k> of its <n> rated turns were low, against <k0> of <n0> under v<m>`.
+
+The rollback is recorded as `scaffold_rollback` with that reason. The owner's changelog revert of a current version goes to the same replaced version.
+
 ### How much of a turn a judge sees
 
 Readers in this loop once truncated evidence to its opening (`slice(0, n)`): the turn rater among them. A turn whose payoff lands at step 9 of 12 was invisible to them, so the loop could not select for long-horizon behaviour.

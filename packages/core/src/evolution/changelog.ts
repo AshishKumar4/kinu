@@ -16,6 +16,7 @@ import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents
 import { rollbackScaffold } from '../scaffold/rollback';
 import { artifactLabel, artifactVersion, listArtifactVersions, revertArtifact, type ArtifactStatus } from './artifacts';
 import { revertDreamSkill } from './refinement-skill';
+import { replacedBy } from '../scaffold/watch';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
@@ -540,19 +541,19 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
     return { ok: false, error: `scaffold v${version} is already ${row.status}: nothing to revert` };
   }
 
-  // Pointer-first rollback: one statement retires this version and promotes its
-  // predecessor, then the live view refreshes from the predecessor's source.
-  const prev = sql<{ version: number }>`
+  // Back to the version this one replaced, as its promotion recorded; a version no promotion made current (an inherited
+  // one) falls back to its numeric predecessor. Pointer-first: one statement swaps them, then the live view refreshes.
+  const prev = replacedBy(sql, actor, version)?.replaced ?? sql<{ version: number }>`
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${actor.actorId} AND version < ${version}
-    ORDER BY version DESC LIMIT 1`[0];
+    ORDER BY version DESC LIMIT 1`[0]?.version;
 
-  if (!prev) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
-  const restored = await rollbackScaffold(rt, prev.version);
+  if (prev === undefined) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
+  const restored = await rollbackScaffold(rt, prev);
 
   if (Result.isFailure(restored)) return { ok: false, error: restored.failure };
 
-  return { ok: true, detail: `rolled back to v${prev.version}` };
+  return { ok: true, detail: `rolled back to v${prev}` };
 }
 
 /** A staged version is discarded; a current one falls back to the one it replaced, or to the bundled text. */
