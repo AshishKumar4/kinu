@@ -750,6 +750,15 @@ publish_alongside() {
   bun "$KINU_ROOT/scripts/devbox-tools.ts" check "$KINU_BACKUP_BUCKET" \
     || { alongside_red "the devbox tools tarball is missing from $KINU_BACKUP_BUCKET; publish it as the line above says"; return 1; }
 
+  # The same parts, served by the release channel (`/downloads/devbox-tools/`) to a self-deployment's computer, which
+  # copies them into its own store bucket: in this build's releases bucket before the release.json naming them ships.
+  KINU_CHANNEL_BUCKET="$(bun -e '
+    const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "RELEASES_BUCKET")?.bucket_name ?? "");
+  ' "$KINU_BUILT_CONFIG")"
+  bun "$KINU_ROOT/scripts/devbox-tools.ts" release "$KINU_BACKUP_BUCKET" "$KINU_CHANNEL_BUCKET" \
+    || { alongside_red "the devbox tools could not be copied into $KINU_CHANNEL_BUCKET for the release channel"; return 1; }
+
   # The runtime catalog this build pins (NIMBUS_RUNTIME_CATALOG_SHA256), read by a hosted `nimbus install` from
   # `catalog/sha256/<sha256>.json` in its NIMBUS_RUNTIME_CACHE bucket: put there from the bucket's `catalog/v1.json` when
   # that is the pinned catalog, else refused by name, before the Worker that reads it is uploaded.

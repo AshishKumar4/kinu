@@ -13,7 +13,7 @@ import {
 } from './context';
 import {
   COMPUTER_SECRETS, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
-  FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY,
+  FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY, resourceName,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
 import { HealthAnswerSchema } from './update';
@@ -24,6 +24,7 @@ import { randomToken } from '../utils/crypto';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
 import { mailStep } from './mail';
+import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 
 export interface DeployStep {
   readonly id: string;
@@ -73,13 +74,17 @@ const BASE64_ALPHABET = new TextEncoder()
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
   return [
     accountStep(manifest),
+    computerTokenStep(manifest),
     kvStep(manifest),
     bucketStep(manifest),
     vectorizeStep(manifest),
     gatewayStep(),
     seedStep(manifest),
+    computerToolsStep(manifest),
     secretsStep(),
     uploadStep(manifest),
+    // On the namespace the upload made, before the address sends anyone to it.
+    computerStep(manifest),
     addressStep(inputs),
     // After the address: the catch-all names the Worker the upload made, and a failure here leaves it answering.
     mailStep(inputs),
@@ -390,13 +395,12 @@ function secretsStep(): DeployStep {
   };
 }
 
-/** What the release requires and this run neither mints nor was given, for the features it deploys: the computer's registry
- *  token is asked only of a run that deploys the computer. */
+/** What the release requires and this run neither mints nor was given: the computer's registry token is the computer's
+ *  steps' to mint, and only a deployment with the computer has one. */
 function missingSecrets(manifest: ReleaseManifest, inputs: DeployInputs): readonly string[] {
   return manifest.secrets
     .filter((secret) => secret.required && secret.handling === 'prompted')
-    .filter((secret) => !MINTED_SECRETS.includes(secret.name) && !inputs.providerKeyNames.includes(secret.name))
-    .filter((secret) => inputs.sandbox || !COMPUTER_SECRETS.includes(secret.name))
+    .filter((secret) => ![...MINTED_SECRETS, ...COMPUTER_SECRETS].includes(secret.name) && !inputs.providerKeyNames.includes(secret.name))
     .map((secret) => secret.name);
 }
 
@@ -909,7 +913,7 @@ async function versionMetadata(
     if (value !== null) bindings.push({ type: 'plain_text', name: declared.name, text: value });
   }
 
-  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...context.inputs.providerKeyNames]) {
+  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, ...context.inputs.providerKeyNames]) {
     const value = await context.vault.read(name);
 
     if (value !== null) bindings.push({ type: 'secret_text', name, text: value });
@@ -928,6 +932,9 @@ async function versionMetadata(
   };
 
   if (!exists) metadata.migrations = { new_tag: tag, new_sqlite_classes: classes };
+
+  // The class's container, as Wrangler declares one with no image; the computer step makes its application.
+  if (context.inputs.sandbox && manifest.computer !== null) metadata.containers = [{ class_name: manifest.computer.className }];
 
   if (assetsToken === '') {
     metadata.keep_assets = true;
@@ -1011,13 +1018,6 @@ function derivedVar(context: DeployContext, name: string): string | null {
     default:
       return null;
   }
-}
-
-// Prefixed by instance name so several instances can share an account.
-function resourceName(inputs: DeployInputs, base: string): string {
-  if (inputs.instanceName === 'kinu' || base.startsWith(inputs.instanceName)) return base;
-
-  return base.startsWith('kinu-') ? `${inputs.instanceName}-${base.slice('kinu-'.length)}` : `${inputs.instanceName}-${base}`;
 }
 
 const CONTENT_TYPE_BY_EXTENSION = new Map<string, string>(Object.entries(ASSET_CONTENT_TYPES));

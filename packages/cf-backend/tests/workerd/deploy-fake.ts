@@ -229,6 +229,7 @@ function manifestText(build: DeployFakeServedBuild): string {
       assetHash: path.startsWith('client/') ? sha256(body).slice(0, 32) : null,
     })),
     seed: null,
+    computer: null,
   });
 }
 

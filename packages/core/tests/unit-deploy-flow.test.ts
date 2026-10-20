@@ -13,7 +13,7 @@ import type {
   DeployInputs,
   ArtifactSource, DeployLedger, DeployProgress, DeploySecretVault, DeployStepFailure, DeployStepRow,
   DeployStepSeed, HttpGet,
-  MultipartUpload, ReleaseManifest, UpdateBuild,
+  MultipartUpload, ReleaseManifest, StreamedPut, UpdateBuild,
 } from '../src/deploy/index';
 import { parseJsonObject, type JsonObject, type JsonValue } from '../src/utils/json';
 import { sha256Hex } from '../src/safety/argument-digest';
@@ -68,6 +68,7 @@ const MANIFEST: ReleaseManifest = {
     { path: 'client/app.js', sha256: 'd'.repeat(64), size: 7, assetHash: '2'.repeat(32) },
   ],
   seed: null,
+  computer: null,
 };
 
 const INPUTS: DeployInputs = {
@@ -117,6 +118,15 @@ class FakeCloudflare implements CloudflareTransport {
 
 
   readonly objects: string[] = [];
+
+  /** Bytes each streamed object upload carried, by path. */
+  readonly streamed = new Map<string, number>();
+
+  /** Account tokens by name, and each value minted or rolled for one. */
+  readonly tokens = new Map<string, string[]>();
+
+  /** Container applications, by the namespace they run on. */
+  readonly applications = new Map<string, string>();
 
   /** The zones the token can read, by name; a mail domain must be one. */
   readonly zones = new Map<string, string>();
@@ -314,11 +324,74 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (call.path.endsWith('/deployments')) return this.deploymentsCall(call);
 
+    const computed = this.computerCall(call);
+
+    if (computed !== null) return computed;
+
     const zoned = this.zoneCall(call);
 
     if (zoned !== null) return zoned;
 
     return { status: 200, body: { success: true, errors: [], result: this.answer(call) } };
+  }
+
+  async put(put: StreamedPut): Promise<CloudflareHttpResponse> {
+    this.calls.push({ method: 'PUT', path: put.path, body: undefined, bearer: undefined });
+    const bytes = (await new Response(put.body).arrayBuffer()).byteLength;
+
+    if (bytes !== put.bytes) return { status: 400, body: { success: false, errors: [{ code: 10_000, message: `declared ${String(put.bytes)}, carried ${String(bytes)}` }], result: null } };
+    this.objects.push(put.path);
+    this.streamed.set(put.path, bytes);
+
+    return { status: 200, body: { success: true, errors: [], result: {} } };
+  }
+
+  /** The computer's account: its tokens, its namespaces, its container applications (`computer.ts`). */
+  private computerCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+
+    if (call.path.includes('/tokens/permission_groups')) return ok([{ id: 'group-containers-write', name: 'Workers Containers Write' }]);
+
+    if (call.path.endsWith('/tokens?per_page=50')) return ok([...this.tokens.keys()].map((name) => ({ id: `token-${name}`, name })));
+
+    const rolled = /\/tokens\/token-(.+)\/value$/u.exec(call.path);
+
+    if (rolled !== null) {
+      const value = `rolled-${String(this.tokens.get(rolled[1] ?? '')?.length ?? 0)}`;
+
+      this.tokens.get(rolled[1] ?? '')?.push(value);
+
+      return ok(value);
+    }
+
+    if (call.path.endsWith('/tokens') && call.method === 'POST') {
+      const name = bodyText(call.body ?? {}, 'name');
+
+      this.tokens.set(name, ['minted-token']);
+
+      return ok({ id: `token-${name}`, value: 'minted-token' });
+    }
+
+    if (call.path.includes('/durable_objects/namespaces')) return ok([{ id: 'ns-devbox', script: 'kinu', class: 'KinuDevbox' }, { id: 'ns-other', script: 'other', class: 'KinuDevbox' }]);
+
+    const application = /\/containers\/applications\/(.+)$/u.exec(call.path);
+
+    if (application !== null) {
+      const name = this.applications.get(application[1] ?? '');
+
+      return name === undefined ? { status: 404, body: { success: false, errors: [{ code: 1000, message: 'application not found' }], result: null } } : ok({ id: application[1] ?? '', name });
+    }
+
+    if (call.path.endsWith('/containers/applications')) {
+      const namespace = call.body?.durable_objects;
+      const id = v.parse(v.object({ namespace_id: v.string() }), namespace).namespace_id;
+
+      this.applications.set(id, bodyText(call.body ?? {}, 'name'));
+
+      return ok({ id });
+    }
+
+    return null;
   }
 
   async upload(upload: MultipartUpload): Promise<CloudflareHttpResponse> {
@@ -594,7 +667,14 @@ let updating = false;
 
 let served: UpdateBuild;
 
+/** The computer's tools parts the channel serves: as many bytes as the release names for each. */
+const toolsBytes = new Map<string, number>();
+
 const healthFetch: HttpGet = async (url, headers) => {
+  const part = /\/downloads\/(devbox-tools\/.+)$/u.exec(url)?.[1];
+
+  if (part !== undefined) return toolsBytes.has(part) ? new Response(new Uint8Array(toolsBytes.get(part) ?? 0)) : new Response('missing', { status: 404 });
+
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
 
   const version = cloudflare.answering(headers);
@@ -817,8 +897,14 @@ describe('a guided run', () => {
 });
 
 describe('what a run asks, makes and hands over', () => {
-  /** A release whose computer needs the registry token the owner mints. */
-  const WITH_COMPUTER: ReleaseManifest = {
+  /** A release that requires a key only its deployer can supply. */
+  const WITH_REQUIRED_KEY: ReleaseManifest = {
+    ...MANIFEST,
+    secrets: [...MANIFEST.secrets, { name: 'OPENAI_API_KEY', handling: 'prompted', required: true, prompt: 'an OpenAI key' }],
+  };
+
+  /** A release whose computer reads the registry token the run mints for it. */
+  const WITH_COMPUTER_TOKEN: ReleaseManifest = {
     ...MANIFEST,
     secrets: [...MANIFEST.secrets, { name: 'DEVBOX_REGISTRY_TOKEN', handling: 'prompted', required: true, prompt: 'Containers Edit' }],
   };
@@ -830,15 +916,15 @@ describe('what a run asks, makes and hands over', () => {
   });
 
   test('a run that would stop at a missing secret stops before it makes anything', async () => {
-    const rows = await run({ ...INPUTS, sandbox: true }, WITH_COMPUTER);
+    const rows = await run(INPUTS, WITH_REQUIRED_KEY);
 
-    expect(rows.find((row) => row.state === 'failed')).toMatchObject({ id: 'account', failure: { detail: expect.stringContaining('DEVBOX_REGISTRY_TOKEN') } });
+    expect(rows.find((row) => row.state === 'failed')).toMatchObject({ id: 'account', failure: { detail: expect.stringContaining('OPENAI_API_KEY') } });
     expect(cloudflare.namespaces).toEqual([]);
     expect(cloudflare.buckets).toEqual([]);
   });
 
-  test('the computer\'s registry token is not asked of a run without the computer', async () => {
-    const rows = await run(INPUTS, WITH_COMPUTER);
+  test('the computer\'s registry token is never asked of a person', async () => {
+    const rows = await run(INPUTS, WITH_COMPUTER_TOKEN);
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
   });
@@ -860,6 +946,78 @@ describe('what a run asks, makes and hands over', () => {
     expect(bound).toMatchObject({ type: 'secret_text', text: `${sha256Hex(token)}.${String(seat?.expiresAt)}.owner@example.com` });
     expect(JSON.stringify(rows)).not.toContain(token);
     expect(await vault.names()).toEqual([]);
+  });
+});
+
+describe('the computer', () => {
+  const SHA = 'e'.repeat(64);
+
+  /** A release whose computer runs on the managed image and reads two tools parts from the store bucket. */
+  const WITH_COMPUTER: ReleaseManifest = {
+    ...MANIFEST,
+    secrets: [...MANIFEST.secrets, { name: 'DEVBOX_REGISTRY_TOKEN', handling: 'prompted', required: true, prompt: 'Containers Edit' }],
+    computer: {
+      className: 'KinuDevbox', bucket: 'BACKUP_BUCKET',
+      tools: { sha256: SHA, parts: [{ key: `devbox-tools/${SHA}.tgz.0`, bytes: 5 }, { key: `devbox-tools/${SHA}.tgz.1`, bytes: 3 }] },
+    },
+  };
+
+  const COMPUTER_INPUTS: DeployInputs = { ...INPUTS, sandbox: true };
+
+  const toolPuts = () => cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/objects/devbox-tools/'));
+
+  const applicationPosts = () => cloudflare.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/containers/applications'));
+
+  beforeEach(() => {
+    toolsBytes.clear();
+
+    for (const part of WITH_COMPUTER.computer?.tools.parts ?? []) toolsBytes.set(part.key, part.bytes);
+  });
+
+  test('copies its tools, mints its registry token and makes its application on no image', async () => {
+    const rows = await run(COMPUTER_INPUTS, WITH_COMPUTER);
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const bindings = uploadedBindings(upload);
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect([...cloudflare.streamed]).toEqual([
+      [`/accounts/${INPUTS.accountId}/r2/buckets/kinu-backups/objects/devbox-tools/${SHA}.tgz.0`, 5],
+      [`/accounts/${INPUTS.accountId}/r2/buckets/kinu-backups/objects/devbox-tools/${SHA}.tgz.1`, 3],
+    ]);
+    expect([...cloudflare.tokens]).toEqual([['kinu computer (Kinu)', ['minted-token']]]);
+    expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
+      name: 'kinu computer (Kinu)',
+      policies: [{ effect: 'allow', resources: { [`com.cloudflare.api.account.${INPUTS.accountId}`]: '*' }, permission_groups: [{ id: 'group-containers-write' }] }],
+    });
+    expect(applicationPosts().map((call) => call.body)).toEqual([
+      { name: 'kinu-kinudevbox', scheduling_policy: 'durable_object', durable_objects: { namespace_id: 'ns-devbox' } },
+    ]);
+    expect(upload?.body?.containers).toEqual([{ class_name: 'KinuDevbox' }]);
+    expect(bindings.find((binding) => binding.name === 'KinuDevbox')).toMatchObject({ type: 'durable_object_namespace', class_name: 'KinuDevbox' });
+    expect(bindings.find((binding) => binding.name === 'DEVBOX_REGISTRY_TOKEN')).toEqual({ type: 'secret_text', name: 'DEVBOX_REGISTRY_TOKEN', text: 'minted-token' });
+  });
+
+  test('a second sitting copies nothing again and makes no second application, and rolls the token it lost', async () => {
+    await run(COMPUTER_INPUTS, WITH_COMPUTER);
+    ledger = new ArrayLedger();
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+
+    const rows = await run(COMPUTER_INPUTS, WITH_COMPUTER);
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(toolPuts()).toHaveLength(2);
+    expect(applicationPosts()).toHaveLength(1);
+    expect([...cloudflare.tokens]).toEqual([['kinu computer (Kinu)', ['minted-token', 'rolled-1']]]);
+  });
+
+  test('a deployment without it runs none of its steps and binds no container', async () => {
+    const rows = await run(INPUTS, WITH_COMPUTER);
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(cloudflare.calls.filter((call) => /\/tokens|\/containers\/|devbox-tools/u.test(call.path))).toEqual([]);
+    expect(upload?.body?.containers).toBeUndefined();
   });
 });
 
@@ -1050,6 +1208,20 @@ describe('the door client', () => {
 describe('a release manifest a channel publishes', () => {
   const manifestWith = (over: JsonObject): string =>
     JSON.stringify({ ...parseJsonObject(JSON.stringify(MANIFEST)), ...over });
+
+  test('one published before the computer could be deployed reads as naming none', () => {
+    const { computer: _named, ...older } = parseJsonObject(JSON.stringify(MANIFEST));
+
+    expect(parseReleaseManifest(JSON.stringify(older)).computer).toBeNull();
+  });
+
+  test('takes a tools part under the tools prefix and refuses one outside it', () => {
+    const part = (key: string) => ({ className: 'KinuDevbox', bucket: 'BACKUP_BUCKET', tools: { sha256: 'e'.repeat(64), parts: [{ key, bytes: 1 }] } });
+    const kept = `devbox-tools/${'e'.repeat(64)}.tgz.0`;
+
+    expect(parseReleaseManifest(manifestWith({ computer: part(kept) })).computer?.tools.parts.map((entry) => entry.key)).toEqual([kept]);
+    expect(() => parseReleaseManifest(manifestWith({ computer: part('../release.json') }))).toThrow('"../release.json"');
+  });
 
   test('refuses a file path that leaves the release directory', () => {
     const escaping = [

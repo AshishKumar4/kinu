@@ -34,9 +34,17 @@ export interface MultipartUpload {
   readonly parts: readonly UploadPart[];
 }
 
+/** A body carried through without being held: a source's stream of known length, as an R2 object upload takes it. */
+export interface StreamedPut {
+  readonly path: string;
+  readonly body: ReadableStream<Uint8Array>;
+  readonly bytes: number;
+}
+
 export interface CloudflareTransport {
   request(call: CloudflareCall): Promise<CloudflareHttpResponse>;
   upload(upload: MultipartUpload): Promise<CloudflareHttpResponse>;
+  put(put: StreamedPut): Promise<CloudflareHttpResponse>;
 }
 
 export interface CloudflareErrorDetail {
@@ -166,6 +174,17 @@ export function bearerTransport(
           authorization: upload.bearer === undefined ? authorization : `Bearer ${upload.bearer}`,
         },
         body: form,
+      });
+
+      return { status: response.status, body: await readJsonBody(response) };
+    },
+
+    // Its length named, so the platform pipes the source into the upload and the isolate never holds the body.
+    async put(put: StreamedPut): Promise<CloudflareHttpResponse> {
+      const response = await fetchImpl(`${apiRoot}${put.path}`, {
+        method: 'PUT',
+        headers: { accept: 'application/json', authorization, 'content-type': 'application/octet-stream', 'content-length': String(put.bytes) },
+        body: put.body,
       });
 
       return { status: response.status, body: await readJsonBody(response) };

@@ -55,6 +55,13 @@ export const DeployInputsSchema: v.GenericSchema<DeployInputs> = v.object({
 
 export const DEFAULT_INSTANCE_NAME = 'kinu';
 
+/** A release resource's name in this deployment: prefixed by its instance name, so several instances share an account. */
+export function resourceName(inputs: DeployInputs, base: string): string {
+  if (inputs.instanceName === 'kinu' || base.startsWith(inputs.instanceName)) return base;
+
+  return base.startsWith('kinu-') ? `${inputs.instanceName}-${base.slice('kinu-'.length)}` : `${inputs.instanceName}-${base}`;
+}
+
 export const ACCESS_TOKEN_KEY = 'cloudflare.access_token';
 
 /** The last step moves this into the new Worker's secrets and deletes it here. */
@@ -89,8 +96,11 @@ export const DeploymentRecordSchema: v.GenericSchema<DeploymentRecord> = v.objec
 /** Minted by the run; the page shows them once. */
 export const MINTED_SECRETS: readonly string[] = ['CREDENTIAL_ENCRYPTION_KEY', 'WEBHOOK_ROUTE_SECRET', 'JWT_SECRET'];
 
-/** Required only of a deployment with the computer. */
-export const COMPUTER_SECRETS: readonly string[] = ['DEVBOX_REGISTRY_TOKEN'];
+/** The token the computer deletes its snapshots with: minted by the run for a deployment with the computer. */
+export const REGISTRY_TOKEN_SECRET = 'DEVBOX_REGISTRY_TOKEN';
+
+/** Minted by the computer's steps, so never asked of a person. */
+export const COMPUTER_SECRETS: readonly string[] = [REGISTRY_TOKEN_SECRET];
 
 /** The first owner's one-time seat, as the deployment's built-in sign-in reads it (`firstOwnerLinkSecret`). */
 export const FIRST_OWNER_LINK_SECRET = 'KINU_FIRST_OWNER_LINK';

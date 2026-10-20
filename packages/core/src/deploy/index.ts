@@ -1,8 +1,8 @@
 // One flow, four doors (docs/SELF-DEPLOY.md); page, DO, CLI and local installer are adapters.
 export {
-  RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH, ReleaseManifestSchema, parseReleaseManifest,
+  DEVBOX_TOOLS_PART, RELEASE_ARTIFACT_NAME, RELEASE_MANIFEST_PATH, ReleaseManifestSchema, devboxToolsPath, parseReleaseManifest,
   workerArtifactPath,
-  type BindingKind, type ReleaseBinding, type ReleaseFile, type ReleaseManifest,
+  type BindingKind, type ReleaseBinding, type ReleaseComputer, type ReleaseFile, type ReleaseManifest, type ReleaseToolsPart,
   type ReleaseMigration, type ReleaseSecret, type ReleaseSeed, type ReleaseVar,
   type ReleaseVectorIndex, type ReleaseWorker, type SecretHandling, type VarPolicy,
 } from './manifest';
@@ -35,7 +35,7 @@ export {
 export {
   CloudflareApiError, bearerTransport, cloudflareResult, readEnvelope,
   type CloudflareCall, type CloudflareErrorDetail, type CloudflareHttpResponse,
-  type CloudflareTransport, type MultipartUpload, type UploadPart,
+  type CloudflareTransport, type MultipartUpload, type StreamedPut, type UploadPart,
 } from './cloudflare';
 
 export {

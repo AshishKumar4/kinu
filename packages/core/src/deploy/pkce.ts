@@ -16,13 +16,16 @@ export const CLI_DEPLOY_REDIRECT_URI = `http://localhost:${String(CLI_DEPLOY_RED
 
 /** Each scope serves a step, named by Cloudflare's OAuth catalog id (`GET /oauth/scopes`): the authorize endpoint refuses
  *  the old colon names (`invalid_scope`, "not allowed to request scope 'account:read'", kinu.run 2026-10-20). The three
- *  mail scopes are the client's optional ones, which the person may leave unticked on Cloudflare's consent screen.
+ *  mail and computer scopes are the client's optional ones, which the person may leave unticked on Cloudflare's consent
+ *  screen.
  *  `offline_access` yields the refresh token. */
 export const CLOUDFLARE_DEPLOY_SCOPES: readonly string[] = [
   'user-details.read', 'account-settings.read',
   'workers-scripts.write', 'workers-routes.write', 'workers-kv-storage.write',
   'workers-r2.write', 'vectorize.write', 'aig.write', 'zone.read', 'dns.write',
   'zone-settings.write', 'email-routing-rule.write', 'email-sending.write',
+  // The computer: its container application, and the account token its box deletes snapshots with.
+  'containers.write', 'account-api-tokens.write',
   'offline_access',
 ];
 

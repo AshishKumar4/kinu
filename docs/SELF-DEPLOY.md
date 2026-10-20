@@ -109,11 +109,18 @@ straight to disk.
    refused scope comes back to the page with Cloudflare's `error` and
    `error_description`, as does a refused code exchange.
 2. **Account and plan.** The lean deployment runs on the free plan. R2 needs
-   a payment method on file. The sandbox needs Workers Paid and is off by
-   default: with it off, the upload leaves out the `KinuDevbox` binding, and
-   it never sends the container. No other subscription is needed. Not built:
-   the flow does not read the account's plan or R2 billing state, and the
-   page has no sandbox switch and no plan link.
+   a payment method on file. The computer needs Workers Paid and is off by
+   default. It is a Durable Object-managed container on Cloudflare's managed
+   image (`cloudflare/debian-trixie`, D55), so no image travels: the upload
+   declares `containers: [{ class_name: "KinuDevbox" }]`, and the `computer`
+   step makes its application on the class's namespace, as Wrangler makes one
+   with no image. Its golden snapshot installs the pinned tools from the store
+   bucket, which `computer-tools` fills from the channel
+   (`/downloads/devbox-tools/<sha>.tgz.<n>`, streamed through, two parts of at
+   most 256 MiB, under the R2 upload endpoint's 300 MB). Its registry token is
+   an account-owned token with Workers Containers Write that `computer-token`
+   mints, never asked. With the computer off, none of these runs, and the upload
+   leaves out the `KinuDevbox` binding and the container.
 3. **Name and address.** Instance name (default: `kinu`), and where it lives:
    `<name>.<subdomain>.workers.dev` by default, or a hostname in one of the
    account's zones, in which case the flow creates a Workers custom domain,

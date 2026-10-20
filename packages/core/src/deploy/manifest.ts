@@ -82,6 +82,24 @@ export interface ReleaseSeed {
   readonly sha256: string;
 }
 
+/** A part of the computer's tools tarball, as its box reads it from the store bucket and the channel serves it. */
+export interface ReleaseToolsPart {
+  readonly key: string;
+  readonly bytes: number;
+}
+
+/**
+ * The computer (docs/DEVBOX-DECISIONS.md D55): a Durable Object-managed container on Cloudflare's managed image, so no
+ * image travels. Its golden snapshot installs the pinned tools, which a deployment copies into its store bucket from
+ * the channel (`devboxToolsPath`), and the container application is made on the class's namespace.
+ */
+export interface ReleaseComputer {
+  readonly className: string;
+  /** The binding of the store bucket a box reads the tools from. */
+  readonly bucket: string;
+  readonly tools: { readonly sha256: string; readonly parts: readonly ReleaseToolsPart[] };
+}
+
 export interface ReleaseManifest {
   readonly version: string;
   readonly sha: string;
@@ -95,6 +113,14 @@ export interface ReleaseManifest {
   readonly vars: readonly ReleaseVar[];
   readonly files: readonly ReleaseFile[];
   readonly seed: ReleaseSeed | null;
+  readonly computer: ReleaseComputer | null;
+}
+
+/** A tools part's key: an R2 object of the channel's releases bucket, served under `/downloads/` (`devboxToolsPath`). */
+export const DEVBOX_TOOLS_PART = 'devbox-tools/[0-9a-f]{64}\\.tgz\\.[0-9]+';
+
+export function devboxToolsPath(key: string): string {
+  return `/downloads/${key}`;
 }
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u));
@@ -114,7 +140,10 @@ const ReleaseFilePathSchema = v.pipe(
   ),
 );
 
-export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object({
+/** What a channel may publish: one published before the computer could be deployed names none. */
+type PublishedManifest = Omit<ReleaseManifest, 'computer'> & { readonly computer?: ReleaseComputer | null };
+
+export const ReleaseManifestSchema: v.GenericSchema<PublishedManifest, ReleaseManifest> = v.object({
   version: v.pipe(v.string(), v.trim(), v.regex(RELEASE_VERSION)),
   sha: v.pipe(v.string(), v.trim(), v.minLength(1)),
   builtAt: v.pipe(v.string(), v.trim(), v.minLength(1)),
@@ -166,6 +195,17 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
     url: v.pipe(v.string(), v.url()),
     sha256: Sha256Schema,
   })),
+  computer: v.optional(v.nullable(v.object({
+    className: v.pipe(v.string(), v.minLength(1)),
+    bucket: v.pipe(v.string(), v.minLength(1)),
+    tools: v.object({
+      sha256: Sha256Schema,
+      parts: v.array(v.object({
+        key: v.pipe(v.string(), v.regex(new RegExp(`^${DEVBOX_TOOLS_PART}$`, 'u'))),
+        bytes: v.pipe(v.number(), v.integer(), v.minValue(1)),
+      })),
+    }),
+  })), null),
 });
 
 
