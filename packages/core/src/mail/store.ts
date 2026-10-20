@@ -113,8 +113,10 @@ export class MailStore {
   }
 
   /** A box this call just wrote: its absence is a store that lost its own write, never a box to make up. */
-  private written(path: string): MailBox {
-    return this.box(path) ?? settleSync(Effect.fail(new KinuError('io', `The box at "${path}" was written and cannot be read back.`)));
+  private written(path: string): Effect.Effect<MailBox, KinuError> {
+    const box = this.box(path);
+
+    return box === null ? Effect.fail(new KinuError('io', `The box at "${path}" was written and cannot be read back.`)) : Effect.succeed(box);
   }
 
   private boxOf(row: v.InferOutput<typeof BoxRow>): MailBox {
@@ -136,7 +138,7 @@ export class MailStore {
       this.deps.sql.exec("UPDATE mail_addresses SET workspace = ?, actor_id = ? WHERE path = '' AND workspace IS NULL", account.assistant.workspace, account.assistant.actorId);
     }
 
-    return this.written('');
+    return settleSync(this.written(''));
   }
 
   /** The Personal assistant the owner has now reads their box, in place of one they had before (docs/MAIL.md §7). */
@@ -169,7 +171,7 @@ export class MailStore {
 
     this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id, created_at) VALUES (?, ?, ?, ?, ?)', path, owner.kind, owner.workspace, owner.actorId, this.deps.now());
 
-    return this.written(path);
+    return settleSync(this.written(path));
   }
 
   /**

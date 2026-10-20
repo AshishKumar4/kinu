@@ -10,8 +10,12 @@ const REPLY = {
 };
 
 test('the binding takes it: no Message-ID of our own, which the service refuses and writes itself', () => {
-  expect(() => { refuseUnlistedHeaders(mailboxEmail(REPLY).headers); }).not.toThrow();
-  expect(() => { refuseUnlistedHeaders(mailboxEmail({ ...REPLY, inReplyTo: null }).headers); }).not.toThrow();
+  const reply = mailboxEmail(REPLY).headers;
+  const opening = mailboxEmail({ ...REPLY, inReplyTo: null });
+
+  refuseUnlistedHeaders(reply);
+  expect(Object.keys(reply ?? {}).sort()).toEqual(['In-Reply-To', 'References']);
+  expect(opening).not.toHaveProperty('headers');
 });
 
 test('a reply threads on what it answers, and its Cc recipients are sent to', () => {

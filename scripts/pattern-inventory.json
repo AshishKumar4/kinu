@@ -38,8 +38,8 @@
     {
       "file": "packages/core/src/mail/words.ts",
       "kind": "hand-parser",
-      "owner": "stripQuotedReply",
-      "sourceSha256": "6b8e7f37ea7cb376d92e781d2f8faa67c3aad2d79790f520c4d42c1533990e22",
+      "owner": "splitQuotedReply",
+      "sourceSha256": "4fa32d02729e85c351668c6e02e81f73cfcde21467a1124f6ed8fe10c50a77e8",
       "decision": "framing"
     },
     {
