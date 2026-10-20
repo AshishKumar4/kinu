@@ -93,6 +93,15 @@ describe("deleting an account on real workerd, every store's census", () => {
 
     for (const [table, rows] of Object.entries(after.mailbox)) expect({ table, rows }).toEqual({ table, rows: 0 });
 
+    // A push from a workspace still naming her, as one cached before the deletion would send: her account keeps no
+    // card, it answers that it was deleted, and Dana's account forgets her again (owner decision, 2026-10-20).
+    expect(await account(priya.userId).deletedAt()).toEqual(expect.any(Number));
+    await account(dana).pushStale(priya);
+
+    for (let runs = 0; runs < 3; runs += 1) await account(dana).runDueWork();
+    expect({ cards: (await account(priya.userId).accountCensus()).user_share_cards, dana: await account(dana).sentTo(priya) })
+      .toEqual({ cards: 0, dana: { cards: 0, overviews: 0 } });
+
     expect(after).toMatchObject({
       // Retired: kept, owned by no one (docs/MAIL.md §11).
       mailName: { label: 'priya', user_id: '' },

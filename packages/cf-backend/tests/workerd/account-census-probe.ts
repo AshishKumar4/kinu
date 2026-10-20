@@ -40,7 +40,7 @@ function workspaceNamed(env: ProbeEnv, name: string): Promise<DurableObjectStub<
   return getAgentByName<ProbeEnv, ProductionOrchestrator>(env.OrchestratorAgent, name);
 }
 
-const ACCOUNT_METHODS = ['accountsOf', 'runDueWork', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'driveCensus', 'previewCensus'];
+const ACCOUNT_METHODS = ['accountsOf', 'runDueWork', 'pushStale', 'deletedAt', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'driveCensus', 'previewCensus'];
 
 /** The tables an account holds, by the prefixes `account-reset-probe.ts` counts, and its sent cards. */
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_', 'share_cards_'];
@@ -90,6 +90,23 @@ export class CensusAccountDO extends UserDO {
     };
 
     await this.putWorkspaceOverview(owner, 'northwind-api', overview);
+  }
+
+  /** A push from a workspace whose overview still names `priya`, as one cached before her account's deletion would. */
+  async pushStale(priya: Person): Promise<void> {
+    const overview: WorkspaceOverview = {
+      activity: 'idle', decisionsWaiting: 0, hasUpdates: true, latestRun: null, slates: [], awaitsSettings: false,
+      shares: [{ kind: 'blueprint', share: 'share-board', slate: 'board', title: 'Webhook board', description: '', createdAt: 1, users: [priya.email] }],
+    };
+
+    await this.putWorkspaceOverview(await ownerCaller(this.env), 'northwind-api', overview);
+  }
+
+  /** When this account was deleted, if it was: the one thing its object keeps. */
+  async deletedAt(): Promise<number | null> {
+    const at = this.ctx.storage.kv.get('account:deleted-at');
+
+    return typeof at === 'number' ? at : null;
   }
 
   /** The deployment's sign-in directory (this class, under its own name): Priya signed up with a password. */

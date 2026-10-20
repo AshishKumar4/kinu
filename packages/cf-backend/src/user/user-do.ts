@@ -92,6 +92,9 @@ export interface AccountSettingsRevision {
   readonly credentials: number;
 }
 
+/** When the account was deleted: the one thing its object keeps after, until a sign-in makes it an account again. */
+const ACCOUNT_DELETED_KEY = 'account:deleted-at';
+
 export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -174,6 +177,7 @@ export class UserDO extends Agent<Env> {
     recipient: (userId) => objectNamed(this.env.UserDO, userId),
     accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
+    forget: (person, workspaces) => this.forgetPersonIn(person, workspaces),
   });
 
   private readonly evalLeases = new EvalLeaseJobs({
@@ -208,8 +212,13 @@ export class UserDO extends Agent<Env> {
 
   private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
 
-  ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
-    return this.profile.ensureProfile(caller, email, displayName);
+  /** A sign-in: an account deleted before is a new one now, and keeps cards again. */
+  async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
+    const profile = await this.profile.ensureProfile(caller, email, displayName);
+
+    this.ctx.storage.kv.delete(ACCOUNT_DELETED_KEY);
+
+    return profile;
   }
 
   getProfile(caller: UserCaller): Promise<UserProfile | null> {
@@ -376,8 +385,14 @@ export class UserDO extends Agent<Env> {
     return this.profile.putProfileCatalog(caller, catalog, expectedVersion);
   }
 
-  shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<void> {
-    return this.profile.shareCards_put(caller, row);
+  /** A deleted account keeps no card: it answers `deleted`, and its sender forgets it (`ShareCardJobs.onJob`). */
+  async shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<'kept' | 'deleted'> {
+    await this.requireTier(caller, 'shares');
+
+    if (this.ctx.storage.kv.get(ACCOUNT_DELETED_KEY) !== undefined) return 'deleted';
+    await this.profile.shareCards_put(caller, row);
+
+    return 'kept';
   }
 
   shareCards_remove(caller: UserCaller, ownerUserId: string, workspace: string, shareId: string): Promise<void> {
@@ -406,13 +421,18 @@ export class UserDO extends Agent<Env> {
    */
   async shareRecipient_forget(caller: UserCaller, person: { readonly userId: string; readonly email: string }, workspaces: readonly string[]): Promise<void> {
     await this.requireTier(caller, 'shares');
+    await this.forgetPersonIn(person, workspaces);
+    await this.shareCards.forgetRecipient(person.userId);
+  }
+
+  /** `person` forgotten in those of `workspaces` that are this account's, and in its overviews of them. */
+  private async forgetPersonIn(person: { readonly userId: string; readonly email: string }, workspaces: readonly string[]): Promise<void> {
     const mine = new Set(this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`).map((row) => row.name));
 
     for (const workspace of new Set(workspaces)) {
       if (mine.has(workspace)) await objectNamed(this.env.OrchestratorAgent, workspace).forgetPerson(this.name, person);
     }
 
-    await this.shareCards.forgetRecipient(person.userId);
     this.workspaces.forgetShareUser(person.email);
   }
 
@@ -1380,9 +1400,11 @@ export class UserDO extends Agent<Env> {
 
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
-    // again, empty, and answers as the new account. They are this build's, so they carry its stamp.
+    // again, empty, and answers as the new account. They are this build's, so they carry its stamp. The
+    // one thing kept is when it was deleted, which refuses a card still on its way until a sign-in.
     this.initTables();
     writeStamp(durableStamps(this.ctx.storage.kv), 'account');
+    this.ctx.storage.kv.put(ACCOUNT_DELETED_KEY, Date.now());
 
     return { ok: true, workspaces: workspaces.length };
   }
