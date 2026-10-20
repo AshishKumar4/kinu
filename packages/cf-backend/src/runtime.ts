@@ -23,7 +23,7 @@ import {
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { JOB_STAMP_ENV, withCommandEnvironment, withHostedNodeExecution, WORKSPACE_ROOT, type CommandEnvironment, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
-import type { ActorReference, HostedNodeHome, InvocationSurface, TierRefusals } from '@kinu.run/core';
+import type { ActorReference, HostedNodeHome, InvocationSurface, ProviderAccounts, TierRefusals } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -239,6 +239,8 @@ export interface CFRuntimeHooks {
   modelOperations: ModelOperationSink;
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
   currentTurn?: (actor: ActorReference) => string | null;
+  /** The actor's account per provider (`providerAccounts`): its lanes call on the account its chat does. */
+  accounts?: () => ProviderAccounts;
   /** The actor's one notice state for its object's life; the root's titling and settings changes use it too. */
   refusals: TierRefusals;
   /** The actor's uid on both planes, or neither: split credentials measured `EACCES` on its own home
@@ -291,7 +293,7 @@ export function createCFRuntime(
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
   const laneOf = (source: FixedTierSource): ModelLaneComponents | undefined => profileLaneComponents({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
+    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn, accounts: hooks.accounts,
     refusals: hooks.refusals,
     modelOperations: hooks.modelOperations,
   });
@@ -653,14 +655,15 @@ function buildVectorStore(
 
 /** Resolved at call time so a newly connected provider applies without redeploy; not via
  * `OwnedModelServices`, which memoizes under one fixed title. */
-function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'env' | 'actor' | 'currentTurn'>, title: string): AgentProviderRegistry {
-  const { env, actor, currentTurn } = lane;
+function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'env' | 'actor' | 'currentTurn' | 'accounts'>, title: string): AgentProviderRegistry {
+  const { env, actor, currentTurn, accounts } = lane;
 
   return createAgentProviderRegistry({
     ...(currentTurn !== undefined && { currentTurn }),
     env,
     userDO: userCredentialSourceFor(env, actor),
     appTitle: title,
+    accountFor: (provider) => accounts?.()[provider],
   });
 }
 
@@ -677,6 +680,7 @@ interface ProfileLaneOptions {
   readonly report: ModelCallSink;
   readonly modelOperations: ModelOperationSink;
   readonly currentTurn: ((reference: ActorReference) => string | null) | undefined;
+  readonly accounts: (() => ProviderAccounts) | undefined;
   readonly refusals: TierRefusals;
 }
 

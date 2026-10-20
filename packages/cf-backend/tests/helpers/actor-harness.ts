@@ -385,6 +385,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The ids the loop started its last turn under, off the transport's event stream. */
   private _lastTurnStart: { turnId: string; messageId: string } | null = null;
   harnessLastTurnStart(): { turnId: string; messageId: string } | null { return this._lastTurnStart; }
+
+  /** The workspace runtime's fast lane: what its titles, sleep-time and decisions call. */
+  harnessFastLane(): RoutedLLM | undefined { return this.rt.fastLlm; }
   /** Every text delta the transport delivered, in order: what a client has seen so far. */
   private readonly _deliveredText: string[] = [];
   private readonly _deliveryWatchers = new Set<() => void>();

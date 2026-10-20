@@ -1,7 +1,7 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
-import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
+import { OPENCODE_GO_CATALOG, present } from '@kinu.run/test-utils';
 import {
   agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
   wakeForDelegatedTask, workspaceMainActor,
@@ -109,7 +109,11 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-test("a hired agent's model call authenticates with the provider account the owner selected", async () => {
+/**
+ * A workspace whose owner holds two Anthropic keys, `sk-main` and the `work` account's `sk-work`, with the work account
+ * selected on the workspace: the keys every Anthropic call it makes presents, in order.
+ */
+async function workAccountWorkspace(name: string) {
   const OWNER = 'abcdef0123456789abcdef0123456789';
   const MODEL = 'anthropic/claude-sonnet-4-5';
   const user = createTestUserDO({ durableObjectId: OWNER });
@@ -117,8 +121,8 @@ test("a hired agent's model call authenticates with the provider account the own
 
   await user.userDO.setCredential(owner, 'anthropic.bearer', { kind: 'bearer', token: 'sk-main' });
   await user.userDO.setCredential(owner, accountCredentialKey('anthropic.bearer', 'work'), { kind: 'bearer', token: 'sk-work' });
-  const token = await provisionTestWorkspace(user, 'accounts', 'Accounts');
-  const world = { userDO: user.userDO, workspace: 'accounts', ownerUserId: OWNER };
+  const token = await provisionTestWorkspace(user, name, name);
+  const world = { userDO: user.userDO, workspace: name, ownerUserId: OWNER };
   const workspace = orchestratorHarness(undefined, world, makeEnv(undefined, undefined, world));
   const used: string[] = [];
 
@@ -132,11 +136,31 @@ test("a hired agent's model call authenticates with the provider account the own
   workspace.agent.harnessHoldsCapability(token);
   workspace.agent.harnessInstallCatalog({ tiers: { default: { model: MODEL }, deep: { model: MODEL }, fast: { model: MODEL } }, availableModels: [MODEL] });
   await workspace.agent.setProviderAccount('anthropic', 'work');
+
+  return { user, workspace, used };
+}
+
+test("a hired agent's model call authenticates with the provider account the owner selected", async () => {
+  const { user, workspace, used } = await workAccountWorkspace('accounts');
   const hire = await hostedSubordinateHarness(workspace, { name: 'writer', displayName: 'Writer', nameOrigin: 'user', mission: 'write' });
 
   await wakeForDelegatedTask(workspace, hire.actor.handle.actorId, 'Write it.');
   await driveUntil(workspace, "the hire's model was never called", () => used.length > 0);
 
+  expect(used.join(' ')).toContain('sk-work');
+  expect(used.join(' ')).not.toContain('sk-main');
+  await user.joinFibers();
+  user.close();
+});
+
+// The InternalFish audit: the workspace runtime's lanes (titles, sleep-time, decisions) built their registry with no
+// account choice, so they called on main while the chat used the account the owner selected.
+test("the workspace's own fast lane calls on the provider account the owner selected", async () => {
+  const { user, workspace, used } = await workAccountWorkspace('lanes');
+
+  // The fake provider refuses every call, so the lane's answer is a refusal; the key it presented is what is read.
+  await expect(present(workspace.agent.harnessFastLane(), 'the fast lane').complete('Title this.')).rejects.toThrow();
+  expect(used.length).toBeGreaterThan(0);
   expect(used.join(' ')).toContain('sk-work');
   expect(used.join(' ')).not.toContain('sk-main');
   await user.joinFibers();

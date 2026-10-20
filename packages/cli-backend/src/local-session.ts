@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { ASKED, historyTurnPairs, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ASKED, historyTurnPairs, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
@@ -924,8 +924,13 @@ export class LocalAgentSession {
     return this.modelResolver?.listProviders() ?? Promise.resolve([]);
   }
 
-  private accountChoice(provider: string): string | undefined {
-    return this.config.getProviderAccounts()[provider] ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider];
+  /** The account `provider`'s calls use for an actor whose own choices are `actor` (`providerAccounts`): a hire or a head
+   *  inherits the workspace's choice, its main actor's in the database every actor of it shares, before the catalog's. */
+  private accountChoice(provider: string, actor: AgentConfigStore = this.config): string | undefined {
+    return providerAccounts({
+      actor: actor.getProviderAccounts(), workspace: openWorkspaceMainActor(this.rt.storage.sql).config.getProviderAccounts(),
+      catalog: this.actorSession.profileInputs?.envelope.catalog.accounts,
+    })[provider];
   }
 
   listAvailableModels() {
@@ -2646,8 +2651,7 @@ export class LocalAgentSession {
     const runId = this.chat.currentRunId ?? WORKSPACE_RUN_ID;
 
     const resolver = this.modelResolver?.withCallScope?.({
-      accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider]
-        ?? actor.session.profileInputs?.envelope.catalog.accounts?.[provider],
+      accountFor: (provider) => this.accountChoice(provider, actor.stores.config),
       onProviderWait: (info) => actor.stores.eventRecorder.emit(runId, { type: 'provider_wait', ...info }),
       onModelAttempt: (info) => actor.stores.eventRecorder.emit(runId, { type: 'model_attempt', ...info }),
     }) ?? this.modelResolver;
