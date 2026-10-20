@@ -739,7 +739,7 @@ describe('the brief and the schema are one contract', () => {
     expect(section).toContain(`\`rationale\` is ${String(MIN_EDIT_RATIONALE)} characters or longer`);
   });
 
-  test('an answer missing the required keys is refused, classified, naming every key', async () => {
+  test('an answer missing the required keys is refused, classified, naming the first key it got wrong and no other', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     // One key with no slot, and all three required keys absent.
@@ -752,9 +752,9 @@ describe('the brief and the schema are one contract', () => {
 
     expect(row.stage).toBe('refused');
 
-    for (const key of ['scope', 'summary', 'edits', 'see_rpi']) {
-      expect(row.detail).toContain(`${key}: expected`);
-    }
+    const named = ['scope', 'summary', 'edits', 'see_rpi'].filter((key) => row.detail?.includes(`${key}: expected`) === true);
+
+    expect(named).toHaveLength(1);
 
     // A classified refusal, and nothing written.
     expect(row.detail).toContain('bad_input');

@@ -8,10 +8,11 @@ import type { TurnEscalationLedger } from '../execution/escalation';
 import type { ExecutionRouter } from '../execution/types';
 import type { TurnContextBudget } from '../context-budget';
 import type { CallJob, Shell, ShellExecOptions } from '../types/primitives';
-import { attempt, KinuError, settle, type Logger } from '../obs/index';
+import { attempt, attemptInItsWords, KinuError, settle, type Logger } from '../obs/index';
 import { serve, type Served } from '../operations/operation';
 import { shellRun } from '../operations/shell';
-import { EXECUTOR_MOUNTS } from '../vfs/mounts';
+import type { PathOwner } from '../vfs/mounts';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 /** What the call hands its runtime: absent keys stay absent, so a runtime reads presence. */
 function shellCallOptions(
@@ -64,15 +65,45 @@ export interface ShellDeps {
   readonly budget: TurnContextBudget;
   readonly escalations: TurnEscalationLedger;
   readonly logger: Logger;
+  /** The machine a workspace path is on (the file plane's `owner`): a command runs where its cwd is. */
+  readonly owner?: (path: string) => Promise<PathOwner>;
+}
+
+/**
+ * The runtime and cwd a call runs with. A workspace call's cwd is a workspace path, run on the machine it is on; a
+ * machine's call takes its cwd in that machine's terms, unless the workspace's name for a place on that same machine was
+ * given (rc22: `/computer/workspace/app`).
+ */
+function placed(
+  args: { readonly runtime?: string; readonly cwd?: string; readonly name?: string },
+  owner: ShellDeps['owner'],
+): Effect.Effect<{ readonly runtime: string; readonly cwd: string | undefined }, KinuError> {
+  const runtime = args.runtime ?? 'workspace';
+  const asGiven = { runtime, cwd: args.cwd };
+  const { cwd } = args;
+
+  // A named shell's relative cwd starts at its own directory, which only that shell knows.
+  if (cwd === undefined || owner === undefined || args.name !== undefined) return Effect.succeed(asGiven);
+  const named = runtime === 'workspace' || runtime === 'computer' ? runtime : 'device';
+
+  return attemptInItsWords('io', () => owner(cwd)).pipe(
+    Effect.map((where) => (runtime !== 'workspace' && where.executor !== named
+      ? asGiven
+      : { runtime: where.executor === 'device' ? where.device : where.executor, cwd: where.path })),
+    // A place that is not there is the shell's to say; a machine that is not there refuses in its own words.
+    Effect.catchIf((failure) => runtime !== 'workspace' || isVfsError(failure.cause), () => Effect.succeed(asGiven)),
+  );
 }
 
 /** No fallback chain: an unready runtime refuses, and never silently routes elsewhere. Approval lives at the execution seam. */
-export function serveShell({ shell, router, files, budget, escalations, logger }: ShellDeps): Served {
+export function serveShell({ shell, router, files, budget, escalations, logger, owner }: ShellDeps): Served {
   const fileToolSteer = createFileToolSteer();
 
   const runtimes = [...new Set(['workspace', ...(router?.listExecutors().map(({ name }) => name) ?? [])])];
 
-  return serve(shellRun(runtimes), async (args, { signal, job }) => await settle(Effect.gen(function* () {
+  return serve(shellRun(runtimes), async (asked, { signal, job }) => await settle(Effect.gen(function* () {
+        const args = { ...asked, ...(yield* placed(asked, owner)) };
+
         // Approval lives at the execution seam (execution/approval.ts), not here.
 
         // The file steer is composed into the clamped text so one cap covers it (shell-file-steer.ts).
@@ -133,15 +164,6 @@ export function serveShell({ shell, router, files, budget, escalations, logger }
           logger.failure(RUN_RUNTIME_NO_EXEC, refusal, { runtime: runtimeKey });
 
           return yield* new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
-        }
-
-        const mount = Object.entries(EXECUTOR_MOUNTS).find(([executor]) => executor === runtimeKey)?.[1];
-
-        // The workspace's name for a path on the machine is not the machine's own (rc22 coding: `/computer/workspace/app`).
-        if (mount !== undefined && args.cwd !== undefined && (args.cwd === mount || args.cwd.startsWith(`${mount}/`))) {
-          const own = args.cwd.slice(mount.length) || '/';
-
-          return yield* new KinuError('bad_input', `cwd "${args.cwd}" is the workspace's name for ${runtimeKey}'s ${own}; on ${runtimeKey} it is "${own}"`);
         }
 
         const context = { ...shellCallOptions(args, signal, job), device: nickname, reportCwd: true };

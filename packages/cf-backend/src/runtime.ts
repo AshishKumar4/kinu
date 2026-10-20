@@ -1,4 +1,5 @@
 import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { ToolSet } from 'ai';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
@@ -8,7 +9,7 @@ import type { AgentRuntime, ActorHandle, RoutedLLM, Schedule, Identity, SqlExecu
 import {
   objectNamed,
   nimbusSessionShell, createShellSession,
-  DefaultExecutionRouter, createNimbusWorkspaceExecutor,
+  DefaultExecutionRouter, createNimbusWorkspaceExecutor, processRetryTool,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
@@ -23,7 +24,7 @@ import {
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { JOB_STAMP_ENV, withCommandEnvironment, withHostedNodeExecution, WORKSPACE_ROOT, type CommandEnvironment, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
-import type { ActorReference, HostedNodeHome, InvocationSurface, ProviderAccounts, TierRefusals } from '@kinu.run/core';
+import type { ActorReference, AdoptsJobs, HostedNodeHome, InvocationSurface, ProviderAccounts, TierRefusals } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -205,6 +206,8 @@ export type CFRuntime = AgentRuntime & {
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
+  /** A process job's retry: its command started again on this actor's workspace box (`processRetryTool`). */
+  processRetry: ToolSet[string];
   /**
    * Which job holds each exposed port, the workspace's and the box's, read without the executor's touch. The box is read
    * only once this activation used it: a call activates the box's object, and only real use keeps a box alive (D56).
@@ -246,6 +249,8 @@ export interface CFRuntimeHooks {
   /** The actor's uid on both planes, or neither: split credentials measured `EACCES` on its own home
      *  and could write a sibling's. */
   workspaceExecution?: HostedNodeHome;
+  /** The actor's jobs, a process it starts among them; read at the call, as its runner is built over this runtime. */
+  jobs: () => AdoptsJobs;
   /** `children` is opened under the actor host's directory authority, never by a caller knowing an id. */
   contextPlane?: {
     readonly actorId: string;
@@ -397,6 +402,7 @@ export function createCFRuntime(
 
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
+    jobs: { adopt: async (request) => await hooks.jobs().adopt(request) },
     shellSession,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
@@ -586,6 +592,7 @@ export function createCFRuntime(
     deviceTransport,
     vectorStore,
     sandboxHandle,
+    processRetry: processRetryTool(executionBox),
     portHolders: () => {
       const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? sandboxHandle : null;
       let workspace: Promise<WorkspaceServing> | undefined;

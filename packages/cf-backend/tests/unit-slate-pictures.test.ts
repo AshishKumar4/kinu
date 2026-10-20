@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { pragmaStamps, repairSchema, sha256Hex } from '@kinu.run/core';
+import { sha256Hex } from '@kinu.run/core';
 import { initSlatePictureTable, pictureKey, shareCaptureUrl, sharePictureKey, SlatePictures, type Camera, type PictureCapture } from '../src/slates/pictures';
 import { durableSqlStorage } from './helpers/programmatic-host';
 import { memoryBucket, type MemoryBucket } from './helpers/r2';
@@ -436,29 +436,3 @@ describe("a share view's shot", () => {
     expect(store.nextDueAt()).toBeNull();
   });
 });
-
-describe('a picture store from before views', () => {
-  test("is rebuilt with its rows, each one its slate's preview, and takes share views beside them", () => {
-    const database = new Database(':memory:');
-    databases.push(database);
-    database.exec(`CREATE TABLE slate_pictures (slate TEXT PRIMARY KEY, port INTEGER NOT NULL, digest TEXT, due_at INTEGER, due_since INTEGER,
-      attempts INTEGER NOT NULL DEFAULT 0, capture_handle TEXT, capture_until INTEGER);
-      INSERT INTO slate_pictures (slate, port, digest) VALUES ('board', ${String(PORT)}, '${sha256Hex(A)}');
-      PRAGMA user_version = 1;`);
-    const sql = durableSqlStorage(database);
-
-    const repair = repairSchema(sql, {
-      schema: 'agent', tables: ['slate_pictures'], stamps: pragmaStamps(sql), transactionSync: (write) => database.transaction(write)(),
-      init: () => { initSlatePictureTable((ddl) => { sql.exec(ddl); }); },
-    }, 'pictures');
-
-    expect({ rebuilt: repair?.rebuilt, refilled: repair?.refilled, refused: repair?.refused }).toEqual({ rebuilt: ['slate_pictures'], refilled: [], refused: null });
-    const store = new SlatePictures(sql);
-
-    expect(store.digests().get('board')).toBe(sha256Hex(A));
-    store.listed('board', 's1', 'rev-1', T0);
-    expect(store.shareDigest('board', 's1')).toBeNull();
-    expect(store.nextDueAt()).toBe(T0 + 30_000);
-  });
-});
-

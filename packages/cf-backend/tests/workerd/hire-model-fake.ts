@@ -8,7 +8,7 @@
 import * as v from 'valibot';
 import {
   CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
-  HIRE_PLAN_ASK, JOB_STARTED, NEST_MISSION, NEST_RELAY, REPORT_MARK, type ChildScript,
+  HIRE_PLAN_ASK, JOB_STARTED, NEST_MISSION, NEST_RELAY, PROCESS_COMMAND, PROCESS_NOTED, PROCESS_STARTED, REPORT_MARK, type ChildScript,
 } from './hire-shapes';
 
 export interface HireCall {
@@ -169,6 +169,10 @@ interface ShellToolArgs {
   readonly runtime: 'workspace';
 }
 
+interface EvalToolArgs {
+  readonly code: string;
+}
+
 interface SseChunk {
   readonly id: string;
   readonly object: 'chat.completion.chunk';
@@ -212,7 +216,7 @@ function textBody(model: string, text: string): Response {
   ]);
 }
 
-function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs | ReportToolArgs | ShellToolArgs | SubmitPlanArgs): Response {
+function toolCallBody(model: string, callId: string, name: string, args: AgentsToolArgs | ReportToolArgs | ShellToolArgs | EvalToolArgs | SubmitPlanArgs): Response {
   return streamResponse([
     sse({
       id: callId, object: 'chat.completion.chunk', model,
@@ -256,6 +260,19 @@ function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]):
     run.rootSaw.resolve();
 
     return textBody(model, 'ROOT-GOT-ANSWER');
+  }
+
+  // `process`, keyed on what it last read: a wake about the job is noted, a started process ends the turn.
+  if (run.childScript === 'process') {
+    if (lastUser(body).includes('Background startProcess job')) return textBody(model, PROCESS_NOTED);
+
+    if (results.length !== 0) {
+      run.rootSaw.resolve();
+
+      return textBody(model, PROCESS_STARTED);
+    }
+
+    return toolCallBody(model, 'call_process_1', 'eval', { code: `// Start the tick counter\nreturn await workspace.startProcess(${JSON.stringify(PROCESS_COMMAND)});` });
   }
 
   if (results.length !== 0) return textBody(model, 'ROOT-WAITS');
@@ -408,7 +425,7 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     const raw = await request.text();
 
     const spec = v.parse(
-      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park', 'nest', 'nest-park', 'nest-progress', 'chain', 'job'])) }),
+      v.looseObject({ script: v.optional(v.picklist(['answer', 'throw', 'park', 'nest', 'nest-park', 'nest-progress', 'chain', 'job', 'process'])) }),
       raw === '' ? {} : JSON.parse(raw),
     );
 

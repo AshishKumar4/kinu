@@ -5,6 +5,7 @@ import {
   genesisForNewTable,
   lockKey,
   lockUpdate,
+  ownerViolations,
   survey,
   type GenesisLock,
   type TableDdl,
@@ -222,6 +223,23 @@ describe('schema-drift genesis comparison', () => {
     expect(detail).toContain("('auto', 'provisional', 'user')");
     expect(detail).not.toContain('added after genesis');
     expect(lockUpdate([widened], { [key]: genesis }, () => widened.parts).refused).toHaveLength(1);
+  });
+});
+
+// 2026-10-20: eight tables made on first use or by an object of no class were in no class, so a release reshaping one
+// would have reached no database's reset.
+describe('schema-drift table owners', () => {
+  const lazy: TableDdl = { table: 'slate_usage', file: 'packages/core/src/slates/usage.ts', parts: ['slate_id TEXT NOT NULL'] };
+
+  test('RED: refuses a table no class makes, naming it', () => {
+    const found = ownerViolations([lazy], { workspace: ['slate_images'] });
+
+    expect(found.map(({ key }) => key)).toEqual(['slate_usage@packages/core/src/slates/usage.ts']);
+    expect(found[0]?.detail).toContain('no class in scripts/schema-classes.json lists it');
+  });
+
+  test('passes a table a class lists, made by its init or on first use', () => {
+    expect(ownerViolations([lazy], { workspace: ['slate_images', 'slate_usage'] })).toEqual([]);
   });
 });
 

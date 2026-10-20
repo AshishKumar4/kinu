@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
@@ -18,8 +18,11 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   BoundedOutput, COMMAND_OUTPUT_LIMITS, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
-  type DeviceStatus, type DeviceTransport, type TunnelSocket, DEVICE_ERRORS, DEVICE_METHOD,
+  type DeviceStatus, type DeviceTransport, type TunnelSocket, DEVICE_ERRORS, DEVICE_METHOD, KINU_NODE_MODULE_SOURCE, TurnContextBudget,
+  WORKSPACE_ROOT, cloudPlanes, executorNamespace, nestedMembers, serveFile, standardMounts, withMountTable, type ExecutorProviderSurface,
 } from '@kinu.run/core';
+import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
+import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 
 const require_ = createRequire(import.meta.url);
 
@@ -209,6 +212,24 @@ describe('pc-agent exec RPC', () => {
     expect(reply.result?.stdout).toContain('started');
     expect(reply.result?.exitCode).toBe(0);
     expect(running).toBe(true);
+  });
+
+  // Owner report, 2026-10-20 (`setsid -f chromium <url>`): the supervisor answered at the command's exit, then closed
+  // the pipes a background process still held, which ends such a process at its next write.
+  test('what the command left running writes on after the answer, into pipes still read', async () => {
+    const cwd = scratchDir('pc-agent-detached');
+    const verdict = join(cwd, 'verdict');
+    await runOk(['mkfifo', verdict]);
+
+    // Waits for `go` (600 looks at most), then writes to both streams with SIGPIPE ignored, and says whether they landed.
+    const reply = await exec(`cd ${cwd} && { sh -c 'trap "" PIPE; n=0; until [ -e go ] || [ $n -ge 600 ]; do n=$((n+1)); sleep 0.05; done; `
+      + `{ echo late && echo late >&2; } && v=wrote || v=refused; echo $v > verdict' & } ; echo started`);
+
+    const uncaptured = '\n[background output after command exit is not captured]\n';
+
+    expect(reply.result).toEqual({ stdout: `started\n${uncaptured}`, stderr: uncaptured, exitCode: 0 });
+    writeFileSync(join(cwd, 'go'), '');
+    expect((await readFile(verdict, 'utf8')).trim()).toBe('wrote');
   });
 
   test('output the command wrote is complete, not cut short by the early answer', async () => {
@@ -540,12 +561,13 @@ describe('pc-agent command cancellation', () => {
       .toEqual({ requestId: runId, acknowledged: true });
     expect(await settled(() => (!existsSync(requestDir) ? true : undefined), 'supervisor cleanup')).toBe(true);
     expect(pcAgent.supervision.size()).toBe(sizeBefore);
-    // The command's group leader has exited; the ACK must still reach the supervisor, which then ends.
-    expect(await gone(supervisor)).toBe(true);
-
+    // The command's group leader has exited; the ACK reached the supervisor, which removed the directory. It stays only
+    // as the reader of the pipes the server still holds, and ends with it.
     const server = Number(readFileSync(pidFile, 'utf8').trim());
 
-    if (isRunning(server)) process.kill(server, 'SIGKILL');
+    expect(isRunning(supervisor)).toBe(true);
+    process.kill(server, 'SIGKILL');
+    expect(await gone(supervisor)).toBe(true);
   });
 
   test('completed, duplicate and unknown cancellation targets answer honestly', async () => {
@@ -1064,6 +1086,46 @@ describe('the daemon answers in the words the hub reads', () => {
 });
 
 /** The whole chain, executor → tunnel → daemon → real process, aborted the way a stopped turn does. */
+// Owner decision, 2026-10-20 ("Run where the files live"): a program's command whose cwd is under /pc/<name> runs on that
+// machine, through its own exec, in its own terms.
+describe('a program\'s command whose cwd is on the user\'s machine runs there', () => {
+  test('child_process with a /pc cwd runs on the pc-agent, in that directory', async () => {
+    const dir = scratchDir('pc-agent-routed');
+    const { provider, tunnel } = deviceChain();
+    // The plane's /pc holds the machine's directories; the files are the device's to serve, not this test's.
+    const deviceTree = createMemoryVfs().vfs;
+    await deviceTree.mkdir(`/laptop${dir}`, { recursive: true });
+    const plane = withMountTable(createMemoryVfs().vfs, standardMounts((name) => (name === 'device' ? { files: deviceTree, isAvailable: () => true } : undefined)));
+    const files = serveFile(() => ({ vfs: plane, home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
+
+    const workspace = {
+      name: 'workspace', tools: {}, positionalArgs: true, capabilities: new Set(), fileRoot: async () => ({ root: '' }),
+    } satisfies ExecutorProviderSurface;
+
+    const members = (surface: ExecutorProviderSurface) => nestedMembers(Object.fromEntries(Object.entries(executorNamespace(surface, files).tools)
+      .map(([name, entry]) => [name, entry.execute])));
+
+    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+
+    const run = new Function('__kinu', 'workspace', 'machines', `const cp = __kinu.createRequire({ workspace, machines, builtins: {}, cwd: "/" })("child_process");
+      return cp.execFile("pwd", [], { cwd: ${JSON.stringify(`/pc/laptop${dir}`)} });`);
+
+    const earlier = new Set(existsSync(pcAgent.INFLIGHT_ROOT) ? readdirSync(pcAgent.INFLIGHT_ROOT) : []);
+
+    expect(await run(kinu, members(workspace), { computer: null, device: members(provider) })).toEqual({ stdout: `${dir}\n`, stderr: '' });
+
+    // As the hub does once it holds a result: it acknowledges it, and the request's supervisor ends.
+    for (const requestId of readdirSync(pcAgent.INFLIGHT_ROOT).filter((id) => !earlier.has(id))) {
+      const { pid } = await supervisorState(requestId);
+
+      await tunnel.rpc(DEVICE_METHOD.execAck, [requestId]);
+      expect(await gone(pid)).toBe(true);
+    }
+
+    tunnel.dispose();
+  });
+});
+
 describe('stopping a turn reaches the process on the user\'s machine', () => {
   test('the tool\'s abort kills the command and its child, and says it did', async () => {
     const dir = scratchDir('pc-agent-e2e');

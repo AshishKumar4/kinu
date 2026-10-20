@@ -33,7 +33,7 @@ const PREVIEW_VIEW = 'preview';
  * are a cache the camera refills, and rows predating views are the preview's.
  */
 export function initSlatePictureTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS slate_pictures ( /* regenerable cache, refilled by packages/cf-backend/src/slates/pictures.ts */
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_pictures ( /* refilled by packages/cf-backend/src/slates/pictures.ts */
     slate          TEXT NOT NULL,
     view           TEXT NOT NULL DEFAULT 'preview',
     listing        TEXT,

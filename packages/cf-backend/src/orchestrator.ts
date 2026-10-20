@@ -1448,6 +1448,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation, turn,
       ),
       deferrals: (actorId) => this.deferralChannel(actorId),
+      jobs: (actor) => this.jobRunnerOf(actor),
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
     };
@@ -4012,11 +4013,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async retryJob(authority: JobAuthority, jobId: string): Promise<RetryOutcome> {
     if (authority.kind === 'step-loop') return { ok: false, error: "a swarm node's job ends with its run" };
 
+    // A process job runs again as `processRetryTool`, under the kind its job was given.
     const rawTools = authority.kind === 'root'
       ? async (mode: WorkMode) => {
         await this.currentAccountSwarms();
 
-        return this.getRawToolsForWorkMode(mode);
+        return { ...this.getRawToolsForWorkMode(mode), startProcess: this.rt.processRetry };
       }
       : (mode: WorkMode) => hostedRetryTools(this.hostedSeams(), actorReferenceOf(this.actingAgentOf(authority.actorId)), mode, `retry:${jobId}`);
 
@@ -4038,9 +4040,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A hire's own jobs; a settle wakes it with a message. */
   private hireJobs(actor: BoundActor, mode: WorkMode): ActorJobs {
-    const authority = this.jobAuthorities.live(actor.reference.actorId) ?? this.hireJobAuthority(actor.reference);
+    return { jobRunner: this.hireRunner(actor), backgroundable: BACKGROUNDABLE_TOOLS, mode: () => mode };
+  }
 
-    return { jobRunner: authority.runner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => mode };
+  private hireRunner(actor: BoundActor): BackgroundJobRunner {
+    return (this.jobAuthorities.live(actor.reference.actorId) ?? this.hireJobAuthority(actor.reference)).runner;
+  }
+
+  /** The runner `actor`'s calls become jobs on, as its tools' do: a workspace agent's the workspace's, a hire's its own. */
+  private jobRunnerOf(actor: BoundActor): BackgroundJobRunner {
+    return actorReach(actorPolicy(actor.record)).kind === 'workspace' ? this.jobRunner : this.hireRunner(actor);
   }
 
   protected override reviveJobAuthority(actorId: string): JobAuthority | null {

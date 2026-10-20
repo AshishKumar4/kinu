@@ -192,7 +192,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps, served?: ServedStores):
   });
 
   tools.shell = operationTool(BUILTIN_TOOL_DESCRIPTIONS.shell, serveShell({
-    shell: rt.shell, router: rt.executionRouter, files: rt.storage, budget, escalations, logger,
+    shell: rt.shell, router: rt.executionRouter, files: rt.storage, budget, escalations, logger, owner: rt.toolFiles.owner?.bind(rt.toolFiles),
   }));
 
   // The same operations as `file.*`, `memory.*` and `tasks.*` in a program.

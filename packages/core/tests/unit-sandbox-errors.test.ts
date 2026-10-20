@@ -6,7 +6,7 @@ import { retiredMembersOf } from '../src/operations/retired';
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { asSchema } from 'ai';
-import { present } from '@kinu.run/test-utils';
+import { NO_JOBS, present } from '@kinu.run/test-utils';
 import { explainSandboxError } from '../src/tools/sandbox-errors';
 import { BUILTIN_TOOLS, programDeclarations, TOOL_REACH } from '../src/tools/registry';
 import { branchableToolCall, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
@@ -156,7 +156,7 @@ test('every member of every namespace refuses with the one declared Refusal, and
 
   const namespaces = [
     executorNamespace(createInlineExecutor({ ...inline, slate: refusingDouble() })),
-    executorNamespace(createNimbusWorkspaceExecutor({ box: refusingDouble(), inline })),
+    executorNamespace(createNimbusWorkspaceExecutor({ box: refusingDouble(), jobs: NO_JOBS, inline })),
     executorNamespace(createSandboxExecutor(refusingDouble(), { previewHostSuffix: 'preview.test' })),
     executorNamespace(createSandboxExecutor()),
     executorNamespace(createParentExecutor({ handle: refusingDouble() })),

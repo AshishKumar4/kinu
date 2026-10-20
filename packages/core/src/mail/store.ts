@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '../obs/index';
-import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
+import { mailAddressOf, mailLabelNumbered, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import { replySubject } from './words';
 import { filedRecipients, mailAddress } from './message';
@@ -164,11 +164,11 @@ export class MailStore {
     const workspacePath = rows(v.object({ path: v.string() }), this.deps.sql.exec("SELECT path FROM mail_addresses WHERE kind = 'workspace' AND workspace = ?", owner.workspace))[0]?.path
       ?? mailLabelOf(owner.workspace) ?? 'workspace';
 
-    const base = owner.kind === 'workspace' ? label : `${label}.${workspacePath}`;
-    let path = base;
+    const at = (own: string) => (owner.kind === 'workspace' ? own : `${own}.${workspacePath}`);
+    let path = at(label);
 
-    // A label is unique per person: a clash gets `-2`, `-3`, … (§1).
-    for (let n = 2; this.deps.sql.exec('SELECT 1 FROM mail_addresses WHERE path = ?', path).toArray().length > 0; n += 1) path = `${base}-${String(n)}`;
+    // A label is unique per person: a clash numbers its own label, inside its 20 characters, and keeps its workspace (§1).
+    for (let n = 2; this.deps.sql.exec('SELECT 1 FROM mail_addresses WHERE path = ?', path).toArray().length > 0; n += 1) path = at(mailLabelNumbered(label, n));
 
     this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id, created_at) VALUES (?, ?, ?, ?, ?)', path, owner.kind, owner.workspace, owner.actorId, this.deps.now());
 

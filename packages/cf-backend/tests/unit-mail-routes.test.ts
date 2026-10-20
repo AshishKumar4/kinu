@@ -236,7 +236,7 @@ describe('the person reads and sends their own mail, and only their own', () => 
 
     storeOf(ASHISH.userId).update(dana?.threadId ?? '', { important: 'Dana is blocked on /hooks/v2.' });
     expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3' })).body).toMatchObject({
-      unread: 1, items: [{ thread: dana?.threadId, from: { address: 'dana@northwind.io' }, reason: 'Dana is blocked on /hooks/v2.', unread: true }],
+      unread: 1, items: [{ thread: dana?.threadId, from: { address: 'dana@northwind.io' }, to: 'ashish@kinu.run', reason: 'Dana is blocked on /hooks/v2.', unread: true }],
     });
     expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/threads?view=important' })).body).toMatchObject({ threads: [{ important: 'Dana is blocked on /hooks/v2.' }] });
   });
