@@ -33,7 +33,14 @@ export interface VfsMount {
 	readonly storeView?: true;
 	/** Its mount point where that is not `/<name>`: locally a view sits in the workspace's space. */
 	readonly at?: string;
+	/** The machine whose files it is: a command whose cwd is here runs there (`owner`). */
+	readonly executor?: keyof typeof EXECUTOR_MOUNTS;
 }
+
+/** The machine a path is on, and the path in that machine's own terms: where a command whose cwd it is runs. */
+export type PathOwner =
+	| { readonly executor: 'workspace' | 'computer'; readonly path: string }
+	| { readonly executor: 'device'; readonly device: string; readonly path: string };
 
 export const EXECUTOR_MOUNTS = {
 	device: '/pc',
@@ -67,12 +74,14 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 				return status?.status === 'disconnected' && status.label !== undefined ? `"${status.label}" is offline` : 'no device connected';
 			},
 			filesOwner: 'user',
+			executor: 'device',
 		},
 		{
 			name: EXECUTOR_MOUNTS.computer.slice(1),
 			files: () => provider('computer')?.files ?? null,
 			absentReason: () => 'this workspace has no computer bound',
 			filesOwner: 'agent',
+			executor: 'computer',
 		},
 	];
 }
@@ -224,6 +233,11 @@ export interface VfsMountRouting {
 	 * operation's own lookup answers, unless `creating` (a write that makes its parents): then it passes as named.
 	 */
 	resolve(path: string, options?: { follow?: boolean; creating?: boolean }): Promise<string>;
+	/**
+	 * The machine `path` is on, by the namespace's own lookup, and the path there. A mount that is absent refuses in its
+	 * own words; `/pc` itself names no machine.
+	 */
+	owner(path: string): Promise<PathOwner>;
 }
 
 export type MountedVfs = VFS & Required<Pick<VFS, 'rename' | 'removeRecursive' | 'readRange'>> & VfsMountRouting & CheckpointFiles;
@@ -501,6 +515,24 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 			const route = options?.creating === true ? routeCreating : routeStrict;
 
 			return target.namespace === null ? target.at : namespacePath(await route(target.namespace, target.at, options?.follow ?? true));
+		},
+		async owner(path) {
+			const target = await on(path);
+
+			if (target.namespace === null) return { executor: 'workspace', path: target.at };
+			const route = await routeStrict(target.namespace, target.at, true);
+			const executor = declared.find((mount) => (mount.at ?? `/${mount.name}`) === route.point)?.executor;
+
+			if (executor === undefined) return { executor: 'workspace', path: namespacePath(route) };
+
+			if (route.source === null) throw new KinuError('unavailable', route.absentReason ?? `${route.point} is not mounted`);
+
+			if (executor === 'computer') return { executor, path: route.path };
+			const [device = '', ...rest] = route.path.split('/').filter((part) => part !== '');
+
+			if (device === '') throw new KinuError('bad_input', `${route.point} holds one directory per device: name one, as ${route.point}/<device>/…`);
+
+			return { executor, device, path: `/${rest.join('/')}` };
 		},
 		// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code; only `readBoundedWithVfsOps` may whole-read.
 		readRange: (path, offset, length) => settle(optionalOperation(() => on(path), path, 'this plane serves no ranged read', (files, at) => files.readRange?.(at, offset, length))),

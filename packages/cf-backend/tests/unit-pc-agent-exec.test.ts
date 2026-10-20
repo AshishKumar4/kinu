@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
@@ -18,8 +18,11 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   BoundedOutput, COMMAND_OUTPUT_LIMITS, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
-  type DeviceStatus, type DeviceTransport, type TunnelSocket, DEVICE_ERRORS, DEVICE_METHOD,
+  type DeviceStatus, type DeviceTransport, type TunnelSocket, DEVICE_ERRORS, DEVICE_METHOD, KINU_NODE_MODULE_SOURCE, TurnContextBudget,
+  WORKSPACE_ROOT, cloudPlanes, executorNamespace, nestedMembers, serveFile, standardMounts, withMountTable, type ExecutorProviderSurface,
 } from '@kinu.run/core';
+import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
+import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 
 const require_ = createRequire(import.meta.url);
 
@@ -1083,6 +1086,46 @@ describe('the daemon answers in the words the hub reads', () => {
 });
 
 /** The whole chain, executor → tunnel → daemon → real process, aborted the way a stopped turn does. */
+// Owner decision, 2026-10-20 ("Run where the files live"): a program's command whose cwd is under /pc/<name> runs on that
+// machine, through its own exec, in its own terms.
+describe('a program\'s command whose cwd is on the user\'s machine runs there', () => {
+  test('child_process with a /pc cwd runs on the pc-agent, in that directory', async () => {
+    const dir = scratchDir('pc-agent-routed');
+    const { provider, tunnel } = deviceChain();
+    // The plane's /pc holds the machine's directories; the files are the device's to serve, not this test's.
+    const deviceTree = createMemoryVfs().vfs;
+    await deviceTree.mkdir(`/laptop${dir}`, { recursive: true });
+    const plane = withMountTable(createMemoryVfs().vfs, standardMounts((name) => (name === 'device' ? { files: deviceTree, isAvailable: () => true } : undefined)));
+    const files = serveFile(() => ({ vfs: plane, home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
+
+    const workspace = {
+      name: 'workspace', tools: {}, positionalArgs: true, capabilities: new Set(), fileRoot: async () => ({ root: '' }),
+    } satisfies ExecutorProviderSurface;
+
+    const members = (surface: ExecutorProviderSurface) => nestedMembers(Object.fromEntries(Object.entries(executorNamespace(surface, files).tools)
+      .map(([name, entry]) => [name, entry.execute])));
+
+    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
+
+    const run = new Function('__kinu', 'workspace', 'machines', `const cp = __kinu.createRequire({ workspace, machines, builtins: {}, cwd: "/" })("child_process");
+      return cp.execFile("pwd", [], { cwd: ${JSON.stringify(`/pc/laptop${dir}`)} });`);
+
+    const earlier = new Set(existsSync(pcAgent.INFLIGHT_ROOT) ? readdirSync(pcAgent.INFLIGHT_ROOT) : []);
+
+    expect(await run(kinu, members(workspace), { computer: null, device: members(provider) })).toEqual({ stdout: `${dir}\n`, stderr: '' });
+
+    // As the hub does once it holds a result: it acknowledges it, and the request's supervisor ends.
+    for (const requestId of readdirSync(pcAgent.INFLIGHT_ROOT).filter((id) => !earlier.has(id))) {
+      const { pid } = await supervisorState(requestId);
+
+      await tunnel.rpc(DEVICE_METHOD.execAck, [requestId]);
+      expect(await gone(pid)).toBe(true);
+    }
+
+    tunnel.dispose();
+  });
+});
+
 describe('stopping a turn reaches the process on the user\'s machine', () => {
   test('the tool\'s abort kills the command and its child, and says it did', async () => {
     const dir = scratchDir('pc-agent-e2e');

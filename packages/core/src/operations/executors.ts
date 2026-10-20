@@ -12,6 +12,10 @@ import { FILE } from './file';
 
 const Command = v.pipe(v.string(), v.nonEmpty());
 
+/** Where a workspace command runs: said by the `shell` tool and by a program's `child_process`. */
+export const EXEC_RUNS_WHERE_ITS_CWD_IS = 'A command whose cwd is under /computer runs on the computer, under /pc/<name> on that machine, '
+  + 'and anywhere else in the workspace; a `cd` inside the command does not move it.';
+
 /** When a command answers, on every machine: said by its `exec` and by the `shell` tool. */
 export const EXEC_ANSWERS_AT_EXIT = 'It answers when the command itself exits: a process it starts in the background keeps running, '
   + 'and what that process writes afterwards is not returned.';

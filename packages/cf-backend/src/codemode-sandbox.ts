@@ -38,7 +38,8 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     '    __kinu.bindSlates(__kinuWorkspace);',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
     `    const process = __kinu.createProcess(${JSON.stringify(identity.cwd)});`,
-    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
+    '    const __kinuMachines = { computer: typeof computer === "undefined" ? null : computer, device: typeof device === "undefined" ? null : device };',
+    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, machines: __kinuMachines, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     // The program's own bindings first (the owner's secrets granted here, `process.env` holds them too), never over these.
     `    const env = Object.freeze({ ...this.env, workspace: ${JSON.stringify(identity.workspace)}, missingBuiltins: __kinuBuiltins.missing });`,
