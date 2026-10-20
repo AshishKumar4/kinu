@@ -30,6 +30,8 @@ export interface SetModelDeps {
 export interface EvolutionConfigView {
   /** The agent learns from its turns; on by default. */
   learning: boolean;
+  /** The agent makes and is offered crafted tools; on by default. */
+  crafting: boolean;
   advisorEnabled: boolean;
   /** Lowest severity that reaches the conversation; below it a note becomes a Changelog row. */
   advisorMinSeverity: AdvisorSeverity;
@@ -37,6 +39,7 @@ export interface EvolutionConfigView {
 
 export const EvolutionConfigViewSchema: v.GenericSchema<EvolutionConfigView> = v.object({
   learning: v.boolean(),
+  crafting: v.boolean(),
   advisorEnabled: v.boolean(),
   advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
 });
@@ -173,6 +176,7 @@ export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue
 export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigView {
   return {
     learning: config.getLearning(),
+    crafting: config.getCrafting(),
     advisorEnabled: config.getAdvisorEnabled(),
     advisorMinSeverity: config.getAdvisorMinSeverity(),
   };
@@ -184,6 +188,8 @@ export function setEvolutionConfig(
   view: Partial<EvolutionConfigView>,
 ): EvolutionConfigView {
   if (view.learning !== undefined) config.setLearning(view.learning);
+
+  if (view.crafting !== undefined) config.setCrafting(view.crafting);
 
   if (view.advisorEnabled !== undefined) config.setAdvisorEnabled(view.advisorEnabled);
 

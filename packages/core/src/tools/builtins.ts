@@ -82,12 +82,13 @@ function askOwnerTool() {
 
 /** The one reader of a runtime's crafted tools, for every `eval` built over its surface. */
 export function codemodeSurface(
-  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes'>, native: ToolSet, external: () => ToolSet,
+  rt: Pick<AgentRuntime, 'craftStore' | 'storage' | 'planes' | 'actor'>, native: ToolSet, external: () => ToolSet,
   held: { readonly report?: ReportDeps; readonly stores: ServedStores },
 ): CodemodeSurface {
   const surface: CodemodeSurface = {
     native,
-    craftedTools: () => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
+    // Read per call: with crafting off no crafted tool is declared or bound.
+    craftedTools: () => (rt.actor.config.getCrafting() ? selectInjectableCraftedTools(rt.craftStore, rt.storage.sql) : []),
     external: () => withCheckedInputs(external()),
     cwd: rt.planes.cwd,
     stores: held.stores,

@@ -21,6 +21,7 @@ function workspaceOf() {
 
   const provider = createInlineExecutor({
     filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, sql: rt.storage.sql, actor: rt.actor,
+    crafting: () => rt.actor.config.getCrafting(),
     shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
   });
 
@@ -83,6 +84,19 @@ describe('saving a tool that reads a file', () => {
         ok, shown: error.includes("somebody else's invitation"), remedy: error.includes('send the function itself'),
         declared: declared.includes('createTool(name, description, async (args) => { ... })'),
       }).toEqual({ ok: false, shown: true, remedy: true, declared: true });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('with crafting off a well-formed tool is refused, and nothing is saved', async () => {
+    const { rt, db, provider } = workspaceOf();
+    rt.actor.config.setCrafting(false);
+
+    try {
+      const { ok, error } = await replay("return await workspace.createTool('double', 'Doubles it', 'async (n) => n * 2');", provider);
+
+      expect({ ok, error, saved: rt.craftStore.list().length }).toEqual({ ok: false, error: expect.stringContaining('Crafting is off'), saved: 0 });
     } finally {
       db.close();
     }

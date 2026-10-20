@@ -34,6 +34,25 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
+    title: 'the agent\'s crafting setting: off, a turn is told of no crafted tool; back on, the next is',
+    async run({ surface, actor, requests }) {
+      const told = (text: string): boolean => {
+        const request = requests().find((asked) => JSON.stringify(asked.prompt.at(-1)?.content).includes(`"${text}"`));
+
+        if (request === undefined) throw new Error(`no request answered '${text}'`);
+
+        return JSON.stringify(request.prompt).includes('## Crafted tools available through eval');
+      };
+
+      actor.config.setCrafting(false);
+      await surface.send('first');
+      actor.config.setCrafting(true);
+      await surface.send('second');
+
+      expect({ off: told('first'), on: told('second') }).toEqual({ off: false, on: true });
+    },
+  },
+  {
     title: 'an edit staged meanwhile moves the prompt prefix only at a turn whose cache is cold; the owner\'s revert, at once',
     async run({ surface, sql, actor, requests }) {
       const artifactId = sectionArtifact('guidance/operating');

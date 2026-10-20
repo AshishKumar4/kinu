@@ -47,6 +47,8 @@ export interface InlineExecutorDeps {
   /** The owner's files surface; absent: `vfs`, the plane the tools reach. */
   files?: VFS;
   craftStore: CraftStore;
+  /** The agent's crafting setting, read per call; absent: on. */
+  crafting?: () => boolean;
   shell: ShellExec;
   /** The declaration the host gated `shell` under. */
   filesOwner: FilesOwner;
@@ -159,6 +161,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const name = parseInput(StringSchema, { value: args[0] });
         const description = parseInput(StringSchema, { value: args[1] });
         const code = parseInput(StringSchema, { value: args[2] });
+
+        if (deps.crafting?.() === false) {
+          return { ok: false, ...refusalOf(new KinuError('unavailable', 'Crafting is off for this agent: createTool makes no tool.')) };
+        }
 
         if (!name || !description || !code) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',

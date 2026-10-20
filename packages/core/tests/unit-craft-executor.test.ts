@@ -71,6 +71,20 @@ describe('crafted-tool execution integration', () => {
     expect(crafted).toEqual([{ name: 'healthy', code: 'async () => 1', description: 'Crafted tool: healthy' }]);
   });
 
+  test('with crafting off no crafted tool reaches the program; back on, it does', async () => {
+    const { rt } = createTestRuntime();
+    rt.craftStore.create({ name: 'double', description: 'doubles its arg', code: 'async (n) => n * 2' });
+    const surface = capturedSurface(rt)();
+
+    rt.actor.config.setCrafting(false);
+    expect(surface.craftedTools()).toEqual([]);
+    expect(await runProgram(rt, 'return typeof tools.double;')).toEqual({ result: 'undefined' });
+
+    rt.actor.config.setCrafting(true);
+    expect(surface.craftedTools().map((crafted) => crafted.name)).toEqual(['double']);
+    expect(await runProgram(rt, 'return await tools.double(21);')).toEqual({ result: 42 });
+  });
+
   test('an unreadable store fails the program instead of silently removing all crafted tools', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.list = () => { throw new Error('crafted store unavailable'); };

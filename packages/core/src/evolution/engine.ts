@@ -359,7 +359,7 @@ export class EvolutionEngine {
 
     await this.settleImports(turn.turnId, rating.score);
 
-    if (isHighRating(rating.score) && turn.toolCalls.length > 0) {
+    if (isHighRating(rating.score) && turn.toolCalls.length > 0 && this.agentConfig.getCrafting()) {
       // The key travels into the body so the marker lands beside the writes.
       const patternKey = gradedKey === null ? null : `${gradedKey}:pattern`;
 

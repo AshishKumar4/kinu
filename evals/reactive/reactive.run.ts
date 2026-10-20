@@ -1,6 +1,7 @@
 /**
  * §8 of docs/EVOLUTION-REDESIGN.md, run against the eval deployment: `bun run evals:reactive`. KINU_REACTIVE_SEGMENTS
  * (200), KINU_REACTIVE_SEEDS (3) and KINU_REACTIVE_HELD_OUT (the last family) shape it; KINU_EVAL_MODELS names the model.
+ * Learning on is held against learning off (dreaming), and against crafting off (crafted tools).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -8,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { test } from 'vitest';
 import { evalMatrix } from '../src/config';
 import { collectEvalTasks } from '../src/eval';
-import { learningVerdict, reactivePlan } from '../src/reactive';
+import { learningVerdict, REACTIVE_ARMS, reactivePlan, type ArmRun } from '../src/reactive';
 import { runArm } from '../src/reactive-run';
 import { trialSlot } from '../src/slot';
 import { ARMS, resolveEvalTarget } from '../src/target';
@@ -17,7 +18,7 @@ test('learning on beats learning off', async () => {
   const env = process.env;
   const segments = Number(env.KINU_REACTIVE_SEGMENTS ?? '200');
   const seeds = Number(env.KINU_REACTIVE_SEEDS ?? '3');
-  const matrix = { ...evalMatrix(env, ARMS.map((arm) => arm.id)), arms: ['learning-on', 'learning-off'], trials: seeds };
+  const matrix = { ...evalMatrix(env, ARMS.map((arm) => arm.id)), arms: [...REACTIVE_ARMS], trials: seeds };
   const [model] = matrix.models;
   const target = resolveEvalTarget(env);
   const tasks = new Map((await collectEvalTasks()).map((task) => [task.id, task]));
@@ -25,23 +26,25 @@ test('learning on beats learning off', async () => {
   const heldOut = env.KINU_REACTIVE_HELD_OUT ?? families.at(-1);
 
   if (model === undefined || heldOut === undefined) throw new Error('KINU_EVAL_MODELS names no model, or no task is declared');
-  const runs = [];
+  const runs: { on: ArmRun; off: ArmRun; craftingOff: ArmRun; heldOut: string }[] = [];
 
   for (let seed = 1; seed <= seeds; seed++) {
     const plan = reactivePlan(families, segments, seed, heldOut);
     const runner = basename(import.meta.filename);
 
-    const [on, off] = await Promise.all((['learning-on', 'learning-off'] as const).map((arm) => runArm({
+    const [on, off, craftingOff] = await Promise.all(REACTIVE_ARMS.map((arm) => runArm({
       target, model, arm, seed, plan, tasks,
       account: trialSlot({ taskFiles: [runner], task: runner, matrix, model, arm, trial: seed }),
     })));
 
-    if (on !== undefined && off !== undefined) runs.push({ on, off, heldOut });
+    if (on !== undefined && off !== undefined && craftingOff !== undefined) runs.push({ on, off, craftingOff, heldOut });
   }
 
   const verdict = learningVerdict(runs);
+  const crafting = learningVerdict(runs.map((run) => ({ on: run.on, off: run.craftingOff, heldOut: run.heldOut })));
   const out = join(env.BENCH_ARTIFACTS ?? tmpdir(), `reactive-${String(Date.now())}.json`);
   mkdirSync(join(out, '..'), { recursive: true });
-  writeFileSync(out, `${JSON.stringify({ runs, verdict }, null, 2)}\n`);
-  process.stdout.write(`[reactive] ${verdict.wins ? 'learning wins' : 'learning does not win'}: ${JSON.stringify(verdict)}; evidence ${out}\n`);
+  writeFileSync(out, `${JSON.stringify({ runs, verdict, crafting }, null, 2)}\n`);
+  process.stdout.write(`[reactive] ${verdict.wins ? 'learning wins' : 'learning does not win'}: ${JSON.stringify(verdict)}\n`);
+  process.stdout.write(`[reactive] ${crafting.wins ? 'crafting wins' : 'crafting does not win'}: ${JSON.stringify(crafting)}; evidence ${out}\n`);
 });
