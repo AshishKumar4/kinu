@@ -93,9 +93,9 @@ export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from
 
 export { initMailNameTables, initMailboxTables } from './state/mail-schema';
 
-export { mailVerdict, type MailVerdict } from './mail/verdict';
+export { mailVerdict } from './mail/verdict';
 
-export { isMailLabel, mailAddressOf, mailLabelOf, parseMailRecipient, type MailRecipient } from './mail/address';
+export { MAIL_LABEL_PATTERN, isMailLabel, mailAddressOf, mailLabelOf, parseMailRecipient, type MailRecipient } from './mail/address';
 
 export type * from './mail/mailbox-api';
 
@@ -111,7 +111,7 @@ export { inboundBody, isAutoReplyEmail, mailThreadText, stripQuotedReply } from 
 
 export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/handed';
 
-export { mailInContext, type MailInContext } from './mail/in-context';
+export { mailInContext } from './mail/in-context';
 
 export { MailTriageLane, triageMail, type MailTriageDeps, type MailTriageRun } from './mail/triage';
 
@@ -908,7 +908,6 @@ export {
   extractJsonObject,
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
-  stripMarkdownFences,
 } from './providers/structured';
 
 export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './utils/evidence-window';
@@ -1036,7 +1035,7 @@ export {
 } from './scaffold/versions';
 
 // Crafted tools by preference
-export { craftPreference, craftPreferences, rankByPreference, type CraftPreferenceRow } from './craft/preference';
+export { craftPreference, craftPreferences } from './craft/preference';
 
 // Scaffold replay against recorded turns
 export { activateReplayedScaffold } from './scaffold/replay-gate';
@@ -1493,7 +1492,6 @@ export {
   EVAL_WORKSPACE_PREFIX,
   evalAccountEmail,
   inheritedRows,
-  type ProvisionedConfig,
   isEvalAccountEmail,
   parseEvalAccount,
   type EvalAccount,
@@ -1532,7 +1530,7 @@ export {
 } from './safety/approval-gate';
 
 export {
-  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, egressPlaceholdersIn, revealHeader, revealUrl, positionWords,
+  EGRESS_PLACEHOLDER_PREFIX, PLACEHOLDER_BODY_LENGTH, isEgressPlaceholder, isSecretName, egressPlaceholdersIn, revealHeader, revealUrl, positionWords,
   findEgressPlaceholders, egressHostMatches, planEgress, scrubBytes, closeReason, scrubText,
   createScrubStream, SecretPositionSchema, type EgressSecretBinding, type EgressRequestFacts, type SecretPosition,
   type ScrubReplacement,
@@ -1548,7 +1546,7 @@ export {
 export {
   initEgressVaultTables, listSecrets, putSecrets, setSecretDestination, deleteSecret, grantSecret, revokeSecretGrant,
   grantedSecrets, revealedSecrets, resolveEgressInjection,
-  type SecretSummary, type SecretGrant, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
+  type SecretSummary, type SecretInput, type SecretDestination, type GrantedSecrets, type EgressInjection,
   type EgressInjectionResult, type EgressVaultDeps,
 } from './safety/egress-vault';
 
@@ -1577,15 +1575,15 @@ export {
 } from './safety/device-consent';
 
 export {
-  AgentWorkspaceStore, createAgentWorkspace, initAgentWorkspacesTable,
-  type AgentWorkspace, type AgentWorkspaceDeps, type AgentWorkspaceInput, type AgentWorkspaceReceipt,
+  AgentWorkspaceStore, createAgentWorkspace,
+  type AgentWorkspace, type AgentWorkspaceDeps,
 } from './identity/agent-workspaces';
 
 export {
-  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern, type SecretProvider,
+  SECRET_PATTERNS, redactSecrets, secretProvider, type SecretPattern,
 } from './safety/secret-patterns';
 
-export { parseDotenv, pastedSecrets, type DotenvEntry, type PastedSecret } from './safety/pasted-secrets';
+export { parseDotenv, pastedSecrets, type PastedSecret } from './safety/pasted-secrets';
 
 export {
   scanText, countDetections, secretSightings, type SecretFinding, type SecretSighting,
@@ -2058,10 +2056,10 @@ export type {
 
 export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage, type ChatWindow } from './read-models/status';
 
-export { WORKSPACE_LAYOUTS, WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
+export { WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
 
 export {
-  WorkspaceBlueprintSchema, blueprintPage, blueprintSeed,
+  blueprintPage, blueprintSeed,
   type BlueprintInstall, type BlueprintNeed, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
 } from './blueprints/workspace';
 
@@ -2183,7 +2181,7 @@ export {
   DEFAULT_ROLE_ID,
   KeptProviderListingSchema, providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead, type StoredProviderListing,
-  fastAssignment, fastCandidatesOf, type FastCandidate,
+  fastAssignment, fastCandidatesOf,
   agentRoleSwitch, changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
@@ -2619,7 +2617,7 @@ export {
 
 export { withCommandEnvironment, type CommandEnvironment } from './execution/command-environment';
 
-export { isViewerProcess, providersWithoutOwnerSecrets, withholdingOwnerSecrets, type SecretsCaller } from './execution/secrets-caller';
+export { isViewerProcess, providersWithoutOwnerSecrets, withholdingOwnerSecrets } from './execution/secrets-caller';
 
 export { viewerCred, withViewerPrincipal, type ViewerPlace } from './execution/viewer-principal';
 

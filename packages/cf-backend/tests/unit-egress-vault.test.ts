@@ -2,7 +2,9 @@
 // grant them, what a workspace ever sees of them, and that a value is opened only for a workspace the owner granted.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder, type EgressRequestFacts, type SecretInput, type UserCaller } from '@kinu.run/core';
+import {
+  CapabilityDeniedError, EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder, type EgressRequestFacts, type SecretInput, type UserCaller,
+} from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 
@@ -115,7 +117,7 @@ describe('the owner adds secrets, and nothing ever hands a value back', () => {
     await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
     const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
 
-    await expect(harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, name: 'stripe-key' }], [])).rejects.toThrow('cannot name a secret');
+    await expect(harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, name: 'stripe-key' }], [])).rejects.toMatchObject({ code: 'bad_input' });
     await expect(harness.userDO.putSecrets(harness.owner, [{ ...STRIPE, name: 'COPY', value: placeholder }], [])).rejects.toThrow('placeholder');
     await expect(harness.userDO.putSecrets(harness.owner, [STRIPE], ['nowhere'])).rejects.toThrow('no workspace');
   });
@@ -232,16 +234,16 @@ describe('only the owner manages secrets, and only the egress opens one', () => 
     await harness.userDO.putSecrets(harness.owner, [STRIPE], ['shop']);
     const placeholder = await placeholderIn(harness, harness.shop, 'STRIPE_SECRET_KEY');
 
-    await expect(harness.userDO.putSecrets(harness.shop, [{ ...STRIPE, name: 'MINE' }], ['shop'])).rejects.toThrow('account authority');
-    await expect(harness.userDO.listSecrets(harness.shop)).rejects.toThrow('account authority');
-    await expect(harness.userDO.grantSecret(harness.blog, { name: 'STRIPE_SECRET_KEY', workspace: 'blog', reveal: true })).rejects.toThrow('account authority');
-    await expect(harness.userDO.resolveEgressInjection(harness.shop, charge(placeholder), 'shop')).rejects.toThrow('account authority');
+    await expect(harness.userDO.putSecrets(harness.shop, [{ ...STRIPE, name: 'MINE' }], ['shop'])).rejects.toThrow(CapabilityDeniedError);
+    await expect(harness.userDO.listSecrets(harness.shop)).rejects.toThrow(CapabilityDeniedError);
+    await expect(harness.userDO.grantSecret(harness.blog, { name: 'STRIPE_SECRET_KEY', workspace: 'blog', reveal: true })).rejects.toThrow(CapabilityDeniedError);
+    await expect(harness.userDO.resolveEgressInjection(harness.shop, charge(placeholder), 'shop')).rejects.toThrow(CapabilityDeniedError);
   });
 
   test('the owner capability names no workspace, so it reads no workspace\'s grants', async () => {
     const harness = await account();
 
-    await expect(harness.userDO.grantedSecrets(harness.owner)).rejects.toThrow('Only a workspace');
+    await expect(harness.userDO.grantedSecrets(harness.owner)).rejects.toMatchObject({ code: 'denied' });
   });
 });
 

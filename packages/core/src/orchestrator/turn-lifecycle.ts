@@ -180,7 +180,7 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   turnIndex: number;
   /** Absent when no step reported usage, so `turn_end` carries no zeros. */
   usage?: Usage | undefined;
-  /** Durable GEPA-cadence field; absent rather than invented. */
+  /** The turn's work mode; absent rather than invented. */
   workMode?: WorkMode | undefined;
   /** From {@link classifyRunEnd}, never hand-picked. */
   reason: RunEndReason;

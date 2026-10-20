@@ -121,7 +121,6 @@
   "packages/core/src/providers/codex-oauth.ts#CODEX_TOKEN_URL (unreached-export)",
   "packages/core/src/providers/effort.ts#workersAIEffortOption (unreached-export)",
   "packages/core/src/providers/input-tokens.ts#NO_COUNT_ENDPOINT (unreached-export)",
-  "packages/core/src/providers/structured.ts#stripMarkdownFences (unreached-export)",
   "packages/core/src/providers/tool-call-id.ts#isPortableToolCallId (unreached-export)",
   "packages/core/src/read-models/files.ts#readExecutorFileBytes (unreached-export)",
   "packages/core/src/read-models/files.ts#statExecutorFile (unreached-export)",

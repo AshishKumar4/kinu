@@ -125,7 +125,7 @@ changes from the UI and the CLI, read at every step and never cached.
    into environment facts (kept as block 1, in the vendor's envelope) and
    operating doctrine (dropped, because the vendor prompt carries its own).
    The partition is a property on each `definePromptSection`, so it is data
-   and GEPA still sees every section. Cache breakpoints
+   and a dream can still edit every section. Cache breakpoints
    (`packages/core/src/prompting/cache-breakpoints.ts`) move with block 0.
 
 4. Events and dynamic context. One renderer per profile over the same

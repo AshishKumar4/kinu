@@ -32,7 +32,7 @@ function textOf(value: JsonValue | undefined): string {
 }
 
 /** The result URLs of one search, as the tool lays them out: each result's URL
- *  on its own line (`formatSearchResults`, packages/core/src/tools/builtins.ts). */
+ *  on its own line (`WEB.search.text`, packages/core/src/operations/web.ts). */
 function resultUrls(text: string): string[] {
   return text.split('\n').map((line) => line.trim()).filter((line) => {
     const url = URL.parse(line);

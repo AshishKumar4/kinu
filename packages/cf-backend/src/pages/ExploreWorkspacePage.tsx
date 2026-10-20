@@ -17,8 +17,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
-import { useMcpServers } from "@/hooks/use-mcp-servers";
-import { lastValue } from "@/hooks/use-async-resource";
+import { useConnectedPreset } from "@/hooks/use-mcp-servers";
 import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, type WorkspaceCard } from "@/lib/explore-api";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 
@@ -112,8 +111,8 @@ export default function ExploreWorkspacePage() {
   const [tries, setTries] = useState(0);
   const [installing, setInstalling] = useState(new URLSearchParams(location.search).has("install"));
   const [soul, setSoul] = useState(false);
-  const servers = lastValue(useMcpServers().servers.resource) ?? [];
-  const has = (preset: string | null) => preset !== null && servers.some((server) => server.presetId === preset && (server.status === "ready" || server.status === "connected"));
+  const connected = useConnectedPreset();
+  const has = (preset: string | null) => preset !== null && connected(preset);
 
   useEffect(() => {
     let current = true;

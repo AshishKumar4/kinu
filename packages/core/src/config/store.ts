@@ -45,14 +45,13 @@ export const AGENT_CONFIG_KEYS = {
   /** Comma-separated `<rule>@<executor>` grants; read live at exec time like the mode. */
   shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
-  /** 'true' runs waiting edits as live trials on the main agent; off by default (docs/EVOLUTION-REDESIGN.md §5). */
   /** 'true' once an agent hosted in its own isolate has submitted a plan there: Work asks only those isolates (D9). */
   holdsPlans: 'holds_plans',
   /** 'true' once the workspace's own agent ran a turn in its isolate: only then does that isolate hold runs or spend (D9). */
   holdsTurns: 'holds_turns',
   /** 'true' once an agent hosted in its own isolate has been offered `ask_owner` there: the stack asks only those isolates. */
   holdsQuestions: 'holds_questions',
-  /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons, proposals or trials. On by default. */
+  /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons or dreams. On by default. */
   learning: 'learning',
   /** 'false' withholds crafted tools: none is offered, made, or extracted from a turn. On by default. */
   crafting: 'crafting',

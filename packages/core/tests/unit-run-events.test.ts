@@ -645,38 +645,6 @@ describe('RunEventRecorder.spendByProducer', () => {
   });
 });
 
-describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
-  test('counts completed non-plan turns after the boundary, across runs, and only those', () => {
-    const { recorder, sql, actor } = setup();
-
-    // 25 qualifying turns across 25 runs; the first ten sit below an explicit boundary (emit stamps
-    // millisecond ISO times, so batches must not share one).
-    for (let i = 0; i < 10; i++) {
-      recorder.emit(`run-a${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
-    }
-
-    void sql`UPDATE run_events SET ts = '2026-01-01T00:00:00.000Z'
-      WHERE actor_id = ${actor.actorId} AND run_id LIKE 'run-a%'`;
-    const boundary = '2026-06-01T00:00:00.000Z';
-
-    for (let i = 0; i < 15; i++) {
-      recorder.emit(`run-b${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
-    }
-
-    // A plan turn answers with a plan; it never ticks the improvement lane.
-    recorder.emit('run-plan', { type: 'turn_end', turnIndex: 0, workMode: 'plan' });
-    // A turn_end with no mode counts nothing: absence never reads as build.
-    recorder.emit('run-no-mode', { type: 'turn_end', turnIndex: 0 });
-
-    expect(recorder.completedWorkTurns(null)).toBe(25);
-    expect(recorder.completedWorkTurns(boundary)).toBe(15);
-  });
-
-  test('an empty log has a zero denominator', () => {
-    expect(setup().recorder.completedWorkTurns(null)).toBe(0);
-  });
-});
-
 describe('RunEventRecorder.latestRunHeader', () => {
   /** A run the person started, recorded as `processTurn` records a user turn: under its own id, stamped theirs. */
   const asked = (text: string) => ({

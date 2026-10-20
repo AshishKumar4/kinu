@@ -10,7 +10,7 @@ import { secretProvider } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
 import { Choice, inputCls } from "@/components/ui/form";
 import { listWorkspaces, type SecretEntry } from "@/lib/user-api";
-import { positionWords, type SecretPosition } from "@kinu.run/core";
+import { isSecretName, positionWords, type SecretPosition } from "@kinu.run/core";
 
 /** A row being written: its hosts as typed, one or several, split on spaces and commas. */
 export interface SecretDraft {
@@ -33,9 +33,6 @@ export interface ChosenWorkspace {
   readonly title: string;
 }
 
-/** The same shape a variable takes in a shell; the server holds the rule, this only says it as the owner types. */
-const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
 export function hostList(typed: string): string[] {
   return typed.split(/[\s,]+/).filter((host) => host !== "");
 }
@@ -50,7 +47,7 @@ export function secretEntries(rows: readonly SecretDraft[]): SecretEntry[] {
 function rowProblem(row: SecretDraft): string | null {
   if (row.name.trim() === "" && row.value === "") return null;
 
-  if (!VARIABLE.test(row.name.trim())) return "Name it as a variable: letters, digits and _, not starting with a digit.";
+  if (!isSecretName(row.name.trim())) return "Name it as a variable: letters, digits and _, not starting with a digit.";
 
   if (row.value === "") return "Paste its value.";
 

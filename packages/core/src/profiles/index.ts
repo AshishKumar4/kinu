@@ -36,7 +36,7 @@ export {
   type ProviderListing, type StoredProviderListing,
 } from './provider-catalog';
 
-export { fastAssignment, fastCandidatesOf, type FastCandidate } from './fast-tier';
+export { fastAssignment, fastCandidatesOf } from './fast-tier';
 
 export { agentRoleSwitch } from './agent-role-switch';
 
