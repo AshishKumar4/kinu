@@ -15,9 +15,7 @@ export function SendToWorkspace({ thread, onClose }: { thread: string; onClose: 
   const { busy, error, run } = useLabelledStep(onClose);
 
   const send = (workspace: ChosenWorkspace): void => run("Sending", async () => {
-    const { status } = await handMailThread(workspace.workspace, thread);
-
-    if (status === "skipped") throw new Error(`${workspace.title} did not take it.`);
+    await handMailThread(workspace, thread);
     await navigate(`/workspace/${encodeURIComponent(workspace.workspace)}`);
   });
 

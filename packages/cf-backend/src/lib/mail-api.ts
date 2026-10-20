@@ -1,6 +1,7 @@
 /** The signed-in person's Mailbox: the page and shell read the same HTTP contract. */
 import * as v from "valibot";
-import { settle } from "@kinu.run/core/obs";
+import { Effect } from "effect";
+import { KinuError, settle } from "@kinu.run/core/obs";
 import type { MailBox, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailThreadSummary, MailThreadView } from "@kinu.run/core";
 import { request } from "./http";
 
@@ -90,9 +91,12 @@ export function sendMail(message: MailWrite): Promise<MailMessageView> {
   return settle(request(MessageSchema, "/api/user/mail/send", { method: "POST", json: message }));
 }
 
-/** "Send to a workspace…": the thread, as its agent reads mail, becomes a turn of that workspace's own. */
-export function handMailThread(workspace: string, thread: string): Promise<{ status: "queued" | "skipped" }> {
-  return settle(request(v.object({ status: v.picklist(["queued", "skipped"]) }), `/api/workspaces/${encodeURIComponent(workspace)}/mail`, { method: "POST", json: { thread } }));
+/** "Send to a workspace…": the thread, as its agent reads mail, becomes a turn of that workspace's own; one it did not take fails, named. */
+export function handMailThread(to: { readonly workspace: string; readonly title: string }, thread: string): Promise<void> {
+  return settle(Effect.flatMap(
+    request(v.object({ status: v.picklist(["queued", "skipped"]) }), `/api/workspaces/${encodeURIComponent(to.workspace)}/mail`, { method: "POST", json: { thread } }),
+    ({ status }) => (status === "queued" ? Effect.void : Effect.fail(new KinuError("unavailable", `${to.title} did not take it.`))),
+  ));
 }
 
 export function saveMailDraft(message: MailWrite): Promise<MailMessageView> {
