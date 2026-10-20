@@ -2844,17 +2844,10 @@ export class LocalAgentSession {
       escalations: this.actorSession.orchestrator.acc.ledgers.escalations,
       craft: this.actorSession.orchestrator.acc.ledgers.craft,
       ...(this.actorReach.kind === 'workspace' && { external: () => this.turnExternalTools }),
-      codemode: (surface) => {
-        // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
-        const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
-        const native: ToolSet = {};
-
-        for (const [name, entry] of Object.entries(surface.native)) {
-          if (narrowing.allowsTool(name)) native[name] = entry;
-        }
-
-        return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode, surface.stores), reach: narrowing })({ ...surface, native });
-      },
+      // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
+      codemode: (surface) => createNodeCodemodeToolFactory({
+        namespaces: this.codemodeProviders(mode, surface.stores), reach: narrowToolSurface(this.actorSession.profile?.allowedTools),
+      })(surface),
       agents: this.agentsToolDeps(mode),
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },
