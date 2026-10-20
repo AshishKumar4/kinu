@@ -215,14 +215,14 @@ export { QualityDaySchema, type QualityDay, type QualityWindow } from './types/q
 // Turn ratings: the one signal evolution decides by.
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
-  listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
+  listTurnRatings, ratingOf, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
   retractThumbs, listThumbs, satisfactionInterval, qualitySeries, qualityWindow, renderQualitySeries, isTrivialTurn,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
 
 export {
-  recordLesson, listLessons, corroborateLessonsForTurn, initLessonTables,
+  recordLesson, listLessons, initLessonTables,
 } from './evolution/lessons';
 
 export {
@@ -240,7 +240,7 @@ export {
 } from './evolution/session-window';
 
 export {
-  awaitingTheOwner, buildChangelog, countUnseenChangelog,
+  buildChangelog, countUnseenChangelog,
   revertChangelogEntryById, ChangelogEntrySchema, ChangelogRevertResultSchema,
   type ChangelogEntry, type ChangelogEntryKind,
   type ChangelogRevertResult,
@@ -1820,26 +1820,21 @@ export type {
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
-// GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
+// The scaffold's versions and the owner's decisions on them.
 export {
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, runOptimization, runScaffoldOnce,
+  previewScaffoldLive, proposeScaffold, runScaffoldOnce,
   type EvolutionStatus, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
-// The proposer, its artifact store and live trials (docs/EVOLUTION-REDESIGN.md §3-5).
+// The artifact store a dream's section and tool edits stage in (docs/EVOLUTION-REDESIGN.md §3-4).
 export {
-  artifactOverrides, artifactVersion, bundledArtifact, currentArtifacts, listArtifactVersions,
-  sectionArtifact, toolArtifact, writeCandidate,
+  artifactOverrides, artifactVersion, currentArtifacts, listArtifactVersions,
+  sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
   type ArtifactOverrides, type ArtifactStatus, type ArtifactVersion,
 } from './evolution/artifacts';
 
-export { judgeAuthoredEdit, runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './evolution/proposer';
-
-export { advanceTrial, runningTrial, startTrial, turnArtifactBodies } from './evolution/trials';
-
-export { drawArm, type LiveTrial, type TrialArm, type TrialTurn, type TrialVerdict } from './evolution/trial-rules';
 
 export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 
@@ -1859,29 +1854,10 @@ export {
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
 export {
-  listRefinements, evolutionAnswerWake, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+  listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
-export {
-  REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute, RefinementDecisionResultSchema, StagedSkillResultSchema,
-  type RefinementDecisionInput, type RefinementDecisionResult,
-  type StagedSkillResult, type StagedSkillView,
-} from './evolution/refinement-skill';
-
-export {
-  runGepa,
-  DEFAULT_GEPA_BUDGET,
-  initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks, aggregateScore,
-} from './evolution/gepa/index';
-
-export type {
-  EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
-  GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
-  GepaIterationState, GepaProgressHooks, GepaResult,
-  GepaRunSummary, GepaStopReason,
-  GepaParetoEntry,
-} from './evolution/gepa/index';
+export { activateDreamSkills } from './evolution/refinement-skill';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
@@ -2128,7 +2104,7 @@ export {
 export { isAdvisorSeverity } from './types/advisor';
 
 export {
-  getChangesAwaitingTheOwner, getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
 
 export { EvolutionChangelogViewSchema, type EvolutionChangelogView } from './read-models/evolution-views';

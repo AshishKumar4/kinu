@@ -283,7 +283,7 @@ Filename convention, not config:
 | `e2e/*.test.ts` | Full system through public APIs | ~seconds | In-memory but realistic |
 | `smoke-*.test.ts` | "Does it boot / import" | <100ms | None |
 
-Core and cf-backend follow it. CLI suites use bare `<name>.test.ts`. Five core tests live under `src/` rather than `tests/`: `skills/skills.test.ts` and four under `evolution/gepa/`. (The 2026-08-19 run counted six, hence 248 rather than 242 files in the table above.)
+Core and cf-backend follow it. CLI suites use bare `<name>.test.ts`. One core test lives under `src/` rather than `tests/`: `skills/skills.test.ts`. (The 2026-08-19 run counted six, hence 248 rather than 242 files in the table above.)
 
 ## What lives where
 

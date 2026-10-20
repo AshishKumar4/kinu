@@ -35,7 +35,6 @@ export const TUI_COMPOSER_STEERING_PLACEHOLDER = 'Type to steer the running turn
 export const CHANGE_KIND_GLYPH = {
   scaffold: '⟳',
   fact: '✦',
-  gepa: '◬',
   ratings: '✓',
   artifact: '➤',
   refinement: '⌁',

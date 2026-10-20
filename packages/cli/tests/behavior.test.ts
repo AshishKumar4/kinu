@@ -695,7 +695,7 @@ function startEvolutionSettingOrigin() {
       if (call.method !== "setEvolutionConfig") return new Response("not found", { status: 404 });
       writes.push(call.args);
 
-      return Response.json({ result: { learning: false, liveTrials: false, advisorEnabled: false, advisorMinSeverity: "concern" } });
+      return Response.json({ result: { learning: false, advisorEnabled: false, advisorMinSeverity: "concern" } });
     },
   });
 

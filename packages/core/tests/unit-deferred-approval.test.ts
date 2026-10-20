@@ -691,7 +691,6 @@ describe('the parked action stays visible until it is decided', () => {
 
     const rows = buildPendingActions({
       scaffoldVersions: [], pendingPlans: [], workspaceProposals: [],
-      changeApprovals: { count: 0, latestAt: 0 },
       deferredActions: queue.list(),
     });
 

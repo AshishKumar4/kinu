@@ -7,6 +7,7 @@ import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { recordTurnRating, takePickRating } from '../evolution/ratings';
+import { completedTurnArtifacts } from '../evolution/session-window';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
@@ -233,6 +234,7 @@ export async function recordTakePick(
       answer: assistantResponse,
       followup: changedAnswer ? chosen.text : null,
       scaffoldVersion: input.scaffoldVersion ?? null,
+      artifacts: completedTurnArtifacts(sql, actor, set.turnId),
       now,
     });
   }

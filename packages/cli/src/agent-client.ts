@@ -6,8 +6,7 @@ import type {
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
   EvolutionConfigView,
-  RefinementDecisionInput, RefinementDecisionResult, RefinementListing, RefinementRequestView,
-  StagedSkillResult,
+  RefinementListing, RefinementRequestView,
   ReasoningEffort, TierId, Usage, RunEvent, JsonObject, ToolOutcome,
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
@@ -349,10 +348,6 @@ export interface AgentClient {
   refinements(): Promise<RefinementListing>;
   /** Resolves with the durable request; the agent's behaviour has not moved yet. */
   requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView>;
-  /** The only path by which a proposed skill becomes trusted instructions; owner client only. */
-  decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult>;
-  /** Never truncated: this is what an owner decides on. */
-  showRefinement(requestId: string, routeIndex: number): Promise<StagedSkillResult>;
   readMemory(): Promise<string>;
   searchNodes(): Promise<AgentSearchNode[]>;
   /** `actor` names a hire by its path of names, as the cloud's per-actor listing does; absent, this client's own. */

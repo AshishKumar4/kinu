@@ -16,7 +16,7 @@ import { putAccountFact } from "../../lib/user-api";
 import { MarkdownContent, Section } from "./shared";
 import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
-import { GepaView, QualityView } from "./evolution-panels";
+import { QualityView } from "./evolution-panels";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
 import { ChatMascot, mascotSeed } from "@/components/Marks";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -219,10 +219,6 @@ function Changing({ rpc, readMoves, version }: {
           </div>
         )}
         {version !== null && <ScaffoldLineage rpc={rpc} currentVersion={version} />}
-        <section className="space-y-1.5">
-          <p className="p-meta p-text-3">Self-tuning</p>
-          <GepaView rpc={rpc} />
-        </section>
       </div>
     </Section>
   );

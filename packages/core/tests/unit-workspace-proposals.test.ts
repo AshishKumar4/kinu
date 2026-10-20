@@ -74,7 +74,7 @@ describe("a proposed workspace", () => {
 
     const [row] = buildPendingActions({
       scaffoldVersions: [], deferredActions: [], pendingPlans: [],
-      changeApprovals: { count: 0, latestAt: 0 }, workspaceProposals: h.proposals.open(),
+      workspaceProposals: h.proposals.open(),
     });
 
     expect(row).toMatchObject({ id: "wsp-1", kind: "workspace_proposal", title: expect.stringContaining(ASK.name), detail: ASK.brief });

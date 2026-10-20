@@ -31,8 +31,6 @@ const PENDING_HOME = {
   deferred_action: { surface: null, cta: "answer it in the chat" },
   workspace_proposal: { surface: null, cta: "answer it in the chat" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent" },
-  // A skill the agent wrote waits in the Agent tab's journal, where it is approved or declined.
-  change_approval: { surface: "Agent", cta: "decide in Agent" },
   // The row is the deep link: it opens the plan's own page.
   plan_review: { surface: null, cta: "open the review" },
 } satisfies Record<PendingActionKind, { surface: SurfaceKind | null; cta: string | null }>;
@@ -41,7 +39,6 @@ const PENDING_ICON = {
   deferred_action: ShieldWarningIcon,
   workspace_proposal: SparkleIcon,
   scaffold_version: GitBranchIcon,
-  change_approval: SparkleIcon,
   plan_review: NotePencilIcon,
 } satisfies Record<PendingActionKind, typeof ClockIcon>;
 

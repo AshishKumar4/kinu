@@ -497,12 +497,13 @@ The other three belong to the `EvolutionEngine`
 - In-episode: every settled `eval` call scores crafted-tool fitness into
   `craft_scores` with one synchronous SQL write and no model call
   (`packages/core/src/orchestrator/craft-cycle.ts` over `craft/in-episode.ts`).
-- Turn level: `reviewTurn()` assesses the finished turn. A negative outcome
-  writes a reflection into memory; a strong one extracts a crafted tool into
-  the CraftStore.
-- Session level: `onSessionComplete()` consolidates patterns.
-- Background: `runDueEvolution()` runs the proposer, whose edit to `agent.js`,
-  a prompt section or a tool description is kept only if a live trial wins.
+- Turn level: `reviewTurn()` rates the finished turn; a strong one extracts a
+  crafted tool into the CraftStore.
+- Session level: `onSessionComplete()` keeps the lifetime cadence and the
+  changelog digest.
+- Background: the dream lane drafts, measures and reviews edits. A prompt
+  section, tool text or skill it accepts is staged and becomes current at the
+  next turn whose prompt cache is cold.
 - Lifetime: `onLifetimeEvolution()` runs craft consolidation.
 
 Hosted actors tick the step clock only: they record no turn into the evolution

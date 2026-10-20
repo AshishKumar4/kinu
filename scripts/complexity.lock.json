@@ -158,10 +158,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
-      "complexity": 29
-    },
-    {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
       "complexity": 29
     },

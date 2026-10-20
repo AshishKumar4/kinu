@@ -151,20 +151,12 @@ function EvolutionSection(): ReactElement {
       detail: 'Agents can craft reusable tools. Execution updates their fitness and affects which remain available. A tool that returned without raising has not proved it did the right thing.',
     },
     {
-      time: 'After corrective feedback',
-      title: 'Lesson extraction',
-      evidence: 'Your feedback, a corrective follow-up, or execution evidence',
-      change: 'Record a provisional lesson',
-      persists: 'A durable lesson row',
-      detail: 'Unconfirmed lessons stay provisional. Corroborated lessons enter workspace memory.',
-    },
-    {
-      time: 'After a corrected turn window',
-      title: 'Turn reflection',
-      evidence: 'Negative signal and recent turns',
-      change: 'Write a focused reflection',
-      persists: 'A reflection in workspace memory',
-      detail: 'A window with no negative signal adds no reflection.',
+      time: 'Every five rated turns, or when idle',
+      title: 'Dreaming',
+      evidence: 'Your replies, thumbs and picks, and the turns they rate',
+      change: 'Draft, measure and review small edits to its prompt, tool texts, memory and skills',
+      persists: 'Changes you can revert from the changelog',
+      detail: 'An edit takes effect at the next turn whose prompt cache is cold. A dream that finds nothing worth changing changes nothing.',
     },
     {
       time: 'Across many turn windows',
@@ -172,7 +164,7 @@ function EvolutionSection(): ReactElement {
       evidence: 'A repeated pattern with recorded outcomes',
       change: 'Propose and validate a new agent loop',
       persists: 'A reversible scaffold version',
-      detail: 'A proposal must pass validation and shadow evaluation before promotion. A rejected proposal does not replace the live scaffold, and a promoted version keeps a rollback path. More experience does not guarantee improvement.',
+      detail: 'A proposal must pass validation before you promote it. A rejected proposal does not replace the live scaffold, and a promoted version keeps a rollback path. More experience does not guarantee improvement.',
     },
   ] as const;
 
@@ -181,7 +173,7 @@ function EvolutionSection(): ReactElement {
 
   return (
     <section id="evolution" data-evolution-stage={activeIndex} className={SECTION}>
-      <SectionHead label="05 · Self-evolution" lead="When you correct the agent, it records a provisional lesson. Each tool run updates that tool's fitness score. A problem that keeps coming back can lead to a proposed change to the scaffold, the code that drives the agent loop.">
+      <SectionHead label="05 · Self-evolution" lead="When you correct the agent, its next dream reads the correction. Each tool run updates that tool's fitness score. A problem that keeps coming back can lead to a proposed change to the scaffold, the code that drives the agent loop.">
         The agent <Accent>evolves with use.</Accent>
       </SectionHead>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface lg:grid-cols-[280px_minmax(0,1fr)]">

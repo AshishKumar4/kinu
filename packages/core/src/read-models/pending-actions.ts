@@ -17,8 +17,6 @@ export type PendingActionKind =
   /** Decided here: the queue is this action's only home. */
   | 'deferred_action'
   | 'scaffold_version'
-  /** Skills the agent wrote for itself, held for the owner's approval in the Agent tab's journal. */
-  | 'change_approval'
   /** Decided here: the agent's proposed workspace, approved or declined once. */
   | 'workspace_proposal'
   /** Deep-links to the full-tab review. */
@@ -63,7 +61,6 @@ const HOLDS_THE_PERSON = {
   workspace_proposal: true,
   plan_review: true,
   scaffold_version: false,
-  change_approval: false,
 } satisfies Record<PendingActionKind, boolean>;
 
 /** What the inspector opens for on its own: an action or a consent to approve, a plan to review, or a question. */
@@ -121,8 +118,6 @@ export interface PendingActionInputs {
   }>;
   /** Still-queued only (safety/deferred-approval.ts). */
   readonly deferredActions: readonly DeferredApproval[];
-  /** The journal's changes that wait on the owner (`awaitingTheOwner`); what the agent did by itself is not counted. */
-  readonly changeApprovals: { count: number; latestAt: number };
   /** Still-open only (safety/workspace-proposals.ts). */
   readonly workspaceProposals: readonly WorkspaceProposal[];
   /** Workspace-wide and retired-inclusive: a subordinate's plan asks the same owner. `actor`: its owner's id. */
@@ -189,19 +184,6 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       title: `Scaffold v${version.version} is waiting to be promoted or rolled back`,
       detail: version.rationale || null,
       at: version.written_at,
-    });
-  }
-
-  const { count: approvals, latestAt } = input.changeApprovals;
-
-  if (approvals > 0) {
-    actions.push({
-      id: 'change-approvals',
-      kind: 'change_approval',
-      title: approvals === 1 ? 'A skill the agent wrote waits for your approval' : `${String(approvals)} skills the agent wrote wait for your approval`,
-      // Where it is decided is the row's own link, so it says no more.
-      detail: null,
-      at: latestAt,
     });
   }
 

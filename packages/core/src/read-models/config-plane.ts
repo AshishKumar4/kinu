@@ -30,8 +30,6 @@ export interface SetModelDeps {
 export interface EvolutionConfigView {
   /** The agent learns from its turns; on by default. */
   learning: boolean;
-  /** Waiting edits run as live trials on the main agent; off by default. */
-  liveTrials: boolean;
   advisorEnabled: boolean;
   /** Lowest severity that reaches the conversation; below it a note becomes a Changelog row. */
   advisorMinSeverity: AdvisorSeverity;
@@ -39,7 +37,6 @@ export interface EvolutionConfigView {
 
 export const EvolutionConfigViewSchema: v.GenericSchema<EvolutionConfigView> = v.object({
   learning: v.boolean(),
-  liveTrials: v.boolean(),
   advisorEnabled: v.boolean(),
   advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
 });
@@ -176,7 +173,6 @@ export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue
 export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigView {
   return {
     learning: config.getLearning(),
-    liveTrials: config.getLiveTrials(),
     advisorEnabled: config.getAdvisorEnabled(),
     advisorMinSeverity: config.getAdvisorMinSeverity(),
   };
@@ -188,8 +184,6 @@ export function setEvolutionConfig(
   view: Partial<EvolutionConfigView>,
 ): EvolutionConfigView {
   if (view.learning !== undefined) config.setLearning(view.learning);
-
-  if (view.liveTrials !== undefined) config.setLiveTrials(view.liveTrials);
 
   if (view.advisorEnabled !== undefined) config.setAdvisorEnabled(view.advisorEnabled);
 

@@ -1,6 +1,5 @@
 export const SLATE_READ_MODELS = [
   'getExecutors',
-  'getGepaRuns',
   'getHeadRuns',
   'getMctsTree',
   'getQuality',

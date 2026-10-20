@@ -135,12 +135,3 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
     `${features.executeCodemodeCalls} eval, ${compactDuration(features.wallClockMs)} wall clock` +
     (path.length > 0 ? `. Wasted motion: ${path.join(', ')} tool calls` : '');
 }
-
-/** Shared by both readers of {@link renderDelegationFeatures} (turn reflection and GEPA reflector) so their vocabularies cannot drift. One clause per line: three rules for three outcomes. */
-export const DELEGATION_RUBRIC = [
-  'Delegation rubric, against the counts above:',
-  '- A low-rated turn with 2+ independent parts, ground through inline with no hiring',
-  '  and no exploration, is a lesson to decompose the work and delegate it.',
-  '- An accepted turn that hired or explored effectively earns credit for having done so.',
-  '- Spawns that contributed nothing are delegation overhead, and count against the turn.',
-].join('\n');

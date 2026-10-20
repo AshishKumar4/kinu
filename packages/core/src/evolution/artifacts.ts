@@ -2,15 +2,20 @@
  * The one store of an agent's evolved text (docs/EVOLUTION-REDESIGN.md §3): a prompt section, a built-in tool's
  * description, or its input fields' descriptions, by artifact id. Assembly reads each artifact's current version, else
  * the bundled text; an override changes only the agent that promoted it. The scaffold keeps `scaffold_versions`.
+ *
+ * An accepted edit is staged, and becomes current only at a turn whose prompt cache is cold (`turnArtifacts`): within a
+ * cache segment every turn's prompt prefix is byte-identical, whatever is staged meanwhile. The owner's revert is the one
+ * move that does not wait, at the cost of one cache rewrite.
  */
 import * as v from 'valibot';
 import { jsonSchema } from 'ai';
+import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { ActorHandle } from '../identity/actor-handle';
 import { ARTIFACT_STATUSES } from './artifact-schema';
 import type { SqlExecutor } from '../types/primitives';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
-import { tolerate } from '../obs/index';
+import { diagnostics, tolerate } from '../obs/index';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { templateContract } from '../prompting/template';
 import { PROMPT_SECTIONS, type PromptSectionOverrides } from '../prompting/section-templates';
@@ -128,18 +133,66 @@ export function bundledArtifact(artifactId: string): string | null {
   return fields === null ? null : JSON.stringify(fields, null, 2);
 }
 
-/** Each artifact's promoted body, by id. */
-export function currentArtifacts(sql: SqlExecutor, actor: ActorHandle): Readonly<Record<string, string>> {
+/** What an artifact id names, as the owner reads it. */
+export function artifactLabel(artifactId: string): string {
+  const tool = /^tool:([a-z_]+)\.(description|schema)$/u.exec(artifactId);
+
+  if (tool?.[1] !== undefined) return `the ${tool[1]} tool's ${tool[2] === 'schema' ? 'field descriptions' : 'description'}`;
+  const section = /^section:(.+)$/u.exec(artifactId)?.[1];
+
+  return section === undefined ? artifactId : `the ${section} prompt section`;
+}
+
+/** One artifact's promoted version. */
+export interface CurrentArtifact {
+  readonly artifactId: string;
+  readonly version: number;
+  readonly body: string;
+}
+
+/** Each artifact's promoted version, in id order. */
+export function currentArtifacts(sql: SqlExecutor, actor: ActorHandle): readonly CurrentArtifact[] {
   actor.assertCurrent();
 
-  return Object.fromEntries(sql<{ artifact_id: string; body: string }>`
-    SELECT artifact_id, body FROM artifact_versions WHERE actor_id = ${actor.actorId} AND status = 'current'`
-    .map((row) => [row.artifact_id, row.body]));
+  return sql<{ artifact_id: string; version: number; body: string }>`
+    SELECT artifact_id, version, body FROM artifact_versions WHERE actor_id = ${actor.actorId} AND status = 'current'
+      ORDER BY artifact_id`
+    .map((row) => ({ artifactId: row.artifact_id, version: row.version, body: row.body }));
+}
+
+/**
+ * The bodies a turn assembles from. A turn whose prompt cache is cold first makes each staged version current, in place
+ * of the version it replaces: the one moment an automatic change moves the prompt prefix.
+ */
+export function turnArtifacts(sql: SqlExecutor, actor: ActorHandle, cacheCold: boolean, now = nowMs()): readonly CurrentArtifact[] {
+  if (cacheCold) activateStaged(sql, actor, now);
+
+  return currentArtifacts(sql, actor);
+}
+
+function activateStaged(sql: SqlExecutor, actor: ActorHandle, now: number): void {
+  actor.assertCurrent();
+
+  const staged = sql<{ artifact_id: string; version: number }>`SELECT artifact_id, version FROM artifact_versions
+    WHERE actor_id = ${actor.actorId} AND status = 'staged'`;
+
+  for (const { artifact_id: artifactId, version } of staged) {
+    const [replaced] = sql<{ version: number }>`SELECT version FROM artifact_versions
+      WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND status = 'current'`;
+
+    void sql`UPDATE artifact_versions SET status = 'historical', decided_at = ${now}
+      WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND status = 'current'`;
+    void sql`UPDATE artifact_versions SET status = 'current', parent = ${replaced?.version ?? null}, decided_at = ${now}
+      WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND version = ${version}`;
+    diagnostics.event('dream.text_applied', { change: `${artifactId}@${String(version)}`, replaced: replaced?.version ?? 0 });
+  }
+
+  if (staged.length > 0) markStoreChanged(sql);
 }
 
 /** The text a turn runs now: the promoted body, else the bundled one. */
 export function artifactBody(sql: SqlExecutor, actor: ActorHandle, artifactId: string): string | null {
-  return currentArtifacts(sql, actor)[artifactId] ?? bundledArtifact(artifactId);
+  return currentArtifacts(sql, actor).find((row) => row.artifactId === artifactId)?.body ?? bundledArtifact(artifactId);
 }
 
 export function listArtifactVersions(sql: SqlExecutor, actor: ActorHandle, artifactId?: string): ArtifactVersion[] {
@@ -156,16 +209,6 @@ export function artifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId
 
   const [row] = sql<ArtifactRow>`SELECT * FROM artifact_versions
     WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND version = ${version}`;
-
-  return row === undefined ? null : versionOf(row);
-}
-
-/** The oldest candidate waiting for a trial. */
-export function waitingCandidate(sql: SqlExecutor, actor: ActorHandle): ArtifactVersion | null {
-  actor.assertCurrent();
-
-  const [row] = sql<ArtifactRow>`SELECT * FROM artifact_versions
-    WHERE actor_id = ${actor.actorId} AND status = 'candidate' ORDER BY written_at ASC, version ASC LIMIT 1`;
 
   return row === undefined ? null : versionOf(row);
 }
@@ -260,8 +303,11 @@ export function artifactEditRefusal(sql: SqlExecutor, actor: ActorHandle, input:
   return `misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
 }
 
-/** A candidate that passed the pre-live tests, waiting for a trial. */
-export function writeCandidate(sql: SqlExecutor, actor: ActorHandle, input: {
+/**
+ * An edit that passed its checks, staged for the next turn whose prompt cache is cold. It takes the place of one staged
+ * before it for the same artifact, which never ran: one staged version per artifact, so activation has no order.
+ */
+export function stageArtifact(sql: SqlExecutor, actor: ActorHandle, input: {
   readonly artifactId: string;
   readonly body: string;
   readonly rationale: string;
@@ -269,42 +315,27 @@ export function writeCandidate(sql: SqlExecutor, actor: ActorHandle, input: {
   readonly now?: number;
 }): number {
   actor.assertCurrent();
+  const now = input.now ?? nowMs();
 
   const [top] = sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) AS v FROM artifact_versions
     WHERE actor_id = ${actor.actorId} AND artifact_id = ${input.artifactId}`;
 
-  const [current] = sql<{ version: number }>`SELECT version FROM artifact_versions
-    WHERE actor_id = ${actor.actorId} AND artifact_id = ${input.artifactId} AND status = 'current'`;
-
   const version = (top?.v ?? 0) + 1;
 
+  void sql`UPDATE artifact_versions SET status = 'rolled_back', decided_at = ${now}
+    WHERE actor_id = ${actor.actorId} AND artifact_id = ${input.artifactId} AND status = 'staged'`;
+  // Its parent is set as it activates: the version it then replaces.
   void sql`INSERT INTO artifact_versions (actor_id, artifact_id, version, body, status, parent, rationale, evidence, written_at)
-    VALUES (${actor.actorId}, ${input.artifactId}, ${version}, ${input.body}, 'candidate', ${current?.version ?? null},
-      ${input.rationale}, ${JSON.stringify(input.evidence)}, ${input.now ?? nowMs()})`;
+    VALUES (${actor.actorId}, ${input.artifactId}, ${version}, ${input.body}, 'staged', NULL,
+      ${input.rationale}, ${JSON.stringify(input.evidence)}, ${now})`;
 
   return version;
 }
 
-/** A version's move: `current` demotes the incumbent to history in the same write. */
-export function settleArtifact(sql: SqlExecutor, actor: ActorHandle, input: {
-  readonly artifactId: string;
-  readonly version: number;
-  readonly status: 'trial' | 'current' | 'rolled_back';
-  readonly now?: number;
-}): void {
-  actor.assertCurrent();
-  const at = input.now ?? nowMs();
-
-  if (input.status === 'current') {
-    void sql`UPDATE artifact_versions SET status = 'historical', decided_at = ${at}
-      WHERE actor_id = ${actor.actorId} AND artifact_id = ${input.artifactId} AND status = 'current'`;
-  }
-
-  void sql`UPDATE artifact_versions SET status = ${input.status}, decided_at = ${input.status === 'trial' ? null : at}
-    WHERE actor_id = ${actor.actorId} AND artifact_id = ${input.artifactId} AND version = ${input.version}`;
-}
-
-/** The changelog's revert of a promotion: the version it replaced, or the bundled text, is current again. */
+/**
+ * The owner's revert, which does not wait for a cold cache: a staged version never runs, and a current one gives way to
+ * the version it replaced, or to the bundled text.
+ */
 export function revertArtifact(sql: SqlExecutor, actor: ActorHandle, artifactId: string, version: number): void {
   const now = nowMs();
   const reverted = artifactVersion(sql, actor, artifactId, version);
@@ -322,15 +353,17 @@ export function revertArtifact(sql: SqlExecutor, actor: ActorHandle, artifactId:
 export interface ArtifactOverrides {
   readonly sections: PromptSectionOverrides;
   readonly tools: ToolTextOverrides;
+  /** `<artifactId>@<version>` for each promoted version the turn runs with: what its admission records. */
+  readonly versions: readonly string[];
 }
 
-/** The bodies a prompt and a tool surface take, from one id map. */
-export function artifactOverrides(bodies: Readonly<Record<string, string>>): ArtifactOverrides {
+/** The bodies a prompt and a tool surface take, and the versions they are. */
+export function artifactOverrides(current: readonly CurrentArtifact[]): ArtifactOverrides {
   const sections: Record<string, string> = {};
   const descriptions: Record<string, string> = {};
   const fields: Record<string, Record<string, string>> = {};
 
-  for (const [artifactId, body] of Object.entries(bodies)) {
+  for (const { artifactId, body } of current) {
     const parsed = parseArtifactId(artifactId);
 
     if (parsed?.kind === 'section') sections[parsed.id] = body;
@@ -342,6 +375,6 @@ export function artifactOverrides(bodies: Readonly<Record<string, string>>): Art
     }
   }
 
-  return { sections, tools: { descriptions, fields } };
+  return { sections, tools: { descriptions, fields }, versions: current.map((row) => `${row.artifactId}@${String(row.version)}`) };
 }
 

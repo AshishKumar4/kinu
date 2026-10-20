@@ -126,10 +126,4 @@ export const CONVERSATION_CASES: readonly SharedCase[] = [
       expect(await surface.latestAlternateTakes()).toBeNull();
     },
   },
-  {
-    title: 'an optimisation with no low-rated turns has nothing to learn from, and no model runs',
-    async run({ surface }) {
-      expect(await surface.runOptimization()).toEqual({ kind: 'idle' });
-    },
-  },
 ];

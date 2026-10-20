@@ -1,7 +1,4 @@
-/**
- * The lesson ledger (`lessons`): what turn and session reflections, execution recoveries and imports taught. A
- * self-scored lesson stays provisional until the user's own negative on one of its turns corroborates it.
- */
+/** The lesson ledger (`lessons`): what execution recoveries and imports taught. */
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
@@ -15,7 +12,7 @@ import { parseJsonValue } from '../utils/json';
  *  this list. `execution_recovery` is bound to no turn, so it is never corroborated;
  *  `import` is born corroborated. Corroboration is the row's `corroborated_at`: provisional while it is null. */
 const LESSON_SOURCES = [
-  'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
+  'execution_recovery', 'import',
 ] as const;
 
 export type LessonSource = (typeof LESSON_SOURCES)[number];
@@ -121,26 +118,4 @@ export function getLesson(sql: SqlExecutor, actor: ActorHandle, id: string): Les
     WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`;
 
   return rows[0] ? toLessonRow(rows[0]) : null;
-}
-
-/** The newest corroborated lessons as one prose block for a turn's dynamic context. */
-export function renderRecentLessons(sql: SqlExecutor, actor: ActorHandle, limit = 5): string {
-  return listLessons(sql, actor, { status: 'corroborated', limit })
-    .map((lesson) => lesson.text)
-    .join('\n');
-}
-
-/** Flip every provisional lesson tied to `turnId` to corroborated. */
-export function corroborateLessonsForTurn(
-  sql: SqlExecutor, actor: ActorHandle, turnId: string, now = nowMs(),
-): LessonRow[] {
-  const provisional = listLessons(sql, actor, { status: 'provisional', limit: 200 });
-  const matched = provisional.filter((l) => l.turnIds.includes(turnId));
-
-  for (const lesson of matched) {
-    void sql`UPDATE lessons SET corroborated_at = ${now}
-      WHERE actor_id = ${actor.actorId} AND id = ${lesson.id}`;
-  }
-
-  return matched.map((l) => ({ ...l, status: 'corroborated' as const, corroboratedAt: now }));
 }

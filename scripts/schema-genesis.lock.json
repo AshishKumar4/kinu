@@ -960,6 +960,7 @@
     "path TEXT NOT NULL",
     "digest TEXT NOT NULL",
     "decision TEXT NOT NULL CHECK (decision IN ('approved', 'revoked'))",
+    "origin TEXT NOT NULL DEFAULT 'owner' CHECK (origin IN ('owner', 'dream'))",
     "PRIMARY KEY (actor_id, scope, path)"
   ],
   "kinu_agent_identity@packages/core/src/vfs/agent-home.ts": [
@@ -1141,6 +1142,7 @@
     "turn_ids TEXT NOT NULL",
     "debt_key TEXT",
     "proposal TEXT",
+    "review_json TEXT",
     "routes TEXT NOT NULL",
     "detail TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
@@ -1516,6 +1518,8 @@
     "answer TEXT NOT NULL",
     "followup TEXT",
     "scaffold_version INTEGER",
+    "artifacts_json TEXT",
+    "rejects TEXT",
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
