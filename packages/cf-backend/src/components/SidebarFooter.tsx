@@ -14,10 +14,10 @@ import { NAV_HOVER } from "./nav";
 const MENU_ROW = "flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover";
 
 /** Where the mail the assistant reads lands; Important is its first view. */
-export const MAIL_ROUTE = "/mail";
+const MAIL_ROUTE = "/mail";
 
 /** A count on an icon: hidden at nothing, and "9+" past nine. */
-export function CountBadge({ count, label }: { count: number; label: string }) {
+function CountBadge({ count, label }: { count: number; label: string }) {
   if (count <= 0) return null;
 
   return (
