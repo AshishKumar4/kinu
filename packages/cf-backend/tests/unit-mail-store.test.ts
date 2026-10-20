@@ -94,6 +94,22 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
     expect(delivery.instruction).toContain('control message');
   });
 
+  test('the person\'s box wakes the Personal assistant they have now, which reads it; before an address, there is none to read', async () => {
+    expect(store.readBy({ workspace: 'personal-assistant', actorId: 'actor-kinu' })).toBeNull();
+    store.open({ userId: 'u-ashish', email: 'probe@ashishkumarsingh.com', username: 'ashish', assistant: null });
+    store.setWake('', 'verified');
+    expect((await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson })).wake).toBeNull();
+
+    store.readBy({ workspace: 'personal-assistant', actorId: 'actor-kinu' });
+    store.readBy({ workspace: 'kinu-2', actorId: 'actor-kinu-2' });
+    const delivery = await delivered({ raw: raw('second-local-part-pass'), envelopeFrom: 'b@x', recipient: toPerson });
+    const caller = { workspace: 'kinu-2', title: 'Kinu', mainActorId: 'actor-kinu-2', actorId: 'actor-kinu-2', name: 'main' };
+
+    expect(delivery.wake).toEqual({ workspace: 'kinu-2', actorId: 'actor-kinu-2', main: true });
+    expect(store.readableBy(caller).map((box) => box.path)).toContain('');
+    expect(store.readableBy({ ...caller, workspace: 'personal-assistant', mainActorId: 'actor-kinu', actorId: 'actor-kinu' }).map((box) => box.path)).not.toContain('');
+  });
+
   test('another verified sender on the same domain is not the owner: by default a box wakes for its owner only', async () => {
     open('probe@ashishkumarsingh.com');
     const delivery = await delivered({ raw: raw('second-local-part-pass'), envelopeFrom: 'x@cf-bounce.ashishkumarsingh.com', recipient: toPerson });

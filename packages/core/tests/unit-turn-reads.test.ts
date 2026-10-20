@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { assembleActorTurn, type TurnReads } from '../src/orchestrator/turn-assembly';
-import { mailInContext } from '../src/prompting/volatile-context';
+import { mailInContext } from '../src/mail/in-context';
 import { hostedSeatsOver } from './helpers-actor-host';
 
 const DANA = mailInContext({ unread: 1, threads: [{

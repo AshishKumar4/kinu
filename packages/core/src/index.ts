@@ -101,7 +101,7 @@ export type * from './mail/mailbox-api';
 
 export { MailStore, type MailBlobs, type MailStoreDeps, type ParsedMail } from './mail/store';
 
-export { createMailCodemodeProvider, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
+export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
 
 export { MAIL } from './operations/mail';
 
@@ -110,6 +110,8 @@ export { mailHostRedirect } from './mail/host';
 export { inboundBody, isAutoReplyEmail, mailThreadText, stripQuotedReply } from './mail/words';
 
 export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/handed';
+
+export { mailInContext, type MailInContext } from './mail/in-context';
 
 export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
 
@@ -882,7 +884,7 @@ export { toolDescription } from './utils/tool-description';
 export { serverCompactor, isServerCompaction, latestCompaction, type ServerCompactor, COMPACTION_TRIGGER_PERCENT, SERVER_COMPACTION_MIN_TOKENS } from './providers/server-compaction';
 
 export {
-  DynamicContextLedger, agentDynamicContext, mailInContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MailInContext, type RuntimeFacts, type MissingCapability, type SecretsInContext,
+  DynamicContextLedger, agentDynamicContext, observeSystemPromptHash, renderDynamicContextBlock, type DynamicApproval, type DynamicContext, type DynamicDelegate, type RuntimeFacts, type MissingCapability, type SecretsInContext,
 } from './prompting/volatile-context';
 
 export type { ActiveRoster } from './types/dynamic-context';

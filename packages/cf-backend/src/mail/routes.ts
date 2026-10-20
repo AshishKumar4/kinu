@@ -6,27 +6,35 @@
  * A person claims their address once: the deployment's operators always, anyone else once `MAIL_ACCOUNTS` is
  * `everyone`. The person reads, sends from any of their boxes and keeps drafts; Important is the assistant's pick, set
  * through its `mail.update`, so the person cannot set it here. A thread they send to one of their workspaces goes there
- * behind the workspace gate, which proves they own it.
+ * behind the workspace gate, which proves they own it. Their own box is read by their Personal assistant: it is handed
+ * over at their claim when they have one, and at its install when they do not yet.
  */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import {
-  err, isMailLabel, json, mailAddressOf, mailThreadText, objectNamed, safeJson,
-  type MailListQuery, type MailView, type ObjectNamespace,
+  err, isMailLabel, json, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
+  type MailListQuery, type MailView, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
+import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import type { FamilyEnv } from '../api/context';
+import type { OrchestratorAgent } from '../orchestrator';
+import { installedAssistant } from '../user/blueprint-install';
+import type { UserDO } from '../user/user-do';
 import type { WorkspaceVariables } from '../api/workspace';
 import type { MailboxDO } from './mailbox-do';
 import type { MailNameDO } from './mailname-do';
 
 type MailboxReach = Pick<MailboxDO, 'open' | 'boxes' | 'list' | 'thread' | 'update' | 'draft' | 'send' | 'setWake'>;
 
-export interface MailRoutesEnv {
+export interface MailRoutesEnv extends OwnerCapabilityEnv {
   readonly EMAIL_DOMAIN?: string;
   readonly MAIL_ACCOUNTS?: string;
   readonly CONTROL_PLANE_ADMINS?: string;
   readonly MAILNAME: ObjectNamespace<unknown, Pick<MailNameDO, 'lookup' | 'claim'>>;
   readonly MAILBOX: ObjectNamespace<unknown, MailboxReach>;
+  readonly UserDO: ObjectNamespace<unknown, Pick<UserDO, 'getConfig' | 'listActiveWorkspaces'>>;
+  readonly OrchestratorAgent: ObjectNamespace<unknown, Pick<OrchestratorAgent, 'readOwnerMail'>>;
 }
 
 type MailContext = Context<FamilyEnv<MailRoutesEnv>>;
@@ -66,6 +74,17 @@ function mayClaim(env: MailRoutesEnv, email: string): boolean {
 
 const mailbox = (c: MailContext): MailboxReach => objectNamed(c.env.MAILBOX, c.get('identity').userId);
 
+/** Their Personal assistant, if they have one, reads their box; a failed hand-over is said, and the claim stands. */
+function handToAssistant(c: MailContext): Effect.Effect<void> {
+  const { userId } = c.get('identity');
+
+  return attempt({ doing: 'giving the assistant the owner\'s mail', otherwise: 'unavailable' }, async () => {
+    const assistant = await installedAssistant(objectNamed(c.env.UserDO, userId), await ownerCaller(c.env));
+
+    if (assistant !== null) await objectNamed(c.env.OrchestratorAgent, assistant).readOwnerMail();
+  }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, {}); })));
+}
+
 /** The person's address, from the boxes their Mailbox holds; null before they claimed one. */
 async function addressOf(c: MailContext): Promise<string | null> {
   return (await mailbox(c).boxes()).find((box) => box.path === '')?.address ?? null;
@@ -80,7 +99,8 @@ mailRoutes.get('/api/user/mail/boxes', async (c) => {
   return json({ body: { address, canClaim, boxes: address === null ? [] : await mailbox(c).boxes() } });
 });
 
-mailRoutes.post('/api/user/mail/claim', async (c) => {
+/** The address the person holds once this returns: claimed now, or the one they had; a refusal is its answer. */
+async function claimAddress(c: MailContext): Promise<{ address: string } | Response> {
   const identity = c.get('identity');
   const body = await safeJson(c.req.raw, Claim);
 
@@ -90,7 +110,7 @@ mailRoutes.post('/api/user/mail/claim', async (c) => {
 
   const held = await addressOf(c);
 
-  if (held !== null) return json({ body: { address: held } });
+  if (held !== null) return { address: held };
 
   const name = objectNamed(c.env.MAILNAME, body.username);
   const holder = await name.lookup();
@@ -102,7 +122,15 @@ mailRoutes.post('/api/user/mail/claim', async (c) => {
 
   const box = await mailbox(c).open({ userId: identity.userId, email: identity.email, username: body.username, assistant: null });
 
-  return json({ body: { address: box.address } });
+  return { address: box.address };
+}
+
+mailRoutes.post('/api/user/mail/claim', async (c) => {
+  const claimed = await claimAddress(c);
+
+  if (claimed instanceof Response) return claimed;
+
+  return settle(Effect.as(handToAssistant(c), json({ body: claimed })));
 });
 
 mailRoutes.get('/api/user/mail/important', async (c) => {

@@ -9,7 +9,9 @@ import type { MailboxAgentCalls, MailCaller, MailThreadSummary } from '../mail/m
 import { mailSendText, type MailSend } from '../safety/approval-kind';
 import type { ApprovalSpend, ApprovalSpendOutcome } from '../safety/approval-gate';
 import { sha256Hex } from '../safety/argument-digest';
-import { KinuError } from '../obs/index';
+import { attempt, diagnostics, KinuError, settle } from '../obs/index';
+import { mailInContext, type MailInContext } from '../mail/in-context';
+import type { ActiveRoster } from '../types/dynamic-context';
 import { serve, type Served } from '../operations/operation';
 import { codemodeNamespace } from './operation-surfaces';
 import { MAIL } from '../operations/mail';
@@ -28,6 +30,20 @@ export interface MailDeps {
   /** Read per call: the account's Mailbox. */
   readonly mailbox: () => MailboxAgentCalls;
   readonly approvals: MailSendApprovals;
+}
+
+/** An agent's unread mail for its turn's context (docs/MAIL.md §8): none on a failed read, which is said. */
+export function unreadMailForTurn(mail: MailDeps, workspace: string): Promise<ActiveRoster<MailInContext> | undefined> {
+  return settle(Effect.catch(
+    attempt({ doing: 'reading the agent\'s unread mail for its turn', otherwise: 'unavailable' }, async () => mailInContext(
+      await mail.mailbox().findFor(mail.caller(), { view: 'all', unread: true, limit: 5 }),
+    )),
+    (failure) => Effect.sync(() => {
+      diagnostics.failure('mail.context_read_failed', failure, { workspace });
+
+      return undefined;
+    }),
+  ));
 }
 
 const summaryOf = (thread: MailThreadSummary) => ({

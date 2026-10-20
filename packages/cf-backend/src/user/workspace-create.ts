@@ -50,7 +50,7 @@ type CreateCloudWorkspaceInput = v.InferOutput<typeof CreateCloudWorkspaceInputS
 export type CloudWorkspaceBirth = Pick<
   OrchestratorAgent,
   'claimOwner' | 'setInitialDisplayName' | 'setSoul' | 'resetWorkspaceBaseline'
-  | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn' | 'seedBlueprint'
+  | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn' | 'seedBlueprint' | 'readOwnerMail'
 >;
 
 export interface CreateCloudWorkspaceEnv<Id> extends AvailableModelsEnv<Id>, IndexFeedEnv<Id> {

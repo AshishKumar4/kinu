@@ -354,6 +354,8 @@ const ORCHESTRATOR_METHODS = [
   // route a thread they sent it (mail/routes.ts).
   'mailArrived',
   'mailHanded',
+  // Worker-only: the assistant's install and the owner's claim of an address (user/blueprint-install.ts, mail/routes.ts).
+  'readOwnerMail',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',

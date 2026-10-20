@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
-import { initMailboxTables, type HandedMail, type JsonValue } from '@kinu.run/core';
+import { initMailboxTables, type HandedMail, type JsonValue, type UserCaller } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { MailStore } from '@kinu.run/core';
@@ -12,6 +12,7 @@ import { mailHandRoutes, mailRoutes, type MailRoutesEnv } from '../src/mail/rout
 import { routeError, type FamilyEnv } from '../src/api/context';
 import type { WorkspaceVariables } from '../src/api/workspace';
 import type { MailNameClaim } from '../src/mail/mailname-do';
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 
 // The person's own mail over HTTP: the account is the signed-in identity's, never one the request names. The Mailbox is
 // the real store over SQLite; the claims are a map, as MailName's objects are one per label.
@@ -27,6 +28,12 @@ let claims: Map<string, MailNameClaim>;
 let stores: Map<string, MailStore>;
 
 let sent: { userId: string; to: readonly string[]; subject: string }[];
+
+/** Each account's Personal assistant, as its config names it; absent, none installed. */
+let assistants: Map<string, string>;
+
+/** The workspaces asked to read their owner's mail, in order. */
+let readers: string[];
 
 function storeOf(userId: string): MailStore {
   const held = stores.get(userId);
@@ -49,7 +56,24 @@ function storeOf(userId: string): MailStore {
 
 function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
   return {
-    EMAIL_DOMAIN: 'kinu.run', MAIL_ACCOUNTS: accounts, CONTROL_PLANE_ADMINS: ASHISH.email,
+    EMAIL_DOMAIN: 'kinu.run', MAIL_ACCOUNTS: accounts, CONTROL_PLANE_ADMINS: ASHISH.email, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    UserDO: {
+      idFromName: (userId: string) => userId,
+      get: (userId: string) => ({
+        getConfig: (_caller: UserCaller, key: string) => Promise.resolve(key === 'assistant' ? assistants.get(userId) ?? null : null),
+        listActiveWorkspaces: () => Promise.resolve([...assistants.values()].map((name) => ({ name, displayName: 'Kinu', createdAt: 7 }))),
+      }),
+    },
+    OrchestratorAgent: {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        readOwnerMail: () => {
+          readers.push(name);
+
+          return Promise.resolve();
+        },
+      }),
+    },
     MAILNAME: {
       idFromName: (label: string) => label,
       get: (label: string) => ({
@@ -112,6 +136,8 @@ beforeEach(() => {
   claims = new Map();
   stores = new Map();
   sent = [];
+  assistants = new Map();
+  readers = [];
 });
 
 describe('an address is claimed once, by whom the deployment allows', () => {
@@ -134,6 +160,14 @@ describe('an address is claimed once, by whom the deployment allows', () => {
     await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
     expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' }, accounts: 'everyone' })).toMatchObject({ status: 403, body: { error: '"ashish" is taken.' } });
     expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'Ashish K' } })).status).toBe(400);
+  });
+
+  test('their Personal assistant reads the address they claim; with none installed, nothing is asked', async () => {
+    assistants.set(ASHISH.userId, 'personal-assistant-7f3a');
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
+    await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'priya' }, accounts: 'everyone' });
+
+    expect(readers).toEqual(['personal-assistant-7f3a']);
   });
 
   test('a second claim by the same account keeps its first address', async () => {
