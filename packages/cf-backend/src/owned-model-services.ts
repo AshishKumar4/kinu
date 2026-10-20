@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import type { LanguageModel } from 'ai';
 import {
   actorAffinity, parseModelSpec, reasoningEffortOptions,
-  providerSnapshotOf, providerListingOf, ProviderListingCache,
+  providerSnapshotOf, providerListingKey, providerListingOf, ProviderListingCache,
   type ModelAffinity, type ProviderListing, type StoredProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ModelAttemptInfo, type ProviderWaitInfo,
   type WebSearchProvider, type WebSearchChain,
@@ -85,9 +85,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
 
   /** The canonical {provider: account} this object lists under: the key a kept listing is served on. */
   private accountsKey(): string {
-    const accounts = this.options.accounts?.() ?? {};
-
-    return JSON.stringify(Object.fromEntries(Object.keys(accounts).sort().map((provider) => [provider, accounts[provider]])));
+    return providerListingKey(null, this.options.accounts?.() ?? {});
   }
 
   /** The account's store, keyed on the credentials' revision this object read last and the accounts it lists under. */
@@ -183,6 +181,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
       yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
         const revision = yield* Effect.promise(() => this.options.getCredentialsRevision());
 
+        // A new revision is new credentials: the registry's cached refreshers go with the listing.
         if (revision !== this.cachedCredentialsRevision) this.invalidate();
         this.cachedCredentialsRevision = revision;
       }), recording({ doing: 'reading the account credential revision a cached provider listing is measured against', otherwise: 'unavailable' }, (failure) => {
@@ -190,7 +189,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
         diagnostics.failure('profile.credentials_revision_unreadable', failure, { agent: this.options.agentName() });
       }));
 
-      const { listing, cache } = yield* Effect.promise(() => this.providerListings.read());
+      const { listing, cache } = yield* Effect.promise(() => this.providerListings.read(providerListingKey(this.cachedCredentialsRevision, this.options.accounts?.() ?? {})));
       const snapshot = providerSnapshotOf(listing);
       diagnostics.event('profile.provider_snapshot.resolved', {
         cache,

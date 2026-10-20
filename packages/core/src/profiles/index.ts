@@ -32,7 +32,7 @@ export {
 } from './model-route';
 
 export {
-  KeptProviderListingSchema, providerListingOf, providerSnapshotOf, ProviderListingCache,
+  KeptProviderListingSchema, providerListingKey, providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type StoredProviderListing,
 } from './provider-catalog';
 

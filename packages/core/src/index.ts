@@ -2191,7 +2191,7 @@ export {
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
-  KeptProviderListingSchema, providerListingOf, providerSnapshotOf, ProviderListingCache,
+  KeptProviderListingSchema, providerListingKey, providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead, type StoredProviderListing,
   fastAssignment, fastCandidatesOf,
   agentRoleSwitch, changeRoleAsOwner,

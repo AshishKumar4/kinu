@@ -5,10 +5,11 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
   agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
-  runDelegatedTask, tapDiagnostics, until, seedOrphanFiber, wakeForDelegatedTask,
+  runDelegatedTask, tapDiagnostics, until, seedOrphanFiber, wakeForDelegatedTask, type StartedHarness,
 } from './helpers/actor-harness';
 import { ownerMail } from './helpers/owner-mail';
 import { joinHarnessFibers } from './helpers/agents-sdk';
@@ -46,6 +47,30 @@ function wakeArmed(db: Database): boolean {
 }
 
 /** Every wake write the queue makes from here is refused, as a failing storage write would be. */
+/** Staging's row: a birth whose seed names a role the roster's schema rejects (rc27's `dream_reviewer`). */
+const REJECTED_ROLE_BIRTH = JSON.stringify({
+  creationId: 'birth-1', assignment: null,
+  seed: { name: 'reviewer', displayName: 'Reviewer', nameOrigin: 'auto', role: 'dream_reviewer', mission: 'review the dream', lifetime: 'task', origin: 'evolution' },
+});
+
+/** A workspace whose roster holds a row no read can parse, and the terminal wake the failed pass armed, due now. */
+async function poisonedRosterWake(): Promise<StartedHarness> {
+  const harness = orchestratorHarness();
+  const { agent, db } = harness;
+
+  await agent.activateActor();
+  db.prepare(
+    `INSERT INTO actor_subordinates
+      (actor_id, name, status, current_task, created_at, dismissed_at,
+       task_event_id, actor_reference, birth_request, delete_requested)
+     VALUES (?, 'reviewer', 'idle', NULL, ?, NULL, NULL, NULL, ?, 0)`,
+  ).run(harnessActorId(db), Date.now(), REJECTED_ROLE_BIRTH);
+  await expect(agent.terminalRetryPass()).rejects.toThrow('Stored subordinate roster data is malformed');
+  db.prepare('UPDATE cf_agents_jobs SET time = ? WHERE id = ?').run(Date.now() - 1000, TERMINAL_RETRY_JOB);
+
+  return harness;
+}
+
 function breakWakeWrites(db: Database): void {
   db.exec(`CREATE TRIGGER wake_writes_refused BEFORE INSERT ON cf_agents_jobs
     BEGIN SELECT RAISE(ABORT, 'storage write failed'); END`);
@@ -550,7 +575,8 @@ describe('the workspace keeps exactly one wake per job', () => {
   });
 
   test('a tick killed after its arm and before its drain still leaves the wake', async () => {
-    // Arm-first: the next-lap row is durable before any pass runs, so a failing roster row cannot end the chain.
+    // Arm-first: the next-lap row is durable before any pass runs, so a kill between them cannot end the chain. The
+    // roster row here only stops the pass there; what a definitive failure's wake does is the job hook's (below).
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
 
@@ -567,6 +593,46 @@ describe('the workspace keeps exactly one wake per job', () => {
     // The pass's own next-lap arm stands: its streak is on the one wake.
     expect(armedWakes(db).filter((wake) => wake.id === TERMINAL_RETRY_JOB).map((wake) => wake.payload))
       .toEqual([{ laps: 1, arms: null }]);
+  });
+
+  // Staging rc27, 2026-10-20 (AGENTS.md Waste): a roster row no read could parse failed every pass, and each pass's own
+  // next lap woke the workspace again, a minute apart once its streak reached the ceiling: 190 activations in 4 h with
+  // nobody there. No retry reads that row differently; an activation (new code, new work) arms the wake again.
+  test('a pass that fails definitively parks its wake, the next lap it armed with it', async () => {
+    const { agent, db } = await poisonedRosterWake();
+    const recorder = createRecordingLogger();
+    const untap = tapDiagnostics(recorder);
+
+    try {
+      await agent.alarm();
+    } finally {
+      untap();
+    }
+
+    const told = recorder.emitted.filter((line) => line.event === 'schedule.wake_parked' || line.event === 'schedule.wake_failed').map((line) => line.event);
+
+    expect({ armed: armedAt(db, TERMINAL_RETRY_JOB), told }).toEqual({ armed: [], told: ['schedule.wake_parked'] });
+  });
+
+  test('a pass that fails for a reason a retry can mend keeps its wake', async () => {
+    const { agent, db } = await poisonedRosterWake();
+
+    Object.defineProperty(agent, 'terminalRetryPass', {
+      configurable: true,
+      value: async () => { throw new KinuError('unavailable', 'the provider is overloaded'); },
+    });
+    const recorder = createRecordingLogger();
+    const untap = tapDiagnostics(recorder);
+
+    try {
+      await agent.alarm();
+    } finally {
+      untap();
+    }
+
+    const told = recorder.emitted.filter((line) => line.event === 'schedule.wake_parked' || line.event === 'schedule.wake_failed').map((line) => line.event);
+
+    expect({ armed: armedAt(db, TERMINAL_RETRY_JOB).length, told }).toEqual({ armed: 1, told: ['schedule.wake_failed'] });
   });
 
   test('a tick with nothing owed releases the wake it armed', async () => {

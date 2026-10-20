@@ -105,7 +105,7 @@ export function machineOperations(ns: string) {
 
 const ws = executorOp('workspace');
 
-export const WORKSPACE = {
+const WORKSPACE = {
   listTools: ws({
     name: 'listTools', impact: 'observe', input: v.strictObject({}),
     help: 'Your crafted tools, best first: each one\'s preference (how often you chose it when offered, weighted by how '
@@ -133,21 +133,27 @@ const sb = executorOp('computer');
 
 /** The computer container's own members; `resize` is declared over the host's own size table. Its files are
  *  `computer.fs`, the workspace's file operations at `/computer`. */
-export const COMPUTER = {
+const COMPUTER = {
   rest: sb({
     name: 'rest', help: '"now" saves and stops the computer, ending what runs; "keep" runs on until it asks again.', impact: 'administer',
     input: v.strictObject({ answer: v.picklist(['now', 'keep']) }), output: Text,
   }),
 } as const;
 
+const RESIZES = 'A running sandbox restarts at the new size: files stay, supervised servers and ports come back, a running command ends.';
+
+/** The computer's members a host serves over its own tables, as every host declares them: `resize` only where the host
+ *  has sizes, its choices those sizes (`computerResize`). */
+const COMPUTER_HOSTED = {
+  resize: sb({ name: 'resize', impact: 'administer', output: Text, help: RESIZES, input: v.strictObject({ size: v.string() }) }),
+} as const;
+
 /** `computer.resize` over the host's sizes, each described as it runs. */
 export function computerResize(sizes: readonly { readonly size: string; readonly vcpu: number; readonly memoryMib: number }[]) {
   const choices = sizes.map((row) => `${row.size}: ${String(row.vcpu)} vCPU, ${String(Math.round(row.memoryMib / 102.4) / 10)} GiB`).join('; ');
 
-  return sb({
-    name: 'resize', impact: 'administer', output: Text,
-    help: `${choices}. A running sandbox restarts at the new size: files stay, supervised servers and ports come back, a running command ends.`,
-    input: v.strictObject({ size: v.picklist(sizes.map((row) => row.size)) }),
+  return defineOperation({
+    ...COMPUTER_HOSTED.resize, help: `${choices}. ${RESIZES}`, input: v.strictObject({ size: v.picklist(sizes.map((row) => row.size)) }),
   });
 }
 
@@ -249,11 +255,11 @@ export function computerDesktop(screen: DesktopScreen) {
 
 /** The parent workspace a hire reads: its shell alone, in the parent's own paths. Its files are the folder it shares
  *  with you, read through `file`. */
-export const PARENT = {} as const;
+const PARENT = {} as const;
 
 /** The user's own machine: its shell, and its files as `device.fs`. `unavailable` means none is attached, and the error
  *  says how to attach one. */
-export const DEVICE = {} as const;
+const DEVICE = {} as const;
 
 /** The member group a machine's own files are under: `computer.fs.read(path)`. */
 export const MACHINE_FILES = 'fs';
@@ -272,3 +278,25 @@ export function machineFileOperations(ns: string): Readonly<Record<string, Opera
     ...op, ns, name: `${MACHINE_FILES}.${op.name}`, input: v.strictObject({ ...op.input.entries, path: MachinePath, ...option }),
   })]));
 }
+
+/** Each executor's own members and what it is, by its name; what every machine shares is admitted by its capabilities. */
+export const EXECUTOR_OPERATIONS = new Map<string, { readonly ops: Readonly<Record<string, Operation>>; readonly summary: string }>([
+  ['workspace', { ops: WORKSPACE, summary: 'Your workspace: its files and shell, the tools you save, and its slates.' }],
+  ['computer', {
+    ops: COMPUTER,
+    summary: 'Your computer, a Linux machine with files and a shell of its own. Bun is its default toolchain (`bun install`, '
+      + '`bun run`, `bun x`, `bun test`); restored after it slept, it keeps source and lockfiles but not node_modules or '
+      + 'build output, so after a failed import run `bun install` once.',
+  }],
+  ['parent', { ops: PARENT, summary: 'The workspace that hired you; its shell is the fast way to search it (`grep -rn`, `find`).' }],
+  ['device', { ops: DEVICE, summary: 'The user\'s machine.' }],
+]);
+
+/**
+ * Every member each executor may serve, by name: what any machine may share, its own, and what a host serves over its
+ * own tables. The desktop's members are none of them: each is `slate: false`, so a slate is refused them all the same.
+ */
+export const EXECUTOR_CATALOG: ReadonlyMap<string, Readonly<Record<string, Operation>>> = new Map([...EXECUTOR_OPERATIONS].map(([ns, { ops }]) => [
+  ns, Object.assign({}, ...Object.values<Readonly<Record<string, Operation>>>(machineOperations(ns)), machineFileOperations(ns), ops,
+    ns === 'computer' ? COMPUTER_HOSTED : {}),
+]));
