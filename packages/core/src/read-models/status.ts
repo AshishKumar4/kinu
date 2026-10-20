@@ -13,6 +13,7 @@ import type { ReasoningEffort } from '../providers/effort';
 import type { TierSource } from '../profiles/resolve';
 import type { RoleId } from '../types/profile';
 import type { PlanReview } from '../types/plans';
+import type { WorkspaceLayout } from './workspace-layout';
 import type { InlineSteer } from './transcript';
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
@@ -37,6 +38,8 @@ export interface AgentStatus {
   model: string;
   reasoningEffort: ReasoningEffort | null;
   forkLineage: ForkLineageRow | null;
+  /** Absent: `workbench`. */
+  layout?: WorkspaceLayout;
 }
 
 /**

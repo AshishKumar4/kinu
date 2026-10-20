@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { pictureUrl } from "@/lib/user-api";
+import { pictureSrc } from "@/lib/picture-src";
 
 /**
  * A slate's latest capture, or `fallback` while it has none or when that picture fails to load. `at` is where its
@@ -15,7 +16,7 @@ export function SlatePicture({ workspace, slate, className, fallback, at = pictu
   const [failed, setFailed] = useState<string | null>(null);
 
   if (slate === undefined || slate.picture === undefined || slate.picture === null) return fallback;
-  const src = at(workspace, slate.id, slate.picture);
+  const src = pictureSrc(at(workspace, slate.id, slate.picture));
 
   if (src === failed) return fallback;
 

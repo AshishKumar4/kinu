@@ -47,6 +47,8 @@ import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
+import { ASSISTANT_ROSTER, assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
+import { exploreFrame } from "./gallery-explore";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AttentionStack } from "@/components/AttentionStack";
@@ -205,6 +207,8 @@ const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
+  // The assistant's Important picks, as the shell's Mail icon reads them (lib/mail-api.ts).
+  "/api/user/mail/important": { unread: 2, items: [] },
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
@@ -965,16 +969,19 @@ const GALLERY_LOGO = sanitizeWorkspaceLogoSvg(
   + "6' height='7' rx='3.5' fill='#115e59'/></svg>",
 );
 
-const galleryRoster: RosterEntry[] = [
-  ...GALLERY_ROSTER.entries,
-  ...(EXTRA_WORKSPACE ? [{
-    name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
-  }] : []),
-].map((entry) => {
-  const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
+const galleryRoster: RosterEntry[] = new URLSearchParams(location.search).get("roster") === "assistant"
+  // The workspaces the personal assistant runs and watches (gallery-assistant.tsx).
+  ? ASSISTANT_ROSTER.map((entry) => ({ ...entry, logo: entry.name === "api-worker" ? GALLERY_LOGO : entry.logo }))
+  : [
+    ...GALLERY_ROSTER.entries,
+    ...(EXTRA_WORKSPACE ? [{
+      name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5, lastVisited: NOW - 36e5,
+    }] : []),
+  ].map((entry) => {
+    const overview = STOCK_OVERVIEWS.get(entry.name) ?? null;
 
-  return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "api-worker" ? GALLERY_LOGO : null };
-});
+    return { ...entry, overview, decisions: overview?.decisionsWaiting ?? 0, logo: entry.name === "api-worker" ? GALLERY_LOGO : null };
+  });
 
 function galleryRosterCounts(): RosterCounts {
   const counts: RosterCounts = { all: galleryRoster.length, needs: 0, working: 0, idle: 0, unreported: 0, decisions: 0 };
@@ -1278,7 +1285,8 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return rosterRead(roster.searchParams);
   }
 
-  const response = STUB.get(path);
+  // A read with a query (`?limit=3`) is answered as its path is.
+  const response = STUB.get(path) ?? STUB.get(path.split("?")[0] ?? path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
@@ -8005,6 +8013,14 @@ async function mount() {
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
     ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
+    ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageRpc))],
+    ["explore", () => Promise.resolve(exploreFrame("explore"))],
+    ["explore-workspace", () => Promise.resolve(exploreFrame("explore-workspace"))],
+    ["focus-workspace", () => {
+      seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
+
+      return Promise.resolve(focusWorkspaceFrame(workspacePageRpc, WORKSPACE_PAGE_NAME));
+    }],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);

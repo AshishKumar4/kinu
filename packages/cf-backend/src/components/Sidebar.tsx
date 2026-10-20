@@ -4,6 +4,7 @@ import { TrashIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon,
   UsersThreeIcon, CaretRightIcon, EraserIcon,
 } from "@phosphor-icons/react";
 import { SidebarHeader } from "./SidebarHeader";
+import { SidebarFooter } from "./SidebarFooter";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
@@ -133,7 +134,7 @@ function WorkspaceDot({ entry }: { entry: RosterEntry }) {
   return <StatusDot className="block" tone={workspaceStatusTone(status)} title={label} />;
 }
 
-export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}) {
+export default function Sidebar({ onCollapse, accountOpen = false }: { onCollapse?: () => void; accountOpen?: boolean } = {}) {
   // Sidebar renders outside the route's Outlet, so useParams cannot see :agentId.
   const sectionMatch = useMatch({ path: "/:section/:agentId/*", end: false });
 
@@ -240,6 +241,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
       </div>
       </div>
 
+      <SidebarFooter initiallyOpen={accountOpen} />
       {deleteTarget && <RemoveWorkspaceDialog workspace={deleteTarget} onClose={() => setDeleteTarget(null)} />}
     </div>
   );
