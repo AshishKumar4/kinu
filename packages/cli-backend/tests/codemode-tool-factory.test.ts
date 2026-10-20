@@ -40,25 +40,26 @@ function machineProgram(rt: ReturnType<typeof createTestRuntime>['rt']): Execute
 }
 
 // rc22 release evals (8 trials): a PNG read with fs/promises came back as its text re-encoded, which failed to inflate.
-test("fs's readFile hands back a text file's bytes, and refuses a file whose bytes are not text, naming the shell's base64", async () => {
+test("a program's fs reads a PNG's bytes and writes them back exactly, and a text file's bytes as UTF-8", async () => {
   const { rt } = createWorkspaceRuntime();
-  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0xff]);
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0xff, 0xc3, 0x28, 0x80]);
 
   await rt.toolFiles.writeFile(`${WORKSPACE_ROOT}/chart.png`, png);
   await writeText(rt.toolFiles, 'notes.md', 'héllo');
 
   const out = await machineProgram(rt)({
-    code: `// Read a text file and a PNG as bytes
+    code: `// Copy a PNG through fs, and read a text file's bytes
 const fs = require('fs/promises');
-const text = Array.from(await fs.readFile('notes.md'));
-const image = await fs.readFile('chart.png').then(() => 'read', (error) => [error.code, error.message]);
-return { text, image };`,
+const image = await fs.readFile('chart.png');
+await fs.writeFile('copy.png', image);
+await fs.appendFile('copy.png', new Uint8Array([0xfe]));
+return { image: Array.from(image), text: Array.from(await fs.readFile('notes.md')), base64: await fs.readFile('chart.png', 'base64') };`,
   });
 
   expect(out.result).toEqual({
-    text: Array.from(new TextEncoder().encode('héllo')),
-    image: ['EILSEQ', expect.stringContaining('"base64 -w 0 /home/main/chart.png" reads them')],
+    image: Array.from(png), text: Array.from(new TextEncoder().encode('héllo')), base64: Buffer.from(png).toString('base64'),
   });
+  expect(Array.from(await rt.toolFiles.readFile(`${WORKSPACE_ROOT}/copy.png`))).toEqual([...png, 0xfe]);
 });
 
 test('a program calls workspace.fs.text on the served workspace file plane', async () => {

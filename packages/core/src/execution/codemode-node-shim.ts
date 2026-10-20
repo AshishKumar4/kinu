@@ -97,64 +97,71 @@ async function execParts(workspace, command, options) {
   return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
-/**
- * Why a file's bytes cannot pass this fs, which reads and writes the workspace's files as text: a PNG read here came
- * back re-encoded and failed to inflate (rc22 release evals). Thrown, so a program never holds bytes that are not the
- * file's.
- */
-function notText(path, syscall) {
-  const error = new Error('EILSEQ: ' + path + ' is not UTF-8 text, and fs here moves text, so its bytes would not survive. '
-    + 'Move a binary file\'s bytes as base64 through the shell: "base64 -w 0 ' + path + '" reads them, "base64 -d" writes them.');
-  error.code = 'EILSEQ';
-  error.errno = -84;
-  error.syscall = syscall;
-  error.path = path;
-  return error;
+/** Bytes as base64, chunked so a large file does not overflow String.fromCharCode's arguments. */
+function toBase64(bytes) {
+  let binary = '';
+  for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  return btoa(binary);
+}
+
+function fromBase64(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let at = 0; at < binary.length; at++) bytes[at] = binary.charCodeAt(at);
+  return bytes;
+}
+
+/** Data a program writes, as the bytes it holds: a string as UTF-8, a view of bytes as they are. */
+function bytesOf(data) {
+  if (typeof data === 'string') return new TextEncoder().encode(data);
+  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  return new TextEncoder().encode(String(data));
 }
 
 function makeFs(workspace, cwd) {
   const encodingOf = (options) => typeof options === 'string' ? options : options && options.encoding;
 
-  /** Bytes as the UTF-8 text they are, or null where they are not text. */
-  const asText = (data) => {
-    if (typeof data === 'string') return data;
-    try {
-      return new TextDecoder('utf-8', { fatal: true }).decode(data);
-    } catch {
-      return null;
-    }
-  };
-
+  /** The file's bytes exactly, as the file plane reads them (file.text with base64), for a file that is not text too. */
+  async function readBase64(path) {
+    const target = resolveAt(cwd, path);
+    const read = await workspace.fs.text(target, { encoding: 'base64' });
+    const refused = refusalOf(read);
+    if (refused) throw fsError('ENOENT', refused, target, 'open');
+    return read;
+  }
   async function readFile(path, options) {
+    const encoding = encodingOf(options);
+    if (encoding === undefined || encoding === null) return fromBase64(await readBase64(path));
+    if (encoding === 'base64') return await readBase64(path);
     const target = resolveAt(cwd, path);
     const text = await workspace.fs.text(target);
     const refused = refusalOf(text);
     if (refused) throw fsError('ENOENT', refused, target, 'open');
-    const encoding = encodingOf(options);
-    if (encoding !== undefined && encoding !== null) return text;
-    // The file's bytes, which only text keeps: the text arrived decoded, and a byte that was not UTF-8 is gone from it.
-    if (text.includes('\uFFFD')) throw notText(target, 'open');
-    return new TextEncoder().encode(text);
-  }
-  function toText(data, target, syscall) {
-    const text = asText(data);
-    if (text === null) throw notText(target, syscall);
     return text;
   }
-  async function writeFile(path, data) {
+  /** A string is written as its text; bytes, or a string named base64, as the bytes exactly. */
+  async function writeFile(path, data, options) {
     const target = resolveAt(cwd, path);
-    const result = await workspace.fs.write(target, toText(data, target, 'open'));
+    const encoding = encodingOf(options);
+    const result = typeof data === 'string' && encoding !== 'base64'
+      ? await workspace.fs.write(target, data)
+      : await workspace.fs.write(target, typeof data === 'string' ? data : toBase64(bytesOf(data)), { encoding: 'base64' });
     const refused = refusalOf(result);
     if (refused) throw fsError('EACCES', refused, target, 'open');
   }
   async function appendFile(path, data) {
-    let current = '';
+    let current = new Uint8Array(0);
     try {
-      current = await readFile(path, 'utf8');
+      current = await readFile(path);
     } catch (cause) {
       if (!cause || cause.code !== 'ENOENT') throw cause;
     }
-    await writeFile(path, current + toText(data, resolveAt(cwd, path), 'open'));
+    const added = bytesOf(data);
+    const joined = new Uint8Array(current.length + added.length);
+    joined.set(current);
+    joined.set(added, current.length);
+    await writeFile(path, joined);
   }
   async function readdir(path, options) {
     const target = resolveAt(cwd, path);

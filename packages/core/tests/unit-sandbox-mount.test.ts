@@ -348,6 +348,19 @@ describe('the codemode sandbox namespace', () => {
 		expect(fs.calls).toEqual([]);
 	});
 
+	// rc22 release evals: a program's binary read came back re-encoded. The computer's plane moves bytes as base64.
+	test("computer.fs reads a file's bytes and writes them back exactly, through base64", async () => {
+		const fs = new ContainerFs();
+		const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xc3, 0x28, 0x80]);
+
+		fs.files.set('/workspace/chart.png', png);
+		const { namespace } = rig(fs);
+		const read = await present(namespace.tools['fs.text'], 'computer.fs.text').execute('chart.png', { encoding: 'base64' });
+
+		expect(await present(namespace.tools['fs.write'], 'computer.fs.write').execute('copy.png', read, { encoding: 'base64' })).toMatchObject({ action: 'created', bytes: png.length });
+		expect(Array.from(fs.files.get('/workspace/copy.png') ?? [])).toEqual(Array.from(png));
+	});
+
 	test('computer.fs reads its root and home, and refuses a path spelled above its root', async () => {
 		const fs = new ContainerFs();
 
