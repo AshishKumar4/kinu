@@ -390,7 +390,8 @@ for (const prefix of ['/auth', '/assets', '/shared/blueprint', '/shared/live', '
 
 /**
  * Explore is public. Signed out, its page is marked a visitor's, which the app draws under the public bar, reading nothing
- * of an account; signed in, it goes on through the gate to the account's own page, rail and theme.
+ * of an account; signed in, it goes on through the gate to the account's own page, rail and theme. A session that could
+ * not be read fails the request, which `routeError` records and answers by its class.
  */
 const exploreShell: MiddlewareHandler<WorkerEnv> = async (c, next) =>
   (await requestIdentity(c.req.raw, c.env) === null ? serveApp(c.req.raw, c.env, VISITOR_SHELL) : next());
