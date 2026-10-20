@@ -996,11 +996,11 @@ describe('account panels', () => {
             await shared.waitForSelector('[data-drive-section="Shared with you"]');
             const body = await shared.evaluate(() => document.body.innerText);
 
-            // The Drive's second place, in its column or below `lg` its switch: what others shared first, then what the owner shared.
+            // The Drive's third place, after My stuff and Slates, in its column or below `lg` its switch: what others shared first, then what the owner shared.
             const place = viewport === 'desktop' ? 'data-drive-place' : 'data-drive-tab';
 
             expect(await shared.$$eval(`[${place}]`, (tabs, name) => tabs.map((tab) => [tab.getAttribute(name), tab.getAttribute('aria-current')]), place))
-              .toEqual([['slates', null], ['mine', null], ['shared', 'page']]);
+              .toEqual([['mine', null], ['slates', null], ['shared', 'page']]);
             expect(body.indexOf('Shared with you')).toBeLessThan(body.indexOf('Shared by you'));
 
             // The Drive row stays lit on /shared: it is the Drive, not another page.
