@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
@@ -529,6 +529,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
   protected abstract actorKind(): AgentKind;
+  /** The workspace agent's newest answered turns, which a pending scaffold is replayed against. */
+  abstract recordedTurns(limit?: number): Promise<RecordedTurn[]>;
 
   /** The workspace whose exec planes this actor rides; a facet actor overrides with its parent's. */
   protected workspaceName(): string { return this.name; }
@@ -1634,6 +1636,7 @@ export abstract class ActorAgent extends Agent<Env> {
       refiner: this.temporaryAgentPort(),
       approvals: this.instructionApprovals(),
       skillsVfs: this.rt.storage.vfs,
+      recordedTurns: () => this.recordedTurns(),
     };
   }
 

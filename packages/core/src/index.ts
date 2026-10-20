@@ -1008,6 +1008,13 @@ export {
 // Crafted tools by preference
 export { craftPreference, craftPreferences, rankByPreference, type CraftPreferenceRow } from './craft/preference';
 
+// Scaffold replay against recorded turns
+export { activateReplayedScaffold } from './scaffold/replay-gate';
+
+export {
+  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn, type ReplayVerdict,
+} from './scaffold/replay';
+
 export { type CraftCall } from './craft/in-episode';
 
 export { TurnCraftLedger } from './craft/turn-ledger';
@@ -1822,12 +1829,12 @@ export type {
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
-// The scaffold's versions and the owner's decisions on them.
+// The scaffold's versions.
 export {
-  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
+  getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldOnce,
   type EvolutionStatus, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
+  type ScaffoldReplayContext, type ScaffoldSurface, type ScaffoldVersionView,
 } from './evolution/control';
 
 // The artifact store a dream's section and tool edits stage in (docs/EVOLUTION-REDESIGN.md §3-4).

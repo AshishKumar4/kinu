@@ -12,11 +12,11 @@ import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
 import { listScaffoldArchive } from '../scaffold/archive';
 import {
-  applyPromotionDecision, getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
+  getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
 } from '../scaffold/versions';
 import { listArtifactVersions, type ArtifactVersion } from './artifacts';
 import { nanoid } from '../utils/nanoid';
-import { KinuError, settle } from '../obs/index';
+import { settle } from '../obs/index';
 import { Effect } from 'effect';
 
 export type { ScaffoldVersionView } from '../types/scaffold';
@@ -157,15 +157,4 @@ export function getEvolutionStatus(sql: SqlExecutor, actor: ActorHandle): Evolut
     waiting: listArtifactVersions(sql, actor).filter((version) => version.status === 'staged'),
     versions: listScaffoldVersions(sql, actor, 10),
   };
-}
-
-export type ScaffoldDecisionResult = Awaited<ReturnType<typeof applyPromotionDecision>>;
-
-/** The owner's decision on the pending scaffold. The misevolution recheck can still turn a promote into a rollback, so the result reports the action applied. */
-export async function applyScaffoldDecision(control: ScaffoldControl, mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-  const pending = getPendingScaffold(control.sql, control.rt.actor);
-
-  if (pending === null) return settle(Effect.fail(new KinuError('missing', 'no pending scaffold')));
-
-  return await applyPromotionDecision(control.rt, pending, mode, control.events);
 }

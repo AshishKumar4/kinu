@@ -10,6 +10,11 @@ export const LAST_SEGMENTS = 50;
 /** A thumb on one reply in ten. */
 export const THUMB_RATE = 0.1;
 
+/** The arms, each its own seeded user: learning on is the product; off and crafting off are what it is held against. */
+export const REACTIVE_ARMS = ['learning-on', 'learning-off', 'crafting-off'] as const;
+
+export type ReactiveArm = (typeof REACTIVE_ARMS)[number];
+
 /** Two-sided 95% t quantiles for 1..10 degrees of freedom. */
 const T95 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228];
 

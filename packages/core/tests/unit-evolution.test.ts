@@ -114,6 +114,29 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     expect(listTurnRatings(rt.storage.sql, rt.actor)[0]?.score).toBeCloseTo(4.6);
   });
 
+  test('with crafting off the same accepted turn is rated, and no tool is extracted from it', async () => {
+    const { rt, stores } = createTestRuntime({
+      llmResponses: {
+        'Extract a reusable pattern': '{"name":"compute_value","description":"Execute code and return result","params":{"type":"object","properties":{},"required":[]},"code":"async (args) => 42"}',
+      },
+    });
+
+    ratedAs(rt, 'accepted');
+    rt.actor.config.setCrafting(false);
+
+    const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
+    const events: EvolutionEvent[] = [];
+    engine.onEvent(e => events.push(e));
+
+    await engine.reviewTurn(makeTurn({
+      toolCalls: [compactToolCall({ name: 'eval', args: { code: 'return 42' }, result: 42 })],
+    }), 'great, now do the same for the prod cluster');
+
+    expect(listTurnRatings(rt.storage.sql, rt.actor)[0]?.score).toBeCloseTo(4.6);
+    expect(events.some(e => e.type === 'craft_discovered')).toBe(false);
+    expect(rt.craftStore.list()).toEqual([]);
+  });
+
   test('a rated turn credits each crafted tool it chose with its rating, and only those it was offered', async () => {
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'corrected');

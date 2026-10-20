@@ -34,6 +34,25 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
+    title: 'the agent\'s crafting setting: off, a turn is told of no crafted tool; back on, the next is',
+    async run({ surface, actor, requests }) {
+      const told = (text: string): boolean => {
+        const request = requests().find((asked) => JSON.stringify(asked.prompt.at(-1)?.content).includes(`"${text}"`));
+
+        if (request === undefined) throw new Error(`no request answered '${text}'`);
+
+        return JSON.stringify(request.prompt).includes('## Crafted tools available through eval');
+      };
+
+      actor.config.setCrafting(false);
+      await surface.send('first');
+      actor.config.setCrafting(true);
+      await surface.send('second');
+
+      expect({ off: told('first'), on: told('second') }).toEqual({ off: false, on: true });
+    },
+  },
+  {
     title: 'an edit staged meanwhile moves the prompt prefix only at a turn whose cache is cold; the owner\'s revert, at once',
     async run({ surface, sql, actor, requests }) {
       const artifactId = sectionArtifact('guidance/operating');
@@ -137,7 +156,23 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a proposed scaffold waits for the owner, who can roll it back',
+    title: 'the turns a scaffold is replayed against are the answered ones, each with what it was asked and what it said',
+    async run({ surface }) {
+      await surface.send('first question');
+      await surface.send('second question');
+
+      const turns = await surface.recordedTurns(1);
+      expect(turns.map((turn) => turn.task)).toEqual(['second question']);
+
+      const both = await surface.recordedTurns();
+      expect(both.map((turn) => turn.task)).toEqual(['first question', 'second question']);
+      // What the second was asked in holds the first exchange; what it said is its own answer.
+      expect(both[1]?.input.map((message) => message.role).filter((role) => role !== 'system')).toContain('assistant');
+      expect(both[1]?.output.at(-1)?.role).toBe('assistant');
+    },
+  },
+  {
+    title: 'a proposed scaffold can be discarded before it runs',
     async run(backend) {
       const { surface } = backend;
       pendingScaffold(backend, 'answer in the owner language');
@@ -145,14 +180,13 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       expect(await surface.getEvolutionStatus()).toMatchObject({
         pendingScaffold: { version: 1, rationale: 'answer in the owner language' }, waiting: [],
       });
-      expect(await surface.applyScaffoldDecision('rollback')).toEqual({ action: 'rollback', fromVersion: 1, newCurrentVersion: 0 });
+      expect(await surface.revertChangelogEntry('scaffold:v1:pending')).toMatchObject({ ok: true });
 
       // cf writes v0 as a precondition of its first turn, the CLI at session start: the candidate is the case's.
       const status = await surface.getEvolutionStatus();
 
       expect(status.pendingScaffold).toBeNull();
       expect(status.versions.find((row) => row.version === 1)?.status).toBe('rolled_back');
-      await expect(surface.applyScaffoldDecision('rollback')).rejects.toThrow('no pending scaffold');
     },
   },
   {

@@ -133,13 +133,12 @@ import {
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SlateReadModel, SLATES_CHANGED_EVENT, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
-  applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
+  getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive,
-  activateDreamSkills, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
   type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
-  type ScaffoldDecisionResult,
   type ScaffoldVersionView, type EvolutionStatus,
   readScaffoldVersion,
   type RunEvent, type RunEventQuery, type StoredRunEvent,
@@ -193,6 +192,7 @@ import {
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
+  decodeRecordedTurns, recordedTurns, type RecordedTurn,
   LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
@@ -1669,7 +1669,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // A dream's skills land in the workspace's skills root, which every turn's index reads, so only this agent's own
     // cold turn writes them.
-    if (cold && actor.handle.actorId === this.rt.actor.actorId) await activateDreamSkills(this.refinementDeps);
+    if (cold && actor.handle.actorId === this.rt.actor.actorId) {
+      await activateDreamSkills(this.refinementDeps);
+      // Before the turn's program is chosen, so this turn runs the version it promotes.
+      await activateReplayedScaffold(this.refinementDeps.control);
+    }
+
     const reports: SubordinateReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
@@ -4884,7 +4889,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private pendingActions(hostedPlans: ReadonlyMap<string, readonly PlanReview[]>): PendingAction[] {
     return buildPendingActions({
-      scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
       deferredActions: this.deferrals.list(),
       // Each agent's plans are its own isolate's (main's included).
       pendingPlans: this.hostedPendingPlans(hostedPlans).sort((a, b) => b.updatedAt - a.updatedAt),
@@ -5037,12 +5041,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   async getEvolutionStatus(): Promise<EvolutionStatus> {
     return getEvolutionStatus(this.boundSql, this.rt.actor);
-  }
-
-  /** The owner's decision on the pending scaffold proposal. */
-  @callable()
-  async applyScaffoldDecision(mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-    return applyScaffoldDecision(this.scaffoldControl, mode);
   }
 
   /**
@@ -5515,6 +5513,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       const sources = yield* this.turnRequestSources(actor);
 
       return yield* Effect.promise(() => turnRequestPage(sources, read));
+    }));
+  }
+
+  /** The workspace agent's newest answered turns, from its isolate where it runs there: what a scaffold is replayed against. */
+  recordedTurns(limit?: number): Promise<RecordedTurn[]> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const agent = this.actorHandle().actorId;
+
+      if (this.isAgent(agent)) {
+        return decodeRecordedTurns(yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.recordedTurns(snapshot, limit))));
+      }
+
+      const sources = yield* this.turnRequestSources(undefined);
+
+      return yield* Effect.promise(() => recordedTurns(sources, limit));
     }));
   }
 

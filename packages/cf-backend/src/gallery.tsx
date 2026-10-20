@@ -3084,14 +3084,13 @@ const PLAN_ASKS: PendingAction[] = [{
   planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
 }];
 
-/** `&asks=mixed`: one of each kind that waits on the owner, and a scaffold version that waits on nobody. */
+/** `&asks=mixed`: one of each kind that waits on the owner. */
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/routes/webhooks.ts", detail: null, at: NOW - 150_000, write: { path: "src/routes/webhooks.ts" } },
   ...PLAN_ASKS,
   { id: "plan:binding-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit the binding of every route", detail: "Submitted by binding-auditor", at: NOW - 200_000,
     planRef: { owner: "binding-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("binding-auditor") },
-  { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is waiting to be promoted or rolled back", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
 /** A change a share of issue-triage made on the owner's access, for Sam, as the queue lists it. */
@@ -5709,11 +5708,6 @@ const PENDING_ACTIONS: PendingAction[] = [
     title: "Approve the plan · Gateway timeout repair",
     detail: null,
     planRef: { owner: "main", id: "plan-gateway", revision: 3 },
-  },
-  {
-    id: "scaffold-v8", kind: "scaffold_version", at: NOW - 10e5,
-    title: "Scaffold v8 is waiting to be promoted or rolled back",
-    detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
   },
 ];
 

@@ -25,7 +25,7 @@ import type {
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
-import { getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
+import { encodeRecordedTurns, getRunEvents, getRunEventText, getRunSummaries, listRuns } from '@kinu.run/core';
 
 export interface AgentFacetEnv {
   readonly WORKSPACE: AgentWorkspaceCalls;
@@ -128,6 +128,8 @@ export interface AgentFacetCalls {
   workingContext(snapshot: AgentSnapshot): Promise<readonly JsonValue[]>;
   turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex>;
   turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage>;
+  /** In the session codec's durable form (`encodeRecordedTurns`). */
+  recordedTurns(snapshot: AgentSnapshot, limit?: number): Promise<JsonValue[]>;
   spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger>;
   context(snapshot: AgentSnapshot, editor: ContextEditor): Promise<ContextTreeRemote>;
   searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
@@ -497,6 +499,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex> {
     return this.open(snapshot).turnRequests(turnId);
+  }
+
+  async recordedTurns(snapshot: AgentSnapshot, limit?: number): Promise<JsonValue[]> {
+    return encodeRecordedTurns(await this.open(snapshot).recordedTurns(limit));
   }
 
   async turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage> {

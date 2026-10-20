@@ -87,7 +87,8 @@ export async function readScaffoldVersion(rt: AgentRuntime, version: number): Pr
 export function applyPromotionDecision(
   rt: AgentRuntime,
   pending: PendingScaffold,
-  decision: 'promote' | 'rollback',
+  /** A rollback may carry its reason, recorded on its event, when a replay rather than the owner decided it. */
+  decision: 'promote' | 'rollback' | { readonly rollback: string },
   events: ScaffoldDecisionEvents,
 ): Promise<{ fromVersion: number; newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
   return settle(Effect.gen(function* () {
@@ -141,7 +142,10 @@ export function applyPromotionDecision(
       yield* Effect.promise(() => rt.identity.scaffold.write(currentCode));
     }
 
-    yield* recordScaffoldDecision(events, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
+    yield* recordScaffoldDecision(events, {
+      type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion,
+      ...(typeof decision === 'object' && { reason: decision.rollback }),
+    });
 
     return { fromVersion: pending.version, newCurrentVersion: currentVersion, action: 'rollback' };
   }));
@@ -154,7 +158,7 @@ export function applyPromotionDecision(
  */
 function recordScaffoldDecision(
   events: ScaffoldDecisionEvents,
-  event: { type: 'scaffold_promotion' | 'scaffold_rollback'; fromVersion: number; toVersion: number },
+  event: { type: 'scaffold_promotion' | 'scaffold_rollback'; fromVersion: number; toVersion: number; reason?: string },
 ): Effect.Effect<void> {
   return Effect.try({
     try: () => events.emit(WORKSPACE_RUN_ID, event),

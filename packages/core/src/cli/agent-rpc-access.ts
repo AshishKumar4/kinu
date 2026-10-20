@@ -54,7 +54,6 @@ export const AGENT_RPC_ACCESS = {
   recoverStrandedTurn: 'workspace.exec',
   executeInExecutor: 'workspace.exec',
 
-  applyScaffoldDecision: 'interactive',
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
   stopSwarmWorker: 'interactive',

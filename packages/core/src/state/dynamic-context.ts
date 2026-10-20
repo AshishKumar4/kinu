@@ -115,7 +115,8 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
       workMode: profile.workMode,
       planSubmission: profile.allowedTools.includes(SUBMIT_PLAN_TOOL) && input.tools[SUBMIT_PLAN_TOOL] !== undefined,
     },
-    craftedTools: craftedToolDeclarations(input.tools, profile),
+    // With crafting off the section stays silent: no tool is offered, and none is asked for.
+    ...(rt.actor.config.getCrafting() && { craftedTools: craftedToolDeclarations(input.tools, profile) }),
     externalTools: externalToolDeclarations(input.tools, input.externalTools ?? {}, profile),
     factsBlock: renderFactsForTurn(reads.facts, input.accountFacts),
     memoryTail: input.memoryTail,

@@ -139,7 +139,7 @@ function entryHasDetails(entry: ChangelogEntry): boolean {
 function EntryScaffoldDiff({ rpc, version, shown }: { rpc: WorkspaceRpc; version: number | null | undefined; shown: boolean }) {
   if (!shown || version == null) return null;
 
-  return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} readAgain={0} /></div>;
+  return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} /></div>;
 }
 
 interface ChangelogEntryCardProps {

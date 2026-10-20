@@ -6,7 +6,7 @@
 import { useCallback, useMemo } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
+  ClockIcon, PulseIcon, WarningCircleIcon,
   CaretRightIcon, ShieldWarningIcon,
   NotePencilIcon,
 } from "@phosphor-icons/react";
@@ -29,14 +29,12 @@ const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
 /** Where each pending kind is decided; tab names stay out of core. */
 const PENDING_HOME = {
   deferred_action: { surface: null, cta: "answer it in the chat" },
-  scaffold_version: { surface: "Agent", cta: "decide in Agent" },
   // The row is the deep link: it opens the plan's own page.
   plan_review: { surface: null, cta: "open the review" },
 } satisfies Record<PendingActionKind, { surface: SurfaceKind | null; cta: string | null }>;
 
 const PENDING_ICON = {
   deferred_action: ShieldWarningIcon,
-  scaffold_version: GitBranchIcon,
   plan_review: NotePencilIcon,
 } satisfies Record<PendingActionKind, typeof ClockIcon>;
 

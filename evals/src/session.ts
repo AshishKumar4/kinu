@@ -1243,6 +1243,11 @@ export class KinuPublicSession {
     await this.boundary(`setEvolutionConfig on ${this.input.origin}/${this.workspace}`, () => this.rpc('setEvolutionConfig', [{ learning: on }]));
   }
 
+  /** The agent's own crafting setting (`setEvolutionConfig`): off, it is offered and makes no crafted tool. */
+  async setCrafting(on: boolean): Promise<void> {
+    await this.boundary(`setEvolutionConfig on ${this.input.origin}/${this.workspace}`, () => this.rpc('setEvolutionConfig', [{ crafting: on }]));
+  }
+
   /** A thumb on one answer, as the web pane gives it (`setTurnFeedback`). */
   async rate(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
     await this.boundary(`setTurnFeedback on ${this.input.origin}/${this.workspace}`, () => this.rpc('setTurnFeedback', [messageId, feedback]));

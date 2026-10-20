@@ -40,6 +40,7 @@ export function hostWorkspaceExecutor(workspace: HostWorkspace): ExecutorProvide
 
   return createInlineExecutor({
     ...workspace,
+    crafting: () => workspace.actor.config.getCrafting(),
     filesOwner: 'user',
     toolchain: hostToolchainCapabilities(),
     unmeasured: HOST_UNMEASURED_CAPABILITIES,

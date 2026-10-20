@@ -15,7 +15,6 @@ import type { AskingAgent } from '../plans/owner-questions';
 export type PendingActionKind =
   /** Decided here: the queue is this action's only home. */
   | 'deferred_action'
-  | 'scaffold_version'
   /** Deep-links to the full-tab review. */
   | 'plan_review';
 
@@ -50,16 +49,9 @@ export interface PersonAsks {
   readonly ownerQuestions: readonly AskingAgent[];
 }
 
-/** Rows holding the person's work until they decide; the agent's own proposals and notes do not (#21). */
-const HOLDS_THE_PERSON = {
-  deferred_action: true,
-  plan_review: true,
-  scaffold_version: false,
-} satisfies Record<PendingActionKind, boolean>;
-
 /** What the inspector opens for on its own: an action or a consent to approve, a plan to review, or a question. */
 export function needsTheUser(asks: PersonAsks): boolean {
-  return asks.pendingActions.some((action) => HOLDS_THE_PERSON[action.kind])
+  return asks.pendingActions.length > 0
     || asks.pendingConsents.length > 0
     || asks.activePlan?.status === 'pending'
     || asks.ownerQuestions.some((asking) => asking.asked.status === 'open');
@@ -88,7 +80,8 @@ export function ownerAsks(
   },
   { raisedBy }: { readonly raisedBy?: string } = {},
 ): OwnerAsk[] {
-  const held: OwnerAsk[] = asks.pendingActions.filter((action) => HOLDS_THE_PERSON[action.kind])
+  // Every row holds the person's work until they decide: what the agent did by itself never reaches the queue.
+  const held: OwnerAsk[] = asks.pendingActions
     .map((action) => ({ key: `action:${action.id}`, at: action.at, raisedBy: action.raisedBy ?? null, kind: 'action', action }));
 
   const consents: OwnerAsk[] = asks.pendingConsents
@@ -107,9 +100,6 @@ export function ownerAsks(
 }
 
 export interface PendingActionInputs {
-  readonly scaffoldVersions: ReadonlyArray<{
-    version: number; status: string; rationale: string; written_at: number;
-  }>;
   /** Still-queued only (safety/deferred-approval.ts). */
   readonly deferredActions: readonly DeferredApproval[];
   /** Workspace-wide and retired-inclusive: a subordinate's plan asks the same owner. `actor`: its owner's id. */
@@ -155,17 +145,6 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
 
   for (const action of input.deferredActions) {
     if (action.status === 'queued') actions.push(deferredCard(action));
-  }
-
-  for (const version of input.scaffoldVersions) {
-    if (version.status !== 'pending') continue;
-    actions.push({
-      id: `scaffold-v${version.version}`,
-      kind: 'scaffold_version',
-      title: `Scaffold v${version.version} is waiting to be promoted or rolled back`,
-      detail: version.rationale || null,
-      at: version.written_at,
-    });
   }
 
   for (const plan of input.pendingPlans) {

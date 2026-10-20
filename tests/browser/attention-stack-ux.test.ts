@@ -150,8 +150,7 @@ test('only what waits on the owner is stacked, newest first; an older card can b
     await opened(page, origin, '&asks=mixed&consent=waiting');
     await page.waitForSelector('[data-attention-stack]');
 
-    // The version under trial waits on nobody: it stays in Work. The workspace's pane stacks its agents' asks too; the
-    // three parked commands share the newest one's card.
+    // The workspace's pane stacks its agents' asks too; the three parked commands share the newest one's card.
     expect(await page.$eval('[data-attention-stack]', (stack) => stack.getAttribute('data-attention-count'))).toBe('6');
     expect((await stacked(page))[0]).toBe('action:park-publish');
     expect(await page.$$eval('[data-attention-card] [data-parked-command]', (rows) => rows.map((row) => row.getAttribute('data-parked-command'))))

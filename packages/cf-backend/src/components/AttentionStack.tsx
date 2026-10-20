@@ -45,7 +45,6 @@ type AskKind = PendingActionKind | "consent" | "memory" | "question";
 const KIND_ICON = {
   deferred_action: ShieldWarningIcon, plan_review: NotePencilIcon, consent: DesktopTowerIcon, memory: BrainIcon,
   question: ChatCircleTextIcon,
-  scaffold_version: ShieldWarningIcon,
 } satisfies Record<AskKind, Icon>;
 
 function kindOf(ask: OwnerAsk): AskKind {

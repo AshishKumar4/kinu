@@ -54,6 +54,8 @@ export const AGENT_CONFIG_KEYS = {
   holdsQuestions: 'holds_questions',
   /** 'false' stops this agent learning from its turns: no ratings, struggles, lessons, proposals or trials. On by default. */
   learning: 'learning',
+  /** 'false' withholds crafted tools: none is offered, made, or extracted from a turn. On by default. */
+  crafting: 'crafting',
   advisorMinSeverity: 'advisor_min_severity',
   /** 'true' enables the turn reviewer; off by default since it costs a model call per turn. */
   advisorEnabled: 'advisor_enabled',
@@ -136,6 +138,8 @@ export interface AgentConfigStore {
   setHoldsQuestions(): void;
   getLearning(): boolean;
   setLearning(enabled: boolean): void;
+  getCrafting(): boolean;
+  setCrafting(enabled: boolean): void;
   getAdvisorEnabled(): boolean;
   setAdvisorEnabled(enabled: boolean): void;
   /** Unset or unknown reads as `concern`. */
@@ -376,6 +380,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setHoldsQuestions() { set(AGENT_CONFIG_KEYS.holdsQuestions, 'true'); },
     getLearning() { return get(AGENT_CONFIG_KEYS.learning) !== 'false'; },
     setLearning(enabled) { set(AGENT_CONFIG_KEYS.learning, String(enabled)); },
+    getCrafting() { return get(AGENT_CONFIG_KEYS.crafting) !== 'false'; },
+    setCrafting(enabled) { set(AGENT_CONFIG_KEYS.crafting, String(enabled)); },
     getAdvisorEnabled() { return get(AGENT_CONFIG_KEYS.advisorEnabled) === 'true'; },
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
     getAdvisorMinSeverity() {

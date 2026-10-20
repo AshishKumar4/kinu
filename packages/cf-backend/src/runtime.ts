@@ -395,6 +395,7 @@ export function createCFRuntime(
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
       vfs: toolFiles, files: agentFileVfs, craftStore, shell, planes,
+      crafting: () => actor.actor.config.getCrafting(),
       sql,
       slate: hooks.slate,
     },
