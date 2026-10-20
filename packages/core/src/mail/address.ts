@@ -10,8 +10,10 @@
  * part without the username: `''`, `<workspace>`, `<agent>.<workspace>`.
  */
 
-/** One label: lowercase letters, digits and inner hyphens, at most 20 long, as a username is. */
-const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/u;
+/** One label: lowercase letters, digits and inner hyphens, at most 20 long, as a username is; an input's `pattern`. */
+export const MAIL_LABEL_PATTERN = '[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?';
+
+const LABEL = new RegExp(`^${MAIL_LABEL_PATTERN}$`, 'u');
 
 const TAG = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 
