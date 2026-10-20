@@ -9,7 +9,7 @@ import type { ExecutorProviderSurface, ExecutorTool } from '../execution/types';
 import { answeredRefusal } from '../execution/exec-result';
 import { attempt, attemptInItsWords, KinuError, settleSync } from '../obs/index';
 import { serve, type Operation, type Served } from '../operations/operation';
-import { COMPUTER, computerDesktop, computerResize, DEVICE, MACHINE_CAPABILITIES, MACHINE_FILES, machineFileOperations, machineOperations, PARENT, WORKSPACE } from '../operations/executors';
+import { computerDesktop, computerResize, EXECUTOR_OPERATIONS, MACHINE_CAPABILITIES, MACHINE_FILES, machineFileOperations, machineOperations } from '../operations/executors';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { DESKTOP_MEMBERS } from '../execution/desktop';
 import type { ExecCallContext } from '../execution/signal';
@@ -17,20 +17,6 @@ import { programExecContext } from './outcome';
 import type { CodemodeProvider } from '../types/codemode';
 import { callArgs, codemodeNamespace } from './operation-surfaces';
 import { SLATE_PROGRAM_MEMBERS } from '../slates/rpc';
-
-/** Each executor's own members and what it is, by the executor's name; the members every machine shares are admitted
- *  by its capabilities (`machineOperations`). */
-const DECLARED = new Map<string, { readonly ops: Readonly<Record<string, Operation>>; readonly summary: string }>([
-  ['workspace', { ops: WORKSPACE, summary: 'Your workspace: its files and shell, the tools you save, and its slates.' }],
-  ['computer', {
-    ops: COMPUTER,
-    summary: 'Your computer, a Linux machine with files and a shell of its own. Bun is its default toolchain (`bun install`, '
-      + '`bun run`, `bun x`, `bun test`); restored after it slept, it keeps source and lockfiles but not node_modules or '
-      + 'build output, so after a failed import run `bun install` once.',
-  }],
-  ['parent', { ops: PARENT, summary: 'The workspace that hired you; its shell is the fast way to search it (`grep -rn`, `find`).' }],
-  ['device', { ops: DEVICE, summary: 'The user\'s machine.' }],
-]);
 
 /** What a program's shell or desktop call carries beyond its arguments, as its backend says, or else the call's own
  *  stop signal: a caller outside eval stops its command by cancelling the call. */
@@ -193,7 +179,7 @@ function machineFiles(provider: ExecutorProviderSurface, files: Readonly<Record<
  * served `file` operations, gives a machine with a root in the plane its `fs`.
  */
 export function executorNamespace(provider: ExecutorProviderSurface, files?: Readonly<Record<string, Served>>): CodemodeProvider {
-  const declared = DECLARED.get(provider.name);
+  const declared = EXECUTOR_OPERATIONS.get(provider.name);
 
   if (declared === undefined) return settleSync(Effect.die(new Error(`executor ${provider.name} has no declared members`)));
   // Only a computer with sizes has `resize`, declared over them; only one with a desktop has its members, over its screen.

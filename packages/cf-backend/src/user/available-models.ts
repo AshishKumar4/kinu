@@ -33,6 +33,7 @@ export async function listAvailableModels<Id>(
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
     contextWindow: model.contextWindow,
     reasoningEfforts: model.reasoningEfforts,
+    cost: model.cost,
   }));
 
   return { models: out, failures: menu.failures, ...(menu.accounts !== undefined && { accounts: menu.accounts }), fast: fastCandidatesOf(menu) };
