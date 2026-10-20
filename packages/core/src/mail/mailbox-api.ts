@@ -6,17 +6,28 @@
  */
 import type { MailRecipient } from './address';
 
-export type MailBoxKind = 'person' | 'workspace' | 'agent';
+// Each list is the one every schema, route and page reads; the Mailbox's DDL spells its CHECKs once more, as deployed storage.
+export const MAIL_BOX_KINDS = ['person', 'workspace', 'agent'] as const;
+
+export type MailBoxKind = (typeof MAIL_BOX_KINDS)[number];
 
 /** Who may wake a box's agent (docs/MAIL.md §3): the verified owner only, also listed senders, any verified sender, or nobody. */
-export type MailWake = 'owner' | 'allowlist' | 'verified' | 'never';
+export const MAIL_WAKES = ['owner', 'allowlist', 'verified', 'never'] as const;
+
+export type MailWake = (typeof MAIL_WAKES)[number];
 
 /** On whose word an arrival woke its box's agent: the owner's verified instruction, or untrusted input. */
-export type MailWoke = 'owner' | 'input';
+export const MAIL_WOKE = ['owner', 'input'] as const;
 
-export type MailView = 'important' | 'all' | 'sent' | 'drafts' | 'trash';
+export type MailWoke = (typeof MAIL_WOKE)[number];
 
-export type MailSendState = 'draft' | 'queued' | 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained';
+export const MAIL_VIEWS = ['important', 'all', 'sent', 'drafts', 'trash'] as const;
+
+export type MailView = (typeof MAIL_VIEWS)[number];
+
+export const MAIL_SEND_STATES = ['draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained'] as const;
+
+export type MailSendState = (typeof MAIL_SEND_STATES)[number];
 
 export interface MailBox {
   readonly path: string;

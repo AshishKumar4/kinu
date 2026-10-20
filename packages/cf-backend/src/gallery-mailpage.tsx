@@ -1,7 +1,7 @@
 /** The production Mail page, reading and writing the HTTP fixture made from the approved wireframe's mail. */
 import { Route, Routes, useParams } from "react-router-dom";
 import * as v from "valibot";
-import type { MailBox, MailListing, MailMessageView, MailThreadSummary, MailThreadView, MailView } from "@kinu.run/core";
+import { MAIL_VIEWS, type MailBox, type MailListing, type MailMessageView, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import MailPage from "@/pages/MailPage";
 import { ADDRESSES, OWNER, THREADS } from "@/gallery-mail";
@@ -204,8 +204,7 @@ function WorkspaceChat() {
 export default function mailPageFrame() {
   installFixture();
   const params = new URLSearchParams(location.search);
-  const views: readonly MailView[] = ["important", "all", "sent", "drafts", "trash"];
-  const view = views.find((name) => name === params.get("view")) ?? "important";
+  const view = MAIL_VIEWS.find((name) => name === params.get("view")) ?? "important";
   const thread = params.get("thread");
 
   return {

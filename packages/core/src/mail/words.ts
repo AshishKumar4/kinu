@@ -32,8 +32,8 @@ const QUOTE_MARKERS: ReadonlyArray<RegExp> = [
   /^\s*--\s*$/m,                              // signature delimiter
 ];
 
-/** Falls back to the full text when stripping would leave nothing. */
-export function stripQuotedReply(text: string): string {
+/** A message's own words and the history quoted under them, cut at the first reply marker; `quote` is null for none. */
+export function splitQuotedReply(text: string): { readonly own: string; readonly quote: string | null } {
   let cut = text.length;
 
   for (const re of QUOTE_MARKERS) {
@@ -42,7 +42,12 @@ export function stripQuotedReply(text: string): string {
     if (m && m.index < cut) cut = m.index;
   }
 
-  const stripped = text.slice(0, cut).trim();
+  return cut === text.length ? { own: text, quote: null } : { own: text.slice(0, cut).trimEnd(), quote: text.slice(cut) };
+}
+
+/** Falls back to the full text when stripping would leave nothing. */
+export function stripQuotedReply(text: string): string {
+  const stripped = splitQuotedReply(text).own.trim();
 
   return stripped.length > 0 ? stripped : text.trim();
 }

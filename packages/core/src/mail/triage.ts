@@ -31,7 +31,7 @@ export interface MailTriageDeps {
   readonly complete: (system: string, prompt: string) => Promise<string>;
 }
 
-export interface MailTriageRun {
+interface MailTriageRun {
   readonly important: number;
   readonly ordinary: number;
   readonly drafted: number;

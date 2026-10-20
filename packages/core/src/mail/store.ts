@@ -9,6 +9,7 @@ import { KinuError, settle, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import { replySubject } from './words';
+import { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_WAKES, MAIL_WOKE } from './mailbox-api';
 import type {
   MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
   MailSendState, MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
@@ -47,7 +48,7 @@ export interface MailBlobs {
   delete(keys: readonly string[]): Promise<void>;
 }
 
-export interface MailStoreDeps {
+interface MailStoreDeps {
   readonly sql: SqlExec;
   readonly blobs: MailBlobs;
   readonly domain: string;
@@ -60,8 +61,8 @@ export interface MailStoreDeps {
 }
 
 const BoxRow = v.object({
-  path: v.string(), kind: v.picklist(['person', 'workspace', 'agent']), workspace: v.nullable(v.string()),
-  actor_id: v.nullable(v.string()), wake: v.picklist(['owner', 'allowlist', 'verified', 'never']),
+  path: v.string(), kind: v.picklist(MAIL_BOX_KINDS), workspace: v.nullable(v.string()),
+  actor_id: v.nullable(v.string()), wake: v.picklist(MAIL_WAKES),
 });
 
 const IdentityRow = v.object({ user_id: v.string(), email: v.string(), username: v.string() });
@@ -70,9 +71,9 @@ const MessageRow = v.object({
   rowid: v.number(), id: v.string(), thread_id: v.string(), direction: v.picklist(['in', 'out']), header_id: v.nullable(v.string()),
   from_addr: v.string(), from_name: v.nullable(v.string()), to_json: v.string(), cc_json: v.string(), delivered_to: v.nullable(v.string()),
   subject: v.string(), at: v.number(), verdict: v.picklist(['verified', 'unverified', 'ours']), auth: v.nullable(v.string()),
-  woke: v.nullable(v.picklist(['owner', 'input'])), snippet: v.string(), text_body: v.nullable(v.string()), text_key: v.nullable(v.string()),
+  woke: v.nullable(v.picklist(MAIL_WOKE)), snippet: v.string(), text_body: v.nullable(v.string()), text_key: v.nullable(v.string()),
   html_key: v.nullable(v.string()), raw_key: v.nullable(v.string()), read: v.number(), written_by: v.nullable(v.string()),
-  send_state: v.nullable(v.picklist(['draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained'])),
+  send_state: v.nullable(v.picklist(MAIL_SEND_STATES)),
 });
 
 type Message = v.InferOutput<typeof MessageRow>;
@@ -111,6 +112,11 @@ export class MailStore {
     return row === undefined ? null : this.boxOf(row);
   }
 
+  /** A box this call just wrote: its absence is a store that lost its own write, never a box to make up. */
+  private written(path: string): MailBox {
+    return this.box(path) ?? settleSync(Effect.fail(new KinuError('io', `The box at "${path}" was written and cannot be read back.`)));
+  }
+
   private boxOf(row: v.InferOutput<typeof BoxRow>): MailBox {
     return {
       path: row.path, kind: row.kind, workspace: row.workspace, actorId: row.actor_id, wake: row.wake,
@@ -130,7 +136,7 @@ export class MailStore {
       this.deps.sql.exec("UPDATE mail_addresses SET workspace = ?, actor_id = ? WHERE path = '' AND workspace IS NULL", account.assistant.workspace, account.assistant.actorId);
     }
 
-    return this.box('') ?? this.boxOf({ path: '', kind: 'person', workspace: null, actor_id: null, wake: 'owner' });
+    return this.written('');
   }
 
   /** The Personal assistant the owner has now reads their box, in place of one they had before (docs/MAIL.md §7). */
@@ -163,7 +169,7 @@ export class MailStore {
 
     this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id, created_at) VALUES (?, ?, ?, ?, ?)', path, owner.kind, owner.workspace, owner.actorId, this.deps.now());
 
-    return this.box(path) ?? this.boxOf({ path, kind: owner.kind, workspace: owner.workspace, actor_id: owner.actorId, wake: 'owner' });
+    return this.written(path);
   }
 
   /**

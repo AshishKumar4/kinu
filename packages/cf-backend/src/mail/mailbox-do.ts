@@ -16,17 +16,13 @@ import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { parseMail } from './parse';
+import { isListedOperator } from '../control-plane/admin-caller';
 
 /** A message's send in the outbox: this prefix and the message's id. */
 const MAIL_SEND_KEY = 'mail:';
 
 /** Sends a day for an account that is not one of the deployment's operators (the owner, 2026-10-19). */
 const DAILY_SEND_CAP = 100;
-
-/** Whether `email` is one of the deployment's operators, who have no send cap and may always claim an address. */
-function isMailOperator(env: Pick<Env, 'CONTROL_PLANE_ADMINS'>, email: string): boolean {
-  return (env.CONTROL_PLANE_ADMINS ?? '').split(',').map((each) => each.trim().toLowerCase()).includes(email.trim().toLowerCase());
-}
 
 const IdentityRow = v.object({ user_id: v.string(), email: v.string() });
 
@@ -180,7 +176,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return Effect.gen(function* () {
       if (refusal !== undefined) return yield* Effect.fail(refusal);
 
-      if (!isMailOperator(env, sender) && store.sentToday() >= DAILY_SEND_CAP) {
+      if (!isListedOperator(env, sender) && store.sentToday() >= DAILY_SEND_CAP) {
         return yield* Effect.fail(new KinuError('budget', `This account has sent ${String(DAILY_SEND_CAP)} messages in the last day; mail goes again as the day's first ones age out.`));
       }
 

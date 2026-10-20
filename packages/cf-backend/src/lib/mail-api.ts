@@ -2,7 +2,7 @@
 import * as v from "valibot";
 import { Effect } from "effect";
 import { KinuError, settle } from "@kinu.run/core/obs";
-import type { MailBox, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailThreadSummary, MailThreadView } from "@kinu.run/core";
+import { MAIL_BOX_KINDS, MAIL_WAKES, type MailBox, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
 import { request } from "./http";
 
 const ImportantMailSchema = v.object({
@@ -31,8 +31,8 @@ export function readImportantMail(limit: number): Promise<Important> {
 const PartySchema = v.object({ name: v.nullable(v.string()), address: v.string() });
 
 const BoxSchema = v.object({
-  path: v.string(), address: v.string(), kind: v.picklist(["person", "workspace", "agent"]),
-  workspace: v.nullable(v.string()), actorId: v.nullable(v.string()), wake: v.picklist(["owner", "allowlist", "verified", "never"]),
+  path: v.string(), address: v.string(), kind: v.picklist(MAIL_BOX_KINDS),
+  workspace: v.nullable(v.string()), actorId: v.nullable(v.string()), wake: v.picklist(MAIL_WAKES),
 }) satisfies v.GenericSchema<unknown, MailBox>;
 
 const BoxesSchema = v.object({ address: v.nullable(v.string()), canClaim: v.boolean(), boxes: v.array(BoxSchema) });
