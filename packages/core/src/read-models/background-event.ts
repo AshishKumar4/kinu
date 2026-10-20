@@ -290,7 +290,7 @@ const VARIANT_LABELS = new Map([
   ["subordinate_task", "Agent task"],
   ["subordinate_report", "Agent report"],
   ["file_changed", "File changed"],
-  ["email", "Email"],
+  ["email", "Mail"],
   ["internal", "Internal"],
   ["reply_request", "Reply request"],
   ["mcp_chat", "MCP message"],

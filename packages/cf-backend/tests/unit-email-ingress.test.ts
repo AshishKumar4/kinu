@@ -1,294 +1,96 @@
-// Mission Inbox inbound: addressing, MIME parsing, sender trust gate, dedupe, rate limit, Worker routing.
-// Mocks only at the email seam (raw MIME in, RPC target out).
+// Inbound mail's words and threading: what the Mailbox files from a raw message (mail/parse.ts), what an owner's
+// instruction keeps of it, how threading identity is bounded, and the agent being told its inbox went deaf. The
+// recipient, verdict and wake are tested in unit-mail-router.test.ts, unit-mail-store.test.ts and core's
+// unit-mail-verdict.test.ts and unit-events-hub-email.test.ts.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
-  acceptInboundEmail, boundedMessageId, boundedReferences,
-  inboundEmailDropNotice, normalizeEmailAddress,
-  type EmailIngressDeps, type IncomingEmail, type KinuEvent, type SqlExec,
+  initEventsHubTables, EventLog, ReplyChannelStore, admitMailArrival, boundedMessageId, boundedReferences, inboundEmailDropNotice,
+  type KinuEvent, type MailArrival,
 } from '@kinu.run/core';
-import {
-  agentEmailAddress, agentNameFromRecipient, parseInboundMime,
-} from '../src/email/inbound';
-import {
-  routeInboundEmail, type EmailDeliveryTarget,
-} from '../src/email/route';
-import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { parseMail } from '../src/mail/parse';
 import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
-
-function makeExec(db: Database): SqlExec {
-  return sqlExec(db);
-}
-
-const DOMAIN = 'agents.example.com';
 
 type EmailEvent = Extract<KinuEvent, { variant: 'email' }>;
 
 function requireEmailEvent(log: EventLog, eventId: string): EmailEvent {
   const event = log.get(eventId);
 
-  if (!event || (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact')
-    || event.variant !== 'email') {
+  if (!event || (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') || event.variant !== 'email') {
     throw new Error(`expected readable email event ${eventId}`);
   }
 
   return event;
 }
 
-function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
+function admission() {
   const db = new Database(':memory:');
-  const exec = makeExec(db);
+  const exec = sqlExec(db);
+
   initEventsHubTables(exec);
   const actor = createTestActorsOver(db).main;
   const log = new EventLog(exec, actor);
   const replies = new ReplyChannelStore(exec, actor, {});
   const { vfs } = createMemoryVfs();
 
-  const deps: EmailIngressDeps = {
-    log, replies,
-    owner_email: 'owner@example.com',
-    allowlist: [],
-    tryConsumeRateLimit: () => true,
-    vfs,
-    ...overrides,
-  };
-
-  return { deps, log, replies, sql: exec, vfs };
+  return { log, replies, deps: { log, replies, owner_email: 'ashish@kinu.run', tryConsumeRateLimit: () => true, vfs } };
 }
 
-function incoming(overrides: Partial<IncomingEmail> = {}): IncomingEmail {
+function arrival(overrides: Partial<MailArrival> = {}): MailArrival {
   return {
-    from: 'owner@example.com',
-    to: `scout-a1b2c3@${DOMAIN}`,
-    subject: 'Check the deploy',
-    body_text: 'Is staging green?',
-    message_id: '<abc@mail.example.com>',
-    in_reply_to: null,
-    references: null,
-    attachments: [],
-    now: 1_000,
-    ...overrides,
+    woke: 'owner', from: 'ashish@kinu.run', to: 'api-worker.ashish@kinu.run', subject: 'Worker error rate above 5%',
+    instruction: 'Ship your fix to staging, and to production if the canary holds for 15 minutes.',
+    message_id: '<alert-1@notify.cloudflare.com>', references: null, attachments: [],
+    mail: { box: 'api-worker', thread: 't-alert', message: 'm-alert' }, now: 1_000, ...overrides,
   };
 }
 
-describe('addressing', () => {
-  test('local part is the agent name; +tag and case are tolerated', () => {
-    expect(agentNameFromRecipient(`scout-a1b2c3@${DOMAIN}`, DOMAIN)).toBe('scout-a1b2c3');
-    expect(agentNameFromRecipient(`Scout-A1B2C3+notes@${DOMAIN}`, DOMAIN)).toBe('scout-a1b2c3');
-    expect(agentNameFromRecipient(`Agent Scout <scout-a1b2c3@${DOMAIN}>`, DOMAIN)).toBe('scout-a1b2c3');
-  });
-  test('wrong domain, missing domain config, or bad local part → unroutable', () => {
-    expect(agentNameFromRecipient('scout-a1b2c3@evil.example.com', DOMAIN)).toBeNull();
-    expect(agentNameFromRecipient(`scout-a1b2c3@${DOMAIN}`, undefined)).toBeNull();
-    expect(agentNameFromRecipient(`not a name!@${DOMAIN}`, DOMAIN)).toBeNull();
-    expect(agentNameFromRecipient('no-at-sign', DOMAIN)).toBeNull();
-  });
-  test('normalizeEmailAddress strips display names and lowercases', () => {
-    expect(normalizeEmailAddress('Owner <Owner@Example.COM>')).toBe('owner@example.com');
-    expect(normalizeEmailAddress('  owner@example.com  ')).toBe('owner@example.com');
-  });
-  test('agentEmailAddress builds the canonical address', () => {
-    expect(agentEmailAddress('Scout-A1B2C3', 'Agents.Example.COM')).toBe(`scout-a1b2c3@${DOMAIN}`);
-  });
-});
+const message = (body: string, headers: readonly string[] = ['Content-Type: text/plain; charset=utf-8']): Uint8Array => new TextEncoder().encode([
+  'From: Ashish Kumar Singh <ashish@kinu.run>', 'To: api-worker.ashish@kinu.run', 'Subject: Worker error rate above 5%', 'MIME-Version: 1.0',
+  ...headers, '', body, '',
+].join('\r\n'));
 
-async function strippedBody(text: string): Promise<string> {
-  const raw = [
-    'From: owner@example.com',
-    `To: scout-a1b2c3@${DOMAIN}`,
-    'Subject: strip',
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
-    '',
-    text,
-    '',
-  ].join('\r\n');
+describe('an instruction is the words its sender wrote this time', () => {
+  test('Gmail and Outlook quoted history and signatures are set aside, and the reader keeps the whole text', async () => {
+    const gmail = await parseMail(message('Ship it to staging.\n\nOn Mon, 19 Oct 2026 at 18:40, Cloudflare <noreply@notify.cloudflare.com> wrote:\n> Error rate 7.2%'));
 
-  return (await parseInboundMime(await new Blob([raw]).arrayBuffer())).body_text;
-}
-
-describe('quoted history never reaches turn input', () => {
-  test('cuts Gmail-style quoted history', async () => {
-    const text = 'Yes please deploy.\n\nOn Mon, Jun 1, 2026 at 9:00 AM Agent <a@b.c> wrote:\n> earlier\n> stuff';
-    expect(await strippedBody(text)).toBe('Yes please deploy.');
-  });
-  test('cuts Outlook original-message blocks and signatures', async () => {
-    expect(await strippedBody('Do it.\n-----Original Message-----\nFrom: x')).toBe('Do it.');
-    expect(await strippedBody('Do it.\n-- \nSent from my phone')).toBe('Do it.');
-  });
-  test('falls back to the full text when stripping would leave nothing', async () => {
-    expect(await strippedBody('> just a quote\n> nothing else')).toBe('> just a quote\n> nothing else');
-  });
-});
-
-describe('parseInboundMime', () => {
-  test('extracts subject, new text, threading headers, attachment metadata', async () => {
-    const raw = [
-      'From: Owner <owner@example.com>',
-      `To: scout-a1b2c3@${DOMAIN}`,
-      'Subject: Check the deploy',
-      'Message-ID: <abc@mail.example.com>',
-      'In-Reply-To: <prev@mail.example.com>',
-      'References: <root@mail.example.com> <prev@mail.example.com>',
-      'MIME-Version: 1.0',
-      'Content-Type: multipart/mixed; boundary="B"',
-      '',
-      '--B',
-      'Content-Type: text/plain',
-      '',
-      'Is staging green?',
-      '',
-      'On Mon, Jun 1, 2026, the agent wrote:',
-      '> previously',
-      '--B',
-      'Content-Type: text/csv',
-      'Content-Disposition: attachment; filename="report.csv"',
-      '',
-      'a,b',
-      '1,2',
-      '--B--',
-      '',
-    ].join('\r\n');
-
-    const parsed = await parseInboundMime(await new Blob([raw]).arrayBuffer());
-    expect(parsed.subject).toBe('Check the deploy');
-    expect(parsed.body_text).toBe('Is staging green?');
-    expect(parsed.message_id).toBe('<abc@mail.example.com>');
-    expect(parsed.in_reply_to).toBe('<prev@mail.example.com>');
-    expect(parsed.references).toBe('<root@mail.example.com> <prev@mail.example.com>');
-    expect(parsed.attachments).toEqual([
-      { filename: 'report.csv', content_type: 'text/csv', size: expect.any(Number) },
-    ]);
+    expect(gmail.ownWords).toBe('Ship it to staging.');
+    expect(gmail.text).toContain('> Error rate 7.2%');
+    expect((await parseMail(message('Do it.\n-----Original Message-----\nFrom: x'))).ownWords).toBe('Do it.');
+    expect((await parseMail(message('Do it.\n-- \nSent from my phone'))).ownWords).toBe('Do it.');
   });
 
-  test('HTML-only mail degrades to stripped text', async () => {
-    const raw = [
-      'From: owner@example.com',
-      `To: scout-a1b2c3@${DOMAIN}`,
-      'Subject: hi',
-      'Content-Type: text/html',
-      '',
-      '<div><p>Run the <b>tests</b></p><style>p{color:red}</style></div>',
-    ].join('\r\n');
-
-    const parsed = await parseInboundMime(await new Blob([raw]).arrayBuffer());
-    expect(parsed.body_text).toBe('Run the tests');
+  test('a message that is only a quote keeps the quote rather than nothing', async () => {
+    expect((await parseMail(message('> just a quote\n> nothing else'))).ownWords).toBe('> just a quote\n> nothing else');
   });
-});
 
-describe('acceptInboundEmail — the trust gate', () => {
-  test('the owner drives a turn: event admitted at authenticated trust with a thread channel', async () => {
-    const { deps, log, replies } = makeDeps();
-    const result = await acceptInboundEmail(deps, incoming());
-    expect(result).toMatchObject({ admitted: true, duplicate: false, sender_class: 'owner' });
+  test('HTML-only mail reads as its text', async () => {
+    const parsed = await parseMail(message('<div><p>Run the <b>tests</b></p><style>p{color:red}</style></div>', ['Content-Type: text/html']));
 
-    if (!result.admitted) throw new Error('unreachable');
+    expect(parsed.text).toBe('Run the tests');
+    expect(parsed.html).toContain('<b>tests</b>');
+  });
 
-    const event = requireEmailEvent(log, result.event_id);
-    expect(event.variant).toBe('email');
-    expect(event.trust).toBe('authenticated');       // capped — never owner
-    expect(event.priority).toBe('normal');
+  test('threading headers, every address, and attachments with their bytes', async () => {
+    const parsed = await parseMail(new TextEncoder().encode([
+      'From: Dana Whitfield <dana@northwind.io>', 'To: scout.api-worker.ashish@kinu.run', 'Cc: "Ops, Northwind" <ops@northwind.io>',
+      'Subject: Webhook deliveries to /hooks/v2 failing with 500', 'Message-ID: <hooks-v2-500@northwind.io>',
+      'In-Reply-To: <prev@kinu.run>', 'References: <root@kinu.run> <prev@kinu.run>', 'MIME-Version: 1.0',
+      'Content-Type: multipart/mixed; boundary="B"', '', '--B', 'Content-Type: text/plain', '', 'Since Tuesday every delivery gets a 500.', '--B',
+      'Content-Type: text/csv', 'Content-Disposition: attachment; filename="failed-events.csv"', '', 'event,status', 'order.created,500', '--B--', '',
+    ].join('\r\n')));
 
-    const channel = present(replies.findOpenByEvent(result.event_id), 'the open reply channel for the event');
-    expect(channel.kind).toBe('email_thread');
-    expect(v.parse(v.object({
-      to: v.string(), from: v.string(), subject: v.string(), message_id: v.nullable(v.string()),
-    }), JSON.parse(channel.holder_addr))).toMatchObject({
-      to: 'owner@example.com',
-      from: `scout-a1b2c3@${DOMAIN}`,
-      subject: 'Check the deploy',
-      message_id: '<abc@mail.example.com>',
+    expect(parsed).toMatchObject({
+      from: { name: 'Dana Whitfield', address: 'dana@northwind.io' }, cc: [{ name: 'Ops, Northwind', address: 'ops@northwind.io' }],
+      messageId: '<hooks-v2-500@northwind.io>', inReplyTo: '<prev@kinu.run>', references: ['<root@kinu.run>', '<prev@kinu.run>'],
     });
-
-    const batch = present(buildDrainBatch(log.pending()), 'the drain batch');
-    expect(batch.ids).toContain(result.event_id);
-    expect(batch.text).toContain('owner@example.com');
-  });
-
-  test('owner match ignores case and display-name wrappers', async () => {
-    const { deps } = makeDeps({ owner_email: 'Owner@Example.COM' });
-    const result = await acceptInboundEmail(deps, incoming({ from: 'Owner <owner@example.com>' }));
-    expect(result).toMatchObject({ admitted: true, sender_class: 'owner' });
-  });
-
-  test('an unknown sender is dropped — no event row, no reply channel', async () => {
-    const { deps, log, sql } = makeDeps();
-    const result = await acceptInboundEmail(deps, incoming({ from: 'attacker@evil.example.com' }));
-    expect(result).toMatchObject({ admitted: false });
-    expect(log.pending()).toHaveLength(0);
-    expect(sql.exec(`SELECT COUNT(*) AS n FROM reply_channels`).toArray()[0].n).toBe(0);
-  });
-
-  test('an allowlisted sender is admitted at external trust', async () => {
-    const { deps, log } = makeDeps({ allowlist: ['Friend@Example.com'] });
-    const result = await acceptInboundEmail(deps, incoming({ from: 'friend@example.com' }));
-    expect(result).toMatchObject({ admitted: true, sender_class: 'allowlisted' });
-
-    if (!result.admitted) throw new Error('unreachable');
-    const event = present(log.get(result.event_id), 'the logged inbound event');
-    expect(event.trust).toBe('external');
-    expect(event.priority).toBe('background');
-  });
-
-  test('a retried delivery of the same Message-ID dedupes and aborts its extra channel', async () => {
-    const { deps, log, sql } = makeDeps();
-    const first = await acceptInboundEmail(deps, incoming());
-    const retry = await acceptInboundEmail(deps, incoming({ now: 9_000 }));
-    expect(retry).toMatchObject({ admitted: true, duplicate: true });
-
-    if (!first.admitted || !retry.admitted) throw new Error('unreachable');
-    expect(retry.event_id).toBe(first.event_id);
-    expect(log.pending()).toHaveLength(1);
-    const states = sql.exec(`SELECT state FROM reply_channels ORDER BY created_at`).toArray();
-    expect(states.map((r) => r.state)).toEqual(['open', 'aborted']);
-  });
-
-  test('the rate limit drops mail before publish', async () => {
-    const { deps, log } = makeDeps({ tryConsumeRateLimit: () => false });
-    const result = await acceptInboundEmail(deps, incoming());
-    expect(result).toMatchObject({ admitted: false });
-    expect(log.pending()).toHaveLength(0);
-  });
-
-  test('a long mail spills its body and the brief cites the path', async () => {
-    // The agent is woken by this message; a silently truncated brief reads as complete.
-    const { deps, log, vfs } = makeDeps();
-    const body = `URGENT-HEAD ${'detail '.repeat(400)}ACTION-TAIL`;
-    const result = await acceptInboundEmail(deps, incoming({ body_text: body }));
-
-    if (!result.admitted) throw new Error('unreachable');
-
-    const payload = requireEmailEvent(log, result.event_id).payload;
-    expect(payload.body_path).toBeTruthy();
-
-    if (!payload.body_path) throw new Error('expected spilled email body path');
-    expect(await readText(vfs, payload.body_path)).toBe(body);
-
-    const batch = buildDrainBatch(log.pending());
-
-    if (!batch) throw new Error('expected pending email drain batch');
-    expect(batch.text).toContain(payload.body_path);
-    expect(batch.text).toContain('URGENT-HEAD');
-    expect(batch.text).toContain('ACTION-TAIL');
-  });
-
-  test('mail that fits the brief is not spilled — a reference would be noise', async () => {
-    const { deps, log } = makeDeps();
-    const result = await acceptInboundEmail(deps, incoming());
-
-    if (!result.admitted) throw new Error('unreachable');
-    expect(requireEmailEvent(log, result.event_id).payload.body_path).toBeUndefined();
-    const batch = buildDrainBatch(log.pending());
-
-    if (!batch) throw new Error('expected pending email drain batch');
-    expect(batch.text).toContain('Is staging green?');
+    expect(parsed.attachments.map((file) => [file.filename, file.contentType, new TextDecoder().decode(file.content).replaceAll('\r\n', '\n').trimEnd()]))
+      .toEqual([['failed-events.csv', 'text/csv', 'event,status\norder.created,500']]);
   });
 });
 
-// KINU-054: References chains only grow; RFC 5322 §2.1.1 caps the whole field at 998 octets.
 describe('threading identity is bounded at admission', () => {
   /** The 998-octet line minus the field name and its `: `. */
   const REFERENCES_BUDGET = 998 - 'References'.length - 2;
@@ -324,38 +126,44 @@ describe('threading identity is bounded at admission', () => {
     expect(boundedReferences(null, null)).toBeNull();
   });
 
-  test('the stored event and the thread channel both carry the bounded chain', async () => {
-    const { deps, log, replies } = makeDeps();
+  test('the stored event and the owner\'s reply thread both carry the bounded chain', async () => {
+    const { deps, log, replies } = admission();
     const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
-    const result = await acceptInboundEmail(deps, incoming({ references: chain.join(' ') }));
+    const result = await admitMailArrival(deps, arrival({ references: chain.join(' ') }));
 
-    if (!result.admitted) throw new Error('unreachable');
+    if (!result.admitted || result.thread === null) throw new Error('unreachable');
 
     const payload = requireEmailEvent(log, result.event_id).payload;
     expect(present(payload.references, 'the event payload References').length).toBeLessThanOrEqual(REFERENCES_BUDGET);
     // One authority: the payload and the reply address cannot disagree about the thread.
     const channel = present(replies.findOpenByEvent(result.event_id), 'the open reply channel for the event');
-
-    const addr = v.parse(
-      v.object({ references: v.nullable(v.string()), message_id: v.nullable(v.string()) }),
-      JSON.parse(channel.holder_addr),
-    );
+    const addr = v.parse(v.object({ references: v.nullable(v.string()), message_id: v.nullable(v.string()) }), JSON.parse(channel.holder_addr));
 
     expect(addr.references).toBe(payload.references);
     expect(result.thread.references).toBe(payload.references);
   });
 
   test('an unusable Message-ID is stored as absent rather than as itself', async () => {
-    const { deps, log } = makeDeps();
-
-    const result = await acceptInboundEmail(deps, incoming({
-      message_id: 'not-a-message-id', in_reply_to: '<ok@x>',
-    }));
+    const { deps, log } = admission();
+    const result = await admitMailArrival(deps, arrival({ message_id: 'not-a-message-id' }));
 
     if (!result.admitted) throw new Error('unreachable');
-    const payload = requireEmailEvent(log, result.event_id).payload;
-    expect(payload.message_id).toBeNull();
-    expect(payload.in_reply_to).toBe('<ok@x>');
+    expect(requireEmailEvent(log, result.event_id).payload.message_id).toBeNull();
+  });
+
+  test('a long instruction spills, and the brief cites the path', async () => {
+    const { deps, log } = admission();
+    const result = await admitMailArrival(deps, arrival({ instruction: `Ship it.\n${'Rollback steps if the canary fails. '.repeat(40)}` }));
+
+    if (!result.admitted) throw new Error('unreachable');
+    expect(requireEmailEvent(log, result.event_id).payload.body_path).toMatch(/^\.kinu\/event-content\//u);
+  });
+
+  test('the rate limit drops mail before anything is published', async () => {
+    const { deps, log } = admission();
+
+    expect(await admitMailArrival({ ...deps, tryConsumeRateLimit: () => false }, arrival())).toMatchObject({ admitted: false });
+    expect(log.pending({})).toEqual([]);
   });
 });
 
@@ -363,7 +171,7 @@ describe('the inbox gate says when it is deaf', () => {
   // A rate-limited delivery leaves no trace the agent can read: it silently goes deaf.
   const RESET_AT = 1_700_000_060_000;
 
-  test('while the window is exhausted, the turn is told — with the limit and the reset', () => {
+  test('while the window is exhausted, the turn is told: with the limit and the reset', () => {
     const notice = inboundEmailDropNotice(30, RESET_AT, RESET_AT - 20_000);
 
     if (!notice) throw new Error('expected active rate-limit notice');
@@ -372,200 +180,8 @@ describe('the inbox gate says when it is deaf', () => {
     expect(notice.reason).toContain(new Date(RESET_AT).toISOString());
   });
 
-  test('once the window resets it says nothing — a deafness that ended is not news', () => {
+  test('once the window resets it says nothing: a deafness that ended is not news', () => {
     expect(inboundEmailDropNotice(30, RESET_AT, RESET_AT)).toBeNull();
     expect(inboundEmailDropNotice(30, RESET_AT, RESET_AT + 1)).toBeNull();
-  });
-});
-
-describe('routeInboundEmail — the Worker seam', () => {
-  function target(over: Partial<EmailDeliveryTarget> = {}): EmailDeliveryTarget {
-    return {
-      authorizeEmailSender: async () => ({ authorized: true }),
-      acceptEmailDelivery: async () => ({ admitted: true, duplicate: false }),
-      ...over,
-    };
-  }
-
-  function mockMessage(opts: {
-    from?: string; to?: string; raw?: string; headers?: Record<string, string>; rawSize?: number;
-  } = {}) {
-    const raw = opts.raw ?? [
-      'From: owner@example.com',
-      `To: ${opts.to ?? `scout-a1b2c3@${DOMAIN}`}`,
-      'Subject: Check the deploy',
-      'Message-ID: <abc@mail.example.com>',
-      'Content-Type: text/plain',
-      '',
-      'Is staging green?',
-    ].join('\r\n');
-
-    const body = new Response(raw).body;
-
-    if (!body) throw new Error('expected response body stream');
-
-    return {
-      from: opts.from ?? 'owner@example.com',
-      to: opts.to ?? `scout-a1b2c3@${DOMAIN}`,
-      headers: new Headers({ 'message-id': '<abc@mail.example.com>', ...opts.headers }),
-      raw: body,
-      rawSize: opts.rawSize ?? raw.length,
-    };
-  }
-
-  test('delivers the parsed email to the agent named by the recipient', async () => {
-    const deliveries: Array<Parameters<EmailDeliveryTarget['acceptEmailDelivery']>[0]> = [];
-    const resolved: string[] = [];
-
-    const result = await routeInboundEmail(mockMessage(), DOMAIN, async (name) => {
-      resolved.push(name);
-
-      return target({
-        acceptEmailDelivery: async (opts) => {
-          deliveries.push(opts);
-
-          return { admitted: true, duplicate: false };
-        },
-      });
-    }, 42);
-
-    expect(result).toEqual({ outcome: 'admitted', agent: 'scout-a1b2c3' });
-    expect(resolved).toEqual(['scout-a1b2c3']);
-    expect(deliveries[0]).toMatchObject({
-      from: 'owner@example.com',
-      to: `scout-a1b2c3@${DOMAIN}`,
-      subject: 'Check the deploy',
-      body_text: 'Is staging green?',
-      message_id: '<abc@mail.example.com>',
-      now: 42,
-    });
-  });
-
-  test('unroutable recipients are dropped without touching any agent', async () => {
-    let resolves = 0;
-
-    const result = await routeInboundEmail(
-      mockMessage({ to: 'anyone@wrong-domain.example.com' }),
-      DOMAIN,
-      async () => {
-        resolves++;
-
-        return target();
-      },
-    );
-
-    expect(result.outcome).toBe('dropped');
-    expect(resolves).toBe(0);
-  });
-
-  test('auto-reply / bulk mail (RFC 3834) is dropped before any agent is touched', async () => {
-    let resolves = 0;
-
-    const autoReplyHeaders: Array<Record<string, string>> = [
-      { 'auto-submitted': 'auto-replied' },
-      { precedence: 'bulk' },
-      { 'list-id': '<newsletter.example.com>' },
-      { 'x-auto-response-suppress': 'All' },
-    ];
-
-    for (const headers of autoReplyHeaders) {
-      const result = await routeInboundEmail(mockMessage({ headers }), DOMAIN, async () => {
-        resolves++;
-
-        return target();
-      });
-
-      expect(result).toMatchObject({ outcome: 'dropped', agent: 'scout-a1b2c3' });
-    }
-
-    expect(resolves).toBe(0);
-  });
-
-  test('Auto-Submitted: no is human mail and still drives a turn', async () => {
-    const result = await routeInboundEmail(
-      mockMessage({ headers: { 'auto-submitted': 'no' } }), DOMAIN, async () => target(),
-    );
-
-    expect(result).toEqual({ outcome: 'admitted', agent: 'scout-a1b2c3' });
-  });
-
-  test('a gate rejection surfaces as dropped with the agent reason', async () => {
-    const result = await routeInboundEmail(mockMessage(), DOMAIN, async () => target({
-      acceptEmailDelivery: async () => ({ admitted: false, reason: 'inbound email rate limit exceeded' }),
-    }));
-
-    expect(result).toEqual({
-      outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'inbound email rate limit exceeded',
-    });
-  });
-
-  test('an unauthorized sender is refused BEFORE the message is read or parsed', async () => {
-    // The sender gate must run before PostalMime parses the body or attachments.
-    let pulled = false;
-    const message = mockMessage({ from: 'stranger@elsewhere.example' });
-
-    const watched = {
-      ...message,
-      // `highWaterMark: 0`: nothing is pulled until a reader asks.
-      raw: new ReadableStream<Uint8Array>(
-        { pull(controller) { pulled = true; controller.close(); } },
-        { highWaterMark: 0 },
-      ),
-    };
-
-    const result = await routeInboundEmail(watched, DOMAIN, async () => target({
-      authorizeEmailSender: async () => ({ authorized: false, reason: 'sender not authorized for this agent' }),
-      acceptEmailDelivery: async () => { throw new Error('an unauthorized message reached the delivery'); },
-    }));
-
-    expect(result).toEqual({
-      outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'sender not authorized for this agent',
-    });
-    expect(pulled).toBe(false);
-  });
-
-  test('a message over the byte ceiling is dropped without resolving an agent', async () => {
-    let resolves = 0;
-
-    // Clearly over any ceiling; the ceiling is read from the route's refusal, never restated.
-    const result = await routeInboundEmail(
-      mockMessage({ rawSize: 10 * 1024 * 1024 }),
-      DOMAIN,
-      async () => {
-        resolves++;
-
-        return target();
-      },
-    );
-
-    expect(result).toMatchObject({
-      outcome: 'dropped',
-      agent: 'scout-a1b2c3',
-    });
-    expect(resolves).toBe(0);
-  });
-
-  test('a message that LIES about its size is refused by the count of arriving bytes', async () => {
-    // `rawSize` is the edge's claim; the byte count is the gate, so an overlong stream is cut off.
-    const oversize = 'x'.repeat(3 * 1024 * 1024);
-    const body = new Response(`Subject: big\r\n\r\n${oversize}`).body;
-
-    if (!body) throw new Error('expected response body stream');
-    let parsedFor: string | null = null;
-
-    const result = await routeInboundEmail(
-      { ...mockMessage(), raw: body, rawSize: 10 },
-      DOMAIN,
-      async () => target({
-        acceptEmailDelivery: async (opts) => {
-          parsedFor = opts.from;
-
-          return { admitted: true };
-        },
-      }),
-    );
-
-    expect(result.outcome).toBe('dropped');
-    expect(parsedFor).toBeNull();
   });
 });

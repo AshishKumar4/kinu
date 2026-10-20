@@ -32,7 +32,7 @@ export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-t
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
   type RunTurnSources, type TurnSourcesBundle, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
-  type TurnTools,
+  type TurnReads, type TurnTools,
 } from './orchestrator/turn-assembly';
 
 export {
@@ -90,6 +90,34 @@ export {
 } from './state/ops-tables';
 
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
+
+export { initMailNameTables, initMailboxTables } from './state/mail-schema';
+
+export { mailVerdict, type MailVerdict } from './mail/verdict';
+
+export { isMailLabel, mailAddressOf, mailLabelOf, parseMailRecipient, type MailRecipient } from './mail/address';
+
+export type * from './mail/mailbox-api';
+
+export { MailStore, type MailBlobs, type MailStoreDeps, type ParsedMail } from './mail/store';
+
+export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
+
+export { MAIL } from './operations/mail';
+
+export { mailHostRedirect } from './mail/host';
+
+export { inboundBody, isAutoReplyEmail, mailThreadText, stripQuotedReply } from './mail/words';
+
+export { handedMailSignal, MAIL_HANDED_EVENT, type HandedMail } from './mail/handed';
+
+export { mailInContext, type MailInContext } from './mail/in-context';
+
+export { MailTriageLane, triageMail, type MailTriageDeps, type MailTriageRun } from './mail/triage';
+
+export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
+
+export { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorDeps, type MonitorRunResult } from './monitor/incidents';
 
 export {
   DEFAULT_SOUL_MD,
@@ -1567,7 +1595,7 @@ export {
   performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
 
-export { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './safety/approval-kind';
+export { approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,

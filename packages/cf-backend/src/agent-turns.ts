@@ -11,7 +11,7 @@ import {
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk, TurnReads } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -80,6 +80,8 @@ interface OpenTurn {
   prepared: PreparedHostedTurn | null;
   /** The account's facts, read once when the turn is read, so every step's block is the same bytes. */
   accountFacts?: readonly Fact[];
+  /** The agent's unread mail, read with the facts for the same reason. */
+  mail?: TurnReads['mail'];
   /** MEMORY.md's tail, read with its sources for the same reason. */
   memoryTail?: string;
   /** The opening the workspace's fence admitted for it: what it offers and closes must still be that one. */
@@ -415,7 +417,10 @@ export class AgentTurns {
   private dynamic(turn: OpenTurn, prepared: PreparedHostedTurn): DynamicContext {
     const { offered, sources, resolved, surface } = prepared.surface;
 
-    const reads = { memoryTail: turn.memoryTail, activeSkills: null, ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }) };
+    const reads: TurnReads = {
+      memoryTail: turn.memoryTail, activeSkills: null,
+      ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }), ...(turn.mail !== undefined && { mail: turn.mail }),
+    };
 
     // The surface holds the profile its isolate bound, once bound, else the one it resolved.
     return sources.dynamic(reads)(surface.operation?.profile ?? resolved.profile, offered);
@@ -518,7 +523,7 @@ export class AgentTurns {
     const { actor, input, surface } = prepared;
 
     turn.prepared = prepared;
-    turn.accountFacts = await surface.sources.accountFacts?.();
+    [turn.accountFacts, turn.mail] = await Promise.all([surface.sources.accountFacts?.(), surface.sources.mail?.()]);
     const version = await actor.runtime.identity.scaffold.version();
 
     const scaffold = this.scaffold(actor, version);

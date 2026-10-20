@@ -168,9 +168,14 @@ describe('a device terminal is a real one', () => {
     h.sessions.write('pane-size', Buffer.from('stty size\r').toString('base64'));
     await h.until(() => /\b24 80\b/.test(h.output()));
 
+    // Resized while a program holds the terminal, not the shell's line editor: readline writes back the size it read
+    // each time it prepares a prompt (rltty.c `set_winsize`, a TIOCGWINSZ then a TIOCSWINSZ), so a resize landing
+    // between the two is put back. The computed marker says `read` holds the terminal; the size is read after.
+    h.sessions.write('pane-size', Buffer.from('echo HELD_$((6 * 7)); read _; stty size\r').toString('base64'));
+    await h.until(() => /HELD_42\b/.test(h.output()));
     const resized = h.sessions.resize('pane-size', 133, 44);
     expect(resized).toEqual({ cols: 133, rows: 44 });
-    h.sessions.write('pane-size', Buffer.from('stty size\r').toString('base64'));
+    h.sessions.write('pane-size', Buffer.from('\r').toString('base64'));
     await h.until(() => /\b44 133\b/.test(h.output()));
   });
 

@@ -15,6 +15,8 @@ export const ALARM_WORK = {
   WorkspaceDeletionJobs: ['workspace.destroyed'],
   // Drops or expires a deploy run nobody finished, an hour after its last call (cf-backend `deploy/deploy-do.ts`).
   DeployRunDO: ['deploy.run_dropped', 'deploy.run_expired'],
+  // Retries an account's queued sends and empties its Trash 30 days on (cf-backend `mail/mailbox-do.ts`).
+  MailboxDO: ['email.outbox_send_failed', 'mail.trash_emptied'],
   // Sends a share's card to a recipient's account: a call into that account, none into this one.
   ShareCardJobs: ['share.card_sent'],
   // Writes the box's checkpoint, or restarts a box whose disk stalled; its heartbeat otherwise watches.

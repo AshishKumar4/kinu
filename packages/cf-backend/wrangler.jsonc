@@ -140,6 +140,11 @@
       // object is named by the run id and holds that run's step ledger and the
       // Cloudflare tokens until the last step hands them to the new Worker.
       { "class_name": "DeployRunDO", "name": "DeployRunDO" },
+      // Mail (docs/MAIL.md §2). MailName: one per address label, `idFromName(label)`; its row is the claim and
+      // naming the object is the lock, so inbound mail resolves an address in one hop. Mailbox: one per account,
+      // `idFromName(user_id)`, holding every box the account has (its person, workspaces and agents).
+      { "class_name": "MailNameDO", "name": "MAILNAME" },
+      { "class_name": "MailboxDO", "name": "MAILBOX" },
       // The user-level shared Drive (Mossaic, built from vendored source under
       // third_party/mossaic). The binding NAMES are the SDK's contract:
       // `createVFS` reads `env.MOSSAIC_USER`, and the tenant object reads
@@ -182,6 +187,8 @@
     "MonitorDO": { "type": "durable-object", "storage": "sqlite" },
     "ControlPlaneDO": { "type": "durable-object", "storage": "sqlite" },
     "DeployRunDO": { "type": "durable-object", "storage": "sqlite" },
+    "MailNameDO": { "type": "durable-object", "storage": "sqlite" },
+    "MailboxDO": { "type": "durable-object", "storage": "sqlite" },
     "MossaicUserDO": { "type": "durable-object", "storage": "sqlite" },
     "MossaicShardDO": { "type": "durable-object", "storage": "sqlite" },
     // Codex model calls go through the account's connected machine; no
@@ -307,6 +314,9 @@
     "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "https://aksingh.cloudflareaccess.com",
     "CONTROL_PLANE_ACCESS_AUD": "fa05f0a7d7193ab2d57e08039c567ce3a3bbafa5bccc32e300ab432c607f0015",
     "CONTROL_PLANE_ADMINS": "me@ashishkumarsingh.com",
+    // Who may claim a mail address (docs/MAIL.md §1): `operators` (CONTROL_PLANE_ADMINS) until the owner opens it
+    // to `everyone`, who then send at most 100 a day.
+    "MAIL_ACCOUNTS": "operators",
     // Account the Analytics Engine SQL API is queried against. The same id as
     // `account_id` above; a plain var because it is in this file already, and
     // the Worker cannot read the deploy-time field. Its companion is the
@@ -429,7 +439,11 @@
     // (slates/pictures.ts). Here, not in the workspace's object, so a Drive of 30 tiles wakes
     // no workspace and a shared slate's picture never wakes its owner's.
     //   wrangler r2 bucket create kinu-slate-pictures
-    { "binding": "SLATE_PICTURES", "bucket_name": "kinu-slate-pictures" }
+    { "binding": "SLATE_PICTURES", "bucket_name": "kinu-slate-pictures" },
+    // Mail's bytes, content-addressed under mail/<user_id>/: raw/<sha256>.eml, text/, html/, att/<sha256>
+    // (mail/store.ts); the rows are the Mailbox's. Trash empties 30 days after a thread went in.
+    //   wrangler r2 bucket create kinu-mail
+    { "binding": "MAIL_BUCKET", "bucket_name": "kinu-mail" }
   ],
   // Browser sessions, one-time OAuth state, and CLI browser-approval state.
   // All of it expires on its own clock, and all of it is read at the edge on
@@ -484,6 +498,8 @@
           { "class_name": "KinuDevbox", "name": "KinuDevbox" },
           { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" },
           { "class_name": "DeployRunDO", "name": "DeployRunDO" },
+          { "class_name": "MailNameDO", "name": "MAILNAME" },
+          { "class_name": "MailboxDO", "name": "MAILBOX" },
           { "class_name": "MossaicUserDO", "name": "MOSSAIC_USER" },
           { "class_name": "MossaicShardDO", "name": "MOSSAIC_SHARD" }
         ]
@@ -515,7 +531,8 @@
         { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" },
         { "binding": "FEEDBACK_BUCKET", "bucket_name": "kinu-feedback-staging" },
         { "binding": "RELEASES_BUCKET", "bucket_name": "kinu-releases-staging" },
-        { "binding": "SLATE_PICTURES", "bucket_name": "kinu-slate-pictures-staging" }
+        { "binding": "SLATE_PICTURES", "bucket_name": "kinu-slate-pictures-staging" },
+        { "binding": "MAIL_BUCKET", "bucket_name": "kinu-mail-staging" }
       ],
       // `kinu-auth-staging`, created by hand like production's (KV titles are not
       // unique, so provisioning never creates one).
@@ -548,6 +565,7 @@
         "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "",
         "CONTROL_PLANE_ACCESS_AUD": "",
         "CONTROL_PLANE_ADMINS": "",
+        "MAIL_ACCOUNTS": "operators",
         "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
         "ANALYTICS_DATASET_SUFFIX": "_staging"
       }

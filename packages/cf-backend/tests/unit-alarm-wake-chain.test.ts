@@ -10,6 +10,7 @@ import {
   agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
   runDelegatedTask, tapDiagnostics, until, seedOrphanFiber, wakeForDelegatedTask,
 } from './helpers/actor-harness';
+import { ownerMail } from './helpers/owner-mail';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { cutNextDelivery } from './helpers/agent-facets';
 import { present, createRecordingLogger } from '@kinu.run/test-utils';
@@ -724,10 +725,7 @@ describe('the workspace keeps exactly one wake per job', () => {
       },
     );
 
-    const admission = await agent.acceptEmailDelivery({
-      from: 'owner@example.com', to: 'workspace@kinu.run', subject: 'status?', body_text: 'how is the deploy?',
-      message_id: '<m-1@example.com>', in_reply_to: null, references: null, attachments: [], now: Date.now(),
-    });
+    const admission = await agent.mailArrived(ownerMail(1, 'how is the deploy?'));
 
     expect(admission).toMatchObject({ admitted: true, duplicate: false });
     expect(refusals).toEqual(['send']);

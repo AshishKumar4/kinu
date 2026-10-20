@@ -42,6 +42,9 @@ interface Answers {
   hostname: string;
   sandbox: boolean;
   keys: Record<string, string>;
+  /** The zone the deployment's mail addresses sit on, or "" for no mail (docs/MAIL.md §1). */
+  mailZoneId: string;
+  mailEveryone: boolean;
 }
 
 const EMPTY: Answers = {
@@ -52,9 +55,11 @@ const EMPTY: Answers = {
   hostname: "",
   sandbox: false,
   keys: {},
+  mailZoneId: "",
+  mailEveryone: false,
 };
 
-function inputsFrom(answers: Answers): DeployInputs {
+function inputsFrom(answers: Answers, zones: readonly { id: string; name: string }[]): DeployInputs {
   const zoned = answers.zoneId !== "" && answers.hostname !== "";
 
   return {
@@ -67,6 +72,8 @@ function inputsFrom(answers: Answers): DeployInputs {
     accessEmails: [answers.ownerEmail],
     providerKeyNames: Object.entries(answers.keys).filter(([, value]) => value !== "").map(([name]) => name),
     sandbox: answers.sandbox,
+    mailDomain: zones.find((zone) => zone.id === answers.mailZoneId)?.name ?? "",
+    mailAccounts: answers.mailEveryone ? "everyone" : "operators",
   };
 }
 
@@ -125,9 +132,12 @@ function Answered({ options, runId, onStarted }: {
         if (value !== "") yield* Effect.promise(async () => door.holdProviderKey(name, value));
       }
 
-      onStarted(yield* Effect.promise(async () => door.start(inputsFrom(answers))));
+      onStarted(yield* Effect.promise(async () => door.start(inputsFrom(answers, zones))));
     }), showing((chain) => { setErr(chain); setBusy(false); }));
   });
+
+  // The zones offered for the address and for mail: one list, drawn in both.
+  const zoneOptions = zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>);
 
   return (
     <section className="space-y-4" aria-label="Your deployment">
@@ -174,7 +184,7 @@ function Answered({ options, runId, onStarted }: {
                 onChange={(event) => setAnswers({ ...answers, zoneId: event.target.value })}
               >
                 <option value="">workers.dev</option>
-                {zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
+                {zoneOptions}
               </select>
               {answers.zoneId !== "" && (
                 <input
@@ -188,6 +198,27 @@ function Answered({ options, runId, onStarted }: {
             </div>
           )}
         </Field>
+        {zones.length > 0 && (
+          <Field label="Mail" hint="Optional. Addresses for you, your workspaces and their agents on a zone of yours; the deploy sets up its routing, sending and DNS.">
+            <div className="space-y-2">
+              <select
+                className={inputCls}
+                aria-label="Mail domain"
+                value={answers.mailZoneId}
+                onChange={(event) => setAnswers({ ...answers, mailZoneId: event.target.value })}
+              >
+                <option value="">No mail</option>
+                {zoneOptions}
+              </select>
+              {answers.mailZoneId !== "" && (
+                <label className="flex items-center gap-2 text-sm p-text-2">
+                  <input type="checkbox" checked={answers.mailEveryone} onChange={(event) => setAnswers({ ...answers, mailEveryone: event.target.checked })} />
+                  Every account may claim an address, not only yours
+                </label>
+              )}
+            </div>
+          </Field>
+        )}
         {options.prompts.map((name) => (
           <Field key={name} label={name} hint="Optional. Stored as a secret on your deployment, never here.">
             <input

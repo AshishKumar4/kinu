@@ -60,7 +60,8 @@ function tierWords(id: TierId): TierWords {
 
 /** What an unset tier runs on: Quick, the pick the server resolves it to (`fastAssignment`); any other, the main model. */
 function unsetTierPlaceholder(tierId: TierId, menu: ModelMenuResponse, main: TierAssignment): string {
-  const autoFast = tierId === 'fast' ? fastAssignment(menu.fast ?? [], main) : null;
+  const windows = Object.fromEntries(menu.models.flatMap((model) => (model.contextWindow === undefined ? [] : [[model.spec, model.contextWindow]])));
+  const autoFast = tierId === 'fast' ? fastAssignment(menu.fast ?? [], main, windows) : null;
 
   return autoFast !== null
     ? `Automatic · ${labelOfSpec(menu, autoFast.model)}`

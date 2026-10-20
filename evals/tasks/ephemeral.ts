@@ -1,3 +1,4 @@
+import * as v from 'valibot';
 import { safeJsonParse, type JsonValue } from '@kinu.run/core';
 import type { SlateView, WorkspaceBrowser } from '../src/browser';
 import { sightEvidence, type Sight } from '../src/sight';
@@ -46,8 +47,12 @@ const PAGE = /[\w./-]*\.html?\b/gu;
 /** A slate the code names, `slates.<id>` or `slates["<id>"]`, and whether the code previews it there. */
 const NAMED = /slates(?:\.([A-Za-z_$][\w$]*)|\[\s*["'`]([^"'`]+)["'`]\s*\])(\s*\.\s*\$preview\s*\()?/gu;
 
-/** A browser on a page: the agent looking at what it built. */
-const LOOK = /\bscreenshot\b|openBrowser|connectBrowser/u;
+/** A program or command opening a browser on a page: the agent looking at what it built. A call, not a word: a comment
+ *  saying "screenshot" looks at nothing (dashboards trial 3, rc22). */
+const LOOK = /\bscreenshot\s*\(|--screenshot\b|\b(?:openBrowser|connectBrowser)\s*\(/u;
+
+/** A `web` call's operation. */
+const WebOp = v.looseObject({ op: v.string() });
 
 /** Every string in a call's recorded arguments, as the agent wrote it: a program's code reads as code, not JSON. */
 function written(args: string): string {
@@ -60,27 +65,48 @@ function written(args: string): string {
   return strings(safeJsonParse(args)).join('\n');
 }
 
+/** A tool call as a trial recorded it: the tool's name and its arguments as JSON. */
+type RecordedCall = { readonly name: string; readonly args: string };
+
+/** The slates a call's code names, and whether it previews each there. */
+function namedIn(args: string): { readonly id: string; readonly previews: boolean }[] {
+  return [...args.matchAll(NAMED)].map((found) => ({ id: found[1] ?? found[2] ?? '', previews: found[3] !== undefined }));
+}
+
+/** Whether a call previews an asked-for slate: by name (`slates.chess.$preview()`), or through a name of its own for
+ *  one it names (`const s = workspace.slates.chess; await s.$preview()`, chess trial 3, rc22) previewing no other. */
+function previewsAsked(args: string, asked: ReadonlySet<string>): boolean {
+  const named = namedIn(args);
+
+  if (named.some(({ id, previews }) => previews && asked.has(id))) return true;
+
+  return /\$preview\s*\(/u.test(args) && named.some(({ id }) => asked.has(id)) && !named.some(({ id, previews }) => previews && !asked.has(id));
+}
+
 /**
  * The calls of a turn that stand in for the slates it was asked for, `slates` (none for an answer drawn in the chat):
  * a server of its own; a page written outside `/slates/<id>/` of an asked-for slate; a preview of any other slate; and a
- * browser on a page before any asked-for slate was previewed, so not on the real one. Checking the real slate as it
- * renders, its `$preview()` and a screenshot of the URL that answers, is what the slates skill asks for, and passes.
+ * browser on a page before any asked-for slate was previewed, in this turn or one `before` it, so not on the real one.
+ * Checking the real slate as it renders, its `$preview()` and a screenshot of the URL that answers, is what the slates
+ * skill asks for, and passes; the preview stays up for the turns after (chess trial 4, dashboards 1-3, rc22).
  */
-export function prototypeSteps(calls: readonly { readonly name: string; readonly args: string }[], slates: readonly string[]): string[] {
+export function prototypeSteps(calls: readonly RecordedCall[], slates: readonly string[], before: readonly RecordedCall[] = []): string[] {
   const asked = new Set(slates);
-  let previewed = false;
+  const executes = (name: string) => ['eval', 'shell', 'file', 'web'].includes(name);
+  let previewed = before.some(({ name, args }) => executes(name) && previewsAsked(written(args), asked));
 
   return calls.flatMap(({ name, args: recorded }) => {
     // Plans, memories and reports describe work; only these tools execute a page, write one, or look at one.
-    if (!['eval', 'shell', 'file', 'web'].includes(name)) return [];
+    if (!executes(name)) return [];
     const args = written(recorded);
-    const named = [...args.matchAll(NAMED)].map((found) => ({ id: found[1] ?? found[2] ?? '', previews: found[3] !== undefined }));
+    const named = namedIn(args);
     const pages = [...args.matchAll(PAGE)].map(([path]) => path).filter((path) => ![...asked].some((id) => path.includes(`/slates/${id}/`)));
     const others = named.filter(({ id, previews }) => previews && !asked.has(id));
     const bare = /\$preview\s*\(/u.test(args) && !named.some(({ previews }) => previews) && !named.some(({ id }) => asked.has(id));
 
-    previewed ||= named.some(({ id, previews }) => previews && asked.has(id));
-    const looked = (LOOK.test(name) || LOOK.test(args)) && !previewed;
+    previewed ||= previewsAsked(args, asked);
+    const web = v.safeParse(WebOp, safeJsonParse(recorded));
+    const looked = (name === 'web' ? web.success && web.output.op === 'screenshot' : LOOK.test(args)) && !previewed;
 
     return SERVER.test(args) || pages.length > 0 || others.length > 0 || bare || looked ? [`${name}: ${recorded.slice(0, 240)}`] : [];
   });
@@ -89,7 +115,8 @@ export function prototypeSteps(calls: readonly { readonly name: string; readonly
 /** No prototype stood in for what the turn was asked to build: `slates`, or none for an answer drawn in the chat. */
 export async function madeNoPrototype(verifier: EvalVerifier, slates: readonly string[] = []): Promise<void> {
   await verifier.check('built-no-prototype', async () => {
-    const steps = prototypeSteps(await verifier.turnToolCalls(), slates);
+    const [calls, before] = await Promise.all([verifier.turnToolCalls(), verifier.earlierToolCalls()]);
+    const steps = prototypeSteps(calls, slates, before);
 
     return { pass: steps.length === 0, evidence: { steps, slates: [...slates] } };
   });

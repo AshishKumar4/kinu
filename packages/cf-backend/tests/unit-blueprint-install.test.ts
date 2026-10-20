@@ -1,5 +1,6 @@
 // Installing a workspace blueprint through the account's route: the new workspace is born with the blueprint's soul,
-// layout, main agent and schedules before its first turn, and the Personal assistant becomes the owner's Home, once.
+// layout, main agent and schedules before its first turn, and the Personal assistant becomes the owner's Home, once,
+// and reads their own mail.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { Hono } from 'hono';
@@ -23,8 +24,8 @@ const ENVELOPE: ProfileCatalogEnvelope = {
   catalog: { ...BUILTIN_PROFILE_CATALOG, tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } } },
 };
 
-/** An account and the workspaces it creates, every birth step recorded in order. */
-function account() {
+/** An account and the workspaces it creates, every birth step recorded in order; `mailDown`: its Mailbox is unreachable. */
+function account({ mailDown = false } = {}) {
   const config = new Map<string, string>();
   const active: string[] = [];
   const counted: string[] = [];
@@ -87,6 +88,10 @@ function account() {
 
       return { started: true };
     },
+    async readOwnerMail() {
+      if (mailDown) throw new Error('the Mailbox is unreachable');
+      step('mail');
+    },
   });
 
   const env: CreateWorkspaceEnv<string> = {
@@ -139,7 +144,7 @@ describe('installing a workspace blueprint', () => {
     const birth = present(owner.births[0], 'the assistant');
 
     expect(answer.status).toBe(201);
-    expect(birth.steps).toEqual(['claim', 'title:Personal assistant', 'soul', 'seed', 'baseline', 'genesis']);
+    expect(birth.steps).toEqual(['claim', 'title:Personal assistant', 'soul', 'seed', 'baseline', 'genesis', 'mail']);
     expect(birth.soul).toStartWith('# Jarvis\n\n## Mission\n\nBe Ashish\'s personal assistant');
     expect(birth.soul).not.toContain('{{');
     expect(birth.seed).toEqual({
@@ -154,6 +159,14 @@ describe('installing a workspace blueprint', () => {
     // Named Home before it was listed, so the roster's first frame of it already says Home.
     expect(birth.homeWhenListed).toBe(workspace);
     expect(owner.counted).toEqual(['personal-assistant']);
+  });
+
+  test('an assistant that could not be handed the owner\'s mail is still installed, and Home', async () => {
+    const owner = account({ mailDown: true });
+    const answer = await owner.install('personal-assistant', { utcOffsetMinutes: 0 });
+
+    expect(answer.status).toBe(201);
+    expect(await owner.home()).toBe(v.parse(InstalledSchema, answer.body).workspace);
   });
 
   test('installing the assistant again opens the one the owner has; once it is removed, Home has none and a new one is made', async () => {
@@ -177,6 +190,7 @@ describe('installing a workspace blueprint', () => {
     expect(answer.status).toBe(201);
     expect(birth.steps).toContain('title:API Worker v2 release');
     expect(birth.seed).toEqual({ blueprint: 'release-manager', layout: 'workbench', agent: 'Release', schedules: [] });
+    expect(birth.steps).not.toContain('mail');
     expect(await owner.home()).toBeNull();
     expect(birth.homeWhenListed).toBeNull();
     expect(owner.counted).toEqual([]);

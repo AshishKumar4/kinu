@@ -50,7 +50,7 @@ function requireStepUp(identity: AuthIdentity): Response | null {
 
 export type HubTarget = Pick<OrchestratorAgent,
   'listTriggers' | 'createDurableWebhook' | 'cancelTrigger' | 'listRecentEvents'
-  | 'getEmailIngress' | 'setEmailAllowlist' | 'setEmailNotifications'
+  | 'getEmailIngress' | 'setEmailNotifications'
 >;
 
 /**
@@ -121,29 +121,17 @@ export function hubRoutes<Bindings extends HubEnv>(
 
   routes.put(EMAIL, async (c) => {
     const request = c.get('workspace').request;
-    // Widening who can drive turns by email is a grant.
     const stepUp = requireStepUp(c.get('identity'));
 
     if (stepUp) return stepUp;
 
-    const body = await safeJson(request, v.object({
-      allow: v.optional(v.array(v.string())),
-      notifications: v.optional(v.boolean()),
-    }));
+    const body = await safeJson(request, v.object({ notifications: v.boolean() }));
 
-    if (!body || (body.allow === undefined && body.notifications === undefined)) {
-      return err(400, 'allow (string[]) and/or notifications (boolean) required');
-    }
+    if (!body) return err(400, 'notifications (boolean) required');
 
     const agent = c.get('hub');
 
-    if (body.allow !== undefined) {
-      await agent.setEmailAllowlist(body.allow);
-    }
-
-    if (body.notifications !== undefined) {
-      await agent.setEmailNotifications(body.notifications === true);
-    }
+    await agent.setEmailNotifications(body.notifications);
 
     return json({ body: await agent.getEmailIngress() });
   });

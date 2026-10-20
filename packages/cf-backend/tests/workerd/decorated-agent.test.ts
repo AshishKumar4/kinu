@@ -80,7 +80,7 @@ describe('KINU-065 — the privileged surface is absent from the runtime registr
   test('worker-only privileged methods exist and are not callable', () => {
     const forbidden = [
       { cls: OrchestratorAgent, names: [
-        'rawCopyFromFork', 'claimOwner', 'acceptWebhookDelivery', 'acceptEmailDelivery',
+        'rawCopyFromFork', 'claimOwner', 'acceptWebhookDelivery', 'mailArrived',
         'receivePeerMessage', 'listPeersFromMcp', 'runTaskFromMcp', 'saveNoteFromMcp', 'sendPeerFromMcp',
       ] },
       { cls: ActorAgent, names: [
