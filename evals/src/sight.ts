@@ -123,13 +123,18 @@ export function look(names: readonly string[], press: Press | null): Looked {
     return node instanceof Element && ['inline', 'inline-block', 'contents'].includes(getComputedStyle(node).display) ? textIn(node) : ' ';
   }).join('');
 
+  // What labels a name in an element: its own line when the name is said there, else all it says.
+  const labelledBy = (name: string, element: Element, text: string): string => {
+    const own = ownLine(element);
+
+    return naming(name, own) ? own : text;
+  };
+
   const labels = new Map(names.map((name) => [name, [...holding].filter((element) => {
     const text = textIn(element);
-    const own = ownLine(element);
-    const labelled = naming(name, own) ? own : text;
 
     return naming(name, text) && !names.some((other) => other !== name && naming(other, text))
-      && labelled.replace(patterns.get(name) ?? '', '').replace(/[^\p{L}]/gu, '').length <= LABEL_LETTERS
+      && labelledBy(name, element, text).replace(patterns.get(name) ?? '', '').replace(/[^\p{L}]/gu, '').length <= LABEL_LETTERS
       && ![...element.children].some((child) => naming(name, textIn(child)));
   })]));
 
@@ -152,6 +157,24 @@ export function look(names: readonly string[], press: Press | null): Looked {
     return new DOMRect(left, top, Math.max(one.right, other.right) - left, Math.max(one.bottom, other.bottom) - top);
   };
 
+  // The box of the drawing a table, grid or flex row is part of. A flex chart can put its bars and axis labels in
+  // separate rows under one drawing, rather than in one grid; drawn straight in the page, with no drawing around them,
+  // the drawing is the axis and the row before it. Null when the page itself would be the drawing.
+  const drawingOf = (holder: Element | null): DOMRect | null => {
+    if (holder === null || !['flex', 'inline-flex'].includes(getComputedStyle(holder).display)) {
+      return holder === null || holder === document.body ? null : holder.getBoundingClientRect();
+    }
+
+    const drawing = holder.parentElement;
+    const bars = holder.previousElementSibling;
+
+    if (drawing === null) return null;
+
+    if (drawing !== document.body) return drawing.getBoundingClientRect();
+
+    return bars === null ? null : spanning(bars.getBoundingClientRect(), holder.getBoundingClientRect());
+  };
+
   // What lies in the column under or over `cell`, within the table, grid or drawing holding it; null when none does.
   const columnOf = (cell: Element): ((node: Node) => boolean) | null => {
     let holder = cell.parentElement;
@@ -160,16 +183,10 @@ export function look(names: readonly string[], press: Press | null): Looked {
       holder = holder.parentElement;
     }
 
-    // A flex chart can put its bars and axis labels in separate rows under one drawing, rather than in one grid. Drawn
-    // straight in the page, with no drawing around them, the drawing is the axis and the row before it.
-    const axis = holder !== null && ['flex', 'inline-flex'].includes(getComputedStyle(holder).display) ? holder : null;
+    const group = drawingOf(holder);
 
-    if (axis !== null) holder = axis.parentElement;
-    const bars = holder === document.body ? axis?.previousElementSibling ?? null : null;
-
-    if (holder === null || (holder === document.body && bars === null)) return null;
+    if (group === null) return null;
     const across = cell.getBoundingClientRect();
-    const group = bars === null || axis === null ? holder.getBoundingClientRect() : spanning(bars.getBoundingClientRect(), axis.getBoundingClientRect());
 
     return (node) => {
       const box = boxes.get(node) ?? (node instanceof Element ? node.getBoundingClientRect() : undefined);
@@ -180,19 +197,22 @@ export function look(names: readonly string[], press: Press | null): Looked {
   };
 
   // What lies beside `cell` in its grid's row band, when the grid lays its rows out with no element for each: a cell
-  // with the others of its row as its siblings; null when the grid has rows of its own.
-  const bandOf = (cell: Element): ((node: Node) => boolean) | null => {
+  // with the others of its row as its siblings. None when the grid has rows of its own, or the band holds another
+  // name's label.
+  const bandOf = (name: string, cell: Element): ((node: Node) => boolean)[] => {
     const grid = cell.parentElement;
 
-    if (grid === null || !['grid', 'inline-grid'].includes(getComputedStyle(grid).display)) return null;
+    if (grid === null || !['grid', 'inline-grid'].includes(getComputedStyle(grid).display)) return [];
     const across = cell.getBoundingClientRect();
 
-    return (node) => {
+    const band = (node: Node): boolean => {
       const box = boxes.get(node) ?? (node instanceof Element ? node.getBoundingClientRect() : undefined);
       const middle = box === undefined ? NaN : box.top + box.height / 2;
 
       return box !== undefined && grid.contains(node) && middle >= across.top && middle <= across.bottom;
     };
+
+    return othersIn(name, band) ? [] : [band];
   };
 
   const regions: Record<string, Region[]> = {};
@@ -237,9 +257,7 @@ export function look(names: readonly string[], press: Press | null): Looked {
       const columns = columnsOf(row);
 
       parts.push({ inside: (node) => row.contains(node), occurrence, columns });
-      const band = bandOf(row);
-
-      if (band !== null && !othersIn(name, band)) parts.push({ inside: band, occurrence, columns });
+      parts.push(...bandOf(name, row).map((inside) => ({ inside, occurrence, columns })));
 
       let cell = label;
 
