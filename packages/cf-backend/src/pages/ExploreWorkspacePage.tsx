@@ -6,8 +6,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@cloudflare/kumo";
-import { ArrowsClockwiseIcon, CaretRightIcon, ClockIcon, HandPalmIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
-import { mcpPresetById } from "@kinu.run/core";
+import { ArrowsClockwiseIcon, CaretRightIcon, ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
+import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Status } from "@/components/ui/Status";
@@ -19,7 +19,8 @@ import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/Exp
 import { InstallDialog } from "@/components/explore/InstallDialog";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { lastValue } from "@/hooks/use-async-resource";
-import { readBlueprint, type BlueprintPage, type ExploreNeed } from "@/lib/explore-api";
+import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, type WorkspaceCard } from "@/lib/explore-api";
+import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 
 const ago = (at: number) => {
   const days = Math.round((Date.now() - at) / 864e5);
@@ -74,6 +75,36 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
   );
 }
 
+/** Install, or Open for the assistant the person already has; and a star of their own, counted with everyone's. */
+function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; onInstall: () => void }) {
+  const assistant = useInstalledAssistant();
+  const [star, setStar] = useState({ on: workspace.starred, count: workspace.stars });
+  const [failure, setFailure] = useState<string | null>(null);
+  const installed = workspace.id === PERSONAL_ASSISTANT_ID && assistant.status === "ready" && assistant.value !== null;
+
+  const toggle = (on: boolean) => Effect.catchCause(
+    Effect.map(Effect.promise(() => starBlueprint(workspace.id, on)), () => {
+      setFailure(null);
+      setStar((prior) => ({ on, count: prior.count + (on ? 1 : -1) }));
+    }),
+    showing(setFailure),
+  );
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {installed
+        ? <Link to={APP_ROUTES.home} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--c-accent)] px-3 text-[13px] font-semibold text-[var(--c-accent-on)]" data-blueprint-open><HouseIcon size={14} />Open on Home</Link>
+        : <FilledButton onClick={onInstall} data-blueprint-install><DownloadSimpleIcon size={14} />Install</FilledButton>}
+      <button type="button" onClick={() => detach(toggle(!star.on))} aria-pressed={star.on} data-blueprint-star
+        className={`inline-flex h-8 items-center gap-1.5 rounded-lg border p-border px-3 text-[13px] transition-colors hover:p-text ${star.on ? "p-text" : "p-text-2"}`}>
+        <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : undefined} />
+        {star.on ? "Starred" : "Star"}<span className="tabular-nums p-text-3">{star.count.toLocaleString("en-US")}</span>
+      </button>
+      {failure !== null && <span className="w-full text-xs p-danger">{failure}</span>}
+    </div>
+  );
+}
+
 export default function ExploreWorkspacePage() {
   const { blueprint = "" } = useParams();
   const [page, setPage] = useState<BlueprintPage | null>(null);
@@ -115,15 +146,9 @@ export default function ExploreWorkspacePage() {
             <p className="p-row-text p-text-2">{workspace.line}</p>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-meta p-text-3">
               <Maker maker={workspace.maker} size={20} />
-              <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} installs</span>
-              <span className="inline-flex items-center gap-1"><StarIcon size={13} />{workspace.stars.toLocaleString("en-US")}</span>
+              <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} {workspace.installs === 1 ? "install" : "installs"}</span>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <FilledButton onClick={() => setInstalling(true)} data-blueprint-install><DownloadSimpleIcon size={14} />Install</FilledButton>
-              <button type="button" className="inline-flex h-8 items-center gap-1.5 rounded-lg border p-border px-3 text-[13px] p-text-2 transition-colors hover:p-text">
-                <StarIcon size={14} />Star
-              </button>
-            </div>
+            <BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />
             <p className="mt-3 flex items-start gap-2 rounded-xl bg-[var(--c-neutral-tint)] px-3 py-2.5 p-meta p-text-2">
               <ArrowsClockwiseIcon size={13} className="mt-0.5 shrink-0" />
               {`${workspace.maker.kinu ? "Kept by Kinu. " : ""}Version ${page.version}, updated ${ago(page.updatedAt)}. Installing makes a workspace of your own: change anything in it, and later versions leave it as it is.`}

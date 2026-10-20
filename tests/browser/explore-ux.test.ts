@@ -99,4 +99,31 @@ describe('Explore', () => {
       expect(await installed(release)).toEqual({ id: 'release-manager', body: { displayName: 'API Worker v2 release', utcOffsetMinutes: expect.any(Number) } });
     });
   });
+
+  test("a blueprint's Star stars it as the person; the assistant they have opens on Home", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'explore-workspace&id=release-manager', 'light', 'desktop');
+
+      await page.waitForSelector('[data-blueprint-star]', SOON);
+      const before = await page.$eval('[data-blueprint-star]', (button) => [button.getAttribute('aria-pressed'), button.textContent]);
+
+      expect(before).toEqual(['false', 'Star702']);
+      await page.click('[data-blueprint-star]');
+      await page.waitForFunction(() => document.querySelector('[data-blueprint-star]')?.getAttribute('aria-pressed') === 'true', SOON);
+      expect(await page.$eval('[data-blueprint-star]', (button) => button.textContent)).toBe('Starred703');
+      expect(JSON.parse(await page.$eval('html', (root) => root.dataset.exploreStarred ?? 'null'))).toEqual({ id: 'release-manager', body: { on: true } });
+      await page.close();
+
+      const had = await freshPage(gallery, 'explore-workspace&id=personal-assistant&assistant=1', 'dark', 'mobile');
+
+      await had.waitForSelector('[data-blueprint-open]', SOON);
+      expect(await had.$('[data-blueprint-install]')).toBeNull();
+      expect(await had.$eval('[data-blueprint-open]', (link) => link.getAttribute('href'))).toBe('/');
+      await had.close();
+
+      const feed = await freshPage(gallery, 'explore&assistant=1', 'light', 'desktop');
+
+      await feed.waitForSelector('[data-explore-hero="personal-assistant"] [data-explore-installed]', SOON);
+    });
+  });
 });

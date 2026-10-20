@@ -8,7 +8,7 @@ import { Link } from "react-router-dom";
 import { Effect } from "effect";
 import { Button, Loader } from "@cloudflare/kumo";
 import { CheckIcon, CompassIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
-import { GALLERY_CATEGORIES, GALLERY_SORTS, type GalleryCategory, type GallerySort } from "@kinu.run/core";
+import { GALLERY_CATEGORIES, GALLERY_SORTS, PERSONAL_ASSISTANT_ID, type GalleryCategory, type GallerySort } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -16,6 +16,7 @@ import { ExploreCard, exploreWorkspaceHref, KindBadge, Maker, Needs, kinuBluepri
 import { EXPLORE_KINDS, readExplore, type ExploreItem, type ExploreKind, type ExplorePage, type WorkspaceCard } from "@/lib/explore-api";
 import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
 import { useSearchChoice } from "@/hooks/use-search-choice";
+import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 
 const SORT_WORDS: Record<GallerySort, string> = { trending: "Trending", new: "New", stars: "Most starred" };
 
@@ -29,6 +30,9 @@ const GRID = "grid grid-cols-1 gap-4 min-[520px]:grid-cols-2 lg:grid-cols-3 xl:g
 
 /** Kinu's lead blueprint, wide: what it is, what it needs, and Install. */
 function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights: readonly string[] }) {
+  const assistant = useInstalledAssistant();
+  const installed = workspace.id === PERSONAL_ASSISTANT_ID && assistant.status === "ready" && assistant.value !== null;
+
   return (
     <Link to={exploreWorkspaceHref(workspace.id)} data-explore-hero={workspace.id}
       className="group flex min-w-0 flex-col overflow-hidden rounded-[18px] border p-border p-surface p-card-lift md:flex-row">
@@ -47,7 +51,9 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
         <span className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-2 pt-2 p-meta p-text-3">
           <Maker maker={workspace.maker} />
           <Needs needs={workspace.needs} />
-          <span className="ml-auto rounded-full bg-[var(--c-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--c-accent-on)]">Install</span>
+          {installed
+            ? <span className="ml-auto inline-flex items-center gap-1 rounded-full border p-border px-4 py-1.5 text-[13px] font-semibold p-text-2" data-explore-installed><CheckIcon size={13} weight="bold" />Installed</span>
+            : <span className="ml-auto rounded-full bg-[var(--c-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--c-accent-on)]">Install</span>}
         </span>
       </span>
     </Link>
@@ -125,11 +131,11 @@ function Filters({ kind, category, sort, q, choose }: {
   );
 }
 
-/** The feed after Kinu's own, and the next page. */
-function Feed({ items, next, q, more }: { items: readonly ExploreItem[]; next: number | null; q: string; more: (page: number) => void }) {
+/** The feed after Kinu's own, and the next page. Empty under Kinu's own, it says nothing: the page is not empty. */
+function Feed({ items, next, q, more, below }: { items: readonly ExploreItem[]; next: number | null; q: string; more: (page: number) => void; below: boolean }) {
   return (
     <>
-      {items.length === 0 && <p className="py-12 text-center p-text-3" data-explore-no-match>{q === "" ? "Nothing here yet" : `Nothing matches “${q}”`}</p>}
+      {items.length === 0 && !below && <p className="py-12 text-center p-text-3" data-explore-no-match>{q === "" ? "Nothing here yet" : `Nothing matches “${q}”`}</p>}
       {items.length > 0 && <ul className={`mt-4 ${GRID}`}>{items.map((item) => <ExploreCard key={item.kind === "app" ? `a/${item.app.workspace}/${item.app.slate}` : `w/${item.workspace.id}`} item={item} />)}</ul>}
       {next !== null && (
         <div className="mt-6 flex justify-center">
@@ -190,7 +196,7 @@ export default function ExplorePage() {
           {failure !== null && <LoadFailure what="Explore" message={failure} onRetry={() => setTries((n) => n + 1)} className="mt-4" />}
           {shown === null && failure === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
           {shown !== null && (
-            <Feed items={shown.items.filter((item) => !(item.kind === "workspace" && kinus.includes(item.workspace)))} next={shown.next} q={q} more={more} />
+            <Feed items={shown.items.filter((item) => !(item.kind === "workspace" && kinus.includes(item.workspace)))} next={shown.next} q={q} more={more} below={lead !== undefined} />
           )}
         </div>
       </div>

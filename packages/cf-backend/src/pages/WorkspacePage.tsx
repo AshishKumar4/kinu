@@ -12,7 +12,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
 } from "@kinu.run/core";
-import type { AgentStatus, OwedOwnerIntent, PlanReview, SignalCard } from "@kinu.run/core";
+import type { OwedOwnerIntent, PlanReview, SignalCard, WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import type { SubordinateView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
@@ -532,7 +532,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
       <FocusBar
         workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/overview` }}
         agent={{
-          label: focus.label ?? speaking?.label ?? title, seed: mascotSeed(workspace, speaking?.key ?? "main"),
+          label: focus.label ?? "", seed: mascotSeed(workspace, speaking?.key ?? "main"),
           colour: mascotColour(workspace, speaking?.colour ?? 0), activity: speaking?.activity,
         }}
         line={focus.line}
@@ -614,6 +614,8 @@ interface FocusIdentity {
 export interface WorkspacePageProps {
   readonly workspace?: string;
   readonly identity?: FocusIdentity;
+  /** The layout the caller already knows, drawn until the workspace's own status says: Home's assistant is `focus`. */
+  readonly layout?: WorkspaceLayout;
 }
 
 export default function WorkspacePage(props: WorkspacePageProps = {}) {
@@ -640,16 +642,22 @@ function useOwnBar(shownElsewhere: boolean): void {
 }
 
 /** The `focus` layout's bar and composer: whom they name, and what the bar says of them. Null in `workbench`. */
-function focusOf(status: AgentStatus | null, given: FocusIdentity | undefined, title: string, agents: { shown: PanelAgent | undefined; all: readonly PanelAgent[] }): FocusIdentity | null {
-  if (status?.layout !== "focus") return null;
+function focusOf(layout: WorkspaceLayout | undefined, given: FocusIdentity | undefined, title: string, agents: { shown: PanelAgent | undefined; all: readonly PanelAgent[]; loaded: boolean }): FocusIdentity | null {
+  if (layout !== "focus") return null;
 
-  return given ?? { label: title, line: activityLine(agents.shown ?? agents.all.find((agent) => agent.category === "main")) };
+  if (given !== undefined) return given;
+
+  // Before the agents are read, no name rather than a wrong one: the stand-in main agent is "Main".
+  if (!agents.loaded) return { line: "" };
+  const speaking = agents.shown ?? agents.all.find((agent) => agent.category === "main");
+
+  return { label: speaking?.label ?? title, line: activityLine(speaking) };
 }
 
 /** What the composer says while no turn runs: in `focus`, whom it addresses. */
 const restingPlaceholder = (focus: FocusIdentity | null) => (focus?.label === undefined ? "Send a message..." : `Message ${focus.label}…`);
 
-function OpenWorkspace({ onGone, workspace, identity }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
+function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
   const params = useParams();
   const agentId = workspace ?? params.agentId;
 
@@ -860,7 +868,7 @@ function OpenWorkspace({ onGone, workspace, identity }: WorkspacePageProps & { o
   const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
   // Blank until the row is read: `agentId` is the URL slug, not a title, and "Untitled" would be a false one.
   const shownTitle = rosterEntry === undefined ? "" : workspaceDisplayTitle(rosterEntry);
-  const focus = focusOf(state.status, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list });
+  const focus = focusOf(state.status?.layout ?? layout, identity, shownTitle, { shown: shownAgent, all: agentsPanel.list, loaded: rosterLoaded });
 
   // The delete dialog goes with the bar, so a chat deleted from its sidebar row while the page connects asks too.
   const bar = (
@@ -1085,5 +1093,5 @@ function activityLine(agent: PanelAgent | undefined): string {
 
   const doing: Partial<Record<PanelAgent["activity"], string>> = { working: "Working", waiting: "Waiting on you", stopped: "Stopped", failed: "Last run failed" };
 
-  return `${agent.label} · ${doing[agent.activity] ?? "Idle"}`;
+  return doing[agent.activity] ?? "Idle";
 }

@@ -174,6 +174,13 @@ test("Kinu's blueprints list first beside apps, count each installer once, and l
   expect(index.installed({ kind: 'workspace', workspace: KINU_LISTINGS, item: 'pricing-watch', userId: 'user-a' }, NOW)).toBe(false);
   expect(index.workspaceCard(KINU_LISTINGS, 'personal-assistant', null, NOW)?.installs).toBe(1);
 
+  // A star on a blueprint is a workspace's, never an app's of the same name; one not listed is refused.
+  expect(index.star({ email: 'a@x.dev', workspace: KINU_LISTINGS, slate: 'personal-assistant', on: true, kind: 'workspace' }, NOW)).toBe(true);
+  expect(index.star({ email: 'a@x.dev', workspace: KINU_LISTINGS, slate: 'personal-assistant', on: true }, NOW)).toBe(false);
+  expect(index.star({ email: 'a@x.dev', workspace: KINU_LISTINGS, slate: 'pricing-watch', on: true, kind: 'workspace' }, NOW)).toBe(false);
+  expect(index.workspaceCard(KINU_LISTINGS, 'personal-assistant', 'a@x.dev', NOW)).toMatchObject({ stars: 1, starred: true });
+  expect(index.workspaceCard(KINU_LISTINGS, 'personal-assistant', 'b@x.dev', NOW)).toMatchObject({ stars: 1, starred: false });
+
   // Only one kind, by words; the Gallery's own page is apps alone.
   expect(index.explore({ q: 'release', kind: 'workspace', sort: 'new', category: null, page: 0 }, null, NOW).items.map((item) => item.kind)).toEqual(['workspace']);
   expect(index.page({ q: '', sort: 'new', category: null, page: 0 }, null, NOW).listings.map((each) => each.slate)).toEqual(['board']);
