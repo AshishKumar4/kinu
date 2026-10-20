@@ -688,10 +688,8 @@ fi
 # No deploy may ship without every CLI download asset sitting in the
 # directory wrangler publishes. A deploy missing one bricks every fresh install
 # and update on the platform it belongs to.
-KINU_CLI_ARTIFACTS=(kinu-runtime-cpython.tar.gz)
-for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
-  KINU_CLI_ARTIFACTS+=("kinu-cli-$platform.tar.gz")
-done
+# The archives by core's inventory, the one the build wrote and the launcher downloads (http/deployed-assets.ts).
+mapfile -t KINU_CLI_ARTIFACTS < <(bun -e 'for (const p of (await import(process.argv[1])).CLI_DIST_PATHS) console.log(p.slice(p.lastIndexOf("/") + 1))' "$KINU_ROOT/packages/core/src/http/deployed-assets.ts")
 for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT.sha256" \
   "${KINU_CLI_ARTIFACTS[@]}" "${KINU_CLI_ARTIFACTS[@]/%/.sha256}"; do
   if [ ! -s "$KINU_ASSETS_DIR/downloads/$file" ]; then

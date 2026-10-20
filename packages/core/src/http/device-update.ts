@@ -2,7 +2,7 @@
  * Self-update vocabulary. The served build stamp (`/downloads/kinu-version.json`)
  * is the only version source; versions are compared for equality, never ordered.
  */
-import { CLI_DIST_PLATFORMS } from './deployed-assets';
+import { CLI_DIST_PLATFORMS, cliArchiveName } from './deployed-assets';
 
 /** Build metadata is significant: 0.1.0+aaa and 0.1.0+bbb differ. */
 export function isSameBuild(installed: string, served: string): boolean {
@@ -24,11 +24,9 @@ export interface DeviceUpdateFrame {
 
 /** Null when no artifact is built for `os.platform()`-`os.arch()`. */
 export function cliArtifactPath(os: string | undefined, arch: string | undefined): string | null {
-  const platform = `${os ?? ''}-${arch ?? ''}`;
+  const platform = CLI_DIST_PLATFORMS.find((built) => built === `${os ?? ''}-${arch ?? ''}`);
 
-  if (!CLI_DIST_PLATFORMS.some((built) => built === platform)) return null;
-
-  return `/downloads/kinu-cli-${platform}.tar.gz`;
+  return platform === undefined ? null : `/downloads/${cliArchiveName(platform)}`;
 }
 
 /**
