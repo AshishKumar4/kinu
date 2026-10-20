@@ -4,7 +4,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
-import { cloudProxyBaseURL, createDefaultWebSearchProvider, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
+import { cloudProxyBaseURL, createDefaultWebSearchProvider, providerListingOf, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
 import { createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
 import { createFileOAuthStore } from '../src/oauth-store';
 import { writeFileSync } from 'node:fs';
@@ -158,6 +158,27 @@ describe('createLocalModelResolver', () => {
       }
 
       expect(sent).toEqual([0, 1].map(() => expect.objectContaining({ response_format: expect.objectContaining({ type: 'json_schema' }) })));
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // The InternalFish audit: the cloud menu priced its models and ordered its fast candidates by price, and a signed-in
+  // CLI rebuilt the models from the display rows without prices, so its unset fast tier followed display order.
+  test("a signed-in machine's model listing keeps the account's prices, so its fast pick is the account's", async () => {
+    const entry = (id: string, cost: { input: number; output: number }) => ({
+      spec: `workers-ai/${id}`, label: id, provider: 'workers-ai', capabilities: ['tools', 'structured-outputs'], contextWindow: 131_072, cost,
+    });
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: (request) => (new URL(request.url).pathname === '/api/cli/models'
+      ? Response.json({ models: [entry('@cf/house/large', { input: 3, output: 9 }), entry('@cf/house/small', { input: 0.1, output: 0.3 })], failures: [] })
+      : new Response('not here', { status: 404 })) });
+
+    try {
+      const resolver = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_listing' } });
+      const listing = providerListingOf(await resolver.listModels());
+
+      expect(listing.fast?.map(({ model }) => model).slice(0, 2)).toEqual(['workers-ai/@cf/house/small', 'workers-ai/@cf/house/large']);
     } finally {
       await server.stop(true);
     }

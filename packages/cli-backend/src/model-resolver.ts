@@ -542,6 +542,7 @@ class CloudProxyProvider implements ModelProvider {
           capabilities: entry.capabilities ? [...entry.capabilities] : undefined,
           contextWindow: entry.contextWindow,
           reasoningEfforts: entry.reasoningEfforts,
+          cost: entry.cost,
         }));
   }
 
